@@ -220,6 +220,12 @@ export interface FoldedReport {
    *  always set, `[]` included, the same as `groupedCalls`. */
   readonly artifacts: readonly BatchArtifact[];
   readonly quarantined?: { readonly reason: string };
+  /** R912 — see `SessionReport.timeBudget`. */
+  readonly timeBudget?: {
+    readonly budgetSeconds: number;
+    readonly unscheduledCount: number;
+    readonly batchesNotStarted: number;
+  };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
   readonly isolation?: { readonly mode: "auto"; readonly codeunits: readonly IsolationChoiceRow[] };
@@ -409,6 +415,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let sawGreenBaselineBatch = false;
 
   let quarantinedReason: string | undefined;
+  let timeBudget:
+    | { budgetSeconds: number; unscheduledCount: number; batchesNotStarted: number }
+    | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let isolationRows: IsolationChoiceRow[] | undefined;
   let resumeFromRunId: number | undefined;
@@ -496,6 +505,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "quarantined":
         sawQuarantined = true;
         quarantinedReason = e.reason;
+        break;
+      case "time-budget-reached":
+        timeBudget = {
+          budgetSeconds: e.budgetSeconds,
+          unscheduledCount: e.unscheduledCount,
+          batchesNotStarted: e.batchesNotStarted,
+        };
         break;
       case "session-finished":
         sawSessionFinished = true;
@@ -839,6 +855,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       .map((m) => mutantRef(m.batchIndex, m.mutantCode)),
     artifacts: [...artifactsByBatch.values()].sort((a, b) => a.batchIndex - b.batchIndex),
     ...(quarantinedReason !== undefined ? { quarantined: { reason: quarantinedReason } } : {}),
+    ...(timeBudget !== undefined ? { timeBudget } : {}),
     ...(permissionCanary !== undefined ? { permissionCanary } : {}),
     ...(isolationRows !== undefined
       ? { isolation: { mode: "auto" as const, codeunits: isolationRows } }

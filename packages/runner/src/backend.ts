@@ -714,7 +714,29 @@ export interface ExecutionBackend {
    */
   prefetchMutants?(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    /**
+     * R912: `remainingMs` is the time left of `--time-budget`. A prefetch request's outer deadline is
+     * clamped to it; a live request never is (a live deadline is an `error` verdict).
+     */
+    opts?: {
+      readonly remainingMs?: () => number;
+      /**
+       * R912: every covered mutant of the call, passed with the first window only. The backend warms
+       * up for all of them, as a whole-batch prefetch did, so a window cannot change what is warm.
+       */
+      readonly batchPlans?: readonly {
+        readonly mutantId: string;
+        readonly refs: readonly TestMethodRef[];
+      }[];
+    },
   ): Promise<void>;
+
+  /**
+   * R912, OPTIONAL: true when a call for test codeunit `codeunitId` runs the codeunit's WHOLE suite
+   * (v3 with entries and the codeunit not per-test), so a mutant's covering-test time is the whole
+   * codeunit's baseline time. Absent counts as false: only the covering tests run.
+   */
+  wholeCodeunit?(codeunitId: number): boolean;
 
   /**
    * R653, OPTIONAL: called right before a cold fail kill's unmutated confirm, under the killing

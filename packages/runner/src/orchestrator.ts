@@ -196,6 +196,14 @@ import {
   fileHoldsWrappedObject,
   wrappedRuleFor,
 } from "./line-map";
+import {
+  type CostModel,
+  ESTIMATE_WARN_MS,
+  TimeBudget,
+  cutWindows,
+  estimateCovered,
+  formatEstimate,
+} from "./mutant-windows";
 import { nestedProjectWarning } from "./nested-project";
 import { checkObjectClashes, dependenciesOf } from "./object-clash";
 import { isRetrySafe, requiresUnsafeLatch } from "./operation-outcome";
@@ -1657,6 +1665,16 @@ export interface SessionConfig {
    * hardcoded 30 s floor was the only thing standing between a real suite and an aborted session.
    */
   readonly mutantTimeoutMs?: number;
+  /**
+   * R912 (`--time-budget <seconds>`): once this many seconds of the session are used, no new window
+   * or mutant is scheduled; work in flight ends, and the report is written without the mutants not
+   * reached. The run is not finished, so `--resume` continues it. Checked before each window and each
+   * live mutant. Only a prefetch request's deadline is clamped to the time left; a live request never
+   * is. A positive integer.
+   */
+  readonly timeBudgetSeconds?: number;
+  /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to `Date.now`. */
+  readonly clockMs?: () => number;
   /**
    * R53 (`--stop-hung-sessions`), OPT-IN, default off.
    *
@@ -4822,6 +4840,8 @@ interface BatchScope {
   readonly minMutantBudgetMs: number;
   /** `cfg.baselineTimeoutMs ?? BASELINE_TIMEOUT_DEFAULT`; also the covering loop's fallback. */
   readonly baselineTimeoutMs: number;
+  /** R912: the session's `--time-budget` clock; absent without the flag. */
+  readonly timeBudget?: TimeBudget;
   /**
    * R-236c: `testKeyOf(ref)` to the reason, for each test with a reachable call that may open a
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
@@ -5990,7 +6010,25 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           clearSuspect: () => store.clearSnapshotSuspect(suspectKey, runId),
         }
       : unmarkedLedger();
-  emit({ type: "phase-entered", phase: "mutants" });
+  // R912: the estimate, from the baseline: covered mutants and their covering tests' summed
+  // baseline time (a whole-codeunit call counts the whole codeunit). It rides the phase's `detail`.
+  const estimate = estimateCovered(
+    toExecute,
+    perMutantTests,
+    costModelOf(scope.parallel?.owner ?? backend, baselineDuration, fallbackTimeoutMs),
+  );
+  emit({
+    type: "phase-entered",
+    phase: "mutants",
+    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time`,
+  });
+  if (estimate.ms > ESTIMATE_WARN_MS) {
+    emit({
+      type: "warning",
+      code: "mutant-phase-estimate-long",
+      message: `[lethal] the mutant phase is estimated at about ${formatEstimate(estimate.ms)} of covering-test time (${estimate.covered} covered mutant(s)). Narrow the run (--only, --lines), or set --time-budget <seconds> and continue with --resume (R912).`,
+    });
+  }
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
@@ -6017,6 +6055,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     baselineReused,
+    ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
   };
   if (scope.parallel !== undefined) {
     await runMutantsParallel({ ...mutantLoopArgs, ...scope.parallel });
@@ -6051,7 +6090,15 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // it can never earn an attestation — gating it on `execute` would fail the artifact and
   // quarantine the container for the crime of having nothing left to do. A carried verdict is
   // not a verdict this artifact produced, so it is correctly outside this gate's scope.
-  const contributed = toExecute.some((m) => (perMutantTests.get(m.mutantId)?.length ?? 0) > 0);
+  // R912: when the time budget stopped the session, a covered mutant that was never scheduled
+  // contributed nothing either; a planned stop is not an unattested artifact.
+  const budgetStopped = scope.timeBudget?.reached !== undefined;
+  const contributed = toExecute.some(
+    (m) =>
+      (perMutantTests.get(m.mutantId)?.length ?? 0) > 0 &&
+      (!budgetStopped ||
+        outcomes.some((o) => o.batchIndex === batchIdx && o.mutant.mutantId === m.mutantId)),
+  );
   if (isBcdev(caps.kind) && contributed && !attestation.clean) {
     const note = `unattested artifact: no covered run observed the deployed binary's selector (artifactId ${input.artifactId ?? "unknown"}) — verdicts discarded, container quarantined (design §G)`;
     emit({ type: "batch-invalidated", batchIndex: batchIdx, reason: note });
@@ -6090,6 +6137,14 @@ async function runSessionBody(
   const safety = new SessionSafety();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
+  if (
+    cfg.timeBudgetSeconds !== undefined &&
+    (!Number.isInteger(cfg.timeBudgetSeconds) || cfg.timeBudgetSeconds < 1)
+  ) {
+    throw new Error(
+      `time-budget-invalid: SessionConfig.timeBudgetSeconds must be a positive integer, got ${cfg.timeBudgetSeconds} (R912)`,
+    );
+  }
   // `record()`'s own `emit` parameter is REQUIRED (see its doc comment) so no call site can write
   // a store row without emitting. `runSession` builds its OWN canonical, seq-stamped stream here —
   // the one every `emit(...)` call site in this file already uses, unchanged — and keeps a full
@@ -6641,6 +6696,12 @@ async function runSessionBody(
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
   const sessionStartedMs = Date.now();
+  // R912: the `--time-budget` clock starts with the session, and is shared by every batch.
+  const clockMs = cfg.clockMs ?? Date.now;
+  const timeBudget =
+    cfg.timeBudgetSeconds !== undefined
+      ? new TimeBudget(cfg.timeBudgetSeconds, clockMs(), clockMs)
+      : undefined;
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -7261,6 +7322,7 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
         : {}),
@@ -7274,6 +7336,11 @@ async function runSessionBody(
     // error; undefined until read, and when the read failed or the backend cannot list them.
     let dependentNames: string[] | undefined;
     for (const [batchIdx, batchFiles] of artifacts.entries()) {
+      // R912: the budget ran out between batches: this batch and the rest never start.
+      if (timeBudget?.exhausted === true) {
+        reachBudget(timeBudget, 0, batchIdx);
+        break;
+      }
       // Layer 5C-B1 (design §6): a lease lost during THIS batch invalidates exactly THIS batch's
       // verdicts (at the loss and again at session end, R508) — earlier batches stand, every RunMutant in them having been
       // individually fence-validated. The heartbeat runs on a timer and can observe the loss at
@@ -8658,6 +8725,16 @@ async function runSessionBody(
     surfaceLateRefusal(late, failing, safety, emit);
   }
 
+  // R912: the budget stop is reported once, with the batches that never started.
+  if (timeBudget?.reached !== undefined) {
+    emit({
+      type: "time-budget-reached",
+      budgetSeconds: timeBudget.seconds,
+      unscheduledCount: timeBudget.reached.unscheduledCount,
+      batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
+    });
+  }
+
   // R391: one warning for every recorded verdict a key matched but `carryRecord` refused.
   if (carryCurrent.refused.size > 0) {
     emit({
@@ -8741,10 +8818,13 @@ async function runSessionBody(
           : `run ${runId} published batch ${highest.batchIndex} (artifact ${highest.artifactId}) but the store holds no installed bundle for it, so lethal verify could not read it once the scratch folder is removed`,
       );
     }
-    cfg.store.finishRun(runId, {
-      batchCount: artifacts.length,
-      baselineGreen: baselineGreenOverall,
-    });
+    // R912: a run stopped by its time budget is NOT finished, so `--resume` continues it.
+    if (timeBudget?.reached === undefined) {
+      cfg.store.finishRun(runId, {
+        batchCount: artifacts.length,
+        baselineGreen: baselineGreenOverall,
+      });
+    }
   } else {
     emit({ type: "quarantined", reason: safety.reason ?? "unknown" });
   }
@@ -11433,6 +11513,8 @@ interface RunMutantsArgs {
   readonly sink?: LaneSink | undefined;
   /** R766 (b): the owner already prefetched the whole batch once, so this call does not. */
   readonly skipPrefetch?: boolean;
+  /** R912: the session's `--time-budget` clock, when the flag is set. */
+  readonly timeBudget?: TimeBudget | undefined;
   readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
@@ -11524,11 +11606,48 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     const prev = measuredToday.get(key);
     if (prev === undefined || ms > prev.ms) measuredToday.set(key, { ms, byMutant });
   };
-  // R635 §4: once per mutant-loop call, every covered mutant of this shard and its covering refs.
-  if (args.skipPrefetch !== true) await args.backend.prefetchMutants?.(prefetchPlans(args));
-  for (const m of args.mutants) {
+  // R635 §4, R912: the covered mutants of this call are prefetched in WINDOWS: one window's covering
+  // refs, then that window is scored, then the next. A stop loses at most one window. A window
+  // starts at its first mutant, so the prefetch rides the top of the loop below.
+  const prefetch = args.skipPrefetch !== true ? args.backend.prefetchMutants : undefined;
+  const windowAt = new Map<string, readonly MutantManifestEntry[]>();
+  if (prefetch !== undefined) {
+    const windows = cutWindows(
+      args.mutants,
+      args.perMutantTests,
+      costModelOf(args.backend, args.baselineDuration, args.fallbackTimeoutMs),
+    );
+    for (const w of windows) windowAt.set(w[0]?.mutantId ?? "", w);
+    // Nothing to window (no mutants): the one empty prefetch the whole-batch call made.
+    if (windows.length === 0) await prefetch.call(args.backend, []);
+  }
+  let firstWindow = true;
+  /** R912: true when the budget is used up. Records the stop only if a covered mutant is left out. */
+  const budgetSpent = (at: number): boolean => {
+    if (args.timeBudget?.exhausted !== true || args.sink !== undefined) return false;
+    const left = args.mutants
+      .slice(at)
+      .filter((x) => args.perMutantTests.get(x.mutantId) !== undefined).length;
+    if (left > 0) reachBudget(args.timeBudget, left, args.batchIndex + 1);
+    return true;
+  };
+  for (const [at, m] of args.mutants.entries()) {
     // R766 (b): the queue closed (a latch or a stop elsewhere) or the session latched unsafe: take no more.
     if (args.sink !== undefined && (args.sink.closed || args.safety.isUnsafe)) break;
+    // R912: `--time-budget`, before each window and each live mutant (a lane's mutants belong to
+    // `runMutantsParallel`'s window, which checks it): stop scheduling; the rest is left out.
+    if (budgetSpent(at)) break;
+    const win = windowAt.get(m.mutantId);
+    if (win !== undefined && prefetch !== undefined) {
+      const clock = args.timeBudget;
+      await prefetch.call(args.backend, prefetchPlans({ ...args, mutants: win }), {
+        ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+        ...(firstWindow ? { batchPlans: prefetchPlans(args) } : {}),
+      });
+      firstWindow = false;
+      // The prefetch itself can use up the budget: no live mutant runs after that.
+      if (budgetSpent(at)) break;
+    }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
     args.sink?.begin(m.mutantId);
@@ -12310,6 +12429,28 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
   }
 }
 
+/** R912: what the window cut and the estimate read: baseline durations, and which codeunits run whole. */
+function costModelOf(
+  backend: ExecutionBackend,
+  baselineDuration: ReadonlyMap<string, number>,
+  fallbackMs: number,
+): CostModel {
+  return {
+    baselineDuration,
+    fallbackMs,
+    wholeCodeunit: backend.wholeCodeunit?.bind(backend),
+  };
+}
+
+/**
+ * R912: the budget ran out with `left` covered mutants of this batch unscheduled, and batches from
+ * `firstUnstartedBatch` on never started. Called only when something IS left out (the stop is
+ * reported only then); the event goes out once, after the batch loop, with both counts.
+ */
+function reachBudget(budget: TimeBudget, left: number, firstUnstartedBatch: number): void {
+  budget.reach(left, firstUnstartedBatch);
+}
+
 /** R635 §4: every covered mutant of the call, with its covering refs, in manifest order. */
 function prefetchPlans(
   args: Pick<RunMutantsArgs, "mutants" | "perMutantTests">,
@@ -12341,61 +12482,93 @@ async function runMutantsParallel(
   },
 ): Promise<void> {
   const { owner, lanes, ...rest } = args;
-  await owner.prefetchMutants?.(prefetchPlans(args));
+  // R912: window by window: the owner prefetches one window, its lanes score it, then the next.
+  // A stop of the queue (a latch, a thrown stop) ends the call from `runScopeQueue` as before. The
+  // time budget is checked between windows only: a lane's mutant cannot be left out of an ordered commit.
+  const windows = cutWindows(
+    args.mutants,
+    args.perMutantTests,
+    costModelOf(owner, args.baselineDuration, args.fallbackTimeoutMs),
+  );
+  if (windows.length === 0) await owner.prefetchMutants?.([]);
   // The latch is shared by every lane: the owner's is the one to read.
   const probe: Latch = () => owner.latched?.();
-  const commit = new OrderedCommit(
-    args.mutants.map((m) => m.mutantId),
-    probe,
-    lanes.length,
-  );
-  const units = new Map<string, MutantManifestEntry[]>();
-  for (const m of args.mutants) {
-    if (args.perMutantTests.get(m.mutantId) === undefined) {
-      commit.markDone(m.mutantId); // uncovered, already recorded above
-      continue;
-    }
-    const scope = procedureScopeOf(m);
-    const unit = units.get(scope) ?? [];
-    unit.push(m);
-    units.set(scope, unit);
-  }
   const asked = lanes.length;
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
   const paced = laneWarmupMs !== undefined && needsLiveCall !== undefined;
-  const { started, warmupMs, reason } = await runScopeQueue({
-    units: [...units.values()],
-    lanes: cap,
-    // R785: `--workers N` is an upper bound; an owner that cannot say its warm-up starts all lanes.
-    ...(paced
-      ? {
-          pace: {
-            warmupMs: () => laneWarmupMs.call(owner),
-            // A prefetched mutant (its answer is already held) is about 0 ms: not live work.
-            weight: (unit: readonly MutantManifestEntry[]) =>
-              unit.filter(
-                (m) =>
-                  (args.perMutantTests.get(m.mutantId)?.length ?? 0) > 0 &&
-                  needsLiveCall.call(owner, m.mutantId),
-              ).length,
-            now: () => performance.now(),
-            ...(owner.laneDaemonStarts !== undefined
-              ? { epoch: () => owner.laneDaemonStarts?.() ?? 0 }
-              : {}),
-          },
-        }
-      : {}),
-    mayStart: (k) => owner.laneMayStart?.(k) ?? true,
-    commit,
-    isUnsafe: () => args.safety.isUnsafe,
-    runUnit: async (k, unit, sink) => {
-      const backend = lanes[k];
-      if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
-      await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
-    },
-  });
-  if (paced) owner.noteLanes?.(lanesNotice(started, asked, cap, reason, warmupMs));
+  let widest: Awaited<ReturnType<typeof runScopeQueue>> | undefined;
+  for (const [wi, window] of windows.entries()) {
+    if (args.safety.isUnsafe) break;
+    const spent = (): boolean => {
+      if (args.timeBudget?.exhausted !== true) return false;
+      const left = windows
+        .slice(wi)
+        .flat()
+        .filter((x) => args.perMutantTests.get(x.mutantId) !== undefined).length;
+      if (left > 0) reachBudget(args.timeBudget, left, args.batchIndex + 1);
+      return true;
+    };
+    if (spent()) break;
+    const clock = args.timeBudget;
+    await owner.prefetchMutants?.(prefetchPlans({ ...args, mutants: window }), {
+      ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+      ...(wi === 0 ? { batchPlans: prefetchPlans(args) } : {}),
+    });
+    // The prefetch itself can use up the budget: no lane runs a live mutant after that.
+    if (spent()) break;
+    const commit = new OrderedCommit(
+      window.map((m) => m.mutantId),
+      probe,
+      lanes.length,
+    );
+    const units = new Map<string, MutantManifestEntry[]>();
+    for (const m of window) {
+      if (args.perMutantTests.get(m.mutantId) === undefined) {
+        commit.markDone(m.mutantId); // uncovered, already recorded above
+        continue;
+      }
+      const scope = procedureScopeOf(m);
+      const unit = units.get(scope) ?? [];
+      unit.push(m);
+      units.set(scope, unit);
+    }
+    const ran = await runScopeQueue({
+      units: [...units.values()],
+      lanes: cap,
+      // R785: `--workers N` is an upper bound; an owner that cannot say its warm-up starts all lanes.
+      ...(paced
+        ? {
+            pace: {
+              warmupMs: () => laneWarmupMs.call(owner),
+              // A prefetched mutant (its answer is already held) is about 0 ms: not live work.
+              weight: (unit: readonly MutantManifestEntry[]) =>
+                unit.filter(
+                  (m) =>
+                    (args.perMutantTests.get(m.mutantId)?.length ?? 0) > 0 &&
+                    needsLiveCall.call(owner, m.mutantId),
+                ).length,
+              now: () => performance.now(),
+              ...(owner.laneDaemonStarts !== undefined
+                ? { epoch: () => owner.laneDaemonStarts?.() ?? 0 }
+                : {}),
+            },
+          }
+        : {}),
+      mayStart: (k) => owner.laneMayStart?.(k) ?? true,
+      commit,
+      isUnsafe: () => args.safety.isUnsafe,
+      runUnit: async (k, unit, sink) => {
+        const backend = lanes[k];
+        if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
+        await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
+      },
+    });
+    if (widest === undefined || ran.started > widest.started) widest = ran;
+  }
+  // One notice for the call: the window that started the most lanes speaks for it.
+  if (paced && widest !== undefined)
+    owner.noteLanes?.(lanesNotice(widest.started, asked, cap, widest.reason, widest.warmupMs));
 }
 
 /** R807: the build plus the run seed the v3 backend saw reported (structural; absent when none). */
