@@ -1056,10 +1056,18 @@ Stated so a consumer does not read an absence as a finding.
   `ClientType=ODataV4`, so a handler-less `Confirm` returns its default silently and GUI-guarded
   code takes the non-interactive path. Measured on a real app: 62 of 19,850 mutation sites (0.3%)
   sit lexically inside such a branch.
-- On al-runner v3 it is the opposite (R895, measured): a test answers `GuiAllowed()` Yes and a
-  `Confirm` is raised to its handler, and al-runner has no option to run without a client. So a
-  mutant behind `GuiAllowed` or a confirm wrapper can reach a different verdict on v3 than on bcdev.
-  The console says so in its `GUI EXECUTION (al-runner v3)` line.
+- On al-runner v3 it is the opposite by default (R895, measured): a test answers `GuiAllowed()` Yes
+  and a `Confirm` is raised to its handler. So a mutant behind `GuiAllowed` or a confirm wrapper can
+  reach a different verdict on v3 than on bcdev. The console says so in its `GUI EXECUTION (al-runner
+  v3)` line.
+- `"alRunnerV3": { "noClient": true }` runs v3 without a client, as bcdev's path does (R-907). The
+  report then records `executionContexts[].noClient: true` and prints the `NON-GUI EXECUTION` line, and
+  `testMethods[].baselineFlagged` marks baseline passes al-runner flagged as resting on an unprobed
+  assumption (any assumption, not only this one). Fewer tests run: al-runner refuses calls it has not
+  measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
+  handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
+- One-shot calls pass `--skip-after-timeout` when the al-runner build supports it (R897): after a test
+  is stopped at the limit, the rest of its codeunit is not run, so a hung mutant costs one limit.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang
   and quarantine the whole run. The report names the refusal rather than guessing at a verdict.
 - A mutant that never terminates is recorded as an unmeasured error, not scored. AL cannot preempt

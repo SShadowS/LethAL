@@ -830,10 +830,14 @@ a LethAL feature or a mode.
   Measured on Document Output: nine statement-generation procedures are executed by NO test on
   either runner, because the tests flip the customer to Manual at an earlier guard. That is a
   test-suite finding, not a tool finding, but the tool cannot tell the two apart for you yet.
-  **On the al-runner v3 backend the opposite holds** (R895, measured): a test there answers `GuiAllowed()`
-  Yes and a `Confirm` is raised to its handler, the branch VS Code runs, and al-runner has no option to
-  run without a client. So a mutant behind `GuiAllowed` or a confirm wrapper can reach a different
-  verdict on v3 than on BC; a v3 report says so in a `GUI EXECUTION (al-runner v3)` line.
+  **On the al-runner v3 backend the opposite holds by default** (R895, measured): a test there answers
+  `GuiAllowed()` Yes and a `Confirm` is raised to its handler, the branch VS Code runs. So a mutant behind
+  `GuiAllowed` or a confirm wrapper can reach a different verdict on v3 than on BC; a v3 report says so in
+  a `GUI EXECUTION (al-runner v3)` line. Set `"alRunnerV3": { "noClient": true }` to run v3 without a
+  client, as BC's path does (R895, R-907): the report then says `NON-GUI EXECUTION` and
+  `executionContexts[].noClient: true`. It is not the default because al-runner refuses calls it has not
+  measured for a session without a client (CurrentClientType, `Page.Run` with a record, a request page with
+  a handler), so fewer tests run: on two Microsoft apps, 5 green tests became 1, and 27 became 18.
 
   **How much AL this affects, measured** (`scripts/measure-gui-guarded.ts`, 2026-07-31, whole app):
   **62 of 19,850 mutation sites (0.3%) sit lexically inside a `GuiAllowed`- or `Confirm`-guarded
