@@ -104,11 +104,13 @@ async function run(
   dirs: Awaited<ReturnType<typeof makeProject>>,
   store: ResultsStore,
   marks?: EquivalenceMark[],
+  assemblyProbingPaths?: readonly string[],
 ) {
   const events: RunEvent[] = [];
   const report = await runSession({
     backend: new SurvivingBackend(),
     store,
+    ...(assemblyProbingPaths !== undefined ? { assemblyProbingPaths } : {}),
     ...dirs,
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
     emit: [(e) => events.push(e)],
@@ -143,6 +145,17 @@ describe("R214: symbols from app.json only (no config symbols)", () => {
     expect(without.run?.buildSymbols).toEqual([]);
     expect(typeof withSym).toBe("string");
     expect(without.run?.configFingerprint).not.toBe(withSym);
+  }, 60_000);
+
+  test("R900: runSession puts its assembly probing paths in the fingerprint, only when non-empty", async () => {
+    // One project (its folder is in the digest), a fresh store each time (so no run resumes).
+    const dirs = await makeProject();
+    const fp = async (paths?: readonly string[]) =>
+      (await run(dirs, new ResultsStore(":memory:"), undefined, paths)).run?.configFingerprint;
+    const none = await fp();
+    expect(typeof none).toBe("string");
+    expect(await fp([])).toBe(none);
+    expect(await fp(["/asm"])).not.toBe(none);
   }, 60_000);
 
   test("a mark under ['APPSYM'] is applied; a mark with no field is stale and the warning says why", async () => {

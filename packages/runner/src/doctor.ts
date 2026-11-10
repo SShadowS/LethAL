@@ -1,4 +1,8 @@
 import { compareAppVersions } from "./app-version";
+import {
+  type ResolvedAssemblyProbingPaths,
+  describeAssemblyProbingPaths,
+} from "./assembly-probing-paths";
 import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 
@@ -150,6 +154,12 @@ export interface DoctorDeps {
    * `envTool.downloadSymbols`, which fills the cache during a run, so a gap is not yet a failure.
    */
   readonly dependencies?: () => Promise<DependenciesProbe>;
+  /**
+   * R900: alc's assembly probing paths as a run resolves them (`resolveAssemblyProbingPaths`). It
+   * THROWS on a listed folder that is missing, which `runCheck` turns into a failed check naming
+   * it. Present only when doctor is given `--project`.
+   */
+  readonly assemblyProbingPaths?: () => Promise<ResolvedAssemblyProbingPaths>;
 }
 
 export type DependenciesProbe =
@@ -550,6 +560,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     alcRuntime,
     testApp,
     dependencies,
+    assemblyProbingPaths,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
@@ -606,6 +617,16 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   if (dependencies !== undefined) {
     checkPromises.push(
       runCheck("dependencies", async () => checkDependencies(await dependencies())),
+    );
+  }
+  if (assemblyProbingPaths !== undefined) {
+    const name = "assembly-probing-paths";
+    checkPromises.push(
+      runCheck(name, async () => ({
+        name,
+        ok: true,
+        detail: describeAssemblyProbingPaths(await assemblyProbingPaths()),
+      })),
     );
   }
   // R146. `checks.every(...)` on an empty array is `true`, so a deps object with nothing in it would

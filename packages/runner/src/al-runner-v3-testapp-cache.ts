@@ -123,6 +123,8 @@ export interface TestAppKeyInput {
   readonly alcSha256: string;
   /** 7. As passed to alc, in order. */
   readonly preprocessorSymbols: readonly string[];
+  /** 7b. R900: alc's assembly probing paths, in order; in the key only when non-empty. */
+  readonly assemblyProbingPaths?: readonly string[];
   /** 8. */
   readonly transport: "one-shot" | "serve-entries";
 }
@@ -157,6 +159,10 @@ export function testAppCacheKey(i: TestAppKeyInput): string {
   );
   part("alc", `${i.alcPath.length}:${i.alcPath}${i.alcSha256}`);
   part("define", JSON.stringify(i.preprocessorSymbols));
+  // R900: only when non-empty, so every key made without probing paths is unchanged.
+  if (i.assemblyProbingPaths !== undefined && i.assemblyProbingPaths.length > 0) {
+    part("assembly-probing", JSON.stringify(i.assemblyProbingPaths));
+  }
   part("transport", i.transport);
   return h.digest("hex");
 }

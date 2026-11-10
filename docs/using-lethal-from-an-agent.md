@@ -1137,6 +1137,13 @@ field is checked at startup and a missing one is named rather than defaulted. Th
 README's Configuration section. Credentials live in it, so treat it as a secret: do not read it
 into a transcript and do not copy it into an issue.
 
+A project that uses `DotNet` types fails every compile with AL0451 and AL0185 unless alc can find
+the assemblies. LethAL takes the folders from the config's top-level `assemblyProbingPaths`, else
+the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages` when it
+exists, else none. A missing folder, or a path holding `,` or `;`, is refused by name before any
+compile. The doctor check `assembly-probing-paths` (with `--project`) prints the list and its
+source. On an AL0451 failure the error text names the paths LethAL passed.
+
 ## Safety (guidance)
 
 - Point LethAL at a **sandbox or dev container only, never a production tenant.** The changed build
