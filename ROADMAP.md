@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 870 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 870 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -353,7 +353,7 @@ that ordering is the priority.
 - **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
 - **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
 - **R904** · v3 with test data off and a partly red baseline scores mutants against the few green tests, and the report never says the data was off · [R904.md](docs/roadmap/R904.md) · done (421523a8)
-- **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · open
+- **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · done (2b021840)
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · open
 
 ## Product gaps a real project hits
