@@ -440,14 +440,38 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
         reportSha256: "abc",
         runnerBuild: "b1",
         killed: 1,
+        killedByFlaggedTest: 0,
         notShown: { survived: 3, timeoutKilled: 1, otherVerdict: 2 },
         refusedTestsNotGreenOnV3: ["P.U"],
       });
       expect(r.validity.caveats).toContain("v3-verdicts-joined");
       const out = renderConsole(r);
       expect(out).toContain("NOT BC VERDICTS: al-runner v3 killed 1 mutant(s)");
+      expect(out).not.toContain("without a client session");
       expect(out).toContain("Not shown: 3 v3 survived, 1 v3 timeout, 2 other.");
       expect(out).toContain("1 test(s) BC refused did not pass on v3, so they show nothing.");
+    });
+    test("a kill through a flagged test is labelled on the row, counted apart, and on the line", () => {
+      const flagged = {
+        ...joined,
+        kills: [
+          {
+            batchIndex: 0,
+            mutantCode: "M0001",
+            killingTest: "P.T",
+            coveringTests: ["P.T"],
+            killingTestNoClient: true,
+          },
+        ],
+      } as RunEventInput;
+      const r = buildReport(STATICS, seq([generated, baseline, noCoverage, flagged, finished]));
+      expect(r.mutants[0]?.v3Verdict?.killingTestNoClient).toBe(true);
+      expect(r.v3Verdicts?.killedByFlaggedTest).toBe(1);
+      expect(renderConsole(r)).toContain(
+        "1 of them through a test whose v3 pass ran without a client session (page calls not run).",
+      );
+      expect(withJoin().mutants[0]?.v3Verdict !== undefined).toBe(true);
+      expect("killingTestNoClient" in (withJoin().mutants[0]?.v3Verdict ?? {})).toBe(false);
     });
     test("no join: no block, no caveat, no line, no row field", () => {
       const r = without();

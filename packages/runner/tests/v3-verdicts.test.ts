@@ -68,7 +68,7 @@ const goodReport = (over: Record<string, unknown> = {}) => ({
   unsupportedTests: [],
   testMethods: [{ name: REFUSED }],
   mutants: [v3Row("M1")],
-  validity: { executionContexts: [{ runnerBuild: "build-1" }] },
+  validity: { executionContexts: [{ runnerBuild: "build-1", noClient: true }] },
   ...over,
 });
 
@@ -111,6 +111,21 @@ describe("loadV3Verdicts refuses by name", () => {
     ["coverage turned off", { coverageOffFiles: ["a.al"] }, "coverage was off"],
     ["--tests-only", { testsOnly: ["a"] }, "--tests-only"],
     ["a quarantined run", { quarantined: { reason: "x" } }, "quarantined"],
+    [
+      "a run with a client (no noClient)",
+      { validity: { executionContexts: [{ runnerBuild: "b" }] } },
+      "--no-client",
+    ],
+    [
+      "one measured entry with a client among no-client ones",
+      {
+        validity: {
+          executionContexts: [{ runnerBuild: "b", noClient: true }, { runnerBuild: "b" }],
+        },
+      },
+      "--no-client",
+    ],
+    ["no measured entry at all", { validity: { executionContexts: [{}] } }, "--no-client"],
     ["no sourceSha256", { sourceSha256: undefined }, "no sourceSha256"],
     ["no numberingDigest", { numberingDigest: undefined }, "no numberingDigest"],
     ["no testSourceSha256", { testSourceSha256: undefined }, "no testSourceSha256"],
@@ -215,6 +230,31 @@ describe("joinV3Verdicts", () => {
     joinV3Verdicts(await load({ mutants: [v3Row("M1", v3)] }), [outcome], [REFUSED], unplaceable);
   const EMPTY = { survived: 0, timeoutKilled: 0, otherVerdict: 0 };
 
+  test("a carried entry without noClient does not refuse", async () => {
+    const input = await load({
+      validity: { executionContexts: [{ runnerBuild: "b", noClient: true }, { carried: true }] },
+    });
+    expect(input.rows.size).toBe(1);
+  });
+  test("a kill through a flagged baseline pass is shown and labelled; an unflagged one is not", async () => {
+    const flagged = await load({ testMethods: [{ name: REFUSED, baselineFlagged: true }] });
+    const [kill] = joinV3Verdicts(flagged, [out("M1")], [REFUSED], new Set()).kills;
+    expect(kill?.killingTestNoClient).toBe(true);
+    const [plain] = (await join1({})).kills;
+    expect(plain !== undefined && "killingTestNoClient" in plain).toBe(false);
+  });
+  test("a flagged pass counts as green for the refusal", async () => {
+    const flagged = await load({ testMethods: [{ name: REFUSED, baselineFlagged: true }] });
+    expect(() =>
+      checkV3Verdicts(flagged, {
+        sourceSha256: "src",
+        numberingDigest: "num",
+        testSourceSha256: "tst",
+        refusedTests: [REFUSED],
+        deployedCount: 1,
+      }),
+    ).not.toThrow();
+  });
   test("a v3 kill on an eligible row is shown", async () => {
     const j = await join1({});
     expect(j.kills).toEqual([

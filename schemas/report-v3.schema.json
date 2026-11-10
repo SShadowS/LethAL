@@ -494,6 +494,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "killingTestNoClient": {
+                "const": true
               }
             }
           },
@@ -1175,6 +1178,7 @@
       "required": [
         "reportSha256",
         "killed",
+        "killedByFlaggedTest",
         "notShown",
         "refusedTestsNotGreenOnV3"
       ],
@@ -1186,6 +1190,9 @@
           "type": "string"
         },
         "killed": {
+          "type": "number"
+        },
+        "killedByFlaggedTest": {
           "type": "number"
         },
         "notShown": {

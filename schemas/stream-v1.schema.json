@@ -1789,6 +1789,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "killingTestNoClient": {
+                "const": true
               }
             }
           }

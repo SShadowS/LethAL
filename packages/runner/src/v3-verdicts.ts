@@ -54,6 +54,8 @@ export interface V3VerdictsInput {
   readonly unsupportedTests: ReadonlySet<string>;
   /** Absent: the report does not list its tests, so only `unsupportedTests` can say "not green". */
   readonly testNames: ReadonlySet<string> | undefined;
+  /** Tests whose v3 baseline pass was flagged (`baselineFlagged`, R-907): green, but labelled. */
+  readonly flaggedTests: ReadonlySet<string>;
 }
 
 const keyOf = (k: readonly unknown[]): string => JSON.stringify(k);
@@ -139,11 +141,19 @@ export async function loadV3Verdicts(path: string): Promise<V3VerdictsInput> {
     rows.set(k, row);
   }
   if (duplicates > 0) reasons.push(`${duplicates} mutant identity key(s) repeat in it`);
+  // R7: v3 must have run the non-GUI branch BC runs. `runnerBuild` marks a directly measured entry.
+  const contexts = (
+    r.validity as { executionContexts?: { runnerBuild?: string; noClient?: true }[] } | undefined
+  )?.executionContexts;
+  const measured = (contexts ?? []).filter((c) => c.runnerBuild !== undefined);
+  if (measured.length === 0 || measured.some((c) => c.noClient !== true)) {
+    reasons.push(
+      'v3 did not run with --no-client (set "alRunnerV3.noClient"), so it ran the GUI branch BC does not',
+    );
+  }
   if (reasons.length > 0 || !isText(sourceSha256) || !isText(numberingDigest) || !isText(testSha))
     throw new V3VerdictsError(path, reasons);
-  const contexts = (r.validity as { executionContexts?: { runnerBuild?: string }[] } | undefined)
-    ?.executionContexts;
-  const methods = r.testMethods as readonly { name: string }[] | undefined;
+  const methods = r.testMethods as readonly { name: string; baselineFlagged?: true }[] | undefined;
   return {
     path,
     reportSha256: createHash("sha256").update(bytes).digest("hex"),
@@ -154,6 +164,9 @@ export async function loadV3Verdicts(path: string): Promise<V3VerdictsInput> {
     rows,
     unsupportedTests: new Set((r.unsupportedTests ?? []) as readonly string[]),
     testNames: methods === undefined ? undefined : new Set(methods.map((m) => m.name)),
+    flaggedTests: new Set(
+      (methods ?? []).filter((m) => m.baselineFlagged === true).map((m) => m.name),
+    ),
   };
 }
 
@@ -252,6 +265,8 @@ export function joinV3Verdicts(
         mutantCode: o.mutant.mutantId,
         killingTest: row.killingTest,
         coveringTests: covering,
+        // Ruling 2: a kill through a flagged (no-client-session) baseline pass is shown, labelled.
+        ...(input.flaggedTests.has(row.killingTest) ? { killingTestNoClient: true as const } : {}),
       });
     } else if (row.verdict === "survived") notShown.survived++;
     else if (row.verdict === "timeout-killed") notShown.timeoutKilled++;

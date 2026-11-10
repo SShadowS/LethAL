@@ -3762,6 +3762,10 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
           coverageMode: "al-runner",
           unsupportedTests: [],
           testMethods: [{ name: REFUSED }],
+          validity: {
+            ...first.validity,
+            executionContexts: [{ runnerBuild: "alrunner test", noClient: true }],
+          },
           mutants: first.mutants.map((m) =>
             m.verdict === "no-coverage"
               ? { ...m, verdict: "killed", killingTest: REFUSED, coveringTests: [REFUSED] }
