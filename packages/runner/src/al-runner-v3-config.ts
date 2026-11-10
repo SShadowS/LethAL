@@ -12,7 +12,8 @@
  *     "transport": "serve-entries",                            // or "one-shot"; absent: serve-entries where proven, else one-shot (R761)
  *     "secondEcho": true,                                      // R635 §5, serve-entries only
  *     "downloadDemoData": true,                                // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
- *     "isolation": "auto",                                     // R896; "auto" (default): per codeunit, "method" where the baseline passes strictly more tests so; R890: "test" or "method" force one mode
+ *     "noClient": false,                                       // R907; true passes --no-client: tests run as a session without a client (GuiAllowed() false, as on BC's web-service path); a pass that rests on an unprobed assumption is flagged
+ *     "isolation": "auto",                                    // R896; "auto" (default): per codeunit, "method" where the baseline passes strictly more tests so; R890: "test" or "method" force one mode
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
  *
@@ -44,6 +45,8 @@ export interface AlRunnerV3ConfigSection {
   readonly secondEcho: boolean;
   /** R885: may v3 download the CRONUS demo data into `cacheDir`? `false` passes `--no-download`. */
   readonly downloadDemoData: boolean;
+  /** R907: `--no-client` for every al-runner call (serve: the `noClient` request field). */
+  readonly noClient: boolean;
   /** R886: `--dotnet-sidecar <dll>` for every al-runner call. Absent: the pinned build's sidecar, if any. `false`: none. */
   readonly dotnetSidecar?: string | false;
   /**
@@ -61,12 +64,16 @@ export interface AlRunnerV3ConfigSection {
  */
 export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
 
+/** R907: THE default of `alRunnerV3.noClient`: off, so a run is as before. */
+export const V3_NO_CLIENT_DEFAULT = false;
+
 /** R896: THE default of `alRunnerV3.isolation`. Every gate sets `"test"` explicitly. */
 export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
   "isolation",
   "downloadDemoData",
+  "noClient",
   "dotnetSidecar",
   "path",
   "packagesDir",
@@ -203,8 +210,14 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.downloadDemoData" must be a boolean, got ${JSON.stringify(r.downloadDemoData)} (R885).`,
     );
   }
+  if (r.noClient !== undefined && typeof r.noClient !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.noClient" must be a boolean, got ${JSON.stringify(r.noClient)} (R907).`,
+    );
+  }
   return {
     downloadDemoData: r.downloadDemoData ?? V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+    noClient: r.noClient ?? V3_NO_CLIENT_DEFAULT,
     path: (r.path as string | undefined) ?? defaultV3Path(exists, home),
     packagesDir: r.packagesDir,
     bcVersion: r.bcVersion,

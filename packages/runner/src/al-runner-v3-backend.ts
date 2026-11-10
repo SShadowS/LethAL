@@ -67,6 +67,7 @@ import {
 } from "./al-runner-server";
 import {
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  V3_NO_CLIENT_DEFAULT,
   assertBcVersionMatchesPackages,
 } from "./al-runner-v3-config";
 import {
@@ -487,6 +488,23 @@ export class AlRunnerV3ResourceSelectorRefusedError extends Error {
 }
 
 /**
+ * R907: `alRunnerV3.noClient` is on, but the running build's `test --help` does not list
+ * `--no-client` (or the help call failed). Serve would send the request field to a build that may
+ * ignore it, so the run would measure the wrong thing; refused before any run.
+ */
+export class AlRunnerV3NoClientUnsupportedError extends Error {
+  constructor(
+    readonly build: string,
+    readonly why: string,
+  ) {
+    super(
+      `al-runner-v3-no-client-unsupported: "alRunnerV3.noClient" is true, but ${build} cannot be shown to support --no-client (${why}). Use a build whose \`test --help\` lists --no-client, or set "alRunnerV3.noClient" to false (R907).`,
+    );
+    this.name = "AlRunnerV3NoClientUnsupportedError";
+  }
+}
+
+/**
  * R761: an explicit `"transport": "serve-entries"` with a test METHOD name holding "." (upstream
  * #5798: the entries answer for it has no `codeunit`/`method`, measured on N1E). Refused before any
  * test runs, by name, instead of failing mid-session.
@@ -621,6 +639,11 @@ export interface AlRunnerV3Config {
    */
   readonly downloadDemoData?: boolean;
   /**
+   * R907: `--no-client` (serve: the `noClient` request field): tests run as a session without a
+   * client. Absent: `V3_NO_CLIENT_DEFAULT`.
+   */
+  readonly noClient?: boolean;
+  /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
    * one and the file still has that sha256 (else a warning and none). `false`: none; gates set this.
@@ -718,6 +741,8 @@ export interface V3Row {
   readonly durationMs?: number;
   readonly message?: string;
   readonly notRun: boolean;
+  /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
+  readonly flagged?: true;
 }
 
 /**
@@ -742,7 +767,7 @@ export function decodeV3Rows(
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
-    const { codeunit, method, name, status, durationMs, message, notRun } = r;
+    const { codeunit, method, name, status, durationMs, message, notRun, flagged } = r;
     if (
       typeof codeunit !== "number" ||
       typeof method !== "string" ||
@@ -750,7 +775,8 @@ export function decodeV3Rows(
       (status !== "pass" && status !== "fail" && status !== "error") ||
       (durationMs !== undefined && typeof durationMs !== "number") ||
       (message !== undefined && typeof message !== "string") ||
-      (notRun !== undefined && typeof notRun !== "boolean")
+      (notRun !== undefined && typeof notRun !== "boolean") ||
+      (flagged !== undefined && typeof flagged !== "boolean")
     ) {
       return {
         why: `row ${i + 1} does not have v3's row shape: ${JSON.stringify(t).slice(0, 200)}`,
@@ -774,6 +800,7 @@ export function decodeV3Rows(
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(message !== undefined ? { message } : {}),
       notRun: notRun === true,
+      ...(flagged === true ? { flagged: true as const } : {}),
     });
   }
   return { rows, ...(seed !== undefined ? { seed } : {}) };
@@ -856,6 +883,7 @@ export function v3RowVerdict(
       status: row.status,
       ...(row.message !== undefined ? { message: row.message } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
+      ...(row.flagged === true ? { flagged: true } : {}),
     },
     wallMs,
     coverage,
@@ -905,6 +933,8 @@ export function v3CallArgv(a: {
   readonly stopSeconds: number;
   readonly packagesDir: string;
   readonly bcVersion: string;
+  /** R907: pass `--no-client` (a session without a client). Absent: not passed. */
+  readonly noClient?: boolean;
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
@@ -917,6 +947,8 @@ export function v3CallArgv(a: {
   readonly onlyTest?: string;
   /** R890: `--isolation` value. Absent: `"test"`. */
   readonly isolation?: "test" | "codeunit";
+  /** R907: `--skip-after-timeout`, right after the stop pair. Absent: not passed. */
+  readonly skipAfterTimeout?: boolean;
 }): string[] {
   return [
     a.alRunnerPath,
@@ -926,6 +958,7 @@ export function v3CallArgv(a: {
     a.isolation ?? "test",
     "--test-timeout-secs",
     String(a.stopSeconds),
+    ...(a.skipAfterTimeout === true ? ["--skip-after-timeout"] : []),
     ...(a.onlyTest !== undefined
       ? ["--test-exact", a.onlyTest, "--run-selected-only"]
       : ["--codeunit", String(a.codeunitId)]),
@@ -933,6 +966,7 @@ export function v3CallArgv(a: {
     a.packagesDir,
     "--bc-version",
     a.bcVersion,
+    ...(a.noClient === true ? ["--no-client"] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
     ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
@@ -1393,6 +1427,8 @@ class Lane {
   /** F3: the id the last `activate()` wrote; `null` is the baseline selector. */
   lastActivated: string | null = null;
   rowsByCodeunit = new Map<number, CallRows>();
+  /** R907: by `refKey`; a ref run alone after a stop cut its codeunit's call. Per mutant. */
+  aloneAfterStop = new Map<string, CallRows>();
   /**
    * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
    * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
@@ -1435,6 +1471,8 @@ class Lane {
       readonly scratchCwd: string;
       /** The test dir as v3 reads it (`realpath`, else absolute). */
       readonly testSource: () => string;
+      /** R907: the backend's `noClient`, sent as the request field when on. */
+      readonly noClient: () => boolean;
       readonly now: () => number;
     },
   ) {
@@ -1473,6 +1511,7 @@ class Lane {
       sourcePaths: [this.realActive ?? resolve(this.activeDir()), this.where.testSource()],
       testIsolation: mode.testIsolation,
       ...(mode.runSelectedOnly ? { runSelectedOnly: true } : {}),
+      ...(this.where.noClient() ? { noClient: true } : {}),
     };
   }
 
@@ -1527,6 +1566,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R857: `--isolate-tests`; see `ExecutionBackend.isolatesTests`. */
   get isolatesTests(): boolean {
     return this.cfg.isolateTests === true || this.methodIsolation;
+  }
+  /** R907: see `ExecutionBackend.noClient`. */
+  get noClient(): boolean {
+    return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
+  }
+  /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
+  get skipAfterTimeout(): boolean {
+    return this.skipAfterTimeoutLearned && !this.entries;
   }
   /** R890: see `ExecutionBackend.methodIsolation`. */
   get methodIsolation(): boolean {
@@ -1882,6 +1929,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       activeDir: join(this.cfg.instrumentedDir, k === 0 ? "active" : `active.${k}`),
       scratchCwd: resolve(this.cfg.instrumentedDir),
       testSource: () => this.realTestDir ?? resolve(this.cfg.testDir),
+      noClient: () => this.noClient,
       now: this.now,
     });
   }
@@ -1961,6 +2009,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ok: false,
         details: `${this.cfg.alRunnerPath} reports "${reported.slice(0, 200)}", which is not an al-runner v3 build (R586)`,
       };
+    }
+    await this.learnSkipAfterTimeout(); // R907
+    if (this.noClient && !this.noClientListed) {
+      throw new AlRunnerV3NoClientUnsupportedError(
+        `${this.cfg.alRunnerPath} (${reported})`,
+        this.helpFailed
+          ? "the `test --help` call failed"
+          : "its `test --help` does not list --no-client",
+      );
     }
     // T17 and M8: `<deps>`'s System Application must exist and equal bcVersion, here as in the CLI.
     try {
@@ -2077,6 +2134,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
     if (covered !== undefined) console.warn(covered.line);
+    console.warn(
+      `[lethal] al-runner-v3 one-shot calls ${this.skipAfterTimeoutLearned ? "carry" : "do not carry"} --skip-after-timeout${this.skipAfterTimeoutLearned ? "" : ` (${this.skipAfterTimeoutWhy})`} (R907)`,
+    );
     for (const line of v3DefectWarnings(this.contract, { ...kind, muted: covered?.muted }))
       console.warn(line);
     const refusals = v3ContractRefusals(this.contract, kind);
@@ -2146,6 +2206,38 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
   private announced = false;
+  /**
+   * R897, R-907: whether the running build's `test --help` lists `--skip-after-timeout`, so every
+   * ONE-SHOT call passes it (after a stop, the rest of that codeunit is reported not run). Older
+   * builds reject unknown flags, hence the check. Serve is unaffected: it has its own cut (R897).
+   */
+  private skipAfterTimeoutLearned = false;
+  private skipAfterTimeoutWhy = "not checked";
+
+  /** R907: reads `test --help` once per session (status() calls it). A failure is false, not a throw. */
+  async learnSkipAfterTimeout(): Promise<void> {
+    if (this.skipAfterTimeoutWhy !== "not checked") return;
+    const res = await this.spawn([this.cfg.alRunnerPath, "test", "--help"], this.cacheEnv()).catch(
+      (e: unknown) => ({ exitCode: -1, stdout: "", stderr: String(e) }),
+    );
+    if (res.exitCode !== 0) {
+      this.skipAfterTimeoutLearned = false;
+      this.helpFailed = true;
+      this.skipAfterTimeoutWhy = "the `test --help` call failed";
+      this.notify(
+        "al-runner-v3-skip-after-timeout-unknown",
+        `[lethal] al-runner v3 \`test --help\` failed (${(res.stderr || res.stdout).trim().slice(0, 200)}); one-shot calls go without --skip-after-timeout (R907)`,
+      );
+      return;
+    }
+    const help = `${res.stdout}\n${res.stderr}`;
+    this.skipAfterTimeoutLearned = help.includes("--skip-after-timeout");
+    this.skipAfterTimeoutWhy = this.skipAfterTimeoutLearned ? "" : "this build does not list it";
+    this.noClientListed = help.includes("--no-client");
+  }
+  /** R907: whether the same `test --help` lists `--no-client`; false until learned or if the call failed. */
+  private noClientListed = false;
+  private helpFailed = false;
   /**
    * R886: the `--dotnet-sidecar` file of this session. A named file is set at construction (a
    * missing one refuses in `status()`); the pinned build's own is set by `status()`, which reads
@@ -2944,6 +3036,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly beforeSpawn?: () => Promise<void>;
     readonly signal?: AbortSignal;
     readonly onlyTest?: string;
+    /** R907: a mutant is active for this call (`--skip-after-timeout` only then). Absent: none. */
+    readonly mutantActive?: boolean;
   }): Promise<SpawnedCall | { readonly spawnError: string; readonly wallMs: number }> {
     const argv = v3CallArgv({
       alRunnerPath: absToolPath(this.cfg.alRunnerPath),
@@ -2955,7 +3049,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds: o.stopSeconds,
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
+      noClient: this.noClient,
       noDownload: this.noDownload(),
+      // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
+      // otherwise leave its codeunit's later tests not run, counted refused at baseline.
+      skipAfterTimeout: this.skipAfterTimeout && o.mutantActive === true,
       ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
@@ -3388,6 +3486,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async activateOn(lane: Lane, mutantId: string | null): Promise<void> {
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
+    lane.aloneAfterStop = new Map();
     // R653: the pair is taken out here; only the expected next activation puts anything back.
     const pair = lane.pair;
     lane.dropPair();
@@ -3599,6 +3698,48 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if ("verdict" in made) return made.verdict;
       call = made.call;
       alone = true;
+    }
+    /**
+     * R897, R-907: as serve's cut runs a cut codeunit's remaining covering tests alone. A one-shot
+     * mutant call carried `--skip-after-timeout`, and an earlier test stopped at the limit left
+     * this ref not run. Run it ALONE under the same mutant and limit, without the flag, once per
+     * (mutant, ref); that answer stands for the ref.
+     */
+    if (
+      !alone &&
+      this.skipAfterTimeout &&
+      !this.isBaselineCall(lane) &&
+      call.refusal === undefined &&
+      call.missing === undefined
+    ) {
+      const idx = call.rows.findIndex(
+        (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
+      );
+      const mine = call.rows[idx];
+      const first = call.rows.findIndex((r) => r.notRun);
+      const stop = call.rows[first];
+      if (
+        mine?.notRun &&
+        stop !== undefined &&
+        first < idx &&
+        V3_TIMEOUT_MESSAGE.test(stop.message ?? "")
+      ) {
+        let cached = lane.aloneAfterStop.get(refKey(ref));
+        if (cached === undefined) {
+          const made = await this.callCodeunit(
+            lane,
+            ref,
+            opts.timeoutMs,
+            opts.coverage !== "none",
+            `Codeunit${ref.codeunitId}.${ref.method}`,
+          );
+          if ("verdict" in made) return made.verdict;
+          cached = made.call;
+          lane.aloneAfterStop.set(refKey(ref), cached);
+        }
+        call = cached;
+        alone = true;
+      }
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);
     if (call.missing !== undefined) return this.rowMissing(lane, ref, call.missing, call.wallMs);
@@ -3862,12 +4003,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ref: TestMethodRef,
     timeoutMs: number,
     wantCoverage: boolean,
+    /** R907: run exactly this test, alone, without `--skip-after-timeout`; rows are not stored. */
+    aloneTest?: string,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const id = ref.codeunitId;
     // R857: one test alone, one process. Only the baseline gets here under --isolate-tests: entries
     // carry no coverage, and a mutant call is an entry.
     const key = this.callId(ref);
-    const onlyTest = this.isolated(key)?.test;
+    const onlyTest = aloneTest ?? this.isolated(key)?.test;
     // R762 A: an UNMUTATED call that asked for no coverage (a kill confirm) needs none: no flag and
     // no join. A mutant call keeps it whatever it asked: the Sleep rule (§6) reads it.
     // In serve-entries the baseline bracket (`inBaseline`) alone says what the baseline is (R635 §4).
@@ -3891,9 +4034,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
     // a spawn; everything below reads its raw answer exactly as a live one's.
     const spec =
-      onlyTest !== undefined
-        ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
-        : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+      aloneTest !== undefined
+        ? undefined
+        : onlyTest !== undefined
+          ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
+          : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
     let raw: SpawnedCall;
     if (spec !== undefined) {
       // R652: still checked, as before a send: the bytes now are the proved bytes.
@@ -3911,6 +4056,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R652: the last await before the spawn; nothing below reads the disk before v3 does.
         beforeSpawn: () => this.checkBound(lane),
         ...(onlyTest !== undefined ? { onlyTest } : {}),
+        mutantActive: aloneTest === undefined && !this.isBaselineCall(lane),
       });
       if ("spawnError" in made) {
         return {
@@ -3998,6 +4144,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       coverage: decodeV3Coverage(covText),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
+    if (aloneTest !== undefined) return { call };
     this.noteBaselineRows(lane, key, decoded.rows);
     lane.rowsByCodeunit.set(key, call);
     return { call };
