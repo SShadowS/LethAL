@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**18 of 864 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**18 of 865 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -350,6 +350,7 @@ that ordering is the priority.
 - **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · done (f85a6c52): the branch is named in the report; making v3 non-GUI waits for upstream aldevtools #7564
 - **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · open
 - **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, BC's 'Failed to compare two elements in the array'), and the operation it had claimed stayed orphaned, which took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; traced offline (R-900): the reconcile behaved as designed; ending such an orphan needs a…
+- **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
 
 ## Product gaps a real project hits
 
