@@ -675,6 +675,45 @@ describe("compileSchemataForFile — selector var injection past codeunit proper
     expect(varAt).toBeLessThan(out.indexOf("procedure Go"));
   });
 
+  // R-898 (BC.History Shopify): a comment BETWEEN two properties is a member too; anchoring before
+  // it left `EventSubscriberInstance` after the `var` (alc AL0104/AL0107).
+  it("inserts the selector var after the last property even with a comment between properties", () => {
+    const source = `codeunit 50102 "R"
+{
+    Access = Internal;
+    // the event subscribers bind by hand
+    EventSubscriberInstance = Manual;
+
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("EventSubscriberInstance = Manual;"));
+    expect(varAt).toBeLessThan(out.indexOf("procedure Go"));
+  });
+
+  it("keeps a comment that sits AFTER the properties with its procedure, as before", () => {
+    const source = `codeunit 50103 "S"
+{
+    Access = Internal;
+
+    // Go does the thing
+    procedure Go()
+    begin
+        DoThing();
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("Access = Internal;"));
+    expect(varAt).toBeLessThan(out.indexOf("// Go does the thing"));
+  });
+
   it("still reuses an existing var_section that sits after a property", () => {
     // The real-world shape this most often takes: `Subtype = Test;` followed by the codeunit's
     // own globals. Reuse must win over insertion, or the emission carries two var sections.

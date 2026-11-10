@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**19 of 865 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**17 of 867 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -347,9 +347,11 @@ that ordering is the priority.
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · done (de9b675a) — the default is `auto` (R-896): a codeunit runs under `method` where its baseline needs it…
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · done (efa3d4bb)
-- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · open
+- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · done (f85a6c52): the branch is named in the report; making v3 non-GUI waits for upstream aldevtools #7564
 - **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · done (5fc624e8) — five Tier-2 hang rules (P1, P1b, P2, P5, P6) in openItemHangRefuses; remove-commit polls a…
 - **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, BC's 'Failed to compare two elements in the array'), and the operation it had claimed stayed orphaned, which took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; traced offline (R-900): the reconcile behaved as designed; ending such an orphan needs a…
+- **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
+- **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
 
 ## Product gaps a real project hits
 
@@ -538,7 +540,7 @@ that ordering is the priority.
 - **R894** · Spread one bcdev run across several BC servers (load balancing), so a slow suite's mutants run in parallel without sessions sharing a database · [R894.md](docs/roadmap/R894.md) · open, filed 2026-11-09 — DEFERRED by the owner: worth doing, not now
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
-- **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · open, filed 2026-11-10 from coord R-893
+- **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
 
 ## Backends and tooling
 
