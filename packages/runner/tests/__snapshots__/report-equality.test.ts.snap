@@ -62,7 +62,38 @@ exports[`buildReport output is stable across the event-stream refactor an event 
     "totalFiles": 13,
   },
   "groupedCalls": 0,
-  "identityScheme": 47,
+  "identityScheme": 48,
+  "isolation": {
+    "codeunits": [
+      {
+        "chosen": "method",
+        "codeunitId": 50100,
+        "lostUnderMethod": [
+          {
+            "message": "Setup not found",
+            "outcome": "fail",
+            "test": "Sales Helper Tests.SetupOnce",
+          },
+        ],
+        "methodPassed": 3,
+        "name": "Sales Helper Tests",
+        "reason": "method passed 3 of 4, test passed 1",
+        "testPassed": 1,
+        "tests": 4,
+      },
+      {
+        "chosen": "test",
+        "codeunitId": 50101,
+        "lostUnderMethod": [],
+        "methodPassed": 1,
+        "name": "Sales Post Tests",
+        "reason": "method passed 1 of 2, test passed 1: not strictly more, so it stays on test",
+        "testPassed": 1,
+        "tests": 2,
+      },
+    ],
+    "mode": "auto",
+  },
   "mutants": [
     {
       "astHash": "hashA1",

@@ -30,6 +30,7 @@ import type {
 } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
+import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import type {
@@ -334,6 +335,16 @@ export type RunEventInput =
          *  run in THIS session only (never a resume-reused baseline). Optional on the wire. */
         readonly durationMs?: number;
       }[];
+    }
+  | {
+      /**
+       * R896: al-runner v3 under `isolation: "auto"`, once per session, in the first batch that ran a
+       * live baseline, before its `baseline-batch-finished`: one row per candidate codeunit (a red
+       * test `method` could change), switched or not. A codeunit that was no candidate has no row.
+       */
+      readonly type: "baseline-isolation-chosen";
+      readonly batchIndex: number;
+      readonly codeunits: readonly IsolationChoiceRow[];
     }
   | {
       /**

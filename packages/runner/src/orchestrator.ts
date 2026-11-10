@@ -166,6 +166,13 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
+import {
+  IsolationChoiceChangedError,
+  type IsolationChoiceRow,
+  chooseCodeunitIsolation,
+  isolationCandidates,
+  methodCodeunits,
+} from "./isolation-auto";
 import { largeMethodSuspect, largeMethodWarning, largeMethodsOf } from "./large-fold";
 import {
   type BeginPublishRefusal,
@@ -283,7 +290,7 @@ import {
   staleDependencyMember,
   staleTargetMember,
 } from "./stale-test-app";
-import { type LendingSession, sameHiddenFiles } from "./store";
+import { ISOLATION_AUTO_BUILD_TAG, type LendingSession, sameHiddenFiles } from "./store";
 import type { ResultsStore } from "./store";
 import type {
   CarryHidden,
@@ -4812,6 +4819,12 @@ interface BatchScope {
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
    */
   readonly testPageRefused?: ReadonlyMap<string, string>;
+  /**
+   * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
+   * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
+   * `--resume` carries from, whose stored choice the new one must equal.
+   */
+  readonly isolationAuto?: { decided: boolean; readonly resumedRunId: number | undefined };
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -5482,6 +5495,78 @@ function assertNoTestAppDrift(
   throw new TestAppDriftedError(proven, now, batchIdx, unreadOf(read));
 }
 
+/**
+ * R896: `isolation: "auto"`, once per session, inside the baseline bracket of the first batch whose
+ * baseline ran live. Every candidate codeunit (`isolationCandidates`) goes to `method`, its tests are
+ * run again, and it keeps `method` only if that passed strictly more of them. A switched codeunit's
+ * `method` rows replace its `test` rows in `baseline` (the `test` rows stay in the store). The
+ * backend's refusal notes are re-made from the chosen rows (review 4). The choice is stored on the
+ * run, compared with a resumed run's first (review 3), then reported.
+ */
+async function chooseIsolationAuto(
+  scope: BatchScope,
+  batchIdx: number,
+  baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }>,
+  resumedRunId: number | undefined,
+): Promise<void> {
+  const { backend, store, runId, emit } = scope;
+  const choose = (cu: number, mode: "test" | "method"): void => {
+    if (backend.chooseIsolation === undefined) {
+      throw new Error(`isolation "auto" on a backend with no chooseIsolation (R896)`);
+    }
+    backend.chooseIsolation(cu, mode);
+  };
+  const candidates = isolationCandidates(baseline);
+  for (const cu of candidates) choose(cu, "method");
+  const methodVerdicts = new Map<string, TestVerdict>();
+  for (const b of baseline) {
+    if (!candidates.includes(b.ref.codeunitId)) continue;
+    const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
+    if (stop) {
+      // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
+      // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
+    methodVerdicts.set(testKeyOf(b.ref), verdict);
+  }
+  const rows: IsolationChoiceRow[] = [];
+  const choice: Record<string, "test" | "method"> = {};
+  for (const cu of candidates) {
+    const testRows = baseline.filter((b) => b.ref.codeunitId === cu);
+    const methodRows = testRows.map((b) => {
+      const verdict = methodVerdicts.get(testKeyOf(b.ref));
+      if (verdict === undefined)
+        throw new Error(`R896: no method row for ${qualifiedTestName(b.ref)}`);
+      return { ref: b.ref, verdict };
+    });
+    const row = chooseCodeunitIsolation(testRows, methodRows);
+    choose(cu, row.chosen);
+    if (row.chosen === "method") {
+      for (const [i, b] of baseline.entries()) {
+        const verdict = methodVerdicts.get(testKeyOf(b.ref));
+        if (b.ref.codeunitId === cu && verdict !== undefined) baseline[i] = { ref: b.ref, verdict };
+      }
+    }
+    backend.noteReusedBaseline?.(row.chosen === "method" ? methodRows : testRows);
+    choice[String(cu)] = row.chosen;
+    rows.push(row);
+  }
+  if (resumedRunId !== undefined) {
+    const was = store.runIsolationChoice(resumedRunId);
+    // A run that never chose ran no baseline, so none of its verdicts depends on a mode.
+    if (was !== null) {
+      const before = methodCodeunits(was);
+      const now = methodCodeunits(choice);
+      if (before.join(",") !== now.join(",")) {
+        throw new IsolationChoiceChangedError(resumedRunId, before, now);
+      }
+    }
+  }
+  store.setRunIsolationChoice(runId, choice);
+  emit({ type: "baseline-isolation-chosen", batchIndex: batchIdx, codeunits: rows });
+}
+
 async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<ScoreBatchResult> {
   const {
     backend,
@@ -5644,6 +5729,18 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       baseline.push({ ref, verdict: v });
       ranHere.add(ref);
     }
+    // R896 (review 2): INSIDE the bracket, so the `method` pass's calls are baseline calls (their
+    // coverage, their refusals); its chosen rows replace the superseded ones in `baseline`.
+    const auto = scope.isolationAuto;
+    if (
+      auto !== undefined &&
+      !auto.decided &&
+      reused === undefined &&
+      baseline.length === tests.length
+    ) {
+      auto.decided = true;
+      await chooseIsolationAuto(scope, batchIdx, baseline, auto.resumedRunId);
+    }
   } finally {
     backend.baselinePhase?.(false);
   }
@@ -5669,6 +5766,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baseline.length === tests.length &&
     // R857: nothing can reuse it, and as the newest match it would hide a default run's own.
     backend.isolatesTests !== true &&
+    // R896 (review 1): nor under auto, whose rows depend on the session's choice.
+    scope.isolationAuto === undefined &&
     // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
     // test would bring it back stopped on a `--resume` that raised the budget.
     !baseline.some((b) => stoppedByUs(b.verdict))
@@ -6366,7 +6465,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -6403,6 +6502,7 @@ async function runSessionBody(
     selectorIds: cfg.selectorIds,
     ...(cfg.backend.isolatesTests === true ? { isolateTests: true } : {}),
     ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
+    ...(cfg.backend.isolationAuto === true ? { isolationAuto: true } : {}), // R896
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -7142,6 +7242,9 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      ...(cfg.backend.isolationAuto === true
+        ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
+        : {}),
     };
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same
     // manifest snapshot, so every batch would report the same changes.
@@ -8414,6 +8517,7 @@ async function runSessionBody(
           allowReuse:
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
+            cfg.backend.isolationAuto !== true && // R896 (review 1)
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
