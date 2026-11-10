@@ -1286,6 +1286,13 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(b.baselineNote()).toContain("28.4.1.2");
   });
 
+  test("R904: a new session on the same backend starts with no data-off note", async () => {
+    const { b } = await notices(OFF, { downloadDemoData: false });
+    expect(b.baselineNote()).toContain("28.4.1.2");
+    b.setNotify(() => {});
+    expect(b.baselineNote()).toBeUndefined();
+  });
+
   test("no note, no warning and no baseline line", async () => {
     const { seen, b } = await notices(undefined);
     expect(seen.filter(([c]) => c.startsWith("al-runner-v3-test-data"))).toEqual([]);

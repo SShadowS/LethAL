@@ -8329,11 +8329,50 @@ describe("runSession — R904, test data off and a partly red baseline stops by 
     const store = new ResultsStore(":memory:");
     const run = runSession({ backend, store, ...dirs, selectorIds });
     await expect(run).rejects.toThrow(
-      /1 of 2 baseline test\(s\) did not pass while al-runner v3 says test data is off/,
+      /1 of 2 baseline test\(s\) did not pass \(Sandbox Tests\.ReadsDemoData\) while al-runner v3 says test data is off/,
     );
     await expect(run).rejects.toThrow(/R904/);
     // Before any mutant: only the baseline's deactivated runs happened.
     expect(backend.activations.filter((a) => a !== null)).toEqual([]);
+    // Review: the red baseline's snapshot is gone, so a `--resume` cannot score against it.
+    expect(store.getRun(1)).not.toBeNull();
+    expect(store.dropBaselineSnapshot(1, 0)).toBe(0);
+  });
+
+  test("data off and a test SKIPPED at baseline (refused before sending) scores as before", async () => {
+    const dirs = await twoTestProject();
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant, ref) =>
+        mutant !== null ? "fail" : ref.method === "ReadsDemoData" ? "skip" : "pass",
+      ["IsOverBudget"],
+    );
+    backend.baselineNote = () => DATA_OFF;
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
+  });
+
+  test("data off and NO green test keeps R885's per-mutant note, and does not stop", async () => {
+    const dirs = await twoTestProject();
+    const backend = new StubBackend(CAPS_NST, () => "fail", ["IsOverBudget"]);
+    backend.baselineNote = () => DATA_OFF;
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain(NO_GREEN_BASELINE);
+      expect(m.failureNote).toContain("test data is off");
+    }
   });
 
   test("data off but an all-green baseline scores as before", async () => {

@@ -1807,6 +1807,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.dotnetHelperWarned = false;
       this.testPathsWarned = false;
       this.testDataOffWarned = false;
+      // R904: and the note itself, so a session after the cache was filled is not stopped on the
+      // last session's data-off line.
+      this.testDataOffBuild = undefined;
       this.demoDownloadWarned = false;
       this.demoMayDownloadWarned = false;
     }
