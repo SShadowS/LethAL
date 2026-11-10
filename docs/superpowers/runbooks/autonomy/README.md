@@ -77,11 +77,16 @@ next free id right before writing).
   `heavy.2` and `heavy.3`, with `flock`. It refuses a fourth heavy job, and a third BaseApp
   (BC.History) corpus job (R642). Known limit: two corpus jobs started from ONE shell (`a & b`) share a
   process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
-  jobs take a slot themselves: `flock -n /coord/locks/heavy.<n> <cmd>`. A slot taken by hand like
-  that writes no pid, so the tool counts it twice: once as a held slot and once as a running job.
-  That errs on the safe side. A slot taken by hand (`flock heavy.N <cmd>`) counts toward the
-  BaseApp cap only while one of its processes names /work/src/BC.History; a job over a COPY of the
-  corpus counts toward the total cap only.
+  jobs take a slot themselves with `scripts/heavy-slot.sh <baseapp|other> <cmd...>` (R905). It takes
+  the first free slot, writes its pid into the lock and `/coord/locks/heavy.<n>.class` (`baseapp <pid>`
+  or `other <pid>`), runs the same guard as `corpus-snapshot.ts` (exit 75 and no command when it
+  refuses), and removes the class on exit. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
+  they take their own slot, so the job would hold two. Say `baseapp` for any job over BC.History or a COPY of it, `other` for the
+  rest. The guard reads the class: while a BaseApp-class job runs, or any held slot has `baseapp` or
+  NO readable class (a dead pid reads as none), at most two heavy jobs run in all; with none, three.
+  A slot taken by a bare `flock -n /coord/locks/heavy.<n> <cmd>` has no class, so it counts as
+  BaseApp: do not use it. Such a slot also writes no pid, so the tool counts it twice: once as a
+  held slot and once as a running job. That errs on the safe side.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
@@ -122,7 +127,8 @@ next free id right before writing).
     process; a serve-entries daemon on D1 peaks near 2.2 GB, R766; 5 of 39 GB in use with two
     running). A run with `--workers N` is one heavy job, but it holds N daemons: count about 2.3 GB
     each against the 10 GB floor. Not while a BaseApp (BC.History) corpus job runs:
-    then the limit stays two in all. Never start a heavy job under 10 GB available (`free -g`). A
+    then the limit stays two in all. The slot class file (`heavy.<n>.class`, written by
+    `scripts/heavy-slot.sh`, R905) is how the guard knows: a slot with no class counts as BaseApp. Never start a heavy job under 10 GB available (`free -g`). A
     timing run whose figures will be quoted runs on a quiet machine, or reports the load beside its
     figures (R760: load inflated times 1.4-2.3x).
   - **Check before any status line (owner, 2026-10-21).** Before you report the state of background

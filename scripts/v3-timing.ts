@@ -57,6 +57,7 @@ import {
   slotHeld,
   trySlots,
 } from "./corpus-snapshot.ts";
+import { readSlotClass, writeSlotClass } from "./heavy-slot-class.ts";
 
 export interface LoadSample {
   readonly availGb: number;
@@ -325,7 +326,8 @@ function otherHeavy(): { n: number; refuse: boolean } {
     .map((s) => Number(readFileSync(join(LOCKS, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
   const ps = spawnSync("ps", ["-eo", "pid,ppid,pgid,args"], { encoding: "utf8" }).stdout;
-  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length);
+  const classes = held.map((s) => readSlotClass(LOCKS, s));
+  const v = heavyVerdict(parsePs(ps), process.pid, pids, held.length, false, classes);
   return { n: held.length + v.foreign.length, refuse: v.refuse };
 }
 
@@ -562,6 +564,7 @@ async function main(argv: readonly string[]): Promise<void> {
     // In the slot: an inherited V3_TIMING_SLOT names a slot we do not hold, so refuse it.
     if (!SLOTS.some((s) => s === MY_SLOT) || !slotHeld(LOCKS, MY_SLOT))
       throw new Error(`v3-timing: V3_TIMING_SLOT=${process.env.V3_TIMING_SLOT} is not a held slot`);
+    writeSlotClass(LOCKS, MY_SLOT, "other"); // R905: v3 timing is not BaseApp-class
     const g = otherHeavy();
     if (g.refuse) {
       console.error(`v3-timing: ${g.n} other heavy job(s), at the cap; giving the slot back`);

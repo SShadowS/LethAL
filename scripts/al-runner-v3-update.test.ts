@@ -663,6 +663,12 @@ describe("R633 I2 and M5", () => {
     expect(countHeavyJobs([], 3)).toBe(3);
     expect(countHeavyJobs([{ pid: 1, ppid: 1, pgid: 1, args: "sleep 100" }], 2)).toBe(2);
   });
+  test("R905: two jobs with a BaseApp-class or unclassed slot fill the container; two other do not", () => {
+    expect(countHeavyJobs([], 2, ["baseapp", "other"])).toBe(3);
+    expect(countHeavyJobs([], 2, [undefined, "other"])).toBe(3);
+    expect(countHeavyJobs([], 2, ["other", "other"])).toBe(2);
+    expect(countHeavyJobs([], 1, ["baseapp"])).toBe(1);
+  });
   test("M5: a heavy job is counted with a bare or a full-path bun; the update script is not", () => {
     for (const cmd of [
       "bun packages/runner/itest/al-runner-v3.itest.ts",
