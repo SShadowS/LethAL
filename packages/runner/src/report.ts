@@ -656,8 +656,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "al-runner-v3-coverage-off": {
     meaning:
       "LethAL turned coverage off for this whole al-runner-v3 run, because the coverage index has no " +
-      "rule for the #if wrapper shape in the files `coverageOffFiles` names. Every mutant ran against " +
-      "every green test. So `survived` includes mutants no test reached, `no-coverage` reads 0 for " +
+      "rule for the #if wrapper shape in the files the report's `coverageOffFiles` names. Every survivor " +
+      "ran against every green test. So `survived` includes mutants no test reached, `no-coverage` reads 0 for " +
       "that reason, and the survivor list is not reliable as a list of gaps a test reached and missed. " +
       "Before acting on a survivor, check that a test reaches its line.",
     entailedNegative:
@@ -3878,7 +3878,7 @@ export function renderConsole(r: SessionReport): string {
     const shown = r.coverageOffFiles.slice(0, 5).join(", ");
     const more = r.coverageOffFiles.length > 5 ? ` and ${r.coverageOffFiles.length - 5} more` : "";
     lines.push(
-      `COVERAGE OFF: LethAL turned coverage off for this whole run, because the coverage index has no rule for the #if wrapper shape in ${shown}${more}. Every mutant ran against every green test, so "survived" includes mutants no test reached and no-coverage reads 0 for that reason. The survivors are not reliable as gaps a test reached and missed.`,
+      `COVERAGE OFF: LethAL turned coverage off for this whole run, because the coverage index has no rule for the #if wrapper shape in ${shown}${more}. Every survivor ran against every green test, so "survived" includes mutants no test reached and no-coverage reads 0 for that reason. The survivors are not reliable as gaps a test reached and missed.`,
     );
   }
   // These mutants were scored against EVERY green test rather than against tests coverage placed

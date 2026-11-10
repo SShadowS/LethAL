@@ -154,7 +154,8 @@ and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` 
 project holding an `#if`-wrapped object file of a shape the index has no rule for (two-arm,
 `#elif`, nested, or a multi-object file holding a wrapper) runs with coverage off, with a
 warning naming the file (multi-object and single-wrapper files keep coverage on, R602), and without coverage an unreached mutant comes back survived rather than
-no-coverage. Do not quote a score from it. Its gate is `itest:alrunner-v3`
+no-coverage. Such a report carries the caveat `al-runner-v3-coverage-off` and names the files in
+`coverageOffFiles` (R907). Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
 An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
@@ -368,7 +369,8 @@ enforced.
 
 `schemaVersion: 3`. The top level carries `counts`, `mutationScore`, `validity` and `mutants`.
 `validity` carries `reliability`, `scoreDescribes` and `caveats`. `coverageMode` names the coverage
-mode the run used; a report written before it existed has none.
+mode the run used; a report written before it existed has none. `coverageOffFiles` is present only
+when LethAL itself turned coverage off for the run.
 
 #### Report notes (guidance)
 
