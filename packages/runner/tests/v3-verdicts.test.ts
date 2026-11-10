@@ -238,6 +238,18 @@ describe("joinV3Verdicts", () => {
     expect(j.kills).toEqual([]);
     expect(j.notShown).toEqual({ ...EMPTY, otherVerdict: 1 });
   });
+  // R-911 ruling 4: a mutant that reaches a call al-runner refuses under --no-client is a "not run"
+  // row (R-907: `error`, cause `runner-refused`, `NotRun: out-of-scope: ...`). Never a kill.
+  test("a v3 'not run' refusal is counted, never shown as a kill", async () => {
+    const j = await join1({
+      verdict: "error",
+      cause: "runner-refused",
+      failureNote:
+        "NotRun: out-of-scope: Page.Run with a record in a session without a client (--no-client)",
+    });
+    expect(j.kills).toEqual([]);
+    expect(j.notShown).toEqual({ ...EMPTY, otherVerdict: 1 });
+  });
   test("a v3 'killed' with no killing test is not shown", async () => {
     const j = await join1({ killingTest: undefined });
     expect(j.kills).toEqual([]);
