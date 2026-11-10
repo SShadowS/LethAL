@@ -665,11 +665,17 @@ function injectSelectorVarIntoObject(
   // `var` ahead of `Permissions`/`Access`/`Subtype`, which AL rejects. `undefined` here (a
   // codeunit whose members are all properties) falls through to the trailing branch below, the
   // same one the trigger-less table uses.
+  // R-898: only a member AFTER the last property: a comment between two properties is a member too,
+  // and anchoring before it left a property after the `var` (alc AL0104/AL0107).
+  let lastProperty = -1;
+  members.forEach((c, i) => {
+    if (c.kind === ALNodeKind.property) lastProperty = i;
+  });
   const anchor = isTrailingOnly
     ? undefined
     : isTable
       ? members.find((c) => c.kind === ALNodeKind.trigger)
-      : members.find((c) => c.kind !== ALNodeKind.property);
+      : members.find((c, i) => i > lastProperty && c.kind !== ALNodeKind.property);
 
   if (anchor !== undefined) {
     rewrites.set(

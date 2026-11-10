@@ -198,3 +198,23 @@ describe("R752: a bare field of the implicit project record is never a Char", ()
     expect(specsOfFiles([TBL(), cu])).toEqual([]);
   });
 });
+
+// R-898 (BC.History Data Compression): `Byte = ''` is AL0175, so a one-character literal compared
+// with a Byte, or with an element of a Byte array, is refused. A Char or Text comparison keeps it.
+describe("R-898: no blanking of a one-character literal compared with a Byte", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const cmp = (decl: string, lhs: string, lit = "'P'") =>
+    `codeunit 50898 R898 { procedure P() var ${decl}; begin if ${lhs} = ${lit} then; end; }`;
+
+  it("refuses a Byte variable and an element of a Byte array", () => {
+    expect(specsOf(cmp("B: Byte", "B"))).toEqual([]);
+    expect(specsOf(cmp("H: array[4] of Byte", "H[1]"))).toEqual([]);
+  });
+  it("keeps a Char, a Text and a longer literal", () => {
+    expect(specsOf(cmp("C: Char", "C"))).toEqual(["'P' -> ''"]);
+    expect(specsOf(cmp("T: Text", "T"))).toEqual(["'P' -> ''"]);
+    expect(specsOf(cmp("H: array[4] of Byte", "H[1]", "'PK'"))).toEqual(["'PK' -> ''"]);
+  });
+});
