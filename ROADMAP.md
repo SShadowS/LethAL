@@ -544,7 +544,7 @@ that ordering is the priority.
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
 - **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — helper-reach measured (coord R-908): the rule is right; next step is the owner's
-- **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · done (3b1fe9c6)
+- **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · done (c8081f97)
 
 ## Backends and tooling
 
