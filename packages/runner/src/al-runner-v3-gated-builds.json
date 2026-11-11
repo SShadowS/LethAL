@@ -84,6 +84,20 @@
     "dotnetSidecarSha256": "599f7bb54af5d6b920281e9fdfcd8d73c728f7d00bfc47d846dfdc035c31992f"
   },
   {
+    "id": "edge-42af5d384",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.14+edge.20261111 (42af5d384)",
+    "binarySha256": "8d6c4a131ccea73e7d5643502ca55b2c8e30ed36ce1b75e4754b6a3f727cc10f",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
+    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
+    "gatedAt": "2026-11-11T17:04:04.526Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    },
+    "dotnetSidecarSha256": "75d8141ee2e5ad32c0d8cf504f1b6456b3c5fb5b6ad6b500f318ba91b3f97268"
+  },
+  {
     "id": "edge-6bb821b98",
     "track": "edge",
     "version": "al-runner 3.0.0-alpha.13+edge.20261107 (6bb821b98)",
