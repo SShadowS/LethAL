@@ -304,17 +304,9 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     },
     {
       "event": {
-        "code": "test-digests-unavailable",
-        "message": "[lethal] this run records no test digests, so lethal verify will refuse it as source-predates-verify: the published test app "Sandbox Tests" carries no AL source, so the body the server runs cannot be digested. Build the test app so its .app includes its source",
-        "seq": 4,
-        "type": "warning",
-      },
-    },
-    {
-      "event": {
         "code": "resume-reusing-run",
         "message": "[lethal] --resume: reusing run 1 — 3 mutant verdict(s) may be carried without re-executing. Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646). 1 prior 'error' verdict(s) will be re-executed. Of those, 1 stranded the tier on a prior run and will be SKIPPED rather than re-executed (a mutant that never terminates reproduces this every time and blocks every mutant behind it; pass --retry-stranded to attempt them).",
-        "seq": 5,
+        "seq": 4,
         "type": "warning",
       },
     },
@@ -324,7 +316,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "fromRunId": 1,
         "mode": "last",
         "retryStranded": false,
-        "seq": 6,
+        "seq": 5,
         "strandedKeyCount": 1,
         "type": "resume-resolved",
       },
@@ -332,7 +324,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "runId": 2,
-        "seq": 7,
+        "seq": 6,
         "streamSchemaVersion": 1,
         "type": "stream-started",
       },
@@ -340,7 +332,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "phase": "generate",
-        "seq": 8,
+        "seq": 7,
         "type": "phase-entered",
       },
     },
@@ -362,7 +354,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "notInstrumentedFiles": [],
         "numberingDigest": "1bf6f9a3d88fb359016fca3a054b3ddddc8f3df5b849b5826d8de7fcc4dd6745",
         "preprocExcludedFiles": [],
-        "seq": 9,
+        "seq": 8,
         "siteCount": 6,
         "sourceSha256": "b5663472c6745b2debcef8680592ede36d8859b8dbf05a2a79e20358103d9530",
         "totalFiles": 2,
@@ -373,7 +365,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "phase": "generate",
-        "seq": 10,
+        "seq": 9,
         "type": "phase-left",
       },
     },
@@ -381,7 +373,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "code": "oversized-batch",
         "message": "[lethal] 2 file(s) exceed --max-guards-per-batch=1 on their own and were each published as a single oversized batch (batches split at file granularity): SandboxExtra.Codeunit.al (3 guards), SandboxLogic.Codeunit.al (3 guards). If such a batch fails to publish, lower the budget for the rest or split the file.",
-        "seq": 11,
+        "seq": 10,
         "type": "warning",
       },
     },
@@ -392,7 +384,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "phase": "deploy",
-        "seq": 12,
+        "seq": 11,
         "type": "phase-entered",
       },
     },
@@ -405,14 +397,14 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "appVersion": "<appVersion#1>",
         "batchIndex": 0,
         "guardCount": 3,
-        "seq": 13,
+        "seq": 12,
         "type": "batch-published",
       },
     },
     {
       "event": {
         "phase": "deploy",
-        "seq": 14,
+        "seq": 13,
         "type": "phase-left",
       },
     },
@@ -420,7 +412,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "batchIndex": 0,
         "phase": "baseline",
-        "seq": 15,
+        "seq": 14,
         "testCount": 1,
         "type": "phase-entered",
       },
@@ -438,21 +430,21 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "code": "resume-baseline-reused",
         "message": "[lethal] --resume: batch 0's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 0, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).",
-        "seq": 16,
+        "seq": 15,
         "type": "warning",
       },
     },
     {
       "event": {
         "phase": "baseline",
-        "seq": 17,
+        "seq": 16,
         "type": "phase-left",
       },
     },
     {
       "event": {
         "batchIndex": 0,
-        "seq": 18,
+        "seq": 17,
         "type": "baseline-batch-finished",
         "verdicts": [
           {
@@ -468,7 +460,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "batchIndex": 0,
         "coveredCount": 3,
         "noCoverageCount": 0,
-        "seq": 19,
+        "seq": 18,
         "type": "coverage-split",
         "unplaceableCount": 0,
         "unplaceableMutants": [],
@@ -512,7 +504,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startIndex": 104,
           "startLine": 4,
         },
-        "seq": 20,
+        "seq": 19,
         "type": "mutant-carried",
         "verdict": "survived",
       },
@@ -551,7 +543,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startIndex": 118,
           "startLine": 5,
         },
-        "seq": 21,
+        "seq": 20,
         "type": "mutant-carried",
         "verdict": "survived",
       },
@@ -590,7 +582,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startIndex": 123,
           "startLine": 5,
         },
-        "seq": 22,
+        "seq": 21,
         "type": "mutant-carried",
         "verdict": "survived",
       },
@@ -599,14 +591,14 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "detail": "estimate: 0 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
-        "seq": 23,
+        "seq": 22,
         "type": "phase-entered",
       },
     },
     {
       "event": {
         "phase": "mutants",
-        "seq": 24,
+        "seq": 23,
         "type": "phase-left",
       },
     },
@@ -647,14 +639,14 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startLine": 4,
         },
         "note": "not re-run on resume: a prior run's execution of this mutant could not be confirmed complete and stranded the tier. A mutant that never terminates (e.g. a negated loop-exit condition) reproduces this every time and blocks every mutant behind it, so it is skipped rather than retried — pass --retry-stranded to attempt it anyway. It is NOT scored either way.",
-        "seq": 25,
+        "seq": 24,
         "type": "mutant-skipped-stranded",
       },
     },
     {
       "event": {
         "phase": "deploy",
-        "seq": 26,
+        "seq": 25,
         "type": "phase-entered",
       },
     },
@@ -667,14 +659,14 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "appVersion": "<appVersion#2>",
         "batchIndex": 1,
         "guardCount": 3,
-        "seq": 27,
+        "seq": 26,
         "type": "batch-published",
       },
     },
     {
       "event": {
         "phase": "deploy",
-        "seq": 28,
+        "seq": 27,
         "type": "phase-left",
       },
     },
@@ -682,7 +674,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "batchIndex": 1,
         "phase": "baseline",
-        "seq": 29,
+        "seq": 28,
         "testCount": 1,
         "type": "phase-entered",
       },
@@ -700,21 +692,21 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "code": "resume-baseline-reused",
         "message": "[lethal] --resume: batch 1's baseline was not re-run. Its instrumented source and the published test app hash the same as run 1's batch 1, so that run's 1 baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).",
-        "seq": 30,
+        "seq": 29,
         "type": "warning",
       },
     },
     {
       "event": {
         "phase": "baseline",
-        "seq": 31,
+        "seq": 30,
         "type": "phase-left",
       },
     },
     {
       "event": {
         "batchIndex": 1,
-        "seq": 32,
+        "seq": 31,
         "type": "baseline-batch-finished",
         "verdicts": [
           {
@@ -730,7 +722,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
         "batchIndex": 1,
         "coveredCount": 2,
         "noCoverageCount": 0,
-        "seq": 33,
+        "seq": 32,
         "type": "coverage-split",
         "unplaceableCount": 0,
         "unplaceableMutants": [],
@@ -741,7 +733,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
       "event": {
         "detail": "estimate: 2 covered mutant(s), about 0 s of covering-test time",
         "phase": "mutants",
-        "seq": 34,
+        "seq": 33,
         "type": "phase-entered",
       },
     },
@@ -791,7 +783,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startIndex": 121,
           "startLine": 5,
         },
-        "seq": 35,
+        "seq": 34,
         "type": "mutant-scored",
         "verdict": "survived",
       },
@@ -842,7 +834,7 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
           "startIndex": 126,
           "startLine": 5,
         },
-        "seq": 36,
+        "seq": 35,
         "type": "mutant-scored",
         "verdict": "survived",
       },
@@ -850,14 +842,14 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "phase": "mutants",
-        "seq": 37,
+        "seq": 36,
         "type": "phase-left",
       },
     },
     {
       "event": {
         "phase": "teardown",
-        "seq": 38,
+        "seq": 37,
         "type": "phase-entered",
       },
     },
@@ -869,13 +861,13 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "phase": "teardown",
-        "seq": 39,
+        "seq": 38,
         "type": "phase-left",
       },
     },
     {
       "event": {
-        "seq": 40,
+        "seq": 39,
         "type": "session-finished",
       },
     },

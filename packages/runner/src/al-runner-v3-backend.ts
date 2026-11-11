@@ -2722,6 +2722,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ) {
       this.speculative = { dir: active, calls: specDone.calls };
     }
+    await this.probeBatchRefusal(this.lane); // R927: explicit serve-entries only
     return null;
   }
 
@@ -4223,6 +4224,80 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return d;
   }
 
+  /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
+  private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {
+    const server = new AlRunnerServer(
+      absToolPath(this.cfg.alRunnerPath),
+      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
+      this.cfg.preprocessorSymbols ?? [],
+      "serve",
+    );
+    await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
+      "--bc-version",
+      this.cfg.bcVersion,
+      ...(this.noDownload() ? ["--no-download"] : []),
+      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
+    ]);
+    this.stats.daemons += 1;
+    const daemon: Daemon = { server, dirty: false };
+    lane.setDaemon(mode, daemon);
+    return daemon;
+  }
+
+  /**
+   * R927: on an EXPLICIT serve-entries transport only, before the first baseline: one NONE entry for
+   * the test codeunit with the fewest tests, on a daemon closed right after. It judges one thing,
+   * whether serve refuses every entry with one reason (`entries-batch-refused`, R635 §6), which no
+   * warm-up after the baseline could change, so the session stops in seconds, not after the whole
+   * baseline. Nothing else of its answer is read: no baseline exists yet to compare it with. The
+   * default transport never probes (its warm-up falls back, R786).
+   */
+  private async probeBatchRefusal(lane: Lane): Promise<void> {
+    if (!this.entries || this.cfg.transportSource !== "explicit" || this.batchProbed) return;
+    const smallest = [...this.suitePerCodeunit].sort(
+      (a, b) => a[1].length - b[1].length || a[0] - b[0],
+    )[0];
+    if (smallest === undefined) return;
+    const s = this.serveStopSeconds();
+    if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    this.batchProbed = true;
+    this.transportFrozen = true; // R761
+    const [cu] = smallest;
+    const mode = this.modeOfCall(cu);
+    const started = Date.now();
+    // Timed as a warm-up (review r1), so its seconds show where the warm-up count does.
+    await lane.timed("warmupMs", async () => {
+      try {
+        // Inside the try (review r1): a daemon that cannot start is not this probe's to judge.
+        await this.spawnDaemon(lane, mode, s);
+        // Counted as a warm-up, so R652's `boundChecks = warmups + ...` still holds.
+        this.stats.warmups += 1;
+        await this.send(
+          lane,
+          [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] }],
+          "warmup",
+          mode,
+        );
+      } catch (err) {
+        if (
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
+          throw new AlRunnerV3EntriesRefusedError(
+            err.code,
+            `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+          );
+        }
+        // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
+      } finally {
+        await lane.closeDaemon();
+      }
+    });
+  }
+
+  private batchProbed = false;
+
   private async startDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
@@ -4239,21 +4314,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
-    const server = new AlRunnerServer(
-      absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
-      this.cfg.preprocessorSymbols ?? [],
-      "serve",
-    );
-    await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], s, [
-      "--bc-version",
-      this.cfg.bcVersion,
-      ...(this.noDownload() ? ["--no-download"] : []),
-      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
-    ]);
-    this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false };
-    lane.setDaemon(mode, daemon);
+    const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -4305,10 +4366,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           );
         }
         // Name the row that blocks the fallback when there is one, else the first unkept row.
-        const named = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad)) ?? first;
+        const blocker = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad));
+        const named = blocker ?? first;
+        // R927: on an explicit transport whose every unkept row is a named refusal, the default
+        // would have re-run the session one-shot (R786): say so, so the user knows the way out.
+        const wayOut =
+          blocker === undefined
+            ? `; with no "alRunnerV3.transport" key the default would re-run this session one-shot instead (R786)`
+            : "";
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any${wayOut}`,
         );
       }
     } catch (err) {

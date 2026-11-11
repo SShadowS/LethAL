@@ -412,9 +412,8 @@ function parseBackendKind(raw: string | undefined): BackendKind {
 }
 
 /** R266: the execution flags `lethal run --dry-run` refuses by name. `--out` is not here: it
- *  writes the dry-run listing. */
+ *  writes the dry-run listing. R917: nor are `--tests` and `--allow-large-run`, which it reads. */
 export const DRY_RUN_REFUSED = [
-  "tests",
   "progress-out",
   "workers",
   "keep-env",
@@ -429,7 +428,6 @@ export const DRY_RUN_REFUSED = [
   "no-group-runs",
   "retry-stranded",
   "stop-hung-sessions",
-  "allow-large-run",
   "fresh-probe",
   "isolate-tests",
 ] as const;
@@ -475,6 +473,12 @@ export interface DryRunCliConfig {
   /** R377: `--backend`, optional here. It changes which `#if` arms are listed, because al-runner
    *  predefines symbols alc does not. Absent lists alc's build. */
   readonly backendKind?: BackendKind;
+  /** R917: the real run's flags a dry run reads (so `--dry-run` can be added to a real command):
+   *  `--allow-large-run` changes the large-scope note, `--tests` is checked and named, and
+   *  `--time-budget` is said back with what the real run does with it. */
+  readonly allowLargeRun?: true;
+  readonly testDir?: string;
+  readonly timeBudgetSeconds?: number;
 }
 
 export interface RunCliConfig {
@@ -576,7 +580,7 @@ export interface RunCliConfig {
   readonly mutantTimeoutMs?: number;
   /**
    * R912: `--time-budget <seconds>`: see `SessionConfig.timeBudgetSeconds`. A positive integer;
-   * refused otherwise, and with `--dry-run`.
+   * refused otherwise. R917: a dry run reads it too (`DryRunCliConfig.timeBudgetSeconds`).
    */
   readonly timeBudgetSeconds?: number;
   /**
@@ -1080,10 +1084,13 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              brought up to date, exactly as a real run would. With --out <file> it
                              writes the listing as JSON: {files, sites, deployed, perFile[{file,
                              sites, deployed}], batches[{index, sites[{file, line, operator,
-                             deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
-                             execution flag (--tests, --workers ...) is refused with
-                             --dry-run, because a dry run executes no tests. --backend is
-                             optional; every backend lists the #if arms of alc's build
+                             deployed}]}], notInstrumented[{file, kinds, sites}]}. It reads
+                             the real run's --allow-large-run, --tests and --time-budget and
+                             says what the run does with each, so a real command previews with
+                             --dry-run added. Every other execution flag (--workers ...) is
+                             refused with --dry-run, because a dry run executes no tests.
+                             --backend is optional; every backend lists the #if arms of alc's
+                             build
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -2207,9 +2214,6 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         "--mutant-timeout-ms has no effect with --dry-run (a dry run executes no mutants)",
       );
     }
-    if (timeBudgetSeconds !== undefined) {
-      throw new Error("--time-budget has no effect with --dry-run (a dry run executes no mutants)");
-    }
     if (baselineTimeoutMs !== undefined) {
       throw new Error(
         "--baseline-timeout-ms has no effect with --dry-run (a dry run runs no baseline)",
@@ -2236,6 +2240,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         );
       }
     }
+    // R917 (review r1): an empty --tests is refused, as the real run refuses it, never dropped.
+    if (values.tests === "") {
+      throw new Error(
+        "--tests needs a folder: an empty --tests is refused (as 'lethal run' refuses it)",
+      );
+    }
     return {
       mode: "dry-run",
       projectDir,
@@ -2244,6 +2254,10 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       configPath: values.config ?? join(projectDir, "lethal.config.json"),
       ...(values.config !== undefined ? { configExplicit: true as const } : {}),
       ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
+      // R917: read, so a real command previews with `--dry-run` added (see `DryRunCliConfig`).
+      ...(values["allow-large-run"] === true ? { allowLargeRun: true as const } : {}),
+      ...(values.tests !== undefined ? { testDir: values.tests } : {}),
+      ...(timeBudgetSeconds !== undefined ? { timeBudgetSeconds } : {}),
       ...only,
       ...exclude,
       ...operators,
@@ -3521,6 +3535,14 @@ const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
  * exactly the drift this file avoids elsewhere. The writes it can perform are idempotent, additive
  * and identical to the ones `lethal run` performs on the same file moments later. `--help` says so.
  */
+/** R48, R917: the dry run's note for a scope above the pre-flight limit. With `--allow-large-run`
+ *  the real run goes ahead, so the note says so instead of telling the user to pass it. */
+export function dryRunLargeScopeNote(sites: number, allowLargeRun: boolean): string {
+  return allowLargeRun
+    ? `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit; with --allow-large-run, 'lethal run' will run this scope anyway.`
+    : `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope. Narrow it with --only <glob>, or pass --allow-large-run (to the run, or to this dry run to see the run's answer).`;
+}
+
 async function dryRunCeiling(
   dbPath: string,
   configPath: string,
@@ -3624,6 +3646,8 @@ export async function printDryRun(
     readonly backendKind?: BackendKind;
     /** R565: the dependency package folders the config names (`MutationSetOptions`). */
     readonly dependencyPackageDirs?: readonly string[];
+    /** R917: see `DryRunCliConfig.allowLargeRun`. */
+    readonly allowLargeRun?: true;
   },
 ): Promise<void> {
   // R41/R127: `--only` and `--operator` are honoured here too. A dry run whose whole purpose is
@@ -3690,9 +3714,7 @@ export async function printDryRun(
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
   // refuses — means the narrowing conversation happens before anything is published.
   if (sites.length > LARGE_RUN_MUTANT_THRESHOLD) {
-    console.log(
-      `NOTE: ${sites.length} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope. Narrow it with --only <glob>, or pass --allow-large-run.`,
-    );
+    console.log(dryRunLargeScopeNote(sites.length, paths.allowLargeRun === true));
   }
   if (only !== undefined && only.length > 0) {
     console.log(
@@ -5935,6 +5957,23 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
   if (dryRunConfig === undefined) {
     console.log(`no config at ${parsed.configPath}: planning from source only, no server lookups`);
   }
+  // R917: the real run's --tests and --time-budget, read and said back (never silently ignored).
+  if (parsed.testDir !== undefined) {
+    // Review r1: the real run's own first check (R-445), so the dry run refuses what it refuses.
+    const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
+    if (nested !== null) throw new TestProjectNestedError(nested);
+    if (!existsSync(parsed.testDir)) {
+      throw new Error(
+        `--tests ${parsed.testDir}: no such folder (a dry run runs no test, but checks the folder it names)`,
+      );
+    }
+    console.log(`tests: ${parsed.testDir} (the real run tests with this app; a dry run runs none)`);
+  }
+  if (parsed.timeBudgetSeconds !== undefined) {
+    console.log(
+      `time budget: ${parsed.timeBudgetSeconds} s (the real run stops scoring when it runs out and can be resumed; a dry run scores nothing)`,
+    );
+  }
   const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
   // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
   const dryRunSource = await readTargetSource(parsed.projectDir);
@@ -5952,6 +5991,7 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
       ? { preprocessorSymbols: validatePreprocessorSymbols(dryRunConfig.preprocessorSymbols) }
       : {}),
     ...(parsed.backendKind !== undefined ? { backendKind: parsed.backendKind } : {}),
+    ...(parsed.allowLargeRun === true ? { allowLargeRun: true as const } : {}),
     // R565/R656: the folders a real run of this backend searches.
     dependencyPackageDirs: dryRunDependencyPackageDirs(
       parsed.backendKind,

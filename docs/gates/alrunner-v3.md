@@ -306,6 +306,21 @@ order, and the stopping mutant only if N = 1 would have recorded it (a throw bef
 Earlier-index mutants still in flight at the stop are discarded too. Which stop comes first can depend on timing. The per-mutant table at
 N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N = 4.
 
+## Auto isolation and refused tests (R890, R896, R921, R927)
+
+`"alRunnerV3.isolation": "auto"` (the default) decides per test codeunit from the baseline, as the owner's R890 ruling asks: a
+codeunit moves to `method` only when its baseline shows it needs to. Until R921 that meant "`method` passes strictly more of its
+tests". **R921 extends the rule, still decided by the baseline:** on a tie, a codeunit also moves to `method` when v3 refused one
+of its tests by name at baseline and `method` loses none of its tests. Under `test` the refused test ran inside every mutant call
+of its codeunit: it spoiled later tests that read its state (MasterDataManagement, R-914: 44 of 81 errors), and on the serve
+default its row made the warm-up give up serve for the whole session (R916). Under `method` it is never sent, since it covers
+nothing. Proof, on an invented app (coord R-922): serve then equals an all-one-shot run per mutant, verdict and killing test.
+
+An explicit `"transport": "serve-entries"` run (only that; the default and the gate's own backends never do) sends one probe
+request before the baseline: one NONE entry for the test codeunit with the fewest tests, on a daemon closed right after. It judges
+only whether serve refuses every entry with one reason (`entries-batch-refused`), so such a run stops in seconds instead of
+after the whole baseline (R927). No gate figure counts it, since no leg sets the transport source.
+
 ## The pin and the update gate
 
 - `/work/tools/al-runner-v3/current` points at the gated build; read `current/.gated` for which one. That file names

@@ -63,7 +63,7 @@ const MANIFEST_ENTRY = "NavxManifest.xml";
 const VERSION_ATTRIBUTE = /<App\b[^>]*\bVersion="([^"]+)"/;
 
 /** Package paths whose contents are AL source. BC nests the project's own layout under `src/`. */
-function isAlSourceEntry(name: string): boolean {
+export function isAlSourceEntry(name: string): boolean {
   return name.toLowerCase().endsWith(".al");
 }
 

@@ -18,8 +18,10 @@ import {
   findObjectClashes,
   injectedObjects,
 } from "../src/object-clash";
+import { compiledMembershipOf } from "../src/test-membership";
 import { readTestAppSources } from "../src/testpage-scan";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { r932PkgA } from "./helpers/proven-test-app";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
 
@@ -195,6 +197,27 @@ describe("R843: the readers", () => {
     expect("objects" in upper).toBe(true);
     // Without an expectation the package is read as it is.
     expect("objects" in declaredObjectsOfPackage(bytes)).toBe(true);
+  });
+
+  test("R932: trailing NULs on SymbolReference.json are padding; a NUL in the middle is not", () => {
+    const pkg = r932PkgA();
+    expect(readPackageEntry(Buffer.from(pkg), "SymbolReference.json")?.at(-1)).toBe(0);
+    const r = declaredObjectsOfPackage(pkg);
+    expect("objects" in r).toBe(true);
+    const mid = buildFakeAppWithEntries({ "SymbolReference.json": '{"AppId":\0"a"}' });
+    const bad = declaredObjectsOfPackage(new Uint8Array(mid));
+    expect(JSON.stringify(bad)).toContain("is not valid JSON");
+  });
+
+  test("R932: compiledMembershipOf reads the NUL-padded served package too; a middle NUL is refused", () => {
+    const pkg = r932PkgA();
+    const m = compiledMembershipOf(pkg);
+    expect(m.kind).toBe("read");
+    if (m.kind === "read") expect(m.tests.map((t) => t.method)).toContain("ControlPasses");
+    const mid = buildFakeAppWithEntries({ "SymbolReference.json": '{"Codeunits":\0[]}' });
+    const bad = compiledMembershipOf(new Uint8Array(mid));
+    expect(bad.kind).toBe("none");
+    if (bad.kind === "none") expect(bad.why).toContain("not valid JSON");
   });
 
   test("a garbled SymbolReference never reads as 'declares nothing'", () => {
