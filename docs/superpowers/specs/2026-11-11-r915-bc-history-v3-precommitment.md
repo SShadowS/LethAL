@@ -33,3 +33,22 @@ Billing, 2 h for E-Document Core, 2.5 h each for Quality Management and Shopify.
 
 Every new refusal cause, crash, hang, wrong-looking verdict, misleading report line or tool friction. Each gets an invented repro,
 then a roadmap item or an upstream al-runner issue. Small LethAL ones are fixed in this task, red both ways.
+
+## Amendment 1, before any sampled run (2026-11-11)
+
+**Why.** On full apps the serve default falls back to one-shot (R918). E-Document Core also ran with coverage off, because of one
+split-header enum (R920). A full app cannot finish in a session.
+
+**What changes.**
+- **LethAL:** sampled runs use branch `lethal/r915` at `f7b31ce8`: current master plus R920's fix, which keeps coverage on for
+  E-Document Core. Its first line records the head.
+- **Sample:** per app, files shuffled with seed **915**, taken in that order while the total stays at or under **150** deployed
+  mutants (`/coord/handoff/R-915/sample.ts`, file lists in `sample-<app>.txt`). The result is 149 to 150 mutants:
+  Subscription Billing 16 files, E-Document Core 3, Quality Management 7, Shopify 14. Each run passes them as `--only`.
+- **Runs:** each sample one-shot (`"transport": "one-shot"`), `--time-budget 14400`. Subscription Billing and E-Document Core also
+  run the SAME sample with `"transport": "serve-entries"`, explicit, in a separate session. One heavy slot at a time.
+- **Paired check:** for those two apps, per mutant on the mutants both runs reached: verdict and killing test. **Nothing is
+  pre-committed.** Every difference is a finding. Agreement is evidence for R918's "prove serve for those shapes", never proof on
+  its own. The serve figures are never reported without the one-shot figures beside them.
+- Subscription Billing's full-app session 2 (already running when this was written) runs to its budget and is reported as
+  measured. No further full-app sessions.
