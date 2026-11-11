@@ -6496,6 +6496,8 @@ describe("R912: windows and --time-budget", () => {
     onPrefetch: (() => void) | undefined;
     /** Baseline coverage names only codeunit 79000, so the second carrier's mutants are uncovered. */
     coverOnlyFirst = false;
+    /** R914: the test's own time; `durationMs` (the whole call, compile included) stays `baselineMs`. */
+    measuredMs: number | undefined;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {
       super("pass");
@@ -6512,6 +6514,7 @@ describe("R912: windows and --time-budget", () => {
         return {
           ...v,
           durationMs: this.baselineMs,
+          ...(this.measuredMs !== undefined ? { measuredDurationMs: this.measuredMs } : {}),
           ...(this.coverOnlyFirst && cov !== undefined && "entries" in cov
             ? {
                 coverage: {
@@ -6629,6 +6632,20 @@ describe("R912: windows and --time-budget", () => {
     for (const run of [short, long]) {
       expect(run.events.some((e) => e.type === "warning" && /estimate/.test(e.code))).toBe(false);
     }
+  });
+
+  test("R914: the estimate and the windows read each test's own time (measuredDurationMs), not the call's durationMs", async () => {
+    // Every baseline call took 400 s wall (a compile each), but the test body took 5 s.
+    const run = await runWith(400_000, {}, (b) => {
+      b.measuredMs = 5_000;
+    });
+    const n = run.backend.prefetches.flat().length;
+    const e = run.events.find((x) => x.type === "phase-entered" && x.phase === "mutants");
+    expect(e?.type === "phase-entered" ? e.detail : "").toBe(
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 5_000)} of covering-test time`,
+    );
+    // At 5 s each they all fit one 600 s window; at the call's 400 s they would go one to a window.
+    expect(run.backend.prefetches).toHaveLength(1);
   });
 
   test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {
