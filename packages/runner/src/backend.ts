@@ -478,10 +478,15 @@ export interface ExecutionBackend {
    */
   readonly noClient?: boolean;
   /**
-   * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). In `runner_build`,
-   * so a session with it and one without it lend each other nothing. Absent counts as false.
+   * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */
   readonly skipAfterTimeout?: boolean;
+  /**
+   * R919: the build lists `--skip-after-timeout`, on either transport. This, not `skipAfterTimeout`, goes in
+   * `runner_build`, so a session with the flag and one without it lend each other nothing, while a run that fell
+   * back from serve to one-shot at the warm-up (R786) is still found by a `--resume` that starts on serve.
+   */
+  readonly skipAfterTimeoutSupported?: boolean;
   /**
    * R890: `alRunnerV3.isolation: "method"`: every test runs alone (as `isolatesTests`) under
    * al-runner's codeunit isolation, so a fresh codeunit per test, as BC's one-method runner.
