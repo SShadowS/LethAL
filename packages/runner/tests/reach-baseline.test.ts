@@ -184,6 +184,52 @@ describe("R926: reachLine is in the coverage frame", () => {
       expect(b.compiled.split("\n")[hit]?.trim().endsWith(start)).toBe(true);
     }
   });
+
+  // R926 review E: dispatch-plan.ts's NOT_AN_OBJECT / DIRECTIVE_ONLY are copies of line-map.ts's
+  // rule. Pinned by behaviour: a namespace and a using line before the first object, and a comment,
+  // a multi-line comment, a pragma and a #region between the two objects, none of which is an
+  // object. If the two rules disagree on any of them, the reach line leaves line-map's frame.
+  test("lines that are no object do not move the base: reachSiteOf agrees with line-map", async () => {
+    const b = await oneFile(`namespace R926.Pin;
+
+using System.Utilities;
+
+codeunit 79900 "Pin One"
+{
+    procedure One(A: Integer; B: Integer): Boolean
+    begin
+        exit(A > B);
+    end;
+}
+
+// a line comment
+/* a block
+   comment */
+#pragma warning disable AA0137
+#region Second
+codeunit 79901 "Pin Two"
+{
+    procedure Two(A: Integer; B: Integer): Boolean
+    begin
+        exit(A > B);
+    end;
+}
+#endregion
+`);
+    const second = b.source.indexOf("codeunit 79901");
+    const seen = { first: 0, second: 0 };
+    for (const [id, line] of b.lines) {
+      const stmt = b.stmt.get(id) ?? -1;
+      const off = b.where(stmt);
+      expect(off).toBeDefined();
+      const placed = resolveFileLine(b.entries, fileLineAt(b.compiled, off ?? 0));
+      expect(placed?.objectLine).toBe(line);
+      if (stmt < second) seen.first++;
+      else seen.second++;
+    }
+    expect(seen.first).toBeGreaterThan(0);
+    expect(seen.second).toBeGreaterThan(0);
+  });
 });
 
 /**

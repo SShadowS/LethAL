@@ -3197,6 +3197,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
+      isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
       compilePlainCheck: no("compilePlainCheck"),

@@ -98,6 +98,18 @@ describe("lanes(N): the guards", () => {
     expect(v.inRunStopMs).toBe(1000);
     expect(v.dependencyPackageDirs?.()).toEqual(r.b.dependencyPackageDirs());
   });
+
+  // R926 review D: the isolation mode is shared by every lane, so a lane view answers `isolationOf`
+  // with the shared backend's own value (reach compares a baseline's mode with the mode now).
+  test("a lane view's isolationOf is the shared backend's", async () => {
+    const r = await lanesRig({ lanes: 2 });
+    const v = r.views[1];
+    if (v === undefined) throw new Error("no lane 1");
+    expect(v.isolationOf?.(7)).toBe("test");
+    r.b.isolationOf = (cu: number) => (cu === 7 ? "method" : "test");
+    expect(v.isolationOf?.(7)).toBe("method");
+    expect(v.isolationOf?.(8)).toBe("test");
+  });
 });
 
 describe("lane trees and daemons", () => {

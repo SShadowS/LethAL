@@ -12447,15 +12447,27 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             ? { guardReached: false, reachedBy: [] }
             : undefined;
     // R926: a backend that attested no run (al-runner v3) is decided from the baseline's lines.
-    const reachFinal =
-      reach !== undefined || reachAnswered
-        ? reach
+    // Not-reached is claimed only for a survivor: only a survivor ran every covering test (R198); on
+    // any other verdict a step may have ended unanswered (timeout, refusal), so only a hit is kept.
+    // FALLBACK 2 ("all-green") ran these tests BECAUSE coverage saw nothing of the object: that same
+    // coverage cannot then say the site was not hit.
+    const fromBaseline =
+      reach !== undefined ||
+      reachAnswered ||
+      args.coverageAttribution.get(m.mutantId) === "all-green"
+        ? undefined
         : reachFromBaseline(
             m,
             ranRefs,
             args.baselineReach,
             (cu) => args.backend.isolationOf?.(cu) ?? "test",
           );
+    const reachFinal =
+      reach !== undefined || reachAnswered
+        ? reach
+        : fromBaseline?.guardReached === true || verdict === "survived"
+          ? fromBaseline
+          : undefined;
     const commitRecord = (): void => {
       const mutantRowId = record(
         args.store,

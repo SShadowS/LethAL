@@ -19149,6 +19149,105 @@ describe("GH-24: per-mutant reach", () => {
     }
   });
 
+  // R926 review A: a covering step with no pass/fail answer may have run the site, so the baseline
+  // decides nothing, whatever the verdict. Neither test hit the reach line at baseline.
+  test("R926: a covering test that ended without an answer leaves reach undecided", async () => {
+    // ("error" is not driven here: the stub's error is a transport failure, which aborts the session.)
+    for (const bad of ["timeout", "skip"] as const) {
+      const backend = v3Backend(
+        () => [4],
+        (mutant, ref) => (mutant !== null && ref.method === "BTest" ? bad : "pass"),
+      );
+      const { scored, report } = await runReach(backend);
+      const decided = decidedOf(scored);
+      for (const e of decided) {
+        expect([bad, reachOf(e)]).toEqual([bad, {}]);
+        expect([bad, reachOf(reportRow(report, e.mutant.mutantId))]).toEqual([bad, {}]);
+      }
+      // The positive control: with B answering, the same baseline DOES decide (unreached).
+      if (bad === "skip") {
+        const control = v3Backend(() => [4]);
+        for (const e of decidedOf((await runReach(control)).scored)) {
+          expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+        }
+      }
+    }
+  });
+
+  // R926 review: ATest answered and its baseline HIT the line; BTest timed out. A hit is a hit, so
+  // the timed-out mutant still reads reached by ATest. Only M0002 times out (M0001 is the
+  // empty-body mutant, with no reach line), and it runs ATest first as no kill is in the ledger yet.
+  test("R926: a hit is kept when another covering test ended unanswered", async () => {
+    const lines = (ref: TestMethodRef) => (ref.method === "ATest" ? [REACH_LINE] : [4]);
+    const timeoutB = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant === "M0002" && ref.method === "BTest" ? "timeout" : "pass";
+    const { scored } = await runReach(v3Backend(lines, timeoutB));
+    const m2 = scored.find((e) => e.mutant.mutantId === "M0002");
+    expect(m2?.verdict).toBe("timeout-killed");
+    expect(m2?.mutant.reachLine).toBe(REACH_LINE);
+    expect(m2 !== undefined ? reachOf(m2) : undefined).toEqual({
+      guardReached: true,
+      reachedBy: [REACH_A],
+    });
+  });
+
+  // R926 review B: "not reached" is claimed only for a survivor. A kill's loop stops at the killer,
+  // so the tests it never ran could have reached.
+  test("R926: a kill is never called unreached from the baseline; a hit is kept", async () => {
+    const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant !== null && ref.method === "ATest" ? "fail" : "pass";
+    const missed = await runReach(v3Backend(() => [4], script));
+    for (const e of decidedOf(missed.scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({});
+      expect(reachOf(reportRow(missed.report, e.mutant.mutantId))).toEqual({});
+    }
+    const hit = await runReach(
+      v3Backend((ref) => (ref.method === "ATest" ? [REACH_LINE] : [4]), script),
+    );
+    for (const e of decidedOf(hit.scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      expect(reachOf(reportRow(hit.report, e.mutant.mutantId))).toEqual({
+        guardReached: true,
+        reachedBy: [REACH_A],
+      });
+    }
+  });
+
+  // R926 review C: FALLBACK 2 ("all-green") ran every test BECAUSE coverage saw nothing of the
+  // object, so that same coverage cannot say the site was not hit. Coverage names only the
+  // codeunit; the table's trigger mutants take the fallback and survive.
+  test("R926: an all-green-attributed survivor is never called unreached", async () => {
+    const dirs = await makeProjectWithTriggerTable();
+    const backend = v3Backend(() => [4]);
+    const events: RunEvent[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        emit: [(e) => events.push(e)],
+      });
+      const table = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+      expect(table.length).toBeGreaterThan(0);
+      expect(report.untargetedTriggerCount).toBe(table.length);
+      expect(table.some((m) => m.verdict === "survived")).toBe(true);
+      for (const m of table) expect(reachOf(m)).toEqual({});
+      // The control: the codeunit's survivors in the same session ARE decided.
+      const code = events.filter(
+        (e): e is Scored => e.type === "mutant-scored" && e.mutant.file.includes("SandboxLogic"),
+      );
+      for (const e of decidedOf(code)) {
+        expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      }
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("R926: a backend that attests keeps its own answer whatever the baseline says", async () => {
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
     backend.lineCoverageFor = () => [REACH_LINE];

@@ -467,4 +467,17 @@ describe("R896: fingerprint and lending", () => {
     expect(owner.chooseCalls).toEqual([[A, "method"]]);
     expect(splitBackend(lane, lane).chooseIsolation).toBeUndefined();
   });
+
+  // R926 review D: reach compares the mode a baseline ran under with the mode now, so the split
+  // backend must hand `isolationOf` to the owner and have none when the owner has none.
+  test("splitBackend hands isolationOf to the owner, and has none when the owner has none", () => {
+    const lane = new AutoStub(switchesA, false);
+    const owner = Object.assign(autoStub(switchesA), {
+      isolationOf: (cu: number): "test" | "method" => (cu === A ? "method" : "test"),
+    });
+    const split = splitBackend(owner, lane);
+    expect(split.isolationOf?.(A)).toBe("method");
+    expect(split.isolationOf?.(C)).toBe("test");
+    expect(splitBackend(lane, lane).isolationOf).toBeUndefined();
+  });
 });
