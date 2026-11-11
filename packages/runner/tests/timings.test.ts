@@ -123,7 +123,10 @@ describe("SessionReport.timings", () => {
 describe("renderConsole — timing line", () => {
   test("R-913: a consistent run keeps the sum form, with the summed mutant time as a term", () => {
     const r = build([outcome("M0001", "killed", 400)], { total: 112_000 });
-    const timingLine = renderConsole(r).split("\n").find((l) => l.startsWith("TIMING:")) ?? "";
+    const timingLine =
+      renderConsole(r)
+        .split("\n")
+        .find((l) => l.startsWith("TIMING:")) ?? "";
     expect(timingLine).toContain("+ mutants 0.4s + overhead");
     expect(timingLine).not.toContain("summed test time");
   });
