@@ -153,6 +153,39 @@ describe("R580 B: a wrapper holding only a code-free object is admitted", () => 
   });
 });
 
+describe("R920: a code-free object whose header is split by #if, inside a wrapper", () => {
+  // E-Document Core's shape: an outer `#if`, and inside it an enum whose header differs per arm.
+  const split = (head1: string, head2: string, body: string) =>
+    `#if not R920SYM\n#if R920B\n${head1}\n#else\n${head2}\n#endif\n{\n${body}}\n#endif\n`;
+  const ENUM = split(
+    'enum 57931 "R920 Enum"',
+    'enum 57931 "R920 Enum" implements "R920 Iface"',
+    "    value(0; First) { }\n",
+  );
+  test("an enum with a split header is admitted: coverage stays on", async () => {
+    const root = rootOf(ENUM);
+    expect(fileHoldsWrappedObject(root)).toBe(true);
+    expect(alRunnerAdmitsWrappedFile(root)).toBe(true);
+    const dir = await bundle({ "src/E.Enum.al": ENUM });
+    expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual([]);
+  });
+  // Guards the other direction: a split header of a kind that carries code is not code-free.
+  test("a codeunit with a split header stays refused", async () => {
+    const text = split(
+      'codeunit 57932 "R920 CU"',
+      'codeunit 57932 "R920 CU" implements "R920 Iface"',
+      "    procedure Hit(): Integer\n    begin\n        exit(1);\n    end;\n",
+    );
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+    const dir = await bundle({ "src/C.Codeunit.al": text });
+    expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual(["src/C.Codeunit.al"]);
+  });
+  test("a split header whose arms mix an enum and a codeunit stays refused", async () => {
+    const text = split('enum 57933 "R920 Mix"', 'codeunit 57933 "R920 Mix"', "");
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+  });
+});
+
 describe("R580 kinds added by the B1 ruling (enumextension, controladdin, dotnet)", () => {
   for (const [kind, obj] of Object.entries(B1_KINDS)) {
     // B (B1). Guards: leaving the kind off the allow-list, which turns coverage off for those projects.

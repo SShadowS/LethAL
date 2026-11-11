@@ -1021,6 +1021,21 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  * allowed. Such a file has one object, so `refusedAsMultiObject` is false for it by construction.
  * The index, the CLI guard and selection all read this one predicate (R387's precedent).
  */
+/**
+ * R920: a code-free kind, or a header split by `#if` (`preproc_split_declaration`) whose every arm
+ * declares a code-free kind (each `<kind>_keyword` names `<kind>_declaration`). BC.History's
+ * E-Document Core splits an enum's header to add `implements` in one arm; read as code-bearing, that
+ * one enum turned v3 coverage off for the whole app. `holdsCode` still runs on the node.
+ */
+function codeFreeKind(n: ALSyntaxNode): boolean {
+  if (CODE_FREE_KINDS.has(n.rawKind)) return true;
+  if (n.rawKind !== "preproc_split_declaration") return false;
+  const kinds = n.children
+    .filter((c) => c.rawKind.endsWith("_keyword"))
+    .map((c) => c.rawKind.replace(/_keyword$/, "_declaration"));
+  return kinds.length > 0 && kinds.every((k) => CODE_FREE_KINDS.has(k));
+}
+
 export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
   if (root.namedChildren.some(isTopLevelObject)) return false;
   const wrappers = root.namedChildren.filter(
@@ -1028,7 +1043,7 @@ export function alRunnerAdmitsWrappedFile(root: ALSyntaxNode): boolean {
   );
   // R580: a file whose every wrapped object, in every arm, is code-free has no covered line to shift.
   const all = wrappers.flatMap((w) => containerNodesOf(w).filter(isTopLevelObject));
-  if (all.length > 0 && all.every((n) => CODE_FREE_KINDS.has(n.rawKind) && !holdsCode(n))) {
+  if (all.length > 0 && all.every((n) => codeFreeKind(n) && !holdsCode(n))) {
     return true;
   }
   const [wrapper] = wrappers;
