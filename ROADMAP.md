@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 891 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 892 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -936,6 +936,7 @@ that ordering is the priority.
 - **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · open
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert; no repro yet, so not filed upstream · [R929.md](docs/roadmap/R929.md) · open
+- **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · open
 
 ---
 
