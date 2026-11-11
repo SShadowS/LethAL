@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 881 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 882 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -926,6 +926,7 @@ that ordering is the priority.
 - **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · open
 - **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · open
 - **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · open
+- **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
 
 ---
 
