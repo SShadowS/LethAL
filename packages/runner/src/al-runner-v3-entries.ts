@@ -301,7 +301,7 @@ function countsOf(rows: readonly V3Row[]): Counts {
  * without it the name is parsed and a dotted method never matches (today's refusal).
  */
 export function serveRow(line: Readonly<Record<string, unknown>>, fields = false): V3Row | string {
-  const { name, status, message, notRun, durationMs, flagged } = line;
+  const { name, status, message, stackTrace, notRun, durationMs, flagged } = line;
   let m: RegExpExecArray | string[] | null = null;
   if (fields) {
     const { codeunit, method } = line;
@@ -318,6 +318,7 @@ export function serveRow(line: Readonly<Record<string, unknown>>, fields = false
     m === null ||
     (status !== "pass" && status !== "fail" && status !== "error") ||
     (message !== undefined && typeof message !== "string") ||
+    (stackTrace !== undefined && typeof stackTrace !== "string") ||
     (notRun !== undefined && typeof notRun !== "boolean") ||
     (flagged !== undefined && typeof flagged !== "boolean") ||
     (durationMs !== undefined && typeof durationMs !== "number")
@@ -331,6 +332,7 @@ export function serveRow(line: Readonly<Record<string, unknown>>, fields = false
     status,
     ...(typeof durationMs === "number" ? { durationMs } : {}),
     ...(typeof message === "string" ? { message } : {}),
+    ...(typeof stackTrace === "string" ? { stackTrace } : {}),
     notRun: notRun === true,
     ...(flagged === true ? { flagged: true as const } : {}),
   };

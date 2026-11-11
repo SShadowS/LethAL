@@ -52,16 +52,20 @@ import {
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
+import { serveRow } from "../src/al-runner-v3-entries";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
+import { killMessageOf, looksLikeAssertionFailure } from "../src/assertion-screen";
 import type { TestMethodRef } from "../src/backend";
 import { noGreenBaselineNote, runOnce } from "../src/orchestrator";
+import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import type { SpawnFn } from "../src/publisher";
 import { SessionSafety } from "../src/session-safety";
 import { TestAppError } from "../src/test-app-publish";
+import { describeTestPageUnsupported } from "../src/testpage-unsupported";
 import { ProjectSymlinkRefusedError } from "../src/walk";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -2127,6 +2131,96 @@ describe("§5 the row decoder", () => {
     expect(
       v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
     ).toBe("fail");
+  });
+  // R925: a real failure carries message + "\n" + stackTrace, as the BC path does.
+  const STACK = `"Bank"(Page 8850).ReadBankFile line 32 - App by Pub version 1.0\n"T"(CodeUnit 5).LoadCsv line 22 - App by Pub version 1.0`;
+  test("R925: the one-shot decoder keeps a stackTrace; a fail verdict is message + newline + stack", () => {
+    const doc = (extra: object) =>
+      JSON.stringify({
+        tests: [{ codeunit: CU, method: "A", name: `Codeunit${CU}.A`, status: "fail", ...extra }],
+      });
+    const withStack = decodeV3Rows(doc({ message: "boom", stackTrace: STACK }), CU);
+    if ("why" in withStack) throw new Error(withStack.why);
+    const [a] = withStack.rows;
+    if (a === undefined) throw new Error("no row");
+    expect(a.stackTrace).toBe(STACK);
+    expect(v3RowVerdict(r, a, 3, 10, undefined).failureMessage).toBe(`boom\n${STACK}`);
+    const without = decodeV3Rows(doc({ message: "boom" }), CU);
+    if ("why" in without) throw new Error(without.why);
+    const [b] = without.rows;
+    if (b === undefined) throw new Error("no row");
+    expect("stackTrace" in b).toBe(false);
+    expect(v3RowVerdict(r, b, 3, 10, undefined).failureMessage).toBe("boom");
+    expect(decodeV3Rows(doc({ message: "boom", stackTrace: 7 }), CU)).toHaveProperty("why");
+  });
+  test("R925: serve's row keeps a stackTrace the same way and refuses a non-string one", () => {
+    const line = { name: `Codeunit${CU}.A`, status: "fail", message: "boom" };
+    const kept = serveRow({ ...line, stackTrace: STACK });
+    if (typeof kept === "string") throw new Error(kept);
+    expect(kept.stackTrace).toBe(STACK);
+    expect(v3RowVerdict(r, kept, 3, 10, undefined).failureMessage).toBe(`boom\n${STACK}`);
+    const plain = serveRow(line);
+    if (typeof plain === "string") throw new Error(plain);
+    expect("stackTrace" in plain).toBe(false);
+    expect(typeof serveRow({ ...line, stackTrace: 7 })).toBe("string");
+  });
+  test("R925: a refused row and a marker row never get the stack", () => {
+    const refused = v3RowVerdict(
+      r,
+      row({ status: "error", notRun: true, message: "out-of-scope: X", stackTrace: STACK }),
+      3,
+      10,
+      undefined,
+    );
+    expect(refused.failureMessage).not.toContain("ReadBankFile");
+    const marked = v3RowVerdict(
+      r,
+      row({ status: "fail", message: `${PREFIXED}`, stackTrace: STACK }),
+      3,
+      10,
+      undefined,
+    );
+    expect(marked.failureMessage).not.toContain("ReadBankFile");
+    expect(marked.outcome).toBe("error");
+    const plainRefusal = v3RowVerdict(
+      r,
+      row({
+        status: "fail",
+        message: "InvalidOperationException: out-of-scope: HttpClient.Get - external-http",
+        stackTrace: STACK,
+      }),
+      3,
+      10,
+      undefined,
+    );
+    expect(plainRefusal.outcome).toBe("error");
+    expect(plainRefusal.failureMessage).not.toContain("ReadBankFile");
+  });
+  test("R925: the text readers answer the same with and without a stack", () => {
+    const perm =
+      "Sorry, the current permissions prevented the action. (TableData 79300 Data Main Insert: Suite)";
+    const page = "NotSupportedException: CreateNavTestService ()";
+    for (const message of [perm, page, "Assert.AreEqual failed. Expected 1"]) {
+      const plain = v3RowVerdict(r, row({ status: "fail", message }), 3, 10, undefined);
+      const stacked = v3RowVerdict(
+        r,
+        row({ status: "fail", message, stackTrace: STACK }),
+        3,
+        10,
+        undefined,
+      );
+      expect(stacked.outcome).toBe(plain.outcome);
+      expect(describeTestPermissionsRefusal(stacked.failureMessage)).toBe(
+        describeTestPermissionsRefusal(plain.failureMessage),
+      );
+      expect(describeTestPageUnsupported(stacked.failureMessage)).toBe(
+        describeTestPageUnsupported(plain.failureMessage),
+      );
+      expect(killMessageOf(stacked.failureMessage)).toBe(killMessageOf(plain.failureMessage));
+      expect(looksLikeAssertionFailure(killMessageOf(stacked.failureMessage))).toBe(
+        looksLikeAssertionFailure(killMessageOf(plain.failureMessage)),
+      );
+    }
   });
   test("R675 K1-d (inverts R672's): the marker NOT at the start is error, never a kill", () => {
     const v = v3RowVerdict(r, row({ status: "fail", message: `x ${PREFIXED}` }), 3, 10, undefined);

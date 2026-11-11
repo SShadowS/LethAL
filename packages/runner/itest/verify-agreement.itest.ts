@@ -919,13 +919,13 @@ async function main(): Promise<void> {
         },
       });
       assert.ok(published !== undefined, "step 7: the publish returned no identity");
-      assert.equal(published.sha256, compiled.sha256, "step 7: published sha256 = compiled");
+      assert.equal(published.sha256, compiled.packageHash, "step 7: published sha256 = compiled");
       const fresh = await backend.fetchPublishedAppPackage({
         publisher: compiled.publisher,
         name: compiled.name,
       });
       assert.ok(fresh instanceof Uint8Array, "step 7: a fresh read-back must answer");
-      assert.equal(hashPackage(fresh), compiled.sha256, "step 7: fresh read-back = compiled");
+      assert.equal(hashPackage(fresh), compiled.packageHash, "step 7: fresh read-back = compiled");
       assert.equal(res.quarantined, undefined, `step 7: no quarantine (${res.quarantined})`);
       const [o] = res.outcomes;
       assert.ok(o !== undefined && res.outcomes.length === 1, "step 7: one outcome");

@@ -28,6 +28,20 @@ export function emitDispatch(
   /** R470: the selector variable PLAN named for the component's object. */
   selector = "MutationSelector",
 ): string {
+  return emitDispatchAt(original, component, latch, selector).text;
+}
+
+/**
+ * `emitDispatch`, and where in its text the ORIGINAL copy of the root starts (the `else begin`
+ * branch, the one a run with no mutant active executes). R926: a read-only side table; the text is
+ * exactly `emitDispatch`'s.
+ */
+export function emitDispatchAt(
+  original: string,
+  component: PlannedComponent,
+  latch: string,
+  selector = "MutationSelector",
+): { readonly text: string; readonly originalAt: number } {
   const parts: string[] = [];
   for (const [i, m] of component.members.entries()) {
     const lead = i === 0 ? "if" : "end else if";
@@ -42,8 +56,11 @@ export function emitDispatch(
   // appending another here emitted `end;;`. Statements that own an internal
   // `;` (a parenless `call_statement`) still end their text with one and still
   // get it reproduced.
-  parts.push(`end else begin\n  ${original}\nend${endsInTerminator(original) ? ";" : ""}`);
-  return parts.join("");
+  const elseOpen = "end else begin\n  ";
+  parts.push(elseOpen);
+  const originalAt = parts.join("").length;
+  parts.push(`${original}\nend${endsInTerminator(original) ? ";" : ""}`);
+  return { text: parts.join(""), originalAt };
 }
 
 /**

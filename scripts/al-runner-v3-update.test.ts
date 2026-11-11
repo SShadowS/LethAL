@@ -650,6 +650,49 @@ describe("R633 I2 and M5", () => {
     ];
     expect(countHeavyJobs(procs, 1)).toBe(1);
   });
+  // R930: the shape measured 2026-11-11 with an invented command: the harness's shell, the job's
+  // shell and `timeout` (which moves itself into a new group) are three groups for one job.
+  test("R930: shells above a job's own process add no job; a reader is never one", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const procs = [
+      { pid: 1, ppid: 0, pgid: 1, args: `/bin/bash -c source snap.sh && eval 'timeout 9 ${cmd}'` },
+      { pid: 2, ppid: 1, pgid: 2, args: `bash scripts/heavy-slot.sh other timeout 9 ${cmd}` },
+      { pid: 3, ppid: 2, pgid: 3, args: `timeout 9 ${cmd}` },
+      { pid: 4, ppid: 3, pgid: 3, args: cmd },
+    ];
+    expect(countHeavyJobs(procs, 0)).toBe(1);
+    const grep = { pid: 5, ppid: 0, pgid: 5, args: `grep -E cli.ts run|itest` };
+    expect(countHeavyJobs([grep, ...procs], 0)).toBe(1);
+  });
+  test("R930: a shell with no job below it still counts (only it may name the work)", () => {
+    // review r2 (corpus-snapshot): only the shell names the corpus; its child names nothing heavy.
+    const census = [
+      { pid: 6, ppid: 0, pgid: 6, args: "bash -c cd /work/src/BC.History && bun census.ts ." },
+      { pid: 7, ppid: 6, pgid: 6, args: "bun census.ts ." },
+    ];
+    expect(countHeavyJobs(census, 0)).toBe(1);
+    // A retry loop between attempts reads as a job too: the safe direction (a skipped update).
+    const loop = {
+      pid: 8,
+      ppid: 0,
+      pgid: 8,
+      args: "sh -c until bun packages/runner/src/cli.ts run --project /x; do sleep 60; done",
+    };
+    expect(countHeavyJobs([loop], 0)).toBe(1);
+  });
+  test("R930: two real jobs started through shells still count as two", () => {
+    const job = (g: number, cmd: string) => [
+      { pid: g, ppid: 0, pgid: g, args: `bash -c timeout 9 ${cmd}` },
+      { pid: g + 1, ppid: g, pgid: g + 1, args: `timeout 9 ${cmd}` },
+      { pid: g + 2, ppid: g + 1, pgid: g + 1, args: cmd },
+    ];
+    const procs = [
+      ...job(10, "bun packages/runner/src/cli.ts run --project /a"),
+      ...job(20, "/home/dev/.bun/bin/bun packages/runner/itest/al-runner-v3.itest.ts"),
+    ];
+    expect(countHeavyJobs(procs, 0)).toBe(2);
+    expect(countHeavyJobs(procs, 1, ["baseapp"])).toBe(3);
+  });
   test("R851: three real jobs still count as three, and stop the update", () => {
     const p = (pid: number, pgid: number) => ({
       pid,

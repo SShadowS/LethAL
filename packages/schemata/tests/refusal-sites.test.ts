@@ -213,6 +213,8 @@ const NEITHER_MODULES = [
   "packages/schemata/src/lift.ts",
   /** REACH_LATCH: both halves read it, and EMIT may not import a value from PLAN. */
   "packages/schemata/src/reach-latch.ts",
+  /** R926: the reach line of each mutant, read from a finished plan and its text; decides nothing. */
+  "packages/schemata/src/reach-line.ts",
   "packages/schemata/src/selector.ts",
   "packages/schemata/src/wrap.ts",
 ];

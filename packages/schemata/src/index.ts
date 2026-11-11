@@ -76,6 +76,8 @@ export { resolveSite, resolveStatement, isMutableSite } from "./enclosing";
 export { objectHeadersOf, planOneFile } from "./project-plan";
 export type { FilePlan, PlannedMutant } from "./project-plan";
 export { emitOneFile } from "./project-emit";
+export { reachLinesOf } from "./reach-line";
+export { originalPositions } from "./compile-emit";
 export type { ResolvedSite } from "./enclosing";
 export {
   SelectorIdDependencyClashError,

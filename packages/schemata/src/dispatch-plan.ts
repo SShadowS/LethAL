@@ -161,6 +161,59 @@ export interface PlannedMember {
   readonly splice: SpliceParts;
   readonly statementStart: number;
   readonly statementEnd: number;
+  /**
+   * R926: where the reach statement `S` starts, for the manifest's `reachLine`. Absent when the
+   * grain is not `statement`, when `S` is a nested `begin ... end` block (a hit on a compound
+   * statement's own line is not measured), or when the object sits in or after a `#if` wrapper.
+   */
+  readonly reachSite?: ReachSite;
+}
+
+/** Top-level node kinds that are no object: a copy of the runner's `line-map.ts` rule (a runner test pins them equal). */
+const NOT_AN_OBJECT: ReadonlySet<string> = new Set([
+  "pragma",
+  "namespace_declaration",
+  "using_statement",
+  "comment",
+  "multiline_comment",
+]);
+const DIRECTIVE_ONLY: ReadonlySet<string> = new Set([
+  "preproc_if",
+  "preproc_elif",
+  "preproc_else",
+  "preproc_endif",
+  "preproc_region",
+  "preproc_endregion",
+  "preproc_define",
+  "preproc_undef",
+  "preproc_pragma_only",
+]);
+
+/**
+ * R926: where a reach line is read from. `stmt` is the statement's start offset in the SOURCE;
+ * `prevEnd` the source offset of the last character of the previous top-level object (`-1`: none).
+ * The caller maps both into the instrumented text and subtracts the lines (`line-map.ts`'s
+ * `objectLine = fileLine - baseLine + 1` with `baseLine = previousEndLine + 1`).
+ */
+export interface ReachSite {
+  readonly stmt: number;
+  readonly prevEnd: number;
+}
+
+/** R926. `undefined` when the object sits in or after a `#if` wrapper (its frame is not decided here). */
+export function reachSiteOf(node: ALSyntaxNode): ReachSite | undefined {
+  let top: ALSyntaxNode = node;
+  while (top.parent !== null && top.parent.parent !== null) top = top.parent;
+  const file = top.parent;
+  if (file === null) return undefined;
+  let prevEnd = -1;
+  for (const sibling of file.namedChildren) {
+    if (sibling.rawKind === "preproc_conditional_object") return undefined;
+    if (sibling.startIndex === top.startIndex && sibling.endIndex === top.endIndex) break;
+    if (NOT_AN_OBJECT.has(sibling.rawKind) || DIRECTIVE_ONLY.has(sibling.rawKind)) continue;
+    prevEnd = sibling.endIndex - 1;
+  }
+  return { stmt: node.startIndex, prevEnd };
 }
 
 /** R-307 O5. One component's frozen plan: the root's span (never the node) and its members. */
@@ -173,6 +226,12 @@ export interface PlannedComponent {
 /** R-307 O5. `planPlacement`, frozen: the node is read here and never again. */
 export function planMember(root: ALSyntaxNode, m: ComponentMember, source: string): PlannedMember {
   const { grain, place, splice } = planPlacement(root, m, source);
+  // A nested block (any placement: a free body's `root` too) is a compound statement: whether
+  // al-runner reports a hit on its own line is not measured, so it carries no reach line.
+  const reachSite =
+    grain === "statement" && place.kind !== "block" && m.statement.kind !== ALNodeKind.block
+      ? reachSiteOf(m.statement)
+      : undefined;
   return {
     mutantId: m.mutantId,
     grain,
@@ -180,6 +239,7 @@ export function planMember(root: ALSyntaxNode, m: ComponentMember, source: strin
     splice,
     statementStart: m.statement.startIndex - root.startIndex,
     statementEnd: m.statement.endIndex - root.startIndex,
+    ...(reachSite !== undefined ? { reachSite } : {}),
   };
 }
 

@@ -644,13 +644,21 @@ async function main(): Promise<void> {
             },
           });
           assert.ok(published !== undefined, "step 9: the publish returned no identity");
-          assert.equal(published.sha256, compiled.sha256, "step 9: published sha256 = compiled");
+          assert.equal(
+            published.sha256,
+            compiled.packageHash,
+            "step 9: published sha256 = compiled",
+          );
           const fresh = await backend.fetchPublishedAppPackage({
             publisher: compiled.publisher,
             name: compiled.name,
           });
           assert.ok(fresh instanceof Uint8Array, "step 9: a fresh read-back must answer");
-          assert.equal(hashPackage(fresh), compiled.sha256, "step 9: fresh read-back = compiled");
+          assert.equal(
+            hashPackage(fresh),
+            compiled.packageHash,
+            "step 9: fresh read-back = compiled",
+          );
           assert.equal(res.quarantined, undefined, `step 9: no quarantine (${res.quarantined})`);
           console.log(
             `step 9 PASS: restored ${compiled.name} against ${resident.artifactId} (${resident.leg}); fresh read-back equal; carrier verdict ${res.outcomes.map((o) => o.verdict).join(", ")}`,

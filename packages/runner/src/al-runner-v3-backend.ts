@@ -740,6 +740,8 @@ export interface V3Row {
   readonly status: "pass" | "fail" | "error";
   readonly durationMs?: number;
   readonly message?: string;
+  /** R925: al-runner's AL call stack for a failure, when it gives one. Absent otherwise. */
+  readonly stackTrace?: string;
   readonly notRun: boolean;
   /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
   readonly flagged?: true;
@@ -767,7 +769,7 @@ export function decodeV3Rows(
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
-    const { codeunit, method, name, status, durationMs, message, notRun, flagged } = r;
+    const { codeunit, method, name, status, durationMs, message, stackTrace, notRun, flagged } = r;
     if (
       typeof codeunit !== "number" ||
       typeof method !== "string" ||
@@ -775,6 +777,7 @@ export function decodeV3Rows(
       (status !== "pass" && status !== "fail" && status !== "error") ||
       (durationMs !== undefined && typeof durationMs !== "number") ||
       (message !== undefined && typeof message !== "string") ||
+      (stackTrace !== undefined && typeof stackTrace !== "string") ||
       (notRun !== undefined && typeof notRun !== "boolean") ||
       (flagged !== undefined && typeof flagged !== "boolean")
     ) {
@@ -799,6 +802,7 @@ export function decodeV3Rows(
       status,
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(message !== undefined ? { message } : {}),
+      ...(stackTrace !== undefined ? { stackTrace } : {}),
       notRun: notRun === true,
       ...(flagged === true ? { flagged: true as const } : {}),
     });
@@ -876,7 +880,7 @@ export function v3RowVerdict(
       runnerRow: "runner-test-error",
     };
   }
-  return verdictFromRunnerTest(
+  const verdict = verdictFromRunnerTest(
     ref,
     row.name,
     {
@@ -888,6 +892,14 @@ export function v3RowVerdict(
     wallMs,
     coverage,
   );
+  // R925: a real failure (a kill) carries message + "\n" + stackTrace, as the BC path does
+  // (`failureTextOf`). Added AFTER the verdict is classified, so every classifier above reads the
+  // message alone; no refusal, timeout or error text gets a stack.
+  if (verdict.outcome === "fail" && row.stackTrace !== undefined && row.stackTrace.length > 0) {
+    const text = [verdict.failureMessage ?? "", row.stackTrace].filter((s) => s.length > 0);
+    return { ...verdict, failureMessage: text.join("\n") };
+  }
+  return verdict;
 }
 
 /** R886: the file `alRunnerV3.dotnetSidecar` names, absolute; refused by name when it is missing. */
@@ -3185,6 +3197,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
+      isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
       compilePlainCheck: no("compilePlainCheck"),

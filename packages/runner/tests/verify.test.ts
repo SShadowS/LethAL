@@ -2385,6 +2385,7 @@ describe("C02-09: gap ids", () => {
         compileTestApp: async (_dir, target) => ({
           appPath: "t.app",
           sha256: "e".repeat(64),
+          packageHash: "e".repeat(64),
           appId: APP,
           name: "T",
           publisher: "p",

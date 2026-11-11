@@ -185,6 +185,55 @@ describe("hashTargetSource (C02-06)", () => {
   });
 });
 
+/** R-920: a NAVX-shaped package: 40-byte header (id at 12..27, content length at 28..35) + payload. */
+function navx(id: number, payload: string, patch?: (b: Buffer) => void): Uint8Array {
+  const body = Buffer.from(`PK\x03\x04${payload}`.padEnd(64, "."), "latin1");
+  const b = Buffer.alloc(40 + body.length);
+  b.write("NAVX", 0, "latin1");
+  b.writeUInt32LE(40, 4);
+  b.writeUInt32LE(2, 8);
+  b.fill(id, 12, 28);
+  b.writeBigUInt64LE(BigInt(body.length), 28);
+  b.write("NAVX", 36, "latin1");
+  body.copy(b, 40);
+  patch?.(b);
+  return new Uint8Array(b);
+}
+
+describe("hashPackage and the NAVX package id (R-920)", () => {
+  test("two downloads that differ only in the package id hash equal", () => {
+    expect(hashPackage(navx(1, "same"))).toBe(hashPackage(navx(2, "same")));
+  });
+  test("a changed payload byte hashes differently (a real republish)", () => {
+    expect(hashPackage(navx(1, "same"))).not.toBe(hashPackage(navx(1, "samf")));
+  });
+  test("a changed header byte outside the id hashes differently", () => {
+    const base = hashPackage(navx(1, "same"));
+    expect(hashPackage(navx(1, "same", (b) => b.writeUInt32LE(3, 8)))).not.toBe(base);
+    expect(hashPackage(navx(1, "same", (b) => b.writeUInt32LE(41, 4)))).not.toBe(base);
+  });
+  test("a content length that is not the bytes after the header is not the known shape: it hashes raw", () => {
+    const odd = navx(1, "same", (b) => b.writeBigUInt64LE(40n, 28));
+    expect(hashPackage(odd)).toBe(createHash("sha256").update(odd).digest("hex"));
+  });
+  test("bytes without the NAVX header hash raw, and the caller's buffer is untouched", () => {
+    const plain = new TextEncoder().encode("PK not a navx package");
+    expect(hashPackage(plain)).toBe(createHash("sha256").update(plain).digest("hex"));
+    const p = navx(7, "x");
+    const copy = Uint8Array.from(p);
+    hashPackage(p);
+    expect(p).toEqual(copy);
+  });
+  test("the drift guard's identity: a fresh id per read is stable, a changed payload is not", async () => {
+    let n = 0;
+    const fresh = () => testAppHashFor(async () => navx(++n, "same"), "/nonexistent");
+    expect(await fresh()).toBe(await fresh());
+    const a = await testAppHashFor(async () => navx(1, "v1"), "/nonexistent");
+    const b = await testAppHashFor(async () => navx(1, "v2"), "/nonexistent");
+    expect(a).not.toBe(b);
+  });
+});
+
 describe("testAppHashFor (R192)", () => {
   test("prefers the published package when the backend can read it", async () => {
     const dir = tree({ "T.Codeunit.al": "codeunit 9 T { }" });
