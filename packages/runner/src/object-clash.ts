@@ -443,6 +443,9 @@ export function declaredObjectsOfPackage(
   if (entry === null) return { unreadable: "the package carries no SymbolReference.json" };
   let text = entry.toString("utf8");
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  // R932: a Windows server's rebuild pads SymbolReference.json with trailing NULs. A NUL anywhere else
+  // stays a parse error.
+  while (text.endsWith("\0")) text = text.slice(0, -1);
   let json: unknown;
   try {
     json = JSON.parse(text);

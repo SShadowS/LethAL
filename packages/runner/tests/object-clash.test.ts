@@ -197,6 +197,18 @@ describe("R843: the readers", () => {
     expect("objects" in declaredObjectsOfPackage(bytes)).toBe(true);
   });
 
+  test("R932: trailing NULs on SymbolReference.json are padding; a NUL in the middle is not", () => {
+    const pkg = new Uint8Array(
+      readFileSync(join(import.meta.dir, "fixtures", "r932", "pkg-a.app")),
+    );
+    expect(readPackageEntry(Buffer.from(pkg), "SymbolReference.json")?.at(-1)).toBe(0);
+    const r = declaredObjectsOfPackage(pkg);
+    expect("objects" in r).toBe(true);
+    const mid = buildFakeAppWithEntries({ "SymbolReference.json": '{"AppId":\0"a"}' });
+    const bad = declaredObjectsOfPackage(new Uint8Array(mid));
+    expect(JSON.stringify(bad)).toContain("is not valid JSON");
+  });
+
   test("a garbled SymbolReference never reads as 'declares nothing'", () => {
     const bad: unknown[] = [
       {},
