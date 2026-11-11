@@ -73,6 +73,18 @@ export function listPackageEntries(buf: Buffer): readonly string[] {
   return names;
 }
 
+/**
+ * Parses the bytes of a package's `SymbolReference.json`. AL writes a UTF-8 BOM, which is stripped.
+ * R932: a Windows BC server rebuilds the package it serves and pads this entry with trailing NUL
+ * bytes; those are stripped too, but a NUL anywhere else stays a parse error. Throws on bad JSON.
+ */
+export function parseSymbolReferenceJson(entry: Buffer): unknown {
+  let text = entry.toString("utf8");
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  while (text.endsWith("\0")) text = text.slice(0, -1);
+  return JSON.parse(text);
+}
+
 /** Reads and inflates one named entry from a zip (or zip-with-prepended-header) archive. */
 function extractZipEntry(buf: Buffer, entryName: string): Buffer {
   const eocdPos = findEndOfCentralDirectory(buf);

@@ -130,6 +130,7 @@ import {
   runNamedMutants,
   runOnce,
   runSession,
+  servedWithoutSource,
   upgradeNotRestored,
 } from "../src/orchestrator";
 import type {
@@ -197,6 +198,7 @@ import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
   TEST_APP,
+  r932PkgA,
   servedIsInstalled,
   servedTestAppDeps,
   servesTestApp,
@@ -3414,6 +3416,7 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           buildFakeAppWithEntries({
             "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${TEST_APP.id}" Name="${TEST_APP.name}" Publisher="${TEST_APP.publisher}" Version="1.0.0.0" /></Package>`,
             "SymbolReference.json": symbols,
+            "src/Empty.al": "// R932: present so the package carries source",
           }),
         );
         const allFound0 = (method: string) => ({
@@ -10293,6 +10296,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         historyWarning: warningsOf("history-test-app-changed"),
         reuseWarning: warningsOf("resume-baseline-reused"),
         depsWarning: warningsOf("test-app-dependencies-unproven"),
+        identityWarning: warningsOf("test-app-identity-unproven"),
         knownSurvivors: (
           store.db
             .query(
@@ -11094,6 +11098,67 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(c.store.getRun(c.runId)?.testAppProven).toBe(true);
         c.store.close();
       });
+      // R932: a served package with no AL source cannot show which bodies run (and Windows BC serves
+      // a rebuilt one with fresh bytes per read): unproven, so no drift check, and one warning.
+      // Revert: let `provenWithoutHook` prove a source-less package (then (a) and (c) fail).
+      const sourceLessN = (n: number) =>
+        testPkg({ version: "1.0.0.2", body: BODY_B, source: false, extra: { "stamp.txt": `${n}` } });
+      const extraBatchProject = async () => {
+        const d = await makeProject(BODY_B);
+        await Bun.write(
+          join(d.projectDir, "SandboxExtra.Codeunit.al"),
+          'codeunit 79002 "Sandbox Extra"\n{\n    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean\n    begin\n        exit(Amount < Limit);\n    end;\n}\n',
+        );
+        return d;
+      };
+      test("R932 (a): a source-less served package that differs per read is unproven and never drifts", async () => {
+        const r = await envRun({
+          noHook: true,
+          pre: null,
+          post: null,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          preSequence: [1, 2, 3, 4, 5, 6, 7, 8].map(sourceLessN),
+          dirs: await extraBatchProject(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        expect(r.identityWarning).toHaveLength(1);
+        expect(r.identityWarning[0]).toContain("R932");
+        expect(r.identityWarning[0]).toContain("No drift check");
+        expect(r.identityWarning[0]).toContain("build the test app so its .app includes its source");
+        expect(r.identityWarning[0]).toContain("--resume refuses this run");
+        // A later session cannot resume it: the run recorded no identity.
+        const resumed = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs: r.dirs,
+          store: r.store,
+          extra: { resume: r.runId },
+        });
+        expect(resumed.outcome).toBeInstanceOf(Error);
+        expect((resumed.outcome as Error).message).toContain("recorded none");
+        r.store.close();
+      });
+      test("R932 (b): a package WITH source whose bytes change between reads still drifts", async () => {
+        const P2x = testPkg({ version: "1.0.0.2", body: BODY_B, extra: { "stamp.txt": "x" } });
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P2x],
+          dirs: await extraBatchProject(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        expect(r.identityWarning).toHaveLength(0);
+        r.store.close();
+      });
+      test("R932 (c): the real Windows package (fixture pkg-a) counts as source-less", async () => {
+        const pkgA = r932PkgA();
+        expect(servedWithoutSource(pkgA)).toBe(true);
+        expect(servedWithoutSource(P2)).toBe(false);
+      });
       test("a backend that cannot read installed versions records no identity", async () => {
         const r = await envRun({ noHook: true, ...provenP2, noMicrosoftMode: true });
         expect(r.outcome).not.toBeInstanceOf(Error);
@@ -11501,22 +11566,27 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const race = (more: Partial<EnvRun> = {}) =>
         session("N", "one", { depAfterAcquire: depPkg("two"), ...more });
       test("T7: a source-less race takes its identity under the lease, so a donor proven with that value lends", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
+        // R932: a source-less package proves only by byte equality with a publishApps file (hook).
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const race = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { depAfterAcquire: depPkg("two"), ...more });
         const r = await race(sourceLess)({});
         expect(r.outcome).not.toBeInstanceOf(Error);
-        const donor = await session("N", "two", sourceLess)({});
+        const donor = await session("H", "two", sourceLess)({});
         expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
         expect(r.store.getRun(r.runId)?.testAppDeps).toBe(
           donor.store.getRun(donor.runId)?.testAppDeps ?? "missing",
         );
         r.store.close();
         donor.store.close();
-        lendsAll(await consumers(session("N", "two", sourceLess), race(sourceLess)));
+        lendsAll(await consumers(session("H", "two", sourceLess), race(sourceLess)));
       });
       // T7b (F6): the same race, the donor proven with "one" (the pre-lease value).
       test("T7b: a source-less race borrows nothing from a donor proven with the pre-lease value", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        lendsNothing(await consumers(session("N", "one", sourceLess), race(sourceLess)));
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const race = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { depAfterAcquire: depPkg("two"), ...more });
+        lendsNothing(await consumers(session("H", "one", sourceLess), race(sourceLess)));
       });
       // T7c (F9): the race WITH digests (pre-lease `D` = "one"); the donor matches the under-lease
       // value "two", but the run's digests no longer describe what runs: it borrows nothing.
@@ -11662,20 +11732,21 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
 
       // T10 (F8): a test app without `.al` source fingerprints from its manifest.
       test("T10: a source-less test app with an unchanged dependency is proven and lends", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        const r = await session("N", "one", sourceLess)({});
+        // R932: proven by byte equality with a publishApps file (hook); a plain session is unproven.
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const r = await session("H", "one", sourceLess)({});
         expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
         expect(r.store.getRun(r.runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
         expect(r.store.testDigests(r.runId)).toBeNull();
         r.store.close();
-        lendsAll(await consumers(session("N", "one", sourceLess), session("N", "one", sourceLess)));
+        lendsAll(await consumers(session("H", "one", sourceLess), session("H", "one", sourceLess)));
       });
       // T10b (F1 only): the same, changed: refused for the DEPENDENCY, both rows proven.
       test("T10b: a source-less test app with a changed dependency is refused for its dependencies", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        const r1 = await session("N", "one", sourceLess)({});
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const r1 = await session("H", "one", sourceLess)({});
         makeResumable(r1);
-        const r2 = await session("N", "two", sourceLess)({ resume: r1.runId }, r1);
+        const r2 = await session("H", "two", sourceLess)({ resume: r1.runId }, r1);
         expect(r2.outcome).toBeInstanceOf(TestAppRepublishedError);
         expect((r2.outcome as Error).message).toMatch(
           /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
@@ -11749,10 +11820,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           r.store.close();
         });
 
-        test("H5: no publishApps file is the test app: proven by the installed checks alone", async () => {
+        // R932: it was proven by the installed checks alone; a source-less package with no file to
+        // equal proves nothing, so it is unproven and says so.
+        test("H5: no publishApps file is the test app: a source-less read-back is unproven (R932)", async () => {
           const r = await hookSL({ testAppInPublishApps: false })({});
           expect(r.outcome).not.toBeInstanceOf(Error);
-          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+          expect(r.digestWarning[0]).toContain("R932");
+          expect(r.identityWarning).toHaveLength(1);
           r.store.close();
         });
 

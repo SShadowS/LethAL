@@ -57,7 +57,7 @@ import {
   servedIsInstalled,
   servesTestApp,
   testAppJson,
-  testAppPackage,
+  testAppPackage as testAppPackageWith,
 } from "./helpers/proven-test-app";
 import { removeScratchDir, scratchDirs } from "./helpers/scratch";
 import { testDbPath } from "./helpers/test-db";
@@ -136,6 +136,11 @@ async function timed<T>(phase: string, f: () => Promise<T>): Promise<T> {
 }
 const runSession = (...a: Parameters<typeof runSessionRaw>): ReturnType<typeof runSessionRaw> =>
   timed("runSession", () => runSessionRaw(...a));
+
+/** The served test app: it carries the very test source `makeProject` writes (R932: a package with
+ *  no source proves no identity), so served sources equal local and no mismatch is warned. */
+const testAppPackage = (version = "1.0.0.0", tag = "") =>
+  testAppPackageWith(version, tag, { "SandboxTests.Codeunit.al": TEST_AL });
 
 function makeProject(opts: { secondFile?: boolean } = {}) {
   return timed("makeProject", () => makeProjectRaw(opts));
