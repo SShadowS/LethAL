@@ -620,7 +620,9 @@ function injectSelectorVarIntoObject(
     object.kind === ALNodeKind.report ||
     object.kind === ALNodeKind.pageextension ||
     object.kind === ALNodeKind.tableextension ||
-    object.kind === ALNodeKind.reportextension;
+    object.kind === ALNodeKind.reportextension ||
+    // R924: a var-less XMLport with the var placed before `schema` fails alc with AL0926 (measured)
+    object.kind === ALNodeKind.xmlport;
   const headerKinds = isTable ? TABLE_HEADER_KINDS : CODEUNIT_HEADER_KINDS;
   // Under the current v3 grammar `declarationMembers` already strips the
   // `declaration_body` container, so header tokens never actually reach

@@ -3576,7 +3576,7 @@ export function renderConsole(r: SessionReport): string {
         ? `${((r.notInstrumented.fileCount / r.notInstrumented.totalFiles) * 100).toFixed(1)}%`
         : "?";
     lines.push(
-      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, xmlport) are published unchanged.`,
+      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, for example) are published unchanged.`,
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);

@@ -8141,9 +8141,9 @@ export function hangCapableForMutatedNode(
   // (its triggers, its child items' triggers and columns, a reportextension dataset block anchored
   // on it) or in a same-object procedure reachable from that code is refused, whatever it writes
   // or reads.
-  // R500: an XMLport element is open-item code only for the DISPATCH check, which the orchestrator
-  // skips in a file that cannot carry the selector var; here it would move those sites out of the
-  // `skipped` row, so this in-operator path keeps R487's report-only scope.
+  // R500: an XMLport element is open-item code only for the DISPATCH check (`openItemHangRefuses`,
+  // live since R924 made xmlport a carrier), which refuses those sites for every operator; this
+  // in-operator path keeps R487's report-only scope, so each is counted once, as hang-refused.
   if (inOpenItemCode(node, ctx) && objectOf(node)?.rawKind !== "xmlport_declaration") {
     return "loop-condition-target";
   }

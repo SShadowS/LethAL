@@ -939,6 +939,24 @@ describe("compileSchemataForFile — selector var injection into pages and repor
     expect(varSections[0]?.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
   });
 
+  it("R924: injects into a var-less xmlport after its schema and triggers, never before schema", () => {
+    // Before `schema`, alc rejects it with AL0926 (measured, /coord/handoff/R-919/xp2/).
+    const source = `xmlport 50203 "X"
+{
+    Direction = Export;
+    schema { textelement(Root) { trigger OnBeforePassVariable() begin DoThing(); end; } }
+
+    trigger OnPreXmlPort()
+    begin
+    end;
+}`;
+    const root = wrapRoot(parseAL(source));
+    const out = compileSchemataForFile(source, root, [specAtFirstCall(root)]);
+    const varAt = out.indexOf("MutationSelector: Codeunit");
+    expect(varAt).toBeGreaterThan(out.indexOf("schema"));
+    expect(varAt).toBeGreaterThan(out.indexOf("OnPreXmlPort"));
+  });
+
   it("canCarryMutationSelectorVar accepts page, report and (R924) xmlport, still refuses query", () => {
     const kinds: Array<[string, boolean]> = [
       ['page 1 "A" { PageType = Card; }', true],
