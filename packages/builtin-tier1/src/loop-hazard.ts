@@ -72,8 +72,8 @@ import {
  *
  * R500 (closed) took R487's exclusions shape by shape, at the dispatch check only:
  * - a `Date` item is open unless `MaxIteration` bounds it (shape 4), and an XMLport `tableelement`
- *   over `Integer` is a loop item like a report data item (shape 5; dormant while xmlport cannot
- *   carry the selector var, but it seeds shape 2);
+ *   over `Integer` is a loop item like a report data item (shape 5; live since R924 made xmlport a
+ *   carrier, and it seeds shape 2);
  * - procedures in OTHER objects that open-item code calls, one hop (`inOneHopCallee`, shape 2);
  * - a filter call on an open item's record from outside its code (`altersOpenItemFilter`, 5b);
  * - an unparsed reportextension extends every report (shape 7); `CurrReport.P()` and a bare
