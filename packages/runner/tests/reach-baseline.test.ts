@@ -15,6 +15,7 @@ import {
 } from "@lethal/schemata";
 import type { TestMethodRef, TestVerdict } from "../src/backend";
 import { fileLineMapEntries, objectIdentityOf, resolveFileLine } from "../src/line-map";
+import { testKeyOf } from "../src/selection";
 import {
   baselineReachOf,
   generateMutationSet,
@@ -268,11 +269,18 @@ describe("R926: only a complete set of passing baseline coverages decides", () =
     });
   });
 
-  test("a refused, reused, flagged or partial baseline row is not evidence", () => {
+  // R-917: a flagged pass ran to its end, so it IS evidence (measured: nearly every pass of Microsoft's
+  // apps is flagged, and excluding them left every v3 reach undecided).
+  test("a flagged baseline pass is evidence: its hit decides the reach", () => {
+    const rows = [{ ref: b, verdict: verdict(b, "pass", [4], { flagged: true }) }];
+    const evidence = baselineReachOf(rows, new Set([b]), modes);
+    expect(evidence.hits.has(testKeyOf(b))).toBe(true);
+  });
+
+  test("a refused, reused or partial baseline row is not evidence", () => {
     const cases: Array<[string, TestVerdict, boolean]> = [
       ["refused", verdict(b, "error", [4], { runnerRow: "runner-refused" }), true],
       ["reused (not run here)", verdict(b, "pass", [4]), false],
-      ["flagged", verdict(b, "pass", [4], { flagged: true }), true],
       [
         "naming gap",
         {

@@ -9721,8 +9721,8 @@ function selectNamed(
  * "did the baseline hit the line the `Reached` marker precedes", answered per covering test.
  *
  * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row ran in this session
- * (`ranHere`: no reused snapshot), passed, was not flagged, and carries line coverage with no
- * naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
+ * (`ranHere`: no reused snapshot), passed (a flagged pass counts: it ran to its end), and carries line
+ * coverage with no naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
  * is decided only if its backend still runs the codeunit under that mode, because a `method`
  * baseline and a `test` baseline cover different lines.
  */
@@ -9743,7 +9743,10 @@ export function baselineReachOf(
   for (const b of baseline) {
     modes.set(b.ref.codeunitId, backend.isolationOf?.(b.ref.codeunitId) ?? "test");
     const cov = b.verdict.coverage;
-    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass" || b.verdict.flagged === true) continue;
+    // R-917: a flagged pass (al-runner rests it on an unprobed assumption, R907) still ran to its end, so its
+    // coverage is complete; excluding it left every reach undecided on Microsoft's apps, where nearly
+    // every pass is flagged (measured: Data Search 11 of 11).
+    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass") continue;
     if (cov === undefined || cov.granularity !== "line" || (cov.namingGaps?.length ?? 0) > 0) {
       continue;
     }
