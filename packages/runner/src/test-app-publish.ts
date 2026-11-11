@@ -1,7 +1,12 @@
 import { chmod, cp, lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
+import {
+  type AppJsonPathChange,
+  caseChangeText,
+  diskCaseResolver,
+  normaliseAppJsonPaths,
+} from "./app-json-paths";
 import { compareAppVersions, confirmedDowngradeRefusal } from "./app-version";
 import type { PublishIdentity } from "./app-version";
 import { AlcCompileError, type ArtifactCompiler } from "./artifact";
@@ -85,7 +90,11 @@ export interface CompiledTestApp {
 }
 
 /** R811: R422's rewrite of a test app.json's text; no changes when it does not parse as an object. */
-export function testAppPathRewrite(appJsonText: string): ReturnType<typeof normaliseAppJsonPaths> {
+export function testAppPathRewrite(
+  appJsonText: string,
+  /** R-913: the test project directory, for the letter-case fix. */
+  testDir?: string,
+): ReturnType<typeof normaliseAppJsonPaths> {
   let parsed: unknown;
   try {
     const noBom = appJsonText.charCodeAt(0) === 0xfeff ? appJsonText.slice(1) : appJsonText;
@@ -96,7 +105,10 @@ export function testAppPathRewrite(appJsonText: string): ReturnType<typeof norma
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { manifest: {}, changes: [] };
   }
-  return normaliseAppJsonPaths(parsed as Record<string, unknown>);
+  return normaliseAppJsonPaths(
+    parsed as Record<string, unknown>,
+    testDir === undefined ? undefined : diskCaseResolver(testDir),
+  );
 }
 
 /**
@@ -113,7 +125,7 @@ export async function stageTestProject(
   appJsonText: string,
   copyTo: string,
 ): Promise<{ readonly projectDir: string; readonly changes: readonly AppJsonPathChange[] }> {
-  const { manifest, changes } = testAppPathRewrite(appJsonText);
+  const { manifest, changes } = testAppPathRewrite(appJsonText, testDir);
   if (changes.length === 0) return { projectDir: testDir, changes };
   const dropped = new Set([".alpackages", ".git"]);
   const modes: { readonly path: string; readonly mode: number }[] = [];
@@ -147,8 +159,17 @@ export async function stageTestProject(
 
 /** R811: the warning for the rewrite `stageTestProject` made, once per session. */
 export function testAppPathWarning(changes: readonly AppJsonPathChange[]): string {
-  const parts = changes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
-  return `the test project's app.json names a path with "\\": ${parts}. LethAL compiled a copy with "/", because the Linux alc reads "\\" as part of the name and fails with AL1001 or AL0863. Your project's own app.json was not changed; write "/" there to remove this warning.`;
+  const slashes = changes.filter((c) => c.kind === "backslash");
+  const parts = slashes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
+  const backslash =
+    slashes.length === 0
+      ? ""
+      : `the test project's app.json names a path with "\\": ${parts}. LethAL compiled a copy with "/", because the Linux alc reads "\\" as part of the name and fails with AL1001 or AL0863. Your project's own app.json was not changed; write "/" there to remove this warning.`;
+  const cased = caseChangeText(changes).replace(
+    "app.json names",
+    "the test project's app.json names",
+  );
+  return [backslash, cased].filter((s) => s !== "").join(" ");
 }
 
 async function readTestManifest(testDir: string) {
