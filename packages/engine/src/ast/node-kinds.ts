@@ -35,6 +35,8 @@ export const ALNodeKind = {
   tableextension: "tableextension_declaration",
   /** R254: also under its own id, as BC object type 22 (scripts/r254-probe/README.md). */
   reportextension: "reportextension_declaration",
+  /** R924: a carrier since R-919 (the selector var compiles in its global `var`). */
+  xmlport: "xmlport_declaration",
   procedure: "procedure",
   trigger: "trigger_declaration",
   /**

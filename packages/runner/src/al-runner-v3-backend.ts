@@ -603,12 +603,38 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * `-`, `(`, `)`, `/`, `&`, `å`, `æ`, with a leading digit allowed ("7Digit Step"). Exactly those: the
  * dot stays out (#5798), and any character N1S never ran (`ø`, `'`, `:`, ...) falls back.
  * Positions too: N1S's names start with a letter or digit and hold only single, inner spaces.
+ * R922 (coord R-919): an invented test app with one test CODEUNIT per shape (`Names A/B Tests`,
+ * `Names A-B Tests`, `Names (A) Tests`, `Names A&B Tests`, `Names Blåbær Tests`, `7Digit Names
+ * Tests` and a plain one) ran under serve-entries and one-shot, per mutant equal (48 of 48,
+ * `/coord/handoff/R-919/names/`). So a codeunit name may also hold `-`, `(`, `)`, `/`, `&`, `å`,
+ * `æ` and start with a digit, when it starts with a letter or digit. The older shape stays.
  * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
-  codeunit: /^[A-Za-z0-9_ .]+$/,
+  codeunit: /^(?:[A-Za-z0-9_ .]+|[A-Za-z0-9][A-Za-z0-9_ .()/&åæ-]*)$/,
 } as const;
+
+/**
+ * R922: which part of a test's name is unproven, and the characters that make it so, for the
+ * `unproven-test-name-shape` reason. A name whose every character is proven but whose position
+ * is not (a leading space, say) is named with no characters.
+ */
+export function unprovenNamePart(
+  codeunitName: string,
+  method: string,
+  methodShape: (m: string) => boolean,
+): string {
+  const odd = (name: string, allowed: RegExp): string => {
+    const chars = [...new Set([...name].filter((c) => !allowed.test(c)))];
+    return chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : "";
+  };
+  const parts: string[] = [];
+  if (!V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(codeunitName))
+    parts.push(`codeunit "${codeunitName}"${odd(codeunitName, /[A-Za-z0-9_ .()/&åæ-]/)}`);
+  if (!methodShape(method)) parts.push(`method "${method}"${odd(method, /[A-Za-z0-9_ ()/&åæ-]/)}`);
+  return parts.join(", ");
+}
 
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
 export class AlRunnerV3ServeStopUnsetError extends Error {
@@ -2366,13 +2392,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
     );
     if (odd.length > 0) {
+      // R922: name the unproven part (codeunit or method) and its characters, not the whole name.
+      const named = [
+        ...new Set(odd.map((t) => unprovenNamePart(t.codeunitName, t.method, methodShape))),
+      ];
       reasons.push(
-        `unproven-test-name-shape: ${odd
-          .slice(0, 5)
-          .map((t) => `${t.codeunitName}.${t.method}`)
-          .join(
-            ", ",
-          )}${odd.length > 5 ? ", ..." : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
+        `unproven-test-name-shape: ${named.slice(0, 5).join("; ")}${named.length > 5 ? `; and ${named.length - 5} more` : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
       );
     }
     if (V3_NO_SERVE_ENTRIES.includes(version)) {

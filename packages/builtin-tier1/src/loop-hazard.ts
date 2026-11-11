@@ -72,8 +72,8 @@ import {
  *
  * R500 (closed) took R487's exclusions shape by shape, at the dispatch check only:
  * - a `Date` item is open unless `MaxIteration` bounds it (shape 4), and an XMLport `tableelement`
- *   over `Integer` is a loop item like a report data item (shape 5; dormant while xmlport cannot
- *   carry the selector var, but it seeds shape 2);
+ *   over `Integer` is a loop item like a report data item (shape 5; live since R924 made xmlport a
+ *   carrier, and it seeds shape 2);
  * - procedures in OTHER objects that open-item code calls, one hop (`inOneHopCallee`, shape 2);
  * - a filter call on an open item's record from outside its code (`altersOpenItemFilter`, 5b);
  * - an unparsed reportextension extends every report (shape 7); `CurrReport.P()` and a bare
@@ -8141,9 +8141,9 @@ export function hangCapableForMutatedNode(
   // (its triggers, its child items' triggers and columns, a reportextension dataset block anchored
   // on it) or in a same-object procedure reachable from that code is refused, whatever it writes
   // or reads.
-  // R500: an XMLport element is open-item code only for the DISPATCH check, which the orchestrator
-  // skips in a file that cannot carry the selector var; here it would move those sites out of the
-  // `skipped` row, so this in-operator path keeps R487's report-only scope.
+  // R500: an XMLport element is open-item code only for the DISPATCH check (`openItemHangRefuses`,
+  // live since R924 made xmlport a carrier), which refuses those sites for every operator; this
+  // in-operator path keeps R487's report-only scope, so each is counted once, as hang-refused.
   if (inOpenItemCode(node, ctx) && objectOf(node)?.rawKind !== "xmlport_declaration") {
     return "loop-condition-target";
   }

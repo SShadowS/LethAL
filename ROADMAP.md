@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**21 of 894 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 895 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -360,6 +360,7 @@ that ordering is the priority.
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
 - **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87, 810d07d7): a v3 fail keeps stackTrace; leg C's row texts leave it out
+- **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · open
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
 
 ## Product gaps a real project hits
@@ -554,7 +555,7 @@ that ordering is the priority.
 - **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · done (c8081f97)
 - **R912** · A v3 serve run on an app whose tests sit in one large codeunit runs that whole codeunit per mutant, with no estimate, no progress inside a prefetch request and an outer bound of days, so a time cap loses every result: Intrastat Core gave no report after 6.3 h · [R912.md](docs/roadmap/R912.md) · done (6d73834fafd5e5d18c2f06a9de6b04d6abcb8777)
 - **R923** · An app.json path whose letter case differs from the file on disk stops the Linux alc (AL1001) before a line compiles: a Windows-authored project fails in 2 s · [R923.md](docs/roadmap/R923.md) · done (637c9053; review fixes cd9672df): measured on Audit File Export, 1,084 of 1,084
-- **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · open
+- **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
 
 ## Backends and tooling
 

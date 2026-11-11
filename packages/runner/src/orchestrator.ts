@@ -507,8 +507,8 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  * run. A mutation guard is a bare `MutationSelector.Active(...)` call, which needs a
  * `var MutationSelector: Codeunit "Mutation Selector";` in scope, and only the kinds in
  * `CARRIER_KINDS` can carry that declaration (`canCarryMutationSelectorVar` /
- * `injectMutationSelectorVar` in @lethal/schemata) — six today, `xmlport` and `query` being the
- * kinds that still hold code and still cannot. A real project routinely holds one, and the tier-1
+ * `injectMutationSelectorVar` in @lethal/schemata) — eight today, `query` being the kind that
+ * still holds code and still cannot. A real project routinely holds one, and the tier-1
  * operators target its trigger bodies happily — so without this filter one such file aborts the
  * whole session at compile time. Dropping the specs costs only those mutants:
  * `prepareBatchProject` copies every project `.al` file the instrumented write did not produce
