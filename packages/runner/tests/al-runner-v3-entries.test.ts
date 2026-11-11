@@ -4992,6 +4992,14 @@ describe("R907: --no-client", () => {
     expect(r.b.skipAfterTimeout).toBe(false);
   });
 
+  test("R919: on serve with the flag learned, the build tag still says supported", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    expect(r.b.skipAfterTimeoutSupported).toBe(false);
+    (r.b as unknown as { skipAfterTimeoutLearned: boolean }).skipAfterTimeoutLearned = true;
+    expect(r.b.skipAfterTimeout).toBe(false);
+    expect(r.b.skipAfterTimeoutSupported).toBe(true);
+  });
+
   test("on: every runTests request carries noClient: true", async () => {
     const r = await readyRig({ serve: { rows: killsM1 }, extra: { noClient: true } });
     await r.b.activate("M0001");

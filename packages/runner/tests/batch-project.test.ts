@@ -450,9 +450,9 @@ describe("prepareBatchProject — backslash paths in app.json (R-422)", () => {
       await write(projectDir, "app.json", JSON.stringify(own));
       const changes = await prepareBatchProject(projectDir, batchDir, own, "1.0.2.0");
       expect(changes).toEqual([
-        { field: "logo", from: "Images\\Logo.png", to: "Images/Logo.png" },
-        { field: "screenshots[0]", from: "Shots\\a.png", to: "Shots/a.png" },
-        { field: "resourceFolders[0]", from: "Res\\Sub", to: "Res/Sub" },
+        { field: "logo", from: "Images\\Logo.png", to: "Images/Logo.png", kind: "backslash" },
+        { field: "screenshots[0]", from: "Shots\\a.png", to: "Shots/a.png", kind: "backslash" },
+        { field: "resourceFolders[0]", from: "Res\\Sub", to: "Res/Sub", kind: "backslash" },
       ]);
     });
     await withDirs(async (projectDir, batchDir) => {

@@ -6177,10 +6177,18 @@ describe("R907: --resume and runner_build follow noClient", () => {
   class V3Stub extends CountingBackend {
     readonly noClient: boolean;
     readonly skipAfterTimeout: boolean;
-    constructor(noClient: boolean, abortAfter?: number, skipAfterTimeout = false) {
+    readonly skipAfterTimeoutSupported: boolean;
+    constructor(
+      noClient: boolean,
+      abortAfter?: number,
+      skipAfterTimeout = false,
+      // R919: a serve session on a build that lists the flag: supported, but not passed.
+      skipAfterTimeoutSupported = skipAfterTimeout,
+    ) {
       super("pass", abortAfter);
       this.noClient = noClient;
       this.skipAfterTimeout = skipAfterTimeout;
+      this.skipAfterTimeoutSupported = skipAfterTimeoutSupported;
       (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
     }
     override capabilities(): BackendCapabilities {
@@ -6282,6 +6290,27 @@ describe("R907: --resume and runner_build follow noClient", () => {
     };
     expect(await run(true)).toContain(" skip-after-timeout");
     expect(await run(false)).not.toContain("skip-after-timeout");
+  });
+
+  test("R919: the tag follows what the BUILD supports, not the transport: serve and its one-shot fallback match", async () => {
+    // Measured (R-913): a run that fell back from serve to one-shot at the warm-up (R786) stored the tag, and a
+    // --resume starting on serve built the string without it and found no unfinished run.
+    const run = async (passed: boolean, supported: boolean) => {
+      const dirs = await makeProject();
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: new V3Stub(false, 1, passed, supported),
+        store,
+        ...dirs,
+        selectorIds,
+      });
+      return buildOf(store);
+    };
+    const oneShot = await run(true, true);
+    const serve = await run(false, true);
+    expect(serve).toContain(" skip-after-timeout");
+    expect(serve).toBe(oneShot);
+    expect(await run(false, false)).not.toContain("skip-after-timeout");
   });
 });
 
