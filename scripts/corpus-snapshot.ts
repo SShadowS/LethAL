@@ -573,7 +573,7 @@ export function parsePs(text: string): Proc[] {
   return out;
 }
 
-function descendants(procs: readonly Proc[], root: number): Set<number> {
+export function descendants(procs: readonly Proc[], root: number): Set<number> {
   const out = new Set<number>([root]);
   for (let grew = true; grew; ) {
     grew = false;
