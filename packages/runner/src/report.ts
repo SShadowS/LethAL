@@ -138,7 +138,8 @@ export interface SessionOutcome {
 /**
  * A file `generateMutationSet` (orchestrator.ts) dropped because no object it declares can carry
  * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard (`CARRIER_KINDS` in
- * @lethal/schemata lists the kinds that can; query and xmlport cannot). See `SessionReport.notInstrumented`.
+ * @lethal/schemata lists the kinds that can; a query cannot, an xmlport can since R924). See
+ * `SessionReport.notInstrumented`.
  */
 export interface NotInstrumentedFile {
   readonly file: string;
@@ -352,8 +353,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "uninstrumentable-files": {
     meaning:
       "Some files were never instrumented because no object they declare can carry the " +
-      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query or xmlport " +
-      "cannot). `mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
+      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query cannot). " +
+      "`mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
       "`narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "A project whose skipped files hold a large share of its code can otherwise read as a " +

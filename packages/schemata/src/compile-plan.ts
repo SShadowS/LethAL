@@ -452,13 +452,16 @@ export function canCarryMutationSelectorVar(root: ALSyntaxNode): boolean {
  * `pageextension`/`tableextension` were added by R30 after the coverage-attribution question this
  * comment used to defer on was measured — the tables gate covers both (a `tableextension`'s five
  * mutants are all killed; a `pageextension`'s are `no-coverage`). Enums stay out for a simpler
- * reason: they hold no code, so they can hold no var. `xmlport` and `query` are the kinds that
- * still hold code and still cannot carry it. Adding `xmlport` here wakes R500's dormant XMLport
- * hang refusal (`openItemHangRefuses` is asked only in a carrier file); `r500-dispatch.test.ts`
- * pins that dormancy and goes red, as a reminder to measure it, when the kind is added. It also
- * admits `#if`-wrapped xmlports on BC (R497's shape rule is kind-blind) with no gate measuring them:
- * R545's census found 4 wrapped BaseApp xmlports (about 350 sites each, skipped today), so add a
- * pre-committed wrapped xmlport arm to `sandbox-wrapped` first, as R536 and R545 did for their kinds.
+ * reason: they hold no code, so they can hold no var. `query` is the kind that still holds code and
+ * still cannot carry it.
+ *
+ * `xmlport` was added by R924 (coord R-919): an invented XMLport with code in element and table
+ * element triggers, `OnPreXmlPort` and a global procedure compiles instrumented with alc, 18 of its
+ * sites guarded (`/coord/handoff/R-919/xp/`). That woke R500's XMLport hang refusal
+ * (`openItemHangRefuses` is asked only in a carrier file), which `r500-dispatch.test.ts` now pins
+ * as live: an open `Integer` table element's reachable writes are refused, a bounded twin's emit.
+ * R497's BC shape rule is kind-blind, so `bcWrappedShapeRefusal` refuses an `#if`-wrapped XMLport
+ * by name until a pre-committed `sandbox-wrapped` arm measures one (R545's census: 4 in BaseApp).
  *
  * `reportextension` was added by R254 once its coverage was measured: BC reports it as object
  * type 22 under the extension's own id, al-runner as its own Cobertura class
