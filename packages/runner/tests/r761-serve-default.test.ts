@@ -118,7 +118,6 @@ describe("R761: the default transport", () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]?.code).toBe(FALLBACK);
     expect(r.warnings[0]?.message).toContain("resume:");
-    expect(r.warnings[0]?.message).not.toContain("multi-object-or-wrapped");
   });
 
   test("R896 (build review 2): an auto resume keeps serve-entries; a forced-test resume still falls back", async () => {

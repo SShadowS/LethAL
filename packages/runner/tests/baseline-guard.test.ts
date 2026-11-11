@@ -17,6 +17,7 @@ import {
   assertMatchesBaseline,
   assertRecordOnCurrent,
   assertRecordPinned,
+  compareOnlyEnv,
   expectedFileProblems,
   expectedPathFor,
   gitShowHead,
@@ -203,6 +204,18 @@ describe("assertMatchesBaseline", () => {
     await expect(assertMatchesBaseline(second, path, "test itest")).rejects.toThrow(
       /per-mutant regression/,
     );
+  });
+});
+
+describe("R918: compareOnlyEnv", () => {
+  test("drops the record request, keeps everything else, and leaves its input alone", () => {
+    const base = "al-runner-v3.multiobject.baseline.json";
+    const env = { [RECORD_BASELINE_ENV]: base, LETHAL_ITEST_ALRUNNER_V3: "1" };
+    expect(recordRequested(base, env)).toBe(true);
+    const out = compareOnlyEnv(env);
+    expect(recordRequested(base, out)).toBe(false);
+    expect(out).toEqual({ LETHAL_ITEST_ALRUNNER_V3: "1" });
+    expect(env[RECORD_BASELINE_ENV]).toBe(base);
   });
 });
 

@@ -857,7 +857,11 @@ export function legOutcomeOfError(err: unknown, leg?: string): V3LegOutcome {
   // own gap, never a verdict on the binary (the update script keeps a gate-fail for good).
   if (err instanceof GateWarningsMismatchError) return "gate-fail";
   if (err instanceof AlRunnerV3CoverageJoinError) return "gate-fail";
-  if (err instanceof AlRunnerCoverageFrameError && (leg === "MO" || leg === "WR")) {
+  // R918: MOE and WRE measure the same per-object frame, on serve.
+  if (
+    err instanceof AlRunnerCoverageFrameError &&
+    (leg === "MO" || leg === "WR" || leg === "MOE" || leg === "WRE")
+  ) {
     return "gate-fail";
   }
   return "infra-fail";

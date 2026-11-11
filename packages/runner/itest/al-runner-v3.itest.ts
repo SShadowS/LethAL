@@ -168,6 +168,7 @@ import {
   assertGateBaseline,
   assertRecordOnCurrent,
   assertRecordPinned,
+  compareOnlyEnv,
   gitShowHead,
   preflightGateBaseline,
   readGateBaseline,
@@ -1387,12 +1388,6 @@ async function legMO(scratch: string, serve = false): Promise<SessionReport> {
   return r;
 }
 
-/** R918: the environment without the record variable, so a serve leg compares and never writes. */
-function compareOnlyEnv(): NodeJS.ProcessEnv {
-  const { LETHAL_ITEST_RECORD_BASELINE: _rec, ...rest } = process.env;
-  return rest;
-}
-
 /** R918: the serve legs' counters, pre-committed in
  *  `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md` (master e1ca5d11). */
 const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
@@ -2389,6 +2384,11 @@ async function main(): Promise<void> {
     preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
   if (LEGS.includes("WR"))
     preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
+  // R918: MOE and WRE compare with the same two files, so they refuse at start without them too.
+  if (LEGS.includes("MOE"))
+    preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MOE");
+  if (LEGS.includes("WRE"))
+    preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WRE");
   // R614: the fixture .alpackages, from the pinned tar (a fresh worktree extracts them itself).
   // M9: every leg selection needs them, CDO-only legs included (or the tar to extract them from).
   const prepared = await prepareFixtureSymbols({ worktree: REPO });
