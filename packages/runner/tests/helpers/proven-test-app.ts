@@ -27,13 +27,21 @@ export function testAppJson(version = "1.0.0.0"): string {
   return JSON.stringify({ ...TEST_APP, version });
 }
 
-/** A served test-app package: a manifest at `version`, no source and no SymbolReference.json (so
- *  no compiled membership and no published digests: the same suite and evidence as no read). */
-export function testAppPackage(version = "1.0.0.0", tag = ""): Uint8Array {
+/** A served test-app package: a manifest at `version`, one empty `.al` entry (R932: a package with
+ *  no `.al` proves no identity) and no SymbolReference.json (so no compiled membership: the same
+ *  suite as no read). */
+export function testAppPackage(
+  version = "1.0.0.0",
+  tag = "",
+  /** AL text by file name, placed under `src/`. A test whose warnings or snapshot must match a
+   *  package that publishes no extra tests passes its test project's real source here. */
+  sources: Readonly<Record<string, string>> = { "Empty.al": "// R932: carries source" },
+): Uint8Array {
   const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
   return new Uint8Array(
     buildFakeAppWithEntries({
       "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${TEST_APP.id}" Name="${TEST_APP.name}" Publisher="${TEST_APP.publisher}" Version="${version}" />${tag}</Package>`,
+      ...Object.fromEntries(Object.entries(sources).map(([name, text]) => [`src/${name}`, text])),
     }),
   );
 }

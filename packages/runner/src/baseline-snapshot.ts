@@ -32,7 +32,6 @@ import {
   CONTROL_SELECTOR_FILENAME,
   CONTROL_UPGRADE_FILENAME,
 } from "@lethal/schemata";
-import { listPackageEntries, readPackageEntry } from "./app-package";
 import {
   type PackageUnread,
   type PublishedPackageRead,
@@ -330,19 +329,12 @@ export function decodeSource(bytes: Buffer): string {
  * A SIGNED package (bytes after the zip) does not match the shape, so it hashes raw and would still
  * drift on a Windows server that re-stamps its id.
  *
- * R932 (measured): the id is not the only thing a Windows server changes. It rebuilds the package on
- * every `dev/packages` read, so every zip entry's DOS time is the download time (three reads 93
- * minutes apart had equal entry names, sizes and bytes, and differed only in those times and the
- * id). So a package of the known NAVX shape is hashed by CONTENT: the header with the id zeroed,
- * then the zip's entries sorted by name, each as length-prefixed name, 8-byte length and the
- * uncompressed bytes. Entry times, entry order and compression level do not count; a changed,
- * added, removed or renamed entry does. If the zip cannot be read, the whole buffer hashes raw
- * (the safe side: an unreadable package reads as changed, so the guard refuses).
- *
- * Named limit: such a server's served package never equals the compiled file (it has no source and
- * another manifest, and its SymbolReference.json is NUL-padded), so a served-vs-compiled compare
- * (R139's source check, R492's identity check) cannot match there. Only served-vs-served compares
- * (this hash, taken on two reads) can.
+ * R932 (measured): Windows also re-stamps every zip entry's time on each read, so a served package
+ * that carries no AL source is never hashed here as an identity: the orchestrator treats it as
+ * unproven instead (`servedWithoutSource`). Content-hashing it was rejected: with no source, edits
+ * to test bodies are invisible to a content hash, and the unzip costs seconds on a large package.
+ * Such a server's served package also never equals the compiled file, so served-vs-compiled
+ * compares (R139, R492) cannot match there.
  */
 export function hashPackage(bytes: Uint8Array): string {
   const h = createHash("sha256");
@@ -357,21 +349,7 @@ export function hashPackage(bytes: Uint8Array): string {
   if (!navx) return h.update(bytes).digest("hex");
   h.update(bytes.subarray(0, 12));
   h.update(new Uint8Array(16));
-  h.update(bytes.subarray(28, 40));
-  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const parts: Buffer[] = [];
-  try {
-    for (const name of [...listPackageEntries(buf)].sort()) {
-      const data = readPackageEntry(buf, name) ?? Buffer.alloc(0);
-      const head = Buffer.alloc(8);
-      head.writeUInt32LE(Buffer.byteLength(name), 0);
-      head.writeUInt32LE(data.length, 4);
-      parts.push(head, Buffer.from(name), data);
-    }
-  } catch {
-    return createHash("sha256").update(bytes).digest("hex");
-  }
-  for (const p of parts) h.update(p);
+  h.update(bytes.subarray(28));
   return h.digest("hex");
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -15,7 +15,6 @@ import {
 import type { BaselineSnapshot } from "../src/baseline-snapshot";
 import { ResultsStore } from "../src/store";
 import { ProjectSymlinkRefusedError } from "../src/walk";
-import { buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
 import { HTTP_500 } from "./helpers/unread";
 
@@ -187,22 +186,8 @@ describe("hashTargetSource (C02-06)", () => {
 });
 
 /** R-920: a NAVX-shaped package: 40-byte header (id at 12..27, content length at 28..35) + payload. */
-function navx(
-  id: number,
-  payload: string,
-  patch?: (b: Buffer) => void,
-  entries?: readonly (readonly [string, string])[],
-  time = 0,
-): Uint8Array {
-  // R932: the content hash reads the zip, so the body is a real (stored) zip.
-  const body = buildFakeAppWithEntries(entries ?? [["A.txt", payload]]);
-  for (const [sig, at] of [
-    [Buffer.from([0x50, 0x4b, 0x03, 0x04]), 10],
-    [Buffer.from([0x50, 0x4b, 0x01, 0x02]), 12],
-  ] as const) {
-    for (let i = body.indexOf(sig); i >= 0; i = body.indexOf(sig, i + 1))
-      body.writeUInt16LE(time, i + at);
-  }
+function navx(id: number, payload: string, patch?: (b: Buffer) => void): Uint8Array {
+  const body = Buffer.from(`PK\x03\x04${payload}`.padEnd(64, "."), "latin1");
   const b = Buffer.alloc(40 + body.length);
   b.write("NAVX", 0, "latin1");
   b.writeUInt32LE(40, 4);
@@ -238,38 +223,6 @@ describe("hashPackage and the NAVX package id (R-920)", () => {
     const copy = Uint8Array.from(p);
     hashPackage(p);
     expect(p).toEqual(copy);
-  });
-  const E = [
-    ["a.txt", "one"],
-    ["b.txt", "two"],
-  ] as const;
-  const h = (entries: readonly (readonly [string, string])[], time = 0, id = 1) =>
-    hashPackage(navx(id, "", undefined, entries, time));
-  test("R932: different entry times, entry order or header id hash equal", () => {
-    expect(h(E, 1234)).toBe(h(E, 0));
-    expect(h([E[1], E[0]])).toBe(h(E));
-    expect(h(E, 0, 9)).toBe(h(E, 0, 1));
-  });
-  test("R932: a changed, added, removed or renamed entry hashes differently", () => {
-    const base = h(E);
-    expect(h([E[0], ["b.txt", "twp"]])).not.toBe(base);
-    expect(h([...E, ["c.txt", ""]])).not.toBe(base);
-    expect(h([E[0]])).not.toBe(base);
-    expect(h([E[0], ["c.txt", "two"]])).not.toBe(base);
-    // framing: moving a byte from one name to its data must not collide
-    expect(h([["ab", "c"]])).not.toBe(h([["a", "bc"]]));
-  });
-  test("R932: a NAVX header over bytes that are not a zip hashes raw", () => {
-    const junk = navx(1, "x", (b) => b.fill(0x41, 41));
-    expect(hashPackage(junk)).toBe(createHash("sha256").update(junk).digest("hex"));
-  });
-  test("R932: three real Windows reads of one app (entry times differ) hash equal", () => {
-    const read = (x: string) =>
-      new Uint8Array(readFileSync(join(import.meta.dir, "fixtures", "r932", `pkg-${x}.app`)));
-    const a = read("a");
-    expect(Buffer.compare(Buffer.from(a), Buffer.from(read("c")))).not.toBe(0);
-    expect(hashPackage(a)).toBe(hashPackage(read("c")));
-    expect(hashPackage(a)).toBe(hashPackage(read("d")));
   });
   test("the drift guard's identity: a fresh id per read is stable, a changed payload is not", async () => {
     let n = 0;
