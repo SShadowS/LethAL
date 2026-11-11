@@ -153,6 +153,49 @@ describe("R580 B: a wrapper holding only a code-free object is admitted", () => 
   });
 });
 
+describe("R920: a code-free object whose header is split by #if, inside a wrapper", () => {
+  // E-Document Core's shape: an outer `#if`, and inside it an enum whose header differs per arm.
+  const split = (head1: string, head2: string, body: string) =>
+    `#if not R920SYM\n#if R920B\n${head1}\n#else\n${head2}\n#endif\n{\n${body}}\n#endif\n`;
+  const ENUM = split(
+    'enum 57931 "R920 Enum"',
+    'enum 57931 "R920 Enum" implements "R920 Iface"',
+    "    value(0; First) { }\n",
+  );
+  test("an enum with a split header is admitted: coverage stays on", async () => {
+    const root = rootOf(ENUM);
+    expect(fileHoldsWrappedObject(root)).toBe(true);
+    expect(alRunnerAdmitsWrappedFile(root)).toBe(true);
+    const dir = await bundle({ "src/E.Enum.al": ENUM });
+    expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual([]);
+  });
+  // Guards the other direction: a split header of a kind that can carry code is not code-free, even
+  // with an empty body (so `holdsCode` alone cannot be what refuses it).
+  test("a codeunit with a split header stays refused, even with no code in it", async () => {
+    const text = split(
+      'codeunit 57932 "R920 CU"',
+      'codeunit 57932 "R920 CU" implements "R920 Iface"',
+      "",
+    );
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+    const dir = await bundle({ "src/C.Codeunit.al": text });
+    expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual(["src/C.Codeunit.al"]);
+  });
+  test("a split header whose arms mix an enum and a codeunit stays refused", async () => {
+    const text = split('enum 57933 "R920 Mix"', 'codeunit 57933 "R920 Mix"', "");
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+  });
+  // `extends_keyword` names no object kind, so an enum extension's split header is admitted too.
+  test("an enumextension with a split header is admitted", () => {
+    const text = split(
+      'enumextension 57934 "R920 EnumExt" extends "R920 Enum"',
+      'enumextension 57934 "R920 EnumExt" extends "R920 Enum2"',
+      "    value(5; Fifth) { }\n",
+    );
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(true);
+  });
+});
+
 describe("R580 kinds added by the B1 ruling (enumextension, controladdin, dotnet)", () => {
   for (const [kind, obj] of Object.entries(B1_KINDS)) {
     // B (B1). Guards: leaving the kind off the allow-list, which turns coverage off for those projects.

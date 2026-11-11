@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 888 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 890 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -358,6 +358,7 @@ that ordering is the priority.
 - **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
 - **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · open — measurement: the Windows probe is with the owner (coord R-910); no reader change until it is back
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
+- **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87): a v3 fail keeps stackTrace
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4): statement-grain reach decided from the baseline's coverage; proof in…
 
@@ -933,6 +934,7 @@ that ordering is the priority.
 - **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · open
 - **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · open
 - **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
+- **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · open
 
 ---
 
