@@ -13,6 +13,7 @@ import {
   NOTHING_SCORED_EXIT_CODE,
   QUARANTINED_EXIT_CODE,
   RUN_FLAGS,
+  TIME_BUDGET_EXIT_CODE,
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
   doctorJson,
@@ -500,8 +501,32 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
   test("the run exit-code table is exitCodeForReport's", () => {
     const rows = tableRows(section(read(REFERENCE), "Exit codes (checked)"));
     expect(rows.map(([c = ""]) => ticks(c)[0]).sort()).toEqual(
-      ["0", "1", String(QUARANTINED_EXIT_CODE), String(NOTHING_SCORED_EXIT_CODE)].sort(),
+      [
+        "0",
+        "1",
+        String(QUARANTINED_EXIT_CODE),
+        String(NOTHING_SCORED_EXIT_CODE),
+        String(TIME_BUDGET_EXIT_CODE),
+      ].sort(),
     );
+    // R912: a budget stop is partial, so it must not read as a pass; the two stronger claims win.
+    expect(
+      flowed(
+        rows.find(([c = ""]) => ticks(c)[0] === String(TIME_BUDGET_EXIT_CODE))?.[1] ?? "",
+      ).toLowerCase(),
+    ).toContain("partial");
+    expect(exitCodeForReport({ validity: { caveats: ["time-budget-reached"] } })).toBe(
+      TIME_BUDGET_EXIT_CODE,
+    );
+    expect(
+      exitCodeForReport({ validity: { caveats: ["time-budget-reached", "all-errors"] } }),
+    ).toBe(NOTHING_SCORED_EXIT_CODE);
+    expect(
+      exitCodeForReport({
+        quarantined: { reason: "x" } as never,
+        validity: { caveats: ["time-budget-reached"] },
+      }),
+    ).toBe(QUARANTINED_EXIT_CODE);
     const meaning = (code: number) =>
       flowed(rows.find(([c = ""]) => ticks(c)[0] === String(code))?.[1] ?? "").toLowerCase();
     expect(meaning(0)).toContain("says nothing about whether mutants survived");
@@ -1475,7 +1500,7 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
     const footer = help.split("EXIT CODES")[1] ?? "";
     const runCodes = [...footer.matchAll(/(?:^|\s)(\d)\s/g)].map((m) => Number(m[1]));
     expect(new Set(runCodes)).toEqual(
-      new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE]),
+      new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE, TIME_BUDGET_EXIT_CODE]),
     );
     const lines = help.split("\n");
     const verifyStart = lines.findIndex((l) => l.startsWith("VERIFY"));

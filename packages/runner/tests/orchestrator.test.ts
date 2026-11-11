@@ -381,6 +381,8 @@ class StubBackend implements ExecutionBackend {
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
   /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
   runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
+  /** R904: the backend's baseline note (v3: test data is off), when a test sets one. */
+  baselineNote?: () => string | undefined;
   constructor(
     private readonly caps: BackendCapabilities,
     private readonly script: (
@@ -4110,6 +4112,127 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(
       await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
     ).toEqual(["tests-testpage-refused"]);
+  });
+  // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
+  // only when that frame is a page call in the test app's source; the same text at any other
+  // statement is an ordinary failure.
+  describe("R909 — Linux page-open frame", () => {
+    const LINUX_CLR =
+      "Unexpected CLR exception thrown.: System.NotSupportedException: Specified method is not supported.";
+    const frameText = (line: number) =>
+      `${LINUX_CLR}\nSandbox Tests(CodeUnit 79100).UnsupportedTest line ${line} - Demo by Pub version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26`;
+    const testAl = (stmt: string) => `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    begin
+    end;
+
+    [Test]
+    procedure UnsupportedTest()
+    begin
+        ${stmt}
+    end;
+}
+`;
+    const run = async (stmt: string) => {
+      const dirs = await project(testAl(stmt));
+      const backend = new RecordingBackend(
+        { ...FENCED, kind: "al-runner-v3", authoritative: false },
+        frameText(2),
+      );
+      const events: RunEvent[] = [];
+      const report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        emit: [createEmitter([(e) => events.push(e)])],
+      });
+      const finished = events.find((e) => e.type === "baseline-batch-finished");
+      if (finished === undefined || finished.type !== "baseline-batch-finished")
+        throw new Error("no baseline-batch-finished event");
+      return {
+        report,
+        classification: finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+          ?.classification,
+      };
+    };
+    test("a top frame at a page call is classified and diagnosed", async () => {
+      const { report, classification } = await run("Page.Run(50000);");
+      expect(classification).toEqual(["tests-testpage-unsupported"]);
+      expect(report.testPageUnsupported?.tests).toEqual(["Sandbox Tests.UnsupportedTest"]);
+      const noted = report.mutants.filter((m) => m.failureNote?.includes(LINUX_CLR));
+      expect(noted.length).toBeGreaterThan(0);
+    });
+    test("the same message at a non-page statement gets neither", async () => {
+      const { report, classification } = await run("Message('x');");
+      expect(classification).toEqual([]);
+      expect(report.testPageUnsupported).toBeUndefined();
+      expect(report.mutants.filter((m) => m.failureNote?.includes(LINUX_CLR))).toEqual([]);
+    });
+    // Review fix 1: BC counts lines of the INSTRUMENTED target, which has more lines than the
+    // original above a page call that follows mutation sites. The frame must resolve there.
+    describe("a target frame is resolved in the instrumented source", () => {
+      const TARGET_PAGE_AL = `codeunit 79050 "Sandbox Page"
+{
+    procedure Show(Amount: Decimal; Budget: Decimal)
+    begin
+        if Amount > Budget then
+            exit;
+        Page.Run(50000);
+    end;
+}
+`;
+      const targetFrame = (k: number) =>
+        `${LINUX_CLR}\nSandbox Page(CodeUnit 79050).Show line ${k} - Demo by Pub version 1.0.0.0;Test Runner - Mgt(CodeUnit 130454).RunTests line 26`;
+      const rowOf = (text: string) => {
+        const rows = text.split("\n");
+        return (
+          rows.findIndex((r) => r.includes("Page.Run(50000)")) -
+          rows.findIndex((r) => r.includes("procedure Show"))
+        );
+      };
+      const runTarget = async (dirs: Awaited<ReturnType<typeof project>>, k: number) => {
+        const events: RunEvent[] = [];
+        await runSession({
+          backend: new RecordingBackend(
+            { ...FENCED, kind: "al-runner-v3", authoritative: false },
+            targetFrame(k),
+          ),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          emit: [createEmitter([(e) => events.push(e)])],
+        });
+        const finished = events.find((e) => e.type === "baseline-batch-finished");
+        if (finished === undefined || finished.type !== "baseline-batch-finished")
+          throw new Error("no baseline-batch-finished event");
+        return finished.verdicts.find((v) => v.name === "Sandbox Tests.UnsupportedTest")
+          ?.classification;
+      };
+      test("named at the instrumented row, unnamed at the original row", async () => {
+        const dirs = await project(testAl("Message('x');"));
+        await Bun.write(join(dirs.projectDir, "SandboxPage.Codeunit.al"), TARGET_PAGE_AL);
+        const originalK = rowOf(TARGET_PAGE_AL);
+        await runTarget(dirs, originalK);
+        const batchDir = (await readdir(dirs.instrumentedDir)).find((e) =>
+          /^run-\d+-batch-0$/.test(e),
+        );
+        expect(batchDir).toBeDefined();
+        const files = await readdir(join(dirs.instrumentedDir, batchDir as string));
+        let instrumentedK = -1;
+        for (const f of files.filter((n) => n.toLowerCase().endsWith(".al"))) {
+          const text = await readFile(join(dirs.instrumentedDir, batchDir as string, f), "utf8");
+          if (text.includes("procedure Show")) instrumentedK = rowOf(text);
+        }
+        expect(instrumentedK).toBeGreaterThan(originalK); // the premise: lines were added
+        expect(await runTarget(dirs, instrumentedK)).toEqual(["tests-testpage-unsupported"]);
+        expect(await runTarget(dirs, originalK)).toEqual([]);
+      });
+    });
   });
 });
 describe("runSession — C3 batch app.json + full source copy", () => {
@@ -8286,6 +8409,115 @@ describe("runSession — R100, the dead-baseline note reaches the report", () =>
       expect(m.failureNote).toContain(NO_GREEN_BASELINE);
       expect(m.failureNote).toContain("al-runner provision");
     }
+  });
+});
+
+describe("runSession — R904, test data off and a partly red baseline stops by name", () => {
+  const DATA_OFF =
+    "al-runner v3 says test data is off: the demo data of build 28.4.1.2 is not cached.";
+  // Two tests: OverBudgetDetected passes at baseline, ReadsDemoData passes or fails as asked.
+  const TWO_TESTS = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ReadsDemoData()
+    begin
+    end;
+}
+`;
+  const twoTestProject = () => makeProject(TWO_TESTS);
+  // Every mutant run fails, so a scored mutant is killed.
+  const backendWith = (secondGreen: boolean, note: string | undefined) => {
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant, ref) =>
+        mutant !== null ? "fail" : ref.method === "ReadsDemoData" && !secondGreen ? "fail" : "pass",
+      ["IsOverBudget"],
+    );
+    backend.baselineNote = () => note;
+    return backend;
+  };
+
+  test("data off and one red baseline test: refused before any mutant, naming the data and R904", async () => {
+    const dirs = await twoTestProject();
+    const backend = backendWith(false, DATA_OFF);
+    const store = new ResultsStore(":memory:");
+    const run = runSession({ backend, store, ...dirs, selectorIds });
+    await expect(run).rejects.toThrow(
+      /1 of 2 baseline test\(s\) did not pass \(Sandbox Tests\.ReadsDemoData\) while al-runner v3 says test data is off/,
+    );
+    await expect(run).rejects.toThrow(/R904/);
+    // Before any mutant: only the baseline's deactivated runs happened.
+    expect(backend.activations.filter((a) => a !== null)).toEqual([]);
+    // Review: the red baseline's snapshot is gone, so a `--resume` cannot score against it.
+    expect(store.getRun(1)).not.toBeNull();
+    expect(store.dropBaselineSnapshot(1, 0)).toBe(0);
+  });
+
+  test("data off and a test SKIPPED at baseline (refused before sending) scores as before", async () => {
+    const dirs = await twoTestProject();
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant, ref) =>
+        mutant !== null ? "fail" : ref.method === "ReadsDemoData" ? "skip" : "pass",
+      ["IsOverBudget"],
+    );
+    backend.baselineNote = () => DATA_OFF;
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
+  });
+
+  test("data off and NO green test keeps R885's per-mutant note, and does not stop", async () => {
+    const dirs = await twoTestProject();
+    const backend = new StubBackend(CAPS_NST, () => "fail", ["IsOverBudget"]);
+    backend.baselineNote = () => DATA_OFF;
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.failureNote).toContain(NO_GREEN_BASELINE);
+      expect(m.failureNote).toContain("test data is off");
+    }
+  });
+
+  test("data off but an all-green baseline scores as before", async () => {
+    const dirs = await twoTestProject();
+    const report = await runSession({
+      backend: backendWith(true, DATA_OFF),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.baselineGreen).toBe(true);
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
+  });
+
+  test("a partly red baseline with test data on scores as before", async () => {
+    const dirs = await twoTestProject();
+    const report = await runSession({
+      backend: backendWith(false, undefined),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+    });
+    expect(report.baselineGreen).toBe(false);
+    expect(report.mutants.some((m) => m.verdict === "killed")).toBe(true);
   });
 });
 
@@ -23462,5 +23694,99 @@ describe("R639: the covering loop and a refusal that follows a timeout", () => {
     expect(m1(report)?.verdict).toBe("error");
     expect(m1(report)?.cause).toBe("runner-test-error");
     expect(report.counts.timeoutKilled).toBe(0);
+  });
+});
+
+/** R907: `--no-client`. A v3-shaped fake with the flag on; `flaggedMethods` pass flagged at baseline. */
+describe("R907: --no-client in a session", () => {
+  const THREE_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Flagged()
+    begin
+    end;
+
+    [Test]
+    procedure Plain()
+    begin
+    end;
+
+    [Test]
+    procedure Failing()
+    begin
+    end;
+}
+`;
+  const REFUSED_TEXT =
+    "NotRun: out-of-scope: a page runs in a session without a client (--no-client): not pinned";
+
+  class NoClientStub extends StubBackend {
+    readonly noClient = true;
+    flaggedMethods = new Set<string>(["Flagged", "Failing"]);
+    refuseMutants = false;
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      const active = this.activations.at(-1) ?? null;
+      if (active === null) {
+        return this.flaggedMethods.has(ref.method) ? { ...v, flagged: true } : v;
+      }
+      if (this.refuseMutants) {
+        return {
+          ...v,
+          outcome: "error",
+          failureMessage: REFUSED_TEXT,
+          operation: "completed-accepted",
+          runnerRow: "runner-refused",
+        };
+      }
+      return v;
+    }
+  }
+
+  const sessionOf = async (backend: NoClientStub) => {
+    const dirs = await makeProject(THREE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    try {
+      return await runSession({ backend, store, ...dirs, selectorIds });
+    } finally {
+      store.close();
+    }
+  };
+  const stub = () =>
+    new NoClientStub(
+      CAPS_NST_WORKERS,
+      (mutant, ref) => (ref.method === "Failing" && mutant === null ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+
+  test("testMethods: baselineFlagged on a flagged baseline pass, not on an unflagged pass or a failing flagged test", async () => {
+    const report = await sessionOf(stub());
+    const rec = (m: string) => report.testMethods?.find((t) => t.name === `Sandbox Tests.${m}`);
+    expect(rec("Flagged")?.baselineFlagged).toBe(true);
+    expect(rec("Plain")).toBeDefined();
+    expect(rec("Plain")).not.toHaveProperty("baselineFlagged");
+    expect(rec("Failing")).toBeDefined();
+    expect(rec("Failing")).not.toHaveProperty("baselineFlagged");
+  });
+
+  test("the report's execution context is threaded from the backend: noClient true, guiAllowed false", async () => {
+    const report = await sessionOf(stub());
+    const ctx = report.validity.executionContexts.find((c) => c.runner === "fenced");
+    expect(ctx?.noClient).toBe(true);
+    expect(ctx?.guiAllowed).toBe(false);
+  });
+
+  test("R-911: a covering test's refused not-run row ends the mutant error runner-refused, never killed", async () => {
+    const backend = stub();
+    backend.refuseMutants = true;
+    const report = await sessionOf(backend);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-refused");
+    }
+    expect(report.counts.killed).toBe(0);
   });
 });

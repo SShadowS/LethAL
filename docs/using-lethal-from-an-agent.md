@@ -174,7 +174,9 @@ offline run set `"downloadDemoData": false` in `alRunnerV3`: LethAL then passes 
 al-runner fetching dependency apps), and you fill the cache yourself, once, with `al-runner warm` or one run with
 the key on. If the data is missing, al-runner refuses every test that reads CRONUS rows and prints `note: test data
 is off ...`; LethAL shows that as the warning `al-runner-v3-test-data-off` (once per run), and adds a line to the
-"no green baseline tests" note. With the setting on, the feed's copy replaces an older Microsoft app in
+"no green baseline tests" note. If some baseline tests pass and some fail or are refused by al-runner while the data
+is off, the run stops before any mutant and names the red tests (R904): they may only need that data, and scoring the
+green ones alone would count the missing setup as survivors. A skipped test does not count. With the setting on, the feed's copy replaces an older Microsoft app in
 `.alpackages`. Before the first call LethAL prints `al-runner may download BC <build> demo data ...` when
 `cacheDir` holds no backup for `bcVersion`, and the download warning records the file's size and sha256 (a
 re-published build shows as a changed hash). The project's own gates set `downloadDemoData: false`.
@@ -289,9 +291,12 @@ The `instead` column is guidance.
 | `1` | Error, including an argv the parse refuses. The message is on stderr. |
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
+| `7` | **Time budget reached.** `--time-budget` ran out; the report is partial, so run with `--resume` to continue. |
 
 `4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
-scored nothing, `3` wins.
+scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the
+mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
+scored (`4`) win over `7`.
 
 #### Exit code notes (guidance)
 
@@ -341,7 +346,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v24.schema.json](../schemas/explain-v24.schema.json)
+- `lethal explain`: [../schemas/explain-v25.schema.json](../schemas/explain-v25.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -389,7 +394,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 24`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 25`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1054,10 +1059,18 @@ Stated so a consumer does not read an absence as a finding.
   `ClientType=ODataV4`, so a handler-less `Confirm` returns its default silently and GUI-guarded
   code takes the non-interactive path. Measured on a real app: 62 of 19,850 mutation sites (0.3%)
   sit lexically inside such a branch.
-- On al-runner v3 it is the opposite (R895, measured): a test answers `GuiAllowed()` Yes and a
-  `Confirm` is raised to its handler, and al-runner has no option to run without a client. So a
-  mutant behind `GuiAllowed` or a confirm wrapper can reach a different verdict on v3 than on bcdev.
-  The console says so in its `GUI EXECUTION (al-runner v3)` line.
+- On al-runner v3 it is the opposite by default (R895, measured): a test answers `GuiAllowed()` Yes
+  and a `Confirm` is raised to its handler. So a mutant behind `GuiAllowed` or a confirm wrapper can
+  reach a different verdict on v3 than on bcdev. The console says so in its `GUI EXECUTION (al-runner
+  v3)` line.
+- `"alRunnerV3": { "noClient": true }` runs v3 without a client, as bcdev's path does (R-907). The
+  report then records `executionContexts[].noClient: true` and prints the `NON-GUI EXECUTION` line, and
+  `testMethods[].baselineFlagged` marks baseline passes al-runner flagged as resting on an unprobed
+  assumption (any assumption, not only this one). Fewer tests run: al-runner refuses calls it has not
+  measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
+  handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
+- One-shot calls ask al-runner to skip after a timeout when the build supports it (R897): after a test
+  is stopped at the limit, the rest of its codeunit is not run, so a hung mutant costs one limit.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang
   and quarantine the whole run. The report names the refusal rather than guessing at a verdict.
 - A mutant that never terminates is recorded as an unmeasured error, not scored. AL cannot preempt

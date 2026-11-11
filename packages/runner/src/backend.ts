@@ -100,6 +100,12 @@ export interface TestVerdict {
    */
   readonly measuredDurationMs?: number;
   /**
+   * R907: on a `pass`, al-runner's `flagged: true`: the pass rests on an unprobed assumption (for
+   * example a test that went through Confirm, StrMenu or a page under `--no-client`). Absent when
+   * false or not reported. Only al-runner sets it.
+   */
+  readonly flagged?: true;
+  /**
    * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
    * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
    * confirm is judged against `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the
@@ -465,6 +471,18 @@ export interface ExecutionBackend {
    */
   readonly isolatesTests?: boolean;
   /**
+   * R907: `--no-client`, al-runner-v3 only: tests run as a session without a client
+   * (`GuiAllowed()` false, as on BC's web-service path). Absent counts as false. The session puts it
+   * in its fingerprint, in `runner_build` and in the report's execution context, so nothing of such
+   * a run reaches a default run, or the other way.
+   */
+  readonly noClient?: boolean;
+  /**
+   * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). In `runner_build`,
+   * so a session with it and one without it lend each other nothing. Absent counts as false.
+   */
+  readonly skipAfterTimeout?: boolean;
+  /**
    * R890: `alRunnerV3.isolation: "method"`: every test runs alone (as `isolatesTests`) under
    * al-runner's codeunit isolation, so a fresh codeunit per test, as BC's one-method runner.
    * Absent counts as false. In `runner_build` like `isolatesTests`.
@@ -701,7 +719,29 @@ export interface ExecutionBackend {
    */
   prefetchMutants?(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    /**
+     * R912: `remainingMs` is the time left of `--time-budget`. A prefetch request's outer deadline is
+     * clamped to it; a live request never is (a live deadline is an `error` verdict).
+     */
+    opts?: {
+      readonly remainingMs?: () => number;
+      /**
+       * R912: every covered mutant of the call, passed with the first window only. The backend warms
+       * up for all of them, as a whole-batch prefetch did, so a window cannot change what is warm.
+       */
+      readonly batchPlans?: readonly {
+        readonly mutantId: string;
+        readonly refs: readonly TestMethodRef[];
+      }[];
+    },
   ): Promise<void>;
+
+  /**
+   * R912, OPTIONAL: true when a call for test codeunit `codeunitId` runs the codeunit's WHOLE suite
+   * (v3 with entries and the codeunit not per-test), so a mutant's covering-test time is the whole
+   * codeunit's baseline time. Absent counts as false: only the covering tests run.
+   */
+  wholeCodeunit?(codeunitId: number): boolean;
 
   /**
    * R653, OPTIONAL: called right before a cold fail kill's unmutated confirm, under the killing

@@ -239,8 +239,9 @@ describe("Caveat union", () => {
       "baseline-test-stopped": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
       "al-runner-v3-coverage-off": true,
+      "time-budget-reached": true,
     };
-    expect(Object.keys(all).length).toBe(30);
+    expect(Object.keys(all).length).toBe(31);
   });
 });
 

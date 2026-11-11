@@ -96,6 +96,28 @@ removeRunScratchAfterAll();
  * `--resume-run`), not merely that something threw — a guard that rejected everything, including
  * the legitimate `campaign` verbs, would pass a presence-only assertion.
  */
+describe("R912: --time-budget <seconds>", () => {
+  const base = ["--project", "P", "--tests", "T", "--backend", "bcdev"];
+  const parse = (...extra: string[]) => parseCliConfig(["run", ...extra, ...base]);
+
+  test("a positive integer reaches the config as timeBudgetSeconds", () => {
+    expect(parse("--time-budget", "900")).toMatchObject({ timeBudgetSeconds: 900 });
+    expect("timeBudgetSeconds" in parse()).toBe(false);
+  });
+
+  for (const bad of ["0", "-5", "1.5", "abc", ""]) {
+    test(`"${bad}" is refused by name`, () => {
+      expect(() => parse(`--time-budget=${bad}`)).toThrow(
+        /--time-budget must be a positive integer/,
+      );
+    });
+  }
+
+  test("a dry run refuses it by name", () => {
+    expect(() => parse("--dry-run", "--time-budget", "60")).toThrow(/--time-budget has no effect/);
+  });
+});
+
 describe("parseCliConfig: a shared flag the subcommand does not own is REFUSED", () => {
   const base = ["--project", "P", "--tests", "T", "--backend", "bcdev"];
 
@@ -3249,6 +3271,7 @@ const VALUE: Readonly<Record<string, string>> = {
   workers: "2",
   "max-guards-per-batch": "5",
   "mutant-timeout-ms": "200000",
+  "time-budget": "300",
   "baseline-timeout-ms": "200000",
   "max-methods-per-call": "4",
   "request-ceiling-ms": "250000",

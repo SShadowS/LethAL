@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**20 of 872 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**19 of 876 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -347,11 +347,13 @@ that ordering is the priority.
 - **R889** · Four ways LethAL emitted AL that alc rejects, found by compiling BC.History instrumented · [R889.md](docs/roadmap/R889.md) · done (ab8e27f5)
 - **R890** · v3 runs a test codeunit under per-test rollback with its globals kept, while bcdev runs each method alone: a suite that sets up once per codeunit loses its setup on v3 · [R890.md](docs/roadmap/R890.md) · done (de9b675a) — the default is `auto` (R-896): a codeunit runs under `method` where its baseline needs it…
 - **R893** · swap-find-direction on a FindLast that skips ahead inside a Next() walk of the same record is not hang-refused: the swapped FindFirst rewinds the walk, and on BC the run stranded and quarantined the tier · [R893.md](docs/roadmap/R893.md) · done (efa3d4bb)
-- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · done (f85a6c52): the branch is named in the report; making v3 non-GUI waits for upstream aldevtools #7564
+- **R895** · v3 runs the app's GUI branch and bcdev the non-GUI one: a Confirm through ConfirmManagement.GetResponseOrDefault is asked on v3 and skipped on BC, so the two backends kill different mutants · [R895.md](docs/roadmap/R895.md) · done (a4f2bad2): the branch is named in the report, and `alRunnerV3.noClient` runs v3 without a client…
 - **R896** · The hang check covers only Tier-1 operators: a Tier-2 mutation inside a loop is never hang-refused · [R896.md](docs/roadmap/R896.md) · done (5fc624e8) — five Tier-2 hang rules (P1, P1b, P2, P5, P6) in openItemHangRefuses; remove-commit polls a…
 - **R899** · itest:tables failed once on lost-ack-unreadable (RunMutant HTTP 500, BC's 'Failed to compare two elements in the array'), and the operation it had claimed stayed orphaned, which took bc2 to container-needs-recycle · [R899.md](docs/roadmap/R899.md) · open: once, on bc2; traced offline (R-900): the reconcile behaved as designed; ending such an orphan needs a…
 - **R902** · Two more ways LethAL emitted AL that alc rejects, found by the BC.History re-hunt with assembly probing paths · [R902.md](docs/roadmap/R902.md) · done (06fe903e)
 - **R903** · A carried verdict's execution context takes the CURRENT backend's GUI label: harmless while every resume is same-backend, wrong if a cross-backend resume is ever allowed · [R903.md](docs/roadmap/R903.md) · closed 2026-11-10 — not reachable: both resume paths refuse a run from another backend; reopen with any…
+- **R904** · v3 with test data off and a partly red baseline scores mutants against the few green tests, and the report never says the data was off · [R904.md](docs/roadmap/R904.md) · done (421523a8)
+- **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · done (2b021840)
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
 - **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
 - **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · open — measurement: the Windows probe is with the owner (coord R-910); no reader change until it is back
@@ -544,8 +546,9 @@ that ordering is the priority.
 - **R898** · No time cap per survivor: a mutant whose covering tests are slow can only end as survived after all of them, so slow suites take days · [R898.md](docs/roadmap/R898.md) · open, filed 2026-11-09 — DEFERRED, owner's call
 - **R900** · LethAL never passes assembly probing paths to alc, so a project that uses DotNet types fails LethAL's own compile (AL0451, AL0185) · [R900.md](docs/roadmap/R900.md) · done (41b42a8c) — top-level assemblyProbingPaths, else .vscode/settings.json, else ./.netpackages; passed on…
 - **R901** · On Linux, alc reads a controladdin's `Resources\x\y.js` as one literal file name, so a batch fails with AL0327 for any controladdin written with backslashes · [R901.md](docs/roadmap/R901.md) · done (ceaecb4c)
-- **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — helper-reach measured (coord R-908): the rule is right; next step is the owner's
-- **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · open
+- **R908** · R69's "TestPage is unprofitable" does not hold in general: on page-heavy Microsoft apps 45-59% of mutants have only TestPage-refused tests, against R69's 5% bar. The owner's decision, with a census · [R908.md](docs/roadmap/R908.md) · open — helper-reach measured (coord R-908): the rule is right; step 4, the labelled v3 hybrid, measured empty…
+- **R909** · On Linux BC a page open fails as a plain CLR NotSupportedException, so LethAL reads a page-opening test as an ordinary failure instead of naming it · [R909.md](docs/roadmap/R909.md) · done (c8081f97)
+- **R912** · A v3 serve run on an app whose tests sit in one large codeunit runs that whole codeunit per mutant, with no estimate, no progress inside a prefetch request and an outer bound of days, so a time cap loses every result: Intrastat Core gave no report after 6.3 h · [R912.md](docs/roadmap/R912.md) · done (6d73834fafd5e5d18c2f06a9de6b04d6abcb8777)
 
 ## Backends and tooling
 
@@ -915,8 +918,9 @@ that ordering is the priority.
 - **R860** · al-runner stops on a missing dependency (upstream #7139); LethAL follows by name · [R860.md](docs/roadmap/R860.md) · done (35b54d36)
 - **R861** · `--edge-rejudge` moved `current` and left its manifest row unpublished until the next plain run · [R861.md](docs/roadmap/R861.md) · done (25eaa10f)
 - **R866** · `--isolate-tests` runs its baseline as one process per test, which is most of the mode's cost · [R866.md](docs/roadmap/R866.md) · done (d8ef7fd3)
-- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1)
+- **R897** · On al-runner v3 one hanging mutant costs (covering tests in its codeunit) x the per-test limit: about 69 minutes for 23 tests, with no verdict until the end · [R897.md](docs/roadmap/R897.md) · done (d66074f1; one-shot b11d2804)
 - **R905** · The heavy-job guard counts a held slot as BaseApp only if its process names /work/src/BC.History, so a BaseApp-class job over a corpus copy reads as not BaseApp, and a third BaseApp-class job can start · [R905.md](docs/roadmap/R905.md) · done (1e1e9b9d)
+- **R913** · The v3 gate says PASS when the D legs (LETHAL_ITEST_V3_CDO) or leg T (LETHAL_ITEST_V3_TABLES) were skipped, so a receipt can claim the full gate while measuring less · [R913.md](docs/roadmap/R913.md) · done (d4c76de9) — the PASS line names every leg of the full set that did not run, and why
 
 ---
 

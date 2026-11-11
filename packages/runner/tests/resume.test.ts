@@ -24,6 +24,7 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
+import { formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
   resumeGuardMessage,
@@ -613,6 +614,17 @@ describe("sessionFingerprint (R47)", () => {
     const a = sessionFingerprint({ ...base, only: ["b/**", "a/**"] });
     const b = sessionFingerprint({ ...base, only: ["a/**", "b/**"] });
     expect(a).toBe(b);
+  });
+
+  // R907: in the digest only when on, so every digest recorded before it is unchanged.
+  test("noClient on changes it; off (or absent) equals the digest without the key", () => {
+    expect(sessionFingerprint({ ...base, noClient: true })).not.toBe(sessionFingerprint(base));
+    // Pinned: the digest of `base` before R907. An off case that put a key in the digest moves it.
+    const PINNED_BASE = "727533a8a3744ab249903f618485a8a8f6e5ead525e74af46aa74e845862068f";
+    expect(sessionFingerprint(base)).toBe(PINNED_BASE);
+    expect(sessionFingerprint({ ...base, isolateTests: true })).not.toBe(
+      sessionFingerprint({ ...base, noClient: true }),
+    );
   });
 
   test("a different --only scope changes it", () => {
@@ -5315,7 +5327,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(24);
+    expect(out.explainSchemaVersion).toBe(25);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6160,6 +6172,119 @@ describe("GitHub #49: --resume keeps stopEvidence", () => {
   });
 });
 
+/** R907: the orchestrator puts the backend's `noClient` into the fingerprint and the stored runner build. */
+describe("R907: --resume and runner_build follow noClient", () => {
+  class V3Stub extends CountingBackend {
+    readonly noClient: boolean;
+    readonly skipAfterTimeout: boolean;
+    constructor(noClient: boolean, abortAfter?: number, skipAfterTimeout = false) {
+      super("pass", abortAfter);
+      this.noClient = noClient;
+      this.skipAfterTimeout = skipAfterTimeout;
+      (this as { fetchPublishedAppPackage?: unknown }).fetchPublishedAppPackage = undefined;
+    }
+    override capabilities(): BackendCapabilities {
+      return { ...super.capabilities(), kind: "al-runner-v3", authoritative: false };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
+    }
+  }
+  const unfinished = async (noClient: boolean) => {
+    const dirs = await makeProject();
+    const store = new ResultsStore(":memory:");
+    const first = await runSession({
+      backend: new V3Stub(noClient, 1),
+      store,
+      ...dirs,
+      selectorIds,
+    });
+    expect(first.quarantined).toBeDefined();
+    return { dirs, store };
+  };
+  const buildOf = (store: ResultsStore) =>
+    (
+      store.db.query("SELECT runner_build AS b FROM runs ORDER BY id DESC LIMIT 1").get() as {
+        b: string;
+      }
+    ).b;
+
+  test("noClient off, then --resume with noClient on: the unfinished run is not found", async () => {
+    const { dirs, store } = await unfinished(false);
+    await expect(
+      runSession({
+        backend: new V3Stub(true),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      }),
+    ).rejects.toThrow(/found no unfinished run to resume/);
+  });
+
+  test("noClient on both times: --resume finds the unfinished run", async () => {
+    const { dirs, store } = await unfinished(true);
+    const report = await runSession({
+      backend: new V3Stub(true),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(report.resumedFrom).toBeDefined();
+  });
+
+  test("noClient off, then --resume-run <id> with noClient on: refused (runner build differs)", async () => {
+    const { dirs, store } = await unfinished(false);
+    const id = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    await expect(
+      runSession({ backend: new V3Stub(true), store, ...dirs, selectorIds, resume: id }),
+    ).rejects.toThrow(/lent only to the same build/);
+  });
+
+  test("noClient on, then --resume-run <id> with noClient off: refused (runner build differs)", async () => {
+    const { dirs, store } = await unfinished(true);
+    const id = (store.db.query("SELECT MAX(id) AS id FROM runs").get() as { id: number }).id;
+    await expect(
+      runSession({ backend: new V3Stub(false), store, ...dirs, selectorIds, resume: id }),
+    ).rejects.toThrow(/lent only to the same build/);
+  });
+
+  test("noClient on, then --resume with noClient off: the unfinished run is not found", async () => {
+    const { dirs, store } = await unfinished(true);
+    await expect(
+      runSession({
+        backend: new V3Stub(false),
+        store,
+        ...dirs,
+        selectorIds,
+        resume: "last",
+      }),
+    ).rejects.toThrow(/found no unfinished run to resume/);
+  });
+
+  test("the stored runner build ends in ' no-client' exactly when noClient is on", async () => {
+    expect(buildOf((await unfinished(true)).store)).toContain(" no-client");
+    expect(buildOf((await unfinished(false)).store)).not.toContain("no-client");
+  });
+
+  test("R907: the stored runner build carries ' skip-after-timeout' exactly when the backend says so", async () => {
+    const run = async (skip: boolean) => {
+      const dirs = await makeProject();
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: new V3Stub(false, 1, skip),
+        store,
+        ...dirs,
+        selectorIds,
+      });
+      return buildOf(store);
+    };
+    expect(await run(true)).toContain(" skip-after-timeout");
+    expect(await run(false)).not.toContain("skip-after-timeout");
+  });
+});
+
 /**
  * R577 on --resume: the row-level rule refuses an unmarked kill. The control carries. R654 removed
  * R557's run-level trust (`runs.al_runner_names`) with the .NET al-runner, and its case (a) with it;
@@ -6316,5 +6441,369 @@ describe("R658 D5: a baseline holding a stopped test records no snapshot", () =>
     expect(backend.baselineRuns).toBeGreaterThan(0);
     expect(report.baselineStopped?.tests.length).toBe(backend.baselineRuns);
     expect(snapshots(stopped)).toBe(0);
+  });
+});
+
+/**
+ * R912: the mutant loop prefetches and scores in windows, and `--time-budget` stops scheduling.
+ * Order is asserted with counters (rows in the store at each prefetch call), never a wall clock; the
+ * budget reads a fake clock the test moves.
+ */
+describe("R912: windows and --time-budget", () => {
+  /** Even mutants are killed, odd ones survive: a mix, so a verdict that moved would show. */
+  const killedId = (id: string) => Number(id.slice(1)) % 2 === 0;
+
+  class WindowBackend extends CountingBackend {
+    /** The mutant ids of each prefetch call, in call order. */
+    readonly prefetches: string[][] = [];
+    /** Killed or survived rows in the store when each prefetch call arrived. */
+    readonly scoredAtPrefetch: number[] = [];
+    /** The `remainingMs` each prefetch call was given, read at the call. */
+    readonly remaining: Array<number | undefined> = [];
+    /** Every mutant activated, in order. */
+    readonly activated: string[] = [];
+    store: ResultsStore | undefined;
+    /** Called at every prefetch: a test spends the budget here. */
+    onPrefetch: (() => void) | undefined;
+    /** Baseline coverage names only codeunit 79000, so the second carrier's mutants are uncovered. */
+    coverOnlyFirst = false;
+    private active: string | null = null;
+    constructor(private readonly baselineMs: number) {
+      super("pass");
+    }
+    override async activate(id: string | null): Promise<void> {
+      this.active = id;
+      if (id !== null) this.activated.push(id);
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      if (this.active === null) {
+        const cov = v.coverage;
+        return {
+          ...v,
+          durationMs: this.baselineMs,
+          ...(this.coverOnlyFirst && cov !== undefined && "entries" in cov
+            ? {
+                coverage: {
+                  ...cov,
+                  entries: cov.entries.filter((e) => e.objectId === 79000),
+                },
+              }
+            : {}),
+        };
+      }
+      return killedId(this.active)
+        ? { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` }
+        : v;
+    }
+    async prefetchMutants(
+      plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+      opts?: { readonly remainingMs?: () => number },
+    ): Promise<void> {
+      this.prefetches.push(plans.map((p) => p.mutantId));
+      this.remaining.push(opts?.remainingMs?.());
+      const n = this.store?.db
+        .query("SELECT COUNT(*) AS n FROM mutants WHERE verdict IN ('killed', 'survived')")
+        .get() as { n: number } | null | undefined;
+      this.scoredAtPrefetch.push(n?.n ?? -1);
+      this.onPrefetch?.();
+    }
+  }
+
+  const shape = (r: SessionReport) =>
+    r.mutants.map((m) => ({
+      mutantCode: m.mutantCode,
+      verdict: m.verdict,
+      killingTest: m.killingTest,
+      failureNote: m.failureNote,
+    }));
+
+  const runWith = async (
+    baselineMs: number,
+    extra: Partial<Parameters<typeof runSession>[0]> = {},
+    setup: (backend: WindowBackend) => void = () => {},
+    project: { secondFile?: boolean; extraFile?: boolean } = {},
+  ) => {
+    const dirs = await makeProject(project);
+    if (project.extraFile === true) {
+      // Sorts after SandboxLogic: its mutants are the manifest's tail.
+      await Bun.write(join(dirs.projectDir, "ZExtra.Codeunit.al"), SECOND_AL);
+    }
+    const store = new ResultsStore(":memory:");
+    const backend = new WindowBackend(baselineMs);
+    backend.store = store;
+    setup(backend);
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [(e) => events.push(e)],
+      ...extra,
+    });
+    return { backend, store, report, events, dirs };
+  };
+  const finishedAt = (store: ResultsStore) =>
+    (
+      store.db.query("SELECT finished_at AS f FROM runs ORDER BY id DESC LIMIT 1").get() as {
+        f: string | null;
+      }
+    ).f;
+
+  test("a window of all, of a few and of one give the same verdicts, killingTest and notes; each mutant is recorded before the next window's prefetch", async () => {
+    const all = await runWith(5);
+    const n = all.backend.prefetches.flat().length;
+    expect(n).toBeGreaterThanOrEqual(3);
+    expect(all.backend.prefetches).toHaveLength(1);
+
+    const few = await runWith(250_000); // 250 s each: two to a 600 s window
+    const one = await runWith(400_000); // 400 s each: one to a window
+    expect(few.backend.prefetches.flat()).toEqual(all.backend.prefetches.flat());
+    expect(few.backend.prefetches.every((w) => w.length <= 2)).toBe(true);
+    expect(few.backend.prefetches).toHaveLength(Math.ceil(n / 2));
+    expect(one.backend.prefetches.map((w) => w.length)).toEqual(Array(n).fill(1));
+
+    expect(shape(few.report)).toEqual(shape(all.report));
+    expect(shape(one.report)).toEqual(shape(all.report));
+    expect(shape(all.report).some((m) => m.verdict === "killed")).toBe(true);
+    expect(shape(all.report).some((m) => m.verdict === "survived")).toBe(true);
+
+    // Counters, not clocks: when window k's prefetch arrives, windows 0..k-1 are all in the store.
+    for (const run of [few, one]) {
+      let before = 0;
+      run.backend.prefetches.forEach((w, k) => {
+        expect(run.backend.scoredAtPrefetch[k]).toBe(before);
+        before += w.length;
+      });
+    }
+    // A default run (no budget) asks for no clamp.
+    expect(all.backend.remaining).toEqual([undefined]);
+  });
+
+  test("the estimate rides the mutants phase's detail and equals the hand sum; over 2 h the detail says so, and no run ever gets a warning code for it", async () => {
+    const short = await runWith(250_000);
+    const n = short.backend.prefetches.flat().length;
+    const detail = (events: readonly RunEvent[]) =>
+      events.find((e) => e.type === "phase-entered" && e.phase === "mutants");
+    expect(detail(short.events)).toMatchObject({
+      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of covering-test time`,
+    });
+
+    const long = await runWith(3_600_000); // 1 h per mutant
+    const longDetail = detail(long.events);
+    expect(longDetail?.type === "phase-entered" ? longDetail.detail : "").toStartWith(
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time. That is long`,
+    );
+    // R912 follow-up: a timing-dependent warning code would make gates' pinned warning sets flaky.
+    for (const run of [short, long]) {
+      expect(run.events.some((e) => e.type === "warning" && /estimate/.test(e.code))).toBe(false);
+    }
+  });
+
+  test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {
+    const control = await runWith(400_000);
+    const n = control.backend.prefetches.flat().length;
+    const controlShape = shape(control.report);
+
+    let now = 0;
+    const events: RunEvent[] = [];
+    const store = new ResultsStore(":memory:");
+    const first = new WindowBackend(400_000);
+    first.store = store;
+    const dirs = await makeProject();
+    const report = await runSession({
+      backend: first,
+      store,
+      ...dirs,
+      selectorIds,
+      timeBudgetSeconds: 100,
+      clockMs: () => now,
+      // The first scored mutant uses the whole budget: window 1 (one mutant, 400 s) is done.
+      emit: [
+        (e) => {
+          events.push(e);
+          if (e.type === "mutant-scored") now = 1_000_000;
+        },
+      ],
+    });
+    // Only window 1 was prefetched and scored; the rest is left OUT, not survived.
+    expect(first.prefetches).toHaveLength(1);
+    const window1 = first.prefetches[0] ?? [];
+    expect(window1).toHaveLength(1);
+    expect(first.activated.filter((id, i, a) => a.indexOf(id) === i)).toEqual(window1);
+    expect(report.mutants.map((m) => m.mutantCode)).toEqual(window1);
+    expect(report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: n - 1,
+      batchesNotStarted: 0,
+    });
+    expect(report.validity.caveats).toContain("time-budget-reached");
+    expect(events.filter((e) => e.type === "time-budget-reached")).toEqual([
+      expect.objectContaining({ budgetSeconds: 100, unscheduledCount: n - 1 }),
+    ]);
+    expect(renderConsole(report)).toContain("TIME BUDGET REACHED");
+    // The prefetch was given the time left: 100 s at the start.
+    expect(first.remaining).toEqual([100_000]);
+    // Not stamped finished, not quarantined: resumable.
+    expect(report.quarantined).toBeUndefined();
+    expect(finishedAt(store)).toBeNull();
+
+    const second = new WindowBackend(400_000);
+    second.store = store;
+    const again = await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+    });
+    expect(again.resumedFrom?.carriedMutants).toBe(1);
+    // Scored only the rest: nothing window 1 already scored is run again.
+    expect(second.activated.filter((id, i, a) => a.indexOf(id) === i)).toEqual(
+      controlShape.map((m) => m.mutantCode).slice(1),
+    );
+    expect(second.prefetches.flat()).toEqual(controlShape.map((m) => m.mutantCode).slice(1));
+    expect(again.timeBudget).toBeUndefined();
+    expect(again.validity.caveats).not.toContain("time-budget-reached");
+    expect(shape(again)).toEqual(controlShape);
+    expect(finishedAt(store)).not.toBeNull();
+  });
+
+  test("a budget with time to spare changes nothing: every mutant is scored and the run is finished", async () => {
+    const control = await runWith(400_000);
+    const spare = await runWith(400_000, { timeBudgetSeconds: 3600, clockMs: () => 0 });
+    expect(shape(spare.report)).toEqual(shape(control.report));
+    expect(spare.report.timeBudget).toBeUndefined();
+    expect(spare.events.some((e) => e.type === "time-budget-reached")).toBe(false);
+    expect(finishedAt(spare.store)).not.toBeNull();
+    // Each prefetch carried the time left, on the fake clock that never moved.
+    expect(spare.backend.remaining.every((r) => r === 3_600_000)).toBe(true);
+  });
+
+  test("a prefetch that uses up the budget: no live mutant runs after it, and the planned stop is not a quarantine", async () => {
+    let now = 0;
+    const run = await runWith(5, { timeBudgetSeconds: 100, clockMs: () => now }, (b) => {
+      b.onPrefetch = () => {
+        now = 1_000_000;
+      };
+    });
+    const n = run.backend.prefetches.flat().length;
+    expect(n).toBeGreaterThanOrEqual(3);
+    // Items 3 and 2: nothing ran, so nothing is unattested; the batch is not invalidated.
+    expect(run.backend.activated).toEqual([]);
+    expect(run.report.quarantined).toBeUndefined();
+    expect(run.events.some((e) => e.type === "batch-invalidated")).toBe(false);
+    expect(run.report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: n,
+      batchesNotStarted: 0,
+    });
+    expect(finishedAt(run.store)).toBeNull();
+  });
+
+  test("a budget stop after a mutant ran un-attested still trips the attestation gate (the stop does not excuse it)", async () => {
+    let now = 0;
+    const dirs = await makeProject();
+    const report = await runSession({
+      backend: new NeverAttestingBackend(),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      timeBudgetSeconds: 100,
+      clockMs: () => now,
+      emit: [
+        (e) => {
+          if (e.type === "mutant-scored") now = 1_000_000;
+        },
+      ],
+    });
+    expect(report.quarantined).toBeDefined();
+  });
+
+  test("a budget that runs out on the last covered mutant leaves nothing out: no stop is reported, the run is finished, even with an uncovered tail", async () => {
+    const control = await runWith(
+      5,
+      {},
+      (b) => {
+        b.coverOnlyFirst = true;
+      },
+      { extraFile: true },
+    );
+    const covered = control.report.mutants.filter((m) => m.verdict !== "no-coverage").length;
+    expect(covered).toBeGreaterThan(0);
+    expect(covered).toBeLessThan(control.report.mutants.length);
+    let now = 0;
+    let scored = 0;
+    const tail = await runWith(
+      5,
+      {
+        timeBudgetSeconds: 100,
+        clockMs: () => now,
+        emit: [
+          (e) => {
+            if (e.type === "mutant-scored" && e.verdict !== "no-coverage") {
+              scored += 1;
+              if (scored === covered) now = 1_000_000;
+            }
+          },
+        ],
+      },
+      (b) => {
+        b.coverOnlyFirst = true;
+      },
+      { extraFile: true },
+    );
+    // With the second carrier uncovered, its mutants are no-coverage rows recorded before the loop.
+    expect(tail.report.mutants.some((m) => m.verdict === "no-coverage")).toBe(true);
+    expect(tail.report.timeBudget).toBeUndefined();
+    expect(tail.report.validity.caveats).not.toContain("time-budget-reached");
+    expect(finishedAt(tail.store)).not.toBeNull();
+  });
+
+  test("a budget that runs out between batches names the batches that never started", async () => {
+    let now = 0;
+    const events: RunEvent[] = [];
+    const run = await runWith(
+      5,
+      {
+        timeBudgetSeconds: 100,
+        clockMs: () => now,
+        maxGuardsPerBatch: 1,
+        emit: [
+          (e) => {
+            events.push(e);
+            if (e.type === "phase-left" && e.phase === "mutants") now = 1_000_000;
+          },
+        ],
+      },
+      () => {},
+      { secondFile: true },
+    );
+    expect(run.report.batches).toBe(1);
+    expect(run.report.timeBudget).toEqual({
+      budgetSeconds: 100,
+      unscheduledCount: 0,
+      batchesNotStarted: 1,
+    });
+    expect(run.report.validity.caveats).toContain("time-budget-reached");
+    expect(renderConsole(run.report)).toContain("1 later batch(es) never started");
+    expect(finishedAt(run.store)).toBeNull();
+  });
+
+  test("a budget that is not a positive integer is refused by name", async () => {
+    const dirs = await makeProject();
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        runSession({
+          backend: new CountingBackend("pass"),
+          store: new ResultsStore(":memory:"),
+          ...dirs,
+          selectorIds,
+          timeBudgetSeconds: bad,
+        }),
+      ).rejects.toThrow(/time-budget-invalid/);
+    }
   });
 });

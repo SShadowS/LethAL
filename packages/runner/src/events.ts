@@ -336,6 +336,9 @@ export type RunEventInput =
         /** R272: this test's own measured duration (`TestVerdict.measuredDurationMs`), on a `pass`
          *  run in THIS session only (never a resume-reused baseline). Optional on the wire. */
         readonly durationMs?: number;
+        /** R907: a `pass` al-runner flagged (it rests on an unprobed assumption); this session's own
+         *  baseline run only. Absent otherwise. */
+        readonly flagged?: true;
       }[];
     }
   | {
@@ -530,6 +533,18 @@ export type RunEventInput =
     }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
   | { readonly type: "quarantined"; readonly reason: string }
+  | {
+      /**
+       * R912: `--time-budget` ran out. Scheduling stopped; `unscheduledCount` covered mutants of the
+       * batch it stopped in were left out of the report, and `batchesNotStarted` batches after it
+       * never started (their mutants are not counted). The run is not finished, so `--resume`
+       * continues it. Emitted once, after the last batch that ran.
+       */
+      readonly type: "time-budget-reached";
+      readonly budgetSeconds: number;
+      readonly unscheduledCount: number;
+      readonly batchesNotStarted: number;
+    }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 
 export type RunEvent = RunEventInput & Base;

@@ -256,7 +256,8 @@ export type Caveat =
   | "project-symlink-skipped"
   | "baseline-test-stopped"
   | "al-runner-v3-serve-default-fallback-warmup"
-  | "al-runner-v3-coverage-off";
+  | "al-runner-v3-coverage-off"
+  | "time-budget-reached";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -664,6 +665,21 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a statement that any one survivor is unreached: this run cannot tell. Not a wrong kill: a " +
       "killed mutant was killed by a test that ran.",
     basis: "R907",
+  },
+  "time-budget-reached": {
+    meaning:
+      "The run was stopped by --time-budget before it had scored every mutant. The mutants it did not " +
+      "reach are LEFT OUT of this report: they are not survivors, not no-coverage, not errors, and they " +
+      "are not in the score. `timeBudget.unscheduledCount` counts those of the batch it stopped in; " +
+      "`timeBudget.batchesNotStarted` counts the batches after it, which never started and whose " +
+      "mutants are not counted. The run is not finished, so `--resume` continues it, carrying " +
+      "the verdicts already scored and running only the rest.",
+    entailedNegative:
+      "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
+      "in the report ran to completion. Its test run was never cut short by the budget; only a " +
+      "prefetch request's deadline is shortened to the time left, and a prefetch that cannot finish " +
+      "is dropped, so its mutants run as live requests with their usual deadline.",
+    basis: "R912",
   },
 };
 
@@ -1139,6 +1155,12 @@ export interface ExecutionContext {
    * comparable with a default run's. Absent otherwise: a default report does not change.
    */
   readonly isolateTests?: true;
+  /**
+   * R907: `true` when this run's tests ran in a session without a client (al-runner v3
+   * `--no-client`: `GuiAllowed()` false, as on BC's web-service path). Only on directly measured
+   * al-runner-v3 entries, never on carried ones. Absent otherwise: a default report does not change.
+   */
+  readonly noClient?: true;
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -1158,6 +1180,10 @@ export interface TestMethodRecord {
    *  nothing. Absent: not measured per test in a completed batch (a resume-reused baseline, a
    *  failing test, a backend that reports none). Displayed, never a ranking key (R272). */
   readonly baselineDurationMs?: number;
+  /** R907: `true` when a COMPLETED baseline batch of THIS session recorded a passing baseline for
+   *  this test that al-runner flagged (the pass rests on an unprobed assumption). Absent otherwise
+   *  (unflagged, failing, resume-reused, another backend). Only al-runner sets it. */
+  readonly baselineFlagged?: true;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */
@@ -1867,6 +1893,18 @@ export interface SessionReport {
     readonly reason: string;
   };
   /**
+   * R912: present only when `--time-budget` ran out. The mutants not reached are left out of
+   * `mutants` and the counts (as quarantine does); `unscheduledCount` is those of the batch it
+   * stopped in. Optional, so reports from before R912 stay valid. See
+   * `CAVEAT_INTERPRETATIONS["time-budget-reached"]`.
+   */
+  readonly timeBudget?: {
+    readonly budgetSeconds: number;
+    readonly unscheduledCount: number;
+    /** Batches after the one it stopped in, which never started; their mutants are not counted. */
+    readonly batchesNotStarted: number;
+  };
+  /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
    * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
    * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
@@ -2412,6 +2450,7 @@ function percentile(sortedAsc: readonly number[], q: number): number {
 function measuredExecutionContext(
   runner: RunnerKind,
   caps: BackendCapabilities,
+  noClient = false, // R907: al-runner v3 ran with --no-client
 ): { guiAllowed: boolean; clientType: string; basis: string } {
   if (runner === "client-services") {
     return {
@@ -2426,16 +2465,26 @@ function measuredExecutionContext(
   }
   // R60. Split by backend rather than asserted once: R57 measured the fenced `RunMutant` path
   // (`GuiAllowed=No`, `ClientType=ODataV4`). R895/R-901 measured al-runner v3: a test there answers
-  // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path; it
-  // has no option to run without a client (upstream aldevtools #7564).
+  // `GuiAllowed()` Yes and a Confirm is raised, the CLIENT branch, the opposite of the fenced path;
+  // running without a client is the opt-in `alRunnerV3.noClient` (R-907, upstream aldevtools #7564).
   if (caps.kind === "al-runner-v3") {
+    if (noClient) {
+      return {
+        guiAllowed: false,
+        clientType: "al-runner v3 CLI, no client",
+        basis:
+          "measured on al-runner v3 with --no-client (R907, R-907): GuiAllowed() answers false and " +
+          "Confirm, StrMenu and a page run raise CallbackNotAllowed as on BC's fenced path; a test " +
+          "that passes through them is a flagged pass",
+      };
+    }
     return {
       guiAllowed: true,
       clientType: "al-runner v3 CLI",
       basis:
         "measured on al-runner v3 (R895, R-901): a test's GuiAllowed() answers Yes and a Confirm is " +
         "raised to the test's handler, so code behind GuiAllowed runs its client branch, unlike " +
-        "BC's fenced path (GuiAllowed=No); al-runner has no option to run without a client",
+        "BC's fenced path (GuiAllowed=No); to run without a client set alRunnerV3.noClient (R-907)",
     };
   }
   // R654: bcdev is the only other backend (the .NET al-runner's "al-runner CLI" arm is gone).
@@ -2473,6 +2522,7 @@ function buildExecutionContexts(
     readonly binarySha256: string;
     readonly runSeed?: number;
     readonly isolateTests?: true;
+    readonly noClient?: true;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2497,11 +2547,12 @@ function buildExecutionContexts(
           binarySha256: runnerBuild.binarySha256,
           ...(runnerBuild.runSeed !== undefined ? { runSeed: runnerBuild.runSeed } : {}),
           ...(runnerBuild.isolateTests === true ? { isolateTests: true as const } : {}),
+          ...(runnerBuild.noClient === true ? { noClient: true as const } : {}),
         }
       : {}),
   };
   return [...groups.values()].map((g) => {
-    const measured = measuredExecutionContext(g.runner, caps);
+    const measured = measuredExecutionContext(g.runner, caps, runnerBuild?.noClient === true);
     if (!g.carried) {
       return { runner: g.runner, ...measured, ...bcFields, verdictCount: g.verdictCount };
     }
@@ -2960,6 +3011,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     caveats.push("al-runner-v3-serve-default-fallback-warmup");
   // R907 - see CAVEAT_INTERPRETATIONS["al-runner-v3-coverage-off"].
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
+  // R912 - see CAVEAT_INTERPRETATIONS["time-budget-reached"].
+  if (input.timeBudget !== undefined) caveats.push("time-budget-reached");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
@@ -3320,6 +3373,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       },
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
+    ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
   };
@@ -3348,11 +3402,16 @@ function summarizeRunnerContexts(
   runner: RunnerKind,
   /** R895: only the contexts that ran with (true) or without (false) a client; absent: all. */
   guiAllowed?: boolean,
+  /** R907: true keeps only al-runner v3 entries (their client type starts "al-runner v3"), false drops them; absent: all. */
+  v3?: boolean,
 ):
   | { readonly verdictCount: number; readonly clientType: string; readonly basisText: string }
   | undefined {
   const matches = contexts.filter(
-    (c) => c.runner === runner && (guiAllowed === undefined || c.guiAllowed === guiAllowed),
+    (c) =>
+      c.runner === runner &&
+      (guiAllowed === undefined || c.guiAllowed === guiAllowed) &&
+      (v3 === undefined || c.clientType.startsWith("al-runner v3") === v3),
   );
   if (matches.length === 0) return undefined;
   const [first] = matches;
@@ -3769,14 +3828,21 @@ export function renderConsole(r: SessionReport): string {
   // block below, which states the opposite fact for that runner.
   // Aggregated across EVERY "fenced" entry, not just the first — see `summarizeRunnerContexts`.
   // R895: only the contexts that really ran without a client; al-runner v3's run with one (below).
-  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false);
+  // R907: BC's own measured behaviour only; a v3 no-client entry has its own line below.
+  const fenced = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false, false);
   if (fenced !== undefined && fenced.verdictCount > 0) {
     lines.push(
       `NON-GUI EXECUTION: ${fenced.verdictCount} verdict(s) here describe the app's non-interactive branch (GuiAllowed=No, ClientType=${fenced.clientType}) — ${fenced.basisText}. Code reachable only when a user can be prompted never runs on this path, so its mutants cannot be killed here and land as survived or no-coverage — neither of which is a statement about your tests. Confirm() returns its DEFAULT rather than skipping the branch; Page.RunModal ERRORS. Measured on Continia Document Output: 0.3% of mutation sites (62 of 19,850).`,
     );
   }
-  // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, and has no
-  // option to run without one (upstream aldevtools #7564). Say so, so a v3 verdict is not read as BC's.
+  const v3NoClient = summarizeRunnerContexts(r.validity.executionContexts, "fenced", false, true);
+  if (v3NoClient !== undefined && v3NoClient.verdictCount > 0) {
+    lines.push(
+      `NON-GUI EXECUTION (al-runner v3, no client): ${v3NoClient.verdictCount} verdict(s) here ran without a client (GuiAllowed=No, ClientType=${v3NoClient.clientType}) — ${v3NoClient.basisText}. al-runner measured these answers on BC for a page background task worker, not a web-service session, and refuses calls it has not measured, so some tests do not run.`,
+    );
+  }
+  // R895: al-runner v3 runs the CLIENT branch (measured), the opposite of BC's fenced path, unless
+  // `alRunnerV3.noClient` is on (R-907). Say so, so a v3 verdict is not read as BC's.
   const v3Gui = summarizeRunnerContexts(r.validity.executionContexts, "fenced", true);
   if (v3Gui !== undefined && v3Gui.verdictCount > 0) {
     lines.push(
@@ -3879,6 +3945,12 @@ export function renderConsole(r: SessionReport): string {
     const more = r.coverageOffFiles.length > 5 ? ` and ${r.coverageOffFiles.length - 5} more` : "";
     lines.push(
       `COVERAGE OFF: LethAL turned coverage off for this whole run, because the coverage index has no rule for the #if wrapper shape in ${shown}${more}. Every survivor ran against every green test, so "survived" includes mutants no test reached and no-coverage reads 0 for that reason. The survivors are not reliable as gaps a test reached and missed.`,
+    );
+  }
+  // R912: a qualifier on the score: the mutants not reached are not in it.
+  if (r.timeBudget !== undefined) {
+    lines.push(
+      `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
     );
   }
   // These mutants were scored against EVERY green test rather than against tests coverage placed
