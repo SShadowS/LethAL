@@ -65,6 +65,7 @@ import {
   diskCaseResolver,
   normaliseAppJsonPaths,
 } from "./app-json-paths";
+import { listPackageEntries } from "./app-package";
 import {
   UpgradeClashRefusedError,
   UpgradeNotRestoredError,
@@ -244,6 +245,7 @@ import {
 import {
   type PublishedApp,
   comparePublishedTestApp,
+  isAlSourceEntry,
   parsePublishedApp,
   publishedAlSources,
   publishedTestAppWarning,
@@ -7139,6 +7141,13 @@ async function runSessionBody(
       // R492: the SERVED package is this run's test app only with proof it is the installed one
       // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
       readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
+      if (after.sources.kind === "source-less" && "why" in readBackProof) {
+        emit({
+          type: "warning",
+          code: "test-app-identity-unproven",
+          message: SOURCE_LESS_UNPROVEN,
+        });
+      }
       const proven = "proven" in readBackProof ? after.packageHash : undefined;
       // R496: proof covers the whole closure: this fingerprint checks every extension in it
       // installed, including the ones the hook did not publish. From the served package's
@@ -10528,14 +10537,14 @@ interface EnvToolPublishes {
  */
 export function servedWithoutSource(bytes: Uint8Array): boolean {
   try {
-    return publishedAlSources(Buffer.from(bytes)).length === 0;
+    return !listPackageEntries(Buffer.from(bytes)).some(isAlSourceEntry);
   } catch {
     return false;
   }
 }
 
 const SOURCE_LESS_UNPROVEN =
-  "[lethal] R932: test-app identity not proven: the served test-app package has no AL source (e.g. Windows BC serves a rebuilt symbol-only package), so it cannot show which test bodies run. No drift check, no baseline-snapshot or verdict reuse this run.";
+  "[lethal] R932: test-app identity not proven: the served test-app package has no AL source, so it cannot show which test bodies run (Windows BC serves a rebuilt symbol-only package; elsewhere, build the test app so its .app includes its source). No drift check, no baseline-snapshot or verdict reuse, and --resume refuses this run.";
 
 /**
  * R495: whether a session WITHOUT a hook measures the test app it identified (`read`). al-runner

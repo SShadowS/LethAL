@@ -18,6 +18,7 @@ import {
   findObjectClashes,
   injectedObjects,
 } from "../src/object-clash";
+import { compiledMembershipOf } from "../src/test-membership";
 import { readTestAppSources } from "../src/testpage-scan";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
@@ -207,6 +208,19 @@ describe("R843: the readers", () => {
     const mid = buildFakeAppWithEntries({ "SymbolReference.json": '{"AppId":\0"a"}' });
     const bad = declaredObjectsOfPackage(new Uint8Array(mid));
     expect(JSON.stringify(bad)).toContain("is not valid JSON");
+  });
+
+  test("R932: compiledMembershipOf reads the NUL-padded served package too; a middle NUL is refused", () => {
+    const pkg = new Uint8Array(
+      readFileSync(join(import.meta.dir, "fixtures", "r932", "pkg-a.app")),
+    );
+    const m = compiledMembershipOf(pkg);
+    expect(m.kind).toBe("read");
+    if (m.kind === "read") expect(m.tests.map((t) => t.method)).toContain("ControlPasses");
+    const mid = buildFakeAppWithEntries({ "SymbolReference.json": '{"Codeunits":\0[]}' });
+    const bad = compiledMembershipOf(new Uint8Array(mid));
+    expect(bad.kind).toBe("none");
+    if (bad.kind === "none") expect(bad.why).toContain("not valid JSON");
   });
 
   test("a garbled SymbolReference never reads as 'declares nothing'", () => {

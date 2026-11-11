@@ -11126,6 +11126,18 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(r.identityWarning).toHaveLength(1);
         expect(r.identityWarning[0]).toContain("R932");
         expect(r.identityWarning[0]).toContain("No drift check");
+        expect(r.identityWarning[0]).toContain("build the test app so its .app includes its source");
+        expect(r.identityWarning[0]).toContain("--resume refuses this run");
+        // A later session cannot resume it: the run recorded no identity.
+        const resumed = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs: r.dirs,
+          store: r.store,
+          extra: { resume: r.runId },
+        });
+        expect(resumed.outcome).toBeInstanceOf(Error);
+        expect((resumed.outcome as Error).message).toContain("recorded none");
         r.store.close();
       });
       test("R932 (b): a package WITH source whose bytes change between reads still drifts", async () => {
@@ -11816,6 +11828,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           expect(r.outcome).not.toBeInstanceOf(Error);
           expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
           expect(r.digestWarning[0]).toContain("R932");
+          expect(r.identityWarning).toHaveLength(1);
           r.store.close();
         });
 
