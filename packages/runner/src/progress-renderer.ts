@@ -162,7 +162,16 @@ export function createProgressRenderer(
         write(`session finished in ${formatSeconds(event.elapsedMs)}`);
         break;
       case "mutant-scored":
-        noteMutantResolved(event.durationMs);
+        // R914: a mutant that never ran reports 0 ms; timing it dragged the median to 0.0s. Never ran:
+        // `no-coverage`, `known-survivor`, and any verdict recorded with no covering test (an `error`
+        // for a failed deploy or an invalid baseline). Count it as resolved, not as timed.
+        noteMutantResolved(
+          event.verdict === "no-coverage" ||
+            event.verdict === "known-survivor" ||
+            event.coveringTests.length === 0
+            ? undefined
+            : event.durationMs,
+        );
         break;
       case "mutant-carried":
         // No comparable `durationMs` here — deliberately (events.ts: only `priorDurationMs`

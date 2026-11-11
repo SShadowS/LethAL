@@ -78,6 +78,11 @@ export class TestAppError extends Error {
 export interface CompiledTestApp {
   readonly appPath: string;
   readonly sha256: string;
+  /**
+   * `hashPackage` of the compiled bytes: the key the server's read-back and a bcdev session's
+   * `package:` identity compare with (R931); `sha256` stays the raw file hash the publishers check.
+   */
+  readonly packageHash: string;
   /** From testDir/app.json. */
   readonly appId: string;
   readonly name: string;
@@ -279,6 +284,7 @@ export async function compileTestApp(a: {
     return {
       appPath: out.appPath,
       sha256: out.sha256,
+      packageHash: hashPackage(new Uint8Array(await readFile(out.appPath))),
       appId: manifest.id,
       name: manifest.name,
       publisher: manifest.publisher,
@@ -298,7 +304,7 @@ export interface PublishedTestApp {
   readonly publisher: string;
   /** The server's own NavxManifest Version, read back after the publish. */
   readonly version: string;
-  /** sha256 of the package the server returned after the publish: the compiled bytes' hash. */
+  /** `hashPackage` of the package the server returned after the publish: the compiled `packageHash` (R931). */
   readonly sha256: string;
   readonly compiledAgainst: CompiledTestApp["compiledAgainst"];
 }
@@ -339,9 +345,9 @@ function describeOutcome(
   const altool = publishError === undefined ? "altool exited 0" : `altool failed: ${publishError}`;
   const server =
     verification.status === "accepted"
-      ? `the server holds the compiled package (${app.sha256})`
+      ? `the server holds the compiled package (${app.packageHash})`
       : verification.status === "mismatch"
-        ? `the server holds package ${verification.reported}, not the compiled ${app.sha256}`
+        ? `the server holds package ${verification.reported}, not the compiled ${app.packageHash}`
         : `the server's package is unreadable (${verification.detail})`;
   return `${app.name} ${app.version}: ${altool}; ${server}`;
 }
@@ -406,7 +412,7 @@ export async function publishTestApp(
             status: "unavailable",
             detail: `the server's package could not be read back after the publish${isUnread(after) ? ` (${after.unread})` : ""}`,
           }
-        : hashPackage(afterBytes) === app.sha256
+        : hashPackage(afterBytes) === app.packageHash
           ? { status: "accepted" }
           : { status: "mismatch", reported: hashPackage(afterBytes) };
     const outcome = decideTestAppOutcome(publishError, verification, app);
@@ -426,7 +432,7 @@ export async function publishTestApp(
     } catch (err) {
       throw new TestAppError(
         "publish-indeterminate",
-        `${app.name}: the server holds the compiled package (${app.sha256}) but its manifest cannot be read: ${describeThrown(err)}`,
+        `${app.name}: the server holds the compiled package (${app.packageHash}) but its manifest cannot be read: ${describeThrown(err)}`,
       );
     }
     return {
@@ -434,7 +440,7 @@ export async function publishTestApp(
       name: app.name,
       publisher: app.publisher,
       version,
-      sha256: app.sha256,
+      sha256: app.packageHash,
       compiledAgainst: app.compiledAgainst,
     };
   });

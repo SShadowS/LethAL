@@ -222,6 +222,8 @@ describe("R761: the default transport", () => {
       "Names Blåbær Tests",
       "7Digit Names Tests",
       "ERM WHT G/L Account",
+      "SAF-T Tests",
+      "Subc. Non-Inv Item Valid. Test",
     ]) {
       const r = await rig(DEFAULT, { tests: [ref("CheckIt", codeunit)] });
       await r.b.decideTransport({ resume: false });

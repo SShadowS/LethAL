@@ -130,6 +130,7 @@ import {
   runNamedMutants,
   runOnce,
   runSession,
+  servedWithoutSource,
   upgradeNotRestored,
 } from "../src/orchestrator";
 import type {
@@ -143,7 +144,11 @@ import type {
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import type { QuarantineRecord } from "../src/quarantine-store";
-import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
+import {
+  COVERAGE_NOT_MEASURED_INTERPRETATION,
+  renderConsole,
+  survivorReachOf,
+} from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { CARRYABLE_VERDICTS, STRANDED_SKIP_NOTE, isStrandedNote } from "../src/resume";
@@ -193,6 +198,7 @@ import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
   TEST_APP,
+  r932PkgA,
   servedIsInstalled,
   servedTestAppDeps,
   servesTestApp,
@@ -379,6 +385,15 @@ class StubBackend implements ExecutionBackend {
    * off, which is how a run without an answer looks.
    */
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
+  /**
+   * R926: line-granularity baseline coverage of `Sandbox Logic`: the lines this test's baseline
+   * hit. `undefined` falls through to the default procedure coverage. `coverageGapsFor` adds a
+   * naming gap (a partial map) to the same row.
+   */
+  lineCoverageFor?: (ref: TestMethodRef) => number[] | undefined;
+  coverageGapsFor?: (ref: TestMethodRef) => boolean;
+  /** R926: the mode a test codeunit runs under now (v3's `isolationOf`). */
+  isolationOf?: (codeunitId: number) => "test" | "method";
   /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
   runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
   /** R904: the backend's baseline note (v3: test data is off), when a test sets one. */
@@ -459,7 +474,23 @@ class StubBackend implements ExecutionBackend {
       durationMs: 5,
       ...(failureMessage !== undefined ? { failureMessage } : {}),
       ...(runnerRow !== undefined ? { runnerRow } : {}),
-      ...(hasCoverage
+      ...(hasCoverage && this.lineCoverageFor?.(ref) !== undefined
+        ? {
+            coverage: {
+              granularity: "line" as const,
+              entries: (this.lineCoverageFor?.(ref) ?? []).map((line) => ({
+                objectType: "Codeunit",
+                objectId: 79000,
+                procedure: "IsOverBudget",
+                line,
+              })),
+              ...(this.coverageGapsFor?.(ref) === true
+                ? { namingGaps: [{ objectType: "Codeunit", objectId: 79000 }] }
+                : {}),
+            },
+          }
+        : {}),
+      ...(hasCoverage && this.lineCoverageFor?.(ref) === undefined
         ? {
             coverage: {
               granularity: "procedure" as const,
@@ -3385,6 +3416,7 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
           buildFakeAppWithEntries({
             "NavxManifest.xml": `<?xml version="1.0" encoding="utf-8"?><Package ${NS}><App Id="${TEST_APP.id}" Name="${TEST_APP.name}" Publisher="${TEST_APP.publisher}" Version="1.0.0.0" /></Package>`,
             "SymbolReference.json": symbols,
+            "src/Empty.al": "// R932: present so the package carries source",
           }),
         );
         const allFound0 = (method: string) => ({
@@ -10266,6 +10298,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         historyWarning: warningsOf("history-test-app-changed"),
         reuseWarning: warningsOf("resume-baseline-reused"),
         depsWarning: warningsOf("test-app-dependencies-unproven"),
+        identityWarning: warningsOf("test-app-identity-unproven"),
         knownSurvivors: (
           store.db
             .query(
@@ -11067,6 +11100,67 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(c.store.getRun(c.runId)?.testAppProven).toBe(true);
         c.store.close();
       });
+      // R932: a served package with no AL source cannot show which bodies run (and Windows BC serves
+      // a rebuilt one with fresh bytes per read): unproven, so no drift check, and one warning.
+      // Revert: let `provenWithoutHook` prove a source-less package (then (a) and (c) fail).
+      const sourceLessN = (n: number) =>
+        testPkg({ version: "1.0.0.2", body: BODY_B, source: false, extra: { "stamp.txt": `${n}` } });
+      const extraBatchProject = async () => {
+        const d = await makeProject(BODY_B);
+        await Bun.write(
+          join(d.projectDir, "SandboxExtra.Codeunit.al"),
+          'codeunit 79002 "Sandbox Extra"\n{\n    procedure UnderLimit(Amount: Decimal; Limit: Decimal): Boolean\n    begin\n        exit(Amount < Limit);\n    end;\n}\n',
+        );
+        return d;
+      };
+      test("R932 (a): a source-less served package that differs per read is unproven and never drifts", async () => {
+        const r = await envRun({
+          noHook: true,
+          pre: null,
+          post: null,
+          installed: { [APP_ID]: ["1.0.0.2"] },
+          preSequence: [1, 2, 3, 4, 5, 6, 7, 8].map(sourceLessN),
+          dirs: await extraBatchProject(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r.outcome).not.toBeInstanceOf(Error);
+        expect(r.store.getRun(r.runId)?.testAppHash).toBeNull();
+        expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+        expect(r.identityWarning).toHaveLength(1);
+        expect(r.identityWarning[0]).toContain("R932");
+        expect(r.identityWarning[0]).toContain("No drift check");
+        expect(r.identityWarning[0]).toContain("build the test app so its .app includes its source");
+        expect(r.identityWarning[0]).toContain("--resume refuses this run");
+        // A later session cannot resume it: the run recorded no identity.
+        const resumed = await envRun({
+          noHook: true,
+          ...provenP2,
+          dirs: r.dirs,
+          store: r.store,
+          extra: { resume: r.runId },
+        });
+        expect(resumed.outcome).toBeInstanceOf(Error);
+        expect((resumed.outcome as Error).message).toContain("recorded none");
+        r.store.close();
+      });
+      test("R932 (b): a package WITH source whose bytes change between reads still drifts", async () => {
+        const P2x = testPkg({ version: "1.0.0.2", body: BODY_B, extra: { "stamp.txt": "x" } });
+        const r = await envRun({
+          noHook: true,
+          ...provenP2,
+          preSequence: [P2, P2, P2, P2x],
+          dirs: await extraBatchProject(),
+          extra: { maxGuardsPerBatch: 1 },
+        });
+        expect(r.outcome).toBeInstanceOf(TestAppDriftedError);
+        expect(r.identityWarning).toHaveLength(0);
+        r.store.close();
+      });
+      test("R932 (c): the real Windows package (fixture pkg-a) counts as source-less", async () => {
+        const pkgA = r932PkgA();
+        expect(servedWithoutSource(pkgA)).toBe(true);
+        expect(servedWithoutSource(P2)).toBe(false);
+      });
       test("a backend that cannot read installed versions records no identity", async () => {
         const r = await envRun({ noHook: true, ...provenP2, noMicrosoftMode: true });
         expect(r.outcome).not.toBeInstanceOf(Error);
@@ -11474,22 +11568,27 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       const race = (more: Partial<EnvRun> = {}) =>
         session("N", "one", { depAfterAcquire: depPkg("two"), ...more });
       test("T7: a source-less race takes its identity under the lease, so a donor proven with that value lends", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
+        // R932: a source-less package proves only by byte equality with a publishApps file (hook).
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const race = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { depAfterAcquire: depPkg("two"), ...more });
         const r = await race(sourceLess)({});
         expect(r.outcome).not.toBeInstanceOf(Error);
-        const donor = await session("N", "two", sourceLess)({});
+        const donor = await session("H", "two", sourceLess)({});
         expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
         expect(r.store.getRun(r.runId)?.testAppDeps).toBe(
           donor.store.getRun(donor.runId)?.testAppDeps ?? "missing",
         );
         r.store.close();
         donor.store.close();
-        lendsAll(await consumers(session("N", "two", sourceLess), race(sourceLess)));
+        lendsAll(await consumers(session("H", "two", sourceLess), race(sourceLess)));
       });
       // T7b (F6): the same race, the donor proven with "one" (the pre-lease value).
       test("T7b: a source-less race borrows nothing from a donor proven with the pre-lease value", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        lendsNothing(await consumers(session("N", "one", sourceLess), race(sourceLess)));
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const race = (more: Partial<EnvRun> = {}) =>
+          session("H", "one", { depAfterAcquire: depPkg("two"), ...more });
+        lendsNothing(await consumers(session("H", "one", sourceLess), race(sourceLess)));
       });
       // T7c (F9): the race WITH digests (pre-lease `D` = "one"); the donor matches the under-lease
       // value "two", but the run's digests no longer describe what runs: it borrows nothing.
@@ -11635,20 +11734,21 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
 
       // T10 (F8): a test app without `.al` source fingerprints from its manifest.
       test("T10: a source-less test app with an unchanged dependency is proven and lends", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        const r = await session("N", "one", sourceLess)({});
+        // R932: proven by byte equality with a publishApps file (hook); a plain session is unproven.
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const r = await session("H", "one", sourceLess)({});
         expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
         expect(r.store.getRun(r.runId)?.testAppDeps).toMatch(/^[0-9a-f]{64}$/);
         expect(r.store.testDigests(r.runId)).toBeNull();
         r.store.close();
-        lendsAll(await consumers(session("N", "one", sourceLess), session("N", "one", sourceLess)));
+        lendsAll(await consumers(session("H", "one", sourceLess), session("H", "one", sourceLess)));
       });
       // T10b (F1 only): the same, changed: refused for the DEPENDENCY, both rows proven.
       test("T10b: a source-less test app with a changed dependency is refused for its dependencies", async () => {
-        const sourceLess = { pre: P2DS, post: P2DS };
-        const r1 = await session("N", "one", sourceLess)({});
+        const sourceLess = { pre: P2DS, post: P2DS, testAppInPublishApps: true };
+        const r1 = await session("H", "one", sourceLess)({});
         makeResumable(r1);
-        const r2 = await session("N", "two", sourceLess)({ resume: r1.runId }, r1);
+        const r2 = await session("H", "two", sourceLess)({ resume: r1.runId }, r1);
         expect(r2.outcome).toBeInstanceOf(TestAppRepublishedError);
         expect((r2.outcome as Error).message).toMatch(
           /the test app's dependencies changed \([0-9a-f]{64}, now [0-9a-f]{64}\)/,
@@ -11722,10 +11822,14 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           r.store.close();
         });
 
-        test("H5: no publishApps file is the test app: proven by the installed checks alone", async () => {
+        // R932: it was proven by the installed checks alone; a source-less package with no file to
+        // equal proves nothing, so it is unproven and says so.
+        test("H5: no publishApps file is the test app: a source-less read-back is unproven (R932)", async () => {
           const r = await hookSL({ testAppInPublishApps: false })({});
           expect(r.outcome).not.toBeInstanceOf(Error);
-          expect(r.store.getRun(r.runId)?.testAppProven).toBe(true);
+          expect(r.store.getRun(r.runId)?.testAppProven).toBe(false);
+          expect(r.digestWarning[0]).toContain("R932");
+          expect(r.identityWarning).toHaveLength(1);
           r.store.close();
         });
 
@@ -19018,6 +19122,217 @@ describe("GH-24: per-mutant reach", () => {
     }
   });
 
+  // R926: a backend that attests nothing (al-runner v3) is decided from the BASELINE's line
+  // coverage. The reach line of every mutant of `TARGET_AL` is line 13 of the INSTRUMENTED text, not
+  // the source's line 5: the chain adds lines before the original copy of `exit(Amount > Budget);`
+  // (a first draft used the source line; that setup error made two tests red).
+  const REACH_LINE = 13;
+  const reachWord = (
+    row: ReturnType<typeof reportRow> | Scored,
+  ): ReturnType<typeof survivorReachOf> =>
+    survivorReachOf("exact", "not-measured", row.guardReached, "statement", false);
+  // The empty-body mutant's reach statement is the procedure body (a compound block): it carries
+  // no `reachLine`, so v3 leaves it undecided. The rest are the mutants these tests are about.
+  const decidedOf = (scored: Scored[]): Scored[] => {
+    for (const e of scored.filter((s) => s.mutant.reachLine === undefined)) {
+      expect(reachOf(e)).toEqual({});
+    }
+    const decided = scored.filter((s) => s.mutant.reachLine !== undefined);
+    expect(decided.length).toBeGreaterThan(0);
+    return decided;
+  };
+  const v3Backend = (
+    lines: (ref: TestMethodRef) => number[] | undefined,
+    script: (mutant: string | null, ref: TestMethodRef) => TestVerdict["outcome"] = () => "pass",
+  ) => {
+    const backend = new StubBackend(CAPS_NST_WORKERS, script, ["IsOverBudget"]);
+    backend.lineCoverageFor = lines;
+    return backend;
+  };
+
+  test("R926: v3 survivor whose covering test's baseline hit the reach line is reached", async () => {
+    const backend = v3Backend((ref) => (ref.method === "ATest" ? [REACH_LINE] : [4]));
+    const { scored, report } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("survived");
+      expect(e.mutant.reachLine).toBe(REACH_LINE);
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      const row = reportRow(report, e.mutant.mutantId);
+      expect(reachOf(row)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      expect(reachWord(row)).toBe("reached-unnoticed");
+    }
+  });
+
+  test("R926: v3 survivor no covering test's baseline hit is covered-but-unreached", async () => {
+    const backend = v3Backend(() => [4, 5, 6, 8]);
+    const { scored, report } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("survived");
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      expect(reachWord(reportRow(report, e.mutant.mutantId))).toBe("covered-but-unreached");
+    }
+  });
+
+  test("R926: a covering test with no baseline line coverage leaves reach undecided", async () => {
+    // ATest has line coverage that misses; BTest has procedure coverage only: never "unreached".
+    const backend = v3Backend((ref) => (ref.method === "ATest" ? [4] : undefined));
+    const { scored, report } = await runReach(backend);
+    for (const e of scored) {
+      expect(reachOf(e)).toEqual({});
+      expect(reachWord(reportRow(report, e.mutant.mutantId))).toBe("not-decided");
+    }
+  });
+
+  test("R926: coverage mode none leaves reach undecided", async () => {
+    const backend = new StubBackend(
+      { ...CAPS_NST_WORKERS, coverage: "none" },
+      () => "pass",
+      ["IsOverBudget"],
+    );
+    backend.lineCoverageFor = () => [REACH_LINE];
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+  });
+
+  test("R926: a baseline map with a naming gap is partial, so reach is undecided", async () => {
+    const backend = v3Backend(() => [4]);
+    backend.coverageGapsFor = (ref) => ref.method === "BTest";
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+  });
+
+  test("R926: a codeunit whose mode moved since its baseline is undecided", async () => {
+    const backend = v3Backend(() => [4]);
+    backend.isolationOf = () => (backend.activations.some((a) => a !== null) ? "method" : "test");
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+    // The mirror: the mode holds, so the same data decides.
+    const steady = v3Backend(() => [4]);
+    steady.isolationOf = () => "method";
+    const decided = await runReach(steady);
+    for (const e of decidedOf(decided.scored)) {
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+    }
+  });
+
+  test("R926: a v3 kill gets reachedBy from the tests that ran, as bcdev does", async () => {
+    const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant !== null && ref.method === "ATest" ? "fail" : "pass";
+    const backend = v3Backend(() => [REACH_LINE], script);
+    const { scored } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+    }
+  });
+
+  // R926 review A: a covering step with no pass/fail answer may have run the site, so the baseline
+  // decides nothing, whatever the verdict. Neither test hit the reach line at baseline.
+  test("R926: a covering test that ended without an answer leaves reach undecided", async () => {
+    // ("error" is not driven here: the stub's error is a transport failure, which aborts the session.)
+    for (const bad of ["timeout", "skip"] as const) {
+      const backend = v3Backend(
+        () => [4],
+        (mutant, ref) => (mutant !== null && ref.method === "BTest" ? bad : "pass"),
+      );
+      const { scored, report } = await runReach(backend);
+      const decided = decidedOf(scored);
+      for (const e of decided) {
+        expect([bad, reachOf(e)]).toEqual([bad, {}]);
+        expect([bad, reachOf(reportRow(report, e.mutant.mutantId))]).toEqual([bad, {}]);
+      }
+      // The positive control: with B answering, the same baseline DOES decide (unreached).
+      if (bad === "skip") {
+        const control = v3Backend(() => [4]);
+        for (const e of decidedOf((await runReach(control)).scored)) {
+          expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+        }
+      }
+    }
+  });
+
+  // R926 review: ATest answered and its baseline HIT the line; BTest timed out. A hit is a hit, so
+  // the timed-out mutant still reads reached by ATest. Only M0002 times out (M0001 is the
+  // empty-body mutant, with no reach line), and it runs ATest first as no kill is in the ledger yet.
+  test("R926: a hit is kept when another covering test ended unanswered", async () => {
+    const lines = (ref: TestMethodRef) => (ref.method === "ATest" ? [REACH_LINE] : [4]);
+    const timeoutB = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant === "M0002" && ref.method === "BTest" ? "timeout" : "pass";
+    const { scored } = await runReach(v3Backend(lines, timeoutB));
+    const m2 = scored.find((e) => e.mutant.mutantId === "M0002");
+    expect(m2?.verdict).toBe("timeout-killed");
+    expect(m2?.mutant.reachLine).toBe(REACH_LINE);
+    expect(m2 !== undefined ? reachOf(m2) : undefined).toEqual({
+      guardReached: true,
+      reachedBy: [REACH_A],
+    });
+  });
+
+  // R926 review B: "not reached" is claimed only for a survivor. A kill's loop stops at the killer,
+  // so the tests it never ran could have reached.
+  test("R926: a kill is never called unreached from the baseline; a hit is kept", async () => {
+    const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant !== null && ref.method === "ATest" ? "fail" : "pass";
+    const missed = await runReach(v3Backend(() => [4], script));
+    for (const e of decidedOf(missed.scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({});
+      expect(reachOf(reportRow(missed.report, e.mutant.mutantId))).toEqual({});
+    }
+    const hit = await runReach(
+      v3Backend((ref) => (ref.method === "ATest" ? [REACH_LINE] : [4]), script),
+    );
+    for (const e of decidedOf(hit.scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      expect(reachOf(reportRow(hit.report, e.mutant.mutantId))).toEqual({
+        guardReached: true,
+        reachedBy: [REACH_A],
+      });
+    }
+  });
+
+  // R926 review C: FALLBACK 2 ("all-green") ran every test BECAUSE coverage saw nothing of the
+  // object, so that same coverage cannot say the site was not hit. Coverage names only the
+  // codeunit; the table's trigger mutants take the fallback and survive.
+  test("R926: an all-green-attributed survivor is never called unreached", async () => {
+    const dirs = await makeProjectWithTriggerTable();
+    const backend = v3Backend(() => [4]);
+    const events: RunEvent[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const report = await runSession({
+        backend,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        emit: [(e) => events.push(e)],
+      });
+      const table = report.mutants.filter((m) => m.file.includes("SandboxTable"));
+      expect(table.length).toBeGreaterThan(0);
+      expect(report.untargetedTriggerCount).toBe(table.length);
+      expect(table.some((m) => m.verdict === "survived")).toBe(true);
+      for (const m of table) expect(reachOf(m)).toEqual({});
+      // The control: the codeunit's survivors in the same session ARE decided.
+      const code = events.filter(
+        (e): e is Scored => e.type === "mutant-scored" && e.mutant.file.includes("SandboxLogic"),
+      );
+      for (const e of decidedOf(code)) {
+        expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      }
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("R926: a backend that attests keeps its own answer whatever the baseline says", async () => {
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.lineCoverageFor = () => [REACH_LINE];
+    backend.reachedFor = () => false;
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+  });
+
   test("GH-24: a manifest from before GH-24 has no grain and is never decided", async () => {
     // An artifact instrumented before GH-24 wrote no `reachGrain`. Strip it from the manifest
     // the batch is read from, at the one seam between writing and reading it.
@@ -20621,6 +20936,7 @@ const OLD = testsPkg("1.0.0.2", { "src/T.al": "old" });
 const COMPILED: CompiledTestApp = {
   appPath: "C:/out/x-testapp.app",
   sha256: hashPackage(NEW),
+  packageHash: hashPackage(NEW),
   appId: TESTS_ID,
   name: "LethAL Sandbox Tests",
   publisher: "LethAL",

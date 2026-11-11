@@ -93,7 +93,16 @@ import {
   parseGatedBuilds,
   v3ReadingsDigest,
 } from "../packages/runner/src/al-runner-v3-pins";
-import { type Proc, SLOTS, SLOT_BUSY, lockDir, parsePs } from "./corpus-snapshot";
+import {
+  type Proc,
+  READER,
+  SLOTS,
+  SLOT_BUSY,
+  WATCHER,
+  descendants,
+  lockDir,
+  parsePs,
+} from "./corpus-snapshot";
 import { type SlotClass, readSlotClass } from "./heavy-slot-class";
 
 export const ROOT = "/work/tools/al-runner-v3";
@@ -899,9 +908,20 @@ export function countHeavyJobs(
   // R905: the class of each held slot (undefined = none readable, which counts as BaseApp).
   heldClasses: readonly (SlotClass | undefined)[] = [],
 ): number {
+  // R930: a reader (`grep`, `ps`, ...) is never a job by its text. A shell names what it runs, and
+  // `timeout` (or a harness's own shell) puts that job in ANOTHER group: one job read as two. So a
+  // shell is skipped when a process below it is a job of its own, and still counts when none is
+  // (`bash -c 'cd /work/src/BC.History && bun census.ts .'`: only the shell names the corpus).
+  const isJob = (p: Proc): boolean =>
+    HEAVY_JOB.test(p.args) && !p.args.includes("--worker") && !WATCHER.test(p.args);
   const groups = new Set<number>();
   for (const p of procs) {
-    if (HEAVY_JOB.test(p.args) && !p.args.includes("--worker")) groups.add(p.pgid);
+    if (READER.test(p.args) || !HEAVY_JOB.test(p.args) || p.args.includes("--worker")) continue;
+    if (WATCHER.test(p.args)) {
+      const below = descendants(procs, p.pid);
+      if (procs.some((q) => below.has(q.pid) && isJob(q))) continue;
+    }
+    groups.add(p.pgid);
   }
   const jobs = Math.max(groups.size, heldSlots);
   // With two or more jobs running and any held slot BaseApp-class or unclassed, the container is

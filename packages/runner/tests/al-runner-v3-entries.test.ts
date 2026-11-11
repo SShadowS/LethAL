@@ -3943,6 +3943,75 @@ describe("R807: the kill pair rethrows a seed refusal; observedRunSeed reads eac
   });
 });
 
+describe("R927: an explicit serve-entries run probes for a batch refusal before the baseline", () => {
+  // E-Document Core's reason (R-915): serve refuses EVERY entry with it, whatever the codeunit.
+  const INSTALL =
+    "NotRun: out-of-scope: the install code read a resource file, and an entry with resource files of its own would need an install baseline of its own (al-runner issue 5635)";
+  const allRefused: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((x) => ({
+      ...x,
+      status: "error" as const,
+      notRun: true,
+      message: INSTALL,
+    }));
+  // The echo entry is refused with the same reason, as every entry of E-Document Core's request was.
+  const echoRefused: Echo = () => ({
+    method: "Echo",
+    status: "error",
+    notRun: true,
+    message: INSTALL,
+  });
+
+  test("explicit + every entry refused: deploy itself fails by name, with the probe's text", async () => {
+    const err = await rig({
+      serve: { rows: allRefused, echo: echoRefused },
+      oneShotRows: allPass,
+      extra: { transportSource: "explicit" },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+    expect(String(err)).toContain("found before the baseline by the probe of codeunit");
+    expect(String(err)).toContain(INSTALL);
+  });
+
+  test("explicit + a clean answer: one probe request, its daemon closed, the session goes on", async () => {
+    const r = await rig({ extra: { transportSource: "explicit" } });
+    expect(r.serve.requests).toHaveLength(1);
+    expect(r.serve.daemons).toHaveLength(1);
+    expect(r.serve.closes).toEqual([{ daemon: 0, afterRequests: 1 }]);
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(r.serve.daemons).toHaveLength(2); // the warm-up's own daemon, as before
+  });
+
+  test("the default transport and an internal caller (no source) never probe", async () => {
+    for (const extra of [{ transportSource: "default" as const }, {}]) {
+      const r = await rig({
+        serve: { rows: allRefused, echo: echoRefused },
+        oneShotRows: allPass,
+        extra,
+      });
+      expect(r.serve.requests, JSON.stringify(extra)).toHaveLength(0);
+    }
+  });
+
+  test("review r1: the probe runs once per session, not at every deploy", async () => {
+    const r = await rig({ extra: { transportSource: "explicit" } });
+    await r.b.deploy(r.l.batch);
+    expect(r.serve.requests).toHaveLength(1);
+  });
+
+  test("review r1: a probe answer that is no batch refusal is not the probe's to judge: deploy goes on", async () => {
+    // The probe's request gets a broken answer (stdout ends): a request error, which the warm-up judges later.
+    const r = await rig({
+      serve: { answer: (_req, n) => (n === 0 ? { lines: [], eof: true } : undefined) },
+      extra: { transportSource: "explicit" },
+    });
+    expect(r.serve.requests).toHaveLength(1);
+    expect(r.serve.closes.length + r.serve.kills.length).toBeGreaterThan(0);
+  });
+});
+
 describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refuses by name", () => {
   const COMPANY =
     "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
@@ -3980,6 +4049,16 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
     const err = await prefetch(r);
     expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+    // R927: and names the way out, since the default would have re-run one-shot.
+    expect(String(err)).toContain("the default would re-run this session one-shot instead");
+  });
+
+  test("R927: explicit + a timeout row (no fallback would apply either): no way-out text", async () => {
+    const r = asDefault(await rig({ serve: { rows: underNone(TIMEOUT_1S) } }), "explicit");
+    await baseline(r.b, SUITE1);
+    const err = await prefetch(r);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+    expect(String(err)).not.toContain("the default would re-run");
   });
 
   test("default + a named refusal FIRST and a timeout row after it (same entry): still refuses, naming the timeout", async () => {

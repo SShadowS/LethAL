@@ -67,6 +67,9 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
             owner.chooseIsolation?.(cu, mode),
         }
       : {}),
+    ...(owner.isolationOf !== undefined
+      ? { isolationOf: (cu: number) => owner.isolationOf?.(cu) ?? "test" }
+      : {}),
     dependencyPackageDirs: () => owner.dependencyPackageDirs?.() ?? [],
     dependencyArtifactAppsDir: () => owner.dependencyArtifactAppsDir?.(),
     useCoveringBudgets: (id, budgets) => lane0.useCoveringBudgets?.(id, budgets),

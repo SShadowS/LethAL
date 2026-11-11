@@ -1,4 +1,9 @@
-import { AppMethodIndex, type CompiledTest, readPackageEntry } from "./app-package";
+import {
+  AppMethodIndex,
+  type CompiledTest,
+  parseSymbolReferenceJson,
+  readPackageEntry,
+} from "./app-package";
 import type { TestMethodRef } from "./backend";
 import type { ArmAwareDiscovery } from "./discovery";
 
@@ -35,12 +40,9 @@ export function compiledMembershipOf(pkg: Uint8Array): CompiledMembership {
     return { kind: "none", why: `the package is not a readable zip (${describe(err)})` };
   }
   if (entry === null) return { kind: "none", why: "the package carries no SymbolReference.json" };
-  let text = entry.toString("utf8");
-  // AL writes SymbolReference.json with a UTF-8 BOM.
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let json: unknown;
   try {
-    json = JSON.parse(text);
+    json = parseSymbolReferenceJson(entry);
   } catch (err) {
     return { kind: "none", why: `its SymbolReference.json is not valid JSON (${describe(err)})` };
   }

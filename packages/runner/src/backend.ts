@@ -93,7 +93,7 @@ export interface TestVerdict {
    * R272: this test's own duration, on a `pass`. The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
-   * al-runner's in-run stop. al-runner sets the runner's own per-test figure, since its
+   * al-runner's in-run stop. Since R914 the R912 estimate and window cut read it too. al-runner sets the runner's own per-test figure, since its
    * `durationMs` includes a compile per call (one-shot) or is the whole suite's (`--server`).
    * bcdev sets its per-test call's wall clock (`BcDevBackend.run`), equal to its `durationMs`.
    * Absent: not measured per test.
@@ -708,6 +708,13 @@ export interface ExecutionBackend {
    * baseline bracket of the first batch that runs a live baseline, and never again.
    */
   chooseIsolation?(codeunitId: number, mode: "test" | "method"): void;
+
+  /**
+   * R926, OPTIONAL (al-runner v3): the mode test codeunit `codeunitId` runs under right now. The
+   * orchestrator reads it when a baseline ends and again for each mutant, and decides a mutant's
+   * reach from baseline coverage only when the two agree. Absent means one mode for everything.
+   */
+  isolationOf?(codeunitId: number): "test" | "method";
 
   /**
    * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`
