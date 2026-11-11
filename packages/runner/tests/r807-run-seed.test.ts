@@ -515,7 +515,7 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
   test("the backend: --version, one-shot and serve spawns all take cacheEnv() (which wraps v3ChildEnv)", async () => {
     const t = await read("al-runner-v3-backend.ts");
     const r = eachFollowedBy(t, /this\.(?:serverSpawn|spawn)\(/g, "this.cacheEnv()", 250);
-    expect(r.count).toBe(3);
+    expect(r.count).toBe(4); // R907: the `test --help` read is the fourth
     expect(r.bad).toEqual([]);
     expect(t).toContain("env: v3ChildEnv(");
   });

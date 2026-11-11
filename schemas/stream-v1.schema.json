@@ -866,6 +866,9 @@
               },
               "durationMs": {
                 "type": "number"
+              },
+              "flagged": {
+                "const": true
               }
             }
           }

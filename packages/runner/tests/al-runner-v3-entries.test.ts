@@ -189,6 +189,8 @@ interface FakeRow {
   status: "pass" | "fail" | "error";
   message?: string;
   notRun?: boolean;
+  /** R907: al-runner's `flagged` (a pass resting on an unprobed assumption). */
+  flagged?: boolean;
 }
 /** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
 const stopMsOf = (message: string | undefined): number => {
@@ -481,6 +483,7 @@ function fakeServe(script: ServeScript = {}) {
             durationMs: stopMsOf(r.message),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
+            ...(r.flagged !== undefined ? { flagged: r.flagged } : {}),
             ...(entry !== undefined ? { entry } : {}),
           });
           let selected: Set<number>;
@@ -4982,6 +4985,62 @@ describe("R790: the speculative baseline", () => {
   });
 });
 
+describe("R907: --no-client", () => {
+  test("R907: serve never passes --skip-after-timeout, even when the help listed it", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    (r.b as unknown as { skipAfterTimeoutLearned: boolean }).skipAfterTimeoutLearned = true;
+    expect(r.b.skipAfterTimeout).toBe(false);
+  });
+
+  test("on: every runTests request carries noClient: true", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 }, extra: { noClient: true } });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
+    expect(r.b.noClient).toBe(true);
+  });
+
+  test("off: no request carries the key, so today's requests are unchanged", async () => {
+    const r = await readyRig({ serve: { rows: killsM1 } });
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    expect(r.serve.requests.length).toBeGreaterThan(0);
+    for (const q of r.serve.requests) expect(q.body).not.toHaveProperty("noClient");
+  });
+
+  test("a serve row's flagged: true reaches a pass verdict; an unflagged pass has no flagged key", async () => {
+    const flaggedA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((row) => (row.method === "A" ? { ...row, flagged: true } : row));
+    const r = await readyRig({ serve: { rows: flaggedA }, extra: { noClient: true } });
+    await r.b.activate("M0002");
+    const a = await r.b.run(ref("A"), OPTS);
+    const b = await r.b.run(ref("B"), OPTS);
+    expect(a.outcome).toBe("pass");
+    expect(a.flagged).toBe(true);
+    expect(b.outcome).toBe("pass");
+    expect(b).not.toHaveProperty("flagged");
+  });
+
+  // R-911: under --no-client al-runner refuses a surface it cannot answer with a not-run row; that
+  // must stay a refusal and never score as a kill.
+  test("on: a refused not-run row is error runner-refused, never a fail", async () => {
+    const REFUSED =
+      "NotRun: out-of-scope: a page runs in a session without a client (--no-client): not pinned";
+    const refusedA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((row) =>
+        m === "M0001" && row.method === "A"
+          ? { ...row, status: "error" as const, notRun: true, message: REFUSED }
+          : row,
+      );
+    const r = await readyRig({ serve: { rows: refusedA }, extra: { noClient: true } });
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("error");
+    expect(v.runnerRow).toBe("runner-refused");
+  });
+});
+
 describe("R857: --isolate-tests", () => {
   const ISOLATE = { extra: { isolateTests: true } };
   type Sent = { id: string; test: string; excludeTests?: string[] };
@@ -5626,6 +5685,22 @@ describe("R895: stop a request at its first timeout row", () => {
       expect(r.serve.requests.filter((q) => q.body.runSelectedOnly === true)).toHaveLength(1);
     });
 
+    test("R907: noClient on: the alone (runSelectedOnly) request carries noClient: true too", async () => {
+      const r = await readyRig({
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+        extra: { noClient: true },
+      });
+      await r.b.activate("M0001");
+      const n0 = r.serve.requests.length;
+      expect((await r.b.run(B, OPTS)).outcome).toBe("pass");
+      const alone = r.serve.requests.slice(n0).filter((q) => q.body.runSelectedOnly === true);
+      expect(alone).toHaveLength(1);
+      for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
+    });
+
     test("a timeout in that alone fetch is a timeout verdict", async () => {
       const rows: RowsFn = (m, cu, d, n) =>
         m === "M0001" && cu === CU
@@ -5710,6 +5785,21 @@ describe("R895: stop a request at its first timeout row", () => {
       expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
       // B and C were re-sent after the cut and stood in the prefetch: no alone fetch, no new request.
       expect(r.serve.requests).toHaveLength(n);
+    });
+
+    test("R907: noClient on, isolation method: every request on the method daemon carries noClient: true", async () => {
+      const r = await readyRig({
+        extra: { isolation: "method", noClient: true },
+        serve: { rows: hangsA },
+        suite: SUITE2,
+        mutants: ["M0001"],
+        seams: retired,
+      });
+      await r.b.activate("M0001");
+      expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+      expect((await r.b.run(B, OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests.length).toBeGreaterThan(0);
+      for (const q of r.serve.requests) expect(q.body.noClient).toBe(true);
     });
 
     test("isolation auto, one codeunit switched to method: a cut in the other codeunit fetches alone on that codeunit's own daemon", async () => {

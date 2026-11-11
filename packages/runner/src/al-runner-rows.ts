@@ -151,6 +151,8 @@ export function verdictFromRunnerTest(
     readonly durationMs?: number;
     /** R534 (D1b): an exit-3 TEST-TIMEOUT-ABORT line names this row (one-shot only). */
     readonly abortProven?: boolean;
+    /** R907: al-runner's `flagged`: a pass that rests on an unprobed assumption. */
+    readonly flagged?: boolean;
   },
   durationMs: number,
   coverage: CoverageMap | undefined,
@@ -167,6 +169,7 @@ export function verdictFromRunnerTest(
       ...(typeof own === "number" && Number.isFinite(own) && own >= 0
         ? { measuredDurationMs: own }
         : {}),
+      ...(t.flagged === true ? { flagged: true as const } : {}),
       ...(coverage !== undefined ? { coverage } : {}),
     };
   }

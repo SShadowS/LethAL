@@ -23696,3 +23696,97 @@ describe("R639: the covering loop and a refusal that follows a timeout", () => {
     expect(report.counts.timeoutKilled).toBe(0);
   });
 });
+
+/** R907: `--no-client`. A v3-shaped fake with the flag on; `flaggedMethods` pass flagged at baseline. */
+describe("R907: --no-client in a session", () => {
+  const THREE_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Flagged()
+    begin
+    end;
+
+    [Test]
+    procedure Plain()
+    begin
+    end;
+
+    [Test]
+    procedure Failing()
+    begin
+    end;
+}
+`;
+  const REFUSED_TEXT =
+    "NotRun: out-of-scope: a page runs in a session without a client (--no-client): not pinned";
+
+  class NoClientStub extends StubBackend {
+    readonly noClient = true;
+    flaggedMethods = new Set<string>(["Flagged", "Failing"]);
+    refuseMutants = false;
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      const active = this.activations.at(-1) ?? null;
+      if (active === null) {
+        return this.flaggedMethods.has(ref.method) ? { ...v, flagged: true } : v;
+      }
+      if (this.refuseMutants) {
+        return {
+          ...v,
+          outcome: "error",
+          failureMessage: REFUSED_TEXT,
+          operation: "completed-accepted",
+          runnerRow: "runner-refused",
+        };
+      }
+      return v;
+    }
+  }
+
+  const sessionOf = async (backend: NoClientStub) => {
+    const dirs = await makeProject(THREE_TESTS_AL);
+    const store = new ResultsStore(":memory:");
+    try {
+      return await runSession({ backend, store, ...dirs, selectorIds });
+    } finally {
+      store.close();
+    }
+  };
+  const stub = () =>
+    new NoClientStub(
+      CAPS_NST_WORKERS,
+      (mutant, ref) => (ref.method === "Failing" && mutant === null ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+
+  test("testMethods: baselineFlagged on a flagged baseline pass, not on an unflagged pass or a failing flagged test", async () => {
+    const report = await sessionOf(stub());
+    const rec = (m: string) => report.testMethods?.find((t) => t.name === `Sandbox Tests.${m}`);
+    expect(rec("Flagged")?.baselineFlagged).toBe(true);
+    expect(rec("Plain")).toBeDefined();
+    expect(rec("Plain")).not.toHaveProperty("baselineFlagged");
+    expect(rec("Failing")).toBeDefined();
+    expect(rec("Failing")).not.toHaveProperty("baselineFlagged");
+  });
+
+  test("the report's execution context is threaded from the backend: noClient true, guiAllowed false", async () => {
+    const report = await sessionOf(stub());
+    const ctx = report.validity.executionContexts.find((c) => c.runner === "fenced");
+    expect(ctx?.noClient).toBe(true);
+    expect(ctx?.guiAllowed).toBe(false);
+  });
+
+  test("R-911: a covering test's refused not-run row ends the mutant error runner-refused, never killed", async () => {
+    const backend = stub();
+    backend.refuseMutants = true;
+    const report = await sessionOf(backend);
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("error");
+      expect(m.cause).toBe("runner-refused");
+    }
+    expect(report.counts.killed).toBe(0);
+  });
+});

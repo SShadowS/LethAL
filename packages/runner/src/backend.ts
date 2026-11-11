@@ -100,6 +100,12 @@ export interface TestVerdict {
    */
   readonly measuredDurationMs?: number;
   /**
+   * R907: on a `pass`, al-runner's `flagged: true`: the pass rests on an unprobed assumption (for
+   * example a test that went through Confirm, StrMenu or a page under `--no-client`). Absent when
+   * false or not reported. Only al-runner sets it.
+   */
+  readonly flagged?: true;
+  /**
    * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
    * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
    * confirm is judged against `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the
@@ -464,6 +470,18 @@ export interface ExecutionBackend {
    * `BackendCapabilities` so a default run's stream does not change.
    */
   readonly isolatesTests?: boolean;
+  /**
+   * R907: `--no-client`, al-runner-v3 only: tests run as a session without a client
+   * (`GuiAllowed()` false, as on BC's web-service path). Absent counts as false. The session puts it
+   * in its fingerprint, in `runner_build` and in the report's execution context, so nothing of such
+   * a run reaches a default run, or the other way.
+   */
+  readonly noClient?: boolean;
+  /**
+   * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). In `runner_build`,
+   * so a session with it and one without it lend each other nothing. Absent counts as false.
+   */
+  readonly skipAfterTimeout?: boolean;
   /**
    * R890: `alRunnerV3.isolation: "method"`: every test runs alone (as `isolatesTests`) under
    * al-runner's codeunit isolation, so a fresh codeunit per test, as BC's one-method runner.

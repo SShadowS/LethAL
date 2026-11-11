@@ -169,6 +169,9 @@
               },
               "isolateTests": {
                 "const": true
+              },
+              "noClient": {
+                "const": true
               }
             }
           }
@@ -252,6 +255,9 @@
           },
           "baselineDurationMs": {
             "type": "number"
+          },
+          "baselineFlagged": {
+            "const": true
           }
         }
       }

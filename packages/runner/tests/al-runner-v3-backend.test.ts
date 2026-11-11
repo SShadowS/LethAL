@@ -26,6 +26,7 @@ import {
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
+  AlRunnerV3NoClientUnsupportedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
@@ -47,6 +48,7 @@ import {
 } from "../src/al-runner-v3-backend";
 import {
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
+  V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
 import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
@@ -226,18 +228,28 @@ function fakeV3(
     stdout?: string;
     /** R590: v3's stderr, per call (the mutant id the selector read). */
     stderr?: (activeId: string) => string;
+    /** R907: the text of `test --help`; `"fail"` makes that call exit 2. */
+    help?: string;
   } = {},
 ) {
   const calls: string[][] = [];
   const spawn: SpawnFn = async (argv) => {
     if (argv[1] === "--version")
       return { exitCode: 0, stdout: "alrunner 3.0.0-alpha.2 (91253f2d6)\n", stderr: "" };
+    if (argv[1] === "test" && argv[2] === "--help")
+      return opts.help === "fail"
+        ? { exitCode: 2, stdout: "", stderr: "boom" }
+        : { exitCode: 0, stdout: opts.help ?? "", stderr: "" };
     calls.push([...argv]);
     const active = argv.at(-2) ?? "";
     const testDir = argv.at(-1) ?? "";
     const sel = await readFile(join(active, "MutationSelector.Codeunit.al"), "utf8");
     const activeId = /MutantId = '([^']+)'/.exec(sel)?.[1] ?? "";
-    const cu = Number(argv[argv.indexOf("--codeunit") + 1]);
+    const exactAt = argv.indexOf("--test-exact");
+    const cu =
+      exactAt >= 0
+        ? Number(/^Codeunit(\d+)\./.exec(argv[exactAt + 1] ?? "")?.[1])
+        : Number(argv[argv.indexOf("--codeunit") + 1]);
     const covAt = argv.indexOf("--coverage-json");
     const cov = opts.coverage?.(activeId, active, testDir);
     // R762 A: a call without the flag has nowhere to write it.
@@ -1380,6 +1392,141 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ downloadDemoData: false }).downloadDemoData).toBe(false);
     expect(v({ downloadDemoData: true }).downloadDemoData).toBe(true);
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
+  });
+
+  test("R907 the config key noClient: default from the constant, boolean only, passed through", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).noClient).toBe(V3_NO_CLIENT_DEFAULT);
+    expect(v({ noClient: true }).noClient).toBe(true);
+    expect(v({ noClient: false }).noClient).toBe(false);
+    expect(() => v({ noClient: "yes" })).toThrow("noClient");
+  });
+
+  test("R907 --no-client: v3CallArgv adds it after --bc-version when on, never when off", () => {
+    const a = {
+      alRunnerPath: "/b",
+      codeunitId: 7,
+      stopSeconds: 3,
+      packagesDir: "/d",
+      bcVersion: "28.0.1.2",
+      symbols: [],
+      activeDir: "/a",
+      testDir: "/t",
+    };
+    const on = v3CallArgv({ ...a, noClient: true });
+    expect(on[on.indexOf("--bc-version") + 2]).toBe("--no-client");
+    expect(v3CallArgv({ ...a, noClient: false })).not.toContain("--no-client");
+    expect(v3CallArgv(a)).not.toContain("--no-client");
+  });
+
+  test("R907 a one-shot call carries --no-client exactly when the backend's noClient is on", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return { argv: v3.calls[0] ?? [], noClient: b.noClient };
+    };
+    const on = await run({ noClient: true });
+    expect(on.argv).toContain("--no-client");
+    expect(on.noClient).toBe(true);
+    const off = await run({});
+    expect(off.argv).not.toContain("--no-client");
+    expect(off.noClient).toBe(V3_NO_CLIENT_DEFAULT);
+  });
+
+  test("R907 --skip-after-timeout: v3CallArgv adds it right after the stop pair when on, never when off", () => {
+    const a = {
+      alRunnerPath: "/b",
+      codeunitId: 7,
+      stopSeconds: 3,
+      packagesDir: "/d",
+      bcVersion: "28.0.1.2",
+      symbols: [],
+      activeDir: "/a",
+      testDir: "/t",
+    };
+    const on = v3CallArgv({ ...a, skipAfterTimeout: true });
+    expect(on[on.indexOf("--test-timeout-secs") + 2]).toBe("--skip-after-timeout");
+    expect(v3CallArgv({ ...a, skipAfterTimeout: false })).not.toContain("--skip-after-timeout");
+    expect(v3CallArgv(a)).not.toContain("--skip-after-timeout");
+  });
+
+  test("R907 a one-shot MUTANT call carries --skip-after-timeout exactly when the build's help lists it, never the baseline call; a failed help call says so once", async () => {
+    const run = async (help: string, mutant: string | null) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass, { help });
+      const b = backendOf(l, v3.spawn, fakeAlc().io);
+      const notes: string[] = [];
+      b.setNotify((code) => notes.push(code));
+      await b.learnSkipAfterTimeout();
+      await b.learnSkipAfterTimeout();
+      await b.deploy(l.batch);
+      await b.activate(mutant);
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return { argv: v3.calls[0] ?? [], notes, tag: b.skipAfterTimeout };
+    };
+    const listed = "  --skip-after-timeout  stop\n";
+    const mutantCall = await run(listed, "M0002");
+    expect(mutantCall.argv).toContain("--skip-after-timeout");
+    expect(mutantCall.tag).toBe(true);
+    // The baseline call has no mutant active: a Sleep test stopped at the limit would leave the
+    // later tests of its codeunit not run, counted refused at baseline.
+    const baseline = await run(listed, null);
+    expect(baseline.argv).not.toContain("--skip-after-timeout");
+    expect(baseline.tag).toBe(true);
+    const no = await run("  --test-timeout-secs\n", "M0002");
+    expect(no.argv).not.toContain("--skip-after-timeout");
+    expect(no.tag).toBe(false);
+    expect(no.notes).toEqual([]);
+    const failed = await run("fail", "M0002");
+    expect(failed.argv).not.toContain("--skip-after-timeout");
+    expect(failed.tag).toBe(false);
+    expect(failed.notes).toEqual(["al-runner-v3-skip-after-timeout-unknown"]);
+  });
+
+  test("R907 status(): noClient on needs the help to list --no-client; a help that does not, or a failed help call, throws a typed error", async () => {
+    const statusOf = async (extra: Partial<AlRunnerV3Config>, help: string) => {
+      const l = await layout();
+      const b = backendOf(l, fakeV3(allPass, { help }).spawn, fakeAlc().io, extra);
+      return await b.status().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    };
+    expect(await statusOf({ noClient: true }, "  --no-client  x\n")).toBeUndefined();
+    const unlisted = await statusOf({ noClient: true }, "  --test-timeout-secs\n");
+    expect(unlisted).toBeInstanceOf(AlRunnerV3NoClientUnsupportedError);
+    expect(String((unlisted as Error).message)).toContain("alRunnerV3.noClient");
+    expect(await statusOf({ noClient: true }, "fail")).toBeInstanceOf(
+      AlRunnerV3NoClientUnsupportedError,
+    );
+    expect(await statusOf({ noClient: false }, "  --test-timeout-secs\n")).toBeUndefined();
+  });
+
+  test("R907 a one-shot row's flagged: true reaches a pass verdict; absent or false does not", () => {
+    const row = {
+      codeunit: 7,
+      method: "A",
+      name: "Codeunit7.A",
+      status: "pass",
+      notRun: false,
+    } as const;
+    const r = (extra: object) => decodeV3Rows(JSON.stringify({ tests: [{ ...row, ...extra }] }), 7);
+    const verdictOf = (extra: object) => {
+      const d = r(extra);
+      if (!("rows" in d)) throw new Error(d.why);
+      const [first] = d.rows;
+      if (first === undefined) throw new Error("no row");
+      return v3RowVerdict(ref("A"), first, 3, 5, undefined);
+    };
+    expect(verdictOf({ flagged: true }).flagged).toBe(true);
+    expect(verdictOf({ flagged: false })).not.toHaveProperty("flagged");
+    expect(verdictOf({})).not.toHaveProperty("flagged");
+    expect("why" in r({ flagged: "yes" })).toBe(true);
   });
 
   test("the not-green baseline note carries the line only when the backend gave one", () => {
@@ -3698,5 +3845,92 @@ describe("R780: the cross-session test-app compile cache", () => {
     expect((await readdir(dir)).sort()).toEqual([2, 3, 4].map(key));
     expect(await store.has(key(1))).toBe(false);
     expect(await store.has(key(2))).toBe(true);
+  });
+});
+
+describe("R907: a ref left not run by a stopped earlier test runs alone", () => {
+  const stopped: FakeRow = {
+    method: "A",
+    status: "error",
+    notRun: true,
+    message: "Test exceeded 1s timeout.",
+  };
+  const cascade: FakeRow = {
+    method: "B",
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: an earlier test of this codeunit (A) was stopped at the time limit, and --skip-after-timeout does not run the rest of the codeunit",
+  };
+  const FLAG = "  --skip-after-timeout  stop\n";
+  /** `aloneStatus` is B's row when it runs alone (`--test-exact`). */
+  async function setup(opts: {
+    help: string;
+    mutant: string | null;
+    aloneStatus?: "pass" | "fail";
+  }) {
+    const l = await layout();
+    const v3 = fakeV3(
+      (_id, argv) =>
+        argv.includes("--test-exact")
+          ? [{ method: "B", status: opts.aloneStatus ?? "pass" }]
+          : [stopped, cascade],
+      { help: opts.help, coverage: plainCoverage },
+    );
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.learnSkipAfterTimeout();
+    await b.deploy(l.batch);
+    await b.activate(opts.mutant);
+    if (opts.mutant !== null)
+      b.useCoveringBudgets(opts.mutant, [
+        { ref: ref("A"), budgetMs: 1000 },
+        { ref: ref("B"), budgetMs: 1000 },
+      ]);
+    const ask = (m: string) => b.run(ref(m), { coverage: "none", timeoutMs: 1000 });
+    return { v3, ask };
+  }
+  const alone = (calls: string[][]) => calls.filter((c) => c.includes("--test-exact"));
+
+  test("1: mutant, flag on: B runs alone (exact, no flag) and its verdict stands", async () => {
+    for (const status of ["pass", "fail"] as const) {
+      const { v3, ask } = await setup({ help: FLAG, mutant: "M0001", aloneStatus: status });
+      const v = await ask("B");
+      expect(v.outcome).toBe(status);
+      expect(v.refusedAfterStop).toBeUndefined();
+      const one = alone(v3.calls);
+      expect(one.length).toBe(1);
+      const argv = one[0] ?? [];
+      expect(argv[argv.indexOf("--test-exact") + 1]).toBe(`Codeunit${ref("B").codeunitId}.B`);
+      expect(argv).toContain("--run-selected-only");
+      expect(argv).not.toContain("--skip-after-timeout");
+      expect(v3.calls[0]).toContain("--skip-after-timeout");
+    }
+  });
+
+  test("2: flag off: no alone call, R639's refusedAfterStop as before", async () => {
+    const { v3, ask } = await setup({ help: "  --test-timeout-secs\n", mutant: "M0001" });
+    const v = await ask("B");
+    expect(alone(v3.calls)).toEqual([]);
+    expect([v.runnerRow, v.refusedAfterStop]).toEqual(["runner-refused", "A"]);
+  });
+
+  test("3: baseline: no alone call", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: null });
+    await ask("B");
+    expect(alone(v3.calls)).toEqual([]);
+  });
+
+  test("4: the stopped ref itself stays a timeout, no alone call", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: "M0001" });
+    const v = await ask("A");
+    expect(v.outcome).toBe("timeout");
+    expect(alone(v3.calls)).toEqual([]);
+  });
+
+  test("5: once per (mutant, ref)", async () => {
+    const { v3, ask } = await setup({ help: FLAG, mutant: "M0001" });
+    await ask("B");
+    await ask("B");
+    expect(alone(v3.calls).length).toBe(1);
   });
 });
