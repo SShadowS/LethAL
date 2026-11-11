@@ -500,6 +500,9 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     // R602: coverage on for multi-object files (MO) and single-wrapper `#if` files (WR).
     "MO",
     "WR",
+    // R918: the same two on serve-entries, per mutant equal to the one-shot legs' baselines.
+    "MOE",
+    "WRE",
     V3_K_LEG,
     ...(o.cdo ? ["D1", "D1c"] : []),
     ...(o.tables ? ["T"] : []),

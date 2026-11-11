@@ -32,6 +32,7 @@ import {
 } from "../itest/al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
+import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import {
   AlRunnerV3CoverageJoinError,
   buildSleepIndex,
@@ -721,6 +722,13 @@ describe("M2: environment refusals are infra-fail, verdict failures gate-fail", 
   });
   test("F4: inside the gate a coverage join refusal is gate-fail (v3's path form moved)", () => {
     expect(legOutcomeOfError(new AlRunnerV3CoverageJoinError("x"))).toBe("gate-fail");
+  });
+  test("R602, R918: a coverage frame error is gate-fail in MO, WR, MOE and WRE only", () => {
+    const frame = new AlRunnerCoverageFrameError("x");
+    for (const leg of ["MO", "WR", "MOE", "WRE"])
+      expect(legOutcomeOfError(frame, leg), leg).toBe("gate-fail");
+    expect(legOutcomeOfError(frame, "S1E")).toBe("infra-fail");
+    expect(legOutcomeOfError(frame)).toBe("infra-fail");
   });
   test("the three classes extend Error directly", () => {
     for (const C of [V3LegEnvironment, V3LegFailure, V3LegHeld])

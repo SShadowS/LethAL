@@ -50,7 +50,6 @@ import {
 import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
-  alRunnerMoOrWrappedFiles,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
@@ -2377,16 +2376,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
       );
     }
-    const shapeDirs = [
-      ...(this.cfg.sourceProjectDir !== undefined ? [this.cfg.sourceProjectDir] : []),
-      this.cfg.testDir,
-    ];
-    const shaped = await alRunnerMoOrWrappedFiles(shapeDirs);
-    if (shaped.length > 0) {
-      reasons.push(
-        `multi-object-or-wrapped: ${shaped.slice(0, 5).join(", ")}${shaped.length > 5 ? ", ..." : ""} (measured on one-shot only)`,
-      );
-    }
+    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
+    // WRE measured them equal to one-shot per mutant (pre-commitment e1ca5d11). Coverage placement,
+    // the shape-specific part, is built from the deployed text the same way under both transports.
     const { version, binarySha256 } = await this.runnerBuild();
     this.serveRowFields = serveRowFieldsFor(version, binarySha256);
     // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
