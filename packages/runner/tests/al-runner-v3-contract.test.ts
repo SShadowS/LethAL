@@ -1553,6 +1553,21 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
+  // R-917: rows keep al-runner's stackTrace since R925; a row fact's measured text must not carry it,
+  // or every pinned text (status and message only) stops matching and leg C holds a build that did not move.
+  test("a row fact's measured text leaves out the row's stackTrace", async () => {
+    const stacked = {
+      ...row(50654, "LaterFails", "fail", { message: "later" }),
+      stackTrace: "X line 2",
+    };
+    const f = (await at50654(1, [PUBLIC_REFUSED, stacked])).facts.find(
+      (x) => x.fact === "refusal-cascade",
+    );
+    expect(f?.verdict).toBe("gone");
+    expect(f?.measured).toContain('"message":"later"');
+    expect(f?.measured).not.toContain("stackTrace");
+  });
+
   const at50657 = (exitCode: number, rows: unknown[]) =>
     probe({ cu50657: () => ({ exitCode, stdout: doc(rows) }) });
   const CUC = "commit-under-test-isolation";

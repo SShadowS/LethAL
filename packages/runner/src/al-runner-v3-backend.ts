@@ -50,7 +50,6 @@ import {
 import {
   type AlRunnerCoverageIndex,
   alRunnerCoverageFromServer,
-  alRunnerMoOrWrappedFiles,
   buildAlRunnerCoverageIndex,
   normalizeFileKey,
 } from "./al-runner-coverage";
@@ -604,12 +603,38 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * `-`, `(`, `)`, `/`, `&`, `å`, `æ`, with a leading digit allowed ("7Digit Step"). Exactly those: the
  * dot stays out (#5798), and any character N1S never ran (`ø`, `'`, `:`, ...) falls back.
  * Positions too: N1S's names start with a letter or digit and hold only single, inner spaces.
+ * R922 (coord R-919): an invented test app with one test CODEUNIT per shape (`Names A/B Tests`,
+ * `Names A-B Tests`, `Names (A) Tests`, `Names A&B Tests`, `Names Blåbær Tests`, `7Digit Names
+ * Tests` and a plain one) ran under serve-entries and one-shot, per mutant equal (48 of 48,
+ * `/coord/handoff/R-919/names/`). So a codeunit name may also hold `-`, `(`, `)`, `/`, `&`, `å`,
+ * `æ` and start with a digit, when it starts with a letter or digit. The older shape stays.
  * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
-  codeunit: /^[A-Za-z0-9_ .]+$/,
+  codeunit: /^(?:[A-Za-z0-9_ .]+|[A-Za-z0-9][A-Za-z0-9_ .()/&åæ-]*)$/,
 } as const;
+
+/**
+ * R922: which part of a test's name is unproven, and the characters that make it so, for the
+ * `unproven-test-name-shape` reason. A name whose every character is proven but whose position
+ * is not (a leading space, say) is named with no characters.
+ */
+export function unprovenNamePart(
+  codeunitName: string,
+  method: string,
+  methodShape: (m: string) => boolean,
+): string {
+  const odd = (name: string, allowed: RegExp): string => {
+    const chars = [...new Set([...name].filter((c) => !allowed.test(c)))];
+    return chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : "";
+  };
+  const parts: string[] = [];
+  if (!V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(codeunitName))
+    parts.push(`codeunit "${codeunitName}"${odd(codeunitName, /[A-Za-z0-9_ .()/&åæ-]/)}`);
+  if (!methodShape(method)) parts.push(`method "${method}"${odd(method, /[A-Za-z0-9_ ()/&åæ-]/)}`);
+  return parts.join(", ");
+}
 
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
 export class AlRunnerV3ServeStopUnsetError extends Error {
@@ -740,6 +765,8 @@ export interface V3Row {
   readonly status: "pass" | "fail" | "error";
   readonly durationMs?: number;
   readonly message?: string;
+  /** R925: al-runner's AL call stack for a failure, when it gives one. Absent otherwise. */
+  readonly stackTrace?: string;
   readonly notRun: boolean;
   /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
   readonly flagged?: true;
@@ -767,7 +794,7 @@ export function decodeV3Rows(
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
-    const { codeunit, method, name, status, durationMs, message, notRun, flagged } = r;
+    const { codeunit, method, name, status, durationMs, message, stackTrace, notRun, flagged } = r;
     if (
       typeof codeunit !== "number" ||
       typeof method !== "string" ||
@@ -775,6 +802,7 @@ export function decodeV3Rows(
       (status !== "pass" && status !== "fail" && status !== "error") ||
       (durationMs !== undefined && typeof durationMs !== "number") ||
       (message !== undefined && typeof message !== "string") ||
+      (stackTrace !== undefined && typeof stackTrace !== "string") ||
       (notRun !== undefined && typeof notRun !== "boolean") ||
       (flagged !== undefined && typeof flagged !== "boolean")
     ) {
@@ -799,6 +827,7 @@ export function decodeV3Rows(
       status,
       ...(durationMs !== undefined ? { durationMs } : {}),
       ...(message !== undefined ? { message } : {}),
+      ...(stackTrace !== undefined ? { stackTrace } : {}),
       notRun: notRun === true,
       ...(flagged === true ? { flagged: true as const } : {}),
     });
@@ -876,7 +905,7 @@ export function v3RowVerdict(
       runnerRow: "runner-test-error",
     };
   }
-  return verdictFromRunnerTest(
+  const verdict = verdictFromRunnerTest(
     ref,
     row.name,
     {
@@ -888,6 +917,14 @@ export function v3RowVerdict(
     wallMs,
     coverage,
   );
+  // R925: a real failure (a kill) carries message + "\n" + stackTrace, as the BC path does
+  // (`failureTextOf`). Added AFTER the verdict is classified, so every classifier above reads the
+  // message alone; no refusal, timeout or error text gets a stack.
+  if (verdict.outcome === "fail" && row.stackTrace !== undefined && row.stackTrace.length > 0) {
+    const text = [verdict.failureMessage ?? "", row.stackTrace].filter((s) => s.length > 0);
+    return { ...verdict, failureMessage: text.join("\n") };
+  }
+  return verdict;
 }
 
 /** R886: the file `alRunnerV3.dotnetSidecar` names, absolute; refused by name when it is missing. */
@@ -2339,16 +2376,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
       );
     }
-    const shapeDirs = [
-      ...(this.cfg.sourceProjectDir !== undefined ? [this.cfg.sourceProjectDir] : []),
-      this.cfg.testDir,
-    ];
-    const shaped = await alRunnerMoOrWrappedFiles(shapeDirs);
-    if (shaped.length > 0) {
-      reasons.push(
-        `multi-object-or-wrapped: ${shaped.slice(0, 5).join(", ")}${shaped.length > 5 ? ", ..." : ""} (measured on one-shot only)`,
-      );
-    }
+    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
+    // WRE measured them equal to one-shot per mutant (pre-commitment e1ca5d11). Coverage placement,
+    // the shape-specific part, is built from the deployed text the same way under both transports.
     const { version, binarySha256 } = await this.runnerBuild();
     this.serveRowFields = serveRowFieldsFor(version, binarySha256);
     // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
@@ -2362,13 +2392,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
     );
     if (odd.length > 0) {
+      // R922: name the unproven part (codeunit or method) and its characters, not the whole name.
+      const named = [
+        ...new Set(odd.map((t) => unprovenNamePart(t.codeunitName, t.method, methodShape))),
+      ];
       reasons.push(
-        `unproven-test-name-shape: ${odd
-          .slice(0, 5)
-          .map((t) => `${t.codeunitName}.${t.method}`)
-          .join(
-            ", ",
-          )}${odd.length > 5 ? ", ..." : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
+        `unproven-test-name-shape: ${named.slice(0, 5).join("; ")}${named.length > 5 ? `; and ${named.length - 5} more` : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
       );
     }
     if (V3_NO_SERVE_ENTRIES.includes(version)) {
@@ -2710,6 +2739,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ) {
       this.speculative = { dir: active, calls: specDone.calls };
     }
+    await this.probeBatchRefusal(this.lane); // R927: explicit serve-entries only
     return null;
   }
 
@@ -3185,6 +3215,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
+      isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
       compilePlainCheck: no("compilePlainCheck"),
@@ -4210,6 +4241,80 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return d;
   }
 
+  /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
+  private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {
+    const server = new AlRunnerServer(
+      absToolPath(this.cfg.alRunnerPath),
+      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
+      this.cfg.preprocessorSymbols ?? [],
+      "serve",
+    );
+    await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
+      "--bc-version",
+      this.cfg.bcVersion,
+      ...(this.noDownload() ? ["--no-download"] : []),
+      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
+    ]);
+    this.stats.daemons += 1;
+    const daemon: Daemon = { server, dirty: false };
+    lane.setDaemon(mode, daemon);
+    return daemon;
+  }
+
+  /**
+   * R927: on an EXPLICIT serve-entries transport only, before the first baseline: one NONE entry for
+   * the test codeunit with the fewest tests, on a daemon closed right after. It judges one thing,
+   * whether serve refuses every entry with one reason (`entries-batch-refused`, R635 §6), which no
+   * warm-up after the baseline could change, so the session stops in seconds, not after the whole
+   * baseline. Nothing else of its answer is read: no baseline exists yet to compare it with. The
+   * default transport never probes (its warm-up falls back, R786).
+   */
+  private async probeBatchRefusal(lane: Lane): Promise<void> {
+    if (!this.entries || this.cfg.transportSource !== "explicit" || this.batchProbed) return;
+    const smallest = [...this.suitePerCodeunit].sort(
+      (a, b) => a[1].length - b[1].length || a[0] - b[0],
+    )[0];
+    if (smallest === undefined) return;
+    const s = this.serveStopSeconds();
+    if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    this.batchProbed = true;
+    this.transportFrozen = true; // R761
+    const [cu] = smallest;
+    const mode = this.modeOfCall(cu);
+    const started = Date.now();
+    // Timed as a warm-up (review r1), so its seconds show where the warm-up count does.
+    await lane.timed("warmupMs", async () => {
+      try {
+        // Inside the try (review r1): a daemon that cannot start is not this probe's to judge.
+        await this.spawnDaemon(lane, mode, s);
+        // Counted as a warm-up, so R652's `boundChecks = warmups + ...` still holds.
+        this.stats.warmups += 1;
+        await this.send(
+          lane,
+          [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] }],
+          "warmup",
+          mode,
+        );
+      } catch (err) {
+        if (
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
+          throw new AlRunnerV3EntriesRefusedError(
+            err.code,
+            `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+          );
+        }
+        // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
+      } finally {
+        await lane.closeDaemon();
+      }
+    });
+  }
+
+  private batchProbed = false;
+
   private async startDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
@@ -4226,21 +4331,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
-    const server = new AlRunnerServer(
-      absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
-      this.cfg.preprocessorSymbols ?? [],
-      "serve",
-    );
-    await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], s, [
-      "--bc-version",
-      this.cfg.bcVersion,
-      ...(this.noDownload() ? ["--no-download"] : []),
-      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
-    ]);
-    this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false };
-    lane.setDaemon(mode, daemon);
+    const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -4292,10 +4383,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           );
         }
         // Name the row that blocks the fallback when there is one, else the first unkept row.
-        const named = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad)) ?? first;
+        const blocker = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad));
+        const named = blocker ?? first;
+        // R927: on an explicit transport whose every unkept row is a named refusal, the default
+        // would have re-run the session one-shot (R786): say so, so the user knows the way out.
+        const wayOut =
+          blocker === undefined
+            ? `; with no "alRunnerV3.transport" key the default would re-run this session one-shot instead (R786)`
+            : "";
         throw new AlRunnerV3EntriesRefusedError(
           "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any`,
+          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any${wayOut}`,
         );
       }
     } catch (err) {

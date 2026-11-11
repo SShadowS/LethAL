@@ -65,6 +65,7 @@ import {
   diskCaseResolver,
   normaliseAppJsonPaths,
 } from "./app-json-paths";
+import { listPackageEntries } from "./app-package";
 import {
   UpgradeClashRefusedError,
   UpgradeNotRestoredError,
@@ -244,6 +245,7 @@ import {
 import {
   type PublishedApp,
   comparePublishedTestApp,
+  isAlSourceEntry,
   parsePublishedApp,
   publishedAlSources,
   publishedTestAppWarning,
@@ -283,6 +285,7 @@ import {
   filterHistory,
   identityKeyOf,
   numberingDigestOf,
+  objectKeyOf,
   testKeyOf,
   twinSitesOf,
 } from "./selection";
@@ -504,8 +507,8 @@ const tierOf: TierResolver = (name) => operatorTiers.get(name);
  * run. A mutation guard is a bare `MutationSelector.Active(...)` call, which needs a
  * `var MutationSelector: Codeunit "Mutation Selector";` in scope, and only the kinds in
  * `CARRIER_KINDS` can carry that declaration (`canCarryMutationSelectorVar` /
- * `injectMutationSelectorVar` in @lethal/schemata) — six today, `xmlport` and `query` being the
- * kinds that still hold code and still cannot. A real project routinely holds one, and the tier-1
+ * `injectMutationSelectorVar` in @lethal/schemata) — eight today, `query` being the kind that
+ * still holds code and still cannot. A real project routinely holds one, and the tier-1
  * operators target its trigger bodies happily — so without this filter one such file aborts the
  * whole session at compile time. Dropping the specs costs only those mutants:
  * `prepareBatchProject` copies every project `.al` file the instrumented write did not produce
@@ -4916,6 +4919,8 @@ interface CoveringPlan {
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
+  /** R914: each green test's own time (`measuredDurationMs ?? durationMs`), what the estimate and windows read. */
+  readonly measuredDuration: ReadonlyMap<string, number>;
   readonly memberCountsByTest: ReadonlyMap<string, number>;
 }
 interface ScoreBatchInput {
@@ -5986,8 +5991,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     perMutantTests,
     coverageAttribution,
     baselineDuration,
+    measuredDuration,
     memberCountsByTest: memberCounts,
   } = plan;
+  // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
+  const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
   // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
@@ -6020,7 +6028,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const estimate = estimateCovered(
     toExecute,
     perMutantTests,
-    costModelOf(scope.parallel?.owner ?? backend, baselineDuration, fallbackTimeoutMs),
+    costModelOf(scope.parallel?.owner ?? backend, measuredDuration, fallbackTimeoutMs),
   );
   // R912 follow-up: the "long" note rides the same `detail`, never a warning code. The estimate comes
   // from measured baseline times, so a warning would appear or not with machine speed, and a gate's
@@ -6044,6 +6052,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     perMutantTests,
     coverageAttribution,
     baselineDuration,
+    measuredDuration,
     fallbackTimeoutMs,
     minMutantBudgetMs,
     store,
@@ -6060,6 +6069,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     baselineReused,
+    baselineReach,
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
   };
   if (scope.parallel !== undefined) {
@@ -6510,6 +6520,14 @@ async function runSessionBody(
     (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
       ? testAppHash
       : undefined;
+  if (
+    envPublishes === undefined &&
+    !isLocalRunner(buildBackend.kind) &&
+    publishedRead.kind === "bytes" &&
+    servedWithoutSource(publishedRead.bytes)
+  ) {
+    emit({ type: "warning", code: "test-app-identity-unproven", message: SOURCE_LESS_UNPROVEN });
+  }
   // R496: al-runner has no lease and no server, so its dependency fingerprint (its app.json and
   // package folders) is complete here and is recorded with the run row. Every other session takes
   // it under the lease (below).
@@ -7123,6 +7141,13 @@ async function runSessionBody(
       // R492: the SERVED package is this run's test app only with proof it is the installed one
       // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
       readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
+      if (after.sources.kind === "source-less" && "why" in readBackProof) {
+        emit({
+          type: "warning",
+          code: "test-app-identity-unproven",
+          message: SOURCE_LESS_UNPROVEN,
+        });
+      }
       const proven = "proven" in readBackProof ? after.packageHash : undefined;
       // R496: proof covers the whole closure: this fingerprint checks every extension in it
       // installed, including the ones the hook did not publish. From the served package's
@@ -8607,6 +8632,7 @@ async function runSessionBody(
           perMutantTests,
           coverageAttribution,
           baselineDuration,
+          measuredDuration: measuredDurationOf(greenTests),
           memberCountsByTest: memberCounts,
         };
       };
@@ -9583,6 +9609,7 @@ async function runProbes(
         perMutantTests: plan.perMutantTests,
         coverageAttribution: plan.coverageAttribution,
         baselineDuration: plan.baselineDuration,
+        measuredDuration: plan.measuredDuration,
         fallbackTimeoutMs: scope.baselineTimeoutMs,
         minMutantBudgetMs: scope.minMutantBudgetMs,
         store: scope.store,
@@ -9703,8 +9730,85 @@ function selectNamed(
         .filter((b) => b.verdict.outcome === "pass")
         .map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
     ),
+    measuredDuration: measuredDurationOf(baseline.filter((b) => b.verdict.outcome === "pass")),
     memberCountsByTest: new Map(),
   };
+}
+
+/**
+ * R926. What this session's baseline can say about a statement-grain mutant's reach on a backend
+ * that attests none (al-runner v3: no `reachedActive`).
+ *
+ * The argument: until a mutant's own statement runs, a mutant run is the baseline run (one mutant
+ * active, v3's seed pinned, R807). So a test whose baseline run never hit the mutant's statement
+ * cannot reach it under the mutant, and a test that did hit it reaches it. The question is only
+ * "did the baseline hit the line the `Reached` marker precedes", answered per covering test.
+ *
+ * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row ran in this session
+ * (`ranHere`: no reused snapshot), passed (a flagged pass counts: it ran to its end), and carries line
+ * coverage with no naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
+ * is decided only if its backend still runs the codeunit under that mode, because a `method`
+ * baseline and a `test` baseline cover different lines.
+ */
+export interface BaselineReach {
+  /** Test key -> `<type>:<id>:<line>` of every line its baseline hit. */
+  readonly hits: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Test codeunit id -> the mode its baseline ran under. */
+  readonly modes: ReadonlyMap<number, "test" | "method">;
+}
+
+export function baselineReachOf(
+  baseline: readonly BaselineRow[],
+  ranHere: ReadonlySet<TestMethodRef>,
+  backend: Pick<ExecutionBackend, "isolationOf">,
+): BaselineReach {
+  const hits = new Map<string, Set<string>>();
+  const modes = new Map<number, "test" | "method">();
+  for (const b of baseline) {
+    modes.set(b.ref.codeunitId, backend.isolationOf?.(b.ref.codeunitId) ?? "test");
+    const cov = b.verdict.coverage;
+    // R-917: a flagged pass (al-runner rests it on an unprobed assumption, R907) still ran to its end, so its
+    // coverage is complete; excluding it left every reach undecided on Microsoft's apps, where nearly
+    // every pass is flagged (measured: Data Search 11 of 11).
+    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass") continue;
+    if (cov === undefined || cov.granularity !== "line" || (cov.namingGaps?.length ?? 0) > 0) {
+      continue;
+    }
+    const lines = new Set<string>();
+    for (const e of cov.entries) {
+      if (e.line === undefined) continue;
+      lines.add(`${objectKeyOf(e.objectType, e.objectId, "baseline reach")}:${e.line}`);
+    }
+    hits.set(testKeyOf(b.ref), lines);
+  }
+  return { hits, modes };
+}
+
+/**
+ * R926. The reach of a statement-grain mutant from baseline line coverage, or `undefined` when it
+ * cannot be decided. `ran` is the covering tests that ran against the mutant. Never "unreached"
+ * on missing data: one run with no complete baseline coverage, or a codeunit whose mode moved
+ * since its baseline, leaves the whole mutant undecided.
+ */
+export function reachFromBaseline(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ran: readonly TestMethodRef[],
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+): { guardReached: boolean; reachedBy: string[] } | undefined {
+  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return undefined;
+  }
+  if (ran.length === 0) return undefined;
+  const site = `${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`;
+  const reachedBy: string[] = [];
+  for (const ref of ran) {
+    const lines = evidence.hits.get(testKeyOf(ref));
+    if (lines === undefined) return undefined;
+    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return undefined;
+    if (lines.has(site)) reachedBy.push(qualifiedTestName(ref));
+  }
+  return { guardReached: reachedBy.length > 0, reachedBy };
 }
 
 /** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is.
@@ -10426,6 +10530,23 @@ interface EnvToolPublishes {
 }
 
 /**
+ * R932: a served test-app package with no `.al` entry cannot show which test BODIES the server
+ * runs (a same-version republish that edits only bodies leaves it unchanged, and Windows BC serves
+ * a rebuilt symbol-only package with fresh entry times), so it proves no identity. An unreadable
+ * package is not "source-less": the callers already refuse it by their own checks.
+ */
+export function servedWithoutSource(bytes: Uint8Array): boolean {
+  try {
+    return !listPackageEntries(Buffer.from(bytes)).some(isAlSourceEntry);
+  } catch {
+    return false;
+  }
+}
+
+const SOURCE_LESS_UNPROVEN =
+  "[lethal] R932: test-app identity not proven: the served test-app package has no AL source, so it cannot show which test bodies run (Windows BC serves a rebuilt symbol-only package; elsewhere, build the test app so its .app includes its source). No drift check, no baseline-snapshot or verdict reuse, and --resume refuses this run.";
+
+/**
  * R495: whether a session WITHOUT a hook measures the test app it identified (`read`). al-runner
  * compiles the test source it hashed, so its `no-fetch` identity is proven by construction (decided
  * by the BACKEND, never by a `source:` prefix: bcdev runs the published app, not the disk). bcdev's
@@ -10440,6 +10561,7 @@ async function provenWithoutHook(
   // R586: v3 also reads the test source itself (and its compile proof hashes that dir per run).
   if (isLocalRunner(backendKind)) return read.kind === "no-fetch";
   if (read.kind !== "bytes") return false;
+  if (servedWithoutSource(read.bytes)) return false; // R932
   let got: ReturnType<typeof readAppIdentity>;
   try {
     got = readAppIdentity(Buffer.from(read.bytes));
@@ -10540,6 +10662,11 @@ async function proveReadBack(
     return { why: `an app read back ${AFTER} is not proven installed: ${err.message}` };
   }
   const file = publishes.testApp;
+  // R932: a source-less read-back proves nothing unless it is byte-equal to a publishApps file
+  // (below); with no such file there is nothing to prove it against.
+  if (file === undefined && sources.kind === "source-less") {
+    return { why: `${SOURCE_LESS_UNPROVEN.replace("[lethal] ", "")}` };
+  }
   if (file !== undefined) {
     let local: Buffer;
     let want: ReturnType<typeof readAppIdentity>;
@@ -10565,7 +10692,7 @@ async function proveReadBack(
       const published = hashPackage(local);
       if (served !== published) {
         return {
-          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say; or R932: Windows BC serves a rebuilt package that never equals the file)`,
         };
       }
       return { proven: true };
@@ -11526,6 +11653,8 @@ interface RunMutantsArgs {
   /** Which attribution path placed each mutant's covering tests — see `CoverageSplit.attribution`. */
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
+  /** R914: see `CoveringPlan.measuredDuration`; the cost model reads this, the budget reads `baselineDuration`. */
+  readonly measuredDuration: ReadonlyMap<string, number>;
   readonly fallbackTimeoutMs: number;
   /** R47: floor for the per-mutant budget — `SessionConfig.mutantTimeoutMs`, already defaulted. */
   readonly minMutantBudgetMs: number;
@@ -11575,6 +11704,8 @@ interface RunMutantsArgs {
    *  an unconfirmed one: `reused-budget-stale` when the budget came from the snapshot, otherwise
    *  `timeout-unconfirmed`. `undefined` for a baseline measured in this run. */
   readonly baselineReused: ReusedBaseline | undefined;
+  /** R926: baseline line coverage for deciding reach where the backend attests none. */
+  readonly baselineReach?: BaselineReach;
 }
 
 /**
@@ -11620,7 +11751,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     const windows = cutWindows(
       args.mutants,
       args.perMutantTests,
-      costModelOf(args.backend, args.baselineDuration, args.fallbackTimeoutMs),
+      costModelOf(args.backend, args.measuredDuration, args.fallbackTimeoutMs),
     );
     for (const w of windows) windowAt.set(w[0]?.mutantId ?? "", w);
     // Nothing to window (no mutants): the one empty prefetch the whole-batch call made.
@@ -11767,6 +11898,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
     const attempted = new Set<string>();
+    const ranRefs: TestMethodRef[] = []; // R926: the covering tests that ran, in run order
     for await (const step of coveringRuns({
       backend: args.backend,
       safety: args.safety,
@@ -11804,7 +11936,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         opKind: step.opKind,
         ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
       });
-      if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
+      if (v.outcome === "pass" || v.outcome === "fail") {
+        attempted.add(testKeyOf(ref));
+        ranRefs.push(ref);
+      }
       spent += v.durationMs;
       // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
       if (step.discoveryRefused === true) continue;
@@ -12360,6 +12495,28 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           : reachAnswered && !reachUnanswered
             ? { guardReached: false, reachedBy: [] }
             : undefined;
+    // R926: a backend that attested no run (al-runner v3) is decided from the baseline's lines.
+    // Not-reached is claimed only for a survivor: only a survivor ran every covering test (R198); on
+    // any other verdict a step may have ended unanswered (timeout, refusal), so only a hit is kept.
+    // FALLBACK 2 ("all-green") ran these tests BECAUSE coverage saw nothing of the object: that same
+    // coverage cannot then say the site was not hit.
+    const fromBaseline =
+      reach !== undefined ||
+      reachAnswered ||
+      args.coverageAttribution.get(m.mutantId) === "all-green"
+        ? undefined
+        : reachFromBaseline(
+            m,
+            ranRefs,
+            args.baselineReach,
+            (cu) => args.backend.isolationOf?.(cu) ?? "test",
+          );
+    const reachFinal =
+      reach !== undefined || reachAnswered
+        ? reach
+        : fromBaseline?.guardReached === true || verdict === "survived"
+          ? fromBaseline
+          : undefined;
     const commitRecord = (): void => {
       const mutantRowId = record(
         args.store,
@@ -12388,7 +12545,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         killingTestFailure,
         undefined, // unplaceable
         killPosition,
-        reach,
+        reachFinal,
         killingTestRef,
         reproduction,
         stopEvidence,
@@ -12432,6 +12589,18 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       break;
     }
   }
+}
+
+/**
+ * R914: each green test's own time. `durationMs` is the whole call (al-runner one-shot adds a compile
+ * to it; serve reports the whole suite's), so summing it overstated the estimate about 13 times.
+ */
+function measuredDurationOf(
+  green: readonly { ref: TestMethodRef; verdict: TestVerdict }[],
+): Map<string, number> {
+  return new Map(
+    green.map((b) => [testKeyOf(b.ref), b.verdict.measuredDurationMs ?? b.verdict.durationMs]),
+  );
 }
 
 /** R912: what the window cut and the estimate read: baseline durations, and which codeunits run whole. */
@@ -12493,7 +12662,7 @@ async function runMutantsParallel(
   const windows = cutWindows(
     args.mutants,
     args.perMutantTests,
-    costModelOf(owner, args.baselineDuration, args.fallbackTimeoutMs),
+    costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs),
   );
   if (windows.length === 0) await owner.prefetchMutants?.([]);
   // The latch is shared by every lane: the owner's is the one to read.

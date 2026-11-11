@@ -316,9 +316,41 @@ export function decodeSource(bytes: Buffer): string {
   return bytes.toString("utf8");
 }
 
-/** SHA-256 of a published package's bytes, the test app as the SERVER holds it. */
+/**
+ * SHA-256 of a published package's bytes, the test app as the SERVER holds it.
+ *
+ * R-920: a Windows BC server stamps a fresh 16-byte package id into the `.app` NAVX header
+ * (offsets 12..27) on every download, so two reads of the SAME app differed and the drift guard
+ * refused a run that nothing had republished. The id is zeroed before hashing, but only when the
+ * bytes carry exactly the known header: "NAVX" at 0 and 36, header length 40, format version 2,
+ * and the u64 at 28 equal to the bytes after the header (the zip's length; measured 1893 of 1933).
+ * Any other bytes hash raw (so an unknown shape refuses, the safe side). A real republish still changes the hash: the zip
+ * after the header holds the manifest version and the sources. The caller's buffer is not touched.
+ * A SIGNED package (bytes after the zip) does not match the shape, so it hashes raw and would still
+ * drift on a Windows server that re-stamps its id.
+ *
+ * R932 (measured): Windows also re-stamps every zip entry's time on each read, so a served package
+ * that carries no AL source is never hashed here as an identity: the orchestrator treats it as
+ * unproven instead (`servedWithoutSource`). Content-hashing it was rejected: with no source, edits
+ * to test bodies are invisible to a content hash, and the unzip costs seconds on a large package.
+ * Such a server's served package also never equals the compiled file, so served-vs-compiled
+ * compares (R139, R492) cannot match there.
+ */
 export function hashPackage(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  const h = createHash("sha256");
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const navx =
+    bytes.byteLength >= 40 &&
+    dv.getUint32(0, true) === 0x5856414e &&
+    dv.getUint32(4, true) === 40 &&
+    dv.getUint32(8, true) === 2 &&
+    dv.getUint32(36, true) === 0x5856414e &&
+    dv.getBigUint64(28, true) === BigInt(bytes.byteLength - 40);
+  if (!navx) return h.update(bytes).digest("hex");
+  h.update(bytes.subarray(0, 12));
+  h.update(new Uint8Array(16));
+  h.update(bytes.subarray(28));
+  return h.digest("hex");
 }
 
 /**

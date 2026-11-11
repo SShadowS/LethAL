@@ -239,6 +239,53 @@ describe("R896: the choice (strictly more passes)", () => {
       "test",
     );
   });
+  // R916, R921: measured on an invented app (coord R-922): a by-name refusal kept on `test` ran in
+  // every mutant call, turned 5 kills of a later test into errors and made serve fall back.
+  // T0 is an `error` row that v3 refused by name, in both modes.
+  const refusedT0 = (outcomes: TestOutcome[]) =>
+    rows(outcomes).map((r, i) =>
+      i === 0 ? { ref: r.ref, verdict: { ...r.verdict, runnerRow: "runner-refused" as const } } : r,
+    );
+  test("R921: a tie with a test v3 refused by name, and nothing lost, goes to method", () => {
+    const row = chooseCodeunitIsolation(refusedT0(["error", "pass"]), refusedT0(["error", "pass"]));
+    expect(row.chosen).toBe("method");
+    expect(row.reason).toContain("refused A Tests.T0 by name");
+    // The refusal is read from the test rows: method's T0 row need not carry it.
+    expect(
+      chooseCodeunitIsolation(refusedT0(["error", "pass"]), rows(["error", "pass"])).chosen,
+    ).toBe("method");
+  });
+  test("R921 (review r1): a cascade row is not a refusal by name, so a tie stays on test", () => {
+    const cascade = (outcomes: TestOutcome[]) =>
+      rows(outcomes).map((r, i) =>
+        i === 0
+          ? {
+              ref: r.ref,
+              verdict: {
+                ...r.verdict,
+                runnerRow: "runner-refused" as const,
+                failureMessage:
+                  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (Hang: did not run)",
+              },
+            }
+          : r,
+      );
+    expect(
+      chooseCodeunitIsolation(cascade(["error", "pass"]), cascade(["error", "pass"])).chosen,
+    ).toBe("test");
+  });
+  test("R921: a tie with no refused test, or one where method loses a test, stays on test", () => {
+    expect(chooseCodeunitIsolation(rows(["error", "pass"]), rows(["error", "pass"])).chosen).toBe(
+      "test",
+    );
+    // Refused T0; method gains T1 and loses T2: a tie with a loss.
+    const lossy = chooseCodeunitIsolation(
+      refusedT0(["error", "fail", "pass"]),
+      refusedT0(["error", "pass", "fail"]),
+    );
+    expect(lossy.chosen).toBe("test");
+    expect(lossy.lostUnderMethod.map((l) => l.test)).toEqual(["A Tests.T2"]);
+  });
   test("mixed (gains 2, loses 1) -> method, the lost test named with what method observed", () => {
     const row = chooseCodeunitIsolation(
       rows(["pass", "fail", "fail"]),
@@ -466,5 +513,18 @@ describe("R896: fingerprint and lending", () => {
     splitBackend(owner, lane).chooseIsolation?.(A, "method");
     expect(owner.chooseCalls).toEqual([[A, "method"]]);
     expect(splitBackend(lane, lane).chooseIsolation).toBeUndefined();
+  });
+
+  // R926 review D: reach compares the mode a baseline ran under with the mode now, so the split
+  // backend must hand `isolationOf` to the owner and have none when the owner has none.
+  test("splitBackend hands isolationOf to the owner, and has none when the owner has none", () => {
+    const lane = new AutoStub(switchesA, false);
+    const owner = Object.assign(autoStub(switchesA), {
+      isolationOf: (cu: number): "test" | "method" => (cu === A ? "method" : "test"),
+    });
+    const split = splitBackend(owner, lane);
+    expect(split.isolationOf?.(A)).toBe("method");
+    expect(split.isolationOf?.(C)).toBe("test");
+    expect(splitBackend(lane, lane).isolationOf).toBeUndefined();
   });
 });

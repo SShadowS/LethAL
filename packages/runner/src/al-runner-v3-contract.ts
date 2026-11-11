@@ -946,9 +946,10 @@ const onlyRow = (c: Call, method: string): V3Row | undefined => {
 const rowCount = (c: Call, method: string): number =>
   c.rows?.filter((r) => r.method === method).length ?? 0;
 
-/** F4: a row fact's measured text, the rows first. */
+/** F4: a row fact's measured text, the rows first. Without `stackTrace` (kept on rows since R925):
+ *  the pinned texts are a row's status and message, so a stack must not move them. */
 const rowsText = (c: Call, method: string): string =>
-  `${JSON.stringify(c.rows?.filter((r) => r.method === method) ?? null)} exit ${c.exitCode}`;
+  `${JSON.stringify(c.rows?.filter((r) => r.method === method).map(({ stackTrace: _, ...r }) => r) ?? null)} exit ${c.exitCode}`;
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {

@@ -64,22 +64,22 @@ const NO_HEADER_AL = `codeunit 79305 Ærø
 }
 `;
 
-/** Holds code but is not a carrier kind, so it is skipped (not refused). Its `SetRange` is a
- *  `void-method-call` site, a shape `Mixed.al` does not hold. */
-const XMLPORT_AL = `xmlport 79306 "Only Xmlport"
+/** Holds code but is not a carrier kind (a query; xmlports carry since R924), so it is skipped (not
+ *  refused). Its `SetFilter` is a `void-method-call` site, a shape `Mixed.al` does not hold. */
+const XMLPORT_AL = `query 79306 "Only Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Other; "Other Table")
         {
-            trigger OnBeforePassVariable()
-            var
-                Other: Record "Other Table";
-            begin
-                Other.SetRange("No.", 'A');
-            end;
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        SetFilter(No, 'A');
+    end;
 }
 `;
 
@@ -104,7 +104,7 @@ async function withProject(
 const GOOD = "src/Good.Codeunit.al";
 const MIXED = "src/Mixed.al";
 const NO_HEADER = "src/Odd.al";
-const XMLPORT = "src/Only.XmlPort.al";
+const XMLPORT = "src/Only.Query.al";
 
 beforeAll(async () => {
   await initParser();
@@ -259,7 +259,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R731: toggle-blank-string's operatorVersion 1.1.0 is the only change (was dc2c1f19...da48).
       // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
       // R855: swap-call-arguments 1.1.0 plus 12 new delete-* entries (was cf442b39...3d4).
-      "bc2c6465b5c8421a6c237017dc90e994be00b668a220c3fc38ad705469d783bc",
+      // R926: every statement-grain entry gains `reachLine`, the only change (was bc2c6465...83bc).
+      "8005622862897bdb2f5fbafdf2c04f7a6f7b5d5de7a5f02ff4c6b9eed52ed41c",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -289,7 +290,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     // so the `.al` files moved (the same ten as in fixture-emission). The manifest pin did not.
     expect(all.digest("hex")).toBe(
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
-      "13203266744ae4dc79d3b0493e5b918ec3b9ea1f2957bced3ae8230b51fc2e15",
+      // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
+      "12e54fd3e5437ddcba10460e702d8463d3fbf094171233f49f80aac86d041065",
     );
   }, 60_000);
 });

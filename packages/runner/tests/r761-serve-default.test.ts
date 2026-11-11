@@ -118,7 +118,6 @@ describe("R761: the default transport", () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]?.code).toBe(FALLBACK);
     expect(r.warnings[0]?.message).toContain("resume:");
-    expect(r.warnings[0]?.message).not.toContain("multi-object-or-wrapped");
   });
 
   test("R896 (build review 2): an auto resume keeps serve-entries; a forced-test resume still falls back", async () => {
@@ -133,14 +132,12 @@ describe("R761: the default transport", () => {
     expect(forced.warnings[0]?.message).toContain("resume:");
   });
 
-  test("reason multi-object-or-wrapped: a multi-object file and a wrapped file each fall back", async () => {
+  test("R918: a multi-object file and a wrapped file no longer fall back (legs MOE and WRE)", async () => {
     for (const src of [MULTI_AL, WRAPPED_AL]) {
       const r = await rig(DEFAULT, { src });
       await r.b.decideTransport({ resume: false });
-      expect(r.b.inRunStopIsBudget).toBe(true);
-      expect(r.warnings).toHaveLength(1);
-      expect(r.warnings[0]?.code).toBe(FALLBACK);
-      expect(r.warnings[0]?.message).toContain("multi-object-or-wrapped: Plain.Codeunit.al");
+      expect(r.b.inRunStopIsBudget).toBe(false);
+      expect(r.warnings).toEqual([]);
     }
   });
 
@@ -190,21 +187,56 @@ describe("R761: the default transport", () => {
     }
   });
 
-  test("reason unproven-test-name-shape (codeunit): '/' falls back; a space and a dot do not", async () => {
-    const bad = await rig(DEFAULT, { tests: [ref("A", "Tests/Slash")] });
+  test("reason unproven-test-name-shape (codeunit): an unseen character falls back, and the warning names the codeunit and the character", async () => {
+    const bad = await rig(DEFAULT, { tests: [ref("Check", "Tests Ø Codeunit")] });
     await bad.b.decideTransport({ resume: false });
     expect(bad.b.inRunStopIsBudget).toBe(true);
-    expect(bad.warnings[0]?.message).toContain("unproven-test-name-shape");
+    const message = bad.warnings[0]?.message ?? "";
+    expect(message).toContain('unproven-test-name-shape: codeunit "Tests Ø Codeunit" ("Ø")');
+    // R922: the plain method is not blamed.
+    expect(message).not.toContain('method "Check"');
     const ok = await rig(DEFAULT, { tests: [ref("A", "CDO Recipient Mgt. Tests")] });
     await ok.b.decideTransport({ resume: false });
     expect(ok.b.inRunStopIsBudget).toBe(false);
     expect(ok.warnings).toEqual([]);
   });
 
+  test("R922: an unproven METHOD is named as the method, with its character, not the codeunit", async () => {
+    const r = await rig(DEFAULT, { tests: [...PLAIN, ref("Colon:Step")] });
+    await r.b.decideTransport({ resume: false });
+    const message = r.warnings[0]?.message ?? "";
+    expect(message).toContain('method "Colon:Step" (":")');
+    expect(message).not.toContain("codeunit");
+  });
+
+  // R922: each codeunit-name shape the invented app ran under serve and one-shot, 48 of 48 equal.
+  test("R922: the codeunit shapes measured under serve no longer fall back", async () => {
+    for (const codeunit of [
+      "Names A/B Tests",
+      "Names A-B Tests",
+      "Names (A) Tests",
+      "Names A&B Tests",
+      "Names Blåbær Tests",
+      "7Digit Names Tests",
+      "ERM WHT G/L Account",
+      "SAF-T Tests",
+      "Subc. Non-Inv Item Valid. Test",
+    ]) {
+      const r = await rig(DEFAULT, { tests: [ref("CheckIt", codeunit)] });
+      await r.b.decideTransport({ resume: false });
+      expect([codeunit, r.b.inRunStopIsBudget]).toEqual([codeunit, false]);
+      expect(r.warnings).toEqual([]);
+    }
+  });
+
   test("the name shapes are the measured ones", () => {
     expect(V3_SERVE_PROVEN_NAME_SHAPES.method.test("Plain_1")).toBe(true);
     expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("CDO Recipient Mgt. Tests")).toBe(true);
-    expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("A - B")).toBe(false);
+    // R922: proven since R-919.
+    expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("A - B")).toBe(true);
+    // Not measured: an unseen character, and an odd character in the first position.
+    for (const name of ["Ø Tests", "A:B", "A'B", "-Lead Tests", "(Lead) Tests", "/Lead"])
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(name)]).toEqual([name, false]);
   });
 
   // R763: leg N1S proved every non-dot method shape in fixtures/sandbox-names-tests under serve.
@@ -258,12 +290,7 @@ describe("R761: the default transport", () => {
     });
     await r.b.decideTransport({ resume: true });
     expect(r.warnings).toHaveLength(1);
-    for (const name of [
-      "resume:",
-      "multi-object-or-wrapped",
-      "unproven-test-name-shape",
-      "no-serve-build",
-    ]) {
+    for (const name of ["resume:", "unproven-test-name-shape", "no-serve-build"]) {
       expect(r.warnings[0]?.message).toContain(name);
     }
   });
@@ -350,7 +377,7 @@ describe("R857: --isolate-tests needs serve-entries", () => {
 
   test("each way to one-shot is refused by name, with its reason", async () => {
     const cases: readonly [Rig, string][] = [
-      [await rig(ON, { src: MULTI_AL }), "multi-object-or-wrapped"],
+      [await rig(ON, { version: V3_NO_SERVE_ENTRIES[0] ?? "" }), "no-serve-build"],
       [await rig({ ...ON, serveFallbackWarmup: "Codeunit1.X: refused" }), "the warm-up:"],
       [
         await rig({ transportSource: "explicit", transport: "one-shot", isolateTests: true }),
