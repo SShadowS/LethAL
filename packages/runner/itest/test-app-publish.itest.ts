@@ -436,13 +436,13 @@ async function main(): Promise<void> {
       });
       const runId = lastNamedRunId;
       assert.ok(published !== undefined, `${step}: the publish returned no identity`);
-      assert.equal(published.sha256, compiled.sha256, `${step}: published sha256 = compiled`);
+      assert.equal(published.sha256, compiled.packageHash, `${step}: published sha256 = compiled`);
       const fresh = await backend.fetchPublishedAppPackage({
         publisher: compiled.publisher,
         name: compiled.name,
       });
       assert.ok(fresh instanceof Uint8Array, `${step}: a fresh read-back must answer`);
-      assert.equal(hashPackage(fresh), compiled.sha256, `${step}: fresh read-back = compiled`);
+      assert.equal(hashPackage(fresh), compiled.packageHash, `${step}: fresh read-back = compiled`);
       assert.equal(published.version, testAppVersion, `${step}: server version`);
       assert.equal(res.quarantined, undefined, `${step}: no quarantine (${res.quarantined})`);
       const [k, s] = res.outcomes;

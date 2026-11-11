@@ -326,6 +326,8 @@ export function decodeSource(bytes: Buffer): string {
  * and the u64 at 28 equal to the bytes after the header (the zip's length; measured 1893 of 1933).
  * Any other bytes hash raw (so an unknown shape refuses, the safe side). A real republish still changes the hash: the zip
  * after the header holds the manifest version and the sources. The caller's buffer is not touched.
+ * A SIGNED package (bytes after the zip) does not match the shape, so it hashes raw and would still
+ * drift on a Windows server that re-stamps its id.
  */
 export function hashPackage(bytes: Uint8Array): string {
   const h = createHash("sha256");
