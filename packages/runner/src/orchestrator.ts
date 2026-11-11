@@ -4911,6 +4911,8 @@ interface CoveringPlan {
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
+  /** R914: each green test's own time (`measuredDurationMs ?? durationMs`), what the estimate and windows read. */
+  readonly measuredDuration: ReadonlyMap<string, number>;
   readonly memberCountsByTest: ReadonlyMap<string, number>;
 }
 interface ScoreBatchInput {
@@ -5981,6 +5983,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     perMutantTests,
     coverageAttribution,
     baselineDuration,
+    measuredDuration,
     memberCountsByTest: memberCounts,
   } = plan;
 
@@ -6015,7 +6018,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const estimate = estimateCovered(
     toExecute,
     perMutantTests,
-    costModelOf(scope.parallel?.owner ?? backend, baselineDuration, fallbackTimeoutMs),
+    costModelOf(scope.parallel?.owner ?? backend, measuredDuration, fallbackTimeoutMs),
   );
   // R912 follow-up: the "long" note rides the same `detail`, never a warning code. The estimate comes
   // from measured baseline times, so a warning would appear or not with machine speed, and a gate's
@@ -6039,6 +6042,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     perMutantTests,
     coverageAttribution,
     baselineDuration,
+    measuredDuration,
     fallbackTimeoutMs,
     minMutantBudgetMs,
     store,
@@ -8602,6 +8606,7 @@ async function runSessionBody(
           perMutantTests,
           coverageAttribution,
           baselineDuration,
+          measuredDuration: measuredDurationOf(greenTests),
           memberCountsByTest: memberCounts,
         };
       };
@@ -9578,6 +9583,7 @@ async function runProbes(
         perMutantTests: plan.perMutantTests,
         coverageAttribution: plan.coverageAttribution,
         baselineDuration: plan.baselineDuration,
+        measuredDuration: plan.measuredDuration,
         fallbackTimeoutMs: scope.baselineTimeoutMs,
         minMutantBudgetMs: scope.minMutantBudgetMs,
         store: scope.store,
@@ -9698,6 +9704,7 @@ function selectNamed(
         .filter((b) => b.verdict.outcome === "pass")
         .map((b) => [testKeyOf(b.ref), b.verdict.durationMs]),
     ),
+    measuredDuration: measuredDurationOf(baseline.filter((b) => b.verdict.outcome === "pass")),
     memberCountsByTest: new Map(),
   };
 }
@@ -11521,6 +11528,8 @@ interface RunMutantsArgs {
   /** Which attribution path placed each mutant's covering tests — see `CoverageSplit.attribution`. */
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
+  /** R914: see `CoveringPlan.measuredDuration`; the cost model reads this, the budget reads `baselineDuration`. */
+  readonly measuredDuration: ReadonlyMap<string, number>;
   readonly fallbackTimeoutMs: number;
   /** R47: floor for the per-mutant budget — `SessionConfig.mutantTimeoutMs`, already defaulted. */
   readonly minMutantBudgetMs: number;
@@ -11615,7 +11624,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     const windows = cutWindows(
       args.mutants,
       args.perMutantTests,
-      costModelOf(args.backend, args.baselineDuration, args.fallbackTimeoutMs),
+      costModelOf(args.backend, args.measuredDuration, args.fallbackTimeoutMs),
     );
     for (const w of windows) windowAt.set(w[0]?.mutantId ?? "", w);
     // Nothing to window (no mutants): the one empty prefetch the whole-batch call made.
@@ -12429,6 +12438,18 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
   }
 }
 
+/**
+ * R914: each green test's own time. `durationMs` is the whole call (al-runner one-shot adds a compile
+ * to it; serve reports the whole suite's), so summing it overstated the estimate about 13 times.
+ */
+function measuredDurationOf(
+  green: readonly { ref: TestMethodRef; verdict: TestVerdict }[],
+): Map<string, number> {
+  return new Map(
+    green.map((b) => [testKeyOf(b.ref), b.verdict.measuredDurationMs ?? b.verdict.durationMs]),
+  );
+}
+
 /** R912: what the window cut and the estimate read: baseline durations, and which codeunits run whole. */
 function costModelOf(
   backend: ExecutionBackend,
@@ -12488,7 +12509,7 @@ async function runMutantsParallel(
   const windows = cutWindows(
     args.mutants,
     args.perMutantTests,
-    costModelOf(owner, args.baselineDuration, args.fallbackTimeoutMs),
+    costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs),
   );
   if (windows.length === 0) await owner.prefetchMutants?.([]);
   // The latch is shared by every lane: the owner's is the one to read.
