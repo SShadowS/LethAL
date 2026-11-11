@@ -580,7 +580,7 @@ export interface RunCliConfig {
   readonly mutantTimeoutMs?: number;
   /**
    * R912: `--time-budget <seconds>`: see `SessionConfig.timeBudgetSeconds`. A positive integer;
-   * refused otherwise, and with `--dry-run`.
+   * refused otherwise. R917: a dry run reads it too (`DryRunCliConfig.timeBudgetSeconds`).
    */
   readonly timeBudgetSeconds?: number;
   /**
@@ -1084,10 +1084,13 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              brought up to date, exactly as a real run would. With --out <file> it
                              writes the listing as JSON: {files, sites, deployed, perFile[{file,
                              sites, deployed}], batches[{index, sites[{file, line, operator,
-                             deployed}]}], notInstrumented[{file, kinds, sites}]}. Every other
-                             execution flag (--tests, --workers ...) is refused with
-                             --dry-run, because a dry run executes no tests. --backend is
-                             optional; every backend lists the #if arms of alc's build
+                             deployed}]}], notInstrumented[{file, kinds, sites}]}. It reads
+                             the real run's --allow-large-run, --tests and --time-budget and
+                             says what the run does with each, so a real command previews with
+                             --dry-run added. Every other execution flag (--workers ...) is
+                             refused with --dry-run, because a dry run executes no tests.
+                             --backend is optional; every backend lists the #if arms of alc's
+                             build
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -2237,6 +2240,12 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
         );
       }
     }
+    // R917 (review r1): an empty --tests is refused, as the real run refuses it, never dropped.
+    if (values.tests === "") {
+      throw new Error(
+        "--tests needs a folder: an empty --tests is refused (as 'lethal run' refuses it)",
+      );
+    }
     return {
       mode: "dry-run",
       projectDir,
@@ -2247,7 +2256,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
       // R917: read, so a real command previews with `--dry-run` added (see `DryRunCliConfig`).
       ...(values["allow-large-run"] === true ? { allowLargeRun: true as const } : {}),
-      ...(values.tests !== undefined && values.tests !== "" ? { testDir: values.tests } : {}),
+      ...(values.tests !== undefined ? { testDir: values.tests } : {}),
       ...(timeBudgetSeconds !== undefined ? { timeBudgetSeconds } : {}),
       ...only,
       ...exclude,
@@ -5950,9 +5959,12 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
   }
   // R917: the real run's --tests and --time-budget, read and said back (never silently ignored).
   if (parsed.testDir !== undefined) {
-    if (!existsSync(join(parsed.testDir, "app.json"))) {
+    // Review r1: the real run's own first check (R-445), so the dry run refuses what it refuses.
+    const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
+    if (nested !== null) throw new TestProjectNestedError(nested);
+    if (!existsSync(parsed.testDir)) {
       throw new Error(
-        `--tests ${parsed.testDir}: no app.json there, so the real run would refuse it (a dry run runs no test, but checks the folder it names)`,
+        `--tests ${parsed.testDir}: no such folder (a dry run runs no test, but checks the folder it names)`,
       );
     }
     console.log(`tests: ${parsed.testDir} (the real run tests with this app; a dry run runs none)`);

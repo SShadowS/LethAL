@@ -250,6 +250,29 @@ describe("R896: the choice (strictly more passes)", () => {
     const row = chooseCodeunitIsolation(refusedT0(["error", "pass"]), refusedT0(["error", "pass"]));
     expect(row.chosen).toBe("method");
     expect(row.reason).toContain("refused A Tests.T0 by name");
+    // The refusal is read from the test rows: method's T0 row need not carry it.
+    expect(
+      chooseCodeunitIsolation(refusedT0(["error", "pass"]), rows(["error", "pass"])).chosen,
+    ).toBe("method");
+  });
+  test("R921 (review r1): a cascade row is not a refusal by name, so a tie stays on test", () => {
+    const cascade = (outcomes: TestOutcome[]) =>
+      rows(outcomes).map((r, i) =>
+        i === 0
+          ? {
+              ref: r.ref,
+              verdict: {
+                ...r.verdict,
+                runnerRow: "runner-refused" as const,
+                failureMessage:
+                  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (Hang: did not run)",
+              },
+            }
+          : r,
+      );
+    expect(
+      chooseCodeunitIsolation(cascade(["error", "pass"]), cascade(["error", "pass"])).chosen,
+    ).toBe("test");
   });
   test("R921: a tie with no refused test, or one where method loses a test, stays on test", () => {
     expect(chooseCodeunitIsolation(rows(["error", "pass"]), rows(["error", "pass"])).chosen).toBe(

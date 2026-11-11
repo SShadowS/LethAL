@@ -4265,31 +4265,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const [cu] = smallest;
     const mode = this.modeOfCall(cu);
     const started = Date.now();
-    await this.spawnDaemon(lane, mode, s);
-    try {
-      // Counted as a warm-up, so R652's `boundChecks = warmups + ...` still holds.
-      this.stats.warmups += 1;
-      await this.send(
-        lane,
-        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] }],
-        "warmup",
-        mode,
-      );
-    } catch (err) {
-      if (
-        err instanceof AlRunnerV3EntriesRefusedError &&
-        err.code === "al-runner-v3-entries-batch-refused"
-      ) {
-        const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
-        throw new AlRunnerV3EntriesRefusedError(
-          err.code,
-          `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+    // Timed as a warm-up (review r1), so its seconds show where the warm-up count does.
+    await lane.timed("warmupMs", async () => {
+      try {
+        // Inside the try (review r1): a daemon that cannot start is not this probe's to judge.
+        await this.spawnDaemon(lane, mode, s);
+        // Counted as a warm-up, so R652's `boundChecks = warmups + ...` still holds.
+        this.stats.warmups += 1;
+        await this.send(
+          lane,
+          [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] }],
+          "warmup",
+          mode,
         );
+      } catch (err) {
+        if (
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
+          throw new AlRunnerV3EntriesRefusedError(
+            err.code,
+            `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+          );
+        }
+        // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
+      } finally {
+        await lane.closeDaemon();
       }
-      // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
-    } finally {
-      await lane.closeDaemon();
-    }
+    });
   }
 
   private batchProbed = false;

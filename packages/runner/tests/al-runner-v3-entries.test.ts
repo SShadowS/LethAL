@@ -3994,6 +3994,22 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
       expect(r.serve.requests, JSON.stringify(extra)).toHaveLength(0);
     }
   });
+
+  test("review r1: the probe runs once per session, not at every deploy", async () => {
+    const r = await rig({ extra: { transportSource: "explicit" } });
+    await r.b.deploy(r.l.batch);
+    expect(r.serve.requests).toHaveLength(1);
+  });
+
+  test("review r1: a probe answer that is no batch refusal is not the probe's to judge: deploy goes on", async () => {
+    // The probe's request gets a broken answer (stdout ends): a request error, which the warm-up judges later.
+    const r = await rig({
+      serve: { answer: (_req, n) => (n === 0 ? { lines: [], eof: true } : undefined) },
+      extra: { transportSource: "explicit" },
+    });
+    expect(r.serve.requests).toHaveLength(1);
+    expect(r.serve.closes.length + r.serve.kills.length).toBeGreaterThan(0);
+  });
 });
 
 describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refuses by name", () => {
