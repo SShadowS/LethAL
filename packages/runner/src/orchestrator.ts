@@ -59,7 +59,12 @@ import {
   writeInstrumentedProject,
 } from "@lethal/schemata";
 import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
-import { type AppJsonPathChange, normaliseAppJsonPaths } from "./app-json-paths";
+import {
+  type AppJsonPathChange,
+  caseChangeText,
+  diskCaseResolver,
+  normaliseAppJsonPaths,
+} from "./app-json-paths";
 import {
   UpgradeClashRefusedError,
   UpgradeNotRestoredError,
@@ -7822,7 +7827,7 @@ async function runSessionBody(
             const bumped = nextAbove(installed);
             lastIssuedVersion = bumped;
             appVersion = bumped;
-            await writeStampedAppJson(batchDir, projectManifest, bumped);
+            await writeStampedAppJson(batchDir, projectManifest, bumped, cfg.projectDir);
             try {
               // A fresh publish op (design §4/§6): the first attempt's marker was already
               // tombstoned by its `EndPublish("failed")` — a version conflict is BC naming the
@@ -12704,8 +12709,13 @@ async function writeStampedAppJson(
   batchDir: string,
   projectManifest: Readonly<Record<string, unknown>>,
   version: string,
+  /** R-913: the project directory app.json's names are resolved against, for letter case. */
+  projectDir: string,
 ): Promise<readonly AppJsonPathChange[]> {
-  const { manifest: normalised, changes } = normaliseAppJsonPaths(projectManifest);
+  const { manifest: normalised, changes } = normaliseAppJsonPaths(
+    projectManifest,
+    diskCaseResolver(projectDir),
+  );
   const manifest = { ...normalised, version };
   await writeFile(join(batchDir, "app.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return changes;
@@ -12713,13 +12723,19 @@ async function writeStampedAppJson(
 
 /** R-422: the once-per-session warning text for the changes `normaliseAppJsonPaths` made. */
 function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
-  const parts = changes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
-  return [
-    `app.json names a path with "\\": ${parts}. LethAL wrote "/" in the app.json it compiles `,
-    'for each batch, because the Linux alc reads "\\" as part of the name and fails with ',
-    'AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove ',
-    "this warning.",
-  ].join("");
+  const slashes = changes.filter((c) => c.kind === "backslash");
+  const parts = slashes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
+  const backslash =
+    slashes.length === 0
+      ? ""
+      : [
+          `app.json names a path with "\\": ${parts}. LethAL wrote "/" in the app.json it compiles `,
+          'for each batch, because the Linux alc reads "\\" as part of the name and fails with ',
+          'AL1001 or AL0863. Your project\'s own app.json was not changed; write "/" there to remove ',
+          "this warning.",
+        ].join("");
+  // R-913: the letter-case rewrite shares the code and the once-per-session warning.
+  return [backslash, caseChangeText(changes)].filter((s) => s !== "").join(" ");
 }
 
 /**
@@ -12910,7 +12926,7 @@ export async function prepareBatchProject(
   /** R739: where the rebase-collision warning goes as an event; absent, it prints to the console. */
   emit?: RunEmitter,
 ): Promise<readonly AppJsonPathChange[]> {
-  const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion);
+  const pathChanges = await writeStampedAppJson(batchDir, projectManifest, appVersion, projectDir);
   // R363: the run's own output files (the results database and its sidecars, `--out`,
   // `--progress-out`), named by the caller. Exact paths only: an old report this run did not name
   // is copied like any resource, and nothing is guessed from an extension.

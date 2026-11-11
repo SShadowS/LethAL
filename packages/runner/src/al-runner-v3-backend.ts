@@ -3370,7 +3370,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : await this.testAppKey(snap, activeAppJsonText, batchBytes, usedDeps);
       // R811: before the cache check, so a run that hits still warns, as R422 does.
       const pathChanges =
-        snap === undefined ? [] : testAppPathRewrite(snap.testAppJsonText).changes;
+        snap === undefined
+          ? []
+          : testAppPathRewrite(snap.testAppJsonText, this.cfg.testDir).changes;
       if (pathChanges.length > 0 && !this.testPathsWarned) {
         this.testPathsWarned = true;
         this.notify("app-json-backslash-path", `[lethal] ${testAppPathWarning(pathChanges)}`);
