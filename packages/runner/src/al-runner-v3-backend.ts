@@ -1575,6 +1575,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get skipAfterTimeout(): boolean {
     return this.skipAfterTimeoutLearned && !this.entries;
   }
+  /** R919: see `ExecutionBackend.skipAfterTimeoutSupported`. */
+  get skipAfterTimeoutSupported(): boolean {
+    return this.skipAfterTimeoutLearned;
+  }
   /** R890: see `ExecutionBackend.methodIsolation`. */
   get methodIsolation(): boolean {
     return this.cfg.isolation === "method";
