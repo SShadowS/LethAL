@@ -51,3 +51,25 @@ kept as evidence, not results.
   `stackTrace` too.
 
 **Unchanged:** the remaining apps (edv, emr, ext, pyp, peppol) re-run on 8c96d9a4 under the same predictions.
+
+## Amendment 2 (2026-11-11, results of the re-runs)
+
+**Run 2 (8c96d9a4), the other five apps:** Enforced Digital Vouchers (one-shot), E-Document Error Messages, Excise Tax, PayPal
+Payments Standard, PEPPOL. PayPal and PEPPOL are joined with R-913's re-run reports (`pyp-r`, `peppol-r`), the ones R-913 kept as
+its results; every mutant of all five apps joins (246 mutants).
+- Prediction 1 HELD: 0 verdict changes in all five. Over all seven apps: 0 in 338 mutants.
+- Prediction 2 FAILED for edv M0171: it reads reached, by `PaymentReconciliationDoesNotRequireDigitalVoucher`. Checked by running
+  that test alone, unmodified, with `--coverage-json`: it hits `DigitalVoucherEntry` line 59 once. So the reach is right and the
+  prediction was wrong: R-916's 0-hit check had run a different covering test, not this one.
+- Prediction 5 HELD: edv M0468 reads reached, and its `reachedBy` test hits line 406 once.
+- Prediction 6, the exception clause: 10 more sampled survivors read UNREACHED: edv M0446, M0307, M0309, M0022; emr M0004, M0246,
+  M0298, M0222; ext M0454, M0411. Each was checked as before: every covering test, run alone unmodified with `--coverage-json`,
+  has 0 hits on that statement line. All 10 are accepted. PayPal and PEPPOL decide no sampled survivor as unreached.
+- Over all seven apps, 25 UNREACHED claims and 2 reached claims were checked against al-runner's own coverage, and every one held.
+  Check script: `/coord/handoff/R-917/verify-reach.ts`.
+- R925, measured: kills with a stack in the failure text: edv 13 of 13, emr 15 of 15, PEPPOL 14 of 14, Excise Tax 8 of 10,
+  PayPal 8 of 9. Each of the 3 without one failed with "The following UI handlers were not executed", which the test framework raises
+  after the test body has ended, so there is no stack to keep.
+- Prediction 7 is only partly met: the report does not name why a mutant is `not-decided`, so the counts kept in `/coord/handoff/R-917/`
+  (from `compare.ts`) are by verdict, grain and reach. The grain class (`enclosing`) is counted there; the block, `#if`, red-baseline
+  and isolation classes are not counted apart.
