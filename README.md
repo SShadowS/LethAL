@@ -894,7 +894,7 @@ a LethAL feature or a mode.
     `runner-refused`, never scored. Only where that is not proven (an unpinned build, or a session
     whose own probe does not read it) a covering pass that reaches a `Sleep` in the project reads
     `error`; one in a dependency is not caught.
-  - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a `--resume` session, a multi-object or `#if`-wrapped file, a test name shape not yet proven under serve, or a build with no serve path. An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
+  - `serve-entries` is the default transport where it is proven (R761). A config with no `"transport"` key falls back to one-shot, with the warning `al-runner-v3-serve-default-fallback`, for a test name shape not yet proven under serve, a build with no serve path, or a `--resume` session under an explicit `"isolation"` of `"test"` or `"method"` (under the default `"auto"` a resume keeps serve). Multi-object and `#if`-wrapped files take serve since R918 (gate legs MOE and WRE). An explicit `"transport"` is always honoured, except that an explicit `serve-entries` with a dotted test method name is refused before any test runs (#5798, R722).
 
   `--isolate-tests` (R857, off by default) runs every test alone, so a work date, a language, a
   codeunit variable, a SingleInstance codeunit or a bound subscriber an earlier test left behind

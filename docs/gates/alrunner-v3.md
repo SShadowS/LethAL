@@ -263,9 +263,13 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
 
 ### Legs MO and WR (R602)
 
-Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
+Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-wr-precommitment.md`, c2f67f0a) and recorded once under R332 on 2026-10-24 on the pin (alpha.2 91253f2d6), equal to the pre-commitment per mutant (MO 12/12 rows, WR 98/98). The gate REFUSES to start MO or WR without their baselines (R332). Both are default legs AND in `V3_GATE_LEGS` (orchestrator ruling 2026-10-24): they are the only measurement of v3's per-object frame, so a build that breaks it must not move `current`. Inside these two legs (and MOE and WRE, below) an `AlRunnerCoverageFrameError` is `gate-fail` (`legOutcomeOfError(err, leg)`); in every other leg it stays `infra-fail`. `scripts/al-runner-v3-update.ts` needs no change: it judges the receipt by `gateOutcome` over `V3_GATE_LEGS`, so an older receipt without MO and WR reads `infra-fail` ("missing legs MO,WR").
 
-Both legs are one-shot only (the measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`. For the same reason, since R761 a USER project with a multi-object or single-wrapper `#if` file does not take the serve-entries default. It falls back to one-shot with `al-runner-v3-serve-default-fallback` (`multi-object-or-wrapped`).
+Both legs are one-shot (their measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`.
+
+**Legs MOE and WRE (R918, pre-committed on master in `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md`, e1ca5d11).** The same two sessions on `transport: "serve-entries"`, judged by MO's and WR's own checks (killers, counts, the WrappedArms refusal, clean-leg notes and warnings) and compared with MO's and WR's frozen ONE-SHOT baselines per mutant. They only compare (`compareOnlyEnv()`): a record request never reaches them, and they refuse at start without MO's and WR's baselines. Their serve counters are pinned (MOE entries 46, WRE 448; one warm-up each). Both are default legs and in `V3_GATE_LEGS`. Since they measure the shapes equal to one-shot, a user project with a multi-object or `#if`-wrapped file now takes the serve-entries default; the `multi-object-or-wrapped` fallback reason R761 had is gone.
+
+**Manifest rows gated before MOE and WRE (orchestrator ruling 2026-11-11).** `current` (edge-42af5d384) passed MOE and WRE; alpha.14-ef00a6a8f is re-gated with `--refresh-rows` at the R918 head. The other rows take serve for these shapes by ruling, NOT by measurement: alpha.12-d4bc8d3a5, alpha.13-23e7631be, edge-05d692e5e, edge-3096bf68f, edge-3138effad, edge-6bb821b98, edge-897b441eb, edge-9597b4a01 and edge-a0825f1d9 (R918 gives the ground). The next daily update re-gates `current` once, as R777 does whenever `V3_GATE_LEGS` gains a leg.
 
 Since R786, the serve-entries DEFAULT also falls back when the serve warm-up meets a row R612 refuses by name (a Company read, a missing DotNet sidecar). `lethal run` closes the serve attempt, builds a new one-shot backend, and re-runs the whole session with one `al-runner-v3-serve-default-fallback-warmup` warning that names the row. Nothing of the serve attempt is kept in the report; its run row stays in the store, marked (its config fingerprint gets an `|abandoned` suffix) so `--resume` skips it, and the warning names that run id. A fallback needs EVERY unkept warm-up row to be a named refusal. An explicit `serve-entries` still refuses (`al-runner-v3-entries-warmup-dirty`), and so does any other warm-up cause (a timeout, rows that differ from the baseline, a wrong echo). `--workers > 1` after a fallback is refused by name, before a second backend is built. The report carries the caveat `al-runner-v3-serve-default-fallback-warmup`.
 
@@ -305,6 +309,21 @@ the discarded mutants. Recorded: mutants that finished before the stop and come 
 order, and the stopping mutant only if N = 1 would have recorded it (a throw before its record discards it).
 Earlier-index mutants still in flight at the stop are discarded too. Which stop comes first can depend on timing. The per-mutant table at
 N > 1 must equal N = 1: R766's proof found D1 and the gift card identical at N = 4.
+
+## Auto isolation and refused tests (R890, R896, R921, R927)
+
+`"alRunnerV3.isolation": "auto"` (the default) decides per test codeunit from the baseline, as the owner's R890 ruling asks: a
+codeunit moves to `method` only when its baseline shows it needs to. Until R921 that meant "`method` passes strictly more of its
+tests". **R921 extends the rule, still decided by the baseline:** on a tie, a codeunit also moves to `method` when v3 refused one
+of its tests by name at baseline and `method` loses none of its tests. Under `test` the refused test ran inside every mutant call
+of its codeunit: it spoiled later tests that read its state (MasterDataManagement, R-914: 44 of 81 errors), and on the serve
+default its row made the warm-up give up serve for the whole session (R916). Under `method` it is never sent, since it covers
+nothing. Proof, on an invented app (coord R-922): serve then equals an all-one-shot run per mutant, verdict and killing test.
+
+An explicit `"transport": "serve-entries"` run (only that; the default and the gate's own backends never do) sends one probe
+request before the baseline: one NONE entry for the test codeunit with the fewest tests, on a daemon closed right after. It judges
+only whether serve refuses every entry with one reason (`entries-batch-refused`), so such a run stops in seconds instead of
+after the whole baseline (R927). No gate figure counts it, since no leg sets the transport source.
 
 ## The pin and the update gate
 

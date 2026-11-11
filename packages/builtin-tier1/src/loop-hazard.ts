@@ -72,8 +72,8 @@ import {
  *
  * R500 (closed) took R487's exclusions shape by shape, at the dispatch check only:
  * - a `Date` item is open unless `MaxIteration` bounds it (shape 4), and an XMLport `tableelement`
- *   over `Integer` is a loop item like a report data item (shape 5; dormant while xmlport cannot
- *   carry the selector var, but it seeds shape 2). R928, measured (coord R-923; bc1 and al-runner v3
+ *   over `Integer` is a loop item like a report data item (shape 5; live since R924 made xmlport a
+ *   carrier, and it seeds shape 2). R928, measured (coord R-923; bc1 and al-runner v3
  *   edge-42af5d384, equal to the byte): an export `tableelement` with `MaxOccurs = Once` is
  *   BOUNDED (it stops after one record; only that element, not its nested ones), and a
  *   `Direction = Import` XMLport's elements are not loop items (filled once per XML node).
@@ -8187,9 +8187,9 @@ export function hangCapableForMutatedNode(
   // (its triggers, its child items' triggers and columns, a reportextension dataset block anchored
   // on it) or in a same-object procedure reachable from that code is refused, whatever it writes
   // or reads.
-  // R500: an XMLport element is open-item code only for the DISPATCH check, which the orchestrator
-  // skips in a file that cannot carry the selector var; here it would move those sites out of the
-  // `skipped` row, so this in-operator path keeps R487's report-only scope.
+  // R500: an XMLport element is open-item code only for the DISPATCH check (`openItemHangRefuses`,
+  // live since R924 made xmlport a carrier), which refuses those sites for every operator; this
+  // in-operator path keeps R487's report-only scope, so each is counted once, as hang-refused.
   if (inOpenItemCode(node, ctx) && objectOf(node)?.rawKind !== "xmlport_declaration") {
     return "loop-condition-target";
   }

@@ -328,6 +328,13 @@ export function decodeSource(bytes: Buffer): string {
  * after the header holds the manifest version and the sources. The caller's buffer is not touched.
  * A SIGNED package (bytes after the zip) does not match the shape, so it hashes raw and would still
  * drift on a Windows server that re-stamps its id.
+ *
+ * R932 (measured): Windows also re-stamps every zip entry's time on each read, so a served package
+ * that carries no AL source is never hashed here as an identity: the orchestrator treats it as
+ * unproven instead (`servedWithoutSource`). Content-hashing it was rejected: with no source, edits
+ * to test bodies are invisible to a content hash, and the unzip costs seconds on a large package.
+ * Such a server's served package also never equals the compiled file, so served-vs-compiled
+ * compares (R139, R492) cannot match there.
  */
 export function hashPackage(bytes: Uint8Array): string {
   const h = createHash("sha256");

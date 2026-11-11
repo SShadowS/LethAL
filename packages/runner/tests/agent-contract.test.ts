@@ -716,9 +716,24 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
     const own = flowed(ownText(read(REFERENCE), "Which subcommand reads which flag (checked)"));
     const para = own.slice(own.indexOf("`lethal run --dry-run` executes no tests"));
     const bare = ["run", "--project", "P", "--dry-run"];
+    // R917: the three the paragraph says a dry run reads.
+    const dryReads = ["--allow-large-run", "--tests", "--time-budget"];
+    for (const f of dryReads) expect(para, f).toContain(`\`${f}\``);
+    expect(
+      parseCliConfig([...bare, "--allow-large-run", "--tests", "T", "--time-budget", "5"]),
+    ).toMatchObject({
+      allowLargeRun: true,
+      testDir: "T",
+      timeBudgetSeconds: 5,
+    });
     const flags = ticks(para)
       .filter(
-        (t) => /^--[a-z-]+$/.test(t) && t !== "--dry-run" && t !== "--out" && t !== "--backend",
+        (t) =>
+          /^--[a-z-]+$/.test(t) &&
+          t !== "--dry-run" &&
+          t !== "--out" &&
+          t !== "--backend" &&
+          !dryReads.includes(t),
       )
       .map((t) => t.slice(2));
     expect(flags.length).toBeGreaterThan(0);
