@@ -662,6 +662,10 @@ name before anything compiles, and so is a path containing `,` or `;` (alc split
 list is part of the resume fingerprint when it is not empty. It reaches alc only: al-runner-v3's own
 `--dotnet-assembly-dir` is a separate setting, not wired from this one.
 
+Point it at a Windows BC service folder's assemblies, even when alc runs on Linux. With a Linux BC
+server's service folder, alc fails DotNet generic conversions (AL0133, AL0122) that build cleanly with
+the Windows folder of the same BC version: measured on BC 28.4, on Windows alc as well as Linux alc.
+
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
 `4` nothing scored, meaning every mutant errored and the run measured nothing.
 
