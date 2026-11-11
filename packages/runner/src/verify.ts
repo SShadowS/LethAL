@@ -1994,7 +1994,7 @@ export async function runVerify(
         // R247: the test app this run measures against, the one it is about to publish. The
         // publish is accepted only when the server's package hashes to it, so it is the key a later
         // bcdev session would compute (`package:` + that hash).
-        testAppHash: `package:${compiled.sha256}`,
+        testAppHash: `package:${compiled.packageHash}`,
         projectPath: source.projectPath,
         backend: "lethal-verify",
         appVersion: "0.0.0.0",

@@ -115,7 +115,10 @@ function watchingCompiler(
         return { exitCode, stdout, stderr: "" };
       },
       readArtifact: async () => new TextEncoder().encode("compiled-test-app"),
-      writeArtifact: async () => {},
+      // The real placement writes the file; compileTestApp reads it back for `packageHash`.
+      writeArtifact: async (_from, to) => {
+        await writeFile(to, "compiled-test-app");
+      },
     },
   );
 }
@@ -592,6 +595,7 @@ const OLD = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.2", { "src/T.al": "old"
 const COMPILED: CompiledTestApp = {
   appPath: "C:/out/x-testapp.app",
   sha256: hashPackage(NEW),
+  packageHash: hashPackage(NEW),
   appId: TESTS_ID,
   name: "LethAL Sandbox Tests",
   publisher: "LethAL",
@@ -639,6 +643,37 @@ test("publishTestApp returns the server's identity only when its bytes are the c
     compiledAgainst: COMPILED.compiledAgainst,
   });
   expect(log).toEqual(["read", "begin", `publish ${COMPILED.sha256.slice(0, 8)}`, "read", "end"]);
+});
+
+/** R-931: the zip behind a 40-byte NAVX header whose package id (12..27) is `id`, like alc's output. */
+function navxOf(zip: Buffer, id: number): Buffer {
+  const h = Buffer.alloc(40);
+  h.write("NAVX", 0, "latin1");
+  h.writeUInt32LE(40, 4);
+  h.writeUInt32LE(2, 8);
+  h.fill(id, 12, 28);
+  h.writeBigUInt64LE(BigInt(zip.length), 28);
+  h.write("NAVX", 36, "latin1");
+  return Buffer.concat([h, zip]);
+}
+
+test("publishTestApp: a server read-back that differs from the compiled file only in its NAVX package id is accepted (R-931)", async () => {
+  const zip = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.2", { "src/T.al": "new" });
+  const compiledBytes = navxOf(zip, 1);
+  const C: CompiledTestApp = {
+    ...COMPILED,
+    sha256: "f".repeat(64), // the raw file hash, which the server's re-stamped bytes never match
+    packageHash: hashPackage(compiledBytes),
+  };
+  const out = await publishTestApp(loggingFence([]), C, deps([], [OLD, navxOf(zip, 2)]));
+  expect(out.sha256).toBe(C.packageHash);
+  const changed = Buffer.from(zip);
+  changed[changed.indexOf("new")] = "o".charCodeAt(0);
+  const err = await publishTestApp(loggingFence([]), C, deps([], [OLD, navxOf(changed, 2)])).catch(
+    (e) => e,
+  );
+  expect(err).toBeInstanceOf(TestAppError);
+  expect((err as TestAppError).message).toContain("not the compiled");
 });
 
 test("publishTestApp refuses a local version below the resident one before the fence", async () => {
@@ -783,7 +818,12 @@ test("publishTestApp returns the server's version, not app.json's", async () => 
   // The server's package says 1.0.0.3, the local app.json says 1.0.0.2. COMPILED3 hashes NEW3,
   // so the byte check passes and the version is the only thing under test.
   const NEW3 = pkg(TESTS_ID, "LethAL Sandbox Tests", "1.0.0.3", { "src/T.al": "new" });
-  const COMPILED3: CompiledTestApp = { ...COMPILED, sha256: hashPackage(NEW3), version: "1.0.0.2" };
+  const COMPILED3: CompiledTestApp = {
+    ...COMPILED,
+    sha256: hashPackage(NEW3),
+    packageHash: hashPackage(NEW3),
+    version: "1.0.0.2",
+  };
   const out = await publishTestApp(loggingFence([]), COMPILED3, deps([], [OLD, NEW3]));
   expect(out.version).toBe("1.0.0.3");
   expect(out.sha256).toBe(hashPackage(NEW3));
@@ -895,7 +935,11 @@ test("TestAppError.confirmedTerminal: pre-server refusals and publish-failed onl
 
 test("publishTestApp: our bytes landed but their manifest cannot be read is publish-indeterminate", async () => {
   const NOMANIFEST = buildFakeAppWithEntries({ "src/T.al": "new" });
-  const C: CompiledTestApp = { ...COMPILED, sha256: hashPackage(NOMANIFEST) };
+  const C: CompiledTestApp = {
+    ...COMPILED,
+    sha256: hashPackage(NOMANIFEST),
+    packageHash: hashPackage(NOMANIFEST),
+  };
   const log: string[] = [];
   const err = await publishTestApp(loggingFence(log), C, deps(log, [OLD, NOMANIFEST])).catch(
     (e) => e,
