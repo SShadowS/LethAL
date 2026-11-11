@@ -907,6 +907,8 @@ function fileObjects(root: ALSyntaxNode): ALSyntaxNode[][] {
  * entry. That loses nothing measured today: R305's skip (`generateMutationSet`) generates no mutant
  * in a file whose only code-carrying object is split, and a file where a plain object follows it is
  * refused here.
+ * R920: `alRunnerAdmitsWrappedFile` does read a split header as code-free when its every arm is a
+ * code-free kind (`codeFreeKind`); this predicate still does not, which only lists such a file here too.
  */
 export function refusedAsMultiObject(root: ALSyntaxNode): boolean {
   return fileObjects(root)
@@ -1023,15 +1025,16 @@ export function fileHoldsWrappedObject(root: ALSyntaxNode): boolean {
  */
 /**
  * R920: a code-free kind, or a header split by `#if` (`preproc_split_declaration`) whose every arm
- * declares a code-free kind (each `<kind>_keyword` names `<kind>_declaration`). BC.History's
- * E-Document Core splits an enum's header to add `implements` in one arm; read as code-bearing, that
- * one enum turned v3 coverage off for the whole app. `holdsCode` still runs on the node.
+ * declares a code-free kind (each object keyword `<kind>_keyword` names `<kind>_declaration`; an
+ * extension's `extends_keyword` names no kind). BC.History's E-Document Core splits an enum's header
+ * to add `implements` in one arm; read as code-bearing, that one enum turned v3 coverage off for the
+ * whole app. `holdsCode` still runs on the node.
  */
 function codeFreeKind(n: ALSyntaxNode): boolean {
   if (CODE_FREE_KINDS.has(n.rawKind)) return true;
   if (n.rawKind !== "preproc_split_declaration") return false;
   const kinds = n.children
-    .filter((c) => c.rawKind.endsWith("_keyword"))
+    .filter((c) => c.rawKind.endsWith("_keyword") && c.rawKind !== "extends_keyword")
     .map((c) => c.rawKind.replace(/_keyword$/, "_declaration"));
   return kinds.length > 0 && kinds.every((k) => CODE_FREE_KINDS.has(k));
 }

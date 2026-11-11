@@ -169,12 +169,13 @@ describe("R920: a code-free object whose header is split by #if, inside a wrappe
     const dir = await bundle({ "src/E.Enum.al": ENUM });
     expect((await alRunnerCoverageSupport(dir)).wrappedObjectFiles).toEqual([]);
   });
-  // Guards the other direction: a split header of a kind that carries code is not code-free.
-  test("a codeunit with a split header stays refused", async () => {
+  // Guards the other direction: a split header of a kind that can carry code is not code-free, even
+  // with an empty body (so `holdsCode` alone cannot be what refuses it).
+  test("a codeunit with a split header stays refused, even with no code in it", async () => {
     const text = split(
       'codeunit 57932 "R920 CU"',
       'codeunit 57932 "R920 CU" implements "R920 Iface"',
-      "    procedure Hit(): Integer\n    begin\n        exit(1);\n    end;\n",
+      "",
     );
     expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
     const dir = await bundle({ "src/C.Codeunit.al": text });
@@ -183,6 +184,15 @@ describe("R920: a code-free object whose header is split by #if, inside a wrappe
   test("a split header whose arms mix an enum and a codeunit stays refused", async () => {
     const text = split('enum 57933 "R920 Mix"', 'codeunit 57933 "R920 Mix"', "");
     expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(false);
+  });
+  // `extends_keyword` names no object kind, so an enum extension's split header is admitted too.
+  test("an enumextension with a split header is admitted", () => {
+    const text = split(
+      'enumextension 57934 "R920 EnumExt" extends "R920 Enum"',
+      'enumextension 57934 "R920 EnumExt" extends "R920 Enum2"',
+      "    value(5; Fifth) { }\n",
+    );
+    expect(alRunnerAdmitsWrappedFile(rootOf(text))).toBe(true);
   });
 });
 
