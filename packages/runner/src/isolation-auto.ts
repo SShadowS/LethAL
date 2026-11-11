@@ -77,7 +77,14 @@ export function chooseCodeunitIsolation(
       },
     ];
   });
-  const chosen: "test" | "method" = methodPassed > testPassed ? "method" : "test";
+  // R916, R921: a tie goes to `method` when v3 refused a test of the codeunit BY NAME and `method`
+  // loses none. Under `test` every mutant call runs the codeunit whole, so the refused test runs in
+  // each: it spoils a later test that reads its state (R921), and on serve its row makes the warm-up
+  // refuse the session (R916). Under `method` it is never sent: it covers nothing.
+  const refused = testRows.find((r) => r.verdict.runnerRow === "runner-refused");
+  const tieToMethod =
+    methodPassed === testPassed && refused !== undefined && lostUnderMethod.length === 0;
+  const chosen: "test" | "method" = methodPassed > testPassed || tieToMethod ? "method" : "test";
   const counts = `method passed ${methodPassed} of ${testRows.length}, test passed ${testPassed}`;
   return {
     codeunitId: first.ref.codeunitId,
@@ -86,7 +93,12 @@ export function chooseCodeunitIsolation(
     tests: testRows.length,
     testPassed,
     methodPassed,
-    reason: chosen === "method" ? counts : `${counts}: not strictly more, so it stays on test`,
+    reason:
+      chosen === "method"
+        ? tieToMethod && refused !== undefined
+          ? `${counts}: a tie, and v3 refused ${refused.ref.codeunitName}.${refused.ref.method} by name, which under test runs in every mutant call of the codeunit, so it moves to method (R921)`
+          : counts
+        : `${counts}: not strictly more, so it stays on test`,
     lostUnderMethod,
   };
 }
