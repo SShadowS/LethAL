@@ -21,7 +21,13 @@ import type { BcDevConfigSection, LethalConfigFile, RunCliConfig } from "../src/
 import { runFromCli } from "../src/cli";
 import { NOTHING_SCORED_EXIT_CODE, QUARANTINED_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import { clearQuarantineFromCli } from "../src/cli";
-import { loadDryRunConfig, printDryRun, restoreNotice } from "../src/cli";
+import {
+  dryRunFromCli,
+  dryRunLargeScopeNote,
+  loadDryRunConfig,
+  printDryRun,
+  restoreNotice,
+} from "../src/cli";
 import {
   DRY_RUN_REFUSED,
   FLAG_OWNERS,
@@ -113,8 +119,43 @@ describe("R912: --time-budget <seconds>", () => {
     });
   }
 
-  test("a dry run refuses it by name", () => {
-    expect(() => parse("--dry-run", "--time-budget", "60")).toThrow(/--time-budget has no effect/);
+  // R917: a real command previews with --dry-run added, so a dry run reads the real run's
+  // --time-budget, --tests and --allow-large-run (and says what the run does with each).
+  test("R917: a dry run reads it, and --tests and --allow-large-run, into its config", () => {
+    expect(parse("--dry-run", "--time-budget", "60", "--allow-large-run")).toMatchObject({
+      mode: "dry-run",
+      timeBudgetSeconds: 60,
+      testDir: "T",
+      allowLargeRun: true,
+    });
+    const bare = parseCliConfig(["run", "--project", "P", "--dry-run"]);
+    expect(bare).not.toHaveProperty("timeBudgetSeconds");
+    expect(bare).not.toHaveProperty("testDir");
+    expect(bare).not.toHaveProperty("allowLargeRun");
+    expect(() => parse("--dry-run", "--time-budget", "0")).toThrow(/must be a positive integer/);
+  });
+  test("R917: a dry run checks the --tests folder the real run would use", async () => {
+    const dir = join(tmpdir(), `lethal-r917-${process.pid}`);
+    await mkdir(dir, { recursive: true });
+    try {
+      await expect(
+        dryRunFromCli({
+          mode: "dry-run",
+          projectDir: dir,
+          dbPath: join(dir, "lethal.sqlite"),
+          configPath: join(dir, "lethal.config.json"),
+          testDir: join(dir, "no-such-tests"),
+        }),
+      ).rejects.toThrow(/no app\.json there, so the real run would refuse it/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  test("R917: the large-scope note says what --allow-large-run does, and following it works", () => {
+    expect(dryRunLargeScopeNote(1200, false)).toContain("'lethal run' will refuse this scope");
+    expect(dryRunLargeScopeNote(1200, false)).toContain("pass --allow-large-run");
+    expect(dryRunLargeScopeNote(1200, true)).toContain("will run this scope anyway");
+    expect(dryRunLargeScopeNote(1200, true)).not.toContain("refuse");
   });
 });
 
@@ -3465,7 +3506,8 @@ describe("C02-07: flags are read or refused, never ignored", () => {
       ];
       expect(() => parseCliConfig(argv), flag).toThrow(`--${flag} has no effect with --dry-run`);
     }
-    expect(DRY_RUN_REFUSED.length).toBe(18);
+    // R917: --tests and --allow-large-run left the list (a dry run reads them).
+    expect(DRY_RUN_REFUSED.length).toBe(16);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {
