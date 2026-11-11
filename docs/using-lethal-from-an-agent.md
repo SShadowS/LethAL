@@ -244,8 +244,10 @@ has the complete set.
 | `--max-new-tests` | `verify` |
 | `--no-reach-filter` | `verify` |
 
-`lethal run --dry-run` executes no tests, so it refuses every execution flag by name (`--tests`,
-`--workers`, `--progress-out` and the rest: "has no effect with --dry-run"). `--backend` is
+`lethal run --dry-run` executes no tests, so it refuses every execution flag by name (`--workers`,
+`--progress-out` and the rest: "has no effect with --dry-run"). Three of the real run's flags it
+reads, so a real command previews with `--dry-run` added (R917): `--allow-large-run` changes its
+large-scope note, `--tests` is checked and named, and `--time-budget` is said back. `--backend` is
 optional there and changes the listing (every backend lists alc's build: none predefines a
 symbol). The other exception is `--out <file>`, which writes the dry-run listing as JSON:
 `{files, sites, deployed, perFile[{file, sites, deployed}], batches[{index, sites[{file, line,

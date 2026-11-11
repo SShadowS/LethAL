@@ -30,6 +30,9 @@ export interface IsolationChoiceRow {
 
 type Row = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
+/** R921 (review r1): v3's cascade rows, which name ANOTHER test's refusal or state, not their own. */
+const V3_CASCADE_ROW = /^NotRun: (?:out-of-scope: )?an earlier test of this codeunit /;
+
 /**
  * Whether a baseline verdict is red for a reason `method` could change: a `fail`, or a row v3 itself
  * answered with an error or a refusal (`runner-test-error`, `runner-refused`, the cascade "an earlier
@@ -77,7 +80,19 @@ export function chooseCodeunitIsolation(
       },
     ];
   });
-  const chosen: "test" | "method" = methodPassed > testPassed ? "method" : "test";
+  // R916, R921: a tie goes to `method` when v3 refused a test of the codeunit BY NAME and `method`
+  // loses none. Under `test` every mutant call runs the codeunit whole, so the refused test runs in
+  // each: it spoils a later test that reads its state (R921), and on serve its row makes the warm-up
+  // refuse the session (R916). Under `method` it is never sent: it covers nothing. A cascade row
+  // ("an earlier test of this codeunit ...") is not a refusal by name of its own test (review r1).
+  const refused = testRows.find(
+    (r) =>
+      r.verdict.runnerRow === "runner-refused" &&
+      !V3_CASCADE_ROW.test(r.verdict.failureMessage ?? ""),
+  );
+  const tieToMethod =
+    methodPassed === testPassed && refused !== undefined && lostUnderMethod.length === 0;
+  const chosen: "test" | "method" = methodPassed > testPassed || tieToMethod ? "method" : "test";
   const counts = `method passed ${methodPassed} of ${testRows.length}, test passed ${testPassed}`;
   return {
     codeunitId: first.ref.codeunitId,
@@ -86,7 +101,12 @@ export function chooseCodeunitIsolation(
     tests: testRows.length,
     testPassed,
     methodPassed,
-    reason: chosen === "method" ? counts : `${counts}: not strictly more, so it stays on test`,
+    reason:
+      chosen === "method"
+        ? tieToMethod && refused !== undefined
+          ? `${counts}: a tie, and v3 refused ${refused.ref.codeunitName}.${refused.ref.method} by name, which under test runs in every mutant call of the codeunit, so it moves to method (R921)`
+          : counts
+        : `${counts}: not strictly more, so it stays on test`,
     lostUnderMethod,
   };
 }
