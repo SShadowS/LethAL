@@ -346,6 +346,9 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // R855: Layout Beta now has 8 guards against the leg's budget of 7 (pre-committed, 2026-11-07-r855-operator-batch-precommitment.md).
   "al-runner-v3/L1": ["oversized-batch"],
   "al-runner-v3/MO": [],
+  // R918: MO and WR on serve-entries, expected to warn exactly as their one-shot legs do.
+  "al-runner-v3/MOE": [],
+  "al-runner-v3/WRE": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
   "al-runner-v3/K": [],
   // R866: leg ISO's own session runs under --isolate-tests, which says so.
   "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],

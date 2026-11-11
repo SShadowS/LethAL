@@ -118,7 +118,6 @@ describe("R761: the default transport", () => {
     expect(r.warnings).toHaveLength(1);
     expect(r.warnings[0]?.code).toBe(FALLBACK);
     expect(r.warnings[0]?.message).toContain("resume:");
-    expect(r.warnings[0]?.message).not.toContain("multi-object-or-wrapped");
   });
 
   test("R896 (build review 2): an auto resume keeps serve-entries; a forced-test resume still falls back", async () => {
@@ -133,14 +132,12 @@ describe("R761: the default transport", () => {
     expect(forced.warnings[0]?.message).toContain("resume:");
   });
 
-  test("reason multi-object-or-wrapped: a multi-object file and a wrapped file each fall back", async () => {
+  test("R918: a multi-object file and a wrapped file no longer fall back (legs MOE and WRE)", async () => {
     for (const src of [MULTI_AL, WRAPPED_AL]) {
       const r = await rig(DEFAULT, { src });
       await r.b.decideTransport({ resume: false });
-      expect(r.b.inRunStopIsBudget).toBe(true);
-      expect(r.warnings).toHaveLength(1);
-      expect(r.warnings[0]?.code).toBe(FALLBACK);
-      expect(r.warnings[0]?.message).toContain("multi-object-or-wrapped: Plain.Codeunit.al");
+      expect(r.b.inRunStopIsBudget).toBe(false);
+      expect(r.warnings).toEqual([]);
     }
   });
 
@@ -258,12 +255,7 @@ describe("R761: the default transport", () => {
     });
     await r.b.decideTransport({ resume: true });
     expect(r.warnings).toHaveLength(1);
-    for (const name of [
-      "resume:",
-      "multi-object-or-wrapped",
-      "unproven-test-name-shape",
-      "no-serve-build",
-    ]) {
+    for (const name of ["resume:", "unproven-test-name-shape", "no-serve-build"]) {
       expect(r.warnings[0]?.message).toContain(name);
     }
   });
@@ -350,7 +342,7 @@ describe("R857: --isolate-tests needs serve-entries", () => {
 
   test("each way to one-shot is refused by name, with its reason", async () => {
     const cases: readonly [Rig, string][] = [
-      [await rig(ON, { src: MULTI_AL }), "multi-object-or-wrapped"],
+      [await rig(ON, { version: V3_NO_SERVE_ENTRIES[0] ?? "" }), "no-serve-build"],
       [await rig({ ...ON, serveFallbackWarmup: "Codeunit1.X: refused" }), "the warm-up:"],
       [
         await rig({ transportSource: "explicit", transport: "one-shot", isolateTests: true }),

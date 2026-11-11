@@ -306,6 +306,12 @@ export async function assertMatchesBaseline(
 /** R332: lists the gate baselines a record run may write, by basename, comma-separated. */
 export const RECORD_BASELINE_ENV = "LETHAL_ITEST_RECORD_BASELINE";
 
+/** R918: `env` without the record request, so a leg that only compares (MOE, WRE) can never write. */
+export function compareOnlyEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { [RECORD_BASELINE_ENV]: _record, ...rest } = env;
+  return rest;
+}
+
 const gateHow = (enable: string, name: string, script: string): string =>
   `${enable} ${RECORD_BASELINE_ENV}=${name} bun run ${script}`;
 
