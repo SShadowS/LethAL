@@ -710,6 +710,13 @@ export interface ExecutionBackend {
   chooseIsolation?(codeunitId: number, mode: "test" | "method"): void;
 
   /**
+   * R926, OPTIONAL (al-runner v3): the mode test codeunit `codeunitId` runs under right now. The
+   * orchestrator reads it when a baseline ends and again for each mutant, and decides a mutant's
+   * reach from baseline coverage only when the two agree. Absent means one mode for everything.
+   */
+  isolationOf?(codeunitId: number): "test" | "method";
+
+  /**
    * R635 §4, OPTIONAL: `true` right before a batch's baseline step (`activateOnce(null)`), `false`
    * in a `finally` after its baseline loop. al-runner v3's serve-entries transport reads its
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant

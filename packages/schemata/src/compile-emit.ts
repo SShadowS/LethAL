@@ -12,6 +12,7 @@ import { type SpanEdit, joinEdits } from "@lethal/engine";
 import type { CompilePlan, PlannedPayload } from "./compile-plan";
 import {
   emitDispatch,
+  emitDispatchAt,
   emitDispatchOpen,
   endsInTerminator,
   guardOpen,
@@ -37,6 +38,49 @@ export function emitFile(plan: CompilePlan): string {
     });
   }
   return joinEdits(plan.source, edits);
+}
+
+/**
+ * R926. Where a SOURCE offset lands in the text `emitFile` builds, for the offsets the ORIGINAL
+ * code keeps: the copy a run with no mutant active executes. A side table: it builds no text and
+ * `emitFile` does not call it. An offset inside a replaced chain maps into the chain's `else begin`
+ * copy of the root; any other offset moves by the edits before it.
+ */
+export function originalPositions(plan: CompilePlan): (source: number) => number | undefined {
+  const rows: Array<{ start: number; end: number; delta: number; originalAt: number | undefined }> =
+    [];
+  for (const edit of plan.edits) {
+    const p = edit.payload;
+    const payload = payloadText(plan.source, edit.start, edit.end, p);
+    const chain = p.kind !== "text" && p.kind !== "guard";
+    const glue = chain && wouldGlue(plan.source.charAt(edit.start - 1), payload) ? 1 : 0;
+    let originalAt: number | undefined;
+    if (p.kind === "chain") {
+      const original = plan.source.slice(edit.start, edit.end);
+      originalAt =
+        glue +
+        (p.wrap ? "begin\n".length : 0) +
+        emitDispatchAt(original, p.component, p.latch, p.selector).originalAt;
+    }
+    rows.push({
+      start: edit.start,
+      end: edit.end,
+      delta: glue + payload.length - (edit.end - edit.start),
+      originalAt,
+    });
+  }
+  return (at) => {
+    let moved = 0;
+    for (const r of rows) {
+      if (at < r.start) break;
+      if (at < r.end) {
+        if (r.originalAt === undefined) return undefined; // no original copy: no reach line
+        return r.start + moved + r.originalAt + (at - r.start);
+      }
+      moved += r.delta;
+    }
+    return at + moved;
+  };
 }
 
 function payloadText(source: string, start: number, end: number, p: PlannedPayload): string {

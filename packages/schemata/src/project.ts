@@ -18,6 +18,7 @@ import { type FlatNames, flatNamesFor } from "./flat-names";
 import { type IdedSpec, assignMutantIds, compareCodeUnits } from "./ids";
 import { emitOneFile } from "./project-emit";
 import { type PlannedMutant, attributeHeader, objectHeadersOf, planOneFile } from "./project-plan";
+import { reachLinesOf } from "./reach-line";
 import {
   type SelectorConfig,
   emitMutationSelector,
@@ -436,6 +437,13 @@ export interface MutantManifestEntry {
    */
   readonly reachGrain?: ReachGrain;
   /**
+   * R926: the line where the ORIGINAL copy of the statement the `Reached` marker precedes starts,
+   * in the INSTRUMENTED text, counted in the object's own frame (the frame of al-runner's line
+   * coverage; see `reachLinesOf`). Not the source line. Set only on a `statement`-grain mutant whose
+   * statement is not a nested block and whose object is outside a `#if` wrapper.
+   */
+  readonly reachLine?: number;
+  /**
    * The AL object KEYWORD this mutant's object was declared with, lowercased: `table`,
    * `codeunit`, `page`, `report`, `query`, `xmlport`, `enum`.
    *
@@ -736,9 +744,20 @@ export function instrumentOneFile(
   f: Pick<InstrumentedFile, "path" | "source" | "root">,
   deduped: readonly MutationSpec[],
   ided: readonly IdedSpec[],
-): { readonly compiled: string; readonly mutants: readonly PlannedMutant[] } {
+): {
+  readonly compiled: string;
+  readonly mutants: readonly (PlannedMutant & { readonly reachLine?: number })[];
+} {
   const plan = planOneFile(f, deduped, ided);
-  return { compiled: emitOneFile(plan), mutants: plan.mutants };
+  const compiled = emitOneFile(plan);
+  const lines = reachLinesOf(plan, compiled); // R926
+  return {
+    compiled,
+    mutants: plan.mutants.map((m) => {
+      const reachLine = lines.get(m.mutantId);
+      return reachLine !== undefined ? { ...m, reachLine } : m;
+    }),
+  };
 }
 
 export async function writeInstrumentedProject(input: WriteInput): Promise<void> {
@@ -826,7 +845,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       // R6: attributed to ITS OWN enclosing object, not always the file's first header — a file
       // legally declaring more than one AL object (all codeunit/table, guarded above) now gets
       // correct per-mutant (objectType, objectId) coverage-lookup keys.
-      const { header, grain: reachGrain } = planned;
+      const { header, grain: reachGrain, reachLine } = planned;
       const id = identityFieldsOf(spec, header.name);
       const triggerName = id.triggerName;
       const siteKey = identitySiteKey(
@@ -882,6 +901,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
         blockStartLine: gap.blockStartLine,
         blockEndLine: gap.blockEndLine,
         reachGrain,
+        ...(reachLine !== undefined ? { reachLine } : {}),
         objectType: header.type,
         codeunitId: header.id,
         codeunitName: id.codeunitName,

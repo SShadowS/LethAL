@@ -143,7 +143,11 @@ import type {
 import { recordPublishOutcome } from "../src/publish-ceiling";
 import { QuarantineStore } from "../src/quarantine-store";
 import type { QuarantineRecord } from "../src/quarantine-store";
-import { COVERAGE_NOT_MEASURED_INTERPRETATION, renderConsole } from "../src/report";
+import {
+  COVERAGE_NOT_MEASURED_INTERPRETATION,
+  renderConsole,
+  survivorReachOf,
+} from "../src/report";
 import type { SessionOutcome, SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { CARRYABLE_VERDICTS, STRANDED_SKIP_NOTE, isStrandedNote } from "../src/resume";
@@ -379,6 +383,15 @@ class StubBackend implements ExecutionBackend {
    * off, which is how a run without an answer looks.
    */
   reachedFor?: (mutant: string | null, ref: TestMethodRef) => boolean | undefined;
+  /**
+   * R926: line-granularity baseline coverage of `Sandbox Logic`: the lines this test's baseline
+   * hit. `undefined` falls through to the default procedure coverage. `coverageGapsFor` adds a
+   * naming gap (a partial map) to the same row.
+   */
+  lineCoverageFor?: (ref: TestMethodRef) => number[] | undefined;
+  coverageGapsFor?: (ref: TestMethodRef) => boolean;
+  /** R926: the mode a test codeunit runs under now (v3's `isolationOf`). */
+  isolationOf?: (codeunitId: number) => "test" | "method";
   /** R609: a baseline row's `runnerRow` (al-runner-v3's refusal), so a fake can model a refused test. */
   runnerRowFor?: (ref: TestMethodRef) => TestVerdict["runnerRow"];
   /** R904: the backend's baseline note (v3: test data is off), when a test sets one. */
@@ -459,7 +472,23 @@ class StubBackend implements ExecutionBackend {
       durationMs: 5,
       ...(failureMessage !== undefined ? { failureMessage } : {}),
       ...(runnerRow !== undefined ? { runnerRow } : {}),
-      ...(hasCoverage
+      ...(hasCoverage && this.lineCoverageFor?.(ref) !== undefined
+        ? {
+            coverage: {
+              granularity: "line" as const,
+              entries: (this.lineCoverageFor?.(ref) ?? []).map((line) => ({
+                objectType: "Codeunit",
+                objectId: 79000,
+                procedure: "IsOverBudget",
+                line,
+              })),
+              ...(this.coverageGapsFor?.(ref) === true
+                ? { namingGaps: [{ objectType: "Codeunit", objectId: 79000 }] }
+                : {}),
+            },
+          }
+        : {}),
+      ...(hasCoverage && this.lineCoverageFor?.(ref) === undefined
         ? {
             coverage: {
               granularity: "procedure" as const,
@@ -19014,6 +19043,118 @@ describe("GH-24: per-mutant reach", () => {
       expect(row.reachGrain).toBe("statement");
       expect(reachOf(row)).toEqual({});
     }
+  });
+
+  // R926: a backend that attests nothing (al-runner v3) is decided from the BASELINE's line
+  // coverage. The reach line of every mutant of `TARGET_AL` is line 13 of the INSTRUMENTED text, not
+  // the source's line 5: the chain adds lines before the original copy of `exit(Amount > Budget);`
+  // (a first draft used the source line; that setup error made two tests red).
+  const REACH_LINE = 13;
+  const reachWord = (
+    row: ReturnType<typeof reportRow> | Scored,
+  ): ReturnType<typeof survivorReachOf> =>
+    survivorReachOf("exact", "not-measured", row.guardReached, "statement", false);
+  // The empty-body mutant's reach statement is the procedure body (a compound block): it carries
+  // no `reachLine`, so v3 leaves it undecided. The rest are the mutants these tests are about.
+  const decidedOf = (scored: Scored[]): Scored[] => {
+    for (const e of scored.filter((s) => s.mutant.reachLine === undefined)) {
+      expect(reachOf(e)).toEqual({});
+    }
+    const decided = scored.filter((s) => s.mutant.reachLine !== undefined);
+    expect(decided.length).toBeGreaterThan(0);
+    return decided;
+  };
+  const v3Backend = (
+    lines: (ref: TestMethodRef) => number[] | undefined,
+    script: (mutant: string | null, ref: TestMethodRef) => TestVerdict["outcome"] = () => "pass",
+  ) => {
+    const backend = new StubBackend(CAPS_NST_WORKERS, script, ["IsOverBudget"]);
+    backend.lineCoverageFor = lines;
+    return backend;
+  };
+
+  test("R926: v3 survivor whose covering test's baseline hit the reach line is reached", async () => {
+    const backend = v3Backend((ref) => (ref.method === "ATest" ? [REACH_LINE] : [4]));
+    const { scored, report } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("survived");
+      expect(e.mutant.reachLine).toBe(REACH_LINE);
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      const row = reportRow(report, e.mutant.mutantId);
+      expect(reachOf(row)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+      expect(reachWord(row)).toBe("reached-unnoticed");
+    }
+  });
+
+  test("R926: v3 survivor no covering test's baseline hit is covered-but-unreached", async () => {
+    const backend = v3Backend(() => [4, 5, 6, 8]);
+    const { scored, report } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("survived");
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      expect(reachWord(reportRow(report, e.mutant.mutantId))).toBe("covered-but-unreached");
+    }
+  });
+
+  test("R926: a covering test with no baseline line coverage leaves reach undecided", async () => {
+    // ATest has line coverage that misses; BTest has procedure coverage only: never "unreached".
+    const backend = v3Backend((ref) => (ref.method === "ATest" ? [4] : undefined));
+    const { scored, report } = await runReach(backend);
+    for (const e of scored) {
+      expect(reachOf(e)).toEqual({});
+      expect(reachWord(reportRow(report, e.mutant.mutantId))).toBe("not-decided");
+    }
+  });
+
+  test("R926: coverage mode none leaves reach undecided", async () => {
+    const backend = new StubBackend(
+      { ...CAPS_NST_WORKERS, coverage: "none" },
+      () => "pass",
+      ["IsOverBudget"],
+    );
+    backend.lineCoverageFor = () => [REACH_LINE];
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+  });
+
+  test("R926: a baseline map with a naming gap is partial, so reach is undecided", async () => {
+    const backend = v3Backend(() => [4]);
+    backend.coverageGapsFor = (ref) => ref.method === "BTest";
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+  });
+
+  test("R926: a codeunit whose mode moved since its baseline is undecided", async () => {
+    const backend = v3Backend(() => [4]);
+    backend.isolationOf = () => (backend.activations.some((a) => a !== null) ? "method" : "test");
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({});
+    // The mirror: the mode holds, so the same data decides.
+    const steady = v3Backend(() => [4]);
+    steady.isolationOf = () => "method";
+    const decided = await runReach(steady);
+    for (const e of decidedOf(decided.scored)) {
+      expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+    }
+  });
+
+  test("R926: a v3 kill gets reachedBy from the tests that ran, as bcdev does", async () => {
+    const script = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
+      mutant !== null && ref.method === "ATest" ? "fail" : "pass";
+    const backend = v3Backend(() => [REACH_LINE], script);
+    const { scored } = await runReach(backend);
+    for (const e of decidedOf(scored)) {
+      expect(e.verdict).toBe("killed");
+      expect(reachOf(e)).toEqual({ guardReached: true, reachedBy: [REACH_A] });
+    }
+  });
+
+  test("R926: a backend that attests keeps its own answer whatever the baseline says", async () => {
+    const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    backend.lineCoverageFor = () => [REACH_LINE];
+    backend.reachedFor = () => false;
+    const { scored } = await runReach(backend);
+    for (const e of scored) expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
   });
 
   test("GH-24: a manifest from before GH-24 has no grain and is never decided", async () => {

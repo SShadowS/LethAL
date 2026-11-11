@@ -283,6 +283,7 @@ import {
   filterHistory,
   identityKeyOf,
   numberingDigestOf,
+  objectKeyOf,
   testKeyOf,
   twinSitesOf,
 } from "./selection";
@@ -5988,6 +5989,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baselineDuration,
     memberCountsByTest: memberCounts,
   } = plan;
+  // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
+  const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
   // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
@@ -6060,6 +6063,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     groupRuns,
     sessionReuse,
     baselineReused,
+    baselineReach,
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
   };
   if (scope.parallel !== undefined) {
@@ -9707,6 +9711,79 @@ function selectNamed(
   };
 }
 
+/**
+ * R926. What this session's baseline can say about a statement-grain mutant's reach on a backend
+ * that attests none (al-runner v3: no `reachedActive`).
+ *
+ * The argument: until a mutant's own statement runs, a mutant run is the baseline run (one mutant
+ * active, v3's seed pinned, R807). So a test whose baseline run never hit the mutant's statement
+ * cannot reach it under the mutant, and a test that did hit it reaches it. The question is only
+ * "did the baseline hit the line the `Reached` marker precedes", answered per covering test.
+ *
+ * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row ran in this session
+ * (`ranHere`: no reused snapshot), passed, was not flagged, and carries line coverage with no
+ * naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
+ * is decided only if its backend still runs the codeunit under that mode, because a `method`
+ * baseline and a `test` baseline cover different lines.
+ */
+export interface BaselineReach {
+  /** Test key -> `<type>:<id>:<line>` of every line its baseline hit. */
+  readonly hits: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Test codeunit id -> the mode its baseline ran under. */
+  readonly modes: ReadonlyMap<number, "test" | "method">;
+}
+
+export function baselineReachOf(
+  baseline: readonly BaselineRow[],
+  ranHere: ReadonlySet<TestMethodRef>,
+  backend: Pick<ExecutionBackend, "isolationOf">,
+): BaselineReach {
+  const hits = new Map<string, Set<string>>();
+  const modes = new Map<number, "test" | "method">();
+  for (const b of baseline) {
+    modes.set(b.ref.codeunitId, backend.isolationOf?.(b.ref.codeunitId) ?? "test");
+    const cov = b.verdict.coverage;
+    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass" || b.verdict.flagged === true) continue;
+    if (cov === undefined || cov.granularity !== "line" || (cov.namingGaps?.length ?? 0) > 0) {
+      continue;
+    }
+    const lines = new Set<string>();
+    for (const e of cov.entries) {
+      if (e.line === undefined) continue;
+      lines.add(`${objectKeyOf(e.objectType, e.objectId, "baseline reach")}:${e.line}`);
+    }
+    hits.set(testKeyOf(b.ref), lines);
+  }
+  return { hits, modes };
+}
+
+/**
+ * R926. The reach of a statement-grain mutant from baseline line coverage, or `undefined` when it
+ * cannot be decided. `ran` is the covering tests that ran against the mutant. Never "unreached"
+ * on missing data: one run with no complete baseline coverage, or a codeunit whose mode moved
+ * since its baseline, leaves the whole mutant undecided.
+ */
+export function reachFromBaseline(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ran: readonly TestMethodRef[],
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+): { guardReached: boolean; reachedBy: string[] } | undefined {
+  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return undefined;
+  }
+  if (ran.length === 0) return undefined;
+  const site = `${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`;
+  const reachedBy: string[] = [];
+  for (const ref of ran) {
+    const lines = evidence.hits.get(testKeyOf(ref));
+    if (lines === undefined) return undefined;
+    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return undefined;
+    if (lines.has(site)) reachedBy.push(qualifiedTestName(ref));
+  }
+  return { guardReached: reachedBy.length > 0, reachedBy };
+}
+
 /** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is.
  *  Exported for R-384's reach filter, which must judge freshness by exactly this rule. */
 export function invalidBaselineReason(v: TestVerdict | undefined): string | undefined {
@@ -11575,6 +11652,8 @@ interface RunMutantsArgs {
    *  an unconfirmed one: `reused-budget-stale` when the budget came from the snapshot, otherwise
    *  `timeout-unconfirmed`. `undefined` for a baseline measured in this run. */
   readonly baselineReused: ReusedBaseline | undefined;
+  /** R926: baseline line coverage for deciding reach where the backend attests none. */
+  readonly baselineReach?: BaselineReach;
 }
 
 /**
@@ -11767,6 +11846,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // only if this equals the covering set (checked after the loop): a chunking bug that skipped a
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
     const attempted = new Set<string>();
+    const ranRefs: TestMethodRef[] = []; // R926: the covering tests that ran, in run order
     for await (const step of coveringRuns({
       backend: args.backend,
       safety: args.safety,
@@ -11804,7 +11884,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         opKind: step.opKind,
         ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
       });
-      if (v.outcome === "pass" || v.outcome === "fail") attempted.add(testKeyOf(ref));
+      if (v.outcome === "pass" || v.outcome === "fail") {
+        attempted.add(testKeyOf(ref));
+        ranRefs.push(ref);
+      }
       spent += v.durationMs;
       // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
       if (step.discoveryRefused === true) continue;
@@ -12360,6 +12443,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           : reachAnswered && !reachUnanswered
             ? { guardReached: false, reachedBy: [] }
             : undefined;
+    // R926: a backend that attested no run (al-runner v3) is decided from the baseline's lines.
+    const reachFinal =
+      reach !== undefined || reachAnswered
+        ? reach
+        : reachFromBaseline(
+            m,
+            ranRefs,
+            args.baselineReach,
+            (cu) => args.backend.isolationOf?.(cu) ?? "test",
+          );
     const commitRecord = (): void => {
       const mutantRowId = record(
         args.store,
@@ -12388,7 +12481,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         killingTestFailure,
         undefined, // unplaceable
         killPosition,
-        reach,
+        reachFinal,
         killingTestRef,
         reproduction,
         stopEvidence,
