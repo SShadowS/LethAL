@@ -121,6 +121,13 @@ describe("SessionReport.timings", () => {
 });
 
 describe("renderConsole — timing line", () => {
+  test("R-913: a consistent run keeps the sum form, with the summed mutant time as a term", () => {
+    const r = build([outcome("M0001", "killed", 400)], { total: 112_000 });
+    const timingLine = renderConsole(r).split("\n").find((l) => l.startsWith("TIMING:")) ?? "";
+    expect(timingLine).toContain("+ mutants 0.4s + overhead");
+    expect(timingLine).not.toContain("summed test time");
+  });
+
   test("states the phase split and the per-mutant distribution", () => {
     const r = build([outcome("M0001", "killed", 400), outcome("M0002", "survived", 600)]);
     const text = renderConsole(r);
@@ -135,7 +142,10 @@ describe("renderConsole — timing line", () => {
     // run rather than in the arithmetic.
     const r = build([outcome("M0001", "killed", 9_000)], { total: 1000 });
     const text = renderConsole(r);
-    expect(text).toContain("overhead 0.0s");
+    // R-913: the summed test time is then not a term of the total (serve overlaps tests), so the
+    // line names it apart and derives no overhead.
+    expect(text).toContain("the mutants' summed test time, 9.0s, is more than that");
+    expect(text).not.toContain("+ mutants 9.0s");
     // Scoped to the TIMING line: hyphens are everywhere else in the report ("no-coverage",
     // "lethal.empty-block"), so asserting over the whole render would pass or fail for reasons
     // that have nothing to do with the arithmetic under test.
