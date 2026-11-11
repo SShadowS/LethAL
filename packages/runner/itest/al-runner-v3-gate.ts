@@ -156,7 +156,9 @@ export function cdoCheckoutRefusal(c: {
  *  R722 adds N1E (N1 under serve-entries): a build that fixes #5798 reads `held`; alpha.2, which has
  *  no serve-entries path, reads `pass` (not applicable, `V3_NO_SERVE_ENTRIES`).
  *  R784 adds O1 (the serve order probe): a build whose entries carry state over cannot become
- *  `current`, because R778's kill-pair batching rests on per-entry isolation. */
+ *  `current`, because R778's kill-pair batching rests on per-entry isolation.
+ *  R918 adds MOE and WRE (MO and WR under serve-entries): the serve default runs those shapes since
+ *  R918, so a build that breaks them on serve must not move `current`. */
 export const V3_GATE_LEGS = [
   "C",
   "S1",
@@ -172,6 +174,8 @@ export const V3_GATE_LEGS = [
   "Y-B",
   "MO",
   "WR",
+  "MOE",
+  "WRE",
   "D1",
   "D1c",
   "T",

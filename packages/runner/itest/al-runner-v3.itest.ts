@@ -20,7 +20,7 @@
  *   measured; lane ruling 2026-10-21. `/work/tools/al-runner-v3/cache` is unused).
  * - `LETHAL_ALC_DIR`: the folder holding `alc`.
  * - `LETHAL_ITEST_V3_LEGS=C,S1,...`: a subset (default every leg that is configured: C, S1, S1E,
- *   S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, K, then D1, D1c and T when configured). R761: S1E is S1's
+ *   S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, MOE, WRE, K, then D1, D1c and T when configured). R761: S1E is S1's
  *   project and assertions under serve-entries by construction; on a build with no serve path it
  *   reads "not applicable" (pass). Its serve counters are printed, pinned after the R-761 observe run.
  * - `LETHAL_ITEST_V3_CDO=<Continia Document Output checkout at 5f2a71d>`: the D legs (a corpus job).
@@ -1358,9 +1358,13 @@ function assertKillers(
  * index places. Pre-committed 7 / 1 / 6 over 14 (R855: was 6 / 1 / 5 over 12): the 6 no-coverage are in
  * procedures no test calls.
  */
-async function legMO(scratch: string): Promise<SessionReport> {
-  const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
-  if (refused !== undefined) throw new LegFailure(refused);
+async function legMO(scratch: string, serve = false): Promise<SessionReport> {
+  const leg = serve ? "MOE" : "MO";
+  // R918: MOE is MO on the serve-entries transport, judged by MO's own checks and baseline.
+  if (!serve) {
+    const refused = moWrTransportRefusal("MO", TRANSPORT.transport);
+    if (refused !== undefined) throw new LegFailure(refused);
+  }
   const projectDir = fixture("sandbox-multiobject");
   const testDir = fixture("sandbox-multiobject-tests");
   const ids = { selectorId: 79849, controlId: 79848, tableId: 79847 };
@@ -1372,13 +1376,58 @@ async function legMO(scratch: string): Promise<SessionReport> {
       bcVersion: SANDBOX_BC,
       selectorObjectId: ids.selectorId,
       sourceProjectDir: projectDir,
+      ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
   const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
-  assertKillers(r, b, "MO", V3_MO_KILLERS);
-  assertCounts(r, "MO", 7, 1, 6, 14);
-  assertCleanLeg(r, b, "MO");
+  assertKillers(r, b, leg, V3_MO_KILLERS);
+  assertCounts(r, leg, 7, 1, 6, 14);
+  assertCleanLeg(r, b, leg);
+  if (serve) logServeCounters(b, "MOE");
   return r;
+}
+
+/** R918: the environment without the record variable, so a serve leg compares and never writes. */
+function compareOnlyEnv(): NodeJS.ProcessEnv {
+  const { LETHAL_ITEST_RECORD_BASELINE: _rec, ...rest } = process.env;
+  return rest;
+}
+
+/** R918: the serve legs' counters, pre-committed in
+ *  `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md` (master e1ca5d11). */
+const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
+  MOE: {
+    warmups: 1,
+    liveRequests: 1,
+    boundChecks: 3,
+    entriesSent: 46,
+    pairRequests: 7,
+    echoMismatches: 0,
+  },
+  WRE: {
+    warmups: 1,
+    liveRequests: 1,
+    boundChecks: 3,
+    entriesSent: 448,
+    pairRequests: 62,
+    echoMismatches: 0,
+  },
+};
+
+/** R918: a serve leg's counters, each equal to its pin. */
+function logServeCounters(b: AlRunnerV3Backend, leg: "MOE" | "WRE"): void {
+  const s = b.entriesStats();
+  const got: Record<string, number> = {
+    warmups: s.warmups,
+    liveRequests: s.liveRequests,
+    boundChecks: s.boundChecks,
+    entriesSent: s.entriesSent,
+    pairRequests: s.pairRequests,
+    echoMismatches: s.echoMismatches,
+  };
+  console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
+  for (const [k, v] of Object.entries(MOE_WRE_PINS[leg]))
+    must(got[k] === v, `${leg}: serve counter ${k} ${got[k]}, pre-committed ${v}`);
 }
 
 /**
@@ -1388,9 +1437,13 @@ async function legMO(scratch: string): Promise<SessionReport> {
  * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 62 / 37 / 3
  * (R855: was 58 / 37 / 3).
  */
-async function legWR(scratch: string): Promise<SessionReport> {
-  const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
-  if (refused !== undefined) throw new LegFailure(refused);
+async function legWR(scratch: string, serve = false): Promise<SessionReport> {
+  const leg = serve ? "WRE" : "WR";
+  // R918: WRE is WR on the serve-entries transport, judged by WR's own checks and baseline.
+  if (!serve) {
+    const refused = moWrTransportRefusal("WR", TRANSPORT.transport);
+    if (refused !== undefined) throw new LegFailure(refused);
+  }
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -1400,6 +1453,7 @@ async function legWR(scratch: string): Promise<SessionReport> {
       selectorObjectId: WRAPPED_SELECTOR_IDS.selectorId,
       preprocessorSymbols: WRAPPED_SYMBOLS,
       sourceProjectDir: WRAPPED_PROJECT_DIR,
+      ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
   const r = await session(scratch, b, {
@@ -1408,12 +1462,13 @@ async function legWR(scratch: string): Promise<SessionReport> {
     selectorIds: WRAPPED_SELECTOR_IDS,
     preprocessorSymbols: WRAPPED_SYMBOLS,
   });
-  assertKillers(r, b, "WR", V3_WR_KILLERS);
+  assertKillers(r, b, leg, V3_WR_KILLERS);
   const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
   for (const l of arms) console.log(`    - ${l}`);
-  must(arms.length === 0, `WR: the WrappedArms refusal differs: ${arms.join("; ")}`);
-  assertCounts(r, "WR", 62, 37, 3, 102);
-  assertCleanLeg(r, b, "WR", V3_WR_STATE_NOTES);
+  must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
+  assertCounts(r, leg, 62, 37, 3, 102);
+  assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
+  if (serve) logServeCounters(b, "WRE");
   return r;
 }
 
@@ -2480,6 +2535,36 @@ async function main(): Promise<void> {
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`MO: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "MOE") {
+          // R918: the serve legs, compared with the ONE-SHOT legs' frozen baselines and never
+          // recording (`compareOnlyEnv`): serve must equal one-shot per mutant.
+          const r = await legMO(scratch, true);
+          try {
+            await assertGateBaseline(
+              r,
+              MULTIOBJECT_BASELINE_PATH,
+              "al-runner-v3 itest leg MOE",
+              compareOnlyEnv(),
+              pinnedRecord(),
+            );
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`MOE: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === "WRE") {
+          const r = await legWR(scratch, true);
+          try {
+            await assertGateBaseline(
+              r,
+              WRAPPED_BASELINE_PATH,
+              "al-runner-v3 itest leg WRE",
+              compareOnlyEnv(),
+              pinnedRecord(),
+            );
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`WRE: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else if (leg === "WR") {
           const r = await legWR(scratch);
