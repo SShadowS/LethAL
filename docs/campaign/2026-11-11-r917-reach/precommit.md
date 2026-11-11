@@ -28,3 +28,26 @@ seed 916). The runs take every mutant touching those lines. One slot, one app at
    a covering test not green at baseline, or an isolation-mode mismatch. Counts per class, per app.
 
 A prediction that fails is a finding, and the build does not go to submit until it is explained.
+
+## Amendment 1 (2026-11-11, after the first runs, before the re-runs)
+
+**Run 1 on 6f699b87 decided no reach at all** (all seven apps: no row had `guardReached`). Cause, found from the code: the
+missing-coverage guard also excluded a baseline pass that al-runner FLAGGED (it rests on an unprobed assumption, R907). A flagged pass
+still ran to its end, so its coverage is complete; nearly every pass of Microsoft's apps is flagged (Data Search 11 of 11), so every
+covering test was excluded. Fixed at 8c96d9a4 (a flagged pass counts; a test, red when the exclusion is restored). Run 1's reports are
+kept as evidence, not results.
+
+**Run 2 (8c96d9a4), Audit File Export and Data Search:**
+- Prediction 1 HELD: 0 verdict changes in 92 mutants.
+- Prediction 2 HELD: afe M0344, M0359, M0441 and ds M0727, M0730 read UNREACHED. (edv M0171: in the re-run.)
+- Prediction 3 HELD: ds M0722 (enclosing grain) is undecided.
+- Prediction 4 FAILED: afe M0430 is undecided, not reached. It is an `empty-block` mutant, whose statement is a block; the build
+  decides no block statement (no `reachLine`), by design. The prediction missed that rule.
+- Prediction 6, the exception clause: 10 more sampled survivors read UNREACHED: afe M0846, M0833, M0223, M0358, M0892, M0856, M0816;
+  ds M0084, M0100, M0051. Each was checked as required: every covering test, run alone unmodified with al-runner's
+  `--coverage-json` (`/coord/handoff/R-916/cov/`), has 0 hits on that statement line. All 10 are accepted as unreached; none is
+  a false "unreached".
+- R925, measured: every kill in both apps (5 of 5, 7 of 7, both on serve) carries a stack in its failure text, so serve's rows carry
+  `stackTrace` too.
+
+**Unchanged:** the remaining apps (edv, emr, ext, pyp, peppol) re-run on 8c96d9a4 under the same predictions.
