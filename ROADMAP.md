@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 894 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 894 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -931,7 +931,7 @@ that ordering is the priority.
 - **R915** · The R912 estimate sums each baseline call's time, not each test's, so on al-runner it reads about 13 times too high and windows are cut too small; and the progress median reads 0.0s · [R915.md](docs/roadmap/R915.md) · done (8028a854)
 - **R916** · One baseline test that v3 refuses at the serve warm-up drops the whole session to one-shot, so every mutant loses the serve speed-up · [R916.md](docs/roadmap/R916.md) · done (fc7e0e2a): auto breaks a tie toward method when v3 refused a test by name and method loses none; serve…
 - **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · done (93588a07): a dry run reads --allow-large-run, --tests and --time-budget
-- **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · open
+- **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · done (7de27405): MO/WR shapes proven on serve (legs MOE, WRE) and no fallback reason; resume already keeps…
 - **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · done (fc7e0e2a): the same tie rule; the refused test is never sent under method
 - **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
