@@ -1131,6 +1131,9 @@
                 "unplaced"
               ]
             },
+            "reachLine": {
+              "type": "number"
+            },
             "objectType": {
               "type": "string"
             },
@@ -1378,6 +1381,9 @@
                 "unplaced"
               ]
             },
+            "reachLine": {
+              "type": "number"
+            },
             "objectType": {
               "type": "string"
             },
@@ -1577,6 +1583,9 @@
                 "enclosing",
                 "unplaced"
               ]
+            },
+            "reachLine": {
+              "type": "number"
             },
             "objectType": {
               "type": "string"
