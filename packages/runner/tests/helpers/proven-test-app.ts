@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PackageUnread } from "../../src/backend";
 import {
   type MicrosoftMode,
@@ -9,6 +11,15 @@ import {
 import { readAppIdentity } from "../../src/published-test-app";
 import { buildFakeAppWithEntries } from "./fake-app";
 import { fakeMicrosoftMode } from "./microsoft-mode";
+
+/** R932: the real Windows BC served package (pkg-a, 1933 bytes), stored as base64 because `*.app` is gitignored. */
+export function r932PkgA(): Uint8Array {
+  const b64 = readFileSync(
+    join(import.meta.dir, "..", "fixtures", "r932", "pkg-a.app.b64"),
+    "utf8",
+  );
+  return new Uint8Array(Buffer.from(b64.trim(), "base64"));
+}
 
 /**
  * R495: what a real bcdev backend gives a session and the in-memory fakes lacked: the SERVED

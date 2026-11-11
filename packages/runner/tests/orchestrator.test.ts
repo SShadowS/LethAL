@@ -198,6 +198,7 @@ import { legacyBuildReport } from "./helpers/legacy-report";
 import { fakeMicrosoftMode } from "./helpers/microsoft-mode";
 import {
   TEST_APP,
+  r932PkgA,
   servedIsInstalled,
   servedTestAppDeps,
   servesTestApp,
@@ -11154,9 +11155,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         r.store.close();
       });
       test("R932 (c): the real Windows package (fixture pkg-a) counts as source-less", async () => {
-        const pkgA = new Uint8Array(
-          readFileSync(join(import.meta.dir, "fixtures", "r932", "pkg-a.app")),
-        );
+        const pkgA = r932PkgA();
         expect(servedWithoutSource(pkgA)).toBe(true);
         expect(servedWithoutSource(P2)).toBe(false);
       });

@@ -21,6 +21,7 @@ import {
 import { compiledMembershipOf } from "../src/test-membership";
 import { readTestAppSources } from "../src/testpage-scan";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
+import { r932PkgA } from "./helpers/proven-test-app";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
 
@@ -199,9 +200,7 @@ describe("R843: the readers", () => {
   });
 
   test("R932: trailing NULs on SymbolReference.json are padding; a NUL in the middle is not", () => {
-    const pkg = new Uint8Array(
-      readFileSync(join(import.meta.dir, "fixtures", "r932", "pkg-a.app")),
-    );
+    const pkg = r932PkgA();
     expect(readPackageEntry(Buffer.from(pkg), "SymbolReference.json")?.at(-1)).toBe(0);
     const r = declaredObjectsOfPackage(pkg);
     expect("objects" in r).toBe(true);
@@ -211,9 +210,7 @@ describe("R843: the readers", () => {
   });
 
   test("R932: compiledMembershipOf reads the NUL-padded served package too; a middle NUL is refused", () => {
-    const pkg = new Uint8Array(
-      readFileSync(join(import.meta.dir, "fixtures", "r932", "pkg-a.app")),
-    );
+    const pkg = r932PkgA();
     const m = compiledMembershipOf(pkg);
     expect(m.kind).toBe("read");
     if (m.kind === "read") expect(m.tests.map((t) => t.method)).toContain("ControlPasses");
