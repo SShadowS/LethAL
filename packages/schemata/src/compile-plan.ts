@@ -476,6 +476,7 @@ export const CARRIER_KINDS: readonly ALNodeKind[] = [
   ALNodeKind.pageextension,
   ALNodeKind.tableextension,
   ALNodeKind.reportextension,
+  ALNodeKind.xmlport,
 ];
 
 /**

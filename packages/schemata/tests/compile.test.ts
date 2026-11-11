@@ -820,46 +820,45 @@ describe("compileSchemataForFile — selector var injection into table objects",
   });
 
   it("throws, naming the object kind and the file, for an object kind it cannot instrument", () => {
-    // R40 made page and report legal carriers (measured: the var compiles inside both). An
-    // `xmlport` is still refused — and the property under test is unchanged: the guard calls are
-    // emitted BEFORE the selector var is injected, so returning silently here would ship
+    // R40 made page and report legal carriers (measured: the var compiles inside both), and R924
+    // xmlport. A `query` is still refused — and the property under test is unchanged: the guard
+    // calls are emitted BEFORE the selector var is injected, so returning silently here would ship
     // `MutationSelector.Active(...)` with no declaration in scope (AL0118 -> AlcCompileError ->
     // bisection halves the mutant set and blames an innocent mutant). Refuse instead.
-    const source = `xmlport 50100 "My Port"
+    const source = `query 50100 "My Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Cust; Customer)
         {
-            tableelement(Cust; Customer)
-            {
-                trigger OnAfterGetRecord()
-                begin
-                    DoThing();
-                end;
-            }
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        DoThing();
+    end;
 }`;
     const root = wrapRoot(parseAL(source));
     let thrown: unknown;
     try {
-      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyPort.XmlPort.al");
+      compileSchemataForFile(source, root, [specAtFirstCall(root)], undefined, "MyQuery.Query.al");
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(Error);
     const message = thrown instanceof Error ? thrown.message : "";
-    expect(message).toContain("MyPort.XmlPort.al");
+    expect(message).toContain("MyQuery.Query.al");
     expect(message).toContain("AL0118");
     // R307: a per-file refusal, typed, with the file's own object and the guarded line.
     expect(thrown).toBeInstanceOf(FileRefusedError);
     if (!(thrown instanceof FileRefusedError)) return;
-    expect(thrown.file).toBe("MyPort.XmlPort.al");
+    expect(thrown.file).toBe("MyQuery.Query.al");
     expect(thrown.shape).toBe("unsupported-kind");
     expect(thrown.site).toBe("compile.unsupported-kind");
-    expect(thrown.objects).toEqual([{ type: "xmlport", id: 50100, name: "My Port" }]);
-    expect(thrown.lines).toEqual([11, 11]);
+    expect(thrown.objects).toEqual([{ type: "query", id: 50100, name: "My Query" }]);
+    expect(thrown.lines).toEqual([13, 13]);
   });
 
   it("does NOT throw when there are no specs — an unmutated page emits no guards to strand", () => {
@@ -940,13 +939,14 @@ describe("compileSchemataForFile — selector var injection into pages and repor
     expect(varSections[0]?.text).toContain('MutationSelector: Codeunit "Mutation Selector";');
   });
 
-  it("canCarryMutationSelectorVar accepts page and report, still refuses xmlport", () => {
+  it("canCarryMutationSelectorVar accepts page, report and (R924) xmlport, still refuses query", () => {
     const kinds: Array<[string, boolean]> = [
       ['page 1 "A" { PageType = Card; }', true],
       ['report 2 "B" { dataset { } }', true],
       ['codeunit 3 "C" { }', true],
       ['table 4 "D" { fields { } }', true],
-      ['xmlport 5 "E" { schema { } }', false],
+      ['xmlport 5 "E" { schema { } }', true],
+      ['query 6 "F" { elements { } }', false],
     ];
     for (const [src, expected] of kinds) {
       expect(canCarryMutationSelectorVar(wrapRoot(parseAL(src)))).toBe(expected);

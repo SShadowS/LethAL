@@ -64,22 +64,22 @@ const NO_HEADER_AL = `codeunit 79305 Ærø
 }
 `;
 
-/** Holds code but is not a carrier kind, so it is skipped (not refused). Its `SetRange` is a
- *  `void-method-call` site, a shape `Mixed.al` does not hold. */
-const XMLPORT_AL = `xmlport 79306 "Only Xmlport"
+/** Holds code but is not a carrier kind (a query; xmlports carry since R924), so it is skipped (not
+ *  refused). Its `SetFilter` is a `void-method-call` site, a shape `Mixed.al` does not hold. */
+const XMLPORT_AL = `query 79306 "Only Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Other; "Other Table")
         {
-            trigger OnBeforePassVariable()
-            var
-                Other: Record "Other Table";
-            begin
-                Other.SetRange("No.", 'A');
-            end;
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        SetFilter(No, 'A');
+    end;
 }
 `;
 
@@ -104,7 +104,7 @@ async function withProject(
 const GOOD = "src/Good.Codeunit.al";
 const MIXED = "src/Mixed.al";
 const NO_HEADER = "src/Odd.al";
-const XMLPORT = "src/Only.XmlPort.al";
+const XMLPORT = "src/Only.Query.al";
 
 beforeAll(async () => {
   await initParser();

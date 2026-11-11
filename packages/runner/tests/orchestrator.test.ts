@@ -5138,26 +5138,28 @@ describe("runSession, R196: hang-capable sites announced before deployment", () 
 // page's own mutants are the only thing lost: `prepareBatchProject` still copies it into the
 // batch dir verbatim, so what is published is byte-identical to the source project.
 describe("generateMutationSet: object kinds that cannot carry the selector var", () => {
-  // R40 made page and report legal carriers (measured: the selector var compiles inside both), so
-  // this suite uses an `xmlport` — still refused, and still ordinary AL whose bodies the tier-1
-  // operators happily target. The property under test is unchanged: one such object must cost only
-  // its own mutants, not the whole session.
-  const PAGE_AL = `xmlport 79010 "Sandbox Port"
+  // R40 made page and report legal carriers (measured: the selector var compiles inside both), and
+  // R924 xmlport, so this suite uses a `query` — still refused, and still ordinary AL whose trigger
+  // bodies the tier-1 operators happily target. The property under test is unchanged: one such
+  // object must cost only its own mutants, not the whole session.
+  const PAGE_AL = `query 79010 "Sandbox Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Cust; Customer)
         {
-            tableelement(Cust; Customer)
-            {
-                trigger OnAfterGetRecord()
-                begin
-                    if Cust.Name = '' then
-                        Cust.Name := 'x';
-                end;
-            }
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        if Threshold > 10 then
+            Threshold := 0;
+    end;
+
+    var
+        Threshold: Integer;
 }
 `;
 
@@ -5169,7 +5171,7 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
     const root = scratch("lethal-orch-objkind-");
     const projectDir = join(root, "app");
     await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
-    await Bun.write(join(projectDir, "SandboxPort.XmlPort.al"), PAGE_AL);
+    await Bun.write(join(projectDir, "SandboxQuery.Query.al"), PAGE_AL);
     await Bun.write(join(projectDir, "app.json"), APP_JSON);
     await Bun.write(join(root, "tests", "SandboxTests.Codeunit.al"), TEST_AL);
     return {
@@ -5196,19 +5198,19 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
 
     // R5: the structured return, not just the console message — this is what `runSession`
     // threads into `SessionReport.notInstrumented`, so it must survive as DATA, not just text.
-    expect(totalFiles).toBe(2); // SandboxLogic.Codeunit.al + SandboxPort.XmlPort.al
+    expect(totalFiles).toBe(2); // SandboxLogic.Codeunit.al + SandboxQuery.Query.al
     expect(skipped).toHaveLength(1);
     const [skippedFile] = skipped;
     if (skippedFile === undefined) throw new Error("expected one skipped file");
-    expect(skippedFile.file).toBe("SandboxPort.XmlPort.al");
-    expect(skippedFile.kinds).toContain("xmlport_declaration");
+    expect(skippedFile.file).toBe("SandboxQuery.Query.al");
+    expect(skippedFile.kinds).toContain("query_declaration");
     expect(skippedFile.sites).toBeGreaterThan(0);
 
     const skips = messages.filter((m) => m.includes("skipped"));
     expect(skips).toHaveLength(1); // once per RUN, not once per file/spec
     const [message] = skips;
-    expect(message).toContain("SandboxPort.XmlPort.al");
-    expect(message).toContain("xmlport_declaration");
+    expect(message).toContain("SandboxQuery.Query.al");
+    expect(message).toContain("query_declaration");
     // Guards this whole test against passing vacuously: if the page fixture stopped producing
     // mutation sites, dropping it would prove nothing. The count comes from the specs actually
     // generated for it, so it can only be >=1 if there was something real to drop.
@@ -5236,7 +5238,7 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
       const [batchDir] = batchDirs;
       if (batchDir === undefined) throw new Error(`no batch dir under ${dirs.instrumentedDir}`);
       const published = await readFile(
-        join(dirs.instrumentedDir, batchDir, "SandboxPort.XmlPort.al"),
+        join(dirs.instrumentedDir, batchDir, "SandboxQuery.Query.al"),
         "utf8",
       );
       expect(published).toBe(PAGE_AL);
@@ -5263,14 +5265,14 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
       expect(report.notInstrumented.files).toHaveLength(1);
       const [skippedFile] = report.notInstrumented.files;
       if (skippedFile === undefined) throw new Error("expected one skipped file");
-      expect(skippedFile.file).toBe("SandboxPort.XmlPort.al");
-      expect(skippedFile.kinds).toContain("xmlport_declaration");
+      expect(skippedFile.file).toBe("SandboxQuery.Query.al");
+      expect(skippedFile.kinds).toContain("query_declaration");
       expect(skippedFile.sites).toBeGreaterThan(0);
 
       // The console render must not let a reader mistake this for a full-project score.
       const rendered = renderConsole(report);
       expect(rendered).toContain("NOT INSTRUMENTED");
-      expect(rendered).toContain("SandboxPort.XmlPort.al");
+      expect(rendered).toContain("SandboxQuery.Query.al");
       expect(rendered).toContain("1/2");
 
       // And a session with NOTHING skipped must report a genuinely empty account, not omit the
@@ -5281,7 +5283,7 @@ describe("generateMutationSet: object kinds that cannot carry the selector var",
         instrumentedDir: join(dirs.projectDir, "..", "instr2"),
       };
       // Remove the page so this second run has nothing to skip.
-      await rm(join(dirs.projectDir, "SandboxPort.XmlPort.al"));
+      await rm(join(dirs.projectDir, "SandboxQuery.Query.al"));
       const backend2 = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
       const store2 = new ResultsStore(":memory:");
       try {
