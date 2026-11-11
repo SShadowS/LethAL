@@ -170,6 +170,35 @@ describe("progress renderer", () => {
     expect(out.length).toBeLessThan(5);
   });
 
+  test("R914: the median times only mutants that ran, not no-coverage or known-survivor ones", () => {
+    const { out, write } = lines();
+    const r = createProgressRenderer(write, { heartbeatMs: 0 });
+    const scored = (
+      id: string,
+      verdict: "killed" | "error" | "no-coverage" | "known-survivor",
+      ms: number,
+      coveringTests: string[] = [],
+    ) =>
+      r(
+        ev({
+          type: "mutant-scored",
+          mutant: mutantFixture(id),
+          verdict,
+          batchIndex: 0,
+          durationMs: ms,
+          coveringTests,
+        }),
+      );
+    scored("M0", "no-coverage", 0);
+    scored("M1", "no-coverage", 0);
+    scored("M2", "known-survivor", 0, ["T.A"]);
+    scored("M5", "error", 0); // a failed deploy: recorded, never run
+    scored("M6", "error", 0); // the same
+    scored("M3", "killed", 4000, ["T.A"]);
+    scored("M4", "killed", 6000, ["T.A"]);
+    expect(out[out.length - 1]).toContain("median 5.0s");
+  });
+
   test("mutant-carried and mutant-skipped-stranded also count toward the mutant total", () => {
     const { out, write } = lines();
     const r = createProgressRenderer(write, { heartbeatMs: 30_000 });
