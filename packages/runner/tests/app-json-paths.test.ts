@@ -1,10 +1,11 @@
 import { afterAll, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { diskCaseResolver, normaliseAppJsonPaths } from "../src/app-json-paths";
-import { prepareBatchProject } from "../src/orchestrator";
-import { testAppPathWarning } from "../src/test-app-publish";
+import { appJsonPathWarning, prepareBatchProject } from "../src/orchestrator";
+import { testAppPathRewrite, testAppPathWarning } from "../src/test-app-publish";
 import { removeScratchDirs } from "./helpers/scratch";
 
 const scratch: string[] = [];
@@ -42,13 +43,59 @@ test("R913: an exact-case logo is untouched", async () => {
   expect(changes).toEqual([]);
 });
 
-test("R913: no match, and two case-insensitive matches, leave the path as written", async () => {
+test("R913: no match leaves the path as written", async () => {
   const none = await project(["other.png"]);
   expect(normaliseAppJsonPaths({ logo: "Logo.png" }, diskCaseResolver(none)).changes).toEqual([]);
-  const dir = await project(["a.png", "A.png"]);
-  expect(normaliseAppJsonPaths({ logo: "A.PNG" }, diskCaseResolver(dir)).manifest.logo).toBe(
-    "A.PNG",
-  );
+});
+
+// On a case-insensitive disk (Windows, macOS) `a.png` and `A.png` are one file, so the two-match
+// case cannot be built there.
+const caseInsensitiveDisk = await (async () => {
+  const dir = await mkdtemp(join(tmpdir(), "lethal-r913-probe-"));
+  scratch.push(dir);
+  await writeFile(join(dir, "probe"), "x");
+  return existsSync(join(dir, "PROBE"));
+})();
+
+test.skipIf(caseInsensitiveDisk)(
+  "R913: two case-insensitive matches leave the path as written",
+  async () => {
+    const dir = await project(["a.png", "A.png"]);
+    expect(normaliseAppJsonPaths({ logo: "A.PNG" }, diskCaseResolver(dir)).manifest.logo).toBe(
+      "A.PNG",
+    );
+  },
+);
+
+test("R913: an absolute path, a drive letter and a .. step are left as written", async () => {
+  const dir = await project(["logo.png"]);
+  const resolve = diskCaseResolver(dir);
+  expect(resolve(`${dir}/LOGO.png`)).toBeUndefined();
+  expect(resolve("/LOGO.png")).toBeUndefined();
+  expect(resolve("sub/../LOGO.png")).toBeUndefined();
+  expect(resolve("../LOGO.png")).toBeUndefined();
+  expect(resolve("LOGO.png")).toBe("logo.png");
+});
+
+// A directory named `C:` cannot exist on Windows, so the drive-letter guard is only observable elsewhere.
+test.skipIf(process.platform === "win32")("R913: a drive letter is left as written", async () => {
+  const dir = await project(["C:/logo.png"]);
+  expect(diskCaseResolver(dir)("C:/LOGO.png")).toBeUndefined();
+});
+
+test("R913: the test app's rewrite fixes a logo's case when given the test dir", async () => {
+  const testDir = await project(["extensionlogo.png"]);
+  const text = JSON.stringify({ logo: "ExtensionLogo.png" });
+  const withDir = testAppPathRewrite(text, testDir);
+  expect(withDir.manifest.logo).toBe("extensionlogo.png");
+  expect(withDir.changes.map((c) => c.kind)).toEqual(["case"]);
+  expect(testAppPathRewrite(text).changes).toEqual([]);
+});
+
+test("R913: the target's warning names the letter case, not a backslash", () => {
+  const text = appJsonPathWarning([{ field: "logo", from: "A.png", to: "a.png", kind: "case" }]);
+  expect(text).toContain("different letter case");
+  expect(text).not.toContain('with "\\"');
 });
 
 test("R913: a folder path is fixed one segment at a time", async () => {

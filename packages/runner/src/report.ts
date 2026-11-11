@@ -3906,14 +3906,17 @@ export function renderConsole(r: SessionReport): string {
   {
     const t = r.timings;
     const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-    const restMs = t.totalMs - t.deployMs - t.baselineMs - t.mutantsMs;
     // R-913: `mutantsMs` sums each mutant's test time, which overlaps on serve (prefetch, lanes), so
-    // it can exceed the wall total (measured: 39,906.8 s in a 469.9 s run). Then the sum is not a
-    // term of the total: the line says so and gives the mutant phase's wall time instead.
+    // it can exceed the wall time left for the mutant phase (measured: 39,906.8 s in a 469.9 s run).
+    // `rest` is that left-over time: total minus generate, deploy and baseline (the overhead now
+    // subtracts generate too). Only when the sum exceeds a non-negative `rest` did tests overlap;
+    // a negative `rest` means the phases overran the total (clock adjustment): no overlap claim.
+    const rest = t.totalMs - t.generateMutationSetMs - t.deployMs - t.baselineMs;
+    const head = `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)}`;
     lines.push(
-      restMs >= 0
-        ? `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)} + mutants ${s(t.mutantsMs)} + overhead ${s(restMs)}`
-        : `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)} + mutant phase ${s(Math.max(0, t.totalMs - t.generateMutationSetMs - t.deployMs - t.baselineMs))} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that because their tests overlapped`,
+      rest >= 0 && t.mutantsMs > rest
+        ? `${head} + mutant phase ${s(rest)} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that because their tests overlapped`
+        : `${head} + mutants ${s(t.mutantsMs)} + overhead ${s(Math.max(0, rest - t.mutantsMs))}`,
     );
     if (t.perMutant.count > 0) {
       lines.push(

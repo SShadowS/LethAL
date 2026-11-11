@@ -12722,7 +12722,7 @@ async function writeStampedAppJson(
 }
 
 /** R-422: the once-per-session warning text for the changes `normaliseAppJsonPaths` made. */
-function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
+export function appJsonPathWarning(changes: readonly AppJsonPathChange[]): string {
   const slashes = changes.filter((c) => c.kind === "backslash");
   const parts = slashes.map((c) => `${c.field} "${c.from}" -> "${c.to}"`).join("; ");
   const backslash =

@@ -131,6 +131,28 @@ describe("renderConsole — timing line", () => {
     expect(timingLine).not.toContain("summed test time");
   });
 
+  test("R-913: the mutants' summed time above the time left names the overlap, with the phase's wall time", () => {
+    // total 10 s - (0.5 + 4 + 1) = 4.5 s left; 9 s of summed test time cannot fit in it.
+    const r = build([outcome("M0001", "killed", 9_000)]);
+    const timingLine =
+      renderConsole(r)
+        .split("\n")
+        .find((l) => l.startsWith("TIMING:")) ?? "";
+    expect(timingLine).toContain("mutant phase 4.5s (with overhead)");
+    expect(timingLine).toContain("summed test time, 9.0s, is more than that");
+    expect(timingLine).not.toContain("+ mutants 9.0s");
+  });
+
+  test("R-913: no mutants and phases over the total: no overlap claim", () => {
+    const r = build([], { total: 1000 });
+    const timingLine =
+      renderConsole(r)
+        .split("\n")
+        .find((l) => l.startsWith("TIMING:")) ?? "";
+    expect(timingLine).toContain("+ mutants 0.0s + overhead 0.0s");
+    expect(timingLine).not.toContain("overlapped");
+  });
+
   test("states the phase split and the per-mutant distribution", () => {
     const r = build([outcome("M0001", "killed", 400), outcome("M0002", "survived", 600)]);
     const text = renderConsole(r);
@@ -145,10 +167,9 @@ describe("renderConsole — timing line", () => {
     // run rather than in the arithmetic.
     const r = build([outcome("M0001", "killed", 9_000)], { total: 1000 });
     const text = renderConsole(r);
-    // R-913: the summed test time is then not a term of the total (serve overlaps tests), so the
-    // line names it apart and derives no overhead.
-    expect(text).toContain("the mutants' summed test time, 9.0s, is more than that");
-    expect(text).not.toContain("+ mutants 9.0s");
+    // R-913: the phases overran the total, so nothing overlapped: sum form, overhead clamped.
+    expect(text).toContain("+ mutants 9.0s + overhead 0.0s");
+    expect(text).not.toContain("overlapped");
     // Scoped to the TIMING line: hyphens are everywhere else in the report ("no-coverage",
     // "lethal.empty-block"), so asserting over the whole render would pass or fail for reasons
     // that have nothing to do with the arithmetic under test.

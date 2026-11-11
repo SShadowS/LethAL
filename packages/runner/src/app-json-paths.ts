@@ -1,5 +1,5 @@
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /**
  * R-422 / R-913: one replacement made in an app.json path. `field` is `logo`, `screenshots[<i>]`
@@ -35,12 +35,16 @@ export type CaseResolver = (path: string) => string | undefined;
  */
 export function diskCaseResolver(dir: string): CaseResolver {
   return (path) => {
+    // An absolute path, a drive letter or a `..` step leaves the project: not ours to fix.
+    const segs = path.split("/");
+    if (isAbsolute(path) || /^[A-Za-z]:/.test(segs[0] ?? "") || segs.includes("..")) {
+      return undefined;
+    }
     let cur = dir;
     const out: string[] = [];
-    for (const seg of path.split("/")) {
-      if (seg === "" || seg === "." || seg === "..") {
+    for (const seg of segs) {
+      if (seg === "" || seg === ".") {
         out.push(seg);
-        cur = join(cur, seg);
         continue;
       }
       let names: string[];
