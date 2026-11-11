@@ -93,7 +93,7 @@ export interface TestVerdict {
    * R272: this test's own duration, on a `pass`. The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
-   * al-runner's in-run stop. al-runner sets the runner's own per-test figure, since its
+   * al-runner's in-run stop. Since R914 the R912 estimate and window cut read it too. al-runner sets the runner's own per-test figure, since its
    * `durationMs` includes a compile per call (one-shot) or is the whole suite's (`--server`).
    * bcdev sets its per-test call's wall clock (`BcDevBackend.run`), equal to its `durationMs`.
    * Absent: not measured per test.
