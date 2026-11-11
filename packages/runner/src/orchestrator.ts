@@ -65,6 +65,7 @@ import {
   diskCaseResolver,
   normaliseAppJsonPaths,
 } from "./app-json-paths";
+import { listPackageEntries } from "./app-package";
 import {
   UpgradeClashRefusedError,
   UpgradeNotRestoredError,
@@ -244,6 +245,7 @@ import {
 import {
   type PublishedApp,
   comparePublishedTestApp,
+  isAlSourceEntry,
   parsePublishedApp,
   publishedAlSources,
   publishedTestAppWarning,
@@ -6518,6 +6520,14 @@ async function runSessionBody(
     (await provenWithoutHook(cfg, buildBackend.kind, publishedRead))
       ? testAppHash
       : undefined;
+  if (
+    envPublishes === undefined &&
+    !isLocalRunner(buildBackend.kind) &&
+    publishedRead.kind === "bytes" &&
+    servedWithoutSource(publishedRead.bytes)
+  ) {
+    emit({ type: "warning", code: "test-app-identity-unproven", message: SOURCE_LESS_UNPROVEN });
+  }
   // R496: al-runner has no lease and no server, so its dependency fingerprint (its app.json and
   // package folders) is complete here and is recorded with the run row. Every other session takes
   // it under the lease (below).
@@ -7131,6 +7141,13 @@ async function runSessionBody(
       // R492: the SERVED package is this run's test app only with proof it is the installed one
       // (`proveReadBack`); a served hash alone once recorded P2 for a run that measured P1.
       readBackProof = await proveReadBack(cfg, envPublishes, after.sources);
+      if (after.sources.kind === "source-less" && "why" in readBackProof) {
+        emit({
+          type: "warning",
+          code: "test-app-identity-unproven",
+          message: SOURCE_LESS_UNPROVEN,
+        });
+      }
       const proven = "proven" in readBackProof ? after.packageHash : undefined;
       // R496: proof covers the whole closure: this fingerprint checks every extension in it
       // installed, including the ones the hook did not publish. From the served package's
@@ -10513,6 +10530,23 @@ interface EnvToolPublishes {
 }
 
 /**
+ * R932: a served test-app package with no `.al` entry cannot show which test BODIES the server
+ * runs (a same-version republish that edits only bodies leaves it unchanged, and Windows BC serves
+ * a rebuilt symbol-only package with fresh entry times), so it proves no identity. An unreadable
+ * package is not "source-less": the callers already refuse it by their own checks.
+ */
+export function servedWithoutSource(bytes: Uint8Array): boolean {
+  try {
+    return !listPackageEntries(Buffer.from(bytes)).some(isAlSourceEntry);
+  } catch {
+    return false;
+  }
+}
+
+const SOURCE_LESS_UNPROVEN =
+  "[lethal] R932: test-app identity not proven: the served test-app package has no AL source, so it cannot show which test bodies run (Windows BC serves a rebuilt symbol-only package; elsewhere, build the test app so its .app includes its source). No drift check, no baseline-snapshot or verdict reuse, and --resume refuses this run.";
+
+/**
  * R495: whether a session WITHOUT a hook measures the test app it identified (`read`). al-runner
  * compiles the test source it hashed, so its `no-fetch` identity is proven by construction (decided
  * by the BACKEND, never by a `source:` prefix: bcdev runs the published app, not the disk). bcdev's
@@ -10527,6 +10561,7 @@ async function provenWithoutHook(
   // R586: v3 also reads the test source itself (and its compile proof hashes that dir per run).
   if (isLocalRunner(backendKind)) return read.kind === "no-fetch";
   if (read.kind !== "bytes") return false;
+  if (servedWithoutSource(read.bytes)) return false; // R932
   let got: ReturnType<typeof readAppIdentity>;
   try {
     got = readAppIdentity(Buffer.from(read.bytes));
@@ -10627,6 +10662,11 @@ async function proveReadBack(
     return { why: `an app read back ${AFTER} is not proven installed: ${err.message}` };
   }
   const file = publishes.testApp;
+  // R932: a source-less read-back proves nothing unless it is byte-equal to a publishApps file
+  // (below); with no such file there is nothing to prove it against.
+  if (file === undefined && sources.kind === "source-less") {
+    return { why: `${SOURCE_LESS_UNPROVEN.replace("[lethal] ", "")}` };
+  }
   if (file !== undefined) {
     let local: Buffer;
     let want: ReturnType<typeof readAppIdentity>;
@@ -10652,7 +10692,7 @@ async function proveReadBack(
       const published = hashPackage(local);
       if (served !== published) {
         return {
-          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say)`,
+          why: `the test app read back ${AFTER} carries no AL source and its bytes differ from the publishApps file ${file.path} (sha256 ${served}, file ${published}), so that file is not known to be what runs (a publish that skipped an already-installed version, say; or R932: Windows BC serves a rebuilt package that never equals the file)`,
         };
       }
       return { proven: true };

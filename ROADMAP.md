@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 894 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**21 of 894 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -356,7 +356,7 @@ that ordering is the priority.
 - **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · done (2b021840)
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
 - **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
-- **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · open — measurement: the Windows probe is with the owner (coord R-910); no reader change until it is back
+- **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · closed 2026-11-11 — measured on Windows BC 28.4 (R910Win): no hang, RunModal fails fast both ways; no reader…
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
 - **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87, 810d07d7): a v3 fail keeps stackTrace; leg C's row texts leave it out
@@ -938,7 +938,7 @@ that ordering is the priority.
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert: an upsert of two existing rows through one buffer, on its second pass (upstream #7798) · [R929.md](docs/roadmap/R929.md) · open
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
-- **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · open
+- **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
 
 ---
 

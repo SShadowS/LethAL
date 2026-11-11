@@ -972,7 +972,7 @@ the package the server holds, each with exactly one installed row at that versio
 to another only when both are equal, so a library the tests depend on that was rebuilt between two
 runs (same id and version, other bytes) carries nothing across. Where the fingerprint is taken:
 - bcdev without a hook: under the lease, from the served test-app package's manifest (a package
-  without `.al` source is fingerprinted too). If a dependency changed while the session waited for
+  without `.al` source is not proven at all since R932, so it gets no fingerprint). If a dependency changed while the session waited for
   the lease, so that its pre-lease digests no longer match, the run keeps neither its identity nor
   its digests and warns `test-digests-unavailable` once; a fresh run then runs unproven, and a
   requested resume refuses with `TestAppRepublishedError`;
@@ -987,13 +987,20 @@ app's dependencies changed (A, now B)" or "it recorded no dependency fingerprint
 installed app outside the dependency closure, a dependency changed during the batches, and the
 control app's own bytes (only its version and its dependencies count).
 
-**A hook session whose test app has no `.al` source (R498)** is proven when the package read back
-after the hook is byte for byte the `publishApps` test-app file (same SHA-256), on top of the usual
-installed checks. If no `publishApps` file is the test app, the installed checks alone prove it. It
-records its identity and dependency fingerprint, but no test digests (one `test-digests-unavailable`
-warning: "carries no AL source"). Byte equality was measured on the dev-endpoint (`altool`) publish
-route only. The hook publishes through the env tool's own publish command; if that command
-repackages the file, the bytes differ and the run stays unproven (safe, but no resume, skip or reuse).
+**A served test app with no `.al` source proves nothing about the test bodies the server runs
+(R498, R932).** A hook session whose test app has no `.al` source is proven only when the package
+read back after the hook is byte for byte the `publishApps` test-app file (same SHA-256), on top of
+the usual installed checks. If no `publishApps` file is the test app, there is nothing to compare
+with, so the run is unproven. A session without a hook is unproven whenever the served package has
+no `.al` source. An unproven run records no identity, so there is no drift check, no snapshot or
+verdict reuse, and `--resume` refuses it; it warns `test-app-identity-unproven` (R932). A proven
+source-less hook run records its identity and dependency fingerprint, but no test digests (one
+`test-digests-unavailable` warning: "carries no AL source"). Byte equality was measured on the
+dev-endpoint (`altool`) publish route only. The hook publishes through the env tool's own publish
+command; if that command repackages the file, the bytes differ and the run stays unproven. A Windows
+BC server serves a rebuilt symbol-only package (no source, fresh entry times, a NUL-padded
+`SymbolReference.json`) that never equals the compiled file, so on Windows such a run is always
+unproven: build the test app so its `.app` includes its source.
 
 **Second one-time cost on upgrade.** Runs recorded before R496, R495's included, carry no
 fingerprint, so the first run after this upgrade carries nothing on `--resume`, skips nothing on

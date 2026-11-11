@@ -23,7 +23,7 @@ import {
   startsInInactiveArm,
   wrapRoot,
 } from "@lethal/engine";
-import { readPackageEntry } from "./app-package";
+import { parseSymbolReferenceJson, readPackageEntry } from "./app-package";
 import { RECOVERY_DOC } from "./app-version";
 import { type PublishedPackageRead, isUnread } from "./backend";
 import { WALK_MAX_APPS, WALK_MAX_MS, testsFirst } from "./dependents-warning";
@@ -441,11 +441,9 @@ export function declaredObjectsOfPackage(
     return { unreadable: `the package is not a readable app (${String(err)})` };
   }
   if (entry === null) return { unreadable: "the package carries no SymbolReference.json" };
-  let text = entry.toString("utf8");
-  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
   let json: unknown;
   try {
-    json = JSON.parse(text);
+    json = parseSymbolReferenceJson(entry);
   } catch (err) {
     return { unreadable: `its SymbolReference.json is not valid JSON (${String(err)})` };
   }
