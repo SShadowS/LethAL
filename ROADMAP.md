@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**22 of 879 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 880 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -924,6 +924,7 @@ that ordering is the priority.
 - **R915** · The R912 estimate sums each baseline call's time, not each test's, so on al-runner it reads about 13 times too high and windows are cut too small; and the progress median reads 0.0s · [R915.md](docs/roadmap/R915.md) · open
 - **R916** · One baseline test that v3 refuses at the serve warm-up drops the whole session to one-shot, so every mutant loses the serve speed-up · [R916.md](docs/roadmap/R916.md) · open
 - **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · open
+- **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · open
 
 ---
 
