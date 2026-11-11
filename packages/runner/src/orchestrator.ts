@@ -11940,7 +11940,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         attempted.add(testKeyOf(ref));
         ranRefs.push(ref);
       }
-      spent += v.durationMs;
+      // R934: the test's own time where the backend measured it. On al-runner `durationMs` is the whole
+      // call's (the whole request on serve), so summing it per covering test multiplied it. A row with
+      // no own figure (al-runner reports one on a pass only) still adds its call's time.
+      spent += v.measuredDurationMs ?? v.durationMs;
       // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
       if (step.discoveryRefused === true) continue;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:

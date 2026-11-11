@@ -6503,6 +6503,8 @@ describe("R912: windows and --time-budget", () => {
     coverOnlyFirst = false;
     /** R914: the test's own time; `durationMs` (the whole call, compile included) stays `baselineMs`. */
     measuredMs: number | undefined;
+    /** R934: under a mutant, a passing row's call time (`durationMs`) and its own time (`measuredDurationMs`). */
+    mutantRow: { callMs: number; ownMs: number } | undefined;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {
       super("pass");
@@ -6530,8 +6532,10 @@ describe("R912: windows and --time-budget", () => {
             : {}),
         };
       }
-      return killedId(this.active)
-        ? { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` }
+      if (killedId(this.active))
+        return { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` };
+      return this.mutantRow !== undefined
+        ? { ...v, durationMs: this.mutantRow.callMs, measuredDurationMs: this.mutantRow.ownMs }
         : v;
     }
     async prefetchMutants(
@@ -6651,6 +6655,22 @@ describe("R912: windows and --time-budget", () => {
     );
     // At 5 s each they all fit one 600 s window; at the call's 400 s they would go one to a window.
     expect(run.backend.prefetches).toHaveLength(1);
+  });
+
+  test("R934: a survivor's durationMs sums each covering test's own time, not the call's time once per test", async () => {
+    // Each passing row under a mutant reports the whole call (60 s) as durationMs and 7 ms as its own.
+    const run = await runWith(5, {}, (b) => {
+      b.mutantRow = { callMs: 60_000, ownMs: 7 };
+    });
+    const survivors = run.report.mutants.filter((m) => m.verdict === "survived");
+    expect(survivors.length).toBeGreaterThan(0);
+    for (const m of survivors) {
+      expect(m.coveringTests.length).toBeGreaterThan(0);
+      expect([m.mutantCode, m.durationMs]).toEqual([m.mutantCode, 7 * m.coveringTests.length]);
+    }
+    expect(run.report.timings.mutantsMs).toBe(
+      run.report.mutants.reduce((n, m) => n + m.durationMs, 0),
+    );
   });
 
   test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {
