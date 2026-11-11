@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**24 of 893 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 893 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -937,7 +937,7 @@ that ordering is the priority.
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert; no repro yet, so not filed upstream · [R929.md](docs/roadmap/R929.md) · open
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
-- **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · open
+- **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
 
 ---
 

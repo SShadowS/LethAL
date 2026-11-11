@@ -2146,6 +2146,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
       const app = {
         appPath,
         sha256: hashPackage(NEW),
+        packageHash: hashPackage(NEW),
         appId: TESTS_APP_ID,
         name: "LethAL Sandbox Tests",
         publisher: "LethAL",
@@ -2227,6 +2228,7 @@ describe("BcDevMcpBackend.compileTestApp / publishTestApp (C02-05)", () => {
     const app = {
       appPath: "C:/unused/x.app",
       sha256: "0".repeat(64),
+      packageHash: "0".repeat(64),
       appId: "x",
       name: "x",
       publisher: "x",

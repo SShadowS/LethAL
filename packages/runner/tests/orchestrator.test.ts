@@ -20859,6 +20859,7 @@ const OLD = testsPkg("1.0.0.2", { "src/T.al": "old" });
 const COMPILED: CompiledTestApp = {
   appPath: "C:/out/x-testapp.app",
   sha256: hashPackage(NEW),
+  packageHash: hashPackage(NEW),
   appId: TESTS_ID,
   name: "LethAL Sandbox Tests",
   publisher: "LethAL",
