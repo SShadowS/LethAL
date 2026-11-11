@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 893 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 893 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -929,12 +929,12 @@ that ordering is the priority.
 - **R913** · The v3 gate says PASS when the D legs (LETHAL_ITEST_V3_CDO) or leg T (LETHAL_ITEST_V3_TABLES) were skipped, so a receipt can claim the full gate while measuring less · [R913.md](docs/roadmap/R913.md) · done (d4c76de9) — the PASS line names every leg of the full set that did not run, and why
 - **R914** · The console TIMING line adds the mutants' summed test time into the total: on serve that sum overlaps and can be 85x the wall time (39,906.8 s in a 469.9 s run) · [R914.md](docs/roadmap/R914.md) · done (6011c87f; review fixes cd9672df)
 - **R915** · The R912 estimate sums each baseline call's time, not each test's, so on al-runner it reads about 13 times too high and windows are cut too small; and the progress median reads 0.0s · [R915.md](docs/roadmap/R915.md) · done (8028a854)
-- **R916** · One baseline test that v3 refuses at the serve warm-up drops the whole session to one-shot, so every mutant loses the serve speed-up · [R916.md](docs/roadmap/R916.md) · open
-- **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · open
+- **R916** · One baseline test that v3 refuses at the serve warm-up drops the whole session to one-shot, so every mutant loses the serve speed-up · [R916.md](docs/roadmap/R916.md) · done (fc7e0e2a): auto breaks a tie toward method when v3 refused a test by name and method loses none; serve…
+- **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · done (93588a07): a dry run reads --allow-large-run, --tests and --time-budget
 - **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · open
-- **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · open
+- **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · done (fc7e0e2a): the same tie rule; the refused test is never sent under method
 - **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
-- **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · open
+- **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert; no repro yet, so not filed upstream · [R929.md](docs/roadmap/R929.md) · open
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · open
