@@ -4151,11 +4151,18 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     class TimedBackend extends RecordingBackend {
       override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
         const v = await super.run(ref, opts);
-        return { ...v, ...(v.outcome === "error" ? { outcome: "fail" as const } : {}), measuredDurationMs: 9 };
+        return {
+          ...v,
+          ...(v.outcome === "error" ? { outcome: "fail" as const } : {}),
+          measuredDurationMs: 9,
+        };
       }
     }
     const dirs = await project();
-    const backend = new TimedBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false }, "boom");
+    const backend = new TimedBackend(
+      { ...FENCED, kind: "al-runner-v3", authoritative: false },
+      "boom",
+    );
     const events: RunEvent[] = [];
     await runSession({
       backend,
