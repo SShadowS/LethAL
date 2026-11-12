@@ -659,8 +659,9 @@ from the first of these that is present:
 Relative paths are relative to the project folder. A listed folder that does not exist is refused by
 name before anything compiles, and so is a path containing `,` or `;` (alc splits the list on both).
 `lethal doctor --project <dir>` shows the list and where it came from (`assembly-probing-paths`). The
-list is part of the resume fingerprint when it is not empty. It reaches alc only: al-runner-v3's own
-`--dotnet-assembly-dir` is a separate setting, not wired from this one.
+list is part of the resume fingerprint when it is not empty. With `--backend al-runner-v3` the same
+folders also reach al-runner's .NET sidecar, as one `--dotnet-assembly-dir` per folder (R941/R943), so a
+test that loads one of those assemblies at run time finds it there too.
 
 Point it at a Windows BC service folder's assemblies, even when alc runs on Linux. With the service
 folder copied from a BC 28.4 server on Linux (the one measured), alc failed DotNet generic conversions
