@@ -331,6 +331,11 @@ project inventory, and zero skipped affected projects.
 
 ### Selection is default-deny, by module
 
+R-936 (2026-11-12): test-only paths (`packages/*/tests/**`, any `*.test.ts`) select no legs, and are matched by
+their own row alone (the union rule does not add the general rows' legs to them). Fixtures an itest names select that
+itest's legs; fixtures no itest names are listed by name with no legs; a new fixture still defaults to the full
+set. `gate-table.test.ts` derives the read set from the itest sources and fails if a named fixture selects nothing.
+
 An unmatched path selects **every** leg. The first draft of the table omitted
 `packages/builtin-tier2/**`, which exists, so Tier-2 operator changes would have selected zero
 live legs. The table will always be incomplete; incompleteness must fail safe.
