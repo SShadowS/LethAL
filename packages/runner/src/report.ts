@@ -256,6 +256,7 @@ export type Caveat =
   | "test-symbols-unverified"
   | "project-symlink-skipped"
   | "baseline-test-stopped"
+  | "al-runner-v3-serve-default-fallback"
   | "al-runner-v3-serve-default-fallback-warmup"
   | "al-runner-v3-coverage-off"
   | "time-budget-reached";
@@ -641,6 +642,19 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a quarantine: a stop BC never answers quarantines the run instead, at the baseline, " +
       "the cold kill confirm and the warm replay alike.",
     basis: "R658",
+  },
+  "al-runner-v3-serve-default-fallback": {
+    meaning:
+      "The al-runner-v3 session ran one-shot, not the serve-entries default, because a reason held " +
+      "before any process started: a --resume, a test method name whose shape serve-entries is not " +
+      "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
+      "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
+      "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
+      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
+    entailedNegative:
+      "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
+      "serve-entries default is proven against.",
+    basis: "R922",
   },
   "al-runner-v3-serve-default-fallback-warmup": {
     meaning:
@@ -3003,6 +3017,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
     caveats.push("project-symlink-skipped");
+  // R922 (4) - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback"]. From the warning itself: no field.
+  if (events.some((e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback"))
+    caveats.push("al-runner-v3-serve-default-fallback");
   // R786 - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback-warmup"]. From the warning itself: no field.
   if (
     events.some(

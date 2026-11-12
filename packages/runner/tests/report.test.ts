@@ -237,11 +237,12 @@ describe("Caveat union", () => {
       "test-symbols-unverified": true,
       "project-symlink-skipped": true,
       "baseline-test-stopped": true,
+      "al-runner-v3-serve-default-fallback": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
       "al-runner-v3-coverage-off": true,
       "time-budget-reached": true,
     };
-    expect(Object.keys(all).length).toBe(31);
+    expect(Object.keys(all).length).toBe(32);
   });
 });
 
@@ -379,6 +380,11 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       buildReport(STATICS, seq([warn("al-runner-v3-serve-default-fallback"), ...base])).validity
         .caveats,
     ).not.toContain(code);
+    // R922 (4): the pre-flight fallback is a caveat of its own, not only a stderr line.
+    const pre = "al-runner-v3-serve-default-fallback";
+    expect(buildReport(STATICS, seq([warn(pre), ...base])).validity.caveats).toContain(pre);
+    expect(buildReport(STATICS, seq(base)).validity.caveats).not.toContain(pre);
+    expect(buildReport(STATICS, seq([warn(code), ...base])).validity.caveats).not.toContain(pre);
   });
 
   describe("R907: coverage LethAL turned off reaches the report and the console", () => {
