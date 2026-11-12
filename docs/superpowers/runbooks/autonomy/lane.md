@@ -56,6 +56,9 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    message the orchestrator.
 4. Work with the superpowers `subagent-driven-development` skill: TDD, a review subagent before
    submitting. Follow `CLAUDE.md`'s build/test order exactly.
+   **Order (orchestrator, 2026-11-12):** build, red checks, VERIFY, then the Opus build review, fix its findings, and only
+   then the gates and CI, once, on the final head. A gate run before the review is repeated after its fixes and costs a
+   slot wait; skip it unless the review needs its output.
 5. Checkpoint at every phase change (`red`, `green`, `review`, `waiting-owner`) and at least
    every 15 minutes. Every checkpoint also polls the pause.
 6. File a roadmap item the moment you find a new gap (`docs/roadmap/R<nnn>.md`, re-check the
