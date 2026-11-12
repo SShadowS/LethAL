@@ -8,10 +8,12 @@ import { join } from "node:path";
 import { v3CallArgv } from "../src/al-runner-v3-backend";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
+  V3EnvironmentUnknownError,
   chooseV3Environment,
   describeV3Environment,
   resolveV3Environment,
 } from "../src/al-runner-v3-environment";
+import { buildBackend } from "../src/cli";
 import { sessionFingerprint } from "../src/resume";
 
 const base = { packagesDir: "/p", bcVersion: "28.0.46665.47126" };
@@ -62,16 +64,58 @@ describe("R938: which environment is chosen", () => {
       await chooseV3Environment(await project(launchOf("Sandbox", "Production")), undefined),
     ).toEqual({ value: "saas", source: "launch.json" });
   });
-  test("configurations that disagree give no answer, and the note names the disagreement", async () => {
-    const c = await chooseV3Environment(await project(launchOf("OnPrem", "Sandbox")), undefined);
-    expect(c.value).toBeUndefined();
-    expect(c.source).toBe("unstated");
-    expect(c.note).toContain("disagree");
-    expect(describeV3Environment(c)).toContain("not stated");
+  test("configurations that disagree are refused, and the message names the disagreement", async () => {
+    await expect(
+      chooseV3Environment(await project(launchOf("OnPrem", "Sandbox")), undefined),
+    ).rejects.toThrow("disagree on environmentType");
   });
-  test("no launch.json, no configurations and no environmentType give no answer", async () => {
+  test("no launch.json, no configurations and no environmentType are refused with the exact fix", async () => {
     for (const launch of [undefined, "{}", '{ "configurations": [ { "name": "x" } ] }', "not json"])
-      expect((await chooseV3Environment(await project(launch), undefined)).value).toBeUndefined();
+      await expect(chooseV3Environment(await project(launch), undefined)).rejects.toThrow(
+        `al-runner-v3: the target's environment is unknown (no alRunnerV3.environment in the config, no environmentType in the target's .vscode/launch.json)`,
+      );
+    await expect(chooseV3Environment(await project(undefined), undefined)).rejects.toThrow(
+      '; set alRunnerV3.environment to "onprem" or "saas"',
+    );
+  });
+  test("the refusal is a typed error that extends Error directly", async () => {
+    const e = await chooseV3Environment(await project(undefined), undefined).catch((x) => x);
+    expect(e).toBeInstanceOf(V3EnvironmentUnknownError);
+    expect(Object.getPrototypeOf(V3EnvironmentUnknownError)).toBe(Error);
+  });
+  test("buildBackend refuses before the version check or any compile", async () => {
+    if (process.platform !== "linux") return; // refuseV3Platform comes first elsewhere
+    const dir = await project(undefined);
+    await writeFile(
+      join(dir, "app.json"),
+      JSON.stringify({
+        id: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+        idRanges: [{ from: 79000, to: 79199 }],
+        runtime: "17.0",
+      }),
+    );
+    // packagesDir does not exist: any later check would fail with a different message.
+    await expect(
+      buildBackend(
+        {
+          mode: "run",
+          projectDir: dir,
+          testDir: dir,
+          backendKind: "al-runner-v3",
+          dbPath: "db",
+          configPath: "cfg",
+          skipKnownSurvivors: false,
+          workers: 1,
+          keepEnv: false,
+          allowExpiringEnv: false,
+        } as Parameters<typeof buildBackend>[0],
+        { alRunnerV3: { ...base, packagesDir: join(dir, "nope") } },
+        dir,
+        undefined,
+        { alcRunnable: () => true },
+        { selectorId: 79199, controlId: 79198, tableId: 79197 },
+      ),
+    ).rejects.toThrow('set alRunnerV3.environment to "onprem" or "saas"');
   });
   test("the config key wins over launch.json, and then launch.json is not read", async () => {
     const dir = await project(launchOf("OnPrem"));
@@ -83,12 +127,12 @@ describe("R938: which environment is chosen", () => {
     });
     expect(reads).toBe(0);
   });
-  test("the decision itself: config, then launch.json, then unstated", () => {
+  test("the decision itself: config, then launch.json, then a refusal", () => {
     expect(resolveV3Environment({ config: "onprem", launch: { value: "saas" } }).source).toBe(
       "config",
     );
     expect(resolveV3Environment({ launch: { value: "saas" } }).source).toBe("launch.json");
-    expect(resolveV3Environment({ launch: {} })).toEqual({ value: undefined, source: "unstated" });
+    expect(() => resolveV3Environment({ launch: {} })).toThrow(V3EnvironmentUnknownError);
   });
   test("the header line names the value and where it came from", () => {
     expect(describeV3Environment({ value: "onprem", source: "config" })).toBe(

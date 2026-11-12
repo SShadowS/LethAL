@@ -158,8 +158,10 @@ no-coverage. Such a report carries the caveat `al-runner-v3-coverage-off` and na
 `coverageOffFiles` (R907). Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
-An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
-numbers); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
+An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, `bcVersion` as four
+numbers, and `environment`: `"onprem"` or `"saas"`, the server the target runs on; if you leave it out
+LethAL reads `environmentType` from the target's `.vscode/launch.json`, and if neither names one the run
+is refused before any compile, R938); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
 (where upstream's installer writes it). Microsoft's symbols
 come from `bun scripts/fetch-ms-symbols.ts <bc-major> <out-dir>` (it prints the `bcVersion`), and `alc`
 comes from the AL Language extension or, on a Linux box with .NET but no VS Code, from

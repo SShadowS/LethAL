@@ -59,10 +59,21 @@ export async function readLaunchEnvironment(
   return {};
 }
 
+/** R938 (owner's ruling A): nothing answered, so the run stops by name before any compile. */
+export class V3EnvironmentUnknownError extends Error {
+  constructor(note?: string) {
+    super(
+      `al-runner-v3: the target's environment is unknown (no alRunnerV3.environment in the config, no environmentType in the target's .vscode/launch.json)${
+        note !== undefined ? ` (${note})` : ""
+      }; set alRunnerV3.environment to "onprem" or "saas"`,
+    );
+    this.name = "V3EnvironmentUnknownError";
+  }
+}
+
 /**
- * THE decision (R938). The step-3 choice (nothing answered) is the owner's and lives here, and only
- * here: today it returns "unstated", so no flag is passed. To refuse by name, throw in that branch;
- * to warn, `cli.ts` already prints the "unstated" line.
+ * THE decision (R938): config, then launch.json; when neither answers, refuse by name (owner's
+ * ruling A, "unknown is not no"). The "unstated" source stays a type for older stored reports.
  */
 export function resolveV3Environment(a: {
   readonly config?: V3Environment | undefined;
@@ -70,11 +81,7 @@ export function resolveV3Environment(a: {
 }): V3EnvironmentChoice {
   if (a.config !== undefined) return { value: a.config, source: "config" };
   if (a.launch.value !== undefined) return { value: a.launch.value, source: "launch.json" };
-  return {
-    value: undefined,
-    source: "unstated",
-    ...(a.launch.note !== undefined ? { note: a.launch.note } : {}),
-  };
+  throw new V3EnvironmentUnknownError(a.launch.note);
 }
 
 /** The config key wins, and then launch.json is not even read. */

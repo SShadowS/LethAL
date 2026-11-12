@@ -570,6 +570,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             packagesDir: e.deps,
             bcVersion: "28.0.46665.47126",
             alcPath: "/fake/alc",
@@ -613,6 +614,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             packagesDir: e.deps,
             bcVersion: "28.0.46665.47126",
             alcPath: "/fake/alc",

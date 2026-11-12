@@ -3145,6 +3145,9 @@ async function buildAlRunnerV3Backend(
     warn: () => {},
   });
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+  // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
+  // environment is unknown (owner's ruling A), before the version check, alc or any compile.
+  const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
   if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
@@ -3159,8 +3162,6 @@ async function buildAlRunnerV3Backend(
     deps.source,
   );
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
-  // R938: the target project (the dir LethAL runs), not the tests dir.
-  const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
   console.warn(describeV3Environment(environmentChoice));
   return new AlRunnerV3Backend(
     {

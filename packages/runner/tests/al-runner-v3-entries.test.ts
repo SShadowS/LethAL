@@ -2504,6 +2504,7 @@ describe("the CLI threads the option through (wiring)", () => {
       } as Parameters<typeof buildBackend>[0],
       {
         alRunnerV3: {
+          environment: "saas", // R938
           packagesDir: deps,
           bcVersion: "28.0.46665.47126",
           alcPath: "/fake/alc",

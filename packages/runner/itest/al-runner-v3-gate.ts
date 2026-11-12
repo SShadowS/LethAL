@@ -779,6 +779,24 @@ export function v3ItestTransport(env: Readonly<Record<string, string | undefined
 }
 
 /**
+ * R938: the environment every leg of `itest:alrunner-v3` runs under (`--environment`).
+ * `LETHAL_ITEST_V3_ENVIRONMENT=saas|onprem`; unset gives `saas`, the one the pinned tables were
+ * measured under. Any other value refuses by name.
+ */
+export function v3ItestEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): "saas" | "onprem" {
+  const v = env.LETHAL_ITEST_V3_ENVIRONMENT;
+  if (v === undefined) return "saas";
+  if (v !== "saas" && v !== "onprem") {
+    throw new Error(
+      `al-runner-v3-itest-environment-refused: LETHAL_ITEST_V3_ENVIRONMENT=${JSON.stringify(v)}; allowed: saas, onprem (R938)`,
+    );
+  }
+  return v;
+}
+
+/**
  * R788: the gate's big legs run serve-entries, the users' default since R761; the other
  * flag-following legs keep one-shot (S1, N1, MO and WR cover it). `LETHAL_ITEST_V3_TRANSPORT`, when
  * set, still names the transport for every flag-following leg (so `one-shot` reproduces the old

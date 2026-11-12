@@ -109,6 +109,7 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3ItestEnvironment,
   v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
@@ -267,6 +268,8 @@ const V3_WORKERS = ((raw) => {
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
 /** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
 const TRANSPORT = v3ItestTransport(process.env);
+/** R938: every leg's `--environment`: `saas` unless `LETHAL_ITEST_V3_ENVIRONMENT=onprem`. */
+const ENVIRONMENT = v3ItestEnvironment(process.env);
 const REPORT_DIR = process.env.LETHAL_ITEST_V3_REPORT_DIR;
 const CONTROL_DIR = process.env.LETHAL_ITEST_V3_CONTROL_DIR;
 const SANDBOX_BC = "28.0.46665.47126";
@@ -329,6 +332,7 @@ function backendCfg(
     dotnetSidecar: false,
     isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
     coverage: "al-runner",
+    environmentChoice: { value: ENVIRONMENT, source: "config" }, // R938: stated, never unknown
     ...(CANDIDATE ? { candidate: true } : {}),
     ...TRANSPORT,
     ...o,
@@ -1516,6 +1520,7 @@ async function legK(scratch: string): Promise<void> {
             bcVersion: SANDBOX_BC,
             alcPath: ALC,
             cacheDir: CACHE,
+            environment: ENVIRONMENT,
           }),
           // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
           downloadDemoData: false,
@@ -2405,6 +2410,7 @@ async function main(): Promise<void> {
     });
   const dirty = dirtyFromStatus(statusNow());
   console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty ? " (DIRTY)" : ""}`);
+  console.log(`al-runner-v3 itest: environment ${ENVIRONMENT} (every leg; R938)`);
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );

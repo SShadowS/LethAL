@@ -149,11 +149,18 @@ credentials.
   "alRunnerV3": {
     "packagesDir": "/home/you/symbols",
     "bcVersion": "28.5.54151.54365",
-    "alcPath": "/home/you/alc/alc"
+    "alcPath": "/home/you/alc/alc",
+    "environment": "onprem"
   },
   "selectorIds": { "selectorId": 90199, "controlId": 90198, "tableId": 90197 }
 }
 ```
+
+- `environment` is required: `"onprem"` or `"saas"`, the server your code runs on. Tests that call
+  `SetTestabilitySoftwareAsAService(false)` and code that checks `IsSaaS` behave differently in each. If you
+  leave it out, LethAL reads `environmentType` from the target's `.vscode/launch.json` (`OnPrem` is
+  `onprem`; `Sandbox` and `Production` are `saas`). If neither names one, the run is refused before it
+  compiles anything (R938).
 
 - `bcVersion` is four numbers (`28.5.54151.54365`, not `28.5`). It must equal the System Application
   in `packagesDir`.
@@ -877,7 +884,7 @@ a LethAL feature or a mode.
   `campaign` refuse a report of it. Its gate (`itest:alrunner`) is gone; its frozen figures are kept
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
-  configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required;
+  configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required, and `environment` (`"onprem"` or `"saas"`) unless the target's `.vscode/launch.json` names one, R938;
   `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`; with it on, the feed's copy replaces an older Microsoft app in `.alpackages`), `dotnetSidecar` optional (R886: a path to al-runner's .NET helper, passed as `--dotnet-sidecar`; absent: the pinned build's own, when the update script built one; `false`: none); the section alone is a complete config, see
   [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change

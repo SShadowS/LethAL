@@ -8,7 +8,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
+import { V3_GATE_LEGS, gateOutcome, v3ItestEnvironment } from "../itest/al-runner-v3-gate";
 import {
   V3_AGENTFLOW_LEGS,
   V3_K_CANDIDATE_SKIP,
@@ -266,17 +266,39 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     bcVersion: BC,
     alcPath: "/p/alc",
     cacheDir: "/p/cache",
+    environment: "saas" as const,
   };
 
-  test("the section names no coverage and no transport key (the CLI's defaults decide)", () => {
+  test("the section names no coverage and no transport key, but states an environment (R938)", () => {
     const s = legKSection(SECTION_IN);
     expect(Object.keys(s).sort()).toEqual([
       "alcPath",
       "bcVersion",
       "cacheDir",
+      "environment",
       "packagesDir",
       "path",
     ]);
+    expect(s.environment).toBe("saas");
+  });
+
+  test("R938: the itest env override sets saas by default, onprem on request, and refuses the rest", () => {
+    expect(v3ItestEnvironment({})).toBe("saas");
+    expect(v3ItestEnvironment({ LETHAL_ITEST_V3_ENVIRONMENT: "onprem" })).toBe("onprem");
+    expect(() => v3ItestEnvironment({ LETHAL_ITEST_V3_ENVIRONMENT: "OnPrem" })).toThrow(
+      "al-runner-v3-itest-environment-refused",
+    );
+  });
+
+  test("R938: every v3 itest config builder states an environment", async () => {
+    const src = await Bun.file(join(import.meta.dir, "../itest/al-runner-v3.itest.ts")).text();
+    // Every backend is built through backendCfg, and backendCfg states the choice.
+    const direct = src.match(/new AlRunnerV3Backend\(\s*(?!\s|backendCfg\()/g) ?? [];
+    expect(direct).toEqual([]);
+    const cfg = /function backendCfg\([\s\S]*?\n}\n/.exec(src)?.[0] ?? "";
+    expect(cfg).toContain("environmentChoice: { value: ENVIRONMENT");
+    // K's CLI-built section passes the environment too.
+    expect(src).toMatch(/legKSection\(\{[^}]*environment: ENVIRONMENT/);
   });
 
   const good = {
@@ -323,6 +345,7 @@ describe("R586c: K on a candidate build (an opt-in test seam)", () => {
       bcVersion: BC,
       alcPath: "/fake/alc",
       cacheDir: join(dir, "cache"),
+      environment: "saas",
     });
   async function build(candidate: boolean) {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r586c-k-"));
@@ -452,6 +475,7 @@ describe("R654 S2 leg K: buildBackend from that section takes the CLI's defaults
               bcVersion: BC,
               alcPath: "/fake/alc",
               cacheDir: join(dir, "cache"),
+              environment: "saas",
             }),
           },
           dir,
