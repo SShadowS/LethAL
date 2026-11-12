@@ -1,9 +1,15 @@
 /**
  * R593: a SHARED master-corpus snapshot (production identity keys), and a branch diff against it.
  *
- *   bun scripts/corpus-snapshot.ts snapshot <set> --master
+ *   bun scripts/corpus-snapshot.ts snapshot <set> --master [--sha <sha>]
  *   bun scripts/corpus-snapshot.ts diff <set> --branch <worktree> [--projects <n|dir>[,...]] [--all]
- *                                       [--legacy-master <sha>]
+ *                                       [--master-sha <sha> | --legacy-master <sha>]
+ *
+ * R935: a job that waits for a slot while other lanes fetch should pin the master commit once, at its
+ * start, and pass it to both: `S=$(git -C <worktree> merge-base HEAD origin/master)`, then
+ * `snapshot <set> --master --sha $S` and `diff <set> --branch <worktree> --master-sha $S`. `--sha`
+ * must be on origin/master; `--master-sha` must be an ancestor of the branch (an older one counts
+ * master's changes since it as branch changes, and the diff says so).
  *
  * Sets: `fixtures` (`<tree>/fixtures`), `cdo` /work/src/do-lethal, `bch` /work/src/BC.History,
  * `dc` /work/src/DC, `do` /work/src/DO. Projects are directories holding `app.json`, sorted.
@@ -209,6 +215,52 @@ function isAncestor(git: Git, a: string, b: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** R935: `pinned` as a full commit sha, refused by name when git does not know it as a commit. */
+function pinnedCommit(git: Git, pinned: string, flag: string): string {
+  try {
+    return git(["rev-parse", "--verify", `${pinned}^{commit}`]);
+  } catch {
+    throw new RefusedError(`${flag} ${pinned} is not a commit this repository knows`);
+  }
+}
+
+/**
+ * R935: the master commit `snapshot` dumps. Unpinned: origin/master as it is now. Pinned
+ * (`--sha <sha>`): exactly that commit, which must be on origin/master, so a fetch while the job
+ * waits for a slot cannot change what it dumps.
+ */
+export function snapshotShaFor(git: Git, pinned: string | undefined): string {
+  if (pinned === undefined) return git(["rev-parse", "origin/master"]);
+  const sha = pinnedCommit(git, pinned, "--sha");
+  if (!isAncestor(git, sha, "origin/master")) {
+    throw new RefusedError(`--sha ${sha} is not on origin/master, so it is not a master commit to dump`);
+  }
+  return sha;
+}
+
+/**
+ * R935: the master commit `diff` compares against. Unpinned: merge-base(HEAD, origin/master), as
+ * before. Pinned (`--master-sha <sha>`): exactly that entry, which must be an ancestor of the
+ * branch; when it is older than the merge base, master's changes between them count as branch
+ * changes, and the line printed says so.
+ */
+export function diffShaFor(git: Git, pinned: string | undefined, print: (l: string) => void): string {
+  const base = git(["merge-base", "HEAD", "origin/master"]);
+  if (pinned === undefined) return base;
+  const sha = pinnedCommit(git, pinned, "--master-sha");
+  if (!isAncestor(git, sha, "HEAD")) {
+    throw new RefusedError(
+      `--master-sha ${sha} is not an ancestor of the branch, so the diff would compare across unrelated changes; merge it into the branch or pin the merge base ${base}`,
+    );
+  }
+  print(
+    sha === base
+      ? `master: pinned ${sha} (the merge base)`
+      : `master: pinned ${sha}, older than the merge base ${base}: master's changes between them count as branch changes`,
+  );
+  return sha;
 }
 
 /** The corpus identity a dump at `sha` depends on besides the code: fixtures' tree hash, or the
@@ -914,10 +966,15 @@ function runSnapshot(
   argv: readonly string[],
   inSlot: number | undefined,
   print: (l: string) => void,
+  pinned?: string,
 ): number {
   const git = gitIn(REPO_ROOT);
-  const sha = git(["rev-parse", "origin/master"]);
-  print(`master: origin/master = ${sha} (not fetched by this tool)`);
+  const sha = snapshotShaFor(git, pinned);
+  print(
+    pinned === undefined
+      ? `master: origin/master = ${sha} (not fetched by this tool)`
+      : `master: pinned ${sha} (--sha)`,
+  );
   const { key, dumperHash } = dumperKeyOf(REPO_ROOT);
   const depDirs = depDirsEnv();
   const corpusHead = corpusHeadOf(set, sha, git);
@@ -960,11 +1017,18 @@ function runSnapshot(
 function runDiff(
   set: string,
   argv: readonly string[],
-  o: { branch: string; projects?: string; all: boolean; legacyMaster?: string; inSlot?: number },
+  o: {
+    branch: string;
+    projects?: string;
+    all: boolean;
+    legacyMaster?: string;
+    masterSha?: string;
+    inSlot?: number;
+  },
   print: (l: string) => void,
 ): number {
   const git = gitIn(o.branch);
-  const base = git(["merge-base", "HEAD", "origin/master"]);
+  const base = diffShaFor(git, o.masterSha, print);
   const { key } = dumperKeyOf(REPO_ROOT);
   let masterDir: string;
   if (o.legacyMaster !== undefined) {
@@ -1076,6 +1140,9 @@ export function parseCliArgs(argv: readonly string[]) {
       projects: { type: "string" },
       all: { type: "boolean", default: false },
       "legacy-master": { type: "string" },
+      // R935: pin the master commit, so origin/master moving while a job waits cannot strand it.
+      sha: { type: "string" },
+      "master-sha": { type: "string" },
       "in-slot": { type: "string" },
     },
   });
@@ -1100,10 +1167,16 @@ function main(argv: readonly string[]): number {
   if (cmd === "snapshot") {
     if (!values.master)
       throw new RefusedError("snapshot needs --master (branch dumps are never cached)");
-    return runSnapshot(set, outer, inSlot, print);
+    if (values["master-sha"] !== undefined)
+      throw new RefusedError("snapshot pins with --sha <sha>; --master-sha is diff's");
+    return runSnapshot(set, outer, inSlot, print, values.sha);
   }
   if (cmd === "diff") {
     if (values.branch === undefined) throw new RefusedError("diff needs --branch <worktree>");
+    if (values.sha !== undefined)
+      throw new RefusedError("diff pins with --master-sha <sha>; --sha is snapshot's");
+    if (values["master-sha"] !== undefined && values["legacy-master"] !== undefined)
+      throw new RefusedError("--master-sha and --legacy-master name two master entries; give one");
     return runDiff(
       set,
       outer,
@@ -1112,6 +1185,7 @@ function main(argv: readonly string[]): number {
         all: values.all ?? false,
         ...(values.projects !== undefined ? { projects: values.projects } : {}),
         ...(values["legacy-master"] !== undefined ? { legacyMaster: values["legacy-master"] } : {}),
+        ...(values["master-sha"] !== undefined ? { masterSha: values["master-sha"] } : {}),
         ...(inSlot !== undefined ? { inSlot } : {}),
       },
       print,
