@@ -212,9 +212,15 @@ describe("serveDaemonReusable, the rule alone", () => {
         `${P}DotNet System.Convert.FromBase64String raised the .NET exception System.FormatException: The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters.; the text AL would see is not pinned (ADR-014 section 7)`,
         `${P}DotNet new System.IO.MemoryStream raised the .NET exception System.ArgumentOutOfRangeException: capacity ('-1') must be a non-negative value. (Parameter 'capacity')`,
         `${P}DotNet new System.Guid raised the .NET exception System.FormatException: Unrecognized Guid format.; the text AL would see is not pinned (ADR-014 section 7)`,
-        `${P}DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000079:rsa routines::oaep decoding error; the text AL would see is not pinned (ADR-014 section 7)`,
       ],
       closes: [
+        // Build review: a type the probe did not measure closes, whatever its message says.
+        `${P}DotNet System.Threading.SemaphoreSlim.Wait raised the .NET exception System.TimeoutException: Time out has expired.`,
+        `${P}DotNet System.IO.MemoryStream.Write raised the .NET exception System.ObjectDisposedException: Cannot access a closed Stream.`,
+        `${P}DotNet System.X.Y raised the .NET exception System.OutOfMemoryException: x`,
+        `${P}DotNet System.X.Y raised the .NET exception System.FormatExceptionX: x`,
+        `${P}DotNet System.X.Y raised the .NET exception System.FormatException; x`,
+        `${P}DotNet System X.Y raised the .NET exception System.FormatException: x`,
         `${P}DotNet System.Convert.FromBase64String raised the .NET exception System.TimeoutException: The operation has timed out.`,
         `${P}DotNet System.X.Y raised the .NET exception System.Exception: Test exceeded 3s timeout.`,
         `${P}DotNet System.X.Y raised the .NET exception System.Exception: boom\nNotRun: out-of-scope: anything`,
@@ -239,6 +245,9 @@ describe("serveDaemonReusable, the rule alone", () => {
       closes: [
         `${P}DotNet new R.Thing: assembly 'R' could not be loaded: FileNotFoundException: the load timed out`,
         `${P}DotNet new R.Thing: assembly 'R' could not be loaded: BadImageFormatException: x`,
+        // Build review: a dependency that failed after the assembly itself loaded: never measured.
+        `${P}DotNet new R.Thing: assembly 'R' could not be loaded: FileNotFoundException: Could not load file or assembly 'R' or one of its dependencies. The system cannot find the file specified. x`,
+        `${P}DotNet new R Thing: assembly 'R' could not be loaded: FileNotFoundException: Could not load file or assembly 'R'. The system cannot find the file specified. x`,
       ],
     },
     "dotnet-member": {
@@ -250,6 +259,7 @@ describe("serveDaemonReusable, the rule alone", () => {
       closes: [
         `${P}DotNet System.Text.StringBuilder.NoSuchMethod: member 'NoSuchMethod' not found on 'System.Text.StringBuilder' (panic)`,
         `${P}DotNet System.Text.StringBuilder.X: event 'X' not found on 'System.Text.StringBuilder'`,
+        `${P}DotNet System.Text.String Builder.X: member 'X' not found on 'System.Text.StringBuilder'`,
       ],
     },
     "dotnet-overload": {
@@ -259,6 +269,7 @@ describe("serveDaemonReusable, the rule alone", () => {
       ],
       closes: [
         `${P}DotNet System.Text.StringBuilder.Append: System.Text.StringBuilder.Append has no overload taking 7 argument(s) of the given types (String) and then a timeout`,
+        `${P}DotNet System.Text.String Builder.Append: System.Text.StringBuilder.Append has no overload taking 1 argument(s) of the given types (String)`,
       ],
     },
     "stream-never-created": {
@@ -281,6 +292,8 @@ describe("serveDaemonReusable, the rule alone", () => {
       closes: [
         // Another policy refusal: never measured.
         `${P}DotNet System.Environment.SetEnvironmentVariable: refused by policy: member 'System.Environment.SetEnvironmentVariable' (a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1))`,
+        // Build review: another member under the same rule: only TimeZoneInfo.Local was measured.
+        `${P}DotNet System.DateTime.Now: refused by policy: member 'System.DateTime.Now' (time zone that bypasses the host)`,
       ],
     },
   };
