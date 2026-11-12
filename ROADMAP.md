@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 913 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**24 of 913 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -355,7 +355,7 @@ that ordering is the priority.
 - **R904** · v3 with test data off and a partly red baseline scores mutants against the few green tests, and the report never says the data was off · [R904.md](docs/roadmap/R904.md) · done (421523a8)
 - **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · done (2b021840)
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
-- **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
+- **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · closed 2026-11-12 — named limit, by measurement (coord R-941): 3 to 6 of 172 measured tests, and R911 found…
 - **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · closed 2026-11-11 — measured on Windows BC 28.4 (R910Win): no hang, RunModal fails fast both ways; no reader…
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
 - **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
