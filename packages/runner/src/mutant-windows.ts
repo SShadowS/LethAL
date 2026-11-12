@@ -15,6 +15,17 @@ export const WINDOW_TIME_CAP_MS = 600_000;
 /** The estimate is worth a warning line above this. */
 export const ESTIMATE_WARN_MS = 2 * 3_600_000;
 
+/**
+ * R940: what the estimate is, said beside it. It sums the covering tests' measured baseline times and
+ * is neither a bound nor a forecast of the mutants phase: over nine al-runner-v3 serve runs (R-925's
+ * seven apps, R-926's Withholding Tax twice) the phase took 0.74 to 5.84 times it. A kill stops at its
+ * first failing test while the estimate sums them all, and a warm daemon can beat the baseline (over);
+ * per-request, echo, warm-up and kill-confirm costs are not in it, and vary by app (under).
+ * Measured: `/coord/handoff/R-931/estimate.ts`, `estimate.out`.
+ */
+export const ESTIMATE_NOT_A_BOUND =
+  "not a bound or a forecast of this phase: on al-runner v3 serve it took 0.7 to 5.8 times it, R940";
+
 export interface CostModel {
   readonly baselineDuration: ReadonlyMap<string, number>;
   readonly fallbackMs: number;

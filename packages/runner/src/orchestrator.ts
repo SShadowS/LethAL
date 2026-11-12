@@ -204,6 +204,7 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
   cutWindows,
@@ -6042,7 +6043,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   emit({
     type: "phase-entered",
     phase: "mutants",
-    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time${longNote}`,
+    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})${longNote}`,
   });
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
