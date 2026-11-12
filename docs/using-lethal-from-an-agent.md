@@ -1172,7 +1172,9 @@ the assemblies. LethAL takes the folders from the config's top-level `assemblyPr
 the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages` when it
 exists, else none. A missing folder, or a path holding `,` or `;`, is refused by name before any
 compile. The doctor check `assembly-probing-paths` (with `--project`) prints the list and its
-source. On an AL0451 failure the error text names the paths LethAL passed. On al-runner-v3 the same
+source. On an AL0451 failure the error text names the paths LethAL passed, and, when the missing
+assembly is an ASP.NET Core one (Base Application's `Microsoft.AspNetCore.StaticFiles`), the shared
+framework folder to add after the BC service folder (R951). On al-runner-v3 the same
 folders also reach al-runner's .NET sidecar (al-runner's own assembly-folder option, once per folder).
 
 ## Safety (guidance)

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 911 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 917 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -355,13 +355,14 @@ that ordering is the priority.
 - **R904** · v3 with test data off and a partly red baseline scores mutants against the few green tests, and the report never says the data was off · [R904.md](docs/roadmap/R904.md) · done (421523a8)
 - **R906** · An inner #if holding only `using` lines counts as a nested object wrapper, so one such file turns al-runner v3 coverage off for its whole project and every unreached mutant reads `survived` · [R906.md](docs/roadmap/R906.md) · done (2b021840)
 - **R907** · A v3 run with coverage turned off says so only on stderr: the report's caveats and console summary show `survived` and `no-coverage 0` with no sign that every mutant ran against every test · [R907.md](docs/roadmap/R907.md) · done (55ac5810)
-- **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · open
+- **R910** · The TestPage reader misses page opens in dependency code, so such a test is sent to the fenced session (on Windows it could hang) · [R910.md](docs/roadmap/R910.md) · closed 2026-11-12 — named limit, by measurement (coord R-941): 3 to 6 of 172 measured tests, and R911 found…
 - **R911** · `RunModal` is unmodelled anywhere; hang on Windows unmeasured: the TestPage reader has no rule for `Page.RunModal` or `Page.Run`, in a test app's own code or in a dependency · [R911.md](docs/roadmap/R911.md) · closed 2026-11-11 — measured on Windows BC 28.4 (R910Win): no hang, RunModal fails fast both ways; no reader…
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
 - **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87, 810d07d7): a v3 fail keeps stackTrace; leg C's row texts leave it out
 - **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · done (d5eb16ff)
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
+- **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · open
 
 ## Product gaps a real project hits
 
@@ -950,12 +951,17 @@ that ordering is the priority.
 - **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (08c571fa): relabelled with the measured spread; no bound exists to promise
 - **R941** · `assemblyProbingPaths` reaches alc only, never al-runner's `--dotnet-assembly-dir`, so a .NET assembly a dependency needs at run time fails to load (Sustainability: Newtonsoft.Json) · [R941.md](docs/roadmap/R941.md) · done (450c1d83) — fixed with R943; measured in R943
 - **R943** · LethAL does not pass its assembly probing paths to al-runner's `--dotnet-assembly-dir`, so .NET types from a BC service folder are refused: measured, 5 Edit in Excel and 9 Cryptography Management tests would run · [R943.md](docs/roadmap/R943.md) · done (450c1d83)
-- **R942** · On al-runner v3, 9 Sustainability baseline tests are refused as "an action that makes a part visible, other than the pinned shape"; 15 invented shapes all run, so no repro yet and not filed upstream · [R942.md](docs/roadmap/R942.md) · open
+- **R942** · On al-runner v3, 9 Sustainability baseline tests are refused as "an action that makes a part visible, other than the pinned shape": the part page comes from a dependency package (upstream #7922) · [R942.md](docs/roadmap/R942.md) · open
 - **R944** · When al-runner refuses to compile the app, LethAL records one 'transport failure' per baseline test and runs the compile once per test, instead of stopping once by name · [R944.md](docs/roadmap/R944.md) · done (beb674d2)
 - **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · done (bc2e48ab)
 - **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
 - **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
-- **R949** · CI saves the 3.85 GB LLVM cache once per BRANCH (GitHub scopes caches by branch), so a few branches fill the 10 GB repo limit and evict the other caches · [R949.md](docs/roadmap/R949.md) · open
+- **R949** · CI saves the 3.85 GB LLVM cache once per BRANCH (GitHub scopes caches by branch), so a few branches fill the 10 GB repo limit and evict the other caches · [R949.md](docs/roadmap/R949.md) · done (4e1c1f0a): restore on every branch, save on master only; branch CI 43232433178 restored master's pair…
+- **R954** · On al-runner v3 the per-mutant budget floor (180 s, set for BC's publish latency) makes each mutant that slows a millisecond test cost three minutes: Password's hour went on 18 such timeouts and 48 mutants were left unscored · [R954.md](docs/roadmap/R954.md) · open
+- **R950** · The al-runner update moves `current` only when no al-runner runs anywhere, so with lanes on v3 all day a passed edge build waits indefinitely, though a process on an explicit build path is not touched by the move · [R950.md](docs/roadmap/R950.md) · done (79e60793): the move guard counts only processes started through current/ (or unreadable); LethAL's own…
+- **R951** · R900's probing path (the BC service folder) is not enough for Base Application: alc also needs the ASP.NET Core shared framework (`Microsoft.AspNetCore.StaticFiles`) · [R951.md](docs/roadmap/R951.md) · done (c061534c)
+- **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause not yet known · [R956.md](docs/roadmap/R956.md) · open
+- **R957** · BC.History batch 7 on al-runner v3 edge-2bd87774f: eight System Application modules, three upstream issues (a .NET exception refused where BC ignores the text, ten refusal causes, a Blob lost through FieldRef.Value after Clear) · [R957.md](docs/roadmap/R957.md) · closed 2026-11-12 — measured and filed upstream (#7924, #7934, #7935); LethAL's own gap is R954
 
 ---
 

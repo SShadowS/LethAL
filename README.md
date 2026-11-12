@@ -675,6 +675,16 @@ folder copied from a BC 28.4 server on Linux (the one measured), alc failed DotN
 (AL0133, AL0122) in Microsoft's System Application modules that build cleanly with the Windows BC 28.4
 service folder, on Windows alc as well as Linux alc.
 
+Base Application needs one more folder: it uses `Microsoft.AspNetCore.StaticFiles`, which is part of
+the ASP.NET Core shared framework, and a BC service folder does not carry it. List the framework's
+folder AFTER the service folder, for example
+`["/srv/bc/Service", "/usr/share/dotnet/shared/Microsoft.AspNetCore.App/10.0.14"]`
+(`dotnet --list-runtimes` shows where yours is; 10.0.14 built BC 28's Base Application). LethAL does
+not add it for you, because the order of the folders matters; when an ASP.NET Core assembly is
+missing, the AL0451 error says which folder to add (R951). Measured with alc only: with
+`--backend al-runner-v3` the folder also reaches al-runner's .NET sidecar, which has not been
+measured with it.
+
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
 `4` nothing scored, meaning every mutant errored and the run measured nothing.
 

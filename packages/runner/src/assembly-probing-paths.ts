@@ -164,12 +164,26 @@ export function describeAssemblyProbingPaths(r: ResolvedAssemblyProbingPaths): s
 
 /**
  * The line `AlcCompileError` gains when alc reports AL0451 (an assembly not found in the probing
- * paths): which paths were passed, and where LethAL reads them.
+ * paths): which paths were passed, and where LethAL reads them. R951: when a missing assembly is
+ * part of the ASP.NET Core shared framework (Base Application needs `Microsoft.AspNetCore.StaticFiles`),
+ * it also names that folder. LethAL does not add it itself: the order of the folders matters (R-927),
+ * so the user lists it.
  */
-export function al0451Note(paths: readonly string[]): string {
+export function al0451Note(paths: readonly string[], alcOutput = ""): string {
   const passed =
     paths.length === 0
       ? "LethAL passed alc no assembly probing paths"
       : `LethAL passed alc these assembly probing paths: ${paths.join(", ")}`;
-  return `AL0451: ${passed}. LethAL reads them from "assemblyProbingPaths" in the LethAL config, else "${VSCODE_SETTINGS_KEY}" in the project's .vscode/settings.json, else ./.netpackages when it exists; list the folders that hold the missing assemblies (R900).`;
+  const aspNet = [
+    ...new Set(
+      [...alcOutput.matchAll(/AL0451: An assembly named '(Microsoft\.AspNetCore\.[^']+)'/g)].map(
+        (m) => m[1],
+      ),
+    ),
+  ];
+  const aspNetNote =
+    aspNet.length === 0
+      ? ""
+      : ` ${aspNet.join(", ")} ${aspNet.length === 1 ? "is" : "are"} part of the ASP.NET Core shared framework, which a BC service folder does not carry: also list <dotnet root>/shared/Microsoft.AspNetCore.App/<version> (\`dotnet --list-runtimes\` shows it), AFTER the BC service folder (R951).`;
+  return `AL0451: ${passed}. LethAL reads them from "assemblyProbingPaths" in the LethAL config, else "${VSCODE_SETTINGS_KEY}" in the project's .vscode/settings.json, else ./.netpackages when it exists; list the folders that hold the missing assemblies (R900).${aspNetNote}`;
 }

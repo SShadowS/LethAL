@@ -42,7 +42,7 @@
  *    script's own commit (logged `stale-gated`); if that does not pass, `current` stays and the
  *    candidate is judged at the script's commit. A script commit off origin/master is refused.
  * 4. Outcomes: `pass` -> installed, `.gated` written, its row in the ledger, and on the edge track
- *    `current` moved (unless a v3 process is running: "deferred: in use"); `gate-fail` -> `failed/`
+ *    `current` moved (unless a process started through `current/` runs, R950: "deferred: in use"); `gate-fail` -> `failed/`
  *    for good; `held` (every difference a move toward BC or a named refusal; read the receipt's
  *    lines) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
@@ -69,7 +69,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -142,7 +142,7 @@ export interface UpdateDeps {
     env: Readonly<Record<string, string>>,
     log: (line: string) => Promise<void>,
   ): Promise<void>;
-  /** A running process whose executable resolves under `root`. */
+  /** A running process a move of `current` would affect (`movesUnder`). */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
   now(): string;
@@ -897,6 +897,28 @@ export const HEAVY_JOB =
   /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
 
 /**
+ * R950: whether a move of `current` would change what a running process runs. It runs an al-runner build
+ * (`exe` resolves under `root`), and it was started through `<root>/current/` or its `argv[0]` is unreadable or
+ * relative (the safe side). One started with an explicit build path (`<root>/<build>/al-runner`) is untouched by
+ * the move: LethAL spawns the path it was given and never re-reads `current` for it.
+ */
+export function movesUnder(root: string, exe: string, argv0: string | undefined): boolean {
+  if (!exe.startsWith(`${root}/`)) return false;
+  // POSIX on every platform: these are Linux `/proc` paths (`path.normalize` is win32 on Windows CI).
+  if (argv0 === undefined || !posix.isAbsolute(argv0)) return true;
+  // Normalised, so `<root>//current/`, `<root>/./current/` and `<root>/x/../current/` count too.
+  const a = posix.normalize(argv0);
+  if (!a.startsWith(`${root}/`)) return true;
+  return a.startsWith(`${root}/current/`);
+}
+
+/** R950: argv[0] from a `/proc/<pid>/cmdline` text (NUL-separated); `undefined` when there is none. */
+export function argv0FromCmdline(cmdline: string): string | undefined {
+  const first = cmdline.split("\0")[0];
+  return first === undefined || first === "" ? undefined : first;
+}
+
+/**
  * R851: heavy JOBS, not processes. One job is a wrapper shell, `flock`, `bun run`, a bun child and
  * workers: on 2026-11-06 one corpus job read as 6 and skipped a release for the day. A job is a
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
@@ -1437,7 +1459,12 @@ export function realDeps(root = ROOT): UpdateDeps {
       for (const pid of await readdir("/proc")) {
         if (!/^\d+$/.test(pid)) continue;
         const exe = await readlink(`/proc/${pid}/exe`).catch(() => "");
-        if (exe.startsWith(`${root}/`)) return true;
+        if (!exe.startsWith(`${root}/`)) continue;
+        // argv[0] is the path the process was started with; undefined when unreadable.
+        const argv0 = await readFile(`/proc/${pid}/cmdline`, "utf8")
+          .then(argv0FromCmdline)
+          .catch(() => undefined);
+        if (movesUnder(root, exe, argv0)) return true;
       }
       return false;
     },
