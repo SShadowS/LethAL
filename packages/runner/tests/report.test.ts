@@ -237,11 +237,12 @@ describe("Caveat union", () => {
       "test-symbols-unverified": true,
       "project-symlink-skipped": true,
       "baseline-test-stopped": true,
+      "al-runner-v3-serve-default-fallback": true,
       "al-runner-v3-serve-default-fallback-warmup": true,
       "al-runner-v3-coverage-off": true,
       "time-budget-reached": true,
     };
-    expect(Object.keys(all).length).toBe(31);
+    expect(Object.keys(all).length).toBe(32);
   });
 });
 
@@ -351,6 +352,47 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     ).not.toContain("project-symlink-skipped");
   });
 
+  test("R939: serve-daemon-closed events become v3DaemonCloses and a TIMING sub-line; none, neither", () => {
+    const base: RunEventInput[] = [
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ];
+    const closed = (reason: string, family?: string): RunEventInput => ({
+      type: "serve-daemon-closed",
+      reason,
+      ...(family !== undefined ? { family } : {}),
+    });
+    const closes: RunEventInput[] = [
+      closed("refusal", "WithEvents subscriber …"),
+      closed("timeout"),
+      closed("refusal", "DateTime before N"),
+      // A warning, even one named like a close, is never counted as one.
+      { type: "warning", code: "al-runner-v3-daemon-closed-refusal", message: "m" },
+    ];
+    const r = buildReport(STATICS, seq([...closes, ...base]));
+    expect(r.v3DaemonCloses).toEqual({ refusal: 2, timeout: 1 });
+    expect(renderConsole(r)).toContain(
+      "serve daemons closed early (each restarts with a warm-up): refusal 2, timeout 1",
+    );
+    const none = buildReport(STATICS, seq(base));
+    expect("v3DaemonCloses" in none).toBe(false);
+    expect(renderConsole(none)).not.toContain("serve daemons closed early");
+  });
+
   test("R786: the serve warm-up fallback warning raises its caveat; no warning, or R761's other fallback warning, does not", () => {
     const base: RunEventInput[] = [
       {
@@ -379,6 +421,11 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       buildReport(STATICS, seq([warn("al-runner-v3-serve-default-fallback"), ...base])).validity
         .caveats,
     ).not.toContain(code);
+    // R922 (4): the pre-flight fallback is a caveat of its own, not only a stderr line.
+    const pre = "al-runner-v3-serve-default-fallback";
+    expect(buildReport(STATICS, seq([warn(pre), ...base])).validity.caveats).toContain(pre);
+    expect(buildReport(STATICS, seq(base)).validity.caveats).not.toContain(pre);
+    expect(buildReport(STATICS, seq([warn(code), ...base])).validity.caveats).not.toContain(pre);
   });
 
   describe("R907: coverage LethAL turned off reaches the report and the console", () => {

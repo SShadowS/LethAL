@@ -24,7 +24,7 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { formatEstimate } from "../src/mutant-windows";
+import { ESTIMATE_NOT_A_BOUND, formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
   resumeGuardMessage,
@@ -5332,7 +5332,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(25);
+    expect(out.explainSchemaVersion).toBe(26);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {
@@ -6503,6 +6503,9 @@ describe("R912: windows and --time-budget", () => {
     coverOnlyFirst = false;
     /** R914: the test's own time; `durationMs` (the whole call, compile included) stays `baselineMs`. */
     measuredMs: number | undefined;
+    /** R934: under a mutant, every row's call time (`durationMs`) and its own time (`measuredDurationMs`, absent when
+     *  `ownMs` is: the runner reported none), pass or fail. */
+    mutantRow: { callMs: number; ownMs?: number } | undefined;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {
       super("pass");
@@ -6530,9 +6533,23 @@ describe("R912: windows and --time-budget", () => {
             : {}),
         };
       }
-      return killedId(this.active)
-        ? { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` }
-        : v;
+      const row =
+        this.mutantRow !== undefined
+          ? {
+              durationMs: this.mutantRow.callMs,
+              ...(this.mutantRow.ownMs !== undefined
+                ? { measuredDurationMs: this.mutantRow.ownMs }
+                : {}),
+            }
+          : {};
+      if (killedId(this.active))
+        return {
+          ...v,
+          ...row,
+          outcome: "fail",
+          failureMessage: `Assert failed under ${this.active}`,
+        };
+      return { ...v, ...row };
     }
     async prefetchMutants(
       plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
@@ -6625,13 +6642,16 @@ describe("R912: windows and --time-budget", () => {
     const detail = (events: readonly RunEvent[]) =>
       events.find((e) => e.type === "phase-entered" && e.phase === "mutants");
     expect(detail(short.events)).toMatchObject({
-      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of covering-test time`,
+      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})`,
     });
+    // R940: the detail claims no bound and states the measured spread.
+    expect(ESTIMATE_NOT_A_BOUND).toContain("not a bound");
+    expect(ESTIMATE_NOT_A_BOUND).toContain("0.7 to 5.8 times");
 
     const long = await runWith(3_600_000); // 1 h per mutant
     const longDetail = detail(long.events);
     expect(longDetail?.type === "phase-entered" ? longDetail.detail : "").toStartWith(
-      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time. That is long`,
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND}). That is long`,
     );
     // R912 follow-up: a timing-dependent warning code would make gates' pinned warning sets flaky.
     for (const run of [short, long]) {
@@ -6647,10 +6667,47 @@ describe("R912: windows and --time-budget", () => {
     const n = run.backend.prefetches.flat().length;
     const e = run.events.find((x) => x.type === "phase-entered" && x.phase === "mutants");
     expect(e?.type === "phase-entered" ? e.detail : "").toBe(
-      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 5_000)} of covering-test time`,
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 5_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})`,
     );
     // At 5 s each they all fit one 600 s window; at the call's 400 s they would go one to a window.
     expect(run.backend.prefetches).toHaveLength(1);
+  });
+
+  test("R934: a mutant's durationMs sums each covering test's own time, not the call's time once per test", async () => {
+    // Each row under a mutant, passing or failing, reports the whole call (60 s) as durationMs and 7 ms as its own.
+    const run = await runWith(5, {}, (b) => {
+      b.mutantRow = { callMs: 60_000, ownMs: 7 };
+    });
+    const survivors = run.report.mutants.filter((m) => m.verdict === "survived");
+    expect(survivors.length).toBeGreaterThan(0);
+    for (const m of survivors) {
+      expect(m.coveringTests.length).toBeGreaterThan(0);
+      expect([m.mutantCode, m.durationMs]).toEqual([m.mutantCode, 7 * m.coveringTests.length]);
+    }
+    // A kill may stop at its first failing test, so at most its covering tests' own time, and never a call's.
+    const kills = run.report.mutants.filter((m) => m.verdict === "killed");
+    expect(kills.length).toBeGreaterThan(0);
+    for (const m of kills) {
+      expect(m.durationMs % 7).toBe(0);
+      expect(m.durationMs).toBeGreaterThan(0);
+      expect(m.durationMs).toBeLessThanOrEqual(7 * Math.max(1, m.coveringTests.length));
+    }
+    expect(run.report.timings.mutantsMs).toBe(
+      run.report.mutants.reduce((n, m) => n + m.durationMs, 0),
+    );
+  });
+
+  test("R934: a row with no own time adds its call's time, never 0", async () => {
+    // The runner reported no per-test figure: the call's 60 s stands (over-states, never hides cost).
+    const run = await runWith(5, {}, (b) => {
+      b.mutantRow = { callMs: 60_000 };
+    });
+    const ran = run.report.mutants.filter((m) => m.verdict === "survived" || m.verdict === "killed");
+    expect(ran.length).toBeGreaterThan(0);
+    for (const m of ran) {
+      expect(m.durationMs).toBeGreaterThanOrEqual(60_000);
+      expect(m.durationMs % 60_000).toBe(0);
+    }
   });
 
   test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {

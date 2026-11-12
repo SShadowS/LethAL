@@ -256,6 +256,7 @@ export type Caveat =
   | "test-symbols-unverified"
   | "project-symlink-skipped"
   | "baseline-test-stopped"
+  | "al-runner-v3-serve-default-fallback"
   | "al-runner-v3-serve-default-fallback-warmup"
   | "al-runner-v3-coverage-off"
   | "time-budget-reached";
@@ -641,6 +642,19 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a quarantine: a stop BC never answers quarantines the run instead, at the baseline, " +
       "the cold kill confirm and the warm replay alike.",
     basis: "R658",
+  },
+  "al-runner-v3-serve-default-fallback": {
+    meaning:
+      "The al-runner-v3 session ran one-shot, not the serve-entries default, because a reason held " +
+      "before any process started: a --resume, a test method name whose shape serve-entries is not " +
+      "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
+      "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
+      "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
+      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
+    entailedNegative:
+      "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
+      "serve-entries default is proven against.",
+    basis: "R922",
   },
   "al-runner-v3-serve-default-fallback-warmup": {
     meaning:
@@ -1906,6 +1920,14 @@ export interface SessionReport {
     readonly batchesNotStarted: number;
   };
   /**
+   * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
+   * `timeout`, `request-failed`, ...; `V3DaemonCloseReason`), counted from the session's
+   * `serve-daemon-closed` events. Each such close costs a new daemon and its
+   * warm-up. Present only when there was one; the routine closes (a redeploy, the session's end) are
+   * not counted here. Optional, so reports from before R939 stay valid.
+   */
+  readonly v3DaemonCloses?: Readonly<Record<string, number>>;
+  /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
    * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
    * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
@@ -2664,8 +2686,19 @@ export const COVERAGE_NOT_MEASURED_INTERPRETATION: Interpretation = {
   basis: "R252",
 };
 
+/** R939: the session's unexpected serve daemon closes by reason, from their events; undefined if none. */
+function daemonClosesOf(events: readonly RunEvent[]): Record<string, number> | undefined {
+  const out: Record<string, number> = {};
+  for (const e of events) {
+    if (e.type !== "serve-daemon-closed") continue;
+    out[e.reason] = (out[e.reason] ?? 0) + 1;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
+  const daemonCloses = daemonClosesOf(events);
   // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
   // `FoldedReport.excludedSites`'s doc comment (report-fold.ts). Computed once here and reused
   // below, both in the caveats/scope-text derivations and in the final returned object.
@@ -3003,6 +3036,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R631 - see CAVEAT_INTERPRETATIONS["project-symlink-skipped"]. From the warning itself: no field.
   if (events.some((e) => e.type === "warning" && e.code === "project-symlink-skipped"))
     caveats.push("project-symlink-skipped");
+  // R922 (4) - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback"]. From the warning itself: no field.
+  if (events.some((e) => e.type === "warning" && e.code === "al-runner-v3-serve-default-fallback"))
+    caveats.push("al-runner-v3-serve-default-fallback");
   // R786 - see CAVEAT_INTERPRETATIONS["al-runner-v3-serve-default-fallback-warmup"]. From the warning itself: no field.
   if (
     events.some(
@@ -3375,6 +3411,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
+    ...(daemonCloses !== undefined ? { v3DaemonCloses: daemonCloses } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
   };
@@ -3916,12 +3953,22 @@ export function renderConsole(r: SessionReport): string {
     const head = `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)}`;
     lines.push(
       rest >= 0 && t.mutantsMs > rest
-        ? `${head} + mutant phase ${s(rest)} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that because their tests overlapped`
+        ? `${head} + mutant phase ${s(rest)} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that: tests overlap (prefetch, lanes), and on al-runner a test whose own time was not reported (a timeout, a refusal, an error) counts its whole call's time`
         : `${head} + mutants ${s(t.mutantsMs)} + overhead ${s(Math.max(0, rest - t.mutantsMs))}`,
     );
     if (t.perMutant.count > 0) {
       lines.push(
         `  per mutant (n=${t.perMutant.count}): mean ${t.perMutant.meanMs}ms, median ${t.perMutant.medianMs}ms, p95 ${t.perMutant.p95Ms}ms, max ${t.perMutant.maxMs}ms`,
+      );
+    }
+    // R939: each early daemon close costs a new daemon and its warm-up; the reasons say which refusal
+    // or failure caused them (the backend's close line on stderr also names the refusal families).
+    if (r.v3DaemonCloses !== undefined) {
+      const byReason = Object.entries(r.v3DaemonCloses).sort(
+        (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1),
+      );
+      lines.push(
+        `  serve daemons closed early (each restarts with a warm-up): ${byReason.map(([k, n]) => `${k} ${n}`).join(", ")}`,
       );
     }
   }

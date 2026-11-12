@@ -1561,6 +1561,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v26.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v25.schema.json": [
         "caveats",
         "contract",
@@ -1775,6 +1787,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "test-symbols-unverified",
         "project-symlink-skipped",
         "baseline-test-stopped",
+        "al-runner-v3-serve-default-fallback",
         "al-runner-v3-serve-default-fallback-warmup",
         "al-runner-v3-coverage-off",
         "time-budget-reached",
@@ -1912,6 +1925,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v24.schema.json")).toEqual(required("explain-v23.schema.json"));
     // R912's v25 added a caveat value, not a required field.
     expect(required("explain-v25.schema.json")).toEqual(required("explain-v24.schema.json"));
+    // R922's v26 added a caveat value, not a required field.
+    expect(required("explain-v26.schema.json")).toEqual(required("explain-v25.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

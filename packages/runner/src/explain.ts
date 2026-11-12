@@ -268,8 +268,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 25: R912 added the caveat value `time-budget-reached` to `$.caveats[].caveat`. A new value, so it
  * bumps (R233); v24 is frozen.
+ *
+ * 26: R922 added the caveat value `al-runner-v3-serve-default-fallback` to `$.caveats[].caveat`. A
+ * new value, so it bumps (R233); v25 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 25;
+export const EXPLAIN_SCHEMA_VERSION = 26;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

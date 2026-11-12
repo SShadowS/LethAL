@@ -204,6 +204,7 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
   cutWindows,
@@ -4811,7 +4812,18 @@ async function withBackendRefusals(
  */
 function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   backend.setNotify?.((code, message) => emit({ type: "warning", code, message }));
-  return () => backend.setNotify?.(undefined);
+  // R939: a serve daemon's early close is an event of its own, not a warning (gates pin warnings).
+  backend.setDaemonCloseSink?.((c) =>
+    emit({
+      type: "serve-daemon-closed",
+      reason: c.reason,
+      ...(c.family !== undefined ? { family: c.family } : {}),
+    }),
+  );
+  return () => {
+    backend.setNotify?.(undefined);
+    backend.setDaemonCloseSink?.(undefined);
+  };
 }
 
 /** R-300b: hands the session's effective build symbols to a backend that takes them. */
@@ -5894,8 +5906,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
           : {}),
-        // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
-        ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
+        // A pass only (the event's contract): since R934 al-runner sets `measuredDurationMs` on a fail too.
+        ...(ranHere.has(b.ref) && b.verdict.outcome === "pass" && measured !== undefined
+          ? { durationMs: measured }
+          : {}),
         // R907: al-runner's flagged pass, this session's own baseline only (as `durationMs`).
         ...(ranHere.has(b.ref) && b.verdict.flagged === true ? { flagged: true as const } : {}),
       };
@@ -6040,7 +6054,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   emit({
     type: "phase-entered",
     phase: "mutants",
-    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time${longNote}`,
+    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})${longNote}`,
   });
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
@@ -11940,7 +11954,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         attempted.add(testKeyOf(ref));
         ranRefs.push(ref);
       }
-      spent += v.durationMs;
+      // R934: the test's own time where the backend measured it. On al-runner `durationMs` is the whole
+      // call's (the whole request on serve), so summing it per covering test multiplied it. A row with
+      // no own figure (al-runner reports one on a pass only) still adds its call's time.
+      spent += v.measuredDurationMs ?? v.durationMs;
       // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
       if (step.discoveryRefused === true) continue;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:

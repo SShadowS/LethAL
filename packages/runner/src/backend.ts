@@ -90,7 +90,8 @@ export interface TestVerdict {
   readonly outcome: TestOutcome;
   readonly durationMs: number;
   /**
-   * R272: this test's own duration, on a `pass`. The timeout BUDGET still reads `durationMs`; this
+   * R272: this test's own duration, on a `pass` (and since R934, on al-runner, a `fail` too: a
+   * mutant's summed time reads it; every reader that wants a pass checks the outcome). The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
    * al-runner's in-run stop. Since R914 the R912 estimate and window cut read it too. al-runner sets the runner's own per-test figure, since its
@@ -537,6 +538,14 @@ export interface ExecutionBackend {
    * with no notifier, or one that was never given one, prints to `console.warn`.
    */
   setNotify?(notify?: (code: string, message: string) => void): void;
+  /**
+   * R939, OPTIONAL: where the backend reports a serve daemon it closed before the session's end
+   * (al-runner-v3 only). Installed and removed with `setNotify`; each call becomes a
+   * `serve-daemon-closed` event. With no sink, closes are only counted (the close line).
+   */
+  setDaemonCloseSink?(
+    sink?: (close: { readonly reason: string; readonly family?: string }) => void,
+  ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

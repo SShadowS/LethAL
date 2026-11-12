@@ -607,33 +607,27 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * `Names A-B Tests`, `Names (A) Tests`, `Names A&B Tests`, `Names Blåbær Tests`, `7Digit Names
  * Tests` and a plain one) ran under serve-entries and one-shot, per mutant equal (48 of 48,
  * `/coord/handoff/R-919/names/`). So a codeunit name may also hold `-`, `(`, `)`, `/`, `&`, `å`,
- * `æ` and start with a digit, when it starts with a letter or digit. The older shape stays.
- * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
+ * `æ` and start with a digit, when it starts with a letter or digit.
+ * R922 item 3 (coord R-929): codeunit names are no longer gated at all. Serve addresses a codeunit by
+ * id (`Codeunit<id>.`) and LethAL matches a row by `codeunit`, `method` and `name`
+ * (`Codeunit<id>.<method>`), never by the row's `codeunitName`; one-shot passes `--codeunit <id>`.
+ * Measured: test codeunits named `Names Ø Tests`, `Names A:B Tests`, `Names A'B Tests`, `-Lead ...`,
+ * `(Lead) ...` and `/Lead ...` ran explicit serve-entries and one-shot per mutant equal (48 of 48,
+ * `/coord/handoff/R-929/names/`), and the raw serve rows carry the name only in `codeunitName`.
+ * A METHOD name outside the shape falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
-  codeunit: /^(?:[A-Za-z0-9_ .]+|[A-Za-z0-9][A-Za-z0-9_ .()/&åæ-]*)$/,
 } as const;
 
 /**
- * R922: which part of a test's name is unproven, and the characters that make it so, for the
- * `unproven-test-name-shape` reason. A name whose every character is proven but whose position
+ * R922: the unproven method of a test, and the characters that make it so, for the
+ * `unproven-test-name-shape` reason. A method whose every character is proven but whose position
  * is not (a leading space, say) is named with no characters.
  */
-export function unprovenNamePart(
-  codeunitName: string,
-  method: string,
-  methodShape: (m: string) => boolean,
-): string {
-  const odd = (name: string, allowed: RegExp): string => {
-    const chars = [...new Set([...name].filter((c) => !allowed.test(c)))];
-    return chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : "";
-  };
-  const parts: string[] = [];
-  if (!V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(codeunitName))
-    parts.push(`codeunit "${codeunitName}"${odd(codeunitName, /[A-Za-z0-9_ .()/&åæ-]/)}`);
-  if (!methodShape(method)) parts.push(`method "${method}"${odd(method, /[A-Za-z0-9_ ()/&åæ-]/)}`);
-  return parts.join(", ");
+export function unprovenNamePart(method: string): string {
+  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ-]/.test(c)))];
+  return `method "${method}"${chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : ""}`;
 }
 
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
@@ -1076,6 +1070,86 @@ interface CallRows {
   readonly prefetchSeq?: number;
 }
 
+/**
+ * R939: why a serve daemon was closed. Each cause is counted once by reason; every reason but the
+ * routine ones (`V3_ROUTINE_CLOSES`) is also reported to the session's close sink, which emits a
+ * `serve-daemon-closed` event (never a warning: gates pin their warning sets).
+ * - `refusal`: a row v3 refused (`NotRun`) with a reason outside `V3_SERVE_SAFE_REFUSALS`; the
+ *   event and the close line name its family. `timeout`: a timeout row. `unkept-row`: any other
+ *   row the keep rule (`serveDaemonReusable`) does not keep (a pass or fail holding v3's refusal marker).
+ *   A prefetch, a live request and a §6 coverage window name their unkept row the same way.
+ * - `warmup-refused`, `batch-refused`: the warm-up's or a whole batch's refusal (the session stops,
+ *   or the default transport falls back to one-shot).
+ * - `request-failed`: the request threw (a crash, EOF, the deadline). `answer-unreadable`: an answer
+ *   that does not decode, or rows for another codeunit. `dependency-skip`: v3 skipped a dependency.
+ * - Routine: `probe` (the pre-baseline probe's own daemon), `deploy`, `session-end`.
+ */
+export type V3DaemonCloseReason =
+  | "refusal"
+  | "timeout"
+  | "unkept-row"
+  | "warmup-refused"
+  | "batch-refused"
+  | "request-failed"
+  | "answer-unreadable"
+  | "dependency-skip"
+  | "probe"
+  | "deploy"
+  | "session-end";
+
+/** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink. */
+export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
+  "probe",
+  "deploy",
+  "session-end",
+]);
+
+/**
+ * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
+ * for a refusal, its family: the text after `out-of-scope: `, with quoted and backticked spans
+ * (names, code) masked as `…` FIRST, then cut at the first `(`, `[`, `;` or `:`, standalone numbers
+ * as N, at most 80 characters. Undefined when every row is kept.
+ */
+export function unkeptRowReason(
+  rows: readonly ServerTestLine[],
+): { readonly reason: "refusal" | "timeout" | "unkept-row"; readonly family?: string } | undefined {
+  const bad = rows.find((r) => !serveDaemonReusable([r], "v3"));
+  if (bad === undefined) return undefined;
+  const m = bad.message ?? "";
+  if (bad.status === "error" && V3_TIMEOUT_MESSAGE.test(m)) return { reason: "timeout" };
+  if (bad.notRun === true) {
+    // Mask before cutting: a backticked call (`X.Y(Z)`) holds the cut characters.
+    const family = (m.split("out-of-scope: ")[1] ?? m)
+      .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, "…")
+      .split(/[([;:]/)[0]
+      ?.replace(/\b\d+\b/g, "N")
+      .trim()
+      .slice(0, 80);
+    return {
+      reason: "refusal",
+      family: family !== undefined && family !== "" ? family : "unnamed",
+    };
+  }
+  return { reason: "unkept-row" };
+}
+
+/** R939: the close line's part: `daemons closed: refusal 11 (WithEvents 5, ...), timeout 2, ...`. */
+export function v3DaemonClosesText(c: {
+  readonly byReason: ReadonlyMap<V3DaemonCloseReason, number>;
+  readonly refusalFamilies: ReadonlyMap<string, number>;
+}): string {
+  if (c.byReason.size === 0) return "daemons closed: none";
+  const families = [...c.refusalFamilies].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+  const parts = [...c.byReason]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .map(([r, n]) =>
+      r === "refusal" && families.length > 0
+        ? `${r} ${n} (${families.map(([f, k]) => `${f} ${k}`).join(", ")})`
+        : `${r} ${n}`,
+    );
+  return `daemons closed: ${parts.join(", ")}`;
+}
+
 /** R635: what the serve-entries transport did, for `status()`, the close line and the gate. */
 export interface V3EntriesStats {
   daemons: number;
@@ -1175,6 +1249,8 @@ export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
 interface Daemon {
   readonly server: AlRunnerServer;
   dirty: boolean;
+  /** R939: why `dirty` was set (the first unkept row's reason), for the close count. */
+  dirtyWhy?: ReturnType<typeof unkeptRowReason>;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -1566,13 +1642,15 @@ class Lane {
     this.pairVerdict = undefined;
   }
 
-  /** Every daemon of the lane (each mode's): a failure on one costs the other its warm daemon only. */
-  async closeDaemon(): Promise<void> {
+  /** Every daemon of the lane (each mode's): a failure on one costs the other its warm daemon only.
+   *  R939: returns how many it closed (0 when the lane had none), so a close is counted per daemon. */
+  async closeDaemon(): Promise<number> {
     // R653 C5: at most a lost saving; a pair is stored only after its request() returned.
     this.dropPair();
     const ds = [...this.daemons.values()];
     this.daemons.clear();
     for (const d of ds) await d.server.close();
+    return ds.length;
   }
 
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
@@ -1776,6 +1854,40 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** §5: true while `active-mutant.txt` legitimately holds a mutant id. */
   private inWindow = false;
   private budgetFloor: { readonly floorMs: number; readonly baselineTimeoutMs: number } | undefined;
+  /** R939: daemons closed, by reason, and the refusal families among them (`closeLane`). */
+  private readonly closes = new Map<V3DaemonCloseReason, number>();
+  private readonly closeFamilies = new Map<string, number>();
+  /** R939: the closes so far, by reason and refusal family (the close line; tests). */
+  daemonCloses(): {
+    readonly byReason: ReadonlyMap<V3DaemonCloseReason, number>;
+    readonly refusalFamilies: ReadonlyMap<string, number>;
+  } {
+    return { byReason: new Map(this.closes), refusalFamilies: new Map(this.closeFamilies) };
+  }
+  /** R939: the session's close sink (`setDaemonCloseSink`); each call becomes a `serve-daemon-closed` event. */
+  private closeSink:
+    | ((c: { readonly reason: string; readonly family?: string }) => void)
+    | undefined;
+  /** R939: see `ExecutionBackend.setDaemonCloseSink`. */
+  setDaemonCloseSink(
+    sink?: (c: { readonly reason: string; readonly family?: string }) => void,
+  ): void {
+    this.closeSink = sink;
+  }
+  /**
+   * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
+   * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
+   * for an unexpected reason (every one but `deploy`, `session-end` and `probe`, which cost no extra
+   * warm-up) report it to the session's sink, naming a refusal's family.
+   */
+  private async closeLane(lane: Lane, reason: V3DaemonCloseReason, family?: string): Promise<void> {
+    if ((await lane.closeDaemon()) === 0) return;
+    this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
+    if (family !== undefined)
+      this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
+    if (V3_ROUTINE_CLOSES.has(reason)) return;
+    this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
+  }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
     daemons: 0,
@@ -2388,14 +2500,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       V3_SERVE_PROVEN_NAME_SHAPES.method.test(
         this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
       );
-    const odd = this.discovered.filter(
-      (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
-    );
+    // R922 item 3 (R-929): the method only; a codeunit's name never reaches serve's addressing.
+    const odd = this.discovered.filter((t) => !methodShape(t.method));
     if (odd.length > 0) {
-      // R922: name the unproven part (codeunit or method) and its characters, not the whole name.
-      const named = [
-        ...new Set(odd.map((t) => unprovenNamePart(t.codeunitName, t.method, methodShape))),
-      ];
+      // R922: name the unproven method and its characters, not the whole test name.
+      const named = [...new Set(odd.map((t) => unprovenNamePart(t.method)))];
       reasons.push(
         `unproven-test-name-shape: ${named.slice(0, 5).join("; ")}${named.length > 5 ? `; and ${named.length - 5} more` : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
       );
@@ -2612,7 +2721,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   async deploy(instrumentedDir: string): Promise<null> {
     this.preRunDemoLine(); // R885
-    await this.closeAllDaemons();
+    await this.closeAllDaemons("deploy");
     this.resetLayoutState();
     const active = this.lane.activeDir();
     const artifactId = await this.stage(instrumentedDir, active);
@@ -4308,7 +4417,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
       } finally {
-        await lane.closeDaemon();
+        await this.closeLane(lane, "probe");
       }
     });
   }
@@ -4397,15 +4506,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       }
     } catch (err) {
-      await lane.closeDaemon();
+      // A failed request already closed (and counted) its daemon; this finds none then.
+      await this.closeLane(
+        lane,
+        err instanceof AlRunnerV3EntriesRefusedError ||
+          err instanceof AlRunnerV3ServeFallbackWarmupError
+          ? "warmup-refused"
+          : "request-failed",
+      );
       throw err;
     }
     return daemon;
   }
 
   /** R766 (b): every lane's daemon; all are tried even if one close fails, then the first failure is thrown. */
-  private async closeAllDaemons(): Promise<void> {
-    const done = await Promise.allSettled(this.laneList.map((l) => l.closeDaemon()));
+  private async closeAllDaemons(reason: "deploy" | "session-end"): Promise<void> {
+    const done = await Promise.allSettled(this.laneList.map((l) => this.closeLane(l, reason)));
     for (const d of done) if (d.status === "rejected") throw d.reason;
   }
 
@@ -4475,7 +4591,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
-      await lane.closeDaemon();
+      await this.closeLane(lane, "request-failed");
       throw missingDependencyOr(err);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
@@ -4488,7 +4604,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
-      await lane.closeDaemon();
+      await this.closeLane(lane, "answer-unreadable");
       throw new AlRunnerServerRequestError(
         "protocol",
         `the entries answer is invalid: ${decoded.why}`,
@@ -4521,7 +4637,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (refused === undefined) batch.ran = true;
     }
     if (refused !== undefined) {
-      await lane.closeDaemon();
+      await this.closeLane(lane, "batch-refused");
       throw new AlRunnerV3EntriesRefusedError(
         "al-runner-v3-entries-batch-refused",
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
@@ -4617,7 +4733,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     // R895: a cut answer's daemon is already killed; `closeDaemon` clears the lane's reference to it.
-    if (cut < sent.length || daemon.dirty) await lane.closeDaemon();
+    // R939: the reason is the first unkept row's (a refusal's family, a timeout); `dirty` alone is
+    // set only by a §6 coverage window whose rows were not kept, with its own `dirtyWhy`.
+    const unkept =
+      cut < sent.length
+        ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
+        : daemon.dirtyWhy;
+    if (cut < sent.length || daemon.dirty)
+      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family);
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -5155,7 +5278,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       } finally {
         await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
         this.inWindow = false;
-        if (daemon.dirty) await lane.closeDaemon();
+        if (daemon.dirty)
+          await this.closeLane(
+            lane,
+            daemon.dirtyWhy?.reason ?? "unkept-row",
+            daemon.dirtyWhy?.family,
+          );
         lane.timers.windowMs += this.now() - windowT0;
       }
     } catch (err) {
@@ -5184,7 +5312,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.watchTestDataOff(daemon.server.stderrSoFar()); // R885
     const lines = v3DependencySkipLines(daemon.server.stderrSoFar());
     if (lines.length === 0) return;
-    await lane.closeDaemon();
+    await this.closeLane(lane, "dependency-skip");
     throw new AlRunnerV3DependencySkippedError(lines);
   }
 
@@ -5215,7 +5343,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         v3CallDeadlineMs(s, this.testsPerCodeunit.get(cu) ?? 1),
       );
     } catch (err) {
-      await lane.closeDaemon();
+      await this.closeLane(lane, "request-failed");
       throw missingDependencyOr(err);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
@@ -5225,7 +5353,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const t of answer.tests) {
       const r = serveRow(t, this.serveRowFields);
       if (typeof r === "string" || r.codeunit !== cu) {
-        await lane.closeDaemon();
+        await this.closeLane(lane, "answer-unreadable");
         throw new AlRunnerServerRequestError(
           "protocol",
           `the plain request for codeunit ${cu} answered ${typeof r === "string" ? r : r.name}`,
@@ -5233,7 +5361,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       rows.push(r);
     }
-    if (!serveDaemonReusable(serveLines(rows), "v3")) daemon.dirty = true;
+    if (!serveDaemonReusable(serveLines(rows), "v3")) {
+      daemon.dirty = true;
+      daemon.dirtyWhy ??= unkeptRowReason(serveLines(rows));
+    }
     return {
       rows,
       coverage: coverage
@@ -5249,11 +5380,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   async close(): Promise<void> {
     // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
-    await this.closeAllDaemons();
+    await this.closeAllDaemons("session-end");
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

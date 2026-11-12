@@ -187,18 +187,22 @@ describe("R761: the default transport", () => {
     }
   });
 
-  test("reason unproven-test-name-shape (codeunit): an unseen character falls back, and the warning names the codeunit and the character", async () => {
-    const bad = await rig(DEFAULT, { tests: [ref("Check", "Tests Ø Codeunit")] });
-    await bad.b.decideTransport({ resume: false });
-    expect(bad.b.inRunStopIsBudget).toBe(true);
-    const message = bad.warnings[0]?.message ?? "";
-    expect(message).toContain('unproven-test-name-shape: codeunit "Tests Ø Codeunit" ("Ø")');
-    // R922: the plain method is not blamed.
-    expect(message).not.toContain('method "Check"');
-    const ok = await rig(DEFAULT, { tests: [ref("A", "CDO Recipient Mgt. Tests")] });
-    await ok.b.decideTransport({ resume: false });
-    expect(ok.b.inRunStopIsBudget).toBe(false);
-    expect(ok.warnings).toEqual([]);
+  // R922 item 3 (R-929): a codeunit's name never reaches serve (rows and requests go by id), so no
+  // codeunit name falls back; measured per mutant equal on an invented app with these names.
+  test("R922 (3): no codeunit name falls back, whatever its characters", async () => {
+    for (const codeunit of [
+      "Tests Ø Codeunit",
+      "Names A:B Tests",
+      "Names A'B Tests",
+      "-Lead Names Tests",
+      "(Lead) Names Tests",
+      "/Lead Names Tests",
+    ]) {
+      const r = await rig(DEFAULT, { tests: [ref("Check", codeunit)] });
+      await r.b.decideTransport({ resume: false });
+      expect([codeunit, r.b.inRunStopIsBudget]).toEqual([codeunit, false]);
+      expect(r.warnings).toEqual([]);
+    }
   });
 
   test("R922: an unproven METHOD is named as the method, with its character, not the codeunit", async () => {
@@ -229,14 +233,9 @@ describe("R761: the default transport", () => {
     }
   });
 
-  test("the name shapes are the measured ones", () => {
+  test("the name shapes are the measured ones: methods only", () => {
     expect(V3_SERVE_PROVEN_NAME_SHAPES.method.test("Plain_1")).toBe(true);
-    expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("CDO Recipient Mgt. Tests")).toBe(true);
-    // R922: proven since R-919.
-    expect(V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test("A - B")).toBe(true);
-    // Not measured: an unseen character, and an odd character in the first position.
-    for (const name of ["Ø Tests", "A:B", "A'B", "-Lead Tests", "(Lead) Tests", "/Lead"])
-      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(name)]).toEqual([name, false]);
+    expect(Object.keys(V3_SERVE_PROVEN_NAME_SHAPES)).toEqual(["method"]);
   });
 
   // R763: leg N1S proved every non-dot method shape in fixtures/sandbox-names-tests under serve.

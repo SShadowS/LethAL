@@ -4145,6 +4145,70 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
     ).toEqual(["tests-testpage-refused"]);
   });
+  // R934: al-runner sets `measuredDurationMs` on a fail too; the baseline event still carries a
+  // test's own time on a pass only (its contract), so a red baseline row gets none.
+  test("R934: the baseline event carries the own time on a pass, never on a fail that has one", async () => {
+    class TimedBackend extends RecordingBackend {
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const v = await super.run(ref, opts);
+        return {
+          ...v,
+          ...(v.outcome === "error" ? { outcome: "fail" as const } : {}),
+          measuredDurationMs: 9,
+        };
+      }
+    }
+    const dirs = await project();
+    const backend = new TimedBackend(
+      { ...FENCED, kind: "al-runner-v3", authoritative: false },
+      "boom",
+    );
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const finished = events.find((e) => e.type === "baseline-batch-finished");
+    if (finished === undefined || finished.type !== "baseline-batch-finished")
+      throw new Error("no baseline-batch-finished event");
+    const rows = finished.verdicts.map((v) => [v.name, v.outcome, v.durationMs]);
+    expect(rows).toContainEqual(["Sandbox Tests.UnsupportedTest", "fail", undefined]);
+    expect(rows.filter((r) => r[1] === "pass").every((r) => r[2] === 9)).toBe(true);
+    expect(rows.some((r) => r[1] === "pass")).toBe(true);
+  });
+  // R939: the session installs a close sink; each close it gets is a `serve-daemon-closed` event,
+  // which the report counts, and never a warning. Removed at the session's end.
+  test("R939: a backend's daemon close becomes an event and the report's v3DaemonCloses, never a warning", async () => {
+    class ClosingBackend extends RecordingBackend {
+      sink: ((c: { readonly reason: string; readonly family?: string }) => void) | undefined;
+      setDaemonCloseSink(sink?: (c: { readonly reason: string; readonly family?: string }) => void) {
+        this.sink = sink;
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (ref.method === "UnsupportedTest") this.sink?.({ reason: "refusal", family: "WithEvents …" });
+        return super.run(ref, opts);
+      }
+    }
+    const dirs = await project();
+    const backend = new ClosingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const closed = events.filter((e) => e.type === "serve-daemon-closed");
+    expect(closed.length).toBeGreaterThan(0);
+    expect(closed[0]).toMatchObject({ reason: "refusal", family: "WithEvents …" });
+    expect(report.v3DaemonCloses).toEqual({ refusal: closed.length });
+    expect(events.some((e) => e.type === "warning" && e.code.includes("daemon"))).toBe(false);
+    expect(backend.sink).toBeUndefined();
+  });
   // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
   // only when that frame is a page call in the test app's source; the same text at any other
   // statement is an ordinary failure.

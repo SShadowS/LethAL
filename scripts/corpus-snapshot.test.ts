@@ -19,6 +19,7 @@ import {
   SLOT_BUSY,
   corpusHeadOf,
   diffDumps,
+  diffShaFor,
   dumperKeyOf,
   entryDir,
   exitCodeOf,
@@ -35,6 +36,7 @@ import {
   resolveProjects,
   slotHeld,
   slotted,
+  snapshotShaFor,
   trySlots,
   writeEntry,
 } from "./corpus-snapshot.ts";
@@ -416,6 +418,86 @@ describe("review r1: --projects and bad flags", () => {
     );
     expect(r.exitCode, r.stderr.toString()).toBe(2);
     expect(r.stderr.toString()).toContain("--bogus");
+  });
+});
+
+describe("R935 pinning the master commit", () => {
+  // A branch cut from master m1; origin/master then moves to m2 while the job waits for a slot.
+  const moved = () => {
+    const r = repo();
+    const m1 = r.git(["rev-parse", "HEAD"]);
+    r.git(["update-ref", "refs/remotes/origin/master", m1]);
+    r.git(["checkout", "-q", "-b", "topic"]);
+    const b1 = r.commit({ "docs/a.md": "branch\n" });
+    r.git(["checkout", "-q", "main"]);
+    const m2 = r.commit({ "docs/a.md": "master moved\n" });
+    r.git(["checkout", "-q", "topic"]);
+    return { r, m1, m2, b1 };
+  };
+  const quiet = () => {};
+
+  test("pinned at the start, snapshot and diff use the same commit after master moves; unpinned they part", () => {
+    const { r, m1, m2 } = moved();
+    // The job's first step, before origin/master moves: the merge base, m1.
+    r.git(["update-ref", "refs/remotes/origin/master", m1]);
+    const pin = diffShaFor(r.git, undefined, quiet);
+    expect(pin).toBe(m1);
+    r.git(["update-ref", "refs/remotes/origin/master", m2]); // another lane fetched
+    expect([snapshotShaFor(r.git, pin), diffShaFor(r.git, pin, quiet)]).toEqual([m1, m1]);
+    // R935's failure, unpinned: the snapshot dumps m2 while the diff still wants m1.
+    expect([snapshotShaFor(r.git, undefined), diffShaFor(r.git, undefined, quiet)]).toEqual([
+      m2,
+      m1,
+    ]);
+  });
+
+  test("refused by name: a --master-sha not in the branch, a --sha not on master, an unknown sha", () => {
+    const { r, m2, b1 } = moved();
+    r.git(["update-ref", "refs/remotes/origin/master", m2]);
+    expect(() => diffShaFor(r.git, m2, quiet)).toThrow(/not an ancestor of the branch/);
+    expect(() => snapshotShaFor(r.git, b1)).toThrow(/not on origin\/master/);
+    expect(() => diffShaFor(r.git, "0".repeat(40), quiet)).toThrow(/not a commit/);
+    expect(() => snapshotShaFor(r.git, "0".repeat(40))).toThrow(RefusedError);
+  });
+
+  test("an older ancestor is used, and the line says master's changes since count as branch changes", () => {
+    // m0 on master; the branch adds its own file, then merges a later master commit m3.
+    const r = repo();
+    const m0 = r.git(["rev-parse", "HEAD"]);
+    r.git(["checkout", "-q", "-b", "topic"]);
+    r.commit({ "docs/c.md": "branch\n" });
+    r.git(["checkout", "-q", "main"]);
+    const m3 = r.commit({ "docs/b.md": "later master\n" });
+    r.git(["checkout", "-q", "topic"]);
+    r.git(["merge", "-q", "--no-edit", m3]);
+    r.git(["update-ref", "refs/remotes/origin/master", m3]);
+    const lines: string[] = [];
+    expect(diffShaFor(r.git, m0, (l) => lines.push(l))).toBe(m0);
+    expect(lines.join("\n")).toContain(`older than the merge base ${m3}`);
+  });
+
+  test("the CLI refuses the other command's pin flag, and two master entries at once", () => {
+    // A temp cache: even with a guard removed, the child must never dump into /coord.
+    const cache = fresh("cache");
+    for (const [argv, said] of [
+      [["snapshot", "fixtures", "--master", "--master-sha", "abc"], "--master-sha is diff's"],
+      [["diff", "fixtures", "--branch", "x", "--sha", "abc"], "--sha is snapshot's"],
+      [
+        ["diff", "fixtures", "--branch", "x", "--master-sha", "a", "--legacy-master", "b"],
+        "name two master entries",
+      ],
+    ] as const) {
+      const p = Bun.spawnSync(["bun", join(REPO_ROOT, "scripts/corpus-snapshot.ts"), ...argv], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, LETHAL_DUMP_CACHE: cache },
+      });
+      expect([argv.join(" "), p.exitCode, p.stderr.toString().includes(said)]).toEqual([
+        argv.join(" "),
+        2,
+        true,
+      ]);
+    }
   });
 });
 

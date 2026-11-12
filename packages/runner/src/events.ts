@@ -532,6 +532,17 @@ export type RunEventInput =
       readonly endedBy?: "complete" | "failure" | "cap";
     }
   | { readonly type: "warning"; readonly code: string; readonly message: string }
+  | {
+      /**
+       * R939: an al-runner-v3 serve daemon closed before the session's end (`V3DaemonCloseReason`:
+       * `refusal`, `timeout`, `request-failed`, ...); the next request starts a new one with a
+       * warm-up. `family` names a refusal's kind. Not a warning: a close is a fact to count, and
+       * gates pin their warning sets. The routine closes (a redeploy, the session's end) emit none.
+       */
+      readonly type: "serve-daemon-closed";
+      readonly reason: string;
+      readonly family?: string;
+    }
   | { readonly type: "quarantined"; readonly reason: string }
   | {
       /**
