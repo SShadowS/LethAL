@@ -142,7 +142,7 @@ export interface UpdateDeps {
     env: Readonly<Record<string, string>>,
     log: (line: string) => Promise<void>,
   ): Promise<void>;
-  /** A running process whose executable resolves under `root`. */
+  /** A running process a move of `current` would affect (`movesUnder`). */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
   now(): string;
@@ -897,6 +897,18 @@ export const HEAVY_JOB =
   /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
 
 /**
+ * R950: whether a move of `current` would change what a running process runs. It runs an al-runner build
+ * (`exe` resolves under `root`), and it was started through `<root>/current/` or its `argv[0]` is unreadable or
+ * relative (the safe side). One started with an explicit build path (`<root>/<build>/al-runner`) is untouched by
+ * the move: LethAL spawns the path it was given and never re-reads `current` for it.
+ */
+export function movesUnder(root: string, exe: string, argv0: string | undefined): boolean {
+  if (!exe.startsWith(`${root}/`)) return false;
+  if (argv0 === undefined || !argv0.startsWith(`${root}/`)) return true;
+  return argv0.startsWith(`${root}/current/`);
+}
+
+/**
  * R851: heavy JOBS, not processes. One job is a wrapper shell, `flock`, `bun run`, a bun child and
  * workers: on 2026-11-06 one corpus job read as 6 and skipped a release for the day. A job is a
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
@@ -1437,7 +1449,12 @@ export function realDeps(root = ROOT): UpdateDeps {
       for (const pid of await readdir("/proc")) {
         if (!/^\d+$/.test(pid)) continue;
         const exe = await readlink(`/proc/${pid}/exe`).catch(() => "");
-        if (exe.startsWith(`${root}/`)) return true;
+        if (!exe.startsWith(`${root}/`)) continue;
+        // argv[0] is the path the process was started with; undefined when unreadable.
+        const argv0 = await readFile(`/proc/${pid}/cmdline`, "utf8")
+          .then((c) => c.split("\0")[0])
+          .catch(() => undefined);
+        if (movesUnder(root, exe, argv0)) return true;
       }
       return false;
     },
