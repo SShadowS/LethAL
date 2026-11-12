@@ -947,7 +947,7 @@ that ordering is the priority.
 - **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · done (b7404cc1)
 - **R938** · LethAL runs al-runner v3 in its default `saas` environment, while the bc servers are on-prem: tests that expect an on-prem server fail at baseline on v3 only · [R938.md](docs/roadmap/R938.md) · open
 - **R939** · A v3 serve session does not say why it closed a daemon, so a session with many restarts (18 daemons for one app) cannot be explained from its report · [R939.md](docs/roadmap/R939.md) · done (851969de; report 195ef055)
-- **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (R-931): relabelled with the measured spread; no bound exists to promise
+- **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (08c571fa): relabelled with the measured spread; no bound exists to promise
 
 ---
 

@@ -1410,9 +1410,7 @@ describe("R939: why each serve daemon closed", () => {
           ["WithEvents subscriber …", 2],
         ]),
       }),
-    ).toBe(
-      "daemons closed: refusal 3 (WithEvents subscriber … 2, DateTime before N 1), timeout 1",
-    );
+    ).toBe("daemons closed: refusal 3 (WithEvents subscriber … 2, DateTime before N 1), timeout 1");
     expect(v3DaemonClosesText({ byReason: new Map(), refusalFamilies: new Map() })).toBe(
       "daemons closed: none",
     );

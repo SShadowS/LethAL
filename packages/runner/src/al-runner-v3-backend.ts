@@ -1117,7 +1117,10 @@ export function unkeptRowReason(
       .replace(/\d+/g, "N")
       .trim()
       .slice(0, 80);
-    return { reason: "refusal", family: family !== undefined && family !== "" ? family : "unnamed" };
+    return {
+      reason: "refusal",
+      family: family !== undefined && family !== "" ? family : "unnamed",
+    };
   }
   return { reason: "unkept-row" };
 }
@@ -1862,7 +1865,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const n = await lane.closeDaemon();
     if (n === 0) return;
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + n);
-    if (family !== undefined) this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + n);
+    if (family !== undefined)
+      this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + n);
     if (reason === "deploy" || reason === "session-end") return;
     this.notify(
       `${V3_DAEMON_CLOSED_CODE}${reason}`,
