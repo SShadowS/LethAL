@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   type Dump,
   EXTERNAL_SETS,
@@ -34,6 +34,7 @@ import {
   pickMaster,
   readEntry,
   resolveProjects,
+  shapeProjects,
   slotHeld,
   slotted,
   snapshotShaFor,
@@ -419,6 +420,72 @@ describe("review r1: --projects and bad flags", () => {
     expect(r.exitCode, r.stderr.toString()).toBe(2);
     expect(r.stderr.toString()).toContain("--bogus");
   });
+});
+
+describe("R-935 --shape narrows the diff to the projects holding a shape", () => {
+  const BCH = "/work/src/BC.History";
+  test("a project is selected by any nested .al naming the shape; one-side projects always; others not", () => {
+    const d = fresh("shape");
+    write(d, "a/app.json", "{}");
+    write(d, "a/src/deep/X.XmlPort.al", 'XMLport 50100 "X" { }\n');
+    write(d, "b/app.json", "{}");
+    write(d, "b/src/C.Codeunit.al", "codeunit 50101 C { }\n");
+    write(d, "new/app.json", "{}");
+    write(d, "new/N.Codeunit.al", "codeunit 1 N { }\n");
+    // Review: the dumper's walk reads a `.al` under a folder named node_modules; so must the scan.
+    write(d, "c/app.json", "{}");
+    write(d, "c/node_modules/X.al", "xmlport 50102 X { }\n");
+    const branch = findProjects(d);
+    const sel = shapeProjects("xmlport", d, branch, new Set(["a", "b", "c", "gone"]));
+    expect([...sel].sort()).toEqual(["a", "c", "gone", "new"]);
+    expect(() => shapeProjects("xmlport,dataitems", d, branch, new Set())).toThrow("dataitems");
+  });
+  test("--shape with --projects is refused (exit 2): one scope per run", () => {
+    const run = (...a: string[]) =>
+      Bun.spawnSync(
+        [process.execPath, join(REPO_ROOT, "scripts", "corpus-snapshot.ts"), "diff", ...a],
+        { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+      );
+    const both = run("bch", "--branch", REPO_ROOT, "--shape", "xmlport", "--projects", "0");
+    expect(both.exitCode, both.stderr.toString()).toBe(2);
+    expect(both.stderr.toString()).toContain("give one");
+  });
+  // The proof the brief asks for: on both known BC.History diffs, the xmlport shape holds every
+  // project that changed (names from /coord/handoff/R-919/five/bch.diff.txt and
+  // /coord/handoff/R-923/r928/bch/bch.diff2.txt). It needs the corpus, so it runs in the container only.
+  const R919 = [
+    "BaseApp/Source/Base Application",
+    "BaseApp/Source/Base Application/Modules/System/DevTools/CodeCoverage",
+    "BaseApp/Source/Base Application/Modules/System/PermissionSets",
+    "BaseApp/Test/Tests-TestLibraries",
+    "EDocument Core/Source/E-Document Core",
+    "MasterDataManagement/Source/_Exclude_Master_Data_Management",
+    "PEPPOL/Source/PEPPOL",
+    "System Application/Source/System Application",
+    "System Application/Source/System Application/Permission Sets",
+    "System Application/Source/System Application/Security Groups",
+    "TestFramework/AITestToolkit/AI Test Toolkit",
+    "TestFramework/TestRunner/Test Runner",
+    "TestFramework/performancetoolkit/Performance Toolkit",
+  ];
+  const R928 = [
+    "BaseApp/Source/Base Application",
+    "EDocument Core/Source/E-Document Core",
+    "PEPPOL/Source/PEPPOL",
+  ];
+  test.skipIf(!existsSync(BCH))(
+    "BC.History (container only): the xmlport shape is a superset of R919's 13 and R928's 3 changed projects",
+    () => {
+      const branch = findProjects(BCH);
+      const all = new Set(branch.map((p) => relative(BCH, p)));
+      const sel = shapeProjects("xmlport", BCH, branch, all);
+      for (const p of [...R919, ...R928]) {
+        expect(all.has(p), `${p} is a project`).toBe(true);
+        expect(sel.has(p), `${p} selected`).toBe(true);
+      }
+      expect(sel.size).toBeLessThan(all.size / 5);
+    },
+  );
 });
 
 describe("R935 pinning the master commit", () => {

@@ -181,6 +181,8 @@
     "changelog-section.test.ts",
     "changelog-section.ts",
     "check-native-grammar.ts",
+    "corpus-build-cache.test.ts",
+    "corpus-build-cache.ts",
     "corpus-fingerprint.test.ts",
     "corpus-snapshot.test.ts",
     "corpus-snapshot.ts",

@@ -47,6 +47,7 @@ describe("lanes(N): the guards", () => {
     expect(() => r.b.lanes(2)).toThrow(/before the first deploy/);
     const fresh = new AlRunnerV3Backend({
       alRunnerPath: "x",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: "/tmp/x",
       testDir: "/tmp/t",
       packagesDir: "/tmp/p",
@@ -393,6 +394,7 @@ describe("the parallel gate: refusals and the memory hold", () => {
   const mk = (transport: "one-shot" | "serve-entries") =>
     new AlRunnerV3Backend({
       alRunnerPath: "x",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: "/tmp/x",
       testDir: "/tmp/t",
       packagesDir: "/tmp/p",

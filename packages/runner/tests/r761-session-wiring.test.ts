@@ -173,6 +173,7 @@ async function backend(testSrc: string) {
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: join(root, "scratch"),
       testDir,
       packagesDir: join(root, "deps"),

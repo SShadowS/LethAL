@@ -101,12 +101,14 @@ function statusOf(
     cacheDir?: string;
     packagesDir?: string;
     spawn?: SpawnFn;
+    environmentChoice?: { value: "saas" | "onprem"; source: "config" };
   } = {},
 ) {
   const { spawn, ...cfgExtra } = extra;
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: e.bin,
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: join(e.root, "scratch"),
       testDir: join(e.root, "tests"),
       packagesDir: e.deps,
@@ -191,6 +193,19 @@ describe("R762: each key part re-runs the probe", () => {
       fp.mockRestore();
     }
     expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("R938: environment (saas then onprem re-runs it; saas again hits)", async () => {
+    const e = await env();
+    await statusOf(e);
+    await statusOf(e, { environmentChoice: { value: "onprem", source: "config" } });
+    expect(probe).toHaveBeenCalledTimes(2);
+    await statusOf(e);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+  test("R938: the probe receives the session's environment", async () => {
+    const e = await env();
+    await statusOf(e, { environmentChoice: { value: "onprem", source: "config" } });
+    expect(probe.mock.calls[0]?.[0]).toMatchObject({ environment: "onprem" });
   });
   test("R776: one changed byte (same name, size and mtime) re-runs it", async () => {
     const e = await env();
@@ -570,6 +585,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             packagesDir: e.deps,
             bcVersion: "28.0.46665.47126",
             alcPath: "/fake/alc",
@@ -613,6 +629,7 @@ describe("R762: --fresh-probe reaches the backend", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             packagesDir: e.deps,
             bcVersion: "28.0.46665.47126",
             alcPath: "/fake/alc",

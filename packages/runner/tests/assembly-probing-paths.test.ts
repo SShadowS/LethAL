@@ -386,6 +386,7 @@ describe("buildBackend hands the resolved list to the bcdev compiler", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             path: "/fake/al-runner",
             packagesDir: deps,
             bcVersion: BC,

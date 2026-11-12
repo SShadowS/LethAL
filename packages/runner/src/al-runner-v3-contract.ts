@@ -767,7 +767,12 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): five codeunits (six tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
-    await server.start(SERVE_DEADLINE_MS, [], SERVE_TEST_TIMEOUT_S);
+    await server.start(
+      SERVE_DEADLINE_MS,
+      [],
+      SERVE_TEST_TIMEOUT_S,
+      env.environment !== undefined ? ["--environment", env.environment] : [], // R938
+    );
     rows = (
       await server.runTests({ sourcePaths: [app, tests], testIsolation: "test" }, SERVE_DEADLINE_MS)
     ).tests;
@@ -828,6 +833,8 @@ export interface V3ProbeEnv {
   readonly expectedVersion: string;
   readonly packagesDir: string;
   readonly bcVersion: string;
+  /** R938: `--environment` for every probe leg that runs the tests; absent: al-runner's default. */
+  readonly environment?: "saas" | "onprem";
   readonly alcPath?: string;
   readonly cacheDir?: string;
   readonly spawn?: SpawnFn;
@@ -993,6 +1000,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         "--bc-version",
         env.bcVersion,
         "--no-download",
+        ...(env.environment !== undefined ? ["--environment", env.environment] : []),
         ...args,
         ...(o.coverage === true ? ["--coverage-json", cov] : []),
         o.app ?? app,
@@ -1667,6 +1675,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
     );
     // predefined-symbols
     try {
+      // R938: the mask probe stays on al-runner's default environment: it reads which `#if` symbols
+      // the compiler predefines, which no environment changes.
       const p = await probeV3PredefinedSymbols({
         alRunnerPath: env.alRunnerPath,
         packagesDir: env.packagesDir,

@@ -46,12 +46,67 @@ async function setup(gated: boolean, withSystemApp = true): Promise<{ bin: strin
 const spawn: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
 
 describe("doctor: al-runner-v3", () => {
-  test("a gated binary passes, and the check is the only one", async () => {
+  test("a gated binary passes, beside the environment check", async () => {
     const { bin, deps } = await setup(true);
     const cfg = { alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC } };
     const d = await buildDoctorDeps(cfg, { alRunnerSpawn: spawn });
     const r = await runDoctor(d.cfg, d.deps);
-    expect(r.checks.map((c) => [c.name, c.ok])).toEqual([["al-runner-v3", true]]);
+    expect(r.checks.map((c) => [c.name, c.ok])).toEqual([
+      ["al-runner-v3", true],
+      ["al-runner-v3-environment", true],
+    ]);
+  });
+
+  const envCheck = async (section: Record<string, unknown>, projectDir?: string) => {
+    const { bin, deps } = await setup(true);
+    const cfg = { alRunnerV3: { path: bin, packagesDir: deps, bcVersion: BC, ...section } };
+    const d = await buildDoctorDeps(cfg, {
+      alRunnerSpawn: spawn,
+      ...(projectDir !== undefined ? { projectDir } : {}),
+    });
+    const r = await runDoctor(d.cfg, d.deps);
+    return r.checks.find((c) => c.name === "al-runner-v3-environment");
+  };
+  const launchDir = async (environmentType: string | undefined) => {
+    const p = await mkdtemp(join(tmpdir(), "lethal-r938-doctor-"));
+    if (environmentType !== undefined) {
+      await mkdir(join(p, ".vscode"));
+      await writeFile(
+        join(p, ".vscode", "launch.json"),
+        JSON.stringify({ configurations: [{ environmentType }] }),
+      );
+    }
+    return p;
+  };
+
+  test("R938: doctor reports the config's environment, and where it came from", async () => {
+    const c = await envCheck({ environment: "onprem" });
+    expect([c?.ok, c?.detail]).toEqual([
+      true,
+      "al-runner-v3: environment: onprem (alRunnerV3.environment)",
+    ]);
+  });
+
+  test("R938: doctor reads the target's launch.json when the config is silent", async () => {
+    const p = await launchDir("Sandbox");
+    try {
+      const c = await envCheck({}, p);
+      expect(c?.ok).toBe(true);
+      expect(c?.detail).toContain("saas (the target's .vscode/launch.json)");
+    } finally {
+      await rm(p, { recursive: true, force: true });
+    }
+  });
+
+  test("R938: with nothing stated anywhere, doctor FAILS with run's refusal text", async () => {
+    const p = await launchDir(undefined);
+    try {
+      const c = await envCheck({}, p);
+      expect(c?.ok).toBe(false);
+      expect(c?.detail).toContain('set alRunnerV3.environment to "onprem" or "saas"');
+    } finally {
+      await rm(p, { recursive: true, force: true });
+    }
   });
 
   test("an ungated binary fails the check by name", async () => {

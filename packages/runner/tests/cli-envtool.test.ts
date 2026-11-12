@@ -1005,6 +1005,7 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir,
         testDir: join(root, "test"),
         packagesDir: join(root, "deps"),

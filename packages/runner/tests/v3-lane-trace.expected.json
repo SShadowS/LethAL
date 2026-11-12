@@ -246,11 +246,11 @@
   }
  ],
  "daemonArgv": [
-  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
-  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
-  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
-  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download",
-  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --no-download"
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --environment saas --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --environment saas --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --environment saas --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --environment saas --no-download",
+  "/fake/al-runner serve --package-cache <ROOT>/deps --test-timeout 1 --bc-version 28.0.46665.47126 --environment saas --no-download"
  ],
  "daemonCwds": [
   "<ROOT>/scratch",
@@ -260,7 +260,7 @@
   "<ROOT>/scratch"
  ],
  "oneShotCalls": [
-  "/fake/al-runner test --output-json --isolation test --test-timeout-secs 1 --codeunit 79100 --package-cache <ROOT>/deps --bc-version 28.0.46665.47126 --no-download --coverage-json <ROOT>/scratch/cov/call-1.json <ROOT>/scratch/active <ROOT>/tests"
+  "/fake/al-runner test --output-json --isolation test --test-timeout-secs 1 --codeunit 79100 --package-cache <ROOT>/deps --bc-version 28.0.46665.47126 --environment saas --no-download --coverage-json <ROOT>/scratch/cov/call-1.json <ROOT>/scratch/active <ROOT>/tests"
  ],
  "spawnCount": 1,
  "stats": {

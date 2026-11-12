@@ -396,6 +396,7 @@ function subjects(o: {
     packagesDir,
     bcVersion,
     coverage,
+    environment: "saas", // R938: stated (an unknown one is refused); saas is what these timings ran under
     downloadDemoData: false, // R885: a timing run measures v3, not the network
     dotnetSidecar: false, // R886: and not a sidecar's start-up
     isolation: "test", // R896: the timings were measured under test; the default is now auto

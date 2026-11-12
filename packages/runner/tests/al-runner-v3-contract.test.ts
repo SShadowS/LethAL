@@ -450,6 +450,49 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
   });
 });
 
+describe("R938: the probe runs under the session's environment", () => {
+  const run = async (environment?: "saas" | "onprem") => {
+    const inner = fakeV3();
+    const argvs: (readonly string[])[] = [];
+    const serve = fakeServe();
+    await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      ...(environment !== undefined ? { environment } : {}),
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: (argv, opts) => {
+        argvs.push(argv);
+        return inner(argv, opts);
+      },
+      serveSpawn: serve.spawn,
+    });
+    return { argvs, serve };
+  };
+  test("every test leg and the serve daemon carry --environment <value>; the flag-rejection call and the mask probe do not", async () => {
+    const { argvs, serve } = await run("onprem");
+    const tests = argvs.filter(
+      (a) => a.includes("test") && !a.includes("--lethal-wire-contract-probe"),
+    );
+    const real = tests.filter((a) => a.includes("--bc-version") && a.includes("--output-json"));
+    const stated = real.filter((a) => a.includes("--environment"));
+    expect(stated.length).toBeGreaterThan(5);
+    for (const a of stated) expect(a[a.indexOf("--environment") + 1]).toBe("onprem");
+    // The one call without it is the mask probe (`probeV3PredefinedSymbols`), on the default.
+    expect(real.length - stated.length).toBe(1);
+    expect(serve.argvs[0]).toContain("onprem");
+  });
+  test("with none given, no leg passes --environment", async () => {
+    const { argvs, serve } = await run();
+    expect(argvs.some((a) => a.includes("--environment"))).toBe(false);
+    expect(serve.argvs[0]).not.toContain("--environment");
+  });
+});
+
 const probe = (
   over: Over = {},
   serveSpawn = fakeServe().spawn,

@@ -144,6 +144,7 @@ describe("R870: --json through the real CLI, on the issue's three failure classe
       config,
       JSON.stringify({
         alRunnerV3: {
+          environment: "saas", // R938
           packagesDir: dir,
           bcVersion: "28.0.1.2",
           path: join(dir, "no-al-runner"),

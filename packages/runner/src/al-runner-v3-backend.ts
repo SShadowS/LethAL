@@ -94,6 +94,7 @@ import {
   isolatedSelection,
   serveRow,
 } from "./al-runner-v3-entries";
+import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
 import {
   AlRunnerV3UngatedBuildError,
   type GatedBuild,
@@ -285,6 +286,34 @@ export class AlRunnerV3NoTestRanError extends Error {
     );
     this.name = "AlRunnerV3NoTestRanError";
   }
+}
+
+/**
+ * R944: al-runner's own compiler refused the app (`COMPILE ERRORS (exit 3)`) on a BASELINE call: the
+ * artifact then holds no runnable app, so the refusal is the app's, not a test's: the session stops
+ * once, by name, quoting the compiler's `error AL....` lines (a file, a position, a code and a symbol
+ * name, as alc's own messages hold), not one failure per test. On a mutant call (a chunked or bisected
+ * batch builds its own artifact) the same refusal stays that batch's transport failure.
+ */
+export class AlRunnerV3CompileRefusedError extends Error {
+  constructor(readonly compilerLines: readonly string[]) {
+    const shown = compilerLines.slice(0, 5).join("; ");
+    super(
+      `al-runner-v3-compile-refused: al-runner's compiler refused the app, so no test can run on v3: ${shown}${compilerLines.length > 5 ? `; and ${compilerLines.length - 5} more` : ""}. LethAL's alc built it; the difference is al-runner's (report it upstream; R944).`,
+    );
+    this.name = "AlRunnerV3CompileRefusedError";
+  }
+}
+
+/** R944: the compiler lines of an al-runner exit 3 that says the apps do not compile; undefined otherwise. */
+export function v3CompileRefusal(exitCode: number, output: string): string[] | undefined {
+  if (exitCode !== 3 || !/COMPILE ERRORS \(exit 3\)/.test(output)) return undefined;
+  const lines = output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /\berror AL\d+:/.test(l))
+    .map((l) => l.replace(/^compile:\s*/, ""));
+  return lines.length > 0 ? [...new Set(lines)] : ["(no error AL line in its output)"];
 }
 
 /**
@@ -663,6 +692,11 @@ export interface AlRunnerV3Config {
    */
   readonly noClient?: boolean;
   /**
+   * R938: the environment choice (`chooseV3Environment`). A stated value is `--environment <value>`
+   * on every al-runner call, one-shot and serve. REQUIRED: the constructor refuses a config without it.
+   */
+  readonly environmentChoice: V3EnvironmentChoice;
+  /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
    * one and the file still has that sha256 (else a warning and none). `false`: none; gates set this.
@@ -675,8 +709,10 @@ export interface AlRunnerV3Config {
   readonly coverageOffFiles?: readonly string[];
   readonly preprocessorSymbols?: readonly string[];
   /**
-   * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). Not passed to
-   * al-runner: its `--dotnet-assembly-dir` is a separate, runtime knob.
+   * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). R941/R943: also
+   * al-runner's `--dotnet-assembly-dir`, one flag per folder (measured: a repeated flag searches
+   * every folder, in either order; a comma-joined value is not split), on every one-shot call and
+   * serve daemon that has a .NET helper, so a .NET type from a BC service folder loads at run time.
    */
   readonly assemblyProbingPaths?: readonly string[];
   /** `ALRUNNER_CACHE` for every v3 call. Absent: v3's own default. */
@@ -966,10 +1002,14 @@ export function v3CallArgv(a: {
   readonly bcVersion: string;
   /** R907: pass `--no-client` (a session without a client). Absent: not passed. */
   readonly noClient?: boolean;
+  /** R938: `--environment <value>`. Absent: not passed. */
+  readonly environment?: "saas" | "onprem";
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
   readonly dotnetSidecar?: string;
+  /** R941/R943: one `--dotnet-assembly-dir <dir>` each, after the sidecar; only with `dotnetSidecar`. */
+  readonly dotnetAssemblyDirs?: readonly string[];
   readonly symbols: readonly string[];
   readonly coverageJson?: string;
   readonly activeDir: string;
@@ -998,8 +1038,15 @@ export function v3CallArgv(a: {
     "--bc-version",
     a.bcVersion,
     ...(a.noClient === true ? ["--no-client"] : []),
+    ...(a.environment !== undefined ? ["--environment", a.environment] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
-    ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
+    ...(a.dotnetSidecar !== undefined
+      ? [
+          "--dotnet-sidecar",
+          a.dotnetSidecar,
+          ...(a.dotnetAssemblyDirs ?? []).flatMap((d) => ["--dotnet-assembly-dir", d]),
+        ]
+      : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
     ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
@@ -1686,6 +1733,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get noClient(): boolean {
     return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
   }
+  /** R938: see `ExecutionBackend.environmentChoice`. */
+  get environmentChoice(): V3EnvironmentChoice {
+    return this.cfg.environmentChoice;
+  }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
     return this.skipAfterTimeoutLearned && !this.entries;
@@ -2048,6 +2099,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R651: the clock of the phase timers only (a test's fake clock). */
     private readonly now: () => number = Date.now,
   ) {
+    // R938: a backend built directly cannot run with an unknown environment either.
+    if ((cfg.environmentChoice as V3EnvironmentChoice | undefined)?.value === undefined) {
+      throw new V3EnvironmentUnknownError();
+    }
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
     if (cfg.isolateTests === true && cfg.isolation === "auto") {
       throw new AlRunnerV3IsolateTestsWithAutoRefusedError();
@@ -2225,6 +2280,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           expectedVersion: reported,
           packagesDir: resolve(this.cfg.packagesDir),
           bcVersion: this.cfg.bcVersion,
+          environment: this.environmentChoice.value, // R938
           alcPath: this.cfg.alcPath,
           ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
           ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
@@ -2314,6 +2370,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         version,
         probeCodeHash: code,
         bcVersion: this.cfg.bcVersion,
+        environment: this.environmentChoice.value, // R938
         packages: await packagesFingerprint(this.cfg.packagesDir),
         alc: await alcIdentity(this.cfg.alcPath),
         cacheDir: this.cfg.cacheDir ?? null,
@@ -2397,6 +2454,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * its `.gated`.
    */
   private sidecarPath: string | undefined;
+  /** R941/R943: the probing paths, absolute, as the .NET helper's assembly folders (empty when none). */
+  private dotnetAssemblyDirs(): string[] {
+    return (this.cfg.assemblyProbingPaths ?? []).map((d) => resolve(d));
+  }
 
   /**
    * R886: the settings a `--resume` must find unchanged: the sidecar this session passes (its
@@ -3193,11 +3254,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
+      environment: this.environmentChoice.value,
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
       skipAfterTimeout: this.skipAfterTimeout && o.mutantActive === true,
-      ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
+      ...(this.sidecarPath !== undefined
+        ? { dotnetSidecar: this.sidecarPath, dotnetAssemblyDirs: this.dotnetAssemblyDirs() }
+        : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
       activeDir: o.activeDir,
@@ -4231,6 +4295,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (lane.lastActivated === null) throw new AlRunnerV3NoTestRanError(id);
       return { verdict: this.rowMissing(lane, ref, ranNoTestWhy(id), wallMs) };
     }
+    // R944: on a baseline call a compile refusal is the app's, not this test's: stop the session
+    // once, by name. Under a mutant (a chunked or bisected batch compiles its own artifact) it is
+    // that batch's, so it stays a transport failure there and the other batches still run.
+    const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
+    if (compileRefusal !== undefined && this.isBaselineCall(lane))
+      throw new AlRunnerV3CompileRefusedError(compileRefusal);
     if (![0, 1, 7, 8].includes(res.exitCode)) {
       return {
         verdict: transportFailure(
@@ -4361,8 +4431,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
       "--bc-version",
       this.cfg.bcVersion,
+      "--environment",
+      this.environmentChoice.value,
       ...(this.noDownload() ? ["--no-download"] : []),
-      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
+      ...(this.sidecarPath !== undefined
+        ? [
+            "--dotnet-sidecar",
+            this.sidecarPath,
+            ...this.dotnetAssemblyDirs().flatMap((d) => ["--dotnet-assembly-dir", d]),
+          ]
+        : []),
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };

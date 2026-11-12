@@ -442,6 +442,8 @@ export interface SessionFingerprintInput {
    * the run and compared at the resumed baseline). Only when on, so no other digest moves.
    */
   readonly isolationAuto?: true;
+  /** R938: `--environment` al-runner v3 ran under. Only when stated, so no other digest moves. */
+  readonly v3Environment?: "saas" | "onprem";
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -527,6 +529,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.noClient === true ? { noClient: true } : {}),
     ...(input.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(input.isolationAuto === true ? { isolation: "auto" } : {}),
+    ...(input.v3Environment !== undefined ? { v3Environment: input.v3Environment } : {}),
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

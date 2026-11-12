@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { validateAlRunnerV3Config } from "../packages/runner/src/al-runner-v3-config";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import {
+  ENVIRONMENT_HINT,
   FEED_INDEX,
   type FetchFn,
   NoBuildForMajorError,
@@ -51,6 +53,15 @@ describe("configLine", () => {
       JSON.parse(`{${line}}`).alRunnerV3.packagesDir as string;
     expect(dirOf(configLine("./symbols", "28.5.1.2"))).toBe(resolve("symbols"));
     expect(dirOf(configLine(resolve("abs", "s"), "28.5.1.2"))).toBe(resolve("abs", "s"));
+  });
+});
+
+describe("configLine: the environment (R938)", () => {
+  test("the printed section states an environment the config accepts, and the hint says to match the target", () => {
+    const section = JSON.parse(`{${configLine("./s", "28.5.1.2")}}`).alRunnerV3;
+    expect(section.environment).toBe("onprem");
+    expect(() => validateAlRunnerV3Config(section)).not.toThrow();
+    expect(ENVIRONMENT_HINT).toContain("must match the target");
   });
 });
 

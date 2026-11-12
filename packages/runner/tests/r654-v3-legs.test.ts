@@ -8,7 +8,12 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
+import {
+  V3_GATE_LEGS,
+  gateOutcome,
+  v3GateBackendCfg,
+  v3ItestEnvironment,
+} from "../itest/al-runner-v3-gate";
 import {
   V3_AGENTFLOW_LEGS,
   V3_K_CANDIDATE_SKIP,
@@ -266,17 +271,61 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     bcVersion: BC,
     alcPath: "/p/alc",
     cacheDir: "/p/cache",
+    environment: "saas" as const,
   };
 
-  test("the section names no coverage and no transport key (the CLI's defaults decide)", () => {
+  test("the section names no coverage and no transport key, but states an environment (R938)", () => {
     const s = legKSection(SECTION_IN);
     expect(Object.keys(s).sort()).toEqual([
       "alcPath",
       "bcVersion",
       "cacheDir",
+      "environment",
       "packagesDir",
       "path",
     ]);
+    expect(s.environment).toBe("saas");
+  });
+
+  test("R938: the itest env override sets saas by default, onprem on request, and refuses the rest", () => {
+    expect(v3ItestEnvironment({})).toBe("saas");
+    expect(v3ItestEnvironment({ LETHAL_ITEST_V3_ENVIRONMENT: "onprem" })).toBe("onprem");
+    expect(() => v3ItestEnvironment({ LETHAL_ITEST_V3_ENVIRONMENT: "OnPrem" })).toThrow(
+      "al-runner-v3-itest-environment-refused",
+    );
+  });
+
+  test("R938: the config every itest leg is built from states the environment, and a leg cannot override it", () => {
+    const ctx = {
+      alRunnerPath: "/b",
+      alcPath: "/alc",
+      cacheDir: "/c",
+      candidate: false,
+      transport: {},
+    };
+    const leg = {
+      instrumentedDir: "/i",
+      testDir: "/t",
+      packagesDir: "/p",
+      bcVersion: BC,
+      selectorObjectId: 1,
+    };
+    for (const environment of ["saas", "onprem"] as const) {
+      const built = v3GateBackendCfg({ ...ctx, environment }, leg);
+      expect(built.environmentChoice).toEqual({ value: environment, source: "config" });
+      // A leg that passes its own (or an undefined) choice does not win.
+      const hostile = v3GateBackendCfg(
+        { ...ctx, environment },
+        { ...leg, environmentChoice: undefined as never },
+      );
+      expect(hostile.environmentChoice.value).toBe(environment);
+    }
+  });
+
+  test("R938: the itest builds every direct backend through that config (source scan: the legs are not importable)", async () => {
+    const src = await Bun.file(join(import.meta.dir, "../itest/al-runner-v3.itest.ts")).text();
+    const direct = src.match(/new AlRunnerV3Backend\(\s*(?!\s|backendCfg\()/g) ?? [];
+    expect(direct).toEqual([]);
   });
 
   const good = {
@@ -323,6 +372,7 @@ describe("R586c: K on a candidate build (an opt-in test seam)", () => {
       bcVersion: BC,
       alcPath: "/fake/alc",
       cacheDir: join(dir, "cache"),
+      environment: "saas",
     });
   async function build(candidate: boolean) {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r586c-k-"));
@@ -452,6 +502,7 @@ describe("R654 S2 leg K: buildBackend from that section takes the CLI's defaults
               bcVersion: BC,
               alcPath: "/fake/alc",
               cacheDir: join(dir, "cache"),
+              environment: "saas",
             }),
           },
           dir,

@@ -13,7 +13,7 @@
  */
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
-import type { V3EntriesStats } from "../src/al-runner-v3-backend";
+import type { AlRunnerV3Config, V3EntriesStats } from "../src/al-runner-v3-backend";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -776,6 +776,62 @@ export function v3ItestTransport(env: Readonly<Record<string, string | undefined
   return t === "serve-entries"
     ? { transport: "serve-entries", ...(e !== undefined ? { secondEcho: e === "1" } : {}) }
     : {};
+}
+
+/**
+ * R938: the environment every leg of `itest:alrunner-v3` runs under (`--environment`).
+ * `LETHAL_ITEST_V3_ENVIRONMENT=saas|onprem`; unset gives `saas`, the one the pinned tables were
+ * measured under. Any other value refuses by name.
+ */
+export function v3ItestEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): "saas" | "onprem" {
+  const v = env.LETHAL_ITEST_V3_ENVIRONMENT;
+  if (v === undefined) return "saas";
+  if (v !== "saas" && v !== "onprem") {
+    throw new Error(
+      `al-runner-v3-itest-environment-refused: LETHAL_ITEST_V3_ENVIRONMENT=${JSON.stringify(v)}; allowed: saas, onprem (R938)`,
+    );
+  }
+  return v;
+}
+
+/**
+ * R938: the backend config every direct leg of `itest:alrunner-v3` is built from. The environment
+ * comes LAST, after the leg's own fields, so a leg cannot override it by accident.
+ */
+export function v3GateBackendCfg(
+  ctx: {
+    readonly alRunnerPath: string;
+    readonly alcPath: string;
+    readonly cacheDir: string;
+    readonly candidate: boolean;
+    readonly transport: { readonly transport?: "serve-entries"; readonly secondEcho?: boolean };
+    readonly environment: "saas" | "onprem";
+  },
+  o: Partial<AlRunnerV3Config> &
+    Pick<
+      AlRunnerV3Config,
+      "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId"
+    >,
+): AlRunnerV3Config {
+  return {
+    alRunnerPath: ctx.alRunnerPath,
+    alcPath: ctx.alcPath,
+    cacheDir: ctx.cacheDir,
+    // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
+    // the fixtures need none, and every call carries --no-download as it did before R885.
+    downloadDemoData: false,
+    // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
+    // would be picked up by default and could turn a refusal into a run. Off, explicitly.
+    dotnetSidecar: false,
+    isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
+    coverage: "al-runner",
+    ...(ctx.candidate ? { candidate: true } : {}),
+    ...ctx.transport,
+    ...o,
+    environmentChoice: { value: ctx.environment, source: "config" }, // R938: stated, never unknown
+  };
 }
 
 /**
