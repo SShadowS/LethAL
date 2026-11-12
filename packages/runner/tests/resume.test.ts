@@ -826,6 +826,53 @@ describe("ResultsStore resume queries (R47)", () => {
     ).toBe(id);
   });
 
+  test("R903: a run on ANOTHER backend is never found, even with the same fingerprint — verdicts do not carry across backends", () => {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({
+      testScope: [],
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "al-runner-v3",
+      appVersion: "1.0.0.0",
+      configFingerprint: "fp",
+      runnerBuild: "b",
+    });
+    store.recordMutant(id, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      procedureName: "Post",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "survived",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    // Recorded on v3 and searched from bcdev: a bcdev search has no runner-build filter, so only
+    // the backend key keeps the v3 run out (the other way round, the build filter alone would).
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
+    ).toBeNull();
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "al-runner-v3",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+        runnerBuild: "b",
+      }),
+    ).toBe(id);
+  });
+
   test("a FINISHED run is not resumable — there is nothing left to score", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({

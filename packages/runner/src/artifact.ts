@@ -401,7 +401,9 @@ export class ArtifactCompiler {
       if (err instanceof AlcCompileError) {
         const note = await flatNamesNote(projectDir);
         // R900: an assembly alc could not find names the probing paths it was (not) given.
-        const probingNote = err.message.includes("AL0451") ? al0451Note(probing) : undefined;
+        const probingNote = err.message.includes("AL0451")
+          ? al0451Note(probing, err.message)
+          : undefined;
         const notes = [note, probingNote].filter((n) => n !== undefined);
         if (notes.length > 0) throw new AlcCompileError([err.message, ...notes].join("\n"));
       }
