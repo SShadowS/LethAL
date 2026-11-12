@@ -1381,9 +1381,10 @@ export class ResultsStore {
       id: number;
       runner_build: string;
     }[];
-    // The tag sits before the (always last) isolation-auto tag.
-    const tag = / environment-(saas|onprem)( isolation-auto)?$/;
-    const strip = (b: string) => b.replace(tag, "$2");
+    // The tag sits before the optional license tag (R956) and the (always last) isolation-auto tag;
+    // both stay in the stripped build, so another license is still a different build.
+    const tag = / environment-(saas|onprem)( license-[0-9a-f]{8})?( isolation-auto)?$/;
+    const strip = (b: string) => b.replace(tag, "$2$3");
     for (const r of rows) {
       if (r.runner_build === q.runnerBuild || strip(r.runner_build) !== strip(q.runnerBuild))
         continue;

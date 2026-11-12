@@ -210,6 +210,16 @@ const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
 
 /**
+ * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
+ * that holds it gets the pointer; every other refusal text is unchanged (so no stored text moves).
+ */
+export function licensePointer(message: string | undefined): string {
+  return message?.includes("with no license file loaded") === true
+    ? " [set alRunnerV3.license to a .bclicense file (R956)]"
+    : "";
+}
+
+/**
  * R678: a reused snapshot's stored verdict carries the v3 notRun refusal text but not
  * `runnerRow: "runner-refused"`, so whether v3 refused it cannot be told. Refused loudly rather
  * than recording nothing.
@@ -704,6 +714,8 @@ export interface AlRunnerV3Config {
    * on every al-runner call, one-shot and serve. REQUIRED: the constructor refuses a config without it.
    */
   readonly environmentChoice: V3EnvironmentChoice;
+  /** R956: `alRunnerV3.license`: `--license <path>` on every al-runner call that runs tests, one-shot and serve. */
+  readonly license?: { readonly path: string; readonly sha256: string };
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -922,7 +934,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
+      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
       // R609: what the test reached before v3 refused it (a note only; see the orchestrator).
@@ -938,7 +950,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]`,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
     };
@@ -1013,6 +1025,8 @@ export function v3CallArgv(a: {
   readonly noClient?: boolean;
   /** R938: `--environment <value>`. Absent: not passed. */
   readonly environment?: "saas" | "onprem";
+  /** R956: `--license <path>`. Absent: not passed. */
+  readonly license?: string;
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
@@ -1048,6 +1062,7 @@ export function v3CallArgv(a: {
     a.bcVersion,
     ...(a.noClient === true ? ["--no-client"] : []),
     ...(a.environment !== undefined ? ["--environment", a.environment] : []),
+    ...(a.license !== undefined ? ["--license", a.license] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
     ...(a.dotnetSidecar !== undefined
       ? [
@@ -1745,6 +1760,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R938: see `ExecutionBackend.environmentChoice`. */
   get environmentChoice(): V3EnvironmentChoice {
     return this.cfg.environmentChoice;
+  }
+  /** R956: see `ExecutionBackend.license`. */
+  get license(): { readonly path: string; readonly sha256: string } | undefined {
+    return this.cfg.license;
   }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
@@ -3264,6 +3283,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
       environment: this.environmentChoice.value,
+      ...(this.cfg.license !== undefined ? { license: this.cfg.license.path } : {}), // R956
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
@@ -4442,6 +4462,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.cfg.bcVersion,
       "--environment",
       this.environmentChoice.value,
+      ...(this.cfg.license !== undefined ? ["--license", this.cfg.license.path] : []), // R956
       ...(this.noDownload() ? ["--no-download"] : []),
       ...(this.sidecarPath !== undefined
         ? [

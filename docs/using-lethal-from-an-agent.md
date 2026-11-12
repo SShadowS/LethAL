@@ -302,6 +302,30 @@ scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-
 mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
 scored (`4`) win over `7`.
 
+Since R955 the budget bounds the baseline too. When it runs out inside the baseline, no more baseline
+calls are made, no mutant of that batch is scored, and the report's `timeBudget.baselineStopped` says how
+many baseline tests ran (`testsRun`) of how many (`testsTotal`); the exit code is still `7`. A baseline
+cut short is not stored, so `--resume` runs it again (raise `--time-budget` or narrow the run).
+
+A SIGTERM or SIGINT spends the same budget (R955), with or without `--time-budget`: the run stops at its next
+check, writes its normal `--out` report with `timeBudget.stoppedBySignal: true` (`budgetSeconds` is 0 when no
+budget was given), and exits `7`. A second signal while it stops ends the process at once. An alc ended
+by a signal is never read as "does not compile" (it is a preparation error), and compile-failure
+isolation stops with no verdict once the budget is spent. If the budget runs out while isolation `auto`
+re-runs codeunits one test at a time, `timeBudget.baselineStopped.inAutoRebaseline` is `true`: no
+isolation choice is made and no mutant of that batch is scored. `timeBudget.unscheduledCount` then
+counts that batch's mutants.
+
+**A license for al-runner (R956).** A test that needs a Business Central license is refused by al-runner
+with "no license file loaded". Set `alRunnerV3.license` to a `.bclicense` file: LethAL passes it as
+al-runner's license switch on every al-runner call that runs tests (one-shot and serve). The report names the file by path
+and sha256 in `executionContexts[].license`, never its contents, and a different license is a different
+run fingerprint, so `--resume` will not mix them. Use only a license you are allowed to use for testing.
+
+**Isolation `auto` and a codeunit with no green test (R956).** A test codeunit whose whole-codeunit baseline
+has no green test stays on `test` and is not re-baselined one test per process; the `isolation` caveat's
+reason says "0 green under test: a tie at 0 decides nothing, kept on test (R956)".
+
 #### Exit code notes (guidance)
 
 An exit `1` means the run did not produce a result you can use.

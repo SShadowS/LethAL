@@ -11,6 +11,8 @@ export type SpawnFn = (
   opts?: { signal?: AbortSignal; env?: Record<string, string>; cwd?: string },
 ) => Promise<{
   exitCode: number;
+  /** R955: the signal that ended the child (`SIGTERM`, ...), when one did; absent on a normal exit. */
+  signalCode?: string;
   stdout: string;
   stderr: string;
   /** R789: the child's own CPU time (user + system) after exit; absent when unknown. */
@@ -59,7 +61,14 @@ const bunSpawn: SpawnFn = async (argv, opts) => {
   const exitCode = await proc.exited;
   // `taskset` execs into its command (same pid), so the child's CPU time is the command's.
   const cpu = proc.resourceUsage()?.cpuTime.total;
-  return { exitCode, stdout, stderr, ...(cpu !== undefined ? { cpuMs: Number(cpu) / 1000 } : {}) };
+  const signalCode = proc.signalCode;
+  return {
+    exitCode,
+    ...(signalCode !== null && signalCode !== undefined ? { signalCode: String(signalCode) } : {}),
+    stdout,
+    stderr,
+    ...(cpu !== undefined ? { cpuMs: Number(cpu) / 1000 } : {}),
+  };
 };
 
 export const defaultSpawn = bunSpawn;

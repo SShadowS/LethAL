@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 917 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 918 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -362,7 +362,7 @@ that ordering is the priority.
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87, 810d07d7): a v3 fail keeps stackTrace; leg C's row texts leave it out
 - **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · done (d5eb16ff)
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
-- **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · open
+- **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · done (285ba3f9)
 
 ## Product gaps a real project hits
 
@@ -960,8 +960,9 @@ that ordering is the priority.
 - **R954** · On al-runner v3 the per-mutant budget floor (180 s, set for BC's publish latency) makes each mutant that slows a millisecond test cost three minutes: Password's hour went on 18 such timeouts and 48 mutants were left unscored · [R954.md](docs/roadmap/R954.md) · open
 - **R950** · The al-runner update moves `current` only when no al-runner runs anywhere, so with lanes on v3 all day a passed edge build waits indefinitely, though a process on an explicit build path is not touched by the move · [R950.md](docs/roadmap/R950.md) · done (79e60793): the move guard counts only processes started through current/ (or unreadable); LethAL's own…
 - **R951** · R900's probing path (the BC service folder) is not enough for Base Application: alc also needs the ASP.NET Core shared framework (`Microsoft.AspNetCore.StaticFiles`) · [R951.md](docs/roadmap/R951.md) · done (c061534c)
-- **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause not yet known · [R956.md](docs/roadmap/R956.md) · open
+- **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause: no license, so every test was refused · [R956.md](docs/roadmap/R956.md) · done (285ba3f9)
 - **R957** · BC.History batch 7 on al-runner v3 edge-2bd87774f: eight System Application modules, three upstream issues (a .NET exception refused where BC ignores the text, ten refusal causes, a Blob lost through FieldRef.Value after Clear) · [R957.md](docs/roadmap/R957.md) · closed 2026-11-12 — measured and filed upstream (#7924, #7934, #7935); LethAL's own gap is R954
+- **R958** · Under `--isolate-tests`, a stop signal does not stop the parallel isolated-baseline fill: the workers keep starting one process per remaining test until the suite is done · [R958.md](docs/roadmap/R958.md) · open
 
 ---
 
