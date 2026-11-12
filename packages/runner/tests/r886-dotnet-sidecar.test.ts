@@ -1,10 +1,10 @@
 // R886: the .NET sidecar: the config field, the `.gated` and manifest-row fields, and doctor.
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AlRunnerV3Backend } from "../src/al-runner-v3-backend";
+import { AlRunnerV3Backend, namedSidecar } from "../src/al-runner-v3-backend";
 import { V3_ISOLATION_DEFAULT, validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import { AlRunnerV3UngatedBuildError, parseGated, sha256OfFile } from "../src/al-runner-v3-pin";
 import { V3_BUILD_PINS, parseGatedBuilds } from "../src/al-runner-v3-pins";
@@ -30,6 +30,22 @@ describe("R886: alRunnerV3.dotnetSidecar", () => {
       expect(() => validateAlRunnerV3Config({ ...base, dotnetSidecar: bad })).toThrow(
         "al-runner-v3-config-refused",
       );
+  });
+});
+
+describe("R950: a named sidecar is resolved once, through its symlinks", () => {
+  test("a sidecar named under a symlinked folder (as current/ is) comes back as its real path", async () => {
+    const d = await mkdtemp(join(tmpdir(), "r950-sidecar-"));
+    try {
+      await mkdir(join(d, "build-a"));
+      await writeFile(join(d, "build-a", "AlDotNetSidecar.dll"), "x");
+      await symlink(join(d, "build-a"), join(d, "current"));
+      expect(namedSidecar(join(d, "current", "AlDotNetSidecar.dll"))).toBe(
+        join(await realpath(d), "build-a", "AlDotNetSidecar.dll"),
+      );
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
   });
 });
 

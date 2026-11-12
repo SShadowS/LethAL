@@ -42,7 +42,7 @@
  *    script's own commit (logged `stale-gated`); if that does not pass, `current` stays and the
  *    candidate is judged at the script's commit. A script commit off origin/master is refused.
  * 4. Outcomes: `pass` -> installed, `.gated` written, its row in the ledger, and on the edge track
- *    `current` moved (unless a v3 process is running: "deferred: in use"); `gate-fail` -> `failed/`
+ *    `current` moved (unless a process started through `current/` runs, R950: "deferred: in use"); `gate-fail` -> `failed/`
  *    for good; `held` (every difference a move toward BC or a named refusal; read the receipt's
  *    lines) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
@@ -69,7 +69,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -904,8 +904,17 @@ export const HEAVY_JOB =
  */
 export function movesUnder(root: string, exe: string, argv0: string | undefined): boolean {
   if (!exe.startsWith(`${root}/`)) return false;
-  if (argv0 === undefined || !argv0.startsWith(`${root}/`)) return true;
-  return argv0.startsWith(`${root}/current/`);
+  if (argv0 === undefined || !isAbsolute(argv0)) return true;
+  // Normalised, so `<root>//current/`, `<root>/./current/` and `<root>/x/../current/` count too.
+  const a = normalize(argv0);
+  if (!a.startsWith(`${root}/`)) return true;
+  return a.startsWith(`${root}/current/`);
+}
+
+/** R950: argv[0] from a `/proc/<pid>/cmdline` text (NUL-separated); `undefined` when there is none. */
+export function argv0FromCmdline(cmdline: string): string | undefined {
+  const first = cmdline.split("\0")[0];
+  return first === undefined || first === "" ? undefined : first;
 }
 
 /**
@@ -1452,7 +1461,7 @@ export function realDeps(root = ROOT): UpdateDeps {
         if (!exe.startsWith(`${root}/`)) continue;
         // argv[0] is the path the process was started with; undefined when unreadable.
         const argv0 = await readFile(`/proc/${pid}/cmdline`, "utf8")
-          .then((c) => c.split("\0")[0])
+          .then(argv0FromCmdline)
           .catch(() => undefined);
         if (movesUnder(root, exe, argv0)) return true;
       }

@@ -31,6 +31,7 @@ import {
   type UpdateDeps,
   V3_CDO_DEFAULT,
   candidates,
+  argv0FromCmdline,
   countHeavyJobs,
   movesUnder,
   dailyOnce,
@@ -645,6 +646,20 @@ describe("R950: which running process a move of `current` affects", () => {
     expect(movesUnder(root, exe, undefined)).toBe(true);
     expect(movesUnder(root, exe, "al-runner")).toBe(true);
     expect(movesUnder(root, "/usr/bin/bash", `${root}/current/al-runner`)).toBe(false);
+  });
+  test("a non-normal path through current/ counts (build review r1)", () => {
+    for (const a of [
+      `${root}//current/al-runner`,
+      `${root}/./current/al-runner`,
+      `${root}/edge-x/../current/al-runner`,
+    ])
+      expect(movesUnder(root, exe, a), a).toBe(true);
+  });
+  test("argv[0] is the cmdline's first NUL-separated field; none when the cmdline is empty", () => {
+    expect(argv0FromCmdline(`${root}/current/al-runner\0serve\0--x\0`)).toBe(
+      `${root}/current/al-runner`,
+    );
+    expect(argv0FromCmdline("")).toBeUndefined();
   });
 });
 
