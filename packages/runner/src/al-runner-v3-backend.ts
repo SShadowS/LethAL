@@ -607,33 +607,27 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * `Names A-B Tests`, `Names (A) Tests`, `Names A&B Tests`, `Names Blåbær Tests`, `7Digit Names
  * Tests` and a plain one) ran under serve-entries and one-shot, per mutant equal (48 of 48,
  * `/coord/handoff/R-919/names/`). So a codeunit name may also hold `-`, `(`, `)`, `/`, `&`, `å`,
- * `æ` and start with a digit, when it starts with a letter or digit. The older shape stays.
- * A name outside these falls the default back to one-shot (`unproven-test-name-shape`).
+ * `æ` and start with a digit, when it starts with a letter or digit.
+ * R922 item 3 (coord R-929): codeunit names are no longer gated at all. Serve addresses a codeunit by
+ * id (`Codeunit<id>.`) and LethAL matches a row by `codeunit`, `method` and `name`
+ * (`Codeunit<id>.<method>`), never by the row's `codeunitName`; one-shot passes `--codeunit <id>`.
+ * Measured: test codeunits named `Names Ø Tests`, `Names A:B Tests`, `Names A'B Tests`, `-Lead ...`,
+ * `(Lead) ...` and `/Lead ...` ran explicit serve-entries and one-shot per mutant equal (48 of 48,
+ * `/coord/handoff/R-929/names/`), and the raw serve rows carry the name only in `codeunitName`.
+ * A METHOD name outside the shape falls the default back to one-shot (`unproven-test-name-shape`).
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
-  codeunit: /^(?:[A-Za-z0-9_ .]+|[A-Za-z0-9][A-Za-z0-9_ .()/&åæ-]*)$/,
 } as const;
 
 /**
- * R922: which part of a test's name is unproven, and the characters that make it so, for the
- * `unproven-test-name-shape` reason. A name whose every character is proven but whose position
+ * R922: the unproven method of a test, and the characters that make it so, for the
+ * `unproven-test-name-shape` reason. A method whose every character is proven but whose position
  * is not (a leading space, say) is named with no characters.
  */
-export function unprovenNamePart(
-  codeunitName: string,
-  method: string,
-  methodShape: (m: string) => boolean,
-): string {
-  const odd = (name: string, allowed: RegExp): string => {
-    const chars = [...new Set([...name].filter((c) => !allowed.test(c)))];
-    return chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : "";
-  };
-  const parts: string[] = [];
-  if (!V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(codeunitName))
-    parts.push(`codeunit "${codeunitName}"${odd(codeunitName, /[A-Za-z0-9_ .()/&åæ-]/)}`);
-  if (!methodShape(method)) parts.push(`method "${method}"${odd(method, /[A-Za-z0-9_ ()/&åæ-]/)}`);
-  return parts.join(", ");
+export function unprovenNamePart(method: string): string {
+  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ-]/.test(c)))];
+  return `method "${method}"${chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : ""}`;
 }
 
 /** R635 §3: the serve daemon was asked to start before `useMutantBudgetFloor` gave it a stop. */
@@ -2388,14 +2382,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       V3_SERVE_PROVEN_NAME_SHAPES.method.test(
         this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
       );
-    const odd = this.discovered.filter(
-      (t) => !methodShape(t.method) || !V3_SERVE_PROVEN_NAME_SHAPES.codeunit.test(t.codeunitName),
-    );
+    // R922 item 3 (R-929): the method only; a codeunit's name never reaches serve's addressing.
+    const odd = this.discovered.filter((t) => !methodShape(t.method));
     if (odd.length > 0) {
-      // R922: name the unproven part (codeunit or method) and its characters, not the whole name.
-      const named = [
-        ...new Set(odd.map((t) => unprovenNamePart(t.codeunitName, t.method, methodShape))),
-      ];
+      // R922: name the unproven method and its characters, not the whole test name.
+      const named = [...new Set(odd.map((t) => unprovenNamePart(t.method)))];
       reasons.push(
         `unproven-test-name-shape: ${named.slice(0, 5).join("; ")}${named.length > 5 ? `; and ${named.length - 5} more` : ""} (name shapes not yet measured under serve-entries; "." in a method name is upstream #5798)`,
       );
