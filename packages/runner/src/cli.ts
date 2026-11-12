@@ -42,6 +42,7 @@ import {
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
+import { chooseV3Environment, describeV3Environment } from "./al-runner-v3-environment";
 import { checkGated, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
@@ -3158,6 +3159,9 @@ async function buildAlRunnerV3Backend(
     deps.source,
   );
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
+  // R938: the target project (the dir LethAL runs), not the tests dir.
+  const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
+  console.warn(describeV3Environment(environmentChoice));
   return new AlRunnerV3Backend(
     {
       alRunnerPath: c.path,
@@ -3182,6 +3186,7 @@ async function buildAlRunnerV3Backend(
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
+      environmentChoice, // R938
       isolation: c.isolation, // R890, R896
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0

@@ -94,6 +94,7 @@ import {
   isolatedSelection,
   serveRow,
 } from "./al-runner-v3-entries";
+import type { V3EnvironmentChoice } from "./al-runner-v3-environment";
 import {
   AlRunnerV3UngatedBuildError,
   type GatedBuild,
@@ -663,6 +664,11 @@ export interface AlRunnerV3Config {
    */
   readonly noClient?: boolean;
   /**
+   * R938: the environment choice (`chooseV3Environment`). A stated value is `--environment <value>`
+   * on every al-runner call, one-shot and serve; "unstated" passes no flag. Absent counts as unstated.
+   */
+  readonly environmentChoice?: V3EnvironmentChoice;
+  /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
    * one and the file still has that sha256 (else a warning and none). `false`: none; gates set this.
@@ -966,6 +972,8 @@ export function v3CallArgv(a: {
   readonly bcVersion: string;
   /** R907: pass `--no-client` (a session without a client). Absent: not passed. */
   readonly noClient?: boolean;
+  /** R938: `--environment <value>`. Absent: not passed. */
+  readonly environment?: "saas" | "onprem";
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
@@ -998,6 +1006,7 @@ export function v3CallArgv(a: {
     "--bc-version",
     a.bcVersion,
     ...(a.noClient === true ? ["--no-client"] : []),
+    ...(a.environment !== undefined ? ["--environment", a.environment] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
     ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
@@ -1685,6 +1694,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R907: see `ExecutionBackend.noClient`. */
   get noClient(): boolean {
     return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
+  }
+  /** R938: see `ExecutionBackend.environmentChoice`. */
+  get environmentChoice(): V3EnvironmentChoice | undefined {
+    return this.cfg.environmentChoice;
   }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
@@ -3193,6 +3206,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
+      ...(this.environmentChoice?.value !== undefined
+        ? { environment: this.environmentChoice.value }
+        : {}),
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
@@ -4361,6 +4377,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
       "--bc-version",
       this.cfg.bcVersion,
+      ...(this.environmentChoice?.value !== undefined
+        ? ["--environment", this.environmentChoice.value]
+        : []),
       ...(this.noDownload() ? ["--no-download"] : []),
       ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
     ]);

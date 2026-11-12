@@ -1424,6 +1424,24 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v3CallArgv(a)).not.toContain("--no-client");
   });
 
+  test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ environmentChoice: { value: "onprem", source: "config" } });
+    expect(on[on.indexOf("--environment") + 1]).toBe("onprem");
+    expect(
+      await run({ environmentChoice: { value: undefined, source: "unstated" } }),
+    ).not.toContain("--environment");
+    expect(await run({})).not.toContain("--environment");
+  });
+
   test("R907 a one-shot call carries --no-client exactly when the backend's noClient is on", async () => {
     const run = async (extra: Partial<AlRunnerV3Config>) => {
       const l = await layout();

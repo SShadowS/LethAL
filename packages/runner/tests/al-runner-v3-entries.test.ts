@@ -1185,6 +1185,23 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
+  test("R938: the daemon argv carries --environment <value> only when the choice is stated", async () => {
+    const on = (
+      await readyRig({
+        mutants: ["M0001"],
+        extra: { environmentChoice: { value: "onprem", source: "launch.json" } },
+      })
+    ).serve.daemons[0];
+    expect(on?.[(on?.indexOf("--environment") ?? -2) + 1]).toBe("onprem");
+    for (const extra of [
+      {},
+      { environmentChoice: { value: undefined, source: "unstated" as const } },
+    ]) {
+      const off = await readyRig({ mutants: ["M0001"], extra });
+      expect(off.serve.daemons[0] ?? []).not.toContain("--environment");
+    }
+  });
+
   test("R886: the daemon argv carries --dotnet-sidecar <dll> only when dotnetSidecar names a file", async () => {
     const dll = join(await mkdtemp(join(tmpdir(), "r886-")), "AlDotNetSidecar.dll");
     await writeFile(dll, "x");

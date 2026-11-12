@@ -1,3 +1,4 @@
+import type { V3EnvironmentChoice } from "./al-runner-v3-environment";
 import type { CompiledArtifact } from "./artifact";
 import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
@@ -478,6 +479,12 @@ export interface ExecutionBackend {
    * a run reaches a default run, or the other way.
    */
   readonly noClient?: boolean;
+  /**
+   * R938, al-runner-v3 only: the `--environment` choice and where it came from. A stated value is in
+   * the fingerprint, in `runner_build` and in the report, so nothing of a run under one environment
+   * is resumed or lent under the other. Absent or "unstated": nothing is passed or recorded in the key.
+   */
+  readonly environmentChoice?: V3EnvironmentChoice | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */

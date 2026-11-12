@@ -429,6 +429,35 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R938: the environment goes in the build, the fingerprint and the report; a resume under another one is refused", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withEnv = (choice?: { value: "saas" | "onprem" | undefined; source: "config" }) =>
+        Object.assign(withProbe(new V3KindStub([]), []), { environmentChoice: choice });
+      const none = await v3Session(root, store, withEnv());
+      const on = await v3Session(root, store, withEnv({ value: "onprem", source: "config" }));
+      const [r1, r2] = [store.getRun(1), store.getRun(2)];
+      expect(r1?.runnerBuild).not.toContain("environment-");
+      expect(r2?.runnerBuild).toBe(`${r1?.runnerBuild} environment-onprem`);
+      expect(r2?.configFingerprint).not.toBe(r1?.configFingerprint);
+      expect(none.validity.executionContexts[0]?.environment).toEqual({
+        value: "unstated",
+        source: "unstated",
+      });
+      expect(on.validity.executionContexts[0]?.environment).toEqual({
+        value: "onprem",
+        source: "config",
+      });
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 2"); // an unfinished run is resumable
+      const refused = await v3Session(root, store, withEnv({ value: "saas", source: "config" }), {
+        resume: 2,
+      }).catch((e: unknown) => e);
+      expect(refused).toBeInstanceOf(Error);
+      expect(String(refused)).toContain("environment-onprem, and this session runs");
+      expect(String(refused)).toContain("environment-saas");
+    });
+  });
+
   test("R890: isolation method goes in the lending build and the fingerprint, apart from --isolate-tests", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

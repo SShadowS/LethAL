@@ -6571,7 +6571,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -6610,6 +6610,9 @@ async function runSessionBody(
     ...(cfg.backend.noClient === true ? { noClient: true } : {}), // R907
     ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(cfg.backend.isolationAuto === true ? { isolationAuto: true } : {}), // R896
+    ...(cfg.backend.environmentChoice?.value !== undefined
+      ? { v3Environment: cfg.backend.environmentChoice.value }
+      : {}), // R938
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -8938,6 +8941,11 @@ async function runSessionBody(
             // R857: the report says so too, as a report is read without the store.
             ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
             ...(cfg.backend.noClient === true ? { noClient: true as const } : {}), // R907
+            // R938: always on a v3 entry, "unstated" included, so a reader sees the choice was not made.
+            environment: {
+              value: cfg.backend.environmentChoice?.value ?? ("unstated" as const),
+              source: cfg.backend.environmentChoice?.source ?? ("unstated" as const),
+            },
           },
         }
       : {}),
