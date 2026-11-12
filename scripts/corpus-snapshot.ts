@@ -235,7 +235,9 @@ export function snapshotShaFor(git: Git, pinned: string | undefined): string {
   if (pinned === undefined) return git(["rev-parse", "origin/master"]);
   const sha = pinnedCommit(git, pinned, "--sha");
   if (!isAncestor(git, sha, "origin/master")) {
-    throw new RefusedError(`--sha ${sha} is not on origin/master, so it is not a master commit to dump`);
+    throw new RefusedError(
+      `--sha ${sha} is not on origin/master, so it is not a master commit to dump`,
+    );
   }
   return sha;
 }
@@ -246,7 +248,11 @@ export function snapshotShaFor(git: Git, pinned: string | undefined): string {
  * branch; when it is older than the merge base, master's changes between them count as branch
  * changes, and the line printed says so.
  */
-export function diffShaFor(git: Git, pinned: string | undefined, print: (l: string) => void): string {
+export function diffShaFor(
+  git: Git,
+  pinned: string | undefined,
+  print: (l: string) => void,
+): string {
   const base = git(["merge-base", "HEAD", "origin/master"]);
   if (pinned === undefined) return base;
   const sha = pinnedCommit(git, pinned, "--master-sha");

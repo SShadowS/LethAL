@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 898 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**22 of 899 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -934,15 +934,16 @@ that ordering is the priority.
 - **R917** · A dry run refuses the real run's flags (--allow-large-run, --time-budget, --tests), although its own note says to pass --allow-large-run · [R917.md](docs/roadmap/R917.md) · done (93588a07): a dry run reads --allow-large-run, --tests and --time-budget
 - **R918** · On large real apps the serve-entries default always falls back to one-shot (a multi-object or #if-wrapped file anywhere in the project or tests, a '-' in a test codeunit name, or any --resume), so a 15,000-mutant app scores 19 mutants in 4 hours · [R918.md](docs/roadmap/R918.md) · done (7de27405): MO/WR shapes proven on serve (legs MOE, WRE) and no fallback reason; resume already keeps…
 - **R921** · On v3 under `test` isolation, a test refused at baseline still runs inside every mutant's codeunit call, and its refusal makes each later covering test an error: 44 of 81 MasterDataManagement errors · [R921.md](docs/roadmap/R921.md) · done (fc7e0e2a): the same tie rule; the refused test is never sent under method
-- **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · open
+- **R922** · A `/` in one test codeunit's name drops a whole v3 session to one-shot, and the warning blames the method names and a "." that is not there · [R922.md](docs/roadmap/R922.md) · done (3: 9eae6762; 4: aa61fe48; 1-2 in R-919)
 - **R933** · BC.History apps the DotNet errors used to block, sampled on v3: a temporary-source page and a raw TAB in JSON give wrong answers (upstream #7811, #7812) · [R933.md](docs/roadmap/R933.md) · open
 - **R934** · On al-runner a mutant's reported `durationMs` sums the whole call's time once per covering test: 174 s for a mutant in a 158 s session, and the TIMING line blames overlap · [R934.md](docs/roadmap/R934.md) · open
+- **R937** · One test METHOD whose name serve-entries is not proven for still drops the whole v3 session to one-shot; a per-codeunit fallback would help one measured app (DC, 13 of 1,906 tests) · [R937.md](docs/roadmap/R937.md) · open
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert: an upsert of two existing rows through one buffer, on its second pass (upstream #7798) · [R929.md](docs/roadmap/R929.md) · open
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
 - **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
-- **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · open
+- **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · done (b7404cc1)
 
 ---
 

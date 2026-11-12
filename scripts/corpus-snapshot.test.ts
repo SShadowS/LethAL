@@ -445,7 +445,10 @@ describe("R935 pinning the master commit", () => {
     r.git(["update-ref", "refs/remotes/origin/master", m2]); // another lane fetched
     expect([snapshotShaFor(r.git, pin), diffShaFor(r.git, pin, quiet)]).toEqual([m1, m1]);
     // R935's failure, unpinned: the snapshot dumps m2 while the diff still wants m1.
-    expect([snapshotShaFor(r.git, undefined), diffShaFor(r.git, undefined, quiet)]).toEqual([m2, m1]);
+    expect([snapshotShaFor(r.git, undefined), diffShaFor(r.git, undefined, quiet)]).toEqual([
+      m2,
+      m1,
+    ]);
   });
 
   test("refused by name: a --master-sha not in the branch, a --sha not on master, an unknown sha", () => {
