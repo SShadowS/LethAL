@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 909 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**29 of 910 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -954,6 +954,7 @@ that ordering is the priority.
 - **R944** · When al-runner refuses to compile the app, LethAL records one 'transport failure' per baseline test and runs the compile once per test, instead of stopping once by name · [R944.md](docs/roadmap/R944.md) · open
 - **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · open
 - **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
+- **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
 
 ---
 
