@@ -19,13 +19,15 @@ Evidence goes to `/coord/handoff/R-938/` (setup and dry runs in `prep.md`). No B
   in 220 files) and `/opt/dotnet/shared/Microsoft.AspNetCore.App/10.0.14` (added before any mutant ran: alc needs
   `Microsoft.AspNetCore.StaticFiles`, which the BC service folder lacks), selector ids 99009699 / 99009698 / 99009697 (checked free
   against the target, the test app and every package codeunit).
-- **Named deviation from the shipped 28.4 source: built with `preprocessorSymbols: ["CLEANSCHEMA27"]` because of upstream #7914**
-  (added before any mutant ran). al-runner's compiler refuses Base Application with AL0264 for tables 308, 309, 310, 231 and 1263, which
-  Microsoft's 28.4 Base Application declares with `ObsoleteState = Moved` while its dependency Business Foundation declares them live; alc
-  accepts that pair. The symbol compiles those moved stubs out, as Microsoft's next schema cleanup does. What else it removes, counted
-  directive by directive: across BaseApp only `Moved`/`Removed` tables and `Removed` fields (and small `#if`/`#else` switches in table
-  extensions); inside `FixedAssets/**` exactly one 8-line block, a field with `ObsoleteState = Removed`, no code. The FA scope's dry run
-  under the symbol is identical: 17,144 sites, 16,446 deployed, 1,957 hang-refused. When #7914 is fixed, a rerun without the symbol is
+- **Named deviation from the shipped 28.4 source: five `Moved` table stubs set aside because of upstream #7914** (before any mutant
+  ran). al-runner's compiler refuses Base Application with AL0264 for tables 308, 309, 310, 1263 and 231 (No. Series, No. Series Line,
+  No. Series Relationship, No. Series Tenant, Reason Code), which Microsoft's 28.4 Base Application declares with `ObsoleteState = Moved`
+  while its dependency Business Foundation declares them live; alc accepts that pair. Those five files are moved out of the scratch copy
+  (to `/coord/handoff/R-938/moved-stubs-set-aside/`, not deleted): each is exactly the conflicting object, `ObsoleteState = Moved`, with
+  no trigger or procedure, so references resolve to Business Foundation's live tables, as on BC. Nothing else changes. The FA scope's dry
+  run is identical: 17,144 sites, 16,446 deployed, 1,957 hang-refused. A first try, `preprocessorSymbols: ["CLEANSCHEMA27"]`, was dropped:
+  it also removes the Check Ledger Entry field "Record ID to Print", which Base Application's upgrade codeunit uses unguarded, so alc
+  failed (AL0118, AL0132), and Microsoft's own 28 build cannot define it either. When #7914 is fixed, a rerun with the five stubs back is
   the follow-up.
 - **al-runner:** an explicit build path in the config, never `current`, so an update cannot split a run: edge-42af5d384 unless the
   pending update has landed and passed its gate before the first window starts; the result names the build every window used.
