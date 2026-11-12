@@ -1185,6 +1185,11 @@ export interface ExecutionContext {
     readonly value: "saas" | "onprem";
     readonly source: "config" | "launch.json";
   };
+  /**
+   * R956: the `alRunnerV3.license` file this run passed as `--license`: its path and the sha256 of its
+   * bytes, never its contents. Only on directly measured al-runner-v3 entries, and only when set.
+   */
+  readonly license?: { readonly path: string; readonly sha256: string };
 }
 
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
@@ -1927,6 +1932,11 @@ export interface SessionReport {
     readonly unscheduledCount: number;
     /** Batches after the one it stopped in, which never started; their mutants are not counted. */
     readonly batchesNotStarted: number;
+    /**
+     * R955: present when the budget ran out INSIDE a baseline: how many of its tests ran, of how
+     * many. No mutant of that batch was scored.
+     */
+    readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -2556,6 +2566,7 @@ function buildExecutionContexts(
     readonly isolateTests?: true;
     readonly noClient?: true;
     readonly environment?: ExecutionContext["environment"];
+    readonly license?: ExecutionContext["license"];
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2584,6 +2595,7 @@ function buildExecutionContexts(
           ...(runnerBuild.environment !== undefined
             ? { environment: runnerBuild.environment }
             : {}),
+          ...(runnerBuild.license !== undefined ? { license: runnerBuild.license } : {}),
         }
       : {}),
   };
@@ -4018,6 +4030,12 @@ export function renderConsole(r: SessionReport): string {
   }
   // R912: a qualifier on the score: the mutants not reached are not in it.
   if (r.timeBudget !== undefined) {
+    const bs = r.timeBudget.baselineStopped;
+    if (bs !== undefined) {
+      lines.push(
+        `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
+      );
+    }
     lines.push(
       `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
     );

@@ -54,6 +54,31 @@ export function isolationCandidates(baseline: readonly Row[]): number[] {
 }
 
 /**
+ * R956: a codeunit with no green test under `test` (every test red or refused) is kept on `test`
+ * and never re-baselined one test per process: a tie at 0 decides nothing, and on DO's app the
+ * per-test passes cost hours.
+ */
+export function isZeroGreen(testRows: readonly Row[]): boolean {
+  return testRows.every((r) => r.verdict.outcome !== "pass");
+}
+
+/** The choice row for a zero-green codeunit (R956): kept on `test`, nothing was measured under `method`. */
+export function zeroGreenIsolationRow(testRows: readonly Row[]): IsolationChoiceRow {
+  const first = testRows[0];
+  if (first === undefined) throw new Error("zeroGreenIsolationRow: no test rows (R956)");
+  return {
+    codeunitId: first.ref.codeunitId,
+    name: first.ref.codeunitName,
+    chosen: "test",
+    tests: testRows.length,
+    testPassed: 0,
+    methodPassed: 0,
+    reason: "0 green under test: a tie at 0 decides nothing, kept on test (R956)",
+    lostUnderMethod: [],
+  };
+}
+
+/**
  * The choice for one codeunit, from its `test` rows and its `method` rows (same tests, same order).
  * `method` is kept iff it passes STRICTLY more of the codeunit's tests; a tie keeps `test` (no gain,
  * more cost).

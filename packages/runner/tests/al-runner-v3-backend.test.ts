@@ -1445,6 +1445,21 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v3CallArgv(a)).not.toContain("--no-client");
   });
 
+  test("R956 a one-shot call carries --license <path> exactly when the license is set", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ license: { path: "/l/x.bclicense", sha256: "a".repeat(64) } });
+    expect(on[on.indexOf("--license") + 1]).toBe("/l/x.bclicense");
+    expect(await run({})).not.toContain("--license");
+  });
+
   test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
     const run = async (extra: Partial<AlRunnerV3Config>) => {
       const l = await layout();
@@ -2170,6 +2185,14 @@ describe("§5 the row decoder", () => {
     status: "pass" as const,
     notRun: false,
     ...o,
+  });
+  test("R956: a refusal for a missing license names alRunnerV3.license; another refusal does not", () => {
+    const refuse = (message: string) =>
+      v3RowVerdict(r, row({ status: "error", notRun: true, message }), 3, 10, undefined);
+    const lic = refuse("NotRun: this test reads a license, with no license file loaded");
+    expect(lic.runnerRow).toBe("runner-refused");
+    expect(lic.failureMessage).toContain("set alRunnerV3.license to a .bclicense file (R956)");
+    expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.license");
   });
   test("notRun with pass or fail is a contract error, never a verdict", () => {
     for (const status of ["pass", "fail"] as const) {

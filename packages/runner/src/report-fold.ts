@@ -230,6 +230,7 @@ export interface FoldedReport {
     readonly budgetSeconds: number;
     readonly unscheduledCount: number;
     readonly batchesNotStarted: number;
+    readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
   };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
@@ -421,7 +422,12 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
 
   let quarantinedReason: string | undefined;
   let timeBudget:
-    | { budgetSeconds: number; unscheduledCount: number; batchesNotStarted: number }
+    | {
+        budgetSeconds: number;
+        unscheduledCount: number;
+        batchesNotStarted: number;
+        baselineStopped?: { testsRun: number; testsTotal: number };
+      }
     | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let isolationRows: IsolationChoiceRow[] | undefined;
@@ -516,6 +522,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           budgetSeconds: e.budgetSeconds,
           unscheduledCount: e.unscheduledCount,
           batchesNotStarted: e.batchesNotStarted,
+          ...(e.baselineStopped !== undefined ? { baselineStopped: e.baselineStopped } : {}),
         };
         break;
       case "session-finished":
@@ -731,7 +738,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   //
   // `caps.coverage === "none"` owes nothing either: that branch gives every mutant every green test
   // by construction and never calls `coverageFilter`.
-  if (statics.caps.coverage !== "none" && sawGreenBaselineBatch && !sawCoverageSplit) {
+  // R955: a baseline the time budget stopped selects nothing, so it owes no split either.
+  if (
+    statics.caps.coverage !== "none" &&
+    sawGreenBaselineBatch &&
+    !sawCoverageSplit &&
+    timeBudget?.baselineStopped === undefined
+  ) {
     throw new Error(
       `foldEvents: a batch finished baseline with at least one green test under coverage mode "${statics.caps.coverage}", but no coverage-split event arrived — untargetedTriggerCount would be reported as a measured 0 when nothing measured it. One coverage-split per such batch is mandatory.`,
     );

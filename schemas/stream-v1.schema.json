@@ -1794,6 +1794,22 @@
         "batchesNotStarted": {
           "type": "number"
         },
+        "baselineStopped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "testsRun",
+            "testsTotal"
+          ],
+          "properties": {
+            "testsRun": {
+              "type": "number"
+            },
+            "testsTotal": {
+              "type": "number"
+            }
+          }
+        },
         "seq": {
           "type": "number"
         }

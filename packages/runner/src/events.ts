@@ -555,6 +555,8 @@ export type RunEventInput =
       readonly budgetSeconds: number;
       readonly unscheduledCount: number;
       readonly batchesNotStarted: number;
+      /** R955: present when the budget ran out inside a baseline: its tests run and total. */
+      readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
     }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 

@@ -154,6 +154,11 @@ export function createProgressRenderer(
         write(`QUARANTINED: ${event.reason}`);
         break;
       case "time-budget-reached":
+        if (event.baselineStopped !== undefined) {
+          write(
+            `TIME BUDGET REACHED IN THE BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
+          );
+        }
         write(
           `TIME BUDGET REACHED: --time-budget ${event.budgetSeconds} s used up; ${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
         );

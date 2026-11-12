@@ -18,7 +18,9 @@ import type { RunEvent } from "../src/events";
 import {
   IsolationChoiceChangedError,
   chooseCodeunitIsolation,
+  isZeroGreen,
   isolationCandidates,
+  zeroGreenIsolationRow,
 } from "../src/isolation-auto";
 import { type SessionConfig, runSession } from "../src/orchestrator";
 import { splitBackend } from "../src/parallel-queue";
@@ -298,6 +300,16 @@ describe("R896: the choice (strictly more passes)", () => {
   });
 });
 
+describe("R956: zero green", () => {
+  test("isZeroGreen: only a codeunit with no pass; one green keeps today's rule", () => {
+    expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "fail")])).toBe(true);
+    expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "pass")])).toBe(false);
+    const row = zeroGreenIsolationRow([rowOf("A1", "fail")]);
+    expect(row).toMatchObject({ chosen: "test", tests: 1, testPassed: 0, methodPassed: 0 });
+    expect(row.reason).toContain("(R956)");
+  });
+});
+
 describe("R896: the session", () => {
   test("auto: a candidate switches inside the bracket, its method rows replace the test rows (coverage, green set), reported and stored", async () => {
     await inProject(async (root) => {
@@ -360,12 +372,18 @@ describe("R896: the session", () => {
         ref.method === "C1" || (mutant !== null && ref.method === "A2") ? "fail" : "pass",
       );
       const { report } = await session(root, store, b);
-      expect(b.chooseCalls).toEqual([
-        [C, "method"],
-        [C, "test"],
-      ]);
+      // R956: C has 0 green under test, so it is never sent to method and never re-baselined.
+      expect(b.chooseCalls).toEqual([]);
+      expect(b.runs.filter((r) => r.mode === "method")).toEqual([]);
+      expect(b.runs.filter((r) => r.test === "C1" && r.inBaseline)).toHaveLength(1);
       expect(report.isolation?.codeunits).toEqual([
-        expect.objectContaining({ codeunitId: C, chosen: "test", testPassed: 0, methodPassed: 0 }),
+        expect.objectContaining({
+          codeunitId: C,
+          chosen: "test",
+          testPassed: 0,
+          methodPassed: 0,
+          reason: "0 green under test: a tie at 0 decides nothing, kept on test (R956)",
+        }),
       ]);
       expect(b.noted).toEqual([["C1=fail"]]);
       expect(store.runIsolationChoice(1)).toEqual({ [C]: "test" });
@@ -403,13 +421,12 @@ describe("R896: the session", () => {
             : "pass",
       );
       const out = await session(root, store, b).catch((e: unknown) => e);
+      // R956: C has 0 green under test, so it is not a candidate and never goes to method.
       expect(b.chooseCalls).toEqual([
         [A, "method"],
-        [C, "method"],
         [A, "test"],
-        [C, "test"],
       ]);
-      expect([b.mode.get(A), b.mode.get(C)]).toEqual(["test", "test"]);
+      expect([b.mode.get(A), b.mode.get(C)]).toEqual(["test", undefined]);
       expect(store.runIsolationChoice(1)).toBeNull();
       expect(
         out instanceof Error

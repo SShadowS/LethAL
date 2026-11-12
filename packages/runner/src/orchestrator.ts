@@ -177,8 +177,10 @@ import {
   IsolationChoiceChangedError,
   type IsolationChoiceRow,
   chooseCodeunitIsolation,
+  isZeroGreen,
   isolationCandidates,
   methodCodeunits,
+  zeroGreenIsolationRow,
 } from "./isolation-auto";
 import { largeMethodSuspect, largeMethodWarning, largeMethodsOf } from "./large-fold";
 import {
@@ -4995,7 +4997,7 @@ interface ReusedBaseline {
 /** "unsafe": latched during the baseline (the caller stops the session).
  *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
  *  "scored": the covering loop and the gate ran; the caller checks `safety.isUnsafe` itself. */
-type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored";
+type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored" | "budget-in-baseline";
 
 /** C02-04: design section 6's fail-loud check that a fenceable authoritative backend has a lease. */
 function assertLeaseConfigured(
@@ -5584,13 +5586,23 @@ async function chooseIsolationAuto(
     }
     backend.chooseIsolation(cu, mode);
   };
-  const candidates = isolationCandidates(baseline);
+  const allCandidates = isolationCandidates(baseline);
+  // R956: a codeunit with 0 green under `test` stays there, with no per-test baseline.
+  const zeroGreen = new Set(
+    allCandidates.filter((cu) => isZeroGreen(baseline.filter((b) => b.ref.codeunitId === cu))),
+  );
+  const candidates = allCandidates.filter((cu) => !zeroGreen.has(cu));
   for (const cu of candidates) choose(cu, "method");
   const methodVerdicts = new Map<string, TestVerdict>();
   for (const b of baseline) {
     if (!candidates.includes(b.ref.codeunitId)) continue;
-    const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
-    if (stop) {
+    // R955: out of budget mid re-baseline: stop as a `stop` does (every candidate back on `test`);
+    // the mutant loop then finds the budget spent and schedules nothing.
+    const { verdict, stop } =
+      scope.timeBudget?.exhausted === true
+        ? { verdict: undefined, stop: true }
+        : await dispatchUnmutated(scope, b.ref);
+    if (stop || verdict === undefined) {
       // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
       // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
       for (const cu of candidates) choose(cu, "test");
@@ -5600,8 +5612,14 @@ async function chooseIsolationAuto(
   }
   const rows: IsolationChoiceRow[] = [];
   const choice: Record<string, "test" | "method"> = {};
-  for (const cu of candidates) {
+  for (const cu of allCandidates) {
     const testRows = baseline.filter((b) => b.ref.codeunitId === cu);
+    if (zeroGreen.has(cu)) {
+      backend.noteReusedBaseline?.(testRows);
+      choice[String(cu)] = "test";
+      rows.push(zeroGreenIsolationRow(testRows));
+      continue;
+    }
     const methodRows = testRows.map((b) => {
       const verdict = methodVerdicts.get(testKeyOf(b.ref));
       if (verdict === undefined)
@@ -5792,6 +5810,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
     }
     for (const ref of reused !== undefined ? [] : tests) {
+      // R955: the budget bounds the baseline too: no new baseline call once it has run out.
+      if (scope.timeBudget?.exhausted === true) {
+        scope.timeBudget.reach(0, batchIdx + 1, {
+          testsRun: baseline.length,
+          testsTotal: tests.length,
+        });
+        break;
+      }
       const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
       if (stop) break;
       baseline.push({ ref, verdict: v });
@@ -5930,6 +5956,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       };
     }),
   });
+  // R955: the budget ran out inside this baseline (the event above carries the tests that ran): the
+  // partial baseline selects and scores nothing.
+  if (scope.timeBudget?.reached?.baselineStopped !== undefined) return "budget-in-baseline";
   // R139: REFUSE rather than measure. Placed after the emit above so the event stream and the
   // store still record what this baseline observed, and before any mutant of this batch runs.
   //
@@ -6628,6 +6657,7 @@ async function runSessionBody(
     ...(cfg.backend.environmentChoice !== undefined
       ? { v3Environment: cfg.backend.environmentChoice.value }
       : {}), // R938
+    ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -8700,6 +8730,7 @@ async function runSessionBody(
         },
         select,
       });
+      if (scored === "budget-in-baseline") break; // R955: reported once, after the loop
       if (scored === "unsafe") break; // stop the whole session: no mutant scheduling, no next batch
       if (scored === "nothing-to-run") continue;
       // R69 (closed): record this batch's unsupported-only candidates — deliberately AFTER both
@@ -8795,6 +8826,9 @@ async function runSessionBody(
       budgetSeconds: timeBudget.seconds,
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
+      ...(timeBudget.reached.baselineStopped !== undefined
+        ? { baselineStopped: timeBudget.reached.baselineStopped }
+        : {}),
     });
   }
 
@@ -8965,6 +8999,8 @@ async function runSessionBody(
                   },
                 }
               : {}),
+            // R956: the license file by path and sha256, never its contents.
+            ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
           },
         }
       : {}),
