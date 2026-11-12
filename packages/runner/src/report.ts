@@ -1937,6 +1937,8 @@ export interface SessionReport {
      * many. No mutant of that batch was scored.
      */
     readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
+    /** R955: `true` when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is 0 when none was given). */
+    readonly stoppedBySignal?: true;
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -4034,6 +4036,11 @@ export function renderConsole(r: SessionReport): string {
     if (bs !== undefined) {
       lines.push(
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
+      );
+    }
+    if (r.timeBudget.stoppedBySignal === true) {
+      lines.push(
+        "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955).",
       );
     }
     lines.push(

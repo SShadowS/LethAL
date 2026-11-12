@@ -146,7 +146,14 @@ export class TimeBudget {
     private readonly startMs: number,
     private readonly now: () => number,
   ) {}
+  /** R955: set by `stop()` (a SIGTERM or SIGINT); the budget is then spent, whatever the clock says. */
+  signalled = false;
+  /** R955: spend the budget now. A session with no `--time-budget` has `seconds` of Infinity. */
+  stop(): void {
+    this.signalled = true;
+  }
   remainingMs(): number {
+    if (this.signalled) return 0;
     return this.startMs + this.seconds * 1000 - this.now();
   }
   get exhausted(): boolean {

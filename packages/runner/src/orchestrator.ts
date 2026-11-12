@@ -1684,6 +1684,11 @@ export interface SessionConfig {
    * is. A positive integer.
    */
   readonly timeBudgetSeconds?: number;
+  /**
+   * R955, test seam: registers the handler that spends the time budget on SIGTERM or SIGINT and
+   * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
+   */
+  readonly registerStopSignal?: (stop: () => void) => () => void;
   /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to `Date.now`. */
   readonly clockMs?: () => number;
   /**
@@ -3547,8 +3552,8 @@ interface LeaseSessionDeps {
   readonly emit: RunEmitter;
   /**
    * R508: called once, on the FIRST loss, after the latch is set. Writes the lost batch's
-   * correction to the store at once, so a process killed before its `finally` (there is no
-   * SIGINT/SIGTERM handler) does not leave that batch carryable. Must not throw.
+   * correction to the store at once, so a process killed before its `finally` (SIGKILL; a SIGINT
+   * or SIGTERM only spends the time budget, R955) does not leave that batch carryable. Must not throw.
    */
   readonly onLost: (batchIndex: number) => void;
 }
@@ -6185,6 +6190,25 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   return "scored";
 }
 
+/**
+ * R955: the default `SessionConfig.registerStopSignal`. The FIRST SIGTERM or SIGINT spends the time
+ * budget (the run stops at its next check and writes its report); the handlers are `once`, so a
+ * second signal takes the default action and ends the process at once. The returned remover runs
+ * when the session ends.
+ */
+export function registerProcessStopSignal(stop: () => void): () => void {
+  const signals = ["SIGTERM", "SIGINT"] as const;
+  const handler = (): void => {
+    // No listener is left, so a second signal takes the default action and ends the process.
+    for (const s of signals) process.off(s, handler);
+    stop();
+  };
+  for (const s of signals) process.once(s, handler);
+  return () => {
+    for (const s of signals) process.off(s, handler);
+  };
+}
+
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
   // R631: a link in the target or test root refuses BY NAME before anything compiles. alc and
   // al-runner follow links, so measuring around one would measure a different build.
@@ -6783,10 +6807,14 @@ async function runSessionBody(
   const sessionStartedMs = Date.now();
   // R912: the `--time-budget` clock starts with the session, and is shared by every batch.
   const clockMs = cfg.clockMs ?? Date.now;
-  const timeBudget =
-    cfg.timeBudgetSeconds !== undefined
-      ? new TimeBudget(cfg.timeBudgetSeconds, clockMs(), clockMs)
-      : undefined;
+  // R955: always one: with no `--time-budget` it is unlimited until a SIGTERM or SIGINT spends it,
+  // and then the run stops through the same checks and writes its report (time-budget-reached).
+  const timeBudget = new TimeBudget(
+    cfg.timeBudgetSeconds ?? Number.POSITIVE_INFINITY,
+    clockMs(),
+    clockMs,
+  );
+  cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -8823,7 +8851,8 @@ async function runSessionBody(
   if (timeBudget?.reached !== undefined) {
     emit({
       type: "time-budget-reached",
-      budgetSeconds: timeBudget.seconds,
+      budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
+      ...(timeBudget.signalled ? { stoppedBySignal: true as const } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -11854,7 +11883,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     if (win !== undefined && prefetch !== undefined) {
       const clock = args.timeBudget;
       await prefetch.call(args.backend, prefetchPlans({ ...args, mutants: win }), {
-        ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+        // R955: no clamp for a session with no `--time-budget` (its clock is only a signal latch).
+        ...(clock !== undefined && Number.isFinite(clock.seconds)
+          ? { remainingMs: () => clock.remainingMs() }
+          : {}),
         ...(firstWindow ? { batchPlans: prefetchPlans(args) } : {}),
       });
       firstWindow = false;
@@ -12766,7 +12798,9 @@ async function runMutantsParallel(
     if (spent()) break;
     const clock = args.timeBudget;
     await owner.prefetchMutants?.(prefetchPlans({ ...args, mutants: window }), {
-      ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+      ...(clock !== undefined && Number.isFinite(clock.seconds)
+        ? { remainingMs: () => clock.remainingMs() }
+        : {}),
       ...(wi === 0 ? { batchPlans: prefetchPlans(args) } : {}),
     });
     // The prefetch itself can use up the budget: no lane runs a live mutant after that.

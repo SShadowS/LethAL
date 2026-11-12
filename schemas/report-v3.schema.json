@@ -1546,6 +1546,9 @@
               "type": "number"
             }
           }
+        },
+        "stoppedBySignal": {
+          "const": true
         }
       }
     },

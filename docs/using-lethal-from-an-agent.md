@@ -307,6 +307,10 @@ calls are made, no mutant of that batch is scored, and the report's `timeBudget.
 many baseline tests ran (`testsRun`) of how many (`testsTotal`); the exit code is still `7`. A baseline
 cut short is not stored, so `--resume` runs it again (raise `--time-budget` or narrow the run).
 
+A SIGTERM or SIGINT spends the same budget (R955), with or without `--time-budget`: the run stops at its next
+check, writes its normal `--out` report with `timeBudget.stoppedBySignal: true` (`budgetSeconds` is 0 when no
+budget was given), and exits `7`. A second signal while it stops ends the process at once.
+
 **A license for al-runner (R956).** A test that needs a Business Central license is refused by al-runner
 with "no license file loaded". Set `alRunnerV3.license` to a `.bclicense` file: LethAL passes it as
 al-runner's license switch on every al-runner call that runs tests (one-shot and serve). The report names the file by path

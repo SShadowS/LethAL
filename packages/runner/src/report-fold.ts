@@ -231,6 +231,7 @@ export interface FoldedReport {
     readonly unscheduledCount: number;
     readonly batchesNotStarted: number;
     readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
+    readonly stoppedBySignal?: true;
   };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
@@ -427,6 +428,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         unscheduledCount: number;
         batchesNotStarted: number;
         baselineStopped?: { testsRun: number; testsTotal: number };
+        stoppedBySignal?: true;
       }
     | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
@@ -523,6 +525,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           unscheduledCount: e.unscheduledCount,
           batchesNotStarted: e.batchesNotStarted,
           ...(e.baselineStopped !== undefined ? { baselineStopped: e.baselineStopped } : {}),
+          ...(e.stoppedBySignal === true ? { stoppedBySignal: true as const } : {}),
         };
         break;
       case "session-finished":

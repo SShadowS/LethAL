@@ -13,8 +13,9 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import type { RunEvent } from "../src/events";
-import { runSession } from "../src/orchestrator";
+import { registerProcessStopSignal, runSession } from "../src/orchestrator";
 import { renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 
@@ -59,6 +60,8 @@ async function inProject<T>(fn: (root: string) => Promise<T>): Promise<T> {
 /** Every call is one fake second: `now()` reads the call counter, never the wall clock. */
 class SlowBaseline implements ExecutionBackend {
   calls = 0;
+  /** Called after each call is counted: a test's way to "send a signal" at a chosen call. */
+  onCall?: (n: number) => void;
   readonly now = () => 1_000_000 + this.calls * 1000;
   capabilities(): BackendCapabilities {
     return {
@@ -80,6 +83,7 @@ class SlowBaseline implements ExecutionBackend {
   async activate(): Promise<void> {}
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     this.calls += 1;
+    this.onCall?.(this.calls);
     return {
       ref,
       outcome: "pass",
@@ -93,7 +97,12 @@ class SlowBaseline implements ExecutionBackend {
   }
 }
 
-async function session(root: string, b: SlowBaseline, budget: number | undefined) {
+async function session(
+  root: string,
+  b: SlowBaseline,
+  budget: number | undefined,
+  registerStopSignal?: (stop: () => void) => () => void,
+) {
   const events: RunEvent[] = [];
   const report = await runSession({
     backend: b,
@@ -104,10 +113,79 @@ async function session(root: string, b: SlowBaseline, budget: number | undefined
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
     emit: [(e: RunEvent) => events.push(e)],
     clockMs: b.now,
+    ...(registerStopSignal !== undefined ? { registerStopSignal } : {}),
     ...(budget !== undefined ? { timeBudgetSeconds: budget } : {}),
   });
   return { report, events };
 }
+
+describe("R955: a SIGTERM or SIGINT spends the same budget", () => {
+  /** The injected registration: the test holds the handler's trigger and counts the removals. */
+  const rig = () => {
+    const r = { stop: (() => {}) as () => void, registered: 0, removed: 0 };
+    const register = (stop: () => void) => {
+      r.stop = stop;
+      r.registered += 1;
+      return () => {
+        r.removed += 1;
+      };
+    };
+    return { r, register };
+  };
+
+  test("a signal in the baseline, with no --time-budget: the report is written and says signal", async () => {
+    await inProject(async (root) => {
+      const b = new SlowBaseline();
+      const { r, register } = rig();
+      b.onCall = (n) => {
+        if (n === 2) r.stop();
+      };
+      const { report } = await session(root, b, undefined, register);
+      expect(b.calls).toBe(2);
+      expect(report.timeBudget).toMatchObject({
+        budgetSeconds: 0,
+        stoppedBySignal: true,
+        baselineStopped: { testsRun: 2, testsTotal: 4 },
+      });
+      expect(report.validity.caveats).toContain("time-budget-reached");
+      expect(exitCodeForReport(report)).toBe(TIME_BUDGET_EXIT_CODE);
+      expect(renderConsole(report)).toContain("STOPPED BY SIGNAL");
+      // The handlers are removed when the session ends.
+      expect([r.registered, r.removed]).toEqual([1, 1]);
+    });
+  });
+
+  test("a session nobody signals is unchanged, and still removes its handlers", async () => {
+    await inProject(async (root) => {
+      const b = new SlowBaseline();
+      const { r, register } = rig();
+      const { report } = await session(root, b, undefined, register);
+      expect(report.timeBudget).toBeUndefined();
+      expect(report.validity.caveats).not.toContain("time-budget-reached");
+      expect(exitCodeForReport(report)).toBe(0);
+      expect(b.calls).toBeGreaterThan(4);
+      expect([r.registered, r.removed]).toEqual([1, 1]);
+    });
+  });
+
+  test("the default registration listens for SIGTERM and SIGINT and leaves no listener behind", () => {
+    const before: [number, number] = [
+      process.listenerCount("SIGTERM"),
+      process.listenerCount("SIGINT"),
+    ];
+    let stopped = 0;
+    const off = registerProcessStopSignal(() => {
+      stopped += 1;
+    });
+    expect([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")]).toEqual([
+      before[0] + 1,
+      before[1] + 1,
+    ]);
+    off();
+    expect([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")]).toEqual(before);
+    expect(stopped).toBe(0);
+  });
+});
 
 describe("R955: the time budget bounds the baseline", () => {
   test("a budget that runs out mid-baseline stops it and the report says where", async () => {
