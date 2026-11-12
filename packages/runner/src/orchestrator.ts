@@ -405,6 +405,24 @@ export const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * enforcing performance, so a floor that generous costs nothing real.
  */
 export const MIN_MUTANT_BUDGET_MS = 180_000;
+// The comment above argues for BC's floor, and it still is BC's. Since R954, `al-runner-v3` with no
+// --mutant-timeout-ms uses the measured rule below instead; an explicit value wins everywhere.
+
+/**
+ * R954: al-runner-v3's default mutant stop, `max(60 s, 20 x the largest GREEN baseline test + 5 s)`,
+ * one value for the session. v3 has no server to strand, so BC's 180 s floor (R91/R47) is not needed.
+ * Measured basis (`/coord/handoff/R-945/study/README.md`): 41,521 finished mutant calls over 60 v3
+ * stores; zero would be cut from F = 60 s, k = 20; smaller floors cut real finishes.
+ */
+export const V3_MUTANT_STOP_MIN_MS = 60_000;
+export const V3_MUTANT_STOP_FACTOR = 20;
+export const V3_MUTANT_STOP_PAD_MS = 5_000;
+export function v3MutantStopMs(largestGreenBaselineMs: number): number {
+  return Math.max(
+    V3_MUTANT_STOP_MIN_MS,
+    V3_MUTANT_STOP_FACTOR * largestGreenBaselineMs + V3_MUTANT_STOP_PAD_MS,
+  );
+}
 
 /**
  * R198: the whole of one `RunMutantMany` call must answer inside this, measured server-side from
@@ -4888,6 +4906,11 @@ interface BatchScope {
    * `--resume` carries from, whose stored choice the new one must equal.
    */
   readonly isolationAuto?: { decided: boolean; readonly resumedRunId: number | undefined };
+  /**
+   * R954: present only on al-runner-v3 with no `--mutant-timeout-ms`. `ms` is the session's mutant
+   * stop so far (the largest `v3MutantStopMs` of any batch's baseline); `undefined` before the first.
+   */
+  readonly v3MutantStop?: { ms: number | undefined };
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -5087,6 +5110,30 @@ function resolveGroupRuns(a: {
     });
   }
   return groupRuns;
+}
+
+/**
+ * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN baseline
+ * durations (`baselineDuration` holds green tests only). Tells the backend and says it on stderr once
+ * per value (once per session in practice). Otherwise returns the configured floor unchanged.
+ */
+function applyV3MutantStop(
+  scope: BatchScope,
+  baselineDuration: ReadonlyMap<string, number>,
+): number {
+  const held = scope.v3MutantStop;
+  if (held === undefined) return scope.minMutantBudgetMs;
+  let largest = 0;
+  for (const ms of baselineDuration.values()) largest = Math.max(largest, ms);
+  const s = Math.max(held.ms ?? 0, v3MutantStopMs(largest));
+  if (s !== held.ms) {
+    held.ms = s;
+    (scope.parallel?.owner ?? scope.backend).useMutantStop?.(s);
+    console.warn(
+      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green baseline ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s)); --mutant-timeout-ms overrides it`,
+    );
+  }
+  return s;
 }
 
 /** C02-04: acquire, bind and start the session's lease (design section 6 step 1). */
@@ -5651,7 +5698,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     killLedger,
     sessionReuse,
     groupRuns,
-    minMutantBudgetMs,
   } = scope;
   const batchIdx = input.batchIndex;
   const tests = input.tests;
@@ -6023,6 +6069,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     measuredDuration,
     memberCountsByTest: memberCounts,
   } = plan;
+  // R954: the floor every mutant budget uses; v3's own rule after its baseline, else the configured one.
+  const minMutantBudgetMs = applyV3MutantStop(scope, baselineDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
   const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
@@ -7387,6 +7435,10 @@ async function runSessionBody(
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
+        : {}),
+      // R954: v3's own mutant stop, unless the caller gave --mutant-timeout-ms.
+      ...(isLocalRunner(caps.kind) && cfg.mutantTimeoutMs === undefined
+        ? { v3MutantStop: { ms: undefined } }
         : {}),
     };
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same

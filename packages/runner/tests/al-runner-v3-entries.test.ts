@@ -2059,6 +2059,18 @@ describe("12: the stop is the daemon's S", () => {
     );
   });
 
+  test("R954: useMutantStop makes S ceil(ms/1000) even when the baseline timeout is larger, and a daemon started under the old stop is replaced", async () => {
+    const r = await readyRig({ floor: [1000, 120_000], mutants: ["M0001"] });
+    expect(r.b.inRunStopMs).toBe(120_000); // before: max(floor, baseline timeout)
+    expect(r.serve.daemons).toHaveLength(1);
+    expect((r.serve.daemons[0] ?? []).join(" ")).toContain("--test-timeout 120");
+    r.b.useMutantStop(60_500);
+    expect(r.b.inRunStopMs).toBe(61_000);
+    await r.b.prefetchMutants(plans(["M0002"]));
+    expect(r.serve.daemons).toHaveLength(2);
+    expect((r.serve.daemons[1] ?? []).join(" ")).toContain("--test-timeout 61");
+  });
+
   test("a daemon start before useMutantBudgetFloor throws; no daemon is spawned", async () => {
     const r = await rig({ floor: false });
     await baseline(r.b, SUITE1);

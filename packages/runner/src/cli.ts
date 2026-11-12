@@ -1096,7 +1096,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
                              count because BC recompiles server-side
-  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
+  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms; on al-runner-v3
+                             max(60 s, 20 x the largest green baseline test + 5 s), R954). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
   --time-budget <seconds>    stop scheduling once the session has run this long: work in flight ends,
                              the report leaves out the mutants not reached (not survivors), and

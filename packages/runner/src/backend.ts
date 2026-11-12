@@ -686,6 +686,14 @@ export interface ExecutionBackend {
   useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
 
   /**
+   * R954, OPTIONAL: al-runner v3 only, and only without `--mutant-timeout-ms`: the session's mutant
+   * stop (`max(60 s, 20 x the largest green baseline + 5 s)`), given after the baseline and before
+   * the mutant loop (again if a later batch raises it). From then on the serve daemon's stop is this,
+   * not the baseline timeout.
+   */
+  useMutantStop?(ms: number): void;
+
+  /**
    * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send
    * each, given once per mutant after its activation and before its first run. al-runner v3 runs
    * a whole test codeunit per call, so it sends the call the LARGEST budget of the refs it serves.

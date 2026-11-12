@@ -132,6 +132,7 @@ import {
   runSession,
   servedWithoutSource,
   upgradeNotRestored,
+  v3MutantStopMs,
 } from "../src/orchestrator";
 import type {
   LeaseFence,
@@ -4605,13 +4606,21 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     readonly runnerBuild = v3RunnerBuild; // R654
     activations: Array<string | null> = [];
     readonly runs: Array<{ active: string | null; timeoutMs: number }> = [];
-    constructor(private readonly baselineDurationMs: number) {}
+    /** R954: every `useMutantStop` call, in order. */
+    readonly stops: number[] = [];
+    useMutantStop(ms: number): void {
+      this.stops.push(ms);
+    }
+    constructor(
+      private readonly baselineDurationMs: number,
+      private readonly kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
+    ) {}
     capabilities(): BackendCapabilities {
       return {
         coverage: "none",
         deploy: "none",
         isolation: "full-reset",
-        kind: "al-runner-v3",
+        kind: this.kind,
         authoritative: false,
       };
     }
@@ -4652,7 +4661,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
   test("a tiny baseline duration still dispatches the covering run at the floored budget", async () => {
     const dirs = await makeProject();
-    const backend = new BudgetProbeBackend(50); // naive 2x budget = 100ms, far under the floor
+    const backend = new BudgetProbeBackend(50, "bcdev"); // naive 2x budget = 100ms, far under the floor
     const store = new ResultsStore(":memory:");
     await runSession({ backend, store, ...dirs, selectorIds });
     store.close();
@@ -4668,7 +4677,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
   test("a large baseline duration still gets exactly 2x, uncapped by the floor", async () => {
     const dirs = await makeProject();
-    const backend = new BudgetProbeBackend(100_000); // naive 2x budget = 200,000ms, above the R91 180s floor
+    const backend = new BudgetProbeBackend(100_000, "bcdev"); // naive 2x budget = 200,000ms, above the R91 180s floor
     const store = new ResultsStore(":memory:");
     await runSession({ backend, store, ...dirs, selectorIds });
     store.close();
@@ -4679,7 +4688,7 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
 
   test("the same floor applies to the confirm-rerun after a fail", async () => {
     const dirs = await makeProject();
-    const backend = new BudgetProbeBackend(50); // "fail" under every mutant triggers a confirm rerun
+    const backend = new BudgetProbeBackend(50, "bcdev"); // "fail" under every mutant triggers a confirm rerun
     const store = new ResultsStore(":memory:");
     await runSession({ backend, store, ...dirs, selectorIds });
     store.close();
@@ -4691,6 +4700,101 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
     // Literal, for the same reason as above.
     expect(confirmRun?.timeoutMs).toBe(180_000);
     expect(confirmRun?.timeoutMs).toBe(MIN_MUTANT_BUDGET_MS);
+  });
+
+  test("R954: bcdev never gets useMutantStop and keeps the 180 s floor", async () => {
+    const dirs = await makeProject();
+    const backend = new BudgetProbeBackend(50, "bcdev");
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend, store, ...dirs, selectorIds });
+    store.close();
+    expect(backend.stops).toEqual([]);
+  });
+
+  describe("R954: al-runner-v3's mutant stop", () => {
+    test("v3MutantStopMs: 60 s up to 2.75 s, then 20 x L + 5 s, at the exact edges", () => {
+      expect(v3MutantStopMs(0)).toBe(60_000);
+      expect(v3MutantStopMs(182)).toBe(60_000);
+      expect(v3MutantStopMs(2_750)).toBe(60_000);
+      expect(v3MutantStopMs(2_751)).toBe(60_020);
+      expect(v3MutantStopMs(10_000)).toBe(205_000);
+    });
+
+    /** Per-test baseline rows (outcome, ms); every mutated run is a 1 ms fail. */
+    class PerTestProbe extends BudgetProbeBackend {
+      constructor(
+        private readonly rows: Record<string, { outcome: "pass" | "fail"; ms: number }>,
+        kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
+      ) {
+        super(0, kind);
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const active = this.activations.at(-1) ?? null;
+        this.runs.push({ active, timeoutMs: opts.timeoutMs });
+        const row = this.rows[ref.method];
+        if (active === null && row !== undefined)
+          return { ref, outcome: row.outcome, durationMs: row.ms };
+        return { ref, outcome: "fail", durationMs: 1 };
+      }
+    }
+    const mutantBudgets = (b: PerTestProbe) =>
+      b.runs.filter((r) => r.active !== null).map((r) => r.timeoutMs);
+
+    test("called once, with S from the largest GREEN baseline test (a red test's duration does not count); every mutant budget has floor S", async () => {
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new PerTestProbe({
+        GreenTest: { outcome: "pass", ms: 4_000 },
+        UnsupportedTest: { outcome: "fail", ms: 90_000 },
+      });
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds });
+      store.close();
+      expect(backend.stops).toEqual([85_000]); // 20 x 4000 + 5000, not 20 x 90000 + 5000
+      const budgets = mutantBudgets(backend);
+      expect(budgets.length).toBeGreaterThan(0);
+      for (const ms of budgets) expect(ms).toBe(85_000);
+    });
+
+    test("small baselines: S is 60 s and the budgets carry it", async () => {
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new PerTestProbe({
+        GreenTest: { outcome: "pass", ms: 182 },
+        UnsupportedTest: { outcome: "fail", ms: 5 },
+      });
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds });
+      store.close();
+      expect(backend.stops).toEqual([60_000]);
+      for (const ms of mutantBudgets(backend)) expect(ms).toBe(60_000);
+    });
+
+    test("an explicit mutantTimeoutMs: useMutantStop is not called and the floor is that value", async () => {
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new PerTestProbe({
+        GreenTest: { outcome: "pass", ms: 182 },
+        UnsupportedTest: { outcome: "fail", ms: 5 },
+      });
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds, mutantTimeoutMs: 7_000 });
+      store.close();
+      expect(backend.stops).toEqual([]);
+      const budgets = mutantBudgets(backend);
+      expect(budgets.length).toBeGreaterThan(0);
+      for (const ms of budgets) expect(ms).toBe(7_000);
+    });
+
+    test("a non-v3 backend with the same rows: no useMutantStop, 180 s floor", async () => {
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new PerTestProbe(
+        { GreenTest: { outcome: "pass", ms: 4_000 }, UnsupportedTest: { outcome: "fail", ms: 5 } },
+        "bcdev",
+      );
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds });
+      store.close();
+      expect(backend.stops).toEqual([]);
+      for (const ms of mutantBudgets(backend)) expect(ms).toBe(180_000);
+    });
   });
 });
 
