@@ -6503,8 +6503,9 @@ describe("R912: windows and --time-budget", () => {
     coverOnlyFirst = false;
     /** R914: the test's own time; `durationMs` (the whole call, compile included) stays `baselineMs`. */
     measuredMs: number | undefined;
-    /** R934: under a mutant, every row's call time (`durationMs`) and its own time (`measuredDurationMs`), pass or fail. */
-    mutantRow: { callMs: number; ownMs: number } | undefined;
+    /** R934: under a mutant, every row's call time (`durationMs`) and its own time (`measuredDurationMs`, absent when
+     *  `ownMs` is: the runner reported none), pass or fail. */
+    mutantRow: { callMs: number; ownMs?: number } | undefined;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {
       super("pass");
@@ -6534,7 +6535,12 @@ describe("R912: windows and --time-budget", () => {
       }
       const row =
         this.mutantRow !== undefined
-          ? { durationMs: this.mutantRow.callMs, measuredDurationMs: this.mutantRow.ownMs }
+          ? {
+              durationMs: this.mutantRow.callMs,
+              ...(this.mutantRow.ownMs !== undefined
+                ? { measuredDurationMs: this.mutantRow.ownMs }
+                : {}),
+            }
           : {};
       if (killedId(this.active))
         return {
@@ -6686,6 +6692,19 @@ describe("R912: windows and --time-budget", () => {
     expect(run.report.timings.mutantsMs).toBe(
       run.report.mutants.reduce((n, m) => n + m.durationMs, 0),
     );
+  });
+
+  test("R934: a row with no own time adds its call's time, never 0", async () => {
+    // The runner reported no per-test figure: the call's 60 s stands (over-states, never hides cost).
+    const run = await runWith(5, {}, (b) => {
+      b.mutantRow = { callMs: 60_000 };
+    });
+    const ran = run.report.mutants.filter((m) => m.verdict === "survived" || m.verdict === "killed");
+    expect(ran.length).toBeGreaterThan(0);
+    for (const m of ran) {
+      expect(m.durationMs).toBeGreaterThanOrEqual(60_000);
+      expect(m.durationMs % 60_000).toBe(0);
+    }
   });
 
   test("a budget that runs out after window 1 leaves the rest out, keeps the run resumable, and --resume carries window 1 and scores only the rest", async () => {

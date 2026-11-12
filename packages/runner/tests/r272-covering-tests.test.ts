@@ -186,6 +186,15 @@ describe("R272: each backend's duration is the test's own", () => {
     );
     // R934: a fail carries the runner's own figure too, so a killed mutant's summed time is its own.
     expect([fail.outcome, fail.durationMs, fail.measuredDurationMs]).toEqual(["fail", 5000, 9]);
+    // A row the runner gave no figure for has none: never a 0 that reads as "took no time".
+    const failNone = verdictFromRunnerTest(
+      ref,
+      "A.M",
+      { status: "fail", message: "boom" },
+      5000,
+      undefined,
+    );
+    expect("measuredDurationMs" in failNone).toBe(false);
   });
 
   test("bcdev: the per-test call's wall clock on a pass, on both paths", async () => {
