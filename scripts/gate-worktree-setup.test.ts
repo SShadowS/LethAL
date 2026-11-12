@@ -45,6 +45,9 @@ beforeEach(() => {
   mkdirSync(join(root, "node_modules"), { recursive: true }); // an installed worktree
   for (const d of needsSymbols("bc1")) put(from, `${d}/.alpackages/Microsoft_Base.app`);
   put(from, ".fixture-symbols.sha256", `${FIXTURE_SYMBOLS_TAR_SHA256}\n`);
+  // Decoys: a normal checkout may hold .alpackages elsewhere; they must never be copied.
+  for (const d of ["sandbox-names", "sandbox-wrapped-tests"])
+    put(from, `fixtures/${d}/.alpackages/Microsoft_Base.app`);
 });
 
 /** A fake run that writes the configs the real setup script would, and counts its calls. */
@@ -152,9 +155,21 @@ describe("setup", () => {
     await expect(setup({ root, server: "bc1", alpackagesFrom: from }, deps)).rejects.toThrow(
       /failed/,
     );
-    expect(preflight({ root, server: undefined, alpackagesFrom: from }, deps)).toContain(
-      "holds no .app symbols",
-    );
+    expect(existsSync(join(root, "fixtures/sandbox-tests/.alpackages"))).toBe(false);
+  });
+  test("server mode copies exactly the three BC-itest folders and no other fixture gets .alpackages", async () => {
+    const { deps } = fakeDeps();
+    await setup({ root, server: "bc1", alpackagesFrom: from }, deps);
+    const withAlpackages = readdirSync(join(root, "fixtures"))
+      .filter((d) => existsSync(join(root, "fixtures", d, ".alpackages")))
+      .sort();
+    expect(withAlpackages).toEqual(["sandbox-data-tests", "sandbox-harden-tests", "sandbox-tests"]);
+  });
+  test("v3-only copies no .alpackages and writes no marker", async () => {
+    const { deps } = fakeDeps({ parserProblem: () => undefined });
+    await setup({ root, server: undefined, alpackagesFrom: from }, deps);
+    expect(readdirSync(join(root, "fixtures"))).toEqual([]);
+    expect(existsSync(join(root, ".fixture-symbols.sha256"))).toBe(false);
   });
 });
 
@@ -194,13 +209,23 @@ describe("ensureInstalled", () => {
 describe("preflight", () => {
   const ok = fakeDeps({ parserProblem: () => undefined }).deps;
   const opts = () => ({ root, server: undefined, alpackagesFrom: from });
-  test("passes on a complete v3 layout", () => {
+  const putConfigs = (r: string) => {
+    for (const f of GATE_FIXTURES) {
+      put(r, `fixtures/${f.configDir}/${configFileName("bc1")}`);
+      put(r, `fixtures/${f.configDir}/.vscode/${launchFileName("bc1")}`);
+    }
+  };
+  test("passes on a complete server layout, and v3-only needs no symbols at all", () => {
+    putConfigs(root);
     copyAlpackages(root, from);
-    expect(preflight(opts(), ok)).toBeUndefined();
+    expect(preflight({ root, server: "bc1", alpackagesFrom: from }, ok)).toBeUndefined();
+    const bare = mkdtempSync(join(tmpdir(), "gws-v3bare-"));
+    expect(preflight({ root: bare, server: undefined, alpackagesFrom: from }, ok)).toBeUndefined();
   });
   test("an empty .alpackages of a tests project that needs symbols is named", () => {
     const bare = mkdtempSync(join(tmpdir(), "gws-bare-"));
-    expect(preflight({ root: bare, server: undefined, alpackagesFrom: from }, ok)).toBe(
+    putConfigs(bare);
+    expect(preflight({ root: bare, server: "bc1", alpackagesFrom: from }, ok)).toBe(
       `${NEEDS_SYMBOLS[0]}/.alpackages holds no .app symbols (copy them with --alpackages-from)`,
     );
   });
@@ -215,14 +240,10 @@ describe("preflight", () => {
     expect(first).toContain("names oldpin");
     expect(first).toContain(FIXTURE_SYMBOLS_TAR_SHA256);
   });
-  test("sandbox-harden-tests symbols are required in server mode only", () => {
+  test("sandbox-harden-tests symbols are required in server mode", () => {
     const r = mkdtempSync(join(tmpdir(), "gws-v3-"));
-    for (const d of NEEDS_SYMBOLS) put(r, `${d}/.alpackages/Microsoft_Base.app`);
-    expect(preflight({ root: r, server: undefined, alpackagesFrom: from }, ok)).toBeUndefined();
-    for (const f of GATE_FIXTURES) {
-      put(r, `fixtures/${f.configDir}/${configFileName("bc1")}`);
-      put(r, `fixtures/${f.configDir}/.vscode/${launchFileName("bc1")}`);
-    }
+    for (const d of NEEDS_SYMBOLS.slice(0, 2)) put(r, `${d}/.alpackages/Microsoft_Base.app`);
+    putConfigs(r);
     expect(preflight({ root: r, server: "bc1", alpackagesFrom: from }, ok)).toContain(
       "sandbox-harden-tests/.alpackages holds no .app symbols",
     );

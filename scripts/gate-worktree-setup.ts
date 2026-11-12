@@ -96,15 +96,19 @@ export const SERVERS = ["bc1", "bc2", "bc3"] as const;
 export type Server = (typeof SERVERS)[number];
 
 /**
- * Tests projects whose `.alpackages` an itest or a v3 leg compiles against. From the itests' own
- * refusals ("holds no .app symbols"): verify and testapp read sandbox-tests, verify-scale
- * sandbox-data-tests, agreement sandbox-harden-tests; the v3 gate reads the first two.
+ * The tests projects whose `.alpackages` a BC itest requires, from the itests' own refusals
+ * ("holds no .app symbols"): verify and testapp read sandbox-tests, verify-scale sandbox-data-tests,
+ * agreement sandbox-harden-tests. ONLY these are filled, and only in server mode: the v3 gate
+ * extracts its own symbols, and a folder it finds in another fixture (sandbox-names, -wrapped-tests,
+ * ...) puts it in "marked" mode, which changes legs N1, N1E, N1S, WR and WRE (R-936).
  */
-export const NEEDS_SYMBOLS = ["fixtures/sandbox-tests", "fixtures/sandbox-data-tests"] as const;
-/** Only the BC gates (`itest:verify-agreement`) read this one; the v3 gate does not. */
-export const NEEDS_SYMBOLS_SERVER = "fixtures/sandbox-harden-tests";
+export const NEEDS_SYMBOLS = [
+  "fixtures/sandbox-tests",
+  "fixtures/sandbox-data-tests",
+  "fixtures/sandbox-harden-tests",
+] as const;
 export const needsSymbols = (server: Server | undefined): readonly string[] =>
-  server === undefined ? NEEDS_SYMBOLS : [...NEEDS_SYMBOLS, NEEDS_SYMBOLS_SERVER];
+  server === undefined ? [] : NEEDS_SYMBOLS;
 
 export interface SetupDeps {
   /** Runs a command in `cwd`; returns the exit code. */
@@ -151,6 +155,7 @@ export function copyAlpackages(root: string, from: string): number {
   // Plan first, copy after: a refusal leaves the worktree untouched.
   const plan: { srcDir: string; dstDir: string; names: string[] }[] = [];
   for (const fx of readdirSync(srcFixtures)) {
+    if (!NEEDS_SYMBOLS.includes(`fixtures/${fx}` as (typeof NEEDS_SYMBOLS)[number])) continue;
     const srcDir = join(srcFixtures, fx, ".alpackages");
     const names = apps(srcDir);
     if (names.length === 0) continue;
@@ -231,7 +236,9 @@ export async function setup(opts: SetupOpts, deps: SetupDeps): Promise<void> {
     const cmd = ["bun", "scripts/bc-linux-setup.ts", "--server", server, "--write-config-only"];
     if (deps.run(cmd, root) !== 0) throw new GateSetupError(`${cmd.join(" ")} failed`);
   }
-  console.log(`alpackages: copied ${copyAlpackages(root, opts.alpackagesFrom)} file(s)`);
+  if (server !== undefined)
+    console.log(`alpackages: copied ${copyAlpackages(root, opts.alpackagesFrom)} file(s)`);
+  else console.log("alpackages: v3-only, none copied (the v3 gate extracts its own)");
   if (deps.parserProblem() !== undefined) {
     if (deps.run(["bun", "scripts/build-native-parser.ts"], root) !== 0)
       throw new GateSetupError("bun scripts/build-native-parser.ts failed (is LLVM_BIN set?)");

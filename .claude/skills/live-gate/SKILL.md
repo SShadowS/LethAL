@@ -21,7 +21,7 @@ Precondition: at most ONE instrumented target installed per container; no concur
 ```bash
 bun scripts/gate-worktree-setup.ts --server bc1 --alpackages-from <checkout with .alpackages>   # or --v3-only
 ```
-It writes the configs and launch files (`--write-config-only`), copies every `fixtures/*/.alpackages` `*.app` and the symbols marker, builds the native parser when it is missing or stale, and then checks each item, exiting 1 on the first one missing. It never leases, publishes or calls a server.
+It writes the configs and launch files (`--write-config-only`), (server mode only) copies `*.app` into the three `.alpackages` the BC itests require (`sandbox-tests`, `sandbox-data-tests`, `sandbox-harden-tests`) plus the symbols marker, and copies none with `--v3-only` (the v3 gate extracts its own; extra folders change legs N1, WR and others), builds the native parser when it is missing or stale, and then checks each item, exiting 1 on the first one missing. It never leases, publishes or calls a server.
 
 ## Run (foreground — do NOT poll/background)
 ```bash
