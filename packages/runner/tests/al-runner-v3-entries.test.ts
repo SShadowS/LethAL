@@ -1197,6 +1197,21 @@ describe("R885: demo data, on the serve path", () => {
     }
   });
 
+  test("R941/R943: the daemon argv carries each probing path as a --dotnet-assembly-dir, only with a sidecar", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r943-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const dirs = (argv: readonly string[]) =>
+      argv.flatMap((a, i) => (a === "--dotnet-assembly-dir" ? [argv[i + 1]] : []));
+    const paths = { assemblyProbingPaths: ["/abs/one", "rel/two"] };
+    const on = (await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: dll, ...paths } }))
+      .serve.daemons[0];
+    expect(dirs(on ?? [])).toEqual(["/abs/one", resolve("rel/two")]);
+    const off = (
+      await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: false as const, ...paths } })
+    ).serve.daemons[0];
+    expect(dirs(off ?? [])).toEqual([]);
+  });
+
   test("the test-data-off note on the daemon's stderr warns once, naming the cacheDir key", async () => {
     const { seen, r } = await run({ cacheDir: "/c" }, `${OFF}\n${OFF}`);
     const codes = seen.map(([c]) => c);

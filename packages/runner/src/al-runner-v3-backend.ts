@@ -675,8 +675,10 @@ export interface AlRunnerV3Config {
   readonly coverageOffFiles?: readonly string[];
   readonly preprocessorSymbols?: readonly string[];
   /**
-   * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). Not passed to
-   * al-runner: its `--dotnet-assembly-dir` is a separate, runtime knob.
+   * R900: alc's `/assemblyprobingpaths:` for both compiles (`ArtifactCompilerConfig`). R941/R943: also
+   * al-runner's `--dotnet-assembly-dir`, one flag per folder (measured: a repeated flag searches
+   * every folder, in either order; a comma-joined value is not split), on every one-shot call and
+   * serve daemon that has a .NET helper, so a .NET type from a BC service folder loads at run time.
    */
   readonly assemblyProbingPaths?: readonly string[];
   /** `ALRUNNER_CACHE` for every v3 call. Absent: v3's own default. */
@@ -970,6 +972,8 @@ export function v3CallArgv(a: {
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
   readonly dotnetSidecar?: string;
+  /** R941/R943: one `--dotnet-assembly-dir <dir>` each, after the sidecar; only with `dotnetSidecar`. */
+  readonly dotnetAssemblyDirs?: readonly string[];
   readonly symbols: readonly string[];
   readonly coverageJson?: string;
   readonly activeDir: string;
@@ -999,7 +1003,13 @@ export function v3CallArgv(a: {
     a.bcVersion,
     ...(a.noClient === true ? ["--no-client"] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
-    ...(a.dotnetSidecar !== undefined ? ["--dotnet-sidecar", a.dotnetSidecar] : []),
+    ...(a.dotnetSidecar !== undefined
+      ? [
+          "--dotnet-sidecar",
+          a.dotnetSidecar,
+          ...(a.dotnetAssemblyDirs ?? []).flatMap((d) => ["--dotnet-assembly-dir", d]),
+        ]
+      : []),
     ...a.symbols.flatMap((s) => ["--define", s]),
     ...(a.coverageJson !== undefined ? ["--coverage-json", a.coverageJson] : []),
     a.activeDir,
@@ -2397,6 +2407,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * its `.gated`.
    */
   private sidecarPath: string | undefined;
+  /** R941/R943: the probing paths, absolute, as the .NET helper's assembly folders (empty when none). */
+  private dotnetAssemblyDirs(): string[] {
+    return (this.cfg.assemblyProbingPaths ?? []).map((d) => resolve(d));
+  }
 
   /**
    * R886: the settings a `--resume` must find unchanged: the sidecar this session passes (its
@@ -3197,7 +3211,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
       skipAfterTimeout: this.skipAfterTimeout && o.mutantActive === true,
-      ...(this.sidecarPath !== undefined ? { dotnetSidecar: this.sidecarPath } : {}),
+      ...(this.sidecarPath !== undefined
+        ? { dotnetSidecar: this.sidecarPath, dotnetAssemblyDirs: this.dotnetAssemblyDirs() }
+        : {}),
       symbols: this.cfg.preprocessorSymbols ?? [],
       ...(o.coverageJson !== undefined ? { coverageJson: resolve(o.coverageJson) } : {}),
       activeDir: o.activeDir,
@@ -4362,7 +4378,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       "--bc-version",
       this.cfg.bcVersion,
       ...(this.noDownload() ? ["--no-download"] : []),
-      ...(this.sidecarPath !== undefined ? ["--dotnet-sidecar", this.sidecarPath] : []),
+      ...(this.sidecarPath !== undefined
+        ? [
+            "--dotnet-sidecar",
+            this.sidecarPath,
+            ...this.dotnetAssemblyDirs().flatMap((d) => ["--dotnet-assembly-dir", d]),
+          ]
+        : []),
     ]);
     this.stats.daemons += 1;
     const daemon: Daemon = { server, dirty: false };

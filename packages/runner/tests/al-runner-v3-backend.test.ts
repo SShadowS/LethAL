@@ -1224,6 +1224,23 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(await callArgv({ dotnetSidecar: false })).not.toContain("--dotnet-sidecar");
   });
 
+  test("R941/R943: each probing path is a --dotnet-assembly-dir after the sidecar, in order and absolute; none without a sidecar or paths", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r943-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const dirs = (argv: readonly string[]) =>
+      argv.flatMap((a, i) => (a === "--dotnet-assembly-dir" ? [argv[i + 1]] : []));
+    const on = await callArgv({
+      dotnetSidecar: dll,
+      assemblyProbingPaths: ["rel/one", "/abs/two"],
+    });
+    expect(dirs(on)).toEqual([resolve("rel/one"), "/abs/two"]);
+    expect(on.indexOf("--dotnet-assembly-dir")).toBeGreaterThan(on.indexOf("--dotnet-sidecar"));
+    expect(
+      dirs(await callArgv({ dotnetSidecar: false, assemblyProbingPaths: ["/abs/two"] })),
+    ).toEqual([]);
+    expect(dirs(await callArgv({ dotnetSidecar: dll }))).toEqual([]);
+  });
+
   test("R886: a named sidecar that is missing refuses the session by name", async () => {
     const l = await layout();
     const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
