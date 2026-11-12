@@ -269,6 +269,7 @@ describe("R739 B: the real backends restart their once-per-backend notices for e
 
   test("v3: setNotify resets the .NET helper flag", () => {
     const backend = new AlRunnerV3Backend({
+      environmentChoice: { value: "saas", source: "config" },
       alcPath: "/fake/alc",
       packagesDir: "/fake/deps",
       instrumentedDir: "/fake/instr",

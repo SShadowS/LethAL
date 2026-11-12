@@ -126,6 +126,11 @@ export interface FoldStatics {
     readonly isolateTests?: true;
     /** R907: this run's tests ran in a session without a client (`--no-client`). */
     readonly noClient?: true;
+    /** R938 — see `ExecutionContext.environment`. */
+    readonly environment?: {
+      readonly value: "saas" | "onprem";
+      readonly source: "config" | "launch.json";
+    };
   };
 }
 

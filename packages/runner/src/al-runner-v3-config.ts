@@ -56,6 +56,8 @@ export interface AlRunnerV3ConfigSection {
    * more tests under `"method"`, chosen once per session.
    */
   readonly isolation: "auto" | "test" | "method";
+  /** R938: `--environment` for every al-runner call. Absent: the target's launch.json decides, else no flag. */
+  readonly environment?: "saas" | "onprem";
 }
 
 /**
@@ -71,6 +73,7 @@ export const V3_NO_CLIENT_DEFAULT = false;
 export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
+  "environment",
   "isolation",
   "downloadDemoData",
   "noClient",
@@ -190,6 +193,11 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.isolation" must be "auto", "test" or "method", got ${JSON.stringify(r.isolation)} (R890, R896).`,
     );
   }
+  if (r.environment !== undefined && r.environment !== "saas" && r.environment !== "onprem") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.environment" must be "saas" or "onprem", got ${JSON.stringify(r.environment)} (R938).`,
+    );
+  }
   for (const k of ["path", "alcPath", "cacheDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
@@ -229,6 +237,7 @@ export function validateAlRunnerV3Config(
     ...(typeof r.cacheDir === "string" ? { cacheDir: r.cacheDir } : {}),
     ...(r.dotnetSidecar !== undefined ? { dotnetSidecar: r.dotnetSidecar as string | false } : {}),
     isolation: (r.isolation as "auto" | "test" | "method" | undefined) ?? V3_ISOLATION_DEFAULT,
+    ...(r.environment !== undefined ? { environment: r.environment as "saas" | "onprem" } : {}),
   };
 }
 

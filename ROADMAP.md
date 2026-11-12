@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 910 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**25 of 911 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -945,16 +945,17 @@ that ordering is the priority.
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
 - **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
 - **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · done (b7404cc1)
-- **R938** · LethAL runs al-runner v3 in its default `saas` environment, while the bc servers are on-prem: tests that expect an on-prem server fail at baseline on v3 only · [R938.md](docs/roadmap/R938.md) · open
+- **R938** · LethAL runs al-runner v3 in its default `saas` environment, while the bc servers are on-prem: tests that expect an on-prem server fail at baseline on v3 only · [R938.md](docs/roadmap/R938.md) · done (d4f04f94)
 - **R939** · A v3 serve session does not say why it closed a daemon, so a session with many restarts (18 daemons for one app) cannot be explained from its report · [R939.md](docs/roadmap/R939.md) · done (851969de; report 195ef055)
 - **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (08c571fa): relabelled with the measured spread; no bound exists to promise
 - **R941** · `assemblyProbingPaths` reaches alc only, never al-runner's `--dotnet-assembly-dir`, so a .NET assembly a dependency needs at run time fails to load (Sustainability: Newtonsoft.Json) · [R941.md](docs/roadmap/R941.md) · done (450c1d83) — fixed with R943; measured in R943
 - **R943** · LethAL does not pass its assembly probing paths to al-runner's `--dotnet-assembly-dir`, so .NET types from a BC service folder are refused: measured, 5 Edit in Excel and 9 Cryptography Management tests would run · [R943.md](docs/roadmap/R943.md) · done (450c1d83)
 - **R942** · On al-runner v3, 9 Sustainability baseline tests are refused as "an action that makes a part visible, other than the pinned shape"; 15 invented shapes all run, so no repro yet and not filed upstream · [R942.md](docs/roadmap/R942.md) · open
 - **R944** · When al-runner refuses to compile the app, LethAL records one 'transport failure' per baseline test and runs the compile once per test, instead of stopping once by name · [R944.md](docs/roadmap/R944.md) · done (beb674d2)
-- **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · open
+- **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · done (bc2e48ab)
 - **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
 - **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
+- **R949** · CI saves the 3.85 GB LLVM cache once per BRANCH (GitHub scopes caches by branch), so a few branches fill the 10 GB repo limit and evict the other caches · [R949.md](docs/roadmap/R949.md) · open
 
 ---
 

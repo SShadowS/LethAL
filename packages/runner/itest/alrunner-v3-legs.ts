@@ -808,8 +808,11 @@ export function legKSection(o: {
   readonly bcVersion: string;
   readonly alcPath: string;
   readonly cacheDir: string;
+  /** R938: required since an unknown environment is refused. */
+  readonly environment: "saas" | "onprem";
 }): Record<string, string> {
   return {
+    environment: o.environment,
     path: o.path,
     packagesDir: o.packagesDir,
     bcVersion: o.bcVersion,

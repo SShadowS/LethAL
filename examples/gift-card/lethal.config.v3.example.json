@@ -1,7 +1,8 @@
 {
   "alRunnerV3": {
     "packagesDir": "/home/you/symbols",
-    "bcVersion": "28.5.54151.54365"
+    "bcVersion": "28.5.54151.54365",
+    "environment": "onprem"
   },
   "selectorIds": {
     "selectorId": 90199,

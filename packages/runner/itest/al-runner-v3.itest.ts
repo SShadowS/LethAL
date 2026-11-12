@@ -109,6 +109,8 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3GateBackendCfg,
+  v3ItestEnvironment,
   v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
@@ -267,6 +269,8 @@ const V3_WORKERS = ((raw) => {
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
 /** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
 const TRANSPORT = v3ItestTransport(process.env);
+/** R938: every leg's `--environment`: `saas` unless `LETHAL_ITEST_V3_ENVIRONMENT=onprem`. */
+const ENVIRONMENT = v3ItestEnvironment(process.env);
 const REPORT_DIR = process.env.LETHAL_ITEST_V3_REPORT_DIR;
 const CONTROL_DIR = process.env.LETHAL_ITEST_V3_CONTROL_DIR;
 const SANDBOX_BC = "28.0.46665.47126";
@@ -317,22 +321,17 @@ function backendCfg(
       "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId"
     >,
 ): AlRunnerV3Config {
-  return {
-    alRunnerPath: BIN,
-    alcPath: ALC,
-    cacheDir: CACHE,
-    // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
-    // the fixtures need none, and every call carries --no-download as it did before R885.
-    downloadDemoData: false,
-    // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
-    // would be picked up by default and could turn a refusal into a run. Off, explicitly.
-    dotnetSidecar: false,
-    isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
-    coverage: "al-runner",
-    ...(CANDIDATE ? { candidate: true } : {}),
-    ...TRANSPORT,
-    ...o,
-  };
+  return v3GateBackendCfg(
+    {
+      alRunnerPath: BIN,
+      alcPath: ALC,
+      cacheDir: CACHE,
+      candidate: CANDIDATE,
+      transport: TRANSPORT,
+      environment: ENVIRONMENT,
+    },
+    o,
+  );
 }
 
 /** r9 §2: this leg's sessions' `unlike-bc` warnings, drained into the receipt after each leg. */
@@ -1516,6 +1515,7 @@ async function legK(scratch: string): Promise<void> {
             bcVersion: SANDBOX_BC,
             alcPath: ALC,
             cacheDir: CACHE,
+            environment: ENVIRONMENT,
           }),
           // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
           downloadDemoData: false,
@@ -2405,6 +2405,7 @@ async function main(): Promise<void> {
     });
   const dirty = dirtyFromStatus(statusNow());
   console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty ? " (DIRTY)" : ""}`);
+  console.log(`al-runner-v3 itest: environment ${ENVIRONMENT} (every leg; R938)`);
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
