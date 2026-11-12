@@ -51,3 +51,26 @@ window that ends at its budget exits 7 with the caveat `time-budget-reached` and
 app: baseline green / red / refused by cause, transport, decided and executed mutants per hour (R-924's `rate.ts`), serve daemon
 closes by reason, peak RSS, refusals by cause, a false-kill sample (R-916's method). Every al-runner refusal or difference gets an
 invented repro with no Continia source text and an upstream issue; every LethAL gap a roadmap item.
+
+## Amendment 1 (2026-11-12, before the resumed DO run): window 1 voided, a license added
+
+**What happened to window 1.** It spent 4 h 40 min in the baseline and decided no mutant; the lane stopped it (SIGTERM), and it wrote
+no report. Cause (R956, diagnosed offline): al-runner refused every DO test before it started, because DO's code reads
+`License Permission` during company initialization and al-runner had no license file; every codeunit then tied at 0 passes and was
+re-baselined one test per process. Its time is not counted; no figure of it is used.
+
+**What changes.** Nothing in scope, packages, environment, selector ids or windows. Two things are added:
+- **LethAL** with R-944 (R955, R956): the time budget bounds the baseline, a stopped run writes its report, and
+  `alRunnerV3.license` exists. Master at the time of the run, named per report.
+- **License:** config `v3.do-lic.json` = `v3.do.json` plus `alRunnerV3.license: /coord/cache/bc28-service-windows/Cronus.bclicense`
+  (sha256 `2bb4ea64ff31351d0c1ea3cc33d710eb72b7d419f581d655fe0386009bff76ad`, licensee Cronus, expires 2033-03-13). It is Microsoft's
+  CRONUS demonstration/development license that ships in the BC 28 service folder and artifacts, and the license al-runner itself
+  loads by default when the BC artifacts are present. It is used only inside this container, only for these local test runs; it is not
+  copied, published or committed (al-runner reads it per run and caches nothing of it).
+- **Measured before this run** (one al-runner process, the whole Test app, the license, no LethAL): 1,805 pass, 49 fail, 125 not run of
+  1,979 in 14 s; 32 of the 49 fail "Document Output has not been activated" (the activation install path, not measured further here).
+  So the resumed baseline is expected to be mostly green; the exact LethAL baseline is recorded, not predicted.
+
+The resumed run is a fresh window 1 (no `--resume`: window 1 stored nothing usable), then windows 2 and 3 with `--resume`, as above.
+The before/after baseline time on R956's diagnosis slice (three test files; before 287.5 s, every test refused) is measured first and
+recorded in R956 and the result.
