@@ -157,18 +157,18 @@ export function verdictFromRunnerTest(
   durationMs: number,
   coverage: CoverageMap | undefined,
 ): TestVerdict {
+  const own = t.durationMs;
+  const measured =
+    typeof own === "number" && Number.isFinite(own) && own >= 0 ? { measuredDurationMs: own } : {};
   if (t.status === "pass") {
     // R272: the runner's OWN per-test figure, for the report and (R517) the figure a position-1
     // timeout confirm is judged on, being timed on the same clock as the in-run stop. `durationMs`
     // stays wall clock for the timeout budget; under `--server` it is the whole suite's.
-    const own = t.durationMs;
     return {
       ref,
       outcome: "pass",
       durationMs,
-      ...(typeof own === "number" && Number.isFinite(own) && own >= 0
-        ? { measuredDurationMs: own }
-        : {}),
+      ...measured,
       ...(t.flagged === true ? { flagged: true as const } : {}),
       ...(coverage !== undefined ? { coverage } : {}),
     };
@@ -212,6 +212,9 @@ export function verdictFromRunnerTest(
       ref,
       outcome: "fail",
       durationMs,
+      // R934: the runner's own figure on a fail too, so a killed mutant's summed time is its tests'
+      // own time, not the whole call's (the whole request on serve) once per covering test.
+      ...measured,
       ...(t.message !== undefined ? { failureMessage: t.message } : {}),
     };
   }

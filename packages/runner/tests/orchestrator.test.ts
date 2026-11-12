@@ -4145,6 +4145,40 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       await classify(testPageNotRunMessage("Sandbox Tests.UnsupportedTest calls Card.OpenView")),
     ).toEqual(["tests-testpage-refused"]);
   });
+  // R934: al-runner sets `measuredDurationMs` on a fail too; the baseline event still carries a
+  // test's own time on a pass only (its contract), so a red baseline row gets none.
+  test("R934: the baseline event carries the own time on a pass, never on a fail that has one", async () => {
+    class TimedBackend extends RecordingBackend {
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const v = await super.run(ref, opts);
+        return {
+          ...v,
+          ...(v.outcome === "error" ? { outcome: "fail" as const } : {}),
+          measuredDurationMs: 9,
+        };
+      }
+    }
+    const dirs = await project();
+    const backend = new TimedBackend(
+      { ...FENCED, kind: "al-runner-v3", authoritative: false },
+      "boom",
+    );
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const finished = events.find((e) => e.type === "baseline-batch-finished");
+    if (finished === undefined || finished.type !== "baseline-batch-finished")
+      throw new Error("no baseline-batch-finished event");
+    const rows = finished.verdicts.map((v) => [v.name, v.outcome, v.durationMs]);
+    expect(rows).toContainEqual(["Sandbox Tests.UnsupportedTest", "fail", undefined]);
+    expect(rows.filter((r) => r[1] === "pass").every((r) => r[2] === 9)).toBe(true);
+    expect(rows.some((r) => r[1] === "pass")).toBe(true);
+  });
   // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
   // only when that frame is a page call in the test app's source; the same text at any other
   // statement is an ordinary failure.
