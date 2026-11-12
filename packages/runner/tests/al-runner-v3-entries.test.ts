@@ -4137,7 +4137,12 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
     expect(r.serve.daemons).toHaveLength(2); // the warm-up's own daemon, as before
     // R939: the probe's close is counted on the close line, and is routine: never an early close.
     expect([...r.b.daemonCloses().byReason]).toEqual([["probe", 1]]);
-    expect([...V3_ROUTINE_CLOSES].sort()).toEqual(["deploy", "probe", "session-end"]);
+    expect([...V3_ROUTINE_CLOSES].sort()).toEqual([
+      "deploy",
+      "mutant-stop",
+      "probe",
+      "session-end",
+    ]);
   });
 
   test("the default transport and an internal caller (no source) never probe", async () => {
