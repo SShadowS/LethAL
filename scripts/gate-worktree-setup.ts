@@ -204,9 +204,10 @@ export function preflight(opts: SetupOpts, deps: SetupDeps): string | undefined 
   }
   if (server !== undefined) {
     for (const f of GATE_FIXTURES) {
+      // Reported paths are POSIX-style on every platform (the message reads the same on Windows CI).
       for (const p of [
-        join("fixtures", f.configDir, configFileName(server)),
-        join("fixtures", f.configDir, ".vscode", launchFileName(server)),
+        `fixtures/${f.configDir}/${configFileName(server)}`,
+        `fixtures/${f.configDir}/.vscode/${launchFileName(server)}`,
       ])
         if (!existsSync(join(root, p))) return `missing ${p} (bc-linux-setup --write-config-only)`;
     }
