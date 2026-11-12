@@ -5,7 +5,9 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,14 +16,19 @@ import { FIXTURE_SYMBOLS_TAR_SHA256 } from "../packages/runner/itest/fixture-sym
 import { GATE_FIXTURES, configFileName, launchFileName } from "./bc-linux-setup.ts";
 import {
   GateSetupError,
+  INSTALL_STAMP,
   NEEDS_SYMBOLS,
   type SetupDeps,
   copyAlpackages,
+  ensureInstalled,
+  loadLibs,
   needsSymbols,
   parserProblemViaSubprocess,
   preflight,
   setup,
 } from "./gate-worktree-setup.ts";
+
+await loadLibs();
 
 let root = "";
 let from = "";
@@ -35,6 +42,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gws-root-"));
   from = mkdtempSync(join(tmpdir(), "gws-from-"));
   mkdirSync(join(root, "fixtures"), { recursive: true });
+  mkdirSync(join(root, "node_modules"), { recursive: true }); // an installed worktree
   for (const d of needsSymbols("bc1")) put(from, `${d}/.alpackages/Microsoft_Base.app`);
   put(from, ".fixture-symbols.sha256", `${FIXTURE_SYMBOLS_TAR_SHA256}\n`);
 });
@@ -99,31 +107,87 @@ describe("copyAlpackages", () => {
 });
 
 describe("setup", () => {
-  test("server mode: configs first, then parser build, then a clean pre-flight; no other command", () => {
+  test("server mode: configs first, then parser build, then a clean pre-flight; no other command", async () => {
     const { deps, calls } = fakeDeps();
-    setup({ root, server: "bc1", alpackagesFrom: from }, deps);
+    await setup({ root, server: "bc1", alpackagesFrom: from }, deps);
     expect(calls).toEqual([
       "bun scripts/bc-linux-setup.ts --server bc1 --write-config-only",
       "bun scripts/build-native-parser.ts",
     ]);
   });
-  test("v3-only mode writes no config, needs none, and builds nothing when the parser is fresh", () => {
+  test("v3-only mode writes no config, needs none, and builds nothing when the parser is fresh", async () => {
     const { deps, calls } = fakeDeps({ parserProblem: () => undefined });
-    setup({ root, server: undefined, alpackagesFrom: from }, deps);
+    await setup({ root, server: undefined, alpackagesFrom: from }, deps);
     expect(calls).toEqual([]);
   });
-  test("a config script that wrote nothing is caught by the pre-flight, naming the first path", () => {
+  test("a config script that wrote nothing is caught by the pre-flight, naming the first path", async () => {
     const { deps } = fakeDeps({}, false);
-    expect(() => setup({ root, server: "bc1", alpackagesFrom: from }, deps)).toThrow(
+    await expect(setup({ root, server: "bc1", alpackagesFrom: from }, deps)).rejects.toThrow(
       /pre-flight: missing fixtures\/sandbox-app\/lethal\.config\.bc1\.json/,
     );
   });
-  test("a failing config script stops before anything is copied", () => {
+  test("a worktree without node_modules runs bun install FIRST, before any other command", async () => {
+    rmSync(join(root, "node_modules"), { recursive: true });
+    const { deps, calls } = fakeDeps();
+    await setup({ root, server: "bc1", alpackagesFrom: from }, deps);
+    expect(calls[0]).toBe("bun install --frozen-lockfile");
+    expect(calls[1]).toBe("bun scripts/bc-linux-setup.ts --server bc1 --write-config-only");
+  });
+  test("a failed install stops the setup before any other command", async () => {
+    rmSync(join(root, "node_modules"), { recursive: true });
+    const calls: string[] = [];
+    const { deps } = fakeDeps({
+      run: (cmd) => {
+        calls.push(cmd.join(" "));
+        return 1;
+      },
+    });
+    await expect(setup({ root, server: "bc1", alpackagesFrom: from }, deps)).rejects.toThrow(
+      /bun install --frozen-lockfile failed/,
+    );
+    expect(calls).toEqual(["bun install --frozen-lockfile"]);
+  });
+  test("a failing config script stops before anything is copied", async () => {
     const { deps } = fakeDeps({ run: () => 1 });
-    expect(() => setup({ root, server: "bc1", alpackagesFrom: from }, deps)).toThrow(/failed/);
+    await expect(setup({ root, server: "bc1", alpackagesFrom: from }, deps)).rejects.toThrow(
+      /failed/,
+    );
     expect(preflight({ root, server: undefined, alpackagesFrom: from }, deps)).toContain(
       "holds no .app symbols",
     );
+  });
+});
+
+describe("ensureInstalled", () => {
+  const runner = () => {
+    const calls: string[] = [];
+    return {
+      calls,
+      run: (cmd: readonly string[]) => {
+        calls.push(cmd.join(" "));
+        return 0;
+      },
+    };
+  };
+  test("node_modules present and no lock newer than the stamp: no install", () => {
+    const r = runner();
+    expect(ensureInstalled(root, r)).toBe(false);
+    put(root, "bun.lock", "lock");
+    put(root, INSTALL_STAMP, "stamp");
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(root, INSTALL_STAMP), later, later);
+    expect(ensureInstalled(root, r)).toBe(false);
+    expect(r.calls).toEqual([]);
+  });
+  test("bun.lock newer than the stamp installs again and refreshes the stamp", () => {
+    const r = runner();
+    put(root, INSTALL_STAMP, "stamp");
+    put(root, "bun.lock", "lock");
+    const earlier = new Date(Date.now() - 60000);
+    utimesSync(join(root, INSTALL_STAMP), earlier, earlier);
+    expect(ensureInstalled(root, r)).toBe(true);
+    expect(r.calls).toEqual(["bun install --frozen-lockfile"]);
+    expect(ensureInstalled(root, r)).toBe(false);
   });
 });
 

@@ -17,15 +17,80 @@
  * It never leases, never publishes and never calls a server. `LLVM_BIN` must be set for step 3.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { checkBinding, loadBindingFor } from "../packages/engine/src/ast/native-parser.ts";
 import {
-  FIXTURE_SYMBOLS_TAR_SHA256,
-  SYMBOLS_MARKER,
-  symlinkedAlpackages,
-} from "../packages/runner/itest/fixture-symbols.ts";
-import { GATE_FIXTURES, configFileName, launchFileName } from "./bc-linux-setup.ts";
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
+import type { checkBinding, loadBindingFor } from "../packages/engine/src/ast/native-parser.ts";
+import type { GATE_FIXTURES, configFileName, launchFileName } from "./bc-linux-setup.ts";
+
+// Only `node:` builtins above: in a fresh worktree there is no node_modules yet, and the modules
+// below import packages. They are loaded by `loadLibs()` AFTER `ensureInstalled`.
+// (Type-only imports are erased, so they load nothing.)
+type Libs = {
+  readonly checkBinding: typeof checkBinding;
+  readonly loadBindingFor: typeof loadBindingFor;
+  readonly FIXTURE_SYMBOLS_TAR_SHA256: string;
+  readonly SYMBOLS_MARKER: string;
+  readonly symlinkedAlpackages: (root: string) => string[];
+  readonly GATE_FIXTURES: typeof GATE_FIXTURES;
+  readonly configFileName: typeof configFileName;
+  readonly launchFileName: typeof launchFileName;
+};
+let libs: Libs | undefined;
+
+/** Loads the parts that need installed packages. Call once, after `ensureInstalled`. */
+export async function loadLibs(): Promise<void> {
+  if (libs !== undefined) return;
+  const [np, fs, bc] = await Promise.all([
+    import("../packages/engine/src/ast/native-parser.ts"),
+    import("../packages/runner/itest/fixture-symbols.ts"),
+    import("./bc-linux-setup.ts"),
+  ]);
+  libs = {
+    checkBinding: np.checkBinding,
+    loadBindingFor: np.loadBindingFor,
+    FIXTURE_SYMBOLS_TAR_SHA256: fs.FIXTURE_SYMBOLS_TAR_SHA256,
+    SYMBOLS_MARKER: fs.SYMBOLS_MARKER,
+    symlinkedAlpackages: fs.symlinkedAlpackages,
+    GATE_FIXTURES: bc.GATE_FIXTURES,
+    configFileName: bc.configFileName,
+    launchFileName: bc.launchFileName,
+  };
+}
+
+function L(): Libs {
+  if (libs === undefined) throw new Error("gate-worktree-setup: loadLibs() was not called");
+  return libs;
+}
+
+/** Written after a successful install; `bun.lock` newer than it means the install is stale. */
+export const INSTALL_STAMP = "node_modules/.gate-worktree-install";
+
+/**
+ * Step 0. `bun install --frozen-lockfile` in the worktree when `node_modules` is missing, or
+ * `bun.lock` is newer than the stamp written by the last install here. Output streams through
+ * (`run` inherits stdio). A failed install stops the setup.
+ */
+export function ensureInstalled(root: string, deps: Pick<SetupDeps, "run">): boolean {
+  const stamp = join(root, INSTALL_STAMP);
+  const lock = join(root, "bun.lock");
+  const stale =
+    !existsSync(join(root, "node_modules")) ||
+    (existsSync(stamp) && existsSync(lock) && statSync(lock).mtimeMs > statSync(stamp).mtimeMs);
+  if (!stale) return false;
+  if (deps.run(["bun", "install", "--frozen-lockfile"], root) !== 0)
+    throw new GateSetupError("bun install --frozen-lockfile failed: nothing else was run");
+  mkdirSync(join(root, "node_modules"), { recursive: true });
+  writeFileSync(stamp, `${new Date().toISOString()}\n`);
+  return true;
+}
 
 export const SERVERS = ["bc1", "bc2", "bc3"] as const;
 export type Server = (typeof SERVERS)[number];
@@ -63,6 +128,7 @@ const apps = (dir: string): string[] =>
 
 /** Step 2. Returns the number of files copied. */
 export function copyAlpackages(root: string, from: string): number {
+  const { symlinkedAlpackages, SYMBOLS_MARKER } = L();
   if (resolve(root) === resolve(from))
     throw new GateSetupError("--alpackages-from is this worktree itself");
   const srcFixtures = join(from, "fixtures");
@@ -122,6 +188,14 @@ export function copyAlpackages(root: string, from: string): number {
 /** Step 4: the first thing missing, or undefined. Reads no config content (they hold a login). */
 export function preflight(opts: SetupOpts, deps: SetupDeps): string | undefined {
   const { root, server } = opts;
+  const {
+    SYMBOLS_MARKER,
+    FIXTURE_SYMBOLS_TAR_SHA256,
+    GATE_FIXTURES,
+    configFileName,
+    launchFileName,
+    symlinkedAlpackages,
+  } = L();
   const marker = join(root, SYMBOLS_MARKER);
   if (existsSync(marker)) {
     const got = readFileSync(marker, "utf8").trim();
@@ -148,8 +222,10 @@ export function preflight(opts: SetupOpts, deps: SetupDeps): string | undefined 
 }
 
 /** Steps 1 to 4. Throws GateSetupError naming the first failed step or missing item. */
-export function setup(opts: SetupOpts, deps: SetupDeps): void {
+export async function setup(opts: SetupOpts, deps: SetupDeps): Promise<void> {
   const { root, server } = opts;
+  ensureInstalled(root, deps); // first: nothing below can load without node_modules
+  await loadLibs();
   if (server !== undefined) {
     const cmd = ["bun", "scripts/bc-linux-setup.ts", "--server", server, "--write-config-only"];
     if (deps.run(cmd, root) !== 0) throw new GateSetupError(`${cmd.join(" ")} failed`);
@@ -168,6 +244,7 @@ const REPO = resolve(import.meta.dir, "..");
 /** In-process check. A process that has loaded the addon once keeps it, so never trust it after a rebuild. */
 function parserProblemInProcess(): string | undefined {
   try {
+    const { checkBinding, loadBindingFor } = L();
     const key = `${process.platform}-${process.arch}`;
     checkBinding(loadBindingFor(key), key, join(REPO, "packages", "engine", "native"));
     return undefined;
@@ -217,12 +294,13 @@ function parse(argv: readonly string[]): SetupOpts {
 
 if (import.meta.main) {
   if (process.argv[2] === "--check-parser") {
+    await loadLibs();
     const problem = parserProblemInProcess();
     if (problem !== undefined) console.error(problem);
     process.exit(problem === undefined ? 0 : 1);
   }
   try {
-    setup(parse(process.argv.slice(2)), REAL_DEPS);
+    await setup(parse(process.argv.slice(2)), REAL_DEPS);
     console.log("gate worktree ready: pre-flight passed. No lease taken, nothing published.");
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
