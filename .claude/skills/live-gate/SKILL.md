@@ -17,6 +17,12 @@ The instrumented target depends on the `LethAL Control` extension and every RunM
 
 Precondition: at most ONE instrumented target installed per container; no concurrent/external publish during the run.
 
+## Fresh worktree: one command, before any lease (R-936)
+```bash
+bun scripts/gate-worktree-setup.ts --server bc1 --alpackages-from <checkout with .alpackages>   # or --v3-only
+```
+It writes the configs and launch files (`--write-config-only`), copies every `fixtures/*/.alpackages` `*.app` and the symbols marker, builds the native parser when it is missing or stale, and then checks each item, exiting 1 on the first one missing. It never leases, publishes or calls a server.
+
 ## Run (foreground — do NOT poll/background)
 ```bash
 LETHAL_ITEST_BCDEV=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json bun run itest:bcdev

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { V3_AGENTFLOW_LEGS } from "../../packages/runner/itest/alrunner-v3-legs.ts";
 import {
   CHUNKED_SUBLEGS,
@@ -202,6 +203,83 @@ describe("R271: harden, verify, testapp and agreement legs", () => {
     expect(at("verify")).toBeLessThan(at("testapp"));
     expect(at("testapp")).toBeLessThan(at("agreement"));
     expect(at("agreement")).toBeLessThan(at("hang"));
+  });
+});
+
+describe("R-936: test-only paths and gate-read fixtures", () => {
+  const root = join(import.meta.dir, "..", "..");
+  const itestDir = join(root, "packages", "runner", "itest");
+  const itestSources = readdirSync(itestDir)
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => ({ f, text: readFileSync(join(itestDir, f), "utf8") }));
+  const fixtureDirs = readdirSync(join(root, "fixtures"), { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  // The read set: a fixture directory whose exact name appears in any non-test itest file. A
+  // comment counts as a read on purpose, so the error is always toward more legs. Not caught: a
+  // fixture reached only through a name built at run time, or through src/ or a script (the
+  // fixture() helper takes literal names today, so a literal search sees them).
+  const named = (dir: string) =>
+    itestSources.some(({ text }) => new RegExp(`(?<![\\w-])${dir}(?![\\w-])`).test(text));
+  const readFixtures = fixtureDirs.filter(named);
+
+  test("the derivation finds the fixtures the gates are known to use", () => {
+    for (const d of [
+      "sandbox-app",
+      "sandbox-data",
+      "sandbox-hang",
+      "sandbox-harden",
+      "sandbox-order",
+    ])
+      expect([d, readFixtures.includes(d)]).toEqual([d, true]);
+  });
+
+  test("every fixture an itest names selects at least one leg, and is matched by a rule", () => {
+    for (const d of readFixtures) {
+      for (const file of ["app.json", "src/X.al"]) {
+        const sel = selectLegs([`fixtures/${d}/${file}`]);
+        expect([d, sel.unmatched, sel.legs.length > 0]).toEqual([d, [], true]);
+      }
+    }
+  });
+
+  test("a fixture no itest names selects no leg, or falls to the full set (never a partial set)", () => {
+    for (const d of fixtureDirs.filter((x) => !named(x))) {
+      const sel = selectLegs([`fixtures/${d}/app.json`]);
+      expect([d, sel.legs.length === 0 || sel.unmatched.length === 1]).toEqual([d, true]);
+    }
+  });
+
+  test("no itest or src file imports anything under packages/*/tests/", () => {
+    const srcDir = join(root, "packages", "runner", "src");
+    const files = [
+      ...itestSources,
+      ...readdirSync(srcDir)
+        .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+        .map((f) => ({ f, text: readFileSync(join(srcDir, f), "utf8") })),
+    ];
+    for (const { f, text } of files) {
+      const imports = text.split("\n").filter((l) => /^\s*(import|export)\b.*\bfrom\b/.test(l));
+      expect([f, imports.filter((l) => /\/tests\/|\.test(\.ts)?["']/.test(l))]).toEqual([f, []]);
+    }
+  });
+
+  test("test-only paths select no legs and park nothing", () => {
+    for (const p of [
+      "packages/runner/tests/orchestrator.test.ts",
+      "packages/runner/tests/helpers/fake-backend.ts",
+      "packages/engine/tests/ast/parse.test.ts",
+      "packages/schemata/tests/x.json",
+      "packages/runner/itest/gate-receipt.test.ts",
+      "packages/runner/src/store.test.ts",
+    ]) {
+      expect([p, selectLegs([p])]).toEqual([p, { legs: [], park: [], unmatched: [] }]);
+    }
+  });
+
+  test("a test file beside code does not remove the code's legs", () => {
+    const sel = selectLegs(["packages/runner/tests/x.test.ts", "packages/runner/src/store.ts"]);
+    expect(sel.legs).toContain("bcdev");
   });
 });
 

@@ -141,6 +141,11 @@ was already installed" (R605's installed-version record: `bc-republish.ts republ
 <fixture>`), and a test app refused after its target was kept as a minted build (run the target's
 gate or `--mint` it, then re-run setup).
 
+**A fresh gate worktree (R-936)** runs one command before any lease: `bun scripts/gate-worktree-setup.ts --server
+bc1|bc2|bc3 --alpackages-from <checkout>` (or `--v3-only` for the v3 gate). It does the config step below, copies the
+`.alpackages` `*.app` files and the symbols marker from the named checkout, builds the native parser when it is
+missing or stale, and runs a pre-flight that exits 1 naming the first missing item. It never leases or publishes.
+
 **A worktree that only needs the configs** runs `bun scripts/bc-linux-setup.ts --write-config-only --server
 bc1|bc2|bc3|all`. It reads the secret file and writes the same configs and launch files, with NO server
 call and NO lease. It refuses by name when the secret file or one of its two keys is missing, and never
