@@ -352,7 +352,7 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     ).not.toContain("project-symlink-skipped");
   });
 
-  test("R939: the backend's daemon-close warnings become v3DaemonCloses and a TIMING sub-line; none, neither", () => {
+  test("R939: serve-daemon-closed events become v3DaemonCloses and a TIMING sub-line; none, neither", () => {
     const base: RunEventInput[] = [
       {
         type: "mutation-set-generated",

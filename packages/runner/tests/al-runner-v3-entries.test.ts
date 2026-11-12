@@ -1427,6 +1427,23 @@ describe("R939: why each serve daemon closed", () => {
       ])?.reason,
     ).toBe("unkept-row");
   });
+
+  test("a refusal's family masks backticked and quoted spans BEFORE cutting, so no code survives; numbers in words stay", () => {
+    const family = (message: string) =>
+      unkeptRowReason([{ name: "Codeunit1.A", status: "error", notRun: true, message }])?.family;
+    // A backticked call holds the cut characters: masked first, nothing of it is left.
+    expect(
+      family(
+        "NotRun: out-of-scope: call `Chart.UpdateChart(CurrPage.Forecast)`: what it does is not pinned",
+      ),
+    ).toBe("call …");
+    expect(family("NotRun: out-of-scope: a DateTime before 1753 (not pinned)")).toBe(
+      "a DateTime before N",
+    );
+    expect(family("NotRun: out-of-scope: field 'CO2e Emission' of table CO2e Ledger")).toBe(
+      "field … of table CO2e Ledger",
+    );
+  });
 });
 
 describe("10: R612's keep rule per entry, in entry order", () => {

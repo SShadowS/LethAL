@@ -1071,16 +1071,18 @@ interface CallRows {
 }
 
 /**
- * R939: why a serve daemon was closed. Each close is counted by reason; every reason but `deploy`
- * and `session-end` (the routine ones) is also reported to the session's close sink, which emits a
+ * R939: why a serve daemon was closed. Each cause is counted once by reason; every reason but the
+ * routine ones (`V3_ROUTINE_CLOSES`) is also reported to the session's close sink, which emits a
  * `serve-daemon-closed` event (never a warning: gates pin their warning sets).
  * - `refusal`: a row v3 refused (`NotRun`) with a reason outside `V3_SERVE_SAFE_REFUSALS`; the
- *   warning and the close line name its family. `timeout`: a timeout row. `unkept-row`: any other
+ *   event and the close line name its family. `timeout`: a timeout row. `unkept-row`: any other
  *   row the keep rule (`serveDaemonReusable`) does not keep (a pass or fail holding v3's refusal marker).
- * - `warmup-refused`, `batch-refused`: the warm-up's or a whole batch's refusal (the session stops).
+ *   A prefetch, a live request and a §6 coverage window name their unkept row the same way.
+ * - `warmup-refused`, `batch-refused`: the warm-up's or a whole batch's refusal (the session stops,
+ *   or the default transport falls back to one-shot).
  * - `request-failed`: the request threw (a crash, EOF, the deadline). `answer-unreadable`: an answer
  *   that does not decode, or rows for another codeunit. `dependency-skip`: v3 skipped a dependency.
- * - `coverage-window`: a §6 coverage window's rows were not kept. `probe`: the pre-baseline probe's own daemon.
+ * - Routine: `probe` (the pre-baseline probe's own daemon), `deploy`, `session-end`.
  */
 export type V3DaemonCloseReason =
   | "refusal"
@@ -1091,15 +1093,18 @@ export type V3DaemonCloseReason =
   | "request-failed"
   | "answer-unreadable"
   | "dependency-skip"
-  | "coverage-window"
   | "probe"
   | "deploy"
   | "session-end";
 
+/** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink. */
+const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set(["probe", "deploy", "session-end"]);
+
 /**
  * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
- * for a refusal, its family (the text after `out-of-scope: `, up to the first `(`, `[`, `;` or `:`,
- * numbers as N and quoted names as `…`, at most 80 characters). Undefined when every row is kept.
+ * for a refusal, its family: the text after `out-of-scope: `, with quoted and backticked spans
+ * (names, code) masked as `…` FIRST, then cut at the first `(`, `[`, `;` or `:`, standalone numbers
+ * as N, at most 80 characters. Undefined when every row is kept.
  */
 export function unkeptRowReason(
   rows: readonly ServerTestLine[],
@@ -1109,10 +1114,11 @@ export function unkeptRowReason(
   const m = bad.message ?? "";
   if (bad.status === "error" && V3_TIMEOUT_MESSAGE.test(m)) return { reason: "timeout" };
   if (bad.notRun === true) {
+    // Mask before cutting: a backticked call (`X.Y(Z)`) holds the cut characters.
     const family = (m.split("out-of-scope: ")[1] ?? m)
+      .replace(/'[^']*'|"[^"]*"|`[^`]*`/g, "…")
       .split(/[([;:]/)[0]
-      ?.replace(/'[^']*'|"[^"]*"|`[^`]*`/g, "…")
-      .replace(/\d+/g, "N")
+      ?.replace(/\b\d+\b/g, "N")
       .trim()
       .slice(0, 80);
     return {
@@ -1865,19 +1871,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.closeSink = sink;
   }
   /**
-   * R939: close every daemon of `lane` and count each by `reason`; for an unexpected reason (every
-   * one but `deploy` and `session-end`) report each close to the session's sink, naming a refusal's
-   * family.
+   * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
+   * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
+   * for an unexpected reason (every one but `deploy`, `session-end` and `probe`, which cost no extra
+   * warm-up) report it to the session's sink, naming a refusal's family.
    */
   private async closeLane(lane: Lane, reason: V3DaemonCloseReason, family?: string): Promise<void> {
-    const n = await lane.closeDaemon();
-    if (n === 0) return;
-    this.closes.set(reason, (this.closes.get(reason) ?? 0) + n);
+    if ((await lane.closeDaemon()) === 0) return;
+    this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
     if (family !== undefined)
-      this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + n);
-    if (reason === "deploy" || reason === "session-end") return;
-    for (let i = 0; i < n; i++)
-      this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
+      this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
+    if (V3_ROUTINE_CLOSES.has(reason)) return;
+    this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
   }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
@@ -4500,7 +4505,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // A failed request already closed (and counted) its daemon; this finds none then.
       await this.closeLane(
         lane,
-        err instanceof AlRunnerV3EntriesRefusedError ? "warmup-refused" : "request-failed",
+        err instanceof AlRunnerV3EntriesRefusedError || err instanceof AlRunnerV3ServeFallbackWarmupError
+          ? "warmup-refused"
+          : "request-failed",
       );
       throw err;
     }
@@ -4722,13 +4729,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // R895: a cut answer's daemon is already killed; `closeDaemon` clears the lane's reference to it.
     // R939: the reason is the first unkept row's (a refusal's family, a timeout); `dirty` alone is
-    // set only by a §6 coverage window whose rows were not kept.
+    // set only by a §6 coverage window whose rows were not kept, with its own `dirtyWhy`.
     const unkept =
       cut < sent.length
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
     if (cut < sent.length || daemon.dirty)
-      await this.closeLane(lane, unkept?.reason ?? "coverage-window", unkept?.family);
+      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family);
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -5269,7 +5276,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (daemon.dirty)
           await this.closeLane(
             lane,
-            daemon.dirtyWhy?.reason ?? "coverage-window",
+            daemon.dirtyWhy?.reason ?? "unkept-row",
             daemon.dirtyWhy?.family,
           );
         lane.timers.windowMs += this.now() - windowT0;
