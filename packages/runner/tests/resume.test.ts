@@ -24,7 +24,7 @@ import type { BcDevConfig } from "../src/bcdev-backend";
 import type { MicrosoftMode } from "../src/digest-inputs";
 import type { RunEvent } from "../src/events";
 import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
-import { formatEstimate } from "../src/mutant-windows";
+import { ESTIMATE_NOT_A_BOUND, formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
   resumeGuardMessage,
@@ -6642,13 +6642,16 @@ describe("R912: windows and --time-budget", () => {
     const detail = (events: readonly RunEvent[]) =>
       events.find((e) => e.type === "phase-entered" && e.phase === "mutants");
     expect(detail(short.events)).toMatchObject({
-      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of covering-test time`,
+      detail: `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 250_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})`,
     });
+    // R940: the detail claims no bound and states the measured spread.
+    expect(ESTIMATE_NOT_A_BOUND).toContain("not a bound");
+    expect(ESTIMATE_NOT_A_BOUND).toContain("0.7 to 5.8 times");
 
     const long = await runWith(3_600_000); // 1 h per mutant
     const longDetail = detail(long.events);
     expect(longDetail?.type === "phase-entered" ? longDetail.detail : "").toStartWith(
-      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of covering-test time. That is long`,
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 3_600_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND}). That is long`,
     );
     // R912 follow-up: a timing-dependent warning code would make gates' pinned warning sets flaky.
     for (const run of [short, long]) {
@@ -6664,7 +6667,7 @@ describe("R912: windows and --time-budget", () => {
     const n = run.backend.prefetches.flat().length;
     const e = run.events.find((x) => x.type === "phase-entered" && x.phase === "mutants");
     expect(e?.type === "phase-entered" ? e.detail : "").toBe(
-      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 5_000)} of covering-test time`,
+      `estimate: ${n} covered mutant(s), about ${formatEstimate(n * 5_000)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})`,
     );
     // At 5 s each they all fit one 600 s window; at the call's 400 s they would go one to a window.
     expect(run.backend.prefetches).toHaveLength(1);
