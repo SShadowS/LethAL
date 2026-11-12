@@ -27,6 +27,7 @@ import {
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoClientUnsupportedError,
+  AlRunnerV3CompileRefusedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
@@ -42,6 +43,7 @@ import {
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
+  v3CompileRefusal,
   v3MissingDependencies,
   v3RowVerdict,
   v3TestDataOffNote,
@@ -1224,6 +1226,24 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(await callArgv({ dotnetSidecar: false })).not.toContain("--dotnet-sidecar");
   });
 
+  test("R941/R943: each probing path is a --dotnet-assembly-dir after the sidecar, in order and absolute; none without a sidecar or paths", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r943-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const dirs = (argv: readonly string[]) =>
+      argv.flatMap((a, i) => (a === "--dotnet-assembly-dir" ? [argv[i + 1]] : []));
+    const on = await callArgv({
+      dotnetSidecar: dll,
+      assemblyProbingPaths: ["rel/one", "/abs/two"],
+    });
+    // resolve() on both: on Windows an absolute "/abs/two" gains the drive letter.
+    expect(dirs(on)).toEqual([resolve("rel/one"), resolve("/abs/two")]);
+    expect(on.indexOf("--dotnet-assembly-dir")).toBeGreaterThan(on.indexOf("--dotnet-sidecar"));
+    expect(
+      dirs(await callArgv({ dotnetSidecar: false, assemblyProbingPaths: ["/abs/two"] })),
+    ).toEqual([]);
+    expect(dirs(await callArgv({ dotnetSidecar: dll }))).toEqual([]);
+  });
+
   test("R886: a named sidecar that is missing refuses the session by name", async () => {
     const l = await layout();
     const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
@@ -1762,6 +1782,46 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     await b.activate(activated);
     return b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
   };
+
+  // R944: v3's own words for a compile refusal (Guided Experience on edge-42af5d384, /coord/handoff/R-932/).
+  const COMPILE_REFUSED =
+    "al-runner 3.0.0-alpha.14+edge.20261111 (42af5d384)\nSeed: 1\ncompile: active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level\nthe APPs do not compile: 1 error(s); no test ran (exit 3)\nResult: COMPILE ERRORS (exit 3)\n";
+
+  test("R944: a compile refusal stops the session once by name, quoting the compiler line; not a per-test transport failure", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const err = await b
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3CompileRefusedError);
+    expect(String(err)).toContain("al-runner-v3-compile-refused");
+    expect((err as AlRunnerV3CompileRefusedError).compilerLines).toEqual([
+      "active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level",
+    ]);
+  });
+
+  test("R944: under a mutant a compile refusal is that batch's transport failure, never a session stop", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("v3 exited 3");
+  });
+
+  test("R944: v3CompileRefusal reads only an exit 3 that says COMPILE ERRORS", () => {
+    expect(v3CompileRefusal(3, COMPILE_REFUSED)?.length).toBe(1);
+    expect(v3CompileRefusal(1, COMPILE_REFUSED)).toBeUndefined();
+    expect(v3CompileRefusal(3, "something else exited 3\n")).toBeUndefined();
+    expect(v3CompileRefusal(3, "Result: COMPILE ERRORS (exit 3)\n")).toEqual([
+      "(no error AL line in its output)",
+    ]);
+  });
 
   test("R815: exit6Kind reads v3's words; anything else is unknown, never a guess", () => {
     expect(exit6Kind(RAN_NO_TEST)).toBe("ran-no-test");
