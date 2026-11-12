@@ -182,7 +182,10 @@ const isOneOf =
  * remove it from here (gate-table.test.ts checks the itests' imports).
  */
 export const isTestOnly = (p: string): boolean =>
-  /^packages\/[^/]+\/tests\//.test(p) || p.endsWith(".test.ts");
+  // The orchestrator's ruling (R654 S2): all of scripts/agentflow/** selects the full set. Its own
+  // tests test this table, so they are not test-only.
+  !p.startsWith("scripts/agentflow/") &&
+  (/^packages\/[^/]+\/tests\//.test(p) || p.endsWith(".test.ts"));
 
 const TEST_ONLY_RULE: Rule = {
   test: isTestOnly,
@@ -264,7 +267,8 @@ const RULES: readonly Rule[] = [
     test: startsWith("fixtures/sandbox-app/", "fixtures/sandbox-tests/"),
     // verify and testapp measure this fixture pair (verify-gaps.ts pins its gap ids; testapp
     // republishes sandbox-tests).
-    legs: ["bcdev", "alrunner-v3", "verify", "testapp"],
+    // lease and stale-publish publish this pair too (their PROJECT_DIR / TEST_DIR).
+    legs: ["bcdev", "alrunner-v3", "verify", "testapp", "lease", "stale-publish"],
     why: "the codeunit fixture and its suite",
   },
   {
@@ -274,7 +278,8 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith("fixtures/sandbox-data/", "fixtures/sandbox-data-tests/"),
-    legs: ["tables", "chunked"],
+    // alrunner-v3: its tables and CDO legs compile and run these (al-runner-v3.itest.ts).
+    legs: ["tables", "chunked", "alrunner-v3"],
     why: "the table fixture and its suite",
   },
   {
@@ -283,9 +288,10 @@ const RULES: readonly Rule[] = [
     why: "the hang fixture and its suite",
   },
   // R-936. Each fixture below is named by an itest, so it selects that itest's leg. The names and
-  // wrapped pairs are also read by the bcdev variants (`itest:bcdev-names`, `itest:bcdev-wrapped`),
-  // which are part of the `bcdev` leg here. gate-table.test.ts derives the read set from the
-  // itests and fails when a fixture an itest names selects nothing.
+  // wrapped pairs are also read by `itest:bcdev-names` and `itest:bcdev-wrapped`. Those two are
+  // NOT in LEGS (there is no such leg), so they are covered here by selecting `bcdev`, the nearest
+  // leg that exercises the same backend. gate-table.test.ts derives the read set from the itests
+  // and fails when a fixture an itest names does not select that itest's leg.
   {
     test: startsWith(
       "fixtures/sandbox-names/",

@@ -11,6 +11,7 @@ import {
   EXPECTED_SUBLEGS,
   FULL_SET,
   GateSelectionError,
+  LEGS,
   LEG_CONTAINER,
   LEG_ORDER,
   type Leg,
@@ -211,12 +212,19 @@ describe("R-936: test-only paths and gate-read fixtures", () => {
   const itestDir = join(root, "packages", "runner", "itest");
   const itestSources = readdirSync(itestDir)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
-    .map((f) => ({ f, text: readFileSync(join(itestDir, f), "utf8") }));
+    .map((f) => ({
+      f,
+      // Comments are dropped: a fixture named only in a comment is not read. (A `//` inside a
+      // string, a URL say, also drops the rest of that line; no itest names a fixture after one.)
+      text: readFileSync(join(itestDir, f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, ""),
+    }));
   const fixtureDirs = readdirSync(join(root, "fixtures"), { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
-  // The read set: a fixture directory whose exact name appears in any non-test itest file. A
-  // comment counts as a read on purpose, so the error is always toward more legs. Not caught: a
+  // The read set: a fixture directory whose exact name appears in the code of any non-test itest
+  // file. Not caught: a
   // fixture reached only through a name built at run time, or through src/ or a script (the
   // fixture() helper takes literal names today, so a literal search sees them).
   const named = (dir: string) =>
@@ -241,6 +249,44 @@ describe("R-936: test-only paths and gate-read fixtures", () => {
         expect([d, sel.unmatched, sel.legs.length > 0]).toEqual([d, [], true]);
       }
     }
+  });
+
+  // R-936 review: not just "some leg" but THE leg of the itest that names it. File -> leg: an
+  // itest named `<leg>.itest.ts` is that leg's; the rest are listed here.
+  const legOfItest = (f: string): Leg | undefined => {
+    if (/^(al-runner-v3|alrunner-v3)/.test(f)) return "alrunner-v3";
+    if (/^bcdev/.test(f)) return "bcdev";
+    const extra: Record<string, Leg> = {
+      "verify-agreement.itest.ts": "agreement",
+      "test-app-publish.itest.ts": "testapp",
+    };
+    const e = extra[f];
+    if (e !== undefined) return e;
+    const m = /^(.+)\.itest\.ts$/.exec(f);
+    return m !== null && (LEGS as readonly string[]).includes(m[1] ?? "")
+      ? (m[1] as Leg)
+      : undefined;
+  };
+
+  test("each fixture an itest names selects THAT itest's leg", () => {
+    const misses: string[] = [];
+    for (const { f, text } of itestSources) {
+      const leg = legOfItest(f);
+      if (leg === undefined) continue;
+      for (const d of fixtureDirs) {
+        if (!new RegExp(`(?<![\\w-])${d}(?![\\w-])`).test(text)) continue;
+        if (!selectLegs([`fixtures/${d}/app.json`]).legs.includes(leg))
+          misses.push(`${f}: ${d} -> ${leg}`);
+      }
+    }
+    expect(misses).toEqual([]);
+  });
+
+  test("the file-to-leg map covers the gates it is meant to", () => {
+    expect(legOfItest("hang.itest.ts")).toBe("hang");
+    expect(legOfItest("al-runner-v3.itest.ts")).toBe("alrunner-v3");
+    expect(legOfItest("bcdev-names.itest.ts")).toBe("bcdev");
+    expect(legOfItest("verify-agreement.itest.ts")).toBe("agreement");
   });
 
   test("a fixture no itest names selects no leg, or falls to the full set (never a partial set)", () => {
@@ -274,6 +320,12 @@ describe("R-936: test-only paths and gate-read fixtures", () => {
       "packages/runner/src/store.test.ts",
     ]) {
       expect([p, selectLegs([p])]).toEqual([p, { legs: [], park: [], unmatched: [] }]);
+    }
+  });
+
+  test("scripts/agentflow/** still selects the full set, its own *.test.ts included", () => {
+    for (const p of ["scripts/agentflow/gate-table.test.ts", "scripts/agentflow/gate-table.ts"]) {
+      expect([p, selectLegs([p]).legs]).toEqual([p, LEG_ORDER.filter((l) => FULL_SET.includes(l))]);
     }
   });
 
@@ -459,7 +511,7 @@ describe("the structural delta may only widen", () => {
   test("widening preserves order", () => {
     const base = selectLegs(["fixtures/sandbox-data/src/DataMain.Table.al"]);
     const widened = widenWithDelta(base, ["bcdev"]);
-    expect(widened.legs).toEqual(["bcdev", "tables", "chunked"]);
+    expect(widened.legs).toEqual(["bcdev", "tables", "chunked", "alrunner-v3"]);
   });
 
   test("widening with an already-selected leg is a no-op, not a duplicate", () => {

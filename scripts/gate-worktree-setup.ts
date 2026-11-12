@@ -17,10 +17,14 @@
  * It never leases, never publishes and never calls a server. `LLVM_BIN` must be set for step 3.
  */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { checkBinding, loadBindingFor } from "../packages/engine/src/ast/native-parser.ts";
-import { SYMBOLS_MARKER, symlinkedAlpackages } from "../packages/runner/itest/fixture-symbols.ts";
+import {
+  FIXTURE_SYMBOLS_TAR_SHA256,
+  SYMBOLS_MARKER,
+  symlinkedAlpackages,
+} from "../packages/runner/itest/fixture-symbols.ts";
 import { GATE_FIXTURES, configFileName, launchFileName } from "./bc-linux-setup.ts";
 
 export const SERVERS = ["bc1", "bc2", "bc3"] as const;
@@ -31,11 +35,11 @@ export type Server = (typeof SERVERS)[number];
  * refusals ("holds no .app symbols"): verify and testapp read sandbox-tests, verify-scale
  * sandbox-data-tests, agreement sandbox-harden-tests; the v3 gate reads the first two.
  */
-export const NEEDS_SYMBOLS = [
-  "fixtures/sandbox-tests",
-  "fixtures/sandbox-data-tests",
-  "fixtures/sandbox-harden-tests",
-] as const;
+export const NEEDS_SYMBOLS = ["fixtures/sandbox-tests", "fixtures/sandbox-data-tests"] as const;
+/** Only the BC gates (`itest:verify-agreement`) read this one; the v3 gate does not. */
+export const NEEDS_SYMBOLS_SERVER = "fixtures/sandbox-harden-tests";
+export const needsSymbols = (server: Server | undefined): readonly string[] =>
+  server === undefined ? NEEDS_SYMBOLS : [...NEEDS_SYMBOLS, NEEDS_SYMBOLS_SERVER];
 
 export interface SetupDeps {
   /** Runs a command in `cwd`; returns the exit code. */
@@ -64,6 +68,11 @@ export function copyAlpackages(root: string, from: string): number {
   const srcFixtures = join(from, "fixtures");
   if (!existsSync(srcFixtures))
     throw new GateSetupError(`${from} has no fixtures/ folder: not a LethAL checkout`);
+  const linked = symlinkedAlpackages(root);
+  if (linked.length > 0)
+    throw new GateSetupError(
+      `${linked[0]} is a symlink out of this worktree (R787): nothing copied`,
+    );
   const srcMarker = join(from, SYMBOLS_MARKER);
   const dstMarker = join(root, SYMBOLS_MARKER);
   if (existsSync(srcMarker) && existsSync(dstMarker)) {
@@ -73,14 +82,36 @@ export function copyAlpackages(root: string, from: string): number {
         `${SYMBOLS_MARKER} differs (source ${a}, here ${b}): the folders came from another symbol tar; run bun scripts/fixture-symbols-reset.ts first`,
       );
   }
-  let copied = 0;
+  // Plan first, copy after: a refusal leaves the worktree untouched.
+  const plan: { srcDir: string; dstDir: string; names: string[] }[] = [];
   for (const fx of readdirSync(srcFixtures)) {
     const srcDir = join(srcFixtures, fx, ".alpackages");
-    for (const name of apps(srcDir)) {
-      const dst = join(root, "fixtures", fx, ".alpackages", name);
-      if (existsSync(dst) && statSync(dst).size === statSync(join(srcDir, name)).size) continue;
-      mkdirSync(dirname(dst), { recursive: true });
-      cpSync(join(srcDir, name), dst);
+    const names = apps(srcDir);
+    if (names.length === 0) continue;
+    const dstDir = join(root, "fixtures", fx, ".alpackages");
+    const held = existsSync(dstDir) ? readdirSync(dstDir) : [];
+    if (held.length === 0) {
+      plan.push({ srcDir, dstDir, names });
+      continue;
+    }
+    // Already filled: fine only when it is exactly the source's apps, byte for byte (a re-run).
+    // Otherwise we cannot vouch for it, and stamping the marker on it would call it verified.
+    const same =
+      held.length === names.length &&
+      names.every(
+        (n) =>
+          held.includes(n) && readFileSync(join(dstDir, n)).equals(readFileSync(join(srcDir, n))),
+      );
+    if (!same)
+      throw new GateSetupError(
+        `${dstDir} already holds ${held.join(", ")} and differs from the source: nothing copied. Empty it (or run bun scripts/fixture-symbols-reset.ts) and run again`,
+      );
+  }
+  let copied = 0;
+  for (const { srcDir, dstDir, names } of plan) {
+    mkdirSync(dstDir, { recursive: true });
+    for (const n of names) {
+      cpSync(join(srcDir, n), join(dstDir, n));
       copied++;
     }
   }
@@ -91,6 +122,12 @@ export function copyAlpackages(root: string, from: string): number {
 /** Step 4: the first thing missing, or undefined. Reads no config content (they hold a login). */
 export function preflight(opts: SetupOpts, deps: SetupDeps): string | undefined {
   const { root, server } = opts;
+  const marker = join(root, SYMBOLS_MARKER);
+  if (existsSync(marker)) {
+    const got = readFileSync(marker, "utf8").trim();
+    if (got !== FIXTURE_SYMBOLS_TAR_SHA256)
+      return `${SYMBOLS_MARKER} names ${got}, but the pinned symbol tar is ${FIXTURE_SYMBOLS_TAR_SHA256} (bun scripts/fixture-symbols-reset.ts)`;
+  }
   if (server !== undefined) {
     for (const f of GATE_FIXTURES) {
       for (const p of [
@@ -100,7 +137,7 @@ export function preflight(opts: SetupOpts, deps: SetupDeps): string | undefined 
         if (!existsSync(join(root, p))) return `missing ${p} (bc-linux-setup --write-config-only)`;
     }
   }
-  for (const d of NEEDS_SYMBOLS)
+  for (const d of needsSymbols(server))
     if (apps(join(root, d, ".alpackages")).length === 0)
       return `${d}/.alpackages holds no .app symbols (copy them with --alpackages-from)`;
   const linked = symlinkedAlpackages(root);
@@ -128,19 +165,34 @@ export function setup(opts: SetupOpts, deps: SetupDeps): void {
 
 const REPO = resolve(import.meta.dir, "..");
 
+/** In-process check. A process that has loaded the addon once keeps it, so never trust it after a rebuild. */
+function parserProblemInProcess(): string | undefined {
+  try {
+    const key = `${process.platform}-${process.arch}`;
+    checkBinding(loadBindingFor(key), key, join(REPO, "packages", "engine", "native"));
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+type Spawn = (
+  cmd: string,
+  args: string[],
+) => { status: number | null; stderr?: Buffer | string | null };
+
+/** Each call asks a fresh `bun` process, so a rebuilt .node is seen as rebuilt. */
+export function parserProblemViaSubprocess(
+  spawn: Spawn = (c, a) => spawnSync(c, a, { encoding: "utf8" }),
+): string | undefined {
+  const r = spawn(process.execPath, [import.meta.path, "--check-parser"]);
+  if (r.status === 0) return undefined;
+  return String(r.stderr ?? "").trim() || `parser check exited ${r.status}`;
+}
+
 export const REAL_DEPS: SetupDeps = {
   run: (cmd, cwd) => spawnSync(cmd[0] ?? "", cmd.slice(1), { cwd, stdio: "inherit" }).status ?? 1,
-  parserProblem: () => {
-    try {
-      // Fresh module state is not needed: this process has loaded nothing yet at the first call,
-      // and the second call (after a build) re-reads the .node through the same loader.
-      const key = `${process.platform}-${process.arch}`;
-      checkBinding(loadBindingFor(key), key, join(REPO, "packages", "engine", "native"));
-      return undefined;
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e);
-    }
-  },
+  parserProblem: () => parserProblemViaSubprocess(),
 };
 
 function parse(argv: readonly string[]): SetupOpts {
@@ -164,6 +216,11 @@ function parse(argv: readonly string[]): SetupOpts {
 }
 
 if (import.meta.main) {
+  if (process.argv[2] === "--check-parser") {
+    const problem = parserProblemInProcess();
+    if (problem !== undefined) console.error(problem);
+    process.exit(problem === undefined ? 0 : 1);
+  }
   try {
     setup(parse(process.argv.slice(2)), REAL_DEPS);
     console.log("gate worktree ready: pre-flight passed. No lease taken, nothing published.");
