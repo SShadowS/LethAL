@@ -2,8 +2,12 @@
  * R593: a SHARED master-corpus snapshot (production identity keys), and a branch diff against it.
  *
  *   bun scripts/corpus-snapshot.ts snapshot <set> --master [--sha <sha>]
- *   bun scripts/corpus-snapshot.ts diff <set> --branch <worktree> [--projects <n|dir>[,...]] [--all]
- *                                       [--master-sha <sha> | --legacy-master <sha>]
+ *   bun scripts/corpus-snapshot.ts diff <set> --branch <worktree> [--projects <n|dir>[,...] |
+ *                                       --shape <name>[,...] | --all] [--master-sha <sha> | --legacy-master <sha>]
+ *
+ * R-935: the report's `scope:` line says what ran: full, narrowed by a named list, or narrowed by a
+ * named SHAPE (`SHAPES`: the projects whose `.al` text matches it, plus any project on one side
+ * only). A shape is the change author's claim; the full diff is the default.
  *
  * R935: a job that waits for a slot while other lanes fetch should pin the master commit once, at its
  * start, and pass it to both: `S=$(git -C <worktree> merge-base HEAD origin/master)`, then
@@ -1026,6 +1030,7 @@ function runDiff(
   o: {
     branch: string;
     projects?: string;
+    shape?: string;
     all: boolean;
     legacyMaster?: string;
     masterSha?: string;
@@ -1071,24 +1076,43 @@ function runDiff(
   const master = readEntry(masterDir, set);
   const corpusRoot = set === "fixtures" ? join(o.branch, "fixtures") : (EXTERNAL_SETS[set] ?? "");
   let wanted: Set<string> | undefined;
+  const branchProjects = findProjects(corpusRoot);
+  const total = new Set([
+    ...master.dumps.keys(),
+    ...branchProjects.map((p) => relative(corpusRoot, p)),
+  ]).size;
   if (o.projects !== undefined) {
     wanted = resolveProjects(
       o.projects,
       master.index,
       new Set(master.dumps.keys()),
-      new Set(findProjects(corpusRoot).map((p) => relative(corpusRoot, p))),
+      new Set(branchProjects.map((p) => relative(corpusRoot, p))),
+    );
+    print(`scope: narrowed by --projects (${wanted.size} of ${total}; your list, not checked)`);
+  } else if (o.shape !== undefined) {
+    // The shape is read from the branch's text. An external corpus is the same on both sides (its
+    // head is checked); fixtures can differ (a removed XMLport would read as no shape), and are small.
+    if (set === "fixtures")
+      throw new RefusedError(
+        "--shape reads one side's AL; fixtures differ per branch and are small: run the full diff",
+      );
+    wanted = shapeProjects(o.shape, corpusRoot, branchProjects, new Set(master.dumps.keys()));
+    print(
+      `scope: narrowed by --shape ${o.shape} (${wanted.size} of ${total}; the shape is your claim about the change, R-935)`,
     );
   } else if (!o.all && set === "bch") {
     throw new RefusedError(
-      "bch has hundreds of projects: name them with --projects, or pass --all",
+      "bch has hundreds of projects: name them with --projects or --shape, or pass --all",
     );
+  } else {
+    print(`scope: full (${total} projects)`);
   }
   const code = slotted(set, argv, o.inSlot, print);
   if (code !== undefined) return code;
   const tmp = join(dirname(cacheRoot()), "tmp", `branch-${process.pid}`);
   mkdirSync(tmp, { recursive: true });
   try {
-    const projects = findProjects(corpusRoot).filter(
+    const projects = branchProjects.filter(
       (p) => wanted === undefined || wanted.has(relative(corpusRoot, p)),
     );
     const dumper = realDumper(depDirsEnv());
@@ -1107,6 +1131,58 @@ function runDiff(
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+/**
+ * R-935 `--shape`: named AL shapes, each a LOOSE text match over a project's `.al` files, so a comment
+ * or a variable naming the kind also selects the project (a superset by design). The shape is the
+ * change author's claim about what the change can touch: no rule from changed paths can be sound,
+ * since an edit can make any operator or rule match new syntax
+ * (docs/superpowers/specs/2026-11-12-r935-narrowed-identity-diff.md).
+ */
+export const SHAPES: Readonly<Record<string, RegExp>> = {
+  xmlport: /\bxmlport\b/i,
+};
+
+/** Does any `.al` file under `dir` (nested projects included, as the dumper reads them; links not
+ *  followed, as findProjects) match `re`? */
+function holdsShape(dir: string, re: RegExp): boolean {
+  for (const e of readdirSync(dir)) {
+    if (e === ".alpackages" || e === ".git" || e === "node_modules") continue;
+    const p = join(dir, e);
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory() ? holdsShape(p, re) : /\.al$/i.test(e) && re.test(readFileSync(p, "utf8")))
+      return true;
+  }
+  return false;
+}
+
+/**
+ * `--shape a,b`: every branch project holding any named shape, plus every project found on ONE side
+ * only (an added or removed project is a change whatever its shape). An unknown shape is refused.
+ */
+export function shapeProjects(
+  shapes: string,
+  corpusRoot: string,
+  branchProjects: readonly string[],
+  masterRels: ReadonlySet<string>,
+): Set<string> {
+  const names = shapes.split(",").map((s) => s.trim());
+  const unknown = names.filter((s) => SHAPES[s] === undefined);
+  if (unknown.length > 0) {
+    throw new RefusedError(
+      `--shape: unknown shape ${unknown.join(", ")} (have ${Object.keys(SHAPES).join(", ")})`,
+    );
+  }
+  const res = names.map((s) => SHAPES[s] as RegExp);
+  const branchRels = new Set(branchProjects.map((p) => relative(corpusRoot, p)));
+  const out = new Set([...masterRels].filter((r) => !branchRels.has(r)));
+  for (const p of branchProjects) {
+    const rel = relative(corpusRoot, p);
+    if (!masterRels.has(rel) || res.some((re) => holdsShape(p, re))) out.add(rel);
+  }
+  return out;
 }
 
 /**
@@ -1144,6 +1220,7 @@ export function parseCliArgs(argv: readonly string[]) {
       master: { type: "boolean", default: false },
       branch: { type: "string" },
       projects: { type: "string" },
+      shape: { type: "string" },
       all: { type: "boolean", default: false },
       "legacy-master": { type: "string" },
       // R935: pin the master commit, so origin/master moving while a job waits cannot strand it.
@@ -1183,6 +1260,11 @@ function main(argv: readonly string[]): number {
       throw new RefusedError("diff pins with --master-sha <sha>; --sha is snapshot's");
     if (values["master-sha"] !== undefined && values["legacy-master"] !== undefined)
       throw new RefusedError("--master-sha and --legacy-master name two master entries; give one");
+    if (
+      [values.projects, values.shape, values.all ? true : undefined].filter((v) => v !== undefined)
+        .length > 1
+    )
+      throw new RefusedError("--projects, --shape and --all each name the scope; give one");
     return runDiff(
       set,
       outer,
@@ -1190,6 +1272,7 @@ function main(argv: readonly string[]): number {
         branch: values.branch,
         all: values.all ?? false,
         ...(values.projects !== undefined ? { projects: values.projects } : {}),
+        ...(values.shape !== undefined ? { shape: values.shape } : {}),
         ...(values["legacy-master"] !== undefined ? { legacyMaster: values["legacy-master"] } : {}),
         ...(values["master-sha"] !== undefined ? { masterSha: values["master-sha"] } : {}),
         ...(inSlot !== undefined ? { inSlot } : {}),
