@@ -73,7 +73,11 @@ import {
  * R500 (closed) took R487's exclusions shape by shape, at the dispatch check only:
  * - a `Date` item is open unless `MaxIteration` bounds it (shape 4), and an XMLport `tableelement`
  *   over `Integer` is a loop item like a report data item (shape 5; live since R924 made xmlport a
- *   carrier, and it seeds shape 2);
+ *   carrier, and it seeds shape 2). R928, measured (coord R-923; bc1 and al-runner v3
+ *   edge-42af5d384, equal to the byte): an export `tableelement` with `MaxOccurs = Once` is
+ *   BOUNDED (it stops after one record; only that element, not its nested ones), and a
+ *   `Direction = Import` XMLport's elements are not loop items (filled once per XML node).
+ *   `Direction = Both` or absent, and any other `MaxOccurs`, keep the rule;
  * - procedures in OTHER objects that open-item code calls, one hop (`inOneHopCallee`, shape 2);
  * - a filter call on an open item's record from outside its code (`altersOpenItemFilter`, 5b);
  * - an unparsed reportextension extends every report (shape 7); `CurrReport.P()` and a bare
@@ -518,13 +522,82 @@ function modifiedItemOpen(ext: ALSyntaxNode, mod: ALSyntaxNode, ctx: SemanticCon
   return false;
 }
 
-/** R500: a loop BC drives over a table: a report data item, or an XMLport `tableelement`. */
+/**
+ * R500: a loop BC drives over a table: a report data item, or an XMLport `tableelement`.
+ * R928 (measured: coord R-923, bc1 and al-runner v3 edge-42af5d384, equal to the byte): an IMPORT
+ * XMLport (`Direction = Import`) fills its elements from the XML, once per node, so its
+ * `tableelement`s do not walk a table and are not loop items. `Direction = Both` or absent (the
+ * default is Both) can still export, so the rule stays. An XMLport that sets `Direction` more than
+ * once (in `#if` arms) counts as import only if every value says Import.
+ */
 function isLoopItem(n: ALSyntaxNode): boolean {
   if (n.rawKind === "report_dataitem") return true;
-  return (
-    n.rawKind === "xmlport_element" &&
-    /^tableelement/i.test(n.childForFieldName("element_type")?.text ?? "")
+  if (
+    n.rawKind !== "xmlport_element" ||
+    !/^tableelement/i.test(n.childForFieldName("element_type")?.text ?? "")
+  ) {
+    return false;
+  }
+  return !importOnlyXmlport(n);
+}
+
+function importOnlyXmlport(n: ALSyntaxNode): boolean {
+  let x: ALSyntaxNode | null = n;
+  while (x !== null && x.rawKind !== "xmlport_declaration") x = x.parent;
+  if (x === null) return false;
+  const dirs: string[] = [];
+  // A `Direction` inside an `#if` arm never counts as import: a build without that arm takes the
+  // default (Both), which can walk the table, so the safe reading is "not import-only".
+  const scan = (m: ALSyntaxNode, insideIf: boolean): void => {
+    if (m.kind === ALNodeKind.property) {
+      if (normalizeAlName(m.childForFieldName("name")?.text ?? "") === "direction") {
+        dirs.push(
+          insideIf ? "conditional" : normalizeAlName(m.childForFieldName("value")?.text ?? ""),
+        );
+      }
+    } else if (m.rawKind.startsWith("preproc_")) {
+      for (const c of m.namedChildren) scan(c, true);
+    }
+  };
+  for (const m of declarationMembers(x)) scan(m, false);
+  return dirs.length > 0 && dirs.every((d) => d === "import");
+}
+
+/** R928 (same measurement): an XMLport `tableelement` with `MaxOccurs = Once` stops after one
+ *  record, with no `Break`. Only that element is bounded; elements nested in it are judged alone.
+ *  Not when the element's own triggers call `Skip` (`currXMLport.Skip()` or the bare `Skip()`): the
+ *  probe never measured whether Once counts records fetched or records written, and an element that
+ *  skips every record could walk `Integer` without end. Then the element stays open (the safe side). */
+function maxOccursOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const body = item.childForFieldName("body");
+  if (body === null || item.rawKind !== "xmlport_element") return false;
+  const members = itemMembers(body, ctx, true);
+  const once = members.some(
+    (m) =>
+      m.kind === ALNodeKind.property &&
+      normalizeAlName(m.childForFieldName("name")?.text ?? "") === "maxoccurs" &&
+      normalizeAlName(m.childForFieldName("value")?.text ?? "") === "once",
   );
+  if (!once) return false;
+  let skips = false;
+  // Every member that is not a nested element: its triggers (and anything else it holds). An
+  // undecided `#if` arm is read too (`itemMembers` without `certain`): a Skip there may compile.
+  for (const m of itemMembers(body, ctx)) {
+    if (m.rawKind === "xmlport_element") continue;
+    visitAll(m, (x) => {
+      if (x.rawKind === "xmlport_element") return;
+      const callee =
+        x.rawKind === "member_expression"
+          ? REPORT_INSTANCES.has(normalizeAlName(x.childForFieldName("object")?.text ?? ""))
+            ? normalizeAlName(x.childForFieldName("member")?.text ?? "")
+            : ""
+          : x.rawKind === "call_expression" || x.rawKind === "call_statement"
+            ? normalizeAlName(x.childForFieldName("function")?.text ?? "")
+            : "";
+      if (callee === "skip") skips = true;
+    });
+  }
+  return !skips;
 }
 
 /** The item's table, by its LAST name segment (a qualified `System.Utilities.Integer` has one child
@@ -665,6 +738,7 @@ function dataItemOpen(item: ALSyntaxNode, ctx: SemanticContext): boolean {
 function dataItemOpenOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
   if (isDateItem(item)) return !maxIterationBounded(item, ctx);
   if (!isIntegerItem(item)) return false;
+  if (maxOccursOnce(item, ctx)) return false;
   const name = normalizeAlName(item.childForFieldName("name")?.text ?? "");
   const body = item.childForFieldName("body");
   if (body === null) return false;
