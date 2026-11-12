@@ -1098,7 +1098,11 @@ export type V3DaemonCloseReason =
   | "session-end";
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink. */
-const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set(["probe", "deploy", "session-end"]);
+export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
+  "probe",
+  "deploy",
+  "session-end",
+]);
 
 /**
  * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
@@ -4505,7 +4509,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // A failed request already closed (and counted) its daemon; this finds none then.
       await this.closeLane(
         lane,
-        err instanceof AlRunnerV3EntriesRefusedError || err instanceof AlRunnerV3ServeFallbackWarmupError
+        err instanceof AlRunnerV3EntriesRefusedError ||
+          err instanceof AlRunnerV3ServeFallbackWarmupError
           ? "warmup-refused"
           : "request-failed",
       );

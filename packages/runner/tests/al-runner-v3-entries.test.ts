@@ -39,6 +39,7 @@ import {
   ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
   V3_AUTO_METHOD_ONE_SHOT,
+  V3_ROUTINE_CLOSES,
   WINDOW_BOUND_CAVEAT,
   unkeptRowReason,
   v3CallDeadlineMs,
@@ -4086,6 +4087,9 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
     await baseline(r.b, SUITE1);
     await r.b.prefetchMutants(plans(["M0001"]));
     expect(r.serve.daemons).toHaveLength(2); // the warm-up's own daemon, as before
+    // R939: the probe's close is counted on the close line, and is routine: never an early close.
+    expect([...r.b.daemonCloses().byReason]).toEqual([["probe", 1]]);
+    expect([...V3_ROUTINE_CLOSES].sort()).toEqual(["deploy", "probe", "session-end"]);
   });
 
   test("the default transport and an internal caller (no source) never probe", async () => {
