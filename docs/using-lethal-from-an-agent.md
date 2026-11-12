@@ -309,7 +309,12 @@ cut short is not stored, so `--resume` runs it again (raise `--time-budget` or n
 
 A SIGTERM or SIGINT spends the same budget (R955), with or without `--time-budget`: the run stops at its next
 check, writes its normal `--out` report with `timeBudget.stoppedBySignal: true` (`budgetSeconds` is 0 when no
-budget was given), and exits `7`. A second signal while it stops ends the process at once.
+budget was given), and exits `7`. A second signal while it stops ends the process at once. An alc ended
+by a signal is never read as "does not compile" (it is a preparation error), and compile-failure
+isolation stops with no verdict once the budget is spent. If the budget runs out while isolation `auto`
+re-runs codeunits one test at a time, `timeBudget.baselineStopped.inAutoRebaseline` is `true`: no
+isolation choice is made and no mutant of that batch is scored. `timeBudget.unscheduledCount` then
+counts that batch's mutants.
 
 **A license for al-runner (R956).** A test that needs a Business Central license is refused by al-runner
 with "no license file loaded". Set `alRunnerV3.license` to a `.bclicense` file: LethAL passes it as

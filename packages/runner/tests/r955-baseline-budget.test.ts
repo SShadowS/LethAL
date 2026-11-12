@@ -62,6 +62,8 @@ class SlowBaseline implements ExecutionBackend {
   calls = 0;
   /** Called after each call is counted: a test's way to "send a signal" at a chosen call. */
   onCall?: (n: number) => void;
+  /** When set, only these test methods cover `Twice`; the others cover nothing. */
+  coveringMethods?: ReadonlySet<string>;
   readonly now = () => 1_000_000 + this.calls * 1000;
   capabilities(): BackendCapabilities {
     return {
@@ -91,7 +93,10 @@ class SlowBaseline implements ExecutionBackend {
       measuredDurationMs: 1,
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 50013, procedure: "Twice" }],
+        entries:
+          this.coveringMethods === undefined || this.coveringMethods.has(ref.method)
+            ? [{ objectType: "Codeunit", objectId: 50013, procedure: "Twice" }]
+            : [],
       },
     };
   }
@@ -204,6 +209,31 @@ describe("R955: the time budget bounds the baseline", () => {
         "TIME BUDGET REACHED IN THE BASELINE: --time-budget 2 s ran out after 2 of 4 baseline test(s)",
       );
       expect(events.some((e) => e.type === "time-budget-reached")).toBe(true);
+    });
+  });
+
+  test("a mutant only a never-run baseline test covers is not scored at all (no no-coverage verdict)", async () => {
+    await inProject(async (root) => {
+      const b = new SlowBaseline();
+      // A1 and A2 run and cover nothing; A3 and A4, which would cover `Twice`, never ran.
+      b.coveringMethods = new Set(["A3", "A4"]);
+      const { report } = await session(root, b, 2);
+      expect(b.calls).toBe(2);
+      expect(report.timeBudget?.baselineStopped).toEqual({ testsRun: 2, testsTotal: 4 });
+      expect(report.mutants).toEqual([]);
+    });
+  });
+
+  test("the stopped batch's mutant total is the unscheduled count (and the banner says so)", async () => {
+    await inProject(async (root) => {
+      const full = await session(root, new SlowBaseline(), undefined);
+      const total = full.report.mutants.length;
+      expect(total).toBeGreaterThan(0);
+      const { report } = await session(root, new SlowBaseline(), 2);
+      expect(report.timeBudget?.unscheduledCount).toBe(total);
+      expect(renderConsole(report)).toContain(
+        `${total} mutant(s) of the batch it stopped in were left out`,
+      );
     });
   });
 

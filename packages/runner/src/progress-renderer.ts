@@ -156,7 +156,7 @@ export function createProgressRenderer(
       case "time-budget-reached":
         if (event.baselineStopped !== undefined) {
           write(
-            `TIME BUDGET REACHED IN THE BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
+            `TIME BUDGET REACHED IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
           );
         }
         write(

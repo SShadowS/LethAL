@@ -2397,6 +2397,8 @@ export async function isolateAndNote(args: {
   readonly configPath: string | undefined;
   /** R739: the session's emitter, for the rebase-collision warning. */
   readonly emit?: RunEmitter;
+  /** R955: checked before each candidate compile; spent (budget or stop signal) ends the search with no verdict. */
+  readonly timeBudget?: TimeBudget;
 }): Promise<IsolationPlan> {
   const fixedIds = fixedIdsOf(args.subsetMutants);
   const singletonText = new Map<MutantManifestEntry, string>();
@@ -2404,6 +2406,12 @@ export async function isolateAndNote(args: {
   let compiles = 0;
   try {
     const outcome = await isolateBreakingMutants(args.subsetMutants, async (subset) => {
+      // R955: out of time, or a stop signal (which also kills alc): no further compile, no verdict.
+      if (args.timeBudget?.exhausted === true) {
+        throw new BisectPrepareError(
+          new Error("the time budget is spent or a stop signal arrived; no verdict (R955)"),
+        );
+      }
       compiles++;
       try {
         await prepareArtifactDir({
@@ -4962,6 +4970,8 @@ interface ScoreBatchInput {
   /** For the section G note only: `compiled?.artifactId`, or the bound artifact's id. */
   readonly artifactId: string | undefined;
   readonly tests: readonly TestMethodRef[];
+  /** R955: this batch's mutant total: the count left out when the time budget ends its baseline. Absent: 0. */
+  readonly mutantCount?: number;
   /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
    *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
   readonly testsCompiledInPublishedPackage?: boolean;
@@ -5583,6 +5593,7 @@ async function chooseIsolationAuto(
   batchIdx: number,
   baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }>,
   resumedRunId: number | undefined,
+  mutantCount: number,
 ): Promise<void> {
   const { backend, store, runId, emit } = scope;
   const choose = (cu: number, mode: "test" | "method"): void => {
@@ -5601,13 +5612,19 @@ async function chooseIsolationAuto(
   const methodVerdicts = new Map<string, TestVerdict>();
   for (const b of baseline) {
     if (!candidates.includes(b.ref.codeunitId)) continue;
-    // R955: out of budget mid re-baseline: stop as a `stop` does (every candidate back on `test`);
-    // the mutant loop then finds the budget spent and schedules nothing.
-    const { verdict, stop } =
-      scope.timeBudget?.exhausted === true
-        ? { verdict: undefined, stop: true }
-        : await dispatchUnmutated(scope, b.ref);
-    if (stop || verdict === undefined) {
+    // R955: out of budget mid re-baseline: every candidate goes back to `test`, no choice is made,
+    // and the stop is recorded as one in the auto re-baseline; `scoreBatch` then scores nothing.
+    if (scope.timeBudget?.exhausted === true) {
+      scope.timeBudget.reach(mutantCount, batchIdx + 1, {
+        testsRun: baseline.length,
+        testsTotal: baseline.length,
+        inAutoRebaseline: true,
+      });
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
+    const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
+    if (stop) {
       // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
       // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
       for (const cu of candidates) choose(cu, "test");
@@ -5817,7 +5834,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     for (const ref of reused !== undefined ? [] : tests) {
       // R955: the budget bounds the baseline too: no new baseline call once it has run out.
       if (scope.timeBudget?.exhausted === true) {
-        scope.timeBudget.reach(0, batchIdx + 1, {
+        scope.timeBudget.reach(input.mutantCount ?? 0, batchIdx + 1, {
           testsRun: baseline.length,
           testsTotal: tests.length,
         });
@@ -5838,7 +5855,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       baseline.length === tests.length
     ) {
       auto.decided = true;
-      await chooseIsolationAuto(scope, batchIdx, baseline, auto.resumedRunId);
+      await chooseIsolationAuto(
+        scope,
+        batchIdx,
+        baseline,
+        auto.resumedRunId,
+        input.mutantCount ?? 0,
+      );
     }
   } finally {
     backend.baselinePhase?.(false);
@@ -6639,7 +6662,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -8068,6 +8091,7 @@ async function runSessionBody(
           excludeOutputs: cfg.excludeOutputs ?? [],
           configPath: cfg.configPath,
           emit,
+          timeBudget,
         });
         emit({
           type: "warning",
@@ -8730,6 +8754,7 @@ async function runSessionBody(
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
+        mutantCount: manifest.mutants.length,
         // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
         // pre-lease membership check never saw; only a hook-free session's proof covers the check.
         testsCompiledInPublishedPackage:

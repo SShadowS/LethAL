@@ -305,8 +305,27 @@ describe("R956: zero green", () => {
     expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "fail")])).toBe(true);
     expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "pass")])).toBe(false);
     const row = zeroGreenIsolationRow([rowOf("A1", "fail")]);
-    expect(row).toMatchObject({ chosen: "test", tests: 1, testPassed: 0, methodPassed: 0 });
+    expect(row).toMatchObject({ chosen: "test", tests: 1, testPassed: 0 });
+    expect(row).not.toHaveProperty("methodPassed");
     expect(row.reason).toContain("(R956)");
+  });
+  test("a by-name refusal alone is zero green; a cascade row (R921) keeps the per-test re-baseline", () => {
+    const refused = rowOf("A1", "error", {
+      runnerRow: "runner-refused",
+      failureMessage: "NotRun: this test is refused by name",
+    });
+    expect(isZeroGreen([refused, rowOf("A2", "fail")])).toBe(true);
+    const cascade = rowOf("A2", "error", {
+      runnerRow: "runner-refused",
+      failureMessage:
+        "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran",
+    });
+    expect(isZeroGreen([refused, cascade])).toBe(false);
+    const plainCascade = rowOf("A2", "error", {
+      runnerRow: "runner-refused",
+      failureMessage: "NotRun: an earlier test of this codeunit changed an isolated storage key",
+    });
+    expect(isZeroGreen([plainCascade])).toBe(false);
   });
 });
 
@@ -381,13 +400,39 @@ describe("R896: the session", () => {
           codeunitId: C,
           chosen: "test",
           testPassed: 0,
-          methodPassed: 0,
           reason: "0 green under test: a tie at 0 decides nothing, kept on test (R956)",
         }),
       ]);
+      // `method` was never measured, so the row says nothing about it.
+      expect(report.isolation?.codeunits[0]).not.toHaveProperty("methodPassed");
       expect(b.noted).toEqual([["C1=fail"]]);
       expect(store.runIsolationChoice(1)).toEqual({ [C]: "test" });
       expect(renderConsole(report)).toContain("0 codeunit(s) switched to method, 1 stayed on test");
+    });
+  });
+
+  test("R955: a budget that runs out in the auto re-baseline is reported as that, and scores nothing", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const b = autoStub(switchesA);
+      // One fake second per call: the four baseline calls use the 4 s, so the first re-baseline
+      // call finds the budget spent.
+      const { report } = await session(root, store, b, {
+        timeBudgetSeconds: 4,
+        clockMs: () => 1_000_000 + b.runs.length * 1000,
+      });
+      expect(b.runs.filter((r) => r.mode === "method")).toEqual([]);
+      expect(b.runs).toHaveLength(4);
+      expect(report.timeBudget?.baselineStopped).toEqual({
+        testsRun: 4,
+        testsTotal: 4,
+        inAutoRebaseline: true,
+      });
+      expect(report.timeBudget?.unscheduledCount).toBeGreaterThan(0);
+      expect(report.mutants).toEqual([]);
+      expect(report.isolation).toBeUndefined();
+      expect(store.runIsolationChoice(1)).toBeNull();
+      expect(renderConsole(report)).toContain("AUTO ISOLATION RE-BASELINE");
     });
   });
 

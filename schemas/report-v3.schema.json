@@ -1544,6 +1544,9 @@
             },
             "testsTotal": {
               "type": "number"
+            },
+            "inAutoRebaseline": {
+              "const": true
             }
           }
         },
@@ -1618,7 +1621,6 @@
               "chosen",
               "tests",
               "testPassed",
-              "methodPassed",
               "reason",
               "lostUnderMethod"
             ],

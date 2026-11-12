@@ -387,6 +387,39 @@ describe("foldEvents — R106, an absent coverage-split is not a measured zero",
     expect(() => foldEvents(STATICS, events)).toThrow(/measured 0/);
   });
 
+  // R955: a budget stop in a batch's baseline exempts THAT batch from owing a split, and no other.
+  const stopped = {
+    type: "time-budget-reached" as const,
+    budgetSeconds: 2,
+    unscheduledCount: 3,
+    batchesNotStarted: 0,
+    baselineStopped: { testsRun: 1, testsTotal: 4 },
+  };
+  const greenBatch = (batchIndex: number) => ({
+    type: "baseline-batch-finished" as const,
+    batchIndex,
+    verdicts: [{ name: "T.T1", outcome: "pass" as const, classification: [] }],
+  });
+  test("R955: the batch whose baseline the budget stopped owes no coverage-split", () => {
+    const events = seq([
+      generated,
+      greenBatch(0),
+      stopped,
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    expect(() => foldEvents(STATICS, events)).not.toThrow();
+  });
+  test("R955: an EARLIER green batch that lost its split is still flagged", () => {
+    const events = seq([
+      generated,
+      greenBatch(0),
+      greenBatch(1),
+      stopped,
+      { type: "session-finished", elapsedMs: 1 },
+    ]);
+    expect(() => foldEvents(STATICS, events)).toThrow(/no coverage-split event arrived/);
+  });
+
   test("does NOT throw when the batch's baseline was entirely RED — it owes no split", () => {
     // The false positive that would have broken real sessions. A batch with no green test never
     // reaches the coverage filter, so demanding a split from it is demanding something the

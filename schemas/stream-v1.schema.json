@@ -905,7 +905,6 @@
               "chosen",
               "tests",
               "testPassed",
-              "methodPassed",
               "reason",
               "lostUnderMethod"
             ],
@@ -1807,6 +1806,9 @@
             },
             "testsTotal": {
               "type": "number"
+            },
+            "inAutoRebaseline": {
+              "const": true
             }
           }
         },

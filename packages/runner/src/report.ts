@@ -1936,7 +1936,12 @@ export interface SessionReport {
      * R955: present when the budget ran out INSIDE a baseline: how many of its tests ran, of how
      * many. No mutant of that batch was scored.
      */
-    readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
+    readonly baselineStopped?: {
+      readonly testsRun: number;
+      readonly testsTotal: number;
+      /** R955: the budget ran out in the auto isolation's per-test re-baseline, after every test ran once. */
+      readonly inAutoRebaseline?: true;
+    };
     /** R955: `true` when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is 0 when none was given). */
     readonly stoppedBySignal?: true;
   };
@@ -4033,7 +4038,11 @@ export function renderConsole(r: SessionReport): string {
   // R912: a qualifier on the score: the mutants not reached are not in it.
   if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
-    if (bs !== undefined) {
+    if (bs?.inAutoRebaseline === true) {
+      lines.push(
+        `TIME BUDGET REACHED IN THE AUTO ISOLATION RE-BASELINE: every one of the ${bs.testsTotal} baseline test(s) ran once, then the budget ran out while isolation "auto" re-ran codeunits one test at a time. Every codeunit stayed on test, no isolation choice was made, and no mutant of that batch was scored.`,
+      );
+    } else if (bs !== undefined) {
       lines.push(
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );

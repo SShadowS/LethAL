@@ -138,7 +138,11 @@ export class TimeBudget {
         readonly unscheduledCount: number;
         readonly firstUnstartedBatch: number;
         /** R955: set when the budget ran out inside a baseline: its tests run and total. */
-        readonly baselineStopped?: { readonly testsRun: number; readonly testsTotal: number };
+        readonly baselineStopped?: {
+          readonly testsRun: number;
+          readonly testsTotal: number;
+          readonly inAutoRebaseline?: true;
+        };
       }
     | undefined;
   constructor(
@@ -163,7 +167,11 @@ export class TimeBudget {
   reach(
     unscheduledCount: number,
     firstUnstartedBatch: number,
-    baselineStopped?: { readonly testsRun: number; readonly testsTotal: number },
+    baselineStopped?: {
+      readonly testsRun: number;
+      readonly testsTotal: number;
+      readonly inAutoRebaseline?: true;
+    },
   ): void {
     this.reached ??= {
       unscheduledCount,
