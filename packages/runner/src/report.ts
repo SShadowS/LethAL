@@ -1920,6 +1920,14 @@ export interface SessionReport {
     readonly batchesNotStarted: number;
   };
   /**
+   * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
+   * `timeout`, `request-failed`, ...; `V3DaemonCloseReason`), counted from the backend's
+   * `al-runner-v3-daemon-closed-<reason>` warnings. Each such close costs a new daemon and its
+   * warm-up. Present only when there was one; the routine closes (a redeploy, the session's end) are
+   * not counted here. Optional, so reports from before R939 stay valid.
+   */
+  readonly v3DaemonCloses?: Readonly<Record<string, number>>;
+  /**
    * R26: set on every session that ran the permission canary — an authoritative (bcdev) session,
    * where the fenced `RunMutant` path is the thing being characterised. Absent on al-runner and on
    * every in-memory-backend unit test, which have no fenced path and so nothing to measure.
@@ -2678,8 +2686,23 @@ export const COVERAGE_NOT_MEASURED_INTERPRETATION: Interpretation = {
   basis: "R252",
 };
 
+/** R939: the al-runner-v3 backend's daemon-close warning code prefix (`V3_DAEMON_CLOSED_CODE`). */
+export const V3_DAEMON_CLOSED_WARNING_PREFIX = "al-runner-v3-daemon-closed-";
+
+/** R939: the session's unexpected serve daemon closes by reason, from their warnings; undefined if none. */
+function daemonClosesOf(events: readonly RunEvent[]): Record<string, number> | undefined {
+  const out: Record<string, number> = {};
+  for (const e of events) {
+    if (e.type !== "warning" || !e.code.startsWith(V3_DAEMON_CLOSED_WARNING_PREFIX)) continue;
+    const reason = e.code.slice(V3_DAEMON_CLOSED_WARNING_PREFIX.length);
+    out[reason] = (out[reason] ?? 0) + 1;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): SessionReport {
   const input = foldEvents(statics, events);
+  const daemonCloses = daemonClosesOf(events);
   // The two legacy fields are VIEWS over `input.excludedSites`, not a parallel computation — see
   // `FoldedReport.excludedSites`'s doc comment (report-fold.ts). Computed once here and reused
   // below, both in the caveats/scope-text derivations and in the final returned object.
@@ -3392,6 +3415,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     },
     ...(input.quarantined !== undefined ? { quarantined: input.quarantined } : {}),
     ...(input.timeBudget !== undefined ? { timeBudget: input.timeBudget } : {}),
+    ...(daemonCloses !== undefined ? { v3DaemonCloses: daemonCloses } : {}),
     ...(input.permissionCanary !== undefined ? { permissionCanary: input.permissionCanary } : {}),
     ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
   };
@@ -3939,6 +3963,16 @@ export function renderConsole(r: SessionReport): string {
     if (t.perMutant.count > 0) {
       lines.push(
         `  per mutant (n=${t.perMutant.count}): mean ${t.perMutant.meanMs}ms, median ${t.perMutant.medianMs}ms, p95 ${t.perMutant.p95Ms}ms, max ${t.perMutant.maxMs}ms`,
+      );
+    }
+    // R939: each early daemon close costs a new daemon and its warm-up; the reasons say which refusal
+    // or failure caused them (the backend's close line on stderr also names the refusal families).
+    if (r.v3DaemonCloses !== undefined) {
+      const byReason = Object.entries(r.v3DaemonCloses).sort(
+        (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1),
+      );
+      lines.push(
+        `  serve daemons closed early (each restarts with a warm-up): ${byReason.map(([k, n]) => `${k} ${n}`).join(", ")}`,
       );
     }
   }

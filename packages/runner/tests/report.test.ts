@@ -3,7 +3,8 @@ import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { HANG_CAPABLE_EXPLANATIONS } from "../src/hang-capable";
 import type { PermissionCanaryResult } from "../src/permission-canary";
-import { buildReport, renderConsole } from "../src/report";
+import { V3_DAEMON_CLOSED_CODE } from "../src/al-runner-v3-backend";
+import { V3_DAEMON_CLOSED_WARNING_PREFIX, buildReport, renderConsole } from "../src/report";
 import type { Caveat, SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -350,6 +351,43 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     expect(
       buildReport(STATICS, seq([warn("something-else"), ...base])).validity.caveats,
     ).not.toContain("project-symlink-skipped");
+  });
+
+  test("R939: the backend's daemon-close warnings become v3DaemonCloses and a TIMING sub-line; none, neither", () => {
+    const base: RunEventInput[] = [
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ];
+    const warn = (c: string): RunEventInput => ({ type: "warning", code: c, message: "m" });
+    expect(V3_DAEMON_CLOSED_WARNING_PREFIX).toBe(V3_DAEMON_CLOSED_CODE);
+    const closes = [
+      warn(`${V3_DAEMON_CLOSED_CODE}refusal`),
+      warn(`${V3_DAEMON_CLOSED_CODE}timeout`),
+      warn(`${V3_DAEMON_CLOSED_CODE}refusal`),
+      warn("al-runner-v3-serve-default-fallback"),
+    ];
+    const r = buildReport(STATICS, seq([...closes, ...base]));
+    expect(r.v3DaemonCloses).toEqual({ refusal: 2, timeout: 1 });
+    expect(renderConsole(r)).toContain(
+      "serve daemons closed early (each restarts with a warm-up): refusal 2, timeout 1",
+    );
+    const none = buildReport(STATICS, seq(base));
+    expect("v3DaemonCloses" in none).toBe(false);
+    expect(renderConsole(none)).not.toContain("serve daemons closed early");
   });
 
   test("R786: the serve warm-up fallback warning raises its caveat; no warning, or R761's other fallback warning, does not", () => {

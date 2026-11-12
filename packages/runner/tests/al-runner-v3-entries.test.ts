@@ -39,8 +39,11 @@ import {
   ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
   V3_AUTO_METHOD_ONE_SHOT,
+  V3_DAEMON_CLOSED_CODE,
   WINDOW_BOUND_CAVEAT,
+  unkeptRowReason,
   v3CallDeadlineMs,
+  v3DaemonClosesText,
 } from "../src/al-runner-v3-backend";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
@@ -1339,6 +1342,91 @@ describe("9: a prefetched answer is consumed once", () => {
       ["NONE|echo", `NONE|${CU}`],
       ["M0001|echo", `M0001|${CU}`],
     ]);
+  });
+});
+
+// R939: every daemon close is counted by its reason; the unexpected ones warn, naming a refusal's family.
+describe("R939: why each serve daemon closed", () => {
+  const WITH_EVENTS = "NotRun: out-of-scope: WithEvents subscriber 'Probe Sub' (not pinned)";
+  const refusedFor =
+    (who: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === who && x.method === "A"
+          ? { ...x, status: "error" as const, notRun: true, message: WITH_EVENTS }
+          : x,
+      );
+  const timedOutFor =
+    (who: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === who && x.method === "A"
+          ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+          : x,
+      );
+  const watched = async (rows: RowsFn) => {
+    const r = await rig({ serve: { rows }, oneShotRows: allPass });
+    const seen: [string, string][] = [];
+    r.b.setNotify((c, m) => seen.push([c, m]));
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001", "M0002", "M0003"], SUITE1));
+    return { r, seen };
+  };
+
+  test("a refusal outside the keep list: one close, reason refusal, its family named in the count and the warning", async () => {
+    const { r, seen } = await watched(refusedFor("M0002"));
+    const c = r.b.daemonCloses();
+    expect([...c.byReason]).toEqual([["refusal", 1]]);
+    expect([...c.refusalFamilies]).toEqual([["WithEvents subscriber …", 1]]);
+    const w = seen.filter(([code]) => code.startsWith(V3_DAEMON_CLOSED_CODE));
+    expect(w.map(([code]) => code)).toEqual(["al-runner-v3-daemon-closed-refusal"]);
+    expect(w[0]?.[1]).toContain("(refusal: WithEvents subscriber …)");
+  });
+
+  test("a timeout row: reason timeout, no family", async () => {
+    const { r } = await watched(timedOutFor("M0002"));
+    const c = r.b.daemonCloses();
+    expect([...c.byReason]).toEqual([["timeout", 1]]);
+    expect(c.refusalFamilies.size).toBe(0);
+  });
+
+  test("every row kept: no close and no warning until the session ends, which counts without warning", async () => {
+    const { r, seen } = await watched(allPass);
+    expect(r.b.daemonCloses().byReason.size).toBe(0);
+    await r.b.close();
+    expect([...r.b.daemonCloses().byReason]).toEqual([["session-end", 1]]);
+    expect(seen.filter(([code]) => code.startsWith(V3_DAEMON_CLOSED_CODE))).toEqual([]);
+  });
+
+  test("the close line names each reason and the refusal families, most first", () => {
+    expect(
+      v3DaemonClosesText({
+        byReason: new Map([
+          ["timeout", 1],
+          ["refusal", 3],
+        ]),
+        refusalFamilies: new Map([
+          ["DateTime before N", 1],
+          ["WithEvents subscriber …", 2],
+        ]),
+      }),
+    ).toBe(
+      "daemons closed: refusal 3 (WithEvents subscriber … 2, DateTime before N 1), timeout 1",
+    );
+    expect(v3DaemonClosesText({ byReason: new Map(), refusalFamilies: new Map() })).toBe(
+      "daemons closed: none",
+    );
+  });
+
+  test("unkeptRowReason: kept rows give none; a pass with v3's marker is unkept-row", () => {
+    expect(unkeptRowReason([{ name: "Codeunit1.A", status: "pass", notRun: false }])).toBe(
+      undefined,
+    );
+    expect(
+      unkeptRowReason([
+        { name: "Codeunit1.A", status: "pass", notRun: false, message: WITH_EVENTS },
+      ])?.reason,
+    ).toBe("unkept-row");
   });
 });
 
