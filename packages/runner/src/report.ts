@@ -647,8 +647,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     meaning:
       "The al-runner-v3 session ran one-shot, not the serve-entries default, because a reason held " +
       "before any process started: a --resume, a test method name whose shape serve-entries is not " +
-      "proven for, or a build with no serve-entries path. Every verdict was measured on one-shot, " +
-      "which is slower per mutant. The `al-runner-v3-serve-default-fallback` warning names each " +
+      "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
+      "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
+      "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
       "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
     entailedNegative:
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +

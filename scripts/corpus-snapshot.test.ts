@@ -477,16 +477,26 @@ describe("R935 pinning the master commit", () => {
   });
 
   test("the CLI refuses the other command's pin flag, and two master entries at once", () => {
-    for (const argv of [
-      ["snapshot", "fixtures", "--master", "--master-sha", "abc"],
-      ["diff", "fixtures", "--branch", "x", "--sha", "abc"],
-      ["diff", "fixtures", "--branch", "x", "--master-sha", "a", "--legacy-master", "b"],
-    ]) {
+    // A temp cache: even with a guard removed, the child must never dump into /coord.
+    const cache = fresh("cache");
+    for (const [argv, said] of [
+      [["snapshot", "fixtures", "--master", "--master-sha", "abc"], "--master-sha is diff's"],
+      [["diff", "fixtures", "--branch", "x", "--sha", "abc"], "--sha is snapshot's"],
+      [
+        ["diff", "fixtures", "--branch", "x", "--master-sha", "a", "--legacy-master", "b"],
+        "name two master entries",
+      ],
+    ] as const) {
       const p = Bun.spawnSync(["bun", join(REPO_ROOT, "scripts/corpus-snapshot.ts"), ...argv], {
         stdout: "pipe",
         stderr: "pipe",
+        env: { ...process.env, LETHAL_DUMP_CACHE: cache },
       });
-      expect([argv.join(" "), p.exitCode]).toEqual([argv.join(" "), 2]);
+      expect([argv.join(" "), p.exitCode, p.stderr.toString().includes(said)]).toEqual([
+        argv.join(" "),
+        2,
+        true,
+      ]);
     }
   });
 });

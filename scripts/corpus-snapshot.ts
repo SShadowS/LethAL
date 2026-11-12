@@ -1062,7 +1062,7 @@ function runDiff(
         ? readdirSync(here).filter((k) => existsSync(join(here, k, "DONE")))
         : [];
       throw new RefusedError(
-        `no master entry for ${base} with dumper ${key} (${pick.message}); keys present there: ${keys.join(", ") || "none"}. Run \`snapshot ${set} --master\` first.`,
+        `no master entry for ${base} with dumper ${key} (${pick.message}); keys present there: ${keys.join(", ") || "none"}. Run \`snapshot ${set} --master${o.masterSha !== undefined ? ` --sha ${base}` : ""}\` first.`,
       );
     }
     print(`master: ${pick.message}`);
