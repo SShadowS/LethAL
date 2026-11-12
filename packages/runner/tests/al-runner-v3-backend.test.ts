@@ -27,6 +27,7 @@ import {
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoClientUnsupportedError,
+  AlRunnerV3CompileRefusedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
@@ -42,6 +43,7 @@ import {
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
+  v3CompileRefusal,
   v3MissingDependencies,
   v3RowVerdict,
   v3TestDataOffNote,
@@ -1779,6 +1781,35 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     await b.activate(activated);
     return b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
   };
+
+  // R944: v3's own words for a compile refusal (Guided Experience on edge-42af5d384, /coord/handoff/R-932/).
+  const COMPILE_REFUSED =
+    "al-runner 3.0.0-alpha.14+edge.20261111 (42af5d384)\nSeed: 1\ncompile: active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level\nthe APPs do not compile: 1 error(s); no test ran (exit 3)\nResult: COMPILE ERRORS (exit 3)\n";
+
+  test("R944: a compile refusal stops the session once by name, quoting the compiler line; not a per-test transport failure", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const err = await b
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3CompileRefusedError);
+    expect(String(err)).toContain("al-runner-v3-compile-refused");
+    expect((err as AlRunnerV3CompileRefusedError).compilerLines).toEqual([
+      "active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level",
+    ]);
+  });
+
+  test("R944: v3CompileRefusal reads only an exit 3 that says COMPILE ERRORS", () => {
+    expect(v3CompileRefusal(3, COMPILE_REFUSED)?.length).toBe(1);
+    expect(v3CompileRefusal(1, COMPILE_REFUSED)).toBeUndefined();
+    expect(v3CompileRefusal(3, "something else exited 3\n")).toBeUndefined();
+    expect(v3CompileRefusal(3, "Result: COMPILE ERRORS (exit 3)\n")).toEqual([
+      "(no error AL line in its output)",
+    ]);
+  });
 
   test("R815: exit6Kind reads v3's words; anything else is unknown, never a guess", () => {
     expect(exit6Kind(RAN_NO_TEST)).toBe("ran-no-test");

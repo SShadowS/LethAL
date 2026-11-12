@@ -288,6 +288,33 @@ export class AlRunnerV3NoTestRanError extends Error {
 }
 
 /**
+ * R944: al-runner's own compiler refused the app (`COMPILE ERRORS (exit 3)`). The artifact holds every
+ * mutant behind its guard, so the refusal is the app's, not a test's or a mutant's: no call can run,
+ * and the session stops once, by name, quoting the compiler's `error AL....` lines (a file, a
+ * position, a code and a symbol name, as alc's own messages hold), not one failure per test.
+ */
+export class AlRunnerV3CompileRefusedError extends Error {
+  constructor(readonly compilerLines: readonly string[]) {
+    const shown = compilerLines.slice(0, 5).join("; ");
+    super(
+      `al-runner-v3-compile-refused: al-runner's compiler refused the app, so no test can run on v3: ${shown}${compilerLines.length > 5 ? `; and ${compilerLines.length - 5} more` : ""}. LethAL's alc built it; the difference is al-runner's (report it upstream; R944).`,
+    );
+    this.name = "AlRunnerV3CompileRefusedError";
+  }
+}
+
+/** R944: the compiler lines of an al-runner exit 3 that says the apps do not compile; undefined otherwise. */
+export function v3CompileRefusal(exitCode: number, output: string): string[] | undefined {
+  if (exitCode !== 3 || !/COMPILE ERRORS \(exit 3\)/.test(output)) return undefined;
+  const lines = output
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /\berror AL\d+:/.test(l))
+    .map((l) => l.replace(/^compile:\s*/, ""));
+  return lines.length > 0 ? [...new Set(lines)] : ["(no error AL line in its output)"];
+}
+
+/**
  * R590 (R-537): v3's stderr lines that say it ran WITHOUT a dependency app: `dependency skipped: ...`
  * (no package with AL source was found, so the whole app is left out), or `... N more dependency
  * notes` (v3 prints 12 problem lines and hides the rest, the skipped ones last). Matched at line start.
@@ -4247,6 +4274,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (lane.lastActivated === null) throw new AlRunnerV3NoTestRanError(id);
       return { verdict: this.rowMissing(lane, ref, ranNoTestWhy(id), wallMs) };
     }
+    // R944: a compile refusal is the app's, not this test's: stop the session once, by name.
+    const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
+    if (compileRefusal !== undefined) throw new AlRunnerV3CompileRefusedError(compileRefusal);
     if (![0, 1, 7, 8].includes(res.exitCode)) {
       return {
         verdict: transportFailure(
