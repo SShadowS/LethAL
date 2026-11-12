@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 910 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 911 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -955,6 +955,7 @@ that ordering is the priority.
 - **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · open
 - **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
 - **R948** · An al-runner v3 serve daemon's memory only grows while it serves (9.7 GB after about 2 h on Subcontracting): LethAL has no daemon memory guard · [R948.md](docs/roadmap/R948.md) · open
+- **R952** · Heavy slots: a FIFO --wait queue in heavy-slot.sh, and the slot class measured against memory (a module pool build is `other`; the class no longer tracks memory) · [R952.md](docs/roadmap/R952.md) · open
 
 ---
 
