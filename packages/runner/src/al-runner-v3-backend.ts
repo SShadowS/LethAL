@@ -23,7 +23,15 @@
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import {
   cp,
   mkdir,
@@ -957,14 +965,15 @@ export function v3RowVerdict(
   return verdict;
 }
 
-/** R886: the file `alRunnerV3.dotnetSidecar` names, absolute; refused by name when it is missing. */
+/** R886: the file `alRunnerV3.dotnetSidecar` names, absolute and with its symlinks resolved (R950: once, as the
+ *  binary is, so a move of `current` never swaps the sidecar under a running session); refused by name when missing. */
 export function namedSidecar(configured: string): string {
   const path = resolve(configured);
   if (!existsSync(path))
     throw new Error(
       `al-runner-v3-dotnet-sidecar-missing: "alRunnerV3.dotnetSidecar" is ${path}, which does not exist (R886). Fix the path, or set it to false.`,
     );
-  return path;
+  return realpathSync(path);
 }
 
 /**

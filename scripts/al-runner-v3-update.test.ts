@@ -31,7 +31,9 @@ import {
   type UpdateDeps,
   V3_CDO_DEFAULT,
   candidates,
+  argv0FromCmdline,
   countHeavyJobs,
+  movesUnder,
   dailyOnce,
   edgeOnce,
   edgeRejudge,
@@ -629,6 +631,35 @@ linuxOnly("T19: the v3 update gate", () => {
       runToLog(["sh", "-c", "echo out-3; echo err-3 >&2; exit 3"], {}, root, log),
     ).rejects.toThrow(/exit 3[\s\S]*err-3/);
     expect(await readFile(log, "utf8")).toMatch(/out-3[\s\S]*err-3/);
+  });
+});
+
+describe("R950: which running process a move of `current` affects", () => {
+  const root = "/work/tools/al-runner-v3";
+  const exe = `${root}/edge-42af5d384-42af5d384/al-runner`;
+  test("one started through current/ counts; one on an explicit build path does not", () => {
+    expect(movesUnder(root, exe, `${root}/current/al-runner`)).toBe(true);
+    expect(movesUnder(root, exe, exe)).toBe(false);
+    expect(movesUnder(root, exe, `${root}/edge-2bd87774f-2bd87774f/al-runner`)).toBe(false);
+  });
+  test("the safe side: an unreadable or relative argv[0] counts; a process off root never does", () => {
+    expect(movesUnder(root, exe, undefined)).toBe(true);
+    expect(movesUnder(root, exe, "al-runner")).toBe(true);
+    expect(movesUnder(root, "/usr/bin/bash", `${root}/current/al-runner`)).toBe(false);
+  });
+  test("a non-normal path through current/ counts (build review r1)", () => {
+    for (const a of [
+      `${root}//current/al-runner`,
+      `${root}/./current/al-runner`,
+      `${root}/edge-x/../current/al-runner`,
+    ])
+      expect(movesUnder(root, exe, a), a).toBe(true);
+  });
+  test("argv[0] is the cmdline's first NUL-separated field; none when the cmdline is empty", () => {
+    expect(argv0FromCmdline(`${root}/current/al-runner\0serve\0--x\0`)).toBe(
+      `${root}/current/al-runner`,
+    );
+    expect(argv0FromCmdline("")).toBeUndefined();
   });
 });
 
