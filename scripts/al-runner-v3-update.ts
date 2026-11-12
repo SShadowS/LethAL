@@ -902,6 +902,9 @@ export const HEAVY_JOB =
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
  * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
  */
+/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] <class> ...`). */
+const HEAVY_SLOT_WRAPPER = /(^|\s)(\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(baseapp|other)\s/;
+
 export function countHeavyJobs(
   procs: readonly Proc[],
   heldSlots: number,
@@ -917,6 +920,9 @@ export function countHeavyJobs(
   const groups = new Set<number>();
   for (const p of procs) {
     if (READER.test(p.args) || !HEAVY_JOB.test(p.args) || p.args.includes("--worker")) continue;
+    // R934: `heavy-slot.sh` itself is never the job: a holder's slot counts in `heldSlots`, its
+    // command counts on its own, and a queued `--wait` waiter holds no slot and runs nothing yet.
+    if (HEAVY_SLOT_WRAPPER.test(p.args)) continue;
     if (WATCHER.test(p.args)) {
       const below = descendants(procs, p.pid);
       if (procs.some((q) => below.has(q.pid) && isJob(q))) continue;

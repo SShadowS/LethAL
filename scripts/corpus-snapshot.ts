@@ -689,8 +689,10 @@ function holderIsBaseApp(args: string): boolean {
  * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
 const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
-/** R905: a `scripts/heavy-slot.sh <class> <cmd>` holder writes its own pid in the lock; its class is in its argv. */
-const WRAPPER_HOLDER_RE = /(^|\/)heavy-slot\.sh\s+(baseapp|other)(\s|$)/;
+/** R905: a `scripts/heavy-slot.sh [--wait] <class> <cmd>` holder writes its own pid in the lock; its class is in its argv. */
+const WRAPPER_HOLDER_RE = /(^|\/)heavy-slot\.sh\s+(?:--wait\s+)?(baseapp|other)(\s|$)/;
+/** R934: a `heavy-slot.sh --wait` process. One that holds no slot is a waiter: no job (it runs nothing yet). */
+const WAITER_RE = /(^|\/)heavy-slot\.sh\s+--wait\s/;
 
 export function heavyVerdict(
   procs: readonly Proc[],
@@ -723,6 +725,10 @@ export function heavyVerdict(
     if (wrapper !== null ? wrapper[2] === "baseapp" : holderIsBaseApp(p.args)) baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
   }
+  // R934: a queued `--wait` wrapper holds no slot and runs nothing; its argv names the job it waits
+  // to run (maybe a BC.History path), which must not count as that job.
+  const holders = new Set(slotPids);
+  for (const p of procs) if (WAITER_RE.test(p.args) && !holders.has(p.pid)) skip.add(p.pid);
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit
   // in their own process groups, R626), else by process group.
   const byPid = new Map(procs.map((p) => [p.pid, p]));

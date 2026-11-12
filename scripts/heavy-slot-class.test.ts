@@ -1,5 +1,13 @@
 import { afterAll, test as bunTest, describe, expect } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RefusedError, guardInSlot, heavyVerdict, parsePs, slotHeld } from "./corpus-snapshot.ts";
@@ -294,5 +302,119 @@ describe("R905 a heavy-slot.sh holder is trusted, so its job counts once", () =>
     const v = heavyVerdict(psOf(rows), 100, [500], 1, false, ["baseapp"]);
     expect(v.foreign).toEqual([]);
     expect(v.refuse).toBe(false);
+  });
+  test("R934: a --wait holder is trusted like any wrapper; a --wait waiter holding no slot is no job", () => {
+    const holder = wrapper(500, "--wait other");
+    const waiter =
+      "700 1 700 /bin/bash scripts/heavy-slot.sh --wait baseapp bun x.ts /work/src/BC.History/BaseApp";
+    const v = heavyVerdict(psOf([...holder, waiter]), 100, [500], 1, false, ["other"]);
+    expect(v.foreign).toEqual([]);
+    expect(v.refuse).toBe(false);
+  });
+});
+
+describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
+  const script = join(import.meta.dir, "heavy-slot.sh");
+  const EMPTY_PS = "PID PPID PGID COMMAND\n1 0 1 init\n";
+  const start = (dir: string, poll: string, ...args: string[]) => {
+    const psFile = join(dir, "ps.txt");
+    writeFileSync(psFile, EMPTY_PS);
+    return Bun.spawn(["bash", script, ...args], {
+      env: {
+        ...process.env,
+        LETHAL_HEAVY_LOCK_DIR: dir,
+        BUN: process.execPath,
+        LETHAL_HEAVY_PS_FILE: psFile,
+        LETHAL_HEAVY_POLL_S: poll,
+      },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  };
+  /** A real holder of slot `n`, killable by pid. */
+  const holdSlot = async (dir: string, n: number, cls: "baseapp" | "other"): Promise<number> => {
+    const lock = join(dir, `heavy.${n}`);
+    const p = Bun.spawn(["bash", "-c", `exec 9>>"${lock}" && flock 9 && exec sleep 60`], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    holders.push(p.pid);
+    for (let i = 0; i < 100 && !slotHeld(dir, n); i++) await Bun.sleep(20);
+    writeFileSync(join(dir, `heavy.${n}.class`), `${cls} ${p.pid}\n`);
+    return p.pid;
+  };
+  const tickets = (dir: string) => {
+    try {
+      return readdirSync(join(dir, "heavy-queue"));
+    } catch {
+      return [];
+    }
+  };
+  const until = async (cond: () => boolean, ms = 8000) => {
+    for (let t = 0; t < ms && !cond(); t += 25) await Bun.sleep(25);
+    return cond();
+  };
+
+  test("the order is kept: the older waiter runs first, even when the younger polls faster", async () => {
+    const dir = fresh();
+    const pids = [
+      await holdSlot(dir, 1, "other"),
+      await holdSlot(dir, 2, "other"),
+      await holdSlot(dir, 3, "other"),
+    ];
+    const order = join(dir, "order");
+    const a = start(dir, "0.4", "--wait", "other", "sh", "-c", `echo A >> "${order}"`);
+    expect(await until(() => tickets(dir).length === 1)).toBe(true);
+    const b = start(dir, "0.02", "--wait", "other", "sh", "-c", `echo B >> "${order}"`);
+    expect(await until(() => tickets(dir).length === 2)).toBe(true);
+    process.kill(pids[0] ?? 0, "SIGKILL");
+    await a.exited;
+    await b.exited;
+    expect(readFileSync(order, "utf8")).toBe("A\nB\n");
+    expect(tickets(dir)).toEqual([]);
+  });
+
+  test("a dead waiter's ticket does not block the queue", async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, "heavy-queue"), { recursive: true });
+    const dead = Bun.spawnSync(["true"]).pid;
+    writeFileSync(join(dir, "heavy-queue", `000000000001.${dead}`), "");
+    writeFileSync(join(dir, "heavy-queue.seq"), "1\n");
+    const marker = join(dir, "ran");
+    const w = start(dir, "0.05", "--wait", "other", "touch", marker);
+    expect(await w.exited).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    expect(tickets(dir)).toEqual([]);
+  });
+
+  test("the caps are unchanged: with two BaseApp slots held a waiter waits, and runs once one frees", async () => {
+    const dir = fresh();
+    const p1 = await holdSlot(dir, 1, "baseapp");
+    await holdSlot(dir, 2, "baseapp");
+    const marker = join(dir, "ran");
+    const w = start(dir, "0.05", "--wait", "other", "touch", marker);
+    expect(await until(() => tickets(dir).length === 1)).toBe(true);
+    await Bun.sleep(400);
+    expect(existsSync(marker)).toBe(false);
+    process.kill(p1, "SIGKILL");
+    expect(await w.exited).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("a caller without --wait does not overtake a live waiter for a slot that just freed", async () => {
+    const dir = fresh();
+    const p1 = await holdSlot(dir, 1, "other");
+    await holdSlot(dir, 2, "other");
+    await holdSlot(dir, 3, "other");
+    // The waiter polls every 30 s, so the freed slot stays free while the plain caller tries.
+    const w = start(dir, "30", "--wait", "other", "true");
+    expect(await until(() => tickets(dir).length === 1)).toBe(true);
+    await Bun.sleep(200);
+    process.kill(p1, "SIGKILL");
+    expect(await until(() => !slotHeld(dir, 1))).toBe(true);
+    const plain = start(dir, "0.05", "other", "touch", join(dir, "plain"));
+    expect(await plain.exited).toBe(75);
+    expect(existsSync(join(dir, "plain"))).toBe(false);
+    w.kill("SIGKILL");
   });
 });
