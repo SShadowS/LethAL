@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**26 of 916 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 917 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -961,6 +961,7 @@ that ordering is the priority.
 - **R950** · The al-runner update moves `current` only when no al-runner runs anywhere, so with lanes on v3 all day a passed edge build waits indefinitely, though a process on an explicit build path is not touched by the move · [R950.md](docs/roadmap/R950.md) · done (79e60793): the move guard counts only processes started through current/ (or unreadable); LethAL's own…
 - **R951** · R900's probing path (the BC service folder) is not enough for Base Application: alc also needs the ASP.NET Core shared framework (`Microsoft.AspNetCore.StaticFiles`) · [R951.md](docs/roadmap/R951.md) · done (c061534c)
 - **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause not yet known · [R956.md](docs/roadmap/R956.md) · open
+- **R957** · BC.History batch 7 on al-runner v3 edge-2bd87774f: eight System Application modules, three upstream issues (a .NET exception refused where BC ignores the text, ten refusal causes, a Blob lost through FieldRef.Value after Clear) · [R957.md](docs/roadmap/R957.md) · closed 2026-11-12 — measured and filed upstream (#7924, #7934, #7935); LethAL's own gap is R954
 
 ---
 
