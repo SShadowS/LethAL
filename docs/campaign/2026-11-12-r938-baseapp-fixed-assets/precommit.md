@@ -20,14 +20,18 @@ Evidence goes to `/coord/handoff/R-938/` (setup and dry runs in `prep.md`). No B
 - **al-runner:** an explicit build path in the config, never `current`, so an update cannot split a run: edge-42af5d384 unless the
   pending update has landed and passed its gate before the first window starts; the result names the build every window used.
 - **LethAL:** master at the time of the run; each report names the sha.
-- **Command:** `lethal run --backend al-runner-v3 --allow-large-run --only 'src/FixedAssets/**'`, default transport, auto isolation,
+- **Command:** `lethal run --backend al-runner-v3 --allow-large-run --only 'FixedAssets/**'`, default transport, auto isolation,
   all 460 tests, `--time-budget 14400` per window and `--resume` for the next window, at most three windows (12 h). Each window in a
   **BaseApp-class** slot (`scripts/heavy-slot.sh baseapp`; at most two BaseApp-class jobs container-wide, one slot per lane), at least
   10 GB available at start, retried only on exit 75. (The prep's dry runs did not take a slot; every real run does.)
 
 | scope | files with mutants | sites | deployed | hang-refused |
 |---|---|---|---|---|
-| `src/FixedAssets/**` (this run) | 160 of 213 | 17,144 | 16,446 | 1,957 in 37 files |
+| `FixedAssets/**` (this run) | 160 of 213 | 17,144 | 16,446 | 1,957 in 37 files |
+
+**Correction (2026-11-12, before any mutant ran):** this file first said `src/FixedAssets/**`; BaseApp's folders sit at the project
+root, so that glob matched nothing and window 1 refused at once ("--only matched no .al file"). The prep's dry runs, whose counts are
+above, used `FixedAssets/**`: the scope and every figure are unchanged, only the transcription was wrong.
 
 Counts from `lethal run --dry-run` on master (`/coord/handoff/R-938/`). Deployed by folder: FixedAsset 8,806, Depreciation 3,514,
 Reports 1,967, Insurance 1,682, Maintenance 425, Setup 52.
