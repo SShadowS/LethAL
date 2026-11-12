@@ -55,3 +55,13 @@ flagged ones included).
 
 Every new refusal cause, crash, hang, wrong-looking verdict, false kill, misleading report line or tool friction. Each al-runner
 refusal or difference gets an invented repro and an upstream issue; each LethAL gap a roadmap item.
+
+## Addendum (2026-11-12, after the first pass, before any rerun)
+
+The first pass on edge-2bd87774f (14:05-14:36 UTC) ran URI to the end. The other seven stopped at their compile: the cached pool
+holds only Edit in Excel's and Cryptography Management's closure (alc AL1022 on Privacy Notice, Azure Key Vault, Extension
+Management, OAuth and several test libraries). That was a wrong assumption in Setup; no verdict was recorded for them.
+- **Packages for the other seven:** a pool built for their closure with R-927's driver (`/coord/handoff/R-940/pool-build/`, class
+  `other` per R-934), put in the shared cache before cleanup. URI keeps its result on the cached pool, which held its closure.
+- **External File Storage is replaced by BLOB Storage** (30 tests, 200 deployed, 2 hang-refused): External File Storage was run in
+  R-928, under the key `filestorage` the exclusion list missed. Every other setting and the reported fields are unchanged.
