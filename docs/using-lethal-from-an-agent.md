@@ -348,7 +348,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v25.schema.json](../schemas/explain-v25.schema.json)
+- `lethal explain`: [../schemas/explain-v26.schema.json](../schemas/explain-v26.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
