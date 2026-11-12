@@ -18,16 +18,22 @@ impossible".
 No generation file is limited to one AL shape. `loop-hazard.ts` judges every loop: code loops in every object, report data items,
 XMLport elements and queries. Even an operator's own file is not limited: an edit can make the operator match a new kind of syntax,
 and then projects without the old syntax change too. So a table "path -> shape" can miss a changed project. A rule like that is the
-change author's claim about what the change touches; the tool cannot check it from the path.
+change author's claim about what the change touches; the tool cannot check it from the path. (A coarse path rule IS sound: "no
+file the dumper imports changed, so skip the diff, else run it in full". What cannot be sound is mapping changed paths to FEWER
+projects.)
 
 ## Built (sound in every case the shape claim is right; the tool says which it ran)
 
 - `diff <set> --shape <name>[,<name>...]`: the projects holding a named shape. Shapes are a fixed table of loose text matches (a
-  superset by design: a comment or a variable naming the kind also selects the project). The first shape is `xmlport`.
-- The report's first line says what ran: `scope: full (N projects)`, `scope: narrowed by --projects (N of M; your list, not checked)`
-  or `scope: narrowed by --shape xmlport (N of M; the shape is your claim about the change)`.
-- Proven a superset on both known diffs by a test that reads the two committed project lists (names only, no source).
-- The full diff stays the default, and `bch` still needs `--all`, `--projects` or `--shape`.
+  superset by design: a comment or a variable naming the kind also selects the project). The first shape is `xmlport`. The scan
+  lists a project's files with the dumper's own walker and `.al` filter, and selects a project it cannot list cleanly. Projects on
+  one side only are always selected. `fixtures` is refused (its AL differs per branch and it is small).
+- After the `master:` line the report says what ran: `scope: full (N projects)`, `scope: narrowed by --projects (N of M; your list,
+  not checked)` or `scope: narrowed by --shape xmlport (N of M; the shape is your claim about the change)`. Under the heavy-slot
+  re-exec it prints twice, once per process, like the `master:` line.
+- Proven a superset on both known diffs by a test with the 13 and 3 changed project names typed in (names only, no source). It reads
+  the real BC.History corpus, so it runs in the container and is skipped where the corpus is missing (CI).
+- The full diff stays the default, and `bch` still needs `--all`, `--projects` or `--shape`; one of the three per run.
 
 ## Asked of the owner
 

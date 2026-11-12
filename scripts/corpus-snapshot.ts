@@ -72,6 +72,8 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { parseArgs as parseCli } from "node:util";
+import { isEnumeratedAl } from "../packages/runner/src/line-filter.ts";
+import { walkFilesSync } from "../packages/runner/src/walk.ts";
 import { type SlotClass, readSlotClass, writeSlotClass } from "./heavy-slot-class.ts";
 import { FORMAT } from "./prod-identity-keys.ts";
 
@@ -1136,26 +1138,26 @@ function runDiff(
 /**
  * R-935 `--shape`: named AL shapes, each a LOOSE text match over a project's `.al` files, so a comment
  * or a variable naming the kind also selects the project (a superset by design). The shape is the
- * change author's claim about what the change can touch: no rule from changed paths can be sound,
- * since an edit can make any operator or rule match new syntax
+ * change author's claim about what the change can touch: no rule can soundly map changed paths to
+ * FEWER projects, since an edit can make any operator or rule match new syntax
  * (docs/superpowers/specs/2026-11-12-r935-narrowed-identity-diff.md).
  */
 export const SHAPES: Readonly<Record<string, RegExp>> = {
   xmlport: /\bxmlport\b/i,
 };
 
-/** Does any `.al` file under `dir` (nested projects included, as the dumper reads them; links not
- *  followed, as findProjects) match `re`? */
+/** Does any `.al` file the dumper would read under `dir` match `re`? The file list is the
+ *  dumper's own (`walkFiles` + `isEnumeratedAl`, as `generateMutationSet`). A project the walk
+ *  cannot list cleanly (a link, an error) is selected: the dumper refuses or reads it differently. */
 function holdsShape(dir: string, re: RegExp): boolean {
-  for (const e of readdirSync(dir)) {
-    if (e === ".alpackages" || e === ".git" || e === "node_modules") continue;
-    const p = join(dir, e);
-    const st = lstatSync(p);
-    if (st.isSymbolicLink()) continue;
-    if (st.isDirectory() ? holdsShape(p, re) : /\.al$/i.test(e) && re.test(readFileSync(p, "utf8")))
-      return true;
+  let walked: ReturnType<typeof walkFilesSync>;
+  try {
+    walked = walkFilesSync(dir, { links: "refuse" });
+  } catch {
+    return true;
   }
-  return false;
+  if (walked.skippedLinks.length > 0) return true;
+  return walked.files.some((f) => isEnumeratedAl(f) && re.test(readFileSync(join(dir, f), "utf8")));
 }
 
 /**

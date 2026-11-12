@@ -75,6 +75,7 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    `bun scripts/corpus-build-cache.ts put <name> --corpus <corpus> --from <dir> [--probing <dirs>]` (the script's header
    says how entries are named and checked), and say its entry in your handoff. Before you build one, look there first:
    `bun scripts/corpus-build-cache.ts list`, then `path <name> --corpus <corpus> [--probing <dirs>]` prints a checked entry.
+   The one exception: a `.tmp-*` folder there is a `put` that died; remove it (`chmod -R u+w` first) only when no `put` runs.
 
 ## Which model a subagent runs on
 

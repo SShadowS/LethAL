@@ -10,7 +10,8 @@
  * Root: `LETHAL_CORPUS_BUILDS`, default /coord/cache/corpus-builds. An entry is
  * `<root>/<name>@<corpus HEAD, 12 hex>+<probing key>/`: `<name>` is the app or closure (letters,
  * digits, `.`, `_`, `-`); the probing key is `none`, or the first 8 hex of sha256 over the sorted
- * absolute probing paths (the paths themselves are in the manifest).
+ * absolute probing paths (the paths themselves are in the manifest). The key names the PATHS, not
+ * their contents: if a probing folder's files change, write entries under a new name.
  *
  * `put` copies `--from` (links followed, so the entry never points back into a scratch folder that
  * a cleanup may delete) into `<root>/.tmp-<entry>-<pid>`, writes `manifest.json` (every file's
@@ -18,6 +19,8 @@
  * whole or not at all. An existing entry is refused, never replaced. `path` prints an entry's
  * folder after a quick check (manifest present, every file there with its size); `check` hashes
  * every file and refuses an extra one. A folder with no manifest is refused as half-written.
+ * A `.tmp-*` folder is a put that died; it may be removed (`chmod -R u+w` first) when no put runs.
+ * Read-only bits only advise (every lane is the same user): never write into an entry.
  *
  * Exit codes: 0 ok, 1 an entry failed its check, 2 refused (bad arguments, entry exists or missing).
  */
@@ -33,7 +36,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 export class CacheRefusedError extends Error {
@@ -197,7 +200,14 @@ export function put(o: {
     };
     writeFileSync(join(tmp, MANIFEST), `${JSON.stringify(manifest, null, 1)}\n`);
     setWritable(tmp, false);
-    renameSync(tmp, final);
+    try {
+      renameSync(tmp, final);
+    } catch (e) {
+      // Two puts of one entry: the first rename wins; this one leaves the winner's entry alone.
+      if (existsSync(final))
+        throw new CacheRefusedError(`another put wrote ${final} first; use that entry`);
+      throw e;
+    }
     return final;
   } catch (e) {
     removeTree(tmp);
@@ -211,7 +221,16 @@ function readManifest(dir: string): Manifest {
       `${dir}: no ${MANIFEST}, so it is half-written or not an entry; never read it`,
     );
   }
-  return JSON.parse(readFileSync(join(dir, MANIFEST), "utf8")) as Manifest;
+  let m: Manifest;
+  try {
+    m = JSON.parse(readFileSync(join(dir, MANIFEST), "utf8")) as Manifest;
+  } catch (e) {
+    throw new CacheCheckError(`${dir}: ${MANIFEST} does not parse (${String(e)})`);
+  }
+  // A copied or renamed folder is not the entry its manifest describes.
+  if (m.entry !== basename(dir))
+    throw new CacheCheckError(`${dir}: its manifest names entry '${m.entry}', not this folder`);
+  return m;
 }
 
 /** Quick (sizes) or full (hashes, and no extra file) check. Throws CacheCheckError on a mismatch. */
@@ -226,7 +245,11 @@ export function check(dir: string, full: boolean): Manifest {
   }
   if (full) {
     const listed = new Set([...m.files.map((f) => f.path), MANIFEST]);
-    for (const f of filesUnder(dir)) if (!listed.has(f)) bad.push(`extra ${f}`);
+    try {
+      for (const f of filesUnder(dir)) if (!listed.has(f)) bad.push(`extra ${f}`);
+    } catch (e) {
+      bad.push(e instanceof Error ? e.message : String(e)); // a link planted in the entry
+    }
   }
   if (bad.length > 0)
     throw new CacheCheckError(`${dir}: ${bad.length} problem(s): ${bad.slice(0, 5).join("; ")}`);

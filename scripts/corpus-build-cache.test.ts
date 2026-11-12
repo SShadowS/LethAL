@@ -45,7 +45,22 @@ function source(): string {
 const putIn = (root: string, from: string, name = "sysapp-pool", probing: string[] = []) =>
   put({ root, name, corpusRoot: "/corpus", corpusSha: SHA, from, probing, note: "t" });
 
-describe("R-935 corpus-build cache", () => {
+// The cache lives in the Linux container only (cp -rL, chmod as a write guard): not on Windows CI.
+describe.skipIf(process.platform === "win32")("R-935 corpus-build cache", () => {
+  test("a manifest that does not parse, a renamed folder and a planted link fail the check (not a refusal)", () => {
+    const root = fresh("root");
+    const dir = putIn(root, source());
+    chmodSync(dir, 0o755);
+    chmodSync(join(root), 0o755);
+    const moved = join(root, "renamed");
+    Bun.spawnSync(["cp", "-r", dir, moved]);
+    expect(() => check(moved, false)).toThrow(CacheCheckError);
+    symlinkSync(join(dir, "pkgs", "A.app"), join(dir, "link.app"));
+    expect(() => check(dir, true)).toThrow(CacheCheckError);
+    chmodSync(join(dir, "manifest.json"), 0o644);
+    writeFileSync(join(dir, "manifest.json"), "{ not json");
+    expect(() => check(dir, false)).toThrow(CacheCheckError);
+  });
   test("put writes a whole, read-only entry with a manifest of every file, and no temp folder", () => {
     const root = fresh("root");
     const dir = putIn(root, source());
@@ -146,6 +161,11 @@ describe("R-935 corpus-build cache", () => {
     const dir = path.stdout.toString().trim();
     expect(existsSync(join(dir, "manifest.json"))).toBe(true);
     expect(cli("check", dir).exitCode).toBe(0);
+    chmodSync(join(dir, "pkgs"), 0o755);
+    chmodSync(join(dir, "pkgs", "A.app"), 0o644);
+    writeFileSync(join(dir, "pkgs", "A.app"), "app-x"); // same size: only the full check sees it
+    expect(cli("path", "pool", "--corpus", corpus).exitCode).toBe(0);
+    expect(cli("check", dir).exitCode).toBe(1);
     expect(cli("put", "pool", "--corpus", corpus, "--from", from).exitCode).toBe(2);
     expect(cli("path", "other", "--corpus", corpus).exitCode).toBe(2);
   });

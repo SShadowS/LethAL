@@ -432,9 +432,12 @@ describe("R-935 --shape narrows the diff to the projects holding a shape", () =>
     write(d, "b/src/C.Codeunit.al", "codeunit 50101 C { }\n");
     write(d, "new/app.json", "{}");
     write(d, "new/N.Codeunit.al", "codeunit 1 N { }\n");
+    // Review: the dumper's walk reads a `.al` under a folder named node_modules; so must the scan.
+    write(d, "c/app.json", "{}");
+    write(d, "c/node_modules/X.al", "xmlport 50102 X { }\n");
     const branch = findProjects(d);
-    const sel = shapeProjects("xmlport", d, branch, new Set(["a", "b", "gone"]));
-    expect([...sel].sort()).toEqual(["a", "gone", "new"]);
+    const sel = shapeProjects("xmlport", d, branch, new Set(["a", "b", "c", "gone"]));
+    expect([...sel].sort()).toEqual(["a", "c", "gone", "new"]);
     expect(() => shapeProjects("xmlport,dataitems", d, branch, new Set())).toThrow("dataitems");
   });
   test("--shape with --projects is refused (exit 2): one scope per run", () => {
