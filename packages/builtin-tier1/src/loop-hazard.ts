@@ -551,25 +551,53 @@ function importOnlyXmlport(n: ALSyntaxNode): boolean {
   const scan = (m: ALSyntaxNode, insideIf: boolean): void => {
     if (m.kind === ALNodeKind.property) {
       if (normalizeAlName(m.childForFieldName("name")?.text ?? "") === "direction") {
-        dirs.push(insideIf ? "conditional" : normalizeAlName(m.childForFieldName("value")?.text ?? ""));
+        dirs.push(
+          insideIf ? "conditional" : normalizeAlName(m.childForFieldName("value")?.text ?? ""),
+        );
       }
-    } else if (m.rawKind.startsWith("preproc_")) m.namedChildren.forEach((c) => scan(c, true));
+    } else if (m.rawKind.startsWith("preproc_")) {
+      for (const c of m.namedChildren) scan(c, true);
+    }
   };
   for (const m of declarationMembers(x)) scan(m, false);
   return dirs.length > 0 && dirs.every((d) => d === "import");
 }
 
 /** R928 (same measurement): an XMLport `tableelement` with `MaxOccurs = Once` stops after one
- *  record, with no `Break`. Only that element is bounded; elements nested in it are judged alone. */
+ *  record, with no `Break`. Only that element is bounded; elements nested in it are judged alone.
+ *  Not when the element's own triggers call `Skip` (`currXMLport.Skip()` or the bare `Skip()`): the
+ *  probe never measured whether Once counts records fetched or records written, and an element that
+ *  skips every record could walk `Integer` without end. Then the element stays open (the safe side). */
 function maxOccursOnce(item: ALSyntaxNode, ctx: SemanticContext): boolean {
   const body = item.childForFieldName("body");
   if (body === null || item.rawKind !== "xmlport_element") return false;
-  return itemMembers(body, ctx, true).some(
+  const members = itemMembers(body, ctx, true);
+  const once = members.some(
     (m) =>
       m.kind === ALNodeKind.property &&
       normalizeAlName(m.childForFieldName("name")?.text ?? "") === "maxoccurs" &&
       normalizeAlName(m.childForFieldName("value")?.text ?? "") === "once",
   );
+  if (!once) return false;
+  let skips = false;
+  // Every member that is not a nested element: its triggers (and anything else it holds). An
+  // undecided `#if` arm is read too (`itemMembers` without `certain`): a Skip there may compile.
+  for (const m of itemMembers(body, ctx)) {
+    if (m.rawKind === "xmlport_element") continue;
+    visitAll(m, (x) => {
+      if (x.rawKind === "xmlport_element") return;
+      const callee =
+        x.rawKind === "member_expression"
+          ? REPORT_INSTANCES.has(normalizeAlName(x.childForFieldName("object")?.text ?? ""))
+            ? normalizeAlName(x.childForFieldName("member")?.text ?? "")
+            : ""
+          : x.rawKind === "call_expression" || x.rawKind === "call_statement"
+            ? normalizeAlName(x.childForFieldName("function")?.text ?? "")
+            : "";
+      if (callee === "skip") skips = true;
+    });
+  }
+  return !skips;
 }
 
 /** The item's table, by its LAST name segment (a qualified `System.Utilities.Integer` has one child

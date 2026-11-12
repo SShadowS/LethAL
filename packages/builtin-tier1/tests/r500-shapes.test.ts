@@ -1309,8 +1309,23 @@ describe("R928: XMLport MaxOccurs = Once and Direction = Import", () => {
   it("an open inner element inside a Once outer element is still refused", () => {
     expect(at(xmlportOf("Direction = Export;", "MaxOccurs = Once;"), INNER)).toBe(true);
   });
-  it("an unbounded inner element is refused with and without Once on the outer", () => {
+  it("an unbounded inner element without Once on the outer is refused", () => {
     expect(at(xmlportOf("Direction = Export;", ""), INNER)).toBe(true);
+  });
+  // Review of R928: the probe never measured Skip, so an element whose own triggers Skip stays open.
+  const withSkip = (skip: string): string =>
+    xmlportOf("Direction = Export;", "MaxOccurs = Once;").replace(
+      "OuterN := OuterN + 1;",
+      `OuterN := OuterN + 1;\n                    if OuterN > 0 then\n                        ${skip};`,
+    );
+  it("Once with currXMLport.Skip() in the element's own trigger: refused (Skip unmeasured)", () => {
+    expect(at(withSkip("currXMLport.Skip()"), OUTER)).toBe(true);
+  });
+  it("Once with a bare Skip() in the element's own trigger: refused", () => {
+    expect(at(withSkip("Skip()"), OUTER)).toBe(true);
+  });
+  it("Once with Break (measured) in the element's own trigger: still bounded", () => {
+    expect(at(withSkip("currXMLport.Break()"), OUTER)).toBe(false);
   });
   it("Direction = Import: the unbounded element is not a loop item", () => {
     const src = xmlportOf("Direction = Import;", "");
