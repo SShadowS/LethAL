@@ -56,6 +56,9 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    message the orchestrator.
 4. Work with the superpowers `subagent-driven-development` skill: TDD, a review subagent before
    submitting. Follow `CLAUDE.md`'s build/test order exactly.
+   **Order (orchestrator, 2026-11-12):** build, red checks, VERIFY, then the Opus build review, fix its findings, and only
+   then the gates and CI, once, on the final head. A gate run before the review is repeated after its fixes and costs a
+   slot wait; skip it unless the review needs its output.
 5. Checkpoint at every phase change (`red`, `green`, `review`, `waiting-owner`) and at least
    every 15 minutes. Every checkpoint also polls the pause.
 6. File a roadmap item the moment you find a new gap (`docs/roadmap/R<nnn>.md`, re-check the
@@ -67,6 +70,12 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    `node_modules`). Keep notes, plans, logs, scripts and every file your submit note or a
    roadmap item cites. Delete only paths you listed first, never by a wildcard over `/coord`.
    (Owner, 2026-10-23: 28 GB of finished tasks' census output had piled up.)
+   **Never delete `/coord/cache/corpus-builds/`** (R-935): the shared, read-only corpus builds every lane reads. Before you
+   delete a corpus tree, package pool or module pool you built, put it there once with
+   `bun scripts/corpus-build-cache.ts put <name> --corpus <corpus> --from <dir> [--probing <dirs>]` (the script's header
+   says how entries are named and checked), and say its entry in your handoff. Before you build one, look there first:
+   `bun scripts/corpus-build-cache.ts list`, then `path <name> --corpus <corpus> [--probing <dirs>]` prints a checked entry.
+   The one exception: a `.tmp-*` folder there is a `put` that died; remove it (`chmod -R u+w` first) only when no `put` runs.
 
 ## Which model a subagent runs on
 

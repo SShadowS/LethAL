@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 905 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 910 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -948,8 +948,13 @@ that ordering is the priority.
 - **R938** · LethAL runs al-runner v3 in its default `saas` environment, while the bc servers are on-prem: tests that expect an on-prem server fail at baseline on v3 only · [R938.md](docs/roadmap/R938.md) · open
 - **R939** · A v3 serve session does not say why it closed a daemon, so a session with many restarts (18 daemons for one app) cannot be explained from its report · [R939.md](docs/roadmap/R939.md) · done (851969de; report 195ef055)
 - **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (08c571fa): relabelled with the measured spread; no bound exists to promise
-- **R941** · `assemblyProbingPaths` reaches alc only, never al-runner's `--dotnet-assembly-dir`, so a .NET assembly a dependency needs at run time fails to load (Sustainability: Newtonsoft.Json) · [R941.md](docs/roadmap/R941.md) · open
+- **R941** · `assemblyProbingPaths` reaches alc only, never al-runner's `--dotnet-assembly-dir`, so a .NET assembly a dependency needs at run time fails to load (Sustainability: Newtonsoft.Json) · [R941.md](docs/roadmap/R941.md) · done (450c1d83) — fixed with R943; measured in R943
+- **R943** · LethAL does not pass its assembly probing paths to al-runner's `--dotnet-assembly-dir`, so .NET types from a BC service folder are refused: measured, 5 Edit in Excel and 9 Cryptography Management tests would run · [R943.md](docs/roadmap/R943.md) · done (450c1d83)
 - **R942** · On al-runner v3, 9 Sustainability baseline tests are refused as "an action that makes a part visible, other than the pinned shape"; 15 invented shapes all run, so no repro yet and not filed upstream · [R942.md](docs/roadmap/R942.md) · open
+- **R944** · When al-runner refuses to compile the app, LethAL records one 'transport failure' per baseline test and runs the compile once per test, instead of stopping once by name · [R944.md](docs/roadmap/R944.md) · done (beb674d2)
+- **R945** · Cryptography Management restarted its serve daemon 250 times, 43% of its mutant loop in warm-ups, mostly on .NET-helper refusals the keep list does not admit · [R945.md](docs/roadmap/R945.md) · open
+- **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
+- **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
 
 ---
 
