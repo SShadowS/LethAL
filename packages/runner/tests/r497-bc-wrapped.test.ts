@@ -51,6 +51,16 @@ describe("R497: the BC shape predicate admits exactly the measured shapes", () =
     ).toBeUndefined();
   });
 
+  // R924: xmlports carry the selector, but no BC gate measured a wrapped one. The same one-arm shape
+  // around a codeunit stays admitted, so the refusal is about the kind, not the shape.
+  test("refused by name: a one-arm wrapper around an XMLport (R924)", () => {
+    const xp = `xmlport 50110 "X"\n{\n    schema\n    {\n        textelement(Root) { }\n    }\n\n    procedure P()\n    begin\n        Message('x');\n    end;\n}\n`;
+    expect(shapeOf(`#if not X\n${xp}#endif\n`)).toBe(
+      "an #if-wrapped XMLport (not yet measured on BC, R924)",
+    );
+    expect(shapeOf(`#if not X\n${cu(50100, "A")}#endif\n`)).toBeUndefined();
+  });
+
   test("refused by name: each unmeasured shape", () => {
     const two = `#if not X\n${cu(50100, "A")}#endif\n#if not Y\n${cu(50101, "B")}#endif\n`;
     expect(shapeOf(two)).toBe("more than one #if object wrapper");

@@ -35,12 +35,12 @@
     "binarySha256": "d4c9ab2b029490cf2b4589195cc922953aa74ca5df92c97589308f6d4ceb3cc3",
     "readingsFrom": "edge-d72d3197d",
     "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
-    "gatedAt": "2026-11-10T19:12:36.944Z",
+    "lethalCommit": "4f17f8c7f091493dc9fab1908bfb7ffcb8530c41",
+    "gatedAt": "2026-11-11T18:57:51.736Z",
+    "dotnetSidecarSha256": "0bd4e4ef0e6956d9aa87da3e744f4d393663b4e7cd9249a3ed045f24e84ca0e8",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "0bd4e4ef0e6956d9aa87da3e744f4d393663b4e7cd9249a3ed045f24e84ca0e8"
+    }
   },
   {
     "id": "edge-05d692e5e",

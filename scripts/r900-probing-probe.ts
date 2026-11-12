@@ -9,7 +9,9 @@
 // Not a unit test because CI has neither alc nor the assemblies, and Microsoft's DLLs cannot be
 // committed. Nothing is written under the repo or under the source folder.
 // Usage (repo root): bun scripts/r900-probing-probe.ts [<alc>] [<folder holding the two DLLs>]
-//   Defaults: $LETHAL_ALC_DIR/alc and /coord/cache/bc28-service (read only).
+//   Defaults: $LETHAL_ALC_DIR/alc and /coord/cache/bc28-service-windows (read only): a Windows BC
+//   28.4 service folder. Not /coord/cache/bc28-service, the Linux copy: its assemblies make alc fail
+//   DotNet generic conversions (AL0133, AL0122), on Windows alc too (owner's check, R-927).
 import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,7 +24,7 @@ import { resolveAssemblyProbingPaths } from "../packages/runner/src/assembly-pro
 
 const [alcArg, srcArg] = process.argv.slice(2);
 const alc = alcArg ?? join(process.env.LETHAL_ALC_DIR ?? "", "alc");
-const src = srcArg ?? "/coord/cache/bc28-service";
+const src = srcArg ?? "/coord/cache/bc28-service-windows";
 const ASSEMBLIES = [
   { dll: "Newtonsoft.Json", type: "Newtonsoft.Json.Linq.JObject", alias: "InventedJObject" },
   {

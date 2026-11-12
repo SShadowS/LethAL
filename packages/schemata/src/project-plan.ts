@@ -167,7 +167,8 @@ export function objectHeadersOf(source: string, filePath: string): readonly Obje
 
 /**
  * Refuses a file only when it mixes an injectable object (codeunit/table) with a non-injectable
- * one (page/report/query/xmlport/enum/...). Two-or-more objects that are ALL injectable are
+ * one (page/report/query/xmlport/enum/...; a page, report or, since R924, XMLport alone in its file
+ * still carries). Two-or-more objects that are ALL injectable are
  * supported (R6): each mutant is attributed to its own enclosing object by `attributeHeader`,
  * and `injectMutationSelectorVar` (compile.ts) injects a declaration into every object that
  * actually received a guard, not just the first.

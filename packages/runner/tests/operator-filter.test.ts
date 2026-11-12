@@ -81,20 +81,21 @@ const TABLE_AL = `table 79311 "Other Table"
 `;
 
 /** Holds code, is NOT a carrier kind — see `CARRIER_KINDS` (@lethal/schemata). */
-const XMLPORT_AL = `xmlport 79330 "Only Xmlport"
+// R924: an xmlport is a carrier now, so a query holds this test's uninstrumentable code.
+const XMLPORT_AL = `query 79330 "Only Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Other; "Other Table")
         {
-            trigger OnBeforePassVariable()
-            var
-                Other: Record "Other Table";
-            begin
-                Other.SetRange("No.", 'A');
-            end;
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        SetFilter(No, 'A');
+    end;
 }
 `;
 
@@ -434,12 +435,12 @@ describe("generateMutationSet — --operator refuses to select nothing", () => {
   });
 
   test("an operator whose only sites are in an UNINSTRUMENTABLE file says so", () => {
-    // An `xmlport` holds code but is not in `CARRIER_KINDS`, so its sites never deploy. Refusing
+    // A `query` holds code but is not in `CARRIER_KINDS`, so its sites never deploy. Refusing
     // with the same message as "no sites at all" would send the reader looking for code that is
     // right there in front of them. (A `page` would NOT work as this fixture: pages have been
-    // carriers since R40.)
+    // carriers since R40, and xmlports since R924.)
     return withProject(
-      { "Al/X/Only.XmlPort.al": XMLPORT_AL, "Al/Table/Other.Table.al": TABLE_AL },
+      { "Al/X/Only.Query.al": XMLPORT_AL, "Al/Table/Other.Table.al": TABLE_AL },
       async (projectDir) => {
         const err = await generateMutationSet(projectDir, {
           operators: ["empty-block"],

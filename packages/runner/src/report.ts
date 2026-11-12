@@ -138,7 +138,8 @@ export interface SessionOutcome {
 /**
  * A file `generateMutationSet` (orchestrator.ts) dropped because no object it declares can carry
  * the injected `var MutationSelector: Codeunit "Mutation Selector";` guard (`CARRIER_KINDS` in
- * @lethal/schemata lists the kinds that can; query and xmlport cannot). See `SessionReport.notInstrumented`.
+ * @lethal/schemata lists the kinds that can; a query cannot, an xmlport can since R924). See
+ * `SessionReport.notInstrumented`.
  */
 export interface NotInstrumentedFile {
   readonly file: string;
@@ -352,8 +353,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "uninstrumentable-files": {
     meaning:
       "Some files were never instrumented because no object they declare can carry the " +
-      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query or xmlport " +
-      "cannot). `mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
+      "selector-var guard (R5; `CARRIER_KINDS` lists the kinds that can, so a query cannot). " +
+      "`mutationScore` is computed ONLY over instrumented sites, so `reliability` is " +
       "`narrowed` when such a file holds sites (R399).",
     entailedNegative:
       "A project whose skipped files hold a large share of its code can otherwise read as a " +
@@ -3575,7 +3576,7 @@ export function renderConsole(r: SessionReport): string {
         ? `${((r.notInstrumented.fileCount / r.notInstrumented.totalFiles) * 100).toFixed(1)}%`
         : "?";
     lines.push(
-      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, xmlport) are published unchanged.`,
+      `NOT INSTRUMENTED: ${r.notInstrumented.fileCount}/${r.notInstrumented.totalFiles} .al file(s) (${pct}), ${r.notInstrumented.siteCount} mutation site(s) never measured — the score above excludes them entirely, it is not a full-project score. Only ${CARRIER_KINDS.map((k) => k.replace(/_declaration$/, "")).join(", ")} objects can carry the injected selector var; objects of any other kind (query, for example) are published unchanged.`,
     );
     for (const f of r.notInstrumented.files) {
       lines.push(`  ${f.file} (${f.kinds}, ${f.sites} site(s))`);

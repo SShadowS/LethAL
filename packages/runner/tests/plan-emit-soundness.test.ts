@@ -232,33 +232,32 @@ describe("R-307 O8: the hand-built refusals, through PLAN alone", () => {
     expect(err.lines).toEqual([6, 8]);
   });
 
-  test("C8: compile.test.ts's inline xmlport refuses in PLAN", () => {
-    const source = `xmlport 50100 "My Port"
+  test("C8: compile.test.ts's inline query (an xmlport until R924) refuses in PLAN", () => {
+    const source = `query 50100 "My Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Cust; Customer)
         {
-            tableelement(Cust; Customer)
-            {
-                trigger OnAfterGetRecord()
-                begin
-                    DoThing();
-                end;
-            }
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        DoThing();
+    end;
 }`;
     const root = wrapRoot(parseAL(source));
     const call = findFirst(root, ALNodeKind.procedure_call);
     if (call === null) throw new Error("no call in fixture");
     const s = spec(call, "", "lethal.void-method-call");
-    const path = "MyPort.XmlPort.al";
+    const path = "MyQuery.Query.al";
     const ided = assignMutantIds(new Map([[path, [s]]])).get(path) ?? [];
     const err = refusalOf(() => planOneFile({ path, source, root }, [s], ided));
     expect(err.shape).toBe("unsupported-kind");
     expect(err.site).toBe("compile.unsupported-kind");
     expect(err.file).toBe(path);
-    expect(err.lines).toEqual([11, 11]);
+    expect(err.lines).toEqual([13, 13]);
   });
 });

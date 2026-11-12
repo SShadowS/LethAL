@@ -1083,6 +1083,10 @@ export function bcWrappedShapeRefusal(root: ALSyntaxNode, arms: ArmEvaluation): 
   const [wrapper] = wrappers;
   if (wrapper === undefined) return undefined;
   if (wrappers.length > 1) return "more than one #if object wrapper";
+  // R924: xmlports carry the selector since R-919, but no BC gate has measured a wrapped one
+  // (R545's census: 4 in BaseApp). Refused until a pre-committed sandbox-wrapped arm measures it.
+  if (containerNodesOf(wrapper).some((n) => n.rawKind === "xmlport_declaration"))
+    return "an #if-wrapped XMLport (not yet measured on BC, R924)";
   const armNodes: ALSyntaxNode[][] = [[]];
   for (const c of wrapper.namedChildren) {
     if (c.rawKind === "preproc_elif") return "an #elif arm";

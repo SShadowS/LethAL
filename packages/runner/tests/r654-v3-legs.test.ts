@@ -94,6 +94,8 @@ describe("R654 S2: the leg sets", () => {
       "Y-B",
       "MO",
       "WR",
+      "MOE", // R918: also in V3_GATE_LEGS (MO and WR on serve-entries)
+      "WRE",
       "K",
     ]);
     expect(v3DefaultLegs({ cdo: true, tables: true })).toEqual([
@@ -112,6 +114,8 @@ describe("R654 S2: the leg sets", () => {
       "Y-B",
       "MO",
       "WR",
+      "MOE",
+      "WRE",
       "K",
       "D1",
       "D1c",

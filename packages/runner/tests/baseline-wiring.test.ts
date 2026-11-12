@@ -464,7 +464,15 @@ describe("R332 wiring: real call sites, not text", () => {
       pinned: c.arguments[4]?.getText(sf),
     }));
     expect(recorded.length).toBe(6);
-    expect(seen.map((s) => s.path).sort()).toEqual([...recorded].sort());
+    // R918: legs MOE and WRE compare again with MO's and WR's baselines, and only compare: their
+    // env is `compareOnlyEnv()`, never `process.env`, so a record request cannot reach them.
+    const serve = asserts.filter((c) => c.arguments[3]?.getText(sf) === "compareOnlyEnv()");
+    expect(serve.map((c) => c.arguments[1]?.getText(sf)).sort()).toEqual([
+      "MULTIOBJECT_BASELINE_PATH",
+      "WRAPPED_BASELINE_PATH",
+    ]);
+    const own = asserts.filter((c) => !serve.includes(c));
+    expect(own.map((c) => c.arguments[1]?.getText(sf)).sort()).toEqual([...recorded].sort());
     for (const s of seen) {
       expect(s).toEqual({
         path: s.path,

@@ -44,35 +44,34 @@ describe("R-307 O5: plan-only twins of the compile refusals", () => {
     await initParser();
   });
 
-  it("twin of compile.test.ts's xmlport case: planFile refuses with the same fields", () => {
-    const source = `xmlport 50100 "My Port"
+  it("twin of compile.test.ts's query case (xmlport until R924): planFile refuses with the same fields", () => {
+    const source = `query 50100 "My Query"
 {
-    schema
+    elements
     {
-        textelement(Root)
+        dataitem(Cust; Customer)
         {
-            tableelement(Cust; Customer)
-            {
-                trigger OnAfterGetRecord()
-                begin
-                    DoThing();
-                end;
-            }
+            column(No; "No.") { }
         }
     }
+
+    trigger OnBeforeOpen()
+    begin
+        DoThing();
+    end;
 }`;
     const root = wrapRoot(parseAL(source));
     const call = findFirst(root, ALNodeKind.procedure_call);
     if (call === null) throw new Error("no call in fixture");
     const s = spec(call, { ...call, text: "" }, "lethal.void-method-call");
-    const thrown = refusalOf(() => planFile(source, root, [s], undefined, "MyPort.XmlPort.al"));
-    expect(thrown.message).toContain("MyPort.XmlPort.al");
+    const thrown = refusalOf(() => planFile(source, root, [s], undefined, "MyQuery.Query.al"));
+    expect(thrown.message).toContain("MyQuery.Query.al");
     expect(thrown.message).toContain("AL0118");
-    expect(thrown.file).toBe("MyPort.XmlPort.al");
+    expect(thrown.file).toBe("MyQuery.Query.al");
     expect(thrown.shape).toBe("unsupported-kind");
     expect(thrown.site).toBe("compile.unsupported-kind");
-    expect(thrown.objects).toEqual([{ type: "xmlport", id: 50100, name: "My Port" }]);
-    expect(thrown.lines).toEqual([11, 11]);
+    expect(thrown.objects).toEqual([{ type: "query", id: 50100, name: "My Query" }]);
+    expect(thrown.lines).toEqual([13, 13]);
   });
 
   it("twin of compile.test.ts's latch-owner case: planFile refuses with the same fields", () => {

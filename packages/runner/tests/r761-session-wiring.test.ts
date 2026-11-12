@@ -195,12 +195,11 @@ async function backend(testSrc: string) {
   return { b, warnings };
 }
 
-describe("R761: the shape scan covers the test folder", () => {
-  test("a multi-object file only in testDir falls back", async () => {
+describe("R918: the multi-object shape is no fallback reason, in the test folder either", () => {
+  test("a multi-object file only in testDir keeps serve-entries", async () => {
     const { b, warnings } = await backend(MULTI_AL);
     await b.decideTransport({ resume: false });
-    expect(b.inRunStopIsBudget).toBe(true);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.message).toContain("multi-object-or-wrapped: T.Codeunit.al");
+    expect(b.inRunStopIsBudget).toBe(false);
+    expect(warnings).toEqual([]);
   });
 });

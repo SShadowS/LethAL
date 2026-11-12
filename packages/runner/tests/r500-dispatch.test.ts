@@ -197,14 +197,24 @@ describe("R500: the XMLport publisher's subscriber (the r1 hang)", () => {
   });
 });
 
-describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dormant", () => {
-  test("xmlport cannot carry the selector var (adding it wakes R500's XMLport refusal: measure first)", () => {
-    expect(canCarryMutationSelectorVar(wrapRoot(parseAL(FILES[XP] ?? "")))).toBe(false);
+describe("R500 step 7, live since R924: an XMLport is a carrier, so its own refusal now runs", () => {
+  test("xmlport can carry the selector var (R924)", () => {
+    expect(canCarryMutationSelectorVar(wrapRoot(parseAL(FILES[XP] ?? "")))).toBe(true);
   });
 
-  test("the open XMLport's specs: none is hang-refused", () => {
-    expect(refused(XP)).toBe(0);
-    expect(skippedSites(XP)).toBeGreaterThan(0);
+  test("the open XMLport: its hang-capable sites are refused, and nothing is skipped as uncarriable", () => {
+    expect(refused(XP)).toBeGreaterThan(0);
+    expect(skippedSites(XP)).toBe(0);
+  });
+
+  test("the bounded twin: nothing is refused, and its code emits", () => {
+    expect(refused(XP_BOUNDED)).toBe(0);
+    expect(skippedSites(XP_BOUNDED)).toBe(0);
+    expect(specsOf(XP_BOUNDED).length).toBeGreaterThan(0);
+  });
+
+  test("the open XMLport emits fewer sites than its bounded twin, by the refused ones", () => {
+    expect(specsOf(XP).length + refused(XP)).toBe(specsOf(XP_BOUNDED).length);
   });
 
   test("the twin really is bounded: asked directly, the open element's code is refused and the twin's is not", () => {
@@ -233,9 +243,6 @@ describe("R500 step 7: an XMLport is not a carrier, so its own refusal is dorman
     expect(openItemHangRefuses(callsWrite(XP_BOUNDED), ctx, undefined)).toBe(false);
   });
 
-  test("so the open XMLport's `skipped` sites equal its bounded twin's: nothing moved out of `skipped`", () => {
-    expect(skippedSites(XP)).toBe(skippedSites(XP_BOUNDED));
-  });
 });
 
 describe("R500: the identity scheme twin (a Date item refused, a MaxIteration twin renumbered)", () => {
