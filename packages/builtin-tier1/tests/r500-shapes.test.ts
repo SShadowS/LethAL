@@ -29,12 +29,15 @@ type Project = {
   at: (path: string, kind: string, text: string, nth?: number) => boolean;
 };
 
-function project(files: Record<string, string>): Project {
+function project(files: Record<string, string>, arms?: "undecided"): Project {
   const parsed = Object.entries(files).map(([path, src]) => ({
     path,
     root: wrapRoot(parseAL(src)),
   }));
-  const ctx = buildSemanticContext(parsed);
+  const built = buildSemanticContext(parsed);
+  // "undecided": every node answers as in a file whose directives could not be evaluated (as in
+  // loop-exit-refusal.test.ts); without it the context has no arm map and every arm reads active.
+  const ctx = arms === "undecided" ? { ...built, armOf: () => "undecided" as const } : built;
   const rootOf = (path: string): ALSyntaxNode => {
     const f = parsed.find((p) => p.path === path);
     if (f === undefined) throw new Error(`no file ${path}`);
@@ -1248,5 +1251,103 @@ describe("R500 shape 5: an XMLport tableelement over Integer is a loop item", ()
   });
   it("the `source` skip applies under xmlport_element only: a report column's source naming the item is a mention", () => {
     expect(p().at("Xp.al", "assignment_statement", "W := W + 1")).toBe(true);
+  });
+});
+
+// R928 (coord R-923): MaxOccurs = Once bounds an element; Direction = Import is no table walk.
+const xmlportOf = (head: string, outerProps: string): string => `xmlport 50610 "XP R928"
+{
+    ${head}
+    schema
+    {
+        textelement(Root)
+        {
+            tableelement(Outer; Integer)
+            {
+                ${outerProps}
+                SourceTableView = where(Number = filter(1 ..));
+                trigger OnAfterGetRecord()
+                begin
+                    OuterN := OuterN + 1;
+                end;
+
+                tableelement(Inner; Integer)
+                {
+                    SourceTableView = where(Number = filter(1 ..));
+                    trigger OnAfterGetRecord()
+                    begin
+                        InnerN := InnerN + 1;
+                    end;
+                }
+            }
+        }
+    }
+
+    var
+        OuterN: Integer;
+        InnerN: Integer;
+}
+`;
+
+describe("R928: XMLport MaxOccurs = Once and Direction = Import", () => {
+  const at = (src: string, text: string): boolean =>
+    project({ "Xp.al": src }).at("Xp.al", "assignment_statement", text);
+  const OUTER = "OuterN := OuterN + 1";
+  const INNER = "InnerN := InnerN + 1";
+  it("export, outer MaxOccurs = Once: the outer element's own code is not refused", () => {
+    expect(at(xmlportOf("Direction = Export;", "MaxOccurs = Once;"), OUTER)).toBe(false);
+  });
+  it("MaxOccurs matches case-insensitively", () => {
+    expect(at(xmlportOf("Direction = Export;", "maxoccurs = ONCE;"), OUTER)).toBe(false);
+  });
+  it("MaxOccurs = Unbounded: refused, as before", () => {
+    expect(at(xmlportOf("Direction = Export;", "MaxOccurs = Unbounded;"), OUTER)).toBe(true);
+  });
+  it("no MaxOccurs: refused, as before", () => {
+    expect(at(xmlportOf("Direction = Export;", ""), OUTER)).toBe(true);
+  });
+  it("an open inner element inside a Once outer element is still refused", () => {
+    expect(at(xmlportOf("Direction = Export;", "MaxOccurs = Once;"), INNER)).toBe(true);
+  });
+  it("an unbounded inner element without Once on the outer is refused", () => {
+    expect(at(xmlportOf("Direction = Export;", ""), INNER)).toBe(true);
+  });
+  // Review of R928: the probe never measured Skip, so an element whose own triggers Skip stays open.
+  const withSkip = (skip: string): string =>
+    xmlportOf("Direction = Export;", "MaxOccurs = Once;").replace(
+      "OuterN := OuterN + 1;",
+      `OuterN := OuterN + 1;\n                    if OuterN > 0 then\n                        ${skip};`,
+    );
+  it("Once with currXMLport.Skip() in the element's own trigger: refused (Skip unmeasured)", () => {
+    expect(at(withSkip("currXMLport.Skip()"), OUTER)).toBe(true);
+  });
+  it("Once with a bare Skip() in the element's own trigger: refused", () => {
+    expect(at(withSkip("Skip()"), OUTER)).toBe(true);
+  });
+  it("Once with Break (measured) in the element's own trigger: still bounded", () => {
+    expect(at(withSkip("currXMLport.Break()"), OUTER)).toBe(false);
+  });
+  it("Direction = Import: the unbounded element is not a loop item", () => {
+    const src = xmlportOf("Direction = Import;", "");
+    expect(at(src, OUTER)).toBe(false);
+    expect(at(src, INNER)).toBe(false);
+  });
+  it("Direction = Both: refused", () => {
+    expect(at(xmlportOf("Direction = Both;", ""), OUTER)).toBe(true);
+  });
+  it("no Direction (the default is Both): refused", () => {
+    expect(at(xmlportOf("", ""), OUTER)).toBe(true);
+  });
+  it("Direction = Import only inside an #if arm: refused (a build without the arm is Both)", () => {
+    expect(at(xmlportOf("#if R928X\n    Direction = Import;\n#endif", ""), OUTER)).toBe(true);
+  });
+  it("MaxOccurs = Once only inside an undecided #if arm: refused (a build without the arm is unbounded)", () => {
+    const src = xmlportOf(
+      "Direction = Export;",
+      "#if R928X\n                MaxOccurs = Once;\n#endif",
+    );
+    expect(project({ "Xp.al": src }, "undecided").at("Xp.al", "assignment_statement", OUTER)).toBe(
+      true,
+    );
   });
 });

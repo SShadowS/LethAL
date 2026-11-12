@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**23 of 897 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 898 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -360,7 +360,7 @@ that ordering is the priority.
 - **R919** · A v3 run that fell back from serve to one-shot at the warm-up cannot be resumed: its stored runner build has ' skip-after-timeout' and a --resume starting on serve builds one without it · [R919.md](docs/roadmap/R919.md) · done (e5a3b5ef; review fixes cd9672df)
 - **R920** · A code-free enum whose header is split by #if (one arm adds `implements`) turned v3 coverage off for a whole app: E-Document Core ran every mutant against all 223 green tests · [R920.md](docs/roadmap/R920.md) · done (c00c3d3d)
 - **R925** · A v3 kill's failure text has no call stack: al-runner's one-shot JSON gives `stackTrace` per test, the v3 decoder keeps only `message`, so nobody can check from the report that a killing test reached the mutated line · [R925.md](docs/roadmap/R925.md) · done (6f699b87, 810d07d7): a v3 fail keeps stackTrace; leg C's row texts leave it out
-- **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · open
+- **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · done (d5eb16ff)
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
 
 ## Product gaps a real project hits
@@ -942,6 +942,7 @@ that ordering is the priority.
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
 - **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
+- **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · open
 
 ---
 
