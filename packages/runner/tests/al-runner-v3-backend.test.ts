@@ -1802,6 +1802,17 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     ]);
   });
 
+  test("R944: under a mutant a compile refusal is that batch's transport failure, never a session stop", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("v3 exited 3");
+  });
+
   test("R944: v3CompileRefusal reads only an exit 3 that says COMPILE ERRORS", () => {
     expect(v3CompileRefusal(3, COMPILE_REFUSED)?.length).toBe(1);
     expect(v3CompileRefusal(1, COMPILE_REFUSED)).toBeUndefined();

@@ -288,10 +288,11 @@ export class AlRunnerV3NoTestRanError extends Error {
 }
 
 /**
- * R944: al-runner's own compiler refused the app (`COMPILE ERRORS (exit 3)`). The artifact holds every
- * mutant behind its guard, so the refusal is the app's, not a test's or a mutant's: no call can run,
- * and the session stops once, by name, quoting the compiler's `error AL....` lines (a file, a
- * position, a code and a symbol name, as alc's own messages hold), not one failure per test.
+ * R944: al-runner's own compiler refused the app (`COMPILE ERRORS (exit 3)`) on a BASELINE call: the
+ * artifact then holds no runnable app, so the refusal is the app's, not a test's: the session stops
+ * once, by name, quoting the compiler's `error AL....` lines (a file, a position, a code and a symbol
+ * name, as alc's own messages hold), not one failure per test. On a mutant call (a chunked or bisected
+ * batch builds its own artifact) the same refusal stays that batch's transport failure.
  */
 export class AlRunnerV3CompileRefusedError extends Error {
   constructor(readonly compilerLines: readonly string[]) {
@@ -4274,9 +4275,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (lane.lastActivated === null) throw new AlRunnerV3NoTestRanError(id);
       return { verdict: this.rowMissing(lane, ref, ranNoTestWhy(id), wallMs) };
     }
-    // R944: a compile refusal is the app's, not this test's: stop the session once, by name.
+    // R944: on a baseline call a compile refusal is the app's, not this test's: stop the session
+    // once, by name. Under a mutant (a chunked or bisected batch compiles its own artifact) it is
+    // that batch's, so it stays a transport failure there and the other batches still run.
     const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
-    if (compileRefusal !== undefined) throw new AlRunnerV3CompileRefusedError(compileRefusal);
+    if (compileRefusal !== undefined && this.isBaselineCall(lane))
+      throw new AlRunnerV3CompileRefusedError(compileRefusal);
     if (![0, 1, 7, 8].includes(res.exitCode)) {
       return {
         verdict: transportFailure(

@@ -1206,10 +1206,13 @@ describe("R885: demo data, on the serve path", () => {
     const on = (await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: dll, ...paths } }))
       .serve.daemons[0];
     expect(dirs(on ?? [])).toEqual(["/abs/one", resolve("rel/two")]);
-    const off = (
-      await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: false as const, ...paths } })
-    ).serve.daemons[0];
-    expect(dirs(off ?? [])).toEqual([]);
+    const offRig = await readyRig({
+      mutants: ["M0001"],
+      extra: { dotnetSidecar: false as const, ...paths },
+    });
+    // Review: a daemon must have started, or an empty argv would pass this for the wrong reason.
+    expect(offRig.serve.daemons.length).toBeGreaterThanOrEqual(1);
+    expect(dirs(offRig.serve.daemons[0] ?? [])).toEqual([]);
   });
 
   test("the test-data-off note on the daemon's stderr warns once, naming the cacheDir key", async () => {
