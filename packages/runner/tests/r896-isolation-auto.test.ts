@@ -436,6 +436,36 @@ describe("R896: the session", () => {
     });
   });
 
+  test("R955: the last re-baseline call killed by a stop signal is dropped: no choice stored, stopped in the auto re-baseline", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      let stop: () => void = () => {};
+      // A2's method run is the last re-baseline call: the signal arrives in it and it comes back red.
+      const b = autoStub((ref, mode, mutant) => {
+        if (ref.method === "A2" && mode === "method" && mutant === null) {
+          stop();
+          return "fail";
+        }
+        return switchesA(ref, mode, mutant);
+      });
+      const { report } = await session(root, store, b, {
+        registerStopSignal: (s) => {
+          stop = s;
+          return () => {};
+        },
+      });
+      expect(report.timeBudget).toMatchObject({
+        stoppedBySignal: true,
+        baselineStopped: { testsRun: 4, testsTotal: 4, inAutoRebaseline: true },
+      });
+      expect(store.runIsolationChoice(1)).toBeNull();
+      expect(report.isolation).toBeUndefined();
+      expect(report.mutants).toEqual([]);
+      // Every candidate is back on test.
+      expect(b.mode.get(A)).toBe("test");
+    });
+  });
+
   test("forced (no auto): no choice, no re-baseline, no report field, no tag", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

@@ -507,6 +507,32 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R956: the other-environment refusal still names the environment when a license is set", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withEnv = (value: "saas" | "onprem") =>
+        Object.assign(withProbe(new V3KindStub([]), []), {
+          environmentChoice: { value, source: "config" as const },
+          license: { path: "/l/x", sha256: "a".repeat(64) },
+        });
+      await v3Session(root, store, withEnv("onprem"));
+      expect(store.getRun(1)?.runnerBuild).toContain(" environment-onprem license-aaaaaaaa");
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const other = await v3Session(root, store, withEnv("saas"), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(other)).toContain("recorded under environment onprem");
+      // Another license as well is not "the same build under another environment".
+      const otherLicense = Object.assign(withEnv("saas"), {
+        license: { path: "/l/y", sha256: "b".repeat(64) },
+      });
+      const unrelated = await v3Session(root, store, otherLicense, { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(unrelated)).not.toContain("recorded under environment");
+    });
+  });
+
   test("R890: isolation method goes in the lending build and the fingerprint, apart from --isolate-tests", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

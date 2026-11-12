@@ -17,6 +17,7 @@ import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import type { RunEvent } from "../src/events";
 import { registerProcessStopSignal, runSession } from "../src/orchestrator";
 import { renderConsole } from "../src/report";
+import { STRANDED_NOTE_PREFIX } from "../src/resume";
 import { ResultsStore } from "../src/store";
 
 const SOURCE = `codeunit 50013 "K Probe"
@@ -64,6 +65,8 @@ class SlowBaseline implements ExecutionBackend {
   onCall?: (n: number) => void;
   /** When set, only these test methods cover `Twice`; the others cover nothing. */
   coveringMethods?: ReadonlySet<string>;
+  /** This call number returns an error row, as a killed al-runner child does. */
+  errorOnCall?: number;
   readonly now = () => 1_000_000 + this.calls * 1000;
   capabilities(): BackendCapabilities {
     return {
@@ -86,6 +89,16 @@ class SlowBaseline implements ExecutionBackend {
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     this.calls += 1;
     this.onCall?.(this.calls);
+    if (this.errorOnCall === this.calls) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 1,
+        failureMessage: "al-runner exited with signal SIGINT",
+        operation: "completed-accepted",
+        runnerRow: "runner-test-error",
+      };
+    }
     return {
       ref,
       outcome: "pass",
@@ -107,11 +120,14 @@ async function session(
   b: SlowBaseline,
   budget: number | undefined,
   registerStopSignal?: (stop: () => void) => () => void,
+  prior?: { store: ResultsStore; resume: number },
 ) {
   const events: RunEvent[] = [];
+  const store = prior?.store ?? new ResultsStore(":memory:");
   const report = await runSession({
+    ...(prior !== undefined ? { resume: prior.resume } : {}),
     backend: b,
-    store: new ResultsStore(":memory:"),
+    store,
     projectDir: join(root, "app"),
     testDir: join(root, "tests"),
     instrumentedDir: join(root, "instr"),
@@ -121,8 +137,11 @@ async function session(
     ...(registerStopSignal !== undefined ? { registerStopSignal } : {}),
     ...(budget !== undefined ? { timeBudgetSeconds: budget } : {}),
   });
-  return { report, events };
+  return { report, events, store };
 }
+
+const snapshotCount = (store: ResultsStore) =>
+  (store.db.query("SELECT COUNT(*) AS n FROM baseline_snapshots").get() as { n: number }).n;
 
 describe("R955: a SIGTERM or SIGINT spends the same budget", () => {
   /** The injected registration: the test holds the handler's trigger and counts the removals. */
@@ -150,13 +169,42 @@ describe("R955: a SIGTERM or SIGINT spends the same budget", () => {
       expect(report.timeBudget).toMatchObject({
         budgetSeconds: 0,
         stoppedBySignal: true,
-        baselineStopped: { testsRun: 2, testsTotal: 4 },
+        // The call the signal arrived in is dropped, so only call 1 counts.
+        baselineStopped: { testsRun: 1, testsTotal: 4 },
       });
       expect(report.validity.caveats).toContain("time-budget-reached");
       expect(exitCodeForReport(report)).toBe(TIME_BUDGET_EXIT_CODE);
       expect(renderConsole(report)).toContain("STOPPED BY SIGNAL");
       // The handlers are removed when the session ends.
       expect([r.registered, r.removed]).toEqual([1, 1]);
+    });
+  });
+
+  test("a baseline call killed by the signal (the last one) is dropped: no snapshot, no mutant, stopped in the baseline", async () => {
+    await inProject(async (root) => {
+      const b = new SlowBaseline();
+      const { r, register } = rig();
+      b.errorOnCall = 4;
+      b.onCall = (n) => {
+        if (n === 4) r.stop();
+      };
+      const { report, store } = await session(root, b, undefined, register);
+      expect(report.timeBudget).toMatchObject({
+        stoppedBySignal: true,
+        baselineStopped: { testsRun: 3, testsTotal: 4 },
+      });
+      expect(report.mutants).toEqual([]);
+      expect(snapshotCount(store)).toBe(0);
+    });
+  });
+
+  test("the same error row with no signal is a normal red baseline test, and the snapshot is written", async () => {
+    await inProject(async (root) => {
+      const b = new SlowBaseline();
+      b.errorOnCall = 4;
+      const { report, store } = await session(root, b, undefined, rig().register);
+      expect(report.timeBudget).toBeUndefined();
+      expect(snapshotCount(store)).toBe(1);
     });
   });
 
@@ -234,6 +282,28 @@ describe("R955: the time budget bounds the baseline", () => {
       expect(renderConsole(report)).toContain(
         `${total} mutant(s) of the batch it stopped in were left out`,
       );
+    });
+  });
+
+  test("a mutant an earlier run stranded on is not counted as left out (the runnable count is)", async () => {
+    await inProject(async (root) => {
+      const first = await session(root, new SlowBaseline(), undefined);
+      const total = first.report.mutants.length;
+      expect(total).toBeGreaterThan(1);
+      // Make run 1 resumable, with one mutant a stranded row (R53).
+      first.store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      // The resumed run must run its baseline (a reused one would not be cut short).
+      first.store.db.run("DELETE FROM baseline_snapshots");
+      first.store.db.run(
+        "UPDATE mutants SET verdict = 'error', failure_note = ? WHERE id = (SELECT MIN(id) FROM mutants WHERE run_id = 1)",
+        [`${STRANDED_NOTE_PREFIX}seeded by the test`],
+      );
+      const { report } = await session(root, new SlowBaseline(), 2, undefined, {
+        store: first.store,
+        resume: 1,
+      });
+      expect(report.timeBudget?.baselineStopped).toBeDefined();
+      expect(report.timeBudget?.unscheduledCount).toBe(total - 1);
     });
   });
 

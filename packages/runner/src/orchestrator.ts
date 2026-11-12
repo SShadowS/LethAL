@@ -5624,6 +5624,17 @@ async function chooseIsolationAuto(
       return;
     }
     const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
+    // R955: a call a stop signal ended may be a killed al-runner, not a result: dropped, so it never
+    // feeds the choice.
+    if (scope.timeBudget?.signalled === true) {
+      scope.timeBudget.reach(mutantCount, batchIdx + 1, {
+        testsRun: baseline.length,
+        testsTotal: baseline.length,
+        inAutoRebaseline: true,
+      });
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
     if (stop) {
       // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
       // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
@@ -5841,6 +5852,15 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         break;
       }
       const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+      // R955: a stop signal reaches the whole process group, so a call that ended while it arrived
+      // may be a killed al-runner, not a test result: its row is dropped, never kept as a red test.
+      if (scope.timeBudget?.signalled === true) {
+        scope.timeBudget.reach(input.mutantCount ?? 0, batchIdx + 1, {
+          testsRun: baseline.length,
+          testsTotal: tests.length,
+        });
+        break;
+      }
       if (stop) break;
       baseline.push({ ref, verdict: v });
       ranHere.add(ref);
@@ -8754,7 +8774,8 @@ async function runSessionBody(
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
-        mutantCount: manifest.mutants.length,
+        // R955: the runnable mutants: a stranded one is already recorded as skipped.
+        mutantCount: runnable.length,
         // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
         // pre-lease membership check never saw; only a hook-free session's proof covers the check.
         testsCompiledInPublishedPackage:
