@@ -698,7 +698,17 @@ const DOTNET_NAME = "[A-Za-z_][A-Za-z0-9_.`+]*";
  * closes the daemon: a timeout, a cancellation, a disposed object, out of memory or a type
  * initializer that failed may mean the .NET helper itself is not clean, and none was measured.
  */
-const DOTNET_CLEAN_EXCEPTIONS = ["System.FormatException", "System.ArgumentOutOfRangeException"]
+const DOTNET_CLEAN_EXCEPTIONS = [
+  "System.FormatException",
+  "System.ArgumentOutOfRangeException",
+  // R-937 probe round 3, each on its own refuser: the types Cryptography Management raises.
+  "System.ArgumentNullException",
+  "System.ArgumentException",
+  "System.NullReferenceException",
+  "System.Security.Cryptography.CryptographicException",
+  "Interop+Crypto+OpenSslCryptographicException",
+  "System.Xml.XPath.XPathException",
+]
   .map((t) => t.replace(/[.+]/g, "\\$&"))
   .join("|");
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {

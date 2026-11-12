@@ -212,6 +212,13 @@ describe("serveDaemonReusable, the rule alone", () => {
         `${P}DotNet System.Convert.FromBase64String raised the .NET exception System.FormatException: The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters.; the text AL would see is not pinned (ADR-014 section 7)`,
         `${P}DotNet new System.IO.MemoryStream raised the .NET exception System.ArgumentOutOfRangeException: capacity ('-1') must be a non-negative value. (Parameter 'capacity')`,
         `${P}DotNet new System.Guid raised the .NET exception System.FormatException: Unrecognized Guid format.; the text AL would see is not pinned (ADR-014 section 7)`,
+        // Probe round 3 (one refuser per type), the texts verbatim.
+        `${P}DotNet System.Convert.ToBase64String raised the .NET exception System.ArgumentNullException: Value cannot be null. (Parameter 'inArray'); the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Security.Cryptography.RSACryptoServiceProvider.FromXmlString raised the .NET exception System.Security.Cryptography.CryptographicException: The provided XML could not be read. <- System.Xml.XmlException: Unexpected end of file while parsing Name has occurred. Line 1, position 19.; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000072:rsa routines::padding check failed; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Convert.ToInt32 raised the .NET exception System.ArgumentException: Invalid Base.; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Xml.XmlDocument.AppendChild raised the .NET exception System.NullReferenceException: Object reference not set to an instance of an object.; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Xml.XmlDocument.SelectNodes raised the .NET exception System.Xml.XPath.XPathException: Expression must evaluate to a node-set.; the text AL would see is not pinned (ADR-014 section 7)`,
       ],
       closes: [
         // Build review: a type the probe did not measure closes, whatever its message says.
