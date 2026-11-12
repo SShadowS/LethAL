@@ -5894,8 +5894,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         ...(b.verdict.failureMessage !== undefined
           ? { failureMessage: b.verdict.failureMessage }
           : {}),
-        // `measuredDurationMs` is set on a `pass` only (TestVerdict's doc), so no outcome check.
-        ...(ranHere.has(b.ref) && measured !== undefined ? { durationMs: measured } : {}),
+        // A pass only (the event's contract): since R934 al-runner sets `measuredDurationMs` on a fail too.
+        ...(ranHere.has(b.ref) && b.verdict.outcome === "pass" && measured !== undefined
+          ? { durationMs: measured }
+          : {}),
         // R907: al-runner's flagged pass, this session's own baseline only (as `durationMs`).
         ...(ranHere.has(b.ref) && b.verdict.flagged === true ? { flagged: true as const } : {}),
       };

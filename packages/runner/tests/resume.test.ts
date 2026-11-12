@@ -6532,11 +6532,18 @@ describe("R912: windows and --time-budget", () => {
             : {}),
         };
       }
+      const row =
+        this.mutantRow !== undefined
+          ? { durationMs: this.mutantRow.callMs, measuredDurationMs: this.mutantRow.ownMs }
+          : {};
       if (killedId(this.active))
-        return { ...v, outcome: "fail", failureMessage: `Assert failed under ${this.active}` };
-      return this.mutantRow !== undefined
-        ? { ...v, durationMs: this.mutantRow.callMs, measuredDurationMs: this.mutantRow.ownMs }
-        : v;
+        return {
+          ...v,
+          ...row,
+          outcome: "fail",
+          failureMessage: `Assert failed under ${this.active}`,
+        };
+      return { ...v, ...row };
     }
     async prefetchMutants(
       plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
@@ -6657,8 +6664,8 @@ describe("R912: windows and --time-budget", () => {
     expect(run.backend.prefetches).toHaveLength(1);
   });
 
-  test("R934: a survivor's durationMs sums each covering test's own time, not the call's time once per test", async () => {
-    // Each passing row under a mutant reports the whole call (60 s) as durationMs and 7 ms as its own.
+  test("R934: a mutant's durationMs sums each covering test's own time, not the call's time once per test", async () => {
+    // Each row under a mutant, passing or failing, reports the whole call (60 s) as durationMs and 7 ms as its own.
     const run = await runWith(5, {}, (b) => {
       b.mutantRow = { callMs: 60_000, ownMs: 7 };
     });
@@ -6667,6 +6674,14 @@ describe("R912: windows and --time-budget", () => {
     for (const m of survivors) {
       expect(m.coveringTests.length).toBeGreaterThan(0);
       expect([m.mutantCode, m.durationMs]).toEqual([m.mutantCode, 7 * m.coveringTests.length]);
+    }
+    // A kill may stop at its first failing test, so at most its covering tests' own time, and never a call's.
+    const kills = run.report.mutants.filter((m) => m.verdict === "killed");
+    expect(kills.length).toBeGreaterThan(0);
+    for (const m of kills) {
+      expect(m.durationMs % 7).toBe(0);
+      expect(m.durationMs).toBeGreaterThan(0);
+      expect(m.durationMs).toBeLessThanOrEqual(7 * Math.max(1, m.coveringTests.length));
     }
     expect(run.report.timings.mutantsMs).toBe(
       run.report.mutants.reduce((n, m) => n + m.durationMs, 0),
