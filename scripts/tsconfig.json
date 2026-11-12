@@ -189,6 +189,8 @@
     "demo-reset.ts",
     "export-mutation-elements.ts",
     "fixtures/r393/late-write.fixture.ts",
+    "gate-worktree-setup.ts",
+    "gate-worktree-setup.test.ts",
     "generate-schemas.ts",
     "gift-card-refreeze.ts",
     "gift-card-refreeze.test.ts",
