@@ -1170,7 +1170,8 @@ the assemblies. LethAL takes the folders from the config's top-level `assemblyPr
 the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages` when it
 exists, else none. A missing folder, or a path holding `,` or `;`, is refused by name before any
 compile. The doctor check `assembly-probing-paths` (with `--project`) prints the list and its
-source. On an AL0451 failure the error text names the paths LethAL passed.
+source. On an AL0451 failure the error text names the paths LethAL passed. On al-runner-v3 the same
+folders also reach al-runner's .NET sidecar (`--dotnet-assembly-dir`, one per folder).
 
 ## Safety (guidance)
 
