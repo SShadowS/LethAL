@@ -6503,7 +6503,7 @@ describe("R912: windows and --time-budget", () => {
     coverOnlyFirst = false;
     /** R914: the test's own time; `durationMs` (the whole call, compile included) stays `baselineMs`. */
     measuredMs: number | undefined;
-    /** R934: under a mutant, a passing row's call time (`durationMs`) and its own time (`measuredDurationMs`). */
+    /** R934: under a mutant, every row's call time (`durationMs`) and its own time (`measuredDurationMs`), pass or fail. */
     mutantRow: { callMs: number; ownMs: number } | undefined;
     private active: string | null = null;
     constructor(private readonly baselineMs: number) {

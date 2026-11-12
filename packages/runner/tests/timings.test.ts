@@ -142,7 +142,7 @@ describe("renderConsole — timing line", () => {
     expect(timingLine).toContain("summed test time, 9.0s, is more than that");
     // R934: it names both causes, not overlap alone.
     expect(timingLine).toContain(
-      "tests overlap (prefetch, lanes), and on al-runner a test that did not pass counts its whole call's time",
+      "tests overlap (prefetch, lanes), and on al-runner a test that timed out, was refused or errored counts its whole call's time",
     );
     expect(timingLine).not.toContain("because their tests overlapped");
     expect(timingLine).not.toContain("+ mutants 9.0s");
