@@ -128,8 +128,8 @@ export interface FoldStatics {
     readonly noClient?: true;
     /** R938 — see `ExecutionContext.environment`. */
     readonly environment?: {
-      readonly value: "saas" | "onprem" | "unstated";
-      readonly source: "config" | "launch.json" | "unstated";
+      readonly value: "saas" | "onprem";
+      readonly source: "config" | "launch.json";
     };
   };
 }

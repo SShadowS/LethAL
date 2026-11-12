@@ -568,6 +568,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: l.scratch,
       testDir: l.testDir,
       packagesDir: l.deps,
@@ -630,6 +631,7 @@ describe("1, 2, 3: the option, its default, the version line", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,
@@ -1185,7 +1187,7 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
-  test("R938: the daemon argv carries --environment <value> only when the choice is stated", async () => {
+  test("R938: the daemon argv carries --environment <value> (the stated one)", async () => {
     const on = (
       await readyRig({
         mutants: ["M0001"],
@@ -1193,13 +1195,8 @@ describe("R885: demo data, on the serve path", () => {
       })
     ).serve.daemons[0];
     expect(on?.[(on?.indexOf("--environment") ?? -2) + 1]).toBe("onprem");
-    for (const extra of [
-      {},
-      { environmentChoice: { value: undefined, source: "unstated" as const } },
-    ]) {
-      const off = await readyRig({ mutants: ["M0001"], extra });
-      expect(off.serve.daemons[0] ?? []).not.toContain("--environment");
-    }
+    const dflt = (await readyRig({ mutants: ["M0001"] })).serve.daemons[0];
+    expect(dflt?.[(dflt?.indexOf("--environment") ?? -2) + 1]).toBe("saas");
   });
 
   test("R886: the daemon argv carries --dotnet-sidecar <dll> only when dotnetSidecar names a file", async () => {
@@ -2057,7 +2054,9 @@ describe("12: the stop is the daemon's S", () => {
     expect(argv.slice(0, 2)).toEqual([resolve("/fake/al-runner"), "serve"]);
     expect(argv.join(" ")).toContain("--test-timeout 3");
     expect(argv.join(" ")).toContain(`--package-cache ${r.l.deps}`);
-    expect(argv.join(" ")).toContain("--bc-version 28.0.46665.47126 --no-download");
+    expect(argv.join(" ")).toContain(
+      "--bc-version 28.0.46665.47126 --environment saas --no-download",
+    );
   });
 
   test("a daemon start before useMutantBudgetFloor throws; no daemon is spawned", async () => {
@@ -4864,6 +4863,7 @@ describe("R790: the speculative baseline", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,
@@ -5014,6 +5014,7 @@ describe("R790: the speculative baseline", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,

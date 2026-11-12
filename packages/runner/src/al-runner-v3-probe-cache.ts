@@ -97,6 +97,8 @@ export interface ProbeCacheKey {
   readonly version: string;
   readonly probeCodeHash: string;
   readonly bcVersion: string;
+  /** R938: the `--environment` the probe's legs ran under (a fact can read differently under each). */
+  readonly environment: string;
   readonly packages: string;
   readonly alc: string;
   /** `ALRUNNER_CACHE` as configured; `null` when absent. */

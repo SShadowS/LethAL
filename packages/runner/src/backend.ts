@@ -482,7 +482,7 @@ export interface ExecutionBackend {
   /**
    * R938, al-runner-v3 only: the `--environment` choice and where it came from. A stated value is in
    * the fingerprint, in `runner_build` and in the report, so nothing of a run under one environment
-   * is resumed or lent under the other. Absent or "unstated": nothing is passed or recorded in the key.
+   * is resumed or lent under the other. Absent on every backend but al-runner v3, which always has one.
    */
   readonly environmentChoice?: V3EnvironmentChoice | undefined;
   /**

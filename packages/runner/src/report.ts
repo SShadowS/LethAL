@@ -1177,13 +1177,13 @@ export interface ExecutionContext {
    */
   readonly noClient?: true;
   /**
-   * R938: the `--environment` al-runner v3 ran under and where the choice came from. `"unstated"`
-   * means no flag was passed, so al-runner's own default (`saas`) applied. Only on directly
+   * R938: the `--environment` al-runner v3 ran under and where the choice came from. A run
+   * with no stated environment is refused, so there is no "unstated" value. Only on directly
    * measured al-runner-v3 entries. Optional, so an older report stays valid.
    */
   readonly environment?: {
-    readonly value: "saas" | "onprem" | "unstated";
-    readonly source: "config" | "launch.json" | "unstated";
+    readonly value: "saas" | "onprem";
+    readonly source: "config" | "launch.json";
   };
 }
 
@@ -2581,7 +2581,9 @@ function buildExecutionContexts(
           ...(runnerBuild.runSeed !== undefined ? { runSeed: runnerBuild.runSeed } : {}),
           ...(runnerBuild.isolateTests === true ? { isolateTests: true as const } : {}),
           ...(runnerBuild.noClient === true ? { noClient: true as const } : {}),
-          ...(runnerBuild.environment !== undefined ? { environment: runnerBuild.environment } : {}),
+          ...(runnerBuild.environment !== undefined
+            ? { environment: runnerBuild.environment }
+            : {}),
         }
       : {}),
   };

@@ -4611,6 +4611,21 @@ function resolveResume(
           `--resume found an unfinished run for this project and backend, run ${otherBuild.runId}, but it was built with preprocessor symbols ${symbolList(otherBuild.buildSymbols)} and this build uses ${symbolList(buildSymbols)}. ${SYMBOLS_WHY} (R214). Drop --resume to run from scratch.`,
         );
       }
+      // R938: likewise for a v3 run recorded under another environment, or before it was recorded.
+      if (lendingSession?.runnerBuild !== undefined) {
+        const otherEnv = cfg.store.unfinishedRunUnderOtherEnvironment({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          runnerBuild: lendingSession.runnerBuild,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+        });
+        if (otherEnv !== null) {
+          const mine = cfg.backend.environmentChoice?.value ?? "none";
+          throw new Error(
+            `--resume found an unfinished run for this project and backend, run ${otherEnv.runId}, but it was recorded under ${otherEnv.environment === null ? "no environment (before al-runner-v3 recorded one)" : `environment ${otherEnv.environment}`}, and this session's is ${mine}. A verdict is never carried across environments. Drop --resume to run from scratch.`,
+          );
+        }
+      }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
       );
@@ -6610,7 +6625,7 @@ async function runSessionBody(
     ...(cfg.backend.noClient === true ? { noClient: true } : {}), // R907
     ...(cfg.backend.methodIsolation === true ? { methodIsolation: true } : {}),
     ...(cfg.backend.isolationAuto === true ? { isolationAuto: true } : {}), // R896
-    ...(cfg.backend.environmentChoice?.value !== undefined
+    ...(cfg.backend.environmentChoice !== undefined
       ? { v3Environment: cfg.backend.environmentChoice.value }
       : {}), // R938
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
@@ -8941,11 +8956,15 @@ async function runSessionBody(
             // R857: the report says so too, as a report is read without the store.
             ...(cfg.backend.isolatesTests === true ? { isolateTests: true as const } : {}),
             ...(cfg.backend.noClient === true ? { noClient: true as const } : {}), // R907
-            // R938: always on a v3 entry, "unstated" included, so a reader sees the choice was not made.
-            environment: {
-              value: cfg.backend.environmentChoice?.value ?? ("unstated" as const),
-              source: cfg.backend.environmentChoice?.source ?? ("unstated" as const),
-            },
+            // R938: the environment al-runner ran under (a v3 backend always has one).
+            ...(cfg.backend.environmentChoice !== undefined
+              ? {
+                  environment: {
+                    value: cfg.backend.environmentChoice.value,
+                    source: cfg.backend.environmentChoice.source,
+                  },
+                }
+              : {}),
           },
         }
       : {}),

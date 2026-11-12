@@ -186,16 +186,14 @@
                     "type": "string",
                     "enum": [
                       "saas",
-                      "onprem",
-                      "unstated"
+                      "onprem"
                     ]
                   },
                   "source": {
                     "type": "string",
                     "enum": [
                       "config",
-                      "launch.json",
-                      "unstated"
+                      "launch.json"
                     ]
                   }
                 }

@@ -78,6 +78,33 @@ describe("R938: which environment is chosen", () => {
       '; set alRunnerV3.environment to "onprem" or "saas"',
     );
   });
+  test("a launch.json that cannot be parsed says so in the refusal", async () => {
+    await expect(chooseV3Environment(await project("not json"), undefined)).rejects.toThrow(
+      "could not be parsed",
+    );
+  });
+  test("a launch.json that cannot be read (a directory in its place) says so in the refusal", async () => {
+    const d = await project(undefined);
+    await mkdir(join(d, ".vscode", "launch.json"), { recursive: true }); // EISDIR on read
+    await expect(chooseV3Environment(d, undefined)).rejects.toThrow(
+      "launch.json could not be read (EISDIR)",
+    );
+    const denied = async () => {
+      throw Object.assign(new Error("no"), { code: "EACCES" });
+    };
+    await expect(chooseV3Environment("/x", undefined, denied)).rejects.toThrow(
+      "could not be read (EACCES)",
+    );
+  });
+  test("an environmentType value al-runner-v3 does not know is named in the refusal", async () => {
+    await expect(chooseV3Environment(await project(launchOf("Sanbox")), undefined)).rejects.toThrow(
+      'does not know ("Sanbox"; known: OnPrem, Sandbox, Production)',
+    );
+    // other direction: a known value beside an unknown one still answers
+    expect(
+      (await chooseV3Environment(await project(launchOf("OnPrem", "Odd")), undefined)).value,
+    ).toBe("onprem");
+  });
   test("the refusal is a typed error that extends Error directly", async () => {
     const e = await chooseV3Environment(await project(undefined), undefined).catch((x) => x);
     expect(e).toBeInstanceOf(V3EnvironmentUnknownError);
@@ -86,6 +113,8 @@ describe("R938: which environment is chosen", () => {
   test("buildBackend refuses before the version check or any compile", async () => {
     if (process.platform !== "linux") return; // refuseV3Platform comes first elsewhere
     const dir = await project(undefined);
+    // The tests app's launch.json says OnPrem; it is never read, only the target's is.
+    const testsDir = await project(launchOf("OnPrem"));
     await writeFile(
       join(dir, "app.json"),
       JSON.stringify({
@@ -100,7 +129,7 @@ describe("R938: which environment is chosen", () => {
         {
           mode: "run",
           projectDir: dir,
-          testDir: dir,
+          testDir: testsDir,
           backendKind: "al-runner-v3",
           dbPath: "db",
           configPath: "cfg",

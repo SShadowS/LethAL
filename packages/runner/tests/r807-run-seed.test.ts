@@ -220,6 +220,7 @@ async function backend(spawn: SpawnFn) {
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/alrunner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: l.scratch,
       testDir: l.testDir,
       packagesDir: l.deps,

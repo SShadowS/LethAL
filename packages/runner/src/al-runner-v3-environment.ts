@@ -3,29 +3,27 @@
  *
  * Order, first answer wins: `alRunnerV3.environment`, then the target's `.vscode/launch.json`
  * (`configurations[].environmentType`: OnPrem -> onprem, Sandbox or Production -> saas), else
- * nothing answered. This file reads `environmentType` and nothing else from launch.json: that file
- * can hold server URLs and auth settings.
+ * the run is refused by name. This file reads `environmentType` and nothing else from launch.json:
+ * that file can hold server URLs and auth settings.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export type V3Environment = "saas" | "onprem";
-export type V3EnvironmentSource = "config" | "launch.json" | "unstated";
+export type V3EnvironmentSource = "config" | "launch.json";
 
 export interface V3EnvironmentChoice {
-  /** `undefined`: nothing answered, so no flag is passed (al-runner's default, `saas`). */
-  readonly value: V3Environment | undefined;
+  readonly value: V3Environment;
   readonly source: V3EnvironmentSource;
-  /** Why launch.json did not answer, when it was read and disagreed or held no usable value. */
-  readonly note?: string;
 }
 
 export interface LaunchEnvironment {
   readonly value?: V3Environment;
+  /** Why launch.json did not answer, when it was read and could not be used. */
   readonly note?: string;
 }
 
-/** Reads `<projectDir>/.vscode/launch.json`. A missing file is no answer; an unreadable one says so. */
+/** Reads `<projectDir>/.vscode/launch.json`. A missing file is no answer; an unusable one says why. */
 export async function readLaunchEnvironment(
   projectDir: string,
   read: (p: string) => Promise<string> = (p) => readFile(p, "utf8"),
@@ -33,8 +31,13 @@ export async function readLaunchEnvironment(
   let text: string;
   try {
     text = await read(join(projectDir, ".vscode", "launch.json"));
-  } catch {
-    return {};
+  } catch (e) {
+    const code = (e as { code?: unknown } | null)?.code;
+    // ENOENT (and ENOTDIR: no .vscode folder) is the ordinary "no launch.json".
+    if (code === "ENOENT" || code === "ENOTDIR") return {};
+    return {
+      note: `the target's .vscode/launch.json could not be read (${typeof code === "string" ? code : "unreadable"})`,
+    };
   }
   let parsed: unknown;
   try {
@@ -45,15 +48,22 @@ export async function readLaunchEnvironment(
   const configs = (parsed as { configurations?: unknown } | null)?.configurations;
   if (!Array.isArray(configs)) return {};
   const seen = new Set<V3Environment>();
+  const unknown = new Set<string>();
   for (const c of configs) {
     const t = (c as { environmentType?: unknown } | null)?.environmentType;
     if (t === "OnPrem") seen.add("onprem");
     else if (t === "Sandbox" || t === "Production") seen.add("saas");
+    else if (t !== undefined) unknown.add(JSON.stringify(t));
   }
   if (seen.size === 1) return { value: [...seen][0] as V3Environment };
   if (seen.size > 1) {
     return {
       note: "the configurations in the target's .vscode/launch.json disagree on environmentType (OnPrem and Sandbox/Production)",
+    };
+  }
+  if (unknown.size > 0) {
+    return {
+      note: `the target's .vscode/launch.json has an environmentType al-runner-v3 does not know (${[...unknown].join(", ")}; known: OnPrem, Sandbox, Production)`,
     };
   }
   return {};
@@ -73,7 +83,7 @@ export class V3EnvironmentUnknownError extends Error {
 
 /**
  * THE decision (R938): config, then launch.json; when neither answers, refuse by name (owner's
- * ruling A, "unknown is not no"). The "unstated" source stays a type for older stored reports.
+ * ruling A, "unknown is not no").
  */
 export function resolveV3Environment(a: {
   readonly config?: V3Environment | undefined;
@@ -98,9 +108,5 @@ export async function chooseV3Environment(
 
 /** The one line the run header (stderr) prints. */
 export function describeV3Environment(c: V3EnvironmentChoice): string {
-  const base =
-    c.value !== undefined
-      ? `al-runner-v3: environment: ${c.value} (${c.source === "config" ? "alRunnerV3.environment" : "the target's .vscode/launch.json"})`
-      : "al-runner-v3: environment: not stated (no alRunnerV3.environment, no launch.json environmentType); al-runner's default `saas` applies, and tests that expect an on-prem server may fail at baseline (R938)";
-  return c.note !== undefined ? `${base}; ${c.note}` : base;
+  return `al-runner-v3: environment: ${c.value} (${c.source === "config" ? "alRunnerV3.environment" : "the target's .vscode/launch.json"})`;
 }

@@ -109,6 +109,7 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3GateBackendCfg,
   v3ItestEnvironment,
   v3ItestLegTransport,
   v3ItestTransport,
@@ -320,23 +321,17 @@ function backendCfg(
       "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId"
     >,
 ): AlRunnerV3Config {
-  return {
-    alRunnerPath: BIN,
-    alcPath: ALC,
-    cacheDir: CACHE,
-    // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
-    // the fixtures need none, and every call carries --no-download as it did before R885.
-    downloadDemoData: false,
-    // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
-    // would be picked up by default and could turn a refusal into a run. Off, explicitly.
-    dotnetSidecar: false,
-    isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
-    coverage: "al-runner",
-    environmentChoice: { value: ENVIRONMENT, source: "config" }, // R938: stated, never unknown
-    ...(CANDIDATE ? { candidate: true } : {}),
-    ...TRANSPORT,
-    ...o,
-  };
+  return v3GateBackendCfg(
+    {
+      alRunnerPath: BIN,
+      alcPath: ALC,
+      cacheDir: CACHE,
+      candidate: CANDIDATE,
+      transport: TRANSPORT,
+      environment: ENVIRONMENT,
+    },
+    o,
+  );
 }
 
 /** r9 §2: this leg's sessions' `unlike-bc` warnings, drained into the receipt after each leg. */

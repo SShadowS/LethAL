@@ -8,7 +8,12 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { V3_GATE_LEGS, gateOutcome, v3ItestEnvironment } from "../itest/al-runner-v3-gate";
+import {
+  V3_GATE_LEGS,
+  gateOutcome,
+  v3GateBackendCfg,
+  v3ItestEnvironment,
+} from "../itest/al-runner-v3-gate";
 import {
   V3_AGENTFLOW_LEGS,
   V3_K_CANDIDATE_SKIP,
@@ -290,15 +295,37 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     );
   });
 
-  test("R938: every v3 itest config builder states an environment", async () => {
+  test("R938: the config every itest leg is built from states the environment, and a leg cannot override it", () => {
+    const ctx = {
+      alRunnerPath: "/b",
+      alcPath: "/alc",
+      cacheDir: "/c",
+      candidate: false,
+      transport: {},
+    };
+    const leg = {
+      instrumentedDir: "/i",
+      testDir: "/t",
+      packagesDir: "/p",
+      bcVersion: BC,
+      selectorObjectId: 1,
+    };
+    for (const environment of ["saas", "onprem"] as const) {
+      const built = v3GateBackendCfg({ ...ctx, environment }, leg);
+      expect(built.environmentChoice).toEqual({ value: environment, source: "config" });
+      // A leg that passes its own (or an undefined) choice does not win.
+      const hostile = v3GateBackendCfg(
+        { ...ctx, environment },
+        { ...leg, environmentChoice: undefined as never },
+      );
+      expect(hostile.environmentChoice.value).toBe(environment);
+    }
+  });
+
+  test("R938: the itest builds every direct backend through that config (source scan: the legs are not importable)", async () => {
     const src = await Bun.file(join(import.meta.dir, "../itest/al-runner-v3.itest.ts")).text();
-    // Every backend is built through backendCfg, and backendCfg states the choice.
     const direct = src.match(/new AlRunnerV3Backend\(\s*(?!\s|backendCfg\()/g) ?? [];
     expect(direct).toEqual([]);
-    const cfg = /function backendCfg\([\s\S]*?\n}\n/.exec(src)?.[0] ?? "";
-    expect(cfg).toContain("environmentChoice: { value: ENVIRONMENT");
-    // K's CLI-built section passes the environment too.
-    expect(src).toMatch(/legKSection\(\{[^}]*environment: ENVIRONMENT/);
   });
 
   const good = {

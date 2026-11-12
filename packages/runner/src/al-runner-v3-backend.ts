@@ -94,7 +94,7 @@ import {
   isolatedSelection,
   serveRow,
 } from "./al-runner-v3-entries";
-import type { V3EnvironmentChoice } from "./al-runner-v3-environment";
+import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
 import {
   AlRunnerV3UngatedBuildError,
   type GatedBuild,
@@ -693,9 +693,9 @@ export interface AlRunnerV3Config {
   readonly noClient?: boolean;
   /**
    * R938: the environment choice (`chooseV3Environment`). A stated value is `--environment <value>`
-   * on every al-runner call, one-shot and serve; "unstated" passes no flag. Absent counts as unstated.
+   * on every al-runner call, one-shot and serve. REQUIRED: the constructor refuses a config without it.
    */
-  readonly environmentChoice?: V3EnvironmentChoice;
+  readonly environmentChoice: V3EnvironmentChoice;
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -1734,7 +1734,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.cfg.noClient ?? V3_NO_CLIENT_DEFAULT;
   }
   /** R938: see `ExecutionBackend.environmentChoice`. */
-  get environmentChoice(): V3EnvironmentChoice | undefined {
+  get environmentChoice(): V3EnvironmentChoice {
     return this.cfg.environmentChoice;
   }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
@@ -2099,6 +2099,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R651: the clock of the phase timers only (a test's fake clock). */
     private readonly now: () => number = Date.now,
   ) {
+    // R938: a backend built directly cannot run with an unknown environment either.
+    if ((cfg.environmentChoice as V3EnvironmentChoice | undefined)?.value === undefined) {
+      throw new V3EnvironmentUnknownError();
+    }
     if (cfg.selectorMode === "resource") throw new AlRunnerV3ResourceSelectorRefusedError();
     if (cfg.isolateTests === true && cfg.isolation === "auto") {
       throw new AlRunnerV3IsolateTestsWithAutoRefusedError();
@@ -2276,6 +2280,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           expectedVersion: reported,
           packagesDir: resolve(this.cfg.packagesDir),
           bcVersion: this.cfg.bcVersion,
+          environment: this.environmentChoice.value, // R938
           alcPath: this.cfg.alcPath,
           ...(this.cfg.cacheDir !== undefined ? { cacheDir: this.cfg.cacheDir } : {}),
           ...(Bun.which("taskset") !== null ? { tasksetPath: Bun.which("taskset") ?? "" } : {}),
@@ -2365,6 +2370,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         version,
         probeCodeHash: code,
         bcVersion: this.cfg.bcVersion,
+        environment: this.environmentChoice.value, // R938
         packages: await packagesFingerprint(this.cfg.packagesDir),
         alc: await alcIdentity(this.cfg.alcPath),
         cacheDir: this.cfg.cacheDir ?? null,
@@ -3248,9 +3254,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       packagesDir: resolve(this.cfg.packagesDir),
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
-      ...(this.environmentChoice?.value !== undefined
-        ? { environment: this.environmentChoice.value }
-        : {}),
+      environment: this.environmentChoice.value,
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
@@ -4427,9 +4431,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
       "--bc-version",
       this.cfg.bcVersion,
-      ...(this.environmentChoice?.value !== undefined
-        ? ["--environment", this.environmentChoice.value]
-        : []),
+      "--environment",
+      this.environmentChoice.value,
       ...(this.noDownload() ? ["--no-download"] : []),
       ...(this.sidecarPath !== undefined
         ? [

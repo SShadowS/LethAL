@@ -4941,6 +4941,27 @@ export async function buildDoctorDeps(
             }
           };
         })();
+  // R938: the same decision `run` makes, so doctor and run agree. Without `--project` the target's
+  // launch.json cannot be read, so only the config key can answer.
+  const v3EnvCheck =
+    configFile.alRunnerV3 === undefined
+      ? undefined
+      : async () => {
+          try {
+            const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+            if (c.environment === undefined && opts.projectDir === undefined) {
+              return {
+                ok: true,
+                details:
+                  'alRunnerV3.environment is not set; pass --project so the target\'s .vscode/launch.json can answer, or set it to "onprem" or "saas"',
+              };
+            }
+            const choice = await chooseV3Environment(opts.projectDir ?? "", c.environment);
+            return { ok: true, details: describeV3Environment(choice) };
+          } catch (err) {
+            return { ok: false, details: err instanceof Error ? err.message : String(err) };
+          }
+        };
   // R900: every backend compiles with alc, so the check is on every config, given `--project`.
   const probingProject = opts.projectDir;
   const probingCheck =
@@ -4948,7 +4969,14 @@ export async function buildDoctorDeps(
       ? {}
       : { assemblyProbingPaths: () => assemblyProbingPathsFor(probingProject, configFile) };
   if (v3Only && v3Check !== undefined) {
-    return { cfg: {}, deps: { alRunnerV3: v3Check, ...probingCheck } };
+    return {
+      cfg: {},
+      deps: {
+        alRunnerV3: v3Check,
+        ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
+        ...probingCheck,
+      },
+    };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -5216,6 +5244,7 @@ export async function buildDoctorDeps(
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
+      ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
       ...probingCheck,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
