@@ -69,7 +69,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, normalize, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -904,9 +904,10 @@ export const HEAVY_JOB =
  */
 export function movesUnder(root: string, exe: string, argv0: string | undefined): boolean {
   if (!exe.startsWith(`${root}/`)) return false;
-  if (argv0 === undefined || !isAbsolute(argv0)) return true;
+  // POSIX on every platform: these are Linux `/proc` paths (`path.normalize` is win32 on Windows CI).
+  if (argv0 === undefined || !posix.isAbsolute(argv0)) return true;
   // Normalised, so `<root>//current/`, `<root>/./current/` and `<root>/x/../current/` count too.
-  const a = normalize(argv0);
+  const a = posix.normalize(argv0);
   if (!a.startsWith(`${root}/`)) return true;
   return a.startsWith(`${root}/current/`);
 }
