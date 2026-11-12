@@ -173,6 +173,30 @@
               },
               "noClient": {
                 "const": true
+              },
+              "environment": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "value",
+                  "source"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "enum": [
+                      "saas",
+                      "onprem"
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "config",
+                      "launch.json"
+                    ]
+                  }
+                }
               }
             }
           }

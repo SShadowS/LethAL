@@ -140,6 +140,7 @@ describe("R886: the session takes the pinned build's sidecar from its .gated", (
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: bin,
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: join(dir, "scratch"),
         testDir: join(dir, "tests"),
         packagesDir: join(dir, "deps"),

@@ -340,6 +340,7 @@ export async function lanesRig(
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: scratch,
       testDir,
       packagesDir: deps,

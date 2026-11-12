@@ -23,11 +23,11 @@ import { emitStaticSelector } from "@lethal/schemata";
 import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
+  AlRunnerV3CompileRefusedError,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
   AlRunnerV3NoClientUnsupportedError,
-  AlRunnerV3CompileRefusedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3ResourceSelectorRefusedError,
   AlRunnerV3ReusedBaselineUnclassifiedError,
@@ -311,6 +311,7 @@ function backendOf(
   return new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/alrunner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: l.scratch,
       testDir: l.testDir,
       packagesDir: l.deps,
@@ -1442,6 +1443,31 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(on[on.indexOf("--bc-version") + 2]).toBe("--no-client");
     expect(v3CallArgv({ ...a, noClient: false })).not.toContain("--no-client");
     expect(v3CallArgv(a)).not.toContain("--no-client");
+  });
+
+  test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ environmentChoice: { value: "onprem", source: "config" } });
+    expect(on[on.indexOf("--environment") + 1]).toBe("onprem");
+    const off = await run({ environmentChoice: { value: "saas", source: "config" } });
+    expect(off[off.indexOf("--environment") + 1]).toBe("saas");
+  });
+
+  test("R938: a backend built directly with no environment is refused by name", () => {
+    const l = {} as Layout;
+    expect(() =>
+      backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
+        environmentChoice: undefined as never,
+      }),
+    ).toThrow('set alRunnerV3.environment to "onprem" or "saas"');
   });
 
   test("R907 a one-shot call carries --no-client exactly when the backend's noClient is on", async () => {

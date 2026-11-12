@@ -1360,6 +1360,38 @@ export class ResultsStore {
       : { runId: row.id, coverageMode: parseCoverageMode(row.coverage_mode, row.id) };
   }
 
+  /**
+   * R938: the most recent unfinished al-runner-v3 run for this project that holds something to carry
+   * and equals this session's `runnerBuild` in everything but its `environment-<value>` tag: it
+   * ran under another environment (`environment` is that value) or before the environment was
+   * recorded (`null`). `--resume` never resumes it; this exists so the refusal can name it.
+   */
+  unfinishedRunUnderOtherEnvironment(q: {
+    projectPath: string;
+    backend: string;
+    runnerBuild: string;
+    carryableVerdicts: readonly string[];
+  }): { runId: number; environment: string | null } | null {
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
+    const rows = this.db
+      .query(
+        `SELECT id, runner_build FROM runs WHERE project_path = ? AND backend = ? AND runner_build IS NOT NULL AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC`,
+      )
+      .all(q.projectPath, q.backend, ...q.carryableVerdicts) as {
+      id: number;
+      runner_build: string;
+    }[];
+    // The tag sits before the (always last) isolation-auto tag.
+    const tag = / environment-(saas|onprem)( isolation-auto)?$/;
+    const strip = (b: string) => b.replace(tag, "$2");
+    for (const r of rows) {
+      if (r.runner_build === q.runnerBuild || strip(r.runner_build) !== strip(q.runnerBuild))
+        continue;
+      return { runId: r.id, environment: tag.exec(r.runner_build)?.[1] ?? null };
+    }
+    return null;
+  }
+
   /** R-278: the run's recorded test digests, or `null` for a run recorded before them. A value
    *  that is not a JSON object of strings is a corrupt row and throws. */
   testDigests(runId: number): Record<string, string> | null {

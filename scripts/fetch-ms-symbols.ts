@@ -122,10 +122,14 @@ export async function fetchSymbols(
   return { files, bcVersion: sys.version };
 }
 
+/** Printed under the config line: the printed "environment" is a guess the user must check. */
+export const ENVIRONMENT_HINT =
+  'Change "environment" to "saas" if your target runs on a SaaS server: it must match the target.';
+
 /** The config line to print: `packagesDir` is absolute, so it works from any folder. */
 export function configLine(outDir: string, bcVersion: string): string {
   // JSON.stringify escapes a Windows path's backslashes, so the printed line is valid JSON.
-  return `"alRunnerV3": { "packagesDir": ${JSON.stringify(resolve(outDir))}, "bcVersion": ${JSON.stringify(bcVersion)} }`;
+  return `"alRunnerV3": { "packagesDir": ${JSON.stringify(resolve(outDir))}, "bcVersion": ${JSON.stringify(bcVersion)}, "environment": "onprem" }`;
 }
 
 async function main(): Promise<number> {
@@ -140,6 +144,7 @@ async function main(): Promise<number> {
   const { files, bcVersion } = await fetchSymbols(major, outDir, fetch);
   for (const f of files) console.log(`  wrote ${f}`);
   console.log(`\nSet in the config:  ${configLine(outDir, bcVersion)}`);
+  console.log(ENVIRONMENT_HINT);
   return 0;
 }
 

@@ -190,7 +190,8 @@ bun scripts/fetch-ms-symbols.ts 28 ./symbols
 bun scripts/fetch-alc.ts ./alc                 # skip with the AL Language VS Code extension
 
 # 4. write the config: copy the example, then set packagesDir and bcVersion as step 3 printed them
-#    and, if you ran fetch-alc, add the "alcPath" line it printed to the alRunnerV3 section
+#    and, if you ran fetch-alc, add the "alcPath" line it printed to the alRunnerV3 section.
+#    "environment" ("onprem" or "saas") must match the server your target runs on (R938)
 cp examples/gift-card/lethal.config.v3.example.json examples/gift-card/lethal.config.local.json
 
 # 5. check, then run
