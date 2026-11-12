@@ -1235,7 +1235,8 @@ describe("R885: demo data, on the one-shot path", () => {
       dotnetSidecar: dll,
       assemblyProbingPaths: ["rel/one", "/abs/two"],
     });
-    expect(dirs(on)).toEqual([resolve("rel/one"), "/abs/two"]);
+    // resolve() on both: on Windows an absolute "/abs/two" gains the drive letter.
+    expect(dirs(on)).toEqual([resolve("rel/one"), resolve("/abs/two")]);
     expect(on.indexOf("--dotnet-assembly-dir")).toBeGreaterThan(on.indexOf("--dotnet-sidecar"));
     expect(
       dirs(await callArgv({ dotnetSidecar: false, assemblyProbingPaths: ["/abs/two"] })),

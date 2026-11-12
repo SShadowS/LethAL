@@ -1205,7 +1205,8 @@ describe("R885: demo data, on the serve path", () => {
     const paths = { assemblyProbingPaths: ["/abs/one", "rel/two"] };
     const on = (await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: dll, ...paths } }))
       .serve.daemons[0];
-    expect(dirs(on ?? [])).toEqual(["/abs/one", resolve("rel/two")]);
+    // resolve() on both: on Windows an absolute "/abs/one" gains the drive letter.
+    expect(dirs(on ?? [])).toEqual([resolve("/abs/one"), resolve("rel/two")]);
     const offRig = await readyRig({
       mutants: ["M0001"],
       extra: { dotnetSidecar: false as const, ...paths },
