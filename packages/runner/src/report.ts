@@ -3916,7 +3916,7 @@ export function renderConsole(r: SessionReport): string {
     const head = `TIMING: total ${s(t.totalMs)} = generate ${s(t.generateMutationSetMs)} + deploy ${s(t.deployMs)} + baseline ${s(t.baselineMs)}`;
     lines.push(
       rest >= 0 && t.mutantsMs > rest
-        ? `${head} + mutant phase ${s(rest)} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that because their tests overlapped`
+        ? `${head} + mutant phase ${s(rest)} (with overhead); the mutants' summed test time, ${s(t.mutantsMs)}, is more than that: tests overlap (prefetch, lanes), and on al-runner a test whose own time was not reported (a timeout, a refusal, an error) counts its whole call's time`
         : `${head} + mutants ${s(t.mutantsMs)} + overhead ${s(Math.max(0, rest - t.mutantsMs))}`,
     );
     if (t.perMutant.count > 0) {
