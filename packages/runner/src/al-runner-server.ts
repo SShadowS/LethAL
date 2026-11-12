@@ -677,7 +677,21 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * answer ..."), one exact text with no variable part, measured by R-808's probe (`/coord/handoff/R-808/probe.md`):
  * about 60 requests per daemon on both builds, every Reader answer equal to a cold daemon's, the pid
  * unchanged. alpha.2's wording stays.
+ * R945: seven .NET-helper and stream refusal families, measured clean by R-937's probe on edge-42af5d384
+ * (`/coord/handoff/R-937/probe/README.md`; invented AL): per family 20 refused requests on one daemon,
+ * each next reader equal to the one after a passing test with the same writes and to a fresh daemon's,
+ * the pid unchanged, no panic text; nothing crossed requests under any isolation, and inside one run a
+ * refused test never left more state than a pass. Only the measured shapes: a `.NET` exception, a call
+ * on a variable that holds no object, an assembly that does not load, a member or overload not found,
+ * a stream never created, and the one time-zone policy member. Never measured, so still closing: an
+ * unassigned Variant used as a stream, an unassigned XmlElement, and every other wording. The two
+ * free-text tails take `SAFE_TAIL`, and no entry spans a line break. Not in the update gate's
+ * `serve-keep-reasons` fact (it runs without the .NET helper): a reworded text stops matching and the
+ * daemon closes again, the safe direction, counted in `v3DaemonCloses`.
  */
+const DOTNET = String.raw`^NotRun: out-of-scope: DotNet `;
+/** R945: a .NET type or member as v3 names it (`System.Collections.Generic.Dictionary`2.Count`). */
+const DOTNET_NAME = "[A-Za-z_][A-Za-z0-9_.`+]*";
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   http: /^NotRun: out-of-scope: (?:an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)|an outbound HTTP request that a test handler does not answer: the runtime never opens a connection \(ADR-027\)\. To run the test, bind an \[HttpClientHandler\] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it)$/,
   commit:
@@ -687,6 +701,26 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ),
   "onrun-failed": new RegExp(
     String.raw`^NotRun: out-of-scope: OnRun failed \(runner behaviour not pinned\): ${SAFE_TAIL}.*$`,
+  ),
+  "dotnet-exception": new RegExp(
+    String.raw`${DOTNET}(?:new )?${DOTNET_NAME} raised the \.NET exception [A-Za-z0-9_.+]+(?::|;| <-)${SAFE_TAIL}[^\n]*$`,
+  ),
+  "dotnet-no-object": new RegExp(
+    String.raw`${DOTNET}${DOTNET_NAME}: '${DOTNET_NAME}' is an instance member and the variable holds no object$`,
+  ),
+  "dotnet-assembly": new RegExp(
+    String.raw`${DOTNET}(?:new )?${DOTNET_NAME}: assembly '[^'\n]+' could not be loaded: FileNotFoundException: ${SAFE_TAIL}[^\n]*$`,
+  ),
+  "dotnet-member": new RegExp(
+    String.raw`${DOTNET}${DOTNET_NAME}: (?:member|property, field or method|settable property or field) '[^'\n]+' not found on '[^'\n]+'$`,
+  ),
+  "dotnet-overload": new RegExp(
+    String.raw`${DOTNET}(?:new )?${DOTNET_NAME}: (?:new )?${DOTNET_NAME} has no overload taking \d+ argument\(s\) of the given types \([^)\n]*\)$`,
+  ),
+  "stream-never-created":
+    /^NotRun: out-of-scope: use of an (?:In|Out)Stream that was never created$/,
+  "dotnet-policy-timezone": new RegExp(
+    String.raw`${DOTNET}${DOTNET_NAME}: refused by policy: member '${DOTNET_NAME}' \(time zone that bypasses the host\)$`,
   ),
 };
 

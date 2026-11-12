@@ -201,4 +201,95 @@ describe("serveDaemonReusable, the rule alone", () => {
     }
     expect(serveDaemonReusable([r("fail", { notRun: false, message: REFUSAL })], "v2")).toBe(true);
   });
+
+  // R945: the seven families R-937's probe measured clean (`/coord/handoff/R-937/probe/README.md`,
+  // invented AL, edge-42af5d384), each keeping on the probe's exact texts and on texts of the same
+  // shape from Cryptography Management's run, and closing on everything around them.
+  const P = "NotRun: out-of-scope: ";
+  const R945: Record<string, { keeps: string[]; closes: string[] }> = {
+    "dotnet-exception": {
+      keeps: [
+        `${P}DotNet System.Convert.FromBase64String raised the .NET exception System.FormatException: The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters.; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet new System.IO.MemoryStream raised the .NET exception System.ArgumentOutOfRangeException: capacity ('-1') must be a non-negative value. (Parameter 'capacity')`,
+        `${P}DotNet new System.Guid raised the .NET exception System.FormatException: Unrecognized Guid format.; the text AL would see is not pinned (ADR-014 section 7)`,
+        `${P}DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000079:rsa routines::oaep decoding error; the text AL would see is not pinned (ADR-014 section 7)`,
+      ],
+      closes: [
+        `${P}DotNet System.Convert.FromBase64String raised the .NET exception System.TimeoutException: The operation has timed out.`,
+        `${P}DotNet System.X.Y raised the .NET exception System.Exception: Test exceeded 3s timeout.`,
+        `${P}DotNet System.X.Y raised the .NET exception System.Exception: boom\nNotRun: out-of-scope: anything`,
+        `${P}DotNet System.X.Y raised the .NET exception`,
+        `x${P}DotNet System.X.Y raised the .NET exception System.Exception: boom`,
+      ],
+    },
+    "dotnet-no-object": {
+      keeps: [
+        `${P}DotNet System.Text.StringBuilder.Append: 'System.Text.StringBuilder.Append' is an instance member and the variable holds no object`,
+      ],
+      closes: [
+        `${P}DotNet System.Text.StringBuilder.Append: 'System.Text.StringBuilder.Append' is an instance member and the variable holds no object after a timeout`,
+        // An array type's member: never measured.
+        `${P}DotNet System.Security.Cryptography.KeySizes[].GetValue: 'System.Security.Cryptography.KeySizes[].GetValue' is an instance member and the variable holds no object`,
+      ],
+    },
+    "dotnet-assembly": {
+      keeps: [
+        `${P}DotNet new R937Missing.Lib.Thing: assembly 'R937Missing.Lib' could not be loaded: FileNotFoundException: Could not load file or assembly 'R937Missing.Lib, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified. Searched the .NET runtime's own assemblies, then: /work/tools/al-runtime-rs/cache/artifacts/28.4.53241.53758/service. To use it, pass a folder that holds R937Missing.Lib.dll with --dotnet-assembly-dir.`,
+      ],
+      closes: [
+        `${P}DotNet new R.Thing: assembly 'R' could not be loaded: FileNotFoundException: the load timed out`,
+        `${P}DotNet new R.Thing: assembly 'R' could not be loaded: BadImageFormatException: x`,
+      ],
+    },
+    "dotnet-member": {
+      keeps: [
+        `${P}DotNet System.Text.StringBuilder.NoSuchMethod: member 'NoSuchMethod' not found on 'System.Text.StringBuilder'`,
+        `${P}DotNet System.Text.StringBuilder.NoSuchProp: property, field or method 'NoSuchProp' not found on 'System.Text.StringBuilder'`,
+        `${P}DotNet System.Text.StringBuilder.NoSuchProp: settable property or field 'NoSuchProp' not found on 'System.Text.StringBuilder'`,
+      ],
+      closes: [
+        `${P}DotNet System.Text.StringBuilder.NoSuchMethod: member 'NoSuchMethod' not found on 'System.Text.StringBuilder' (panic)`,
+        `${P}DotNet System.Text.StringBuilder.X: event 'X' not found on 'System.Text.StringBuilder'`,
+      ],
+    },
+    "dotnet-overload": {
+      keeps: [
+        `${P}DotNet System.Text.StringBuilder.Append: System.Text.StringBuilder.Append has no overload taking 7 argument(s) of the given types (String, String, String, String, String, String, String)`,
+        `${P}DotNet new System.Security.Cryptography.X509Certificates.CertificateRequest: new System.Security.Cryptography.X509Certificates.CertificateRequest has no overload taking 4 argument(s) of the given types (String, RSACryptoServiceProvider, null, RSASignaturePadding)`,
+      ],
+      closes: [
+        `${P}DotNet System.Text.StringBuilder.Append: System.Text.StringBuilder.Append has no overload taking 7 argument(s) of the given types (String) and then a timeout`,
+      ],
+    },
+    "stream-never-created": {
+      keeps: [
+        `${P}use of an InStream that was never created`,
+        `${P}use of an OutStream that was never created`,
+      ],
+      closes: [
+        // Never produced by the probe (F1): still closes.
+        `${P}InStream method on an unassigned Variant`,
+        `${P}OutStream method on an unassigned Variant`,
+        `${P}use of an unassigned XmlElement`,
+        `${P}use of an InStream that was never created x`,
+      ],
+    },
+    "dotnet-policy-timezone": {
+      keeps: [
+        `${P}DotNet System.TimeZoneInfo.Local: refused by policy: member 'System.TimeZoneInfo.Local' (time zone that bypasses the host)`,
+      ],
+      closes: [
+        // Another policy refusal: never measured.
+        `${P}DotNet System.Environment.SetEnvironmentVariable: refused by policy: member 'System.Environment.SetEnvironmentVariable' (a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1))`,
+      ],
+    },
+  };
+  for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
+    test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
+      for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
+      for (const m of [...c, ...k.map((x) => `${x}\n`), ...k.map((x) => `x${x}`)])
+        expect([m, keeps(m)]).toEqual([m, false]);
+      for (const m of k) expect([m, keeps(m, false)]).toEqual([m, false]);
+    });
+  }
 });
