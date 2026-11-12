@@ -1921,8 +1921,8 @@ export interface SessionReport {
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
-   * `timeout`, `request-failed`, ...; `V3DaemonCloseReason`), counted from the backend's
-   * `al-runner-v3-daemon-closed-<reason>` warnings. Each such close costs a new daemon and its
+   * `timeout`, `request-failed`, ...; `V3DaemonCloseReason`), counted from the session's
+   * `serve-daemon-closed` events. Each such close costs a new daemon and its
    * warm-up. Present only when there was one; the routine closes (a redeploy, the session's end) are
    * not counted here. Optional, so reports from before R939 stay valid.
    */
@@ -2686,16 +2686,12 @@ export const COVERAGE_NOT_MEASURED_INTERPRETATION: Interpretation = {
   basis: "R252",
 };
 
-/** R939: the al-runner-v3 backend's daemon-close warning code prefix (`V3_DAEMON_CLOSED_CODE`). */
-export const V3_DAEMON_CLOSED_WARNING_PREFIX = "al-runner-v3-daemon-closed-";
-
-/** R939: the session's unexpected serve daemon closes by reason, from their warnings; undefined if none. */
+/** R939: the session's unexpected serve daemon closes by reason, from their events; undefined if none. */
 function daemonClosesOf(events: readonly RunEvent[]): Record<string, number> | undefined {
   const out: Record<string, number> = {};
   for (const e of events) {
-    if (e.type !== "warning" || !e.code.startsWith(V3_DAEMON_CLOSED_WARNING_PREFIX)) continue;
-    const reason = e.code.slice(V3_DAEMON_CLOSED_WARNING_PREFIX.length);
-    out[reason] = (out[reason] ?? 0) + 1;
+    if (e.type !== "serve-daemon-closed") continue;
+    out[e.reason] = (out[e.reason] ?? 0) + 1;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }

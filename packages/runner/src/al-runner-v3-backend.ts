@@ -1072,7 +1072,8 @@ interface CallRows {
 
 /**
  * R939: why a serve daemon was closed. Each close is counted by reason; every reason but `deploy`
- * and `session-end` (the routine ones) also emits the warning `al-runner-v3-daemon-closed-<reason>`.
+ * and `session-end` (the routine ones) is also reported to the session's close sink, which emits a
+ * `serve-daemon-closed` event (never a warning: gates pin their warning sets).
  * - `refusal`: a row v3 refused (`NotRun`) with a reason outside `V3_SERVE_SAFE_REFUSALS`; the
  *   warning and the close line name its family. `timeout`: a timeout row. `unkept-row`: any other
  *   row the keep rule (`serveDaemonReusable`) does not keep (a pass or fail holding v3's refusal marker).
@@ -1094,9 +1095,6 @@ export type V3DaemonCloseReason =
   | "probe"
   | "deploy"
   | "session-end";
-
-/** R939: the warning code a close emits; `buildReport` counts closes by this prefix. */
-export const V3_DAEMON_CLOSED_CODE = "al-runner-v3-daemon-closed-";
 
 /**
  * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
@@ -1856,10 +1854,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   } {
     return { byReason: new Map(this.closes), refusalFamilies: new Map(this.closeFamilies) };
   }
+  /** R939: the session's close sink (`setDaemonCloseSink`); each call becomes a `serve-daemon-closed` event. */
+  private closeSink:
+    | ((c: { readonly reason: string; readonly family?: string }) => void)
+    | undefined;
+  /** R939: see `ExecutionBackend.setDaemonCloseSink`. */
+  setDaemonCloseSink(
+    sink?: (c: { readonly reason: string; readonly family?: string }) => void,
+  ): void {
+    this.closeSink = sink;
+  }
   /**
    * R939: close every daemon of `lane` and count each by `reason`; for an unexpected reason (every
-   * one but `deploy` and `session-end`) say so once per close, as the warning
-   * `al-runner-v3-daemon-closed-<reason>`, naming a refusal's family.
+   * one but `deploy` and `session-end`) report each close to the session's sink, naming a refusal's
+   * family.
    */
   private async closeLane(lane: Lane, reason: V3DaemonCloseReason, family?: string): Promise<void> {
     const n = await lane.closeDaemon();
@@ -1868,10 +1876,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (family !== undefined)
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + n);
     if (reason === "deploy" || reason === "session-end") return;
-    this.notify(
-      `${V3_DAEMON_CLOSED_CODE}${reason}`,
-      `[lethal] al-runner-v3 serve daemon closed (${reason}${family !== undefined ? `: ${family}` : ""}); the next request starts a new one with a warm-up (R939).`,
-    );
+    for (let i = 0; i < n; i++)
+      this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
   }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {

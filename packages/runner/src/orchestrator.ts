@@ -4812,7 +4812,18 @@ async function withBackendRefusals(
  */
 function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   backend.setNotify?.((code, message) => emit({ type: "warning", code, message }));
-  return () => backend.setNotify?.(undefined);
+  // R939: a serve daemon's early close is an event of its own, not a warning (gates pin warnings).
+  backend.setDaemonCloseSink?.((c) =>
+    emit({
+      type: "serve-daemon-closed",
+      reason: c.reason,
+      ...(c.family !== undefined ? { family: c.family } : {}),
+    }),
+  );
+  return () => {
+    backend.setNotify?.(undefined);
+    backend.setDaemonCloseSink?.(undefined);
+  };
 }
 
 /** R-300b: hands the session's effective build symbols to a backend that takes them. */

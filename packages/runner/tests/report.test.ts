@@ -3,8 +3,7 @@ import { IDENTITY_SCHEME, type MutantManifestEntry } from "@lethal/schemata";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { HANG_CAPABLE_EXPLANATIONS } from "../src/hang-capable";
 import type { PermissionCanaryResult } from "../src/permission-canary";
-import { V3_DAEMON_CLOSED_CODE } from "../src/al-runner-v3-backend";
-import { V3_DAEMON_CLOSED_WARNING_PREFIX, buildReport, renderConsole } from "../src/report";
+import { buildReport, renderConsole } from "../src/report";
 import type { Caveat, SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
 import { identityKeyOf, serializeKey } from "../src/selection";
@@ -372,13 +371,17 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
       { type: "session-finished", elapsedMs: 1 },
     ];
-    const warn = (c: string): RunEventInput => ({ type: "warning", code: c, message: "m" });
-    expect(V3_DAEMON_CLOSED_WARNING_PREFIX).toBe(V3_DAEMON_CLOSED_CODE);
-    const closes = [
-      warn(`${V3_DAEMON_CLOSED_CODE}refusal`),
-      warn(`${V3_DAEMON_CLOSED_CODE}timeout`),
-      warn(`${V3_DAEMON_CLOSED_CODE}refusal`),
-      warn("al-runner-v3-serve-default-fallback"),
+    const closed = (reason: string, family?: string): RunEventInput => ({
+      type: "serve-daemon-closed",
+      reason,
+      ...(family !== undefined ? { family } : {}),
+    });
+    const closes: RunEventInput[] = [
+      closed("refusal", "WithEvents subscriber …"),
+      closed("timeout"),
+      closed("refusal", "DateTime before N"),
+      // A warning, even one named like a close, is never counted as one.
+      { type: "warning", code: "al-runner-v3-daemon-closed-refusal", message: "m" },
     ];
     const r = buildReport(STATICS, seq([...closes, ...base]));
     expect(r.v3DaemonCloses).toEqual({ refusal: 2, timeout: 1 });

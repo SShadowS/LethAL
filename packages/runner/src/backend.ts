@@ -538,6 +538,14 @@ export interface ExecutionBackend {
    * with no notifier, or one that was never given one, prints to `console.warn`.
    */
   setNotify?(notify?: (code: string, message: string) => void): void;
+  /**
+   * R939, OPTIONAL: where the backend reports a serve daemon it closed before the session's end
+   * (al-runner-v3 only). Installed and removed with `setNotify`; each call becomes a
+   * `serve-daemon-closed` event. With no sink, closes are only counted (the close line).
+   */
+  setDaemonCloseSink?(
+    sink?: (close: { readonly reason: string; readonly family?: string }) => void,
+  ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

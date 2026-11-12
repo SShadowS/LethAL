@@ -39,7 +39,6 @@ import {
   ISOLATED_BASELINE_PROCESSES,
   SPECULATE_BASELINE_ENV,
   V3_AUTO_METHOD_ONE_SHOT,
-  V3_DAEMON_CLOSED_CODE,
   WINDOW_BOUND_CAVEAT,
   unkeptRowReason,
   v3CallDeadlineMs,
@@ -1367,20 +1366,22 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
+    const sunk: { reason: string; family?: string }[] = [];
     r.b.setNotify((c, m) => seen.push([c, m]));
+    r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
     await r.b.prefetchMutants(plans(["M0001", "M0002", "M0003"], SUITE1));
-    return { r, seen };
+    return { r, seen, sunk };
   };
 
-  test("a refusal outside the keep list: one close, reason refusal, its family named in the count and the warning", async () => {
-    const { r, seen } = await watched(refusedFor("M0002"));
+  test("a refusal outside the keep list: one close, reason refusal, its family in the count and the sink, no notice", async () => {
+    const { r, seen, sunk } = await watched(refusedFor("M0002"));
     const c = r.b.daemonCloses();
     expect([...c.byReason]).toEqual([["refusal", 1]]);
     expect([...c.refusalFamilies]).toEqual([["WithEvents subscriber …", 1]]);
-    const w = seen.filter(([code]) => code.startsWith(V3_DAEMON_CLOSED_CODE));
-    expect(w.map(([code]) => code)).toEqual(["al-runner-v3-daemon-closed-refusal"]);
-    expect(w[0]?.[1]).toContain("(refusal: WithEvents subscriber …)");
+    expect(sunk).toEqual([{ reason: "refusal", family: "WithEvents subscriber …" }]);
+    // Not a warning: gates pin their warning sets (R939).
+    expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
   });
 
   test("a timeout row: reason timeout, no family", async () => {
@@ -1390,12 +1391,12 @@ describe("R939: why each serve daemon closed", () => {
     expect(c.refusalFamilies.size).toBe(0);
   });
 
-  test("every row kept: no close and no warning until the session ends, which counts without warning", async () => {
-    const { r, seen } = await watched(allPass);
+  test("every row kept: no close until the session ends, which is counted but never sent to the sink", async () => {
+    const { r, sunk } = await watched(allPass);
     expect(r.b.daemonCloses().byReason.size).toBe(0);
     await r.b.close();
     expect([...r.b.daemonCloses().byReason]).toEqual([["session-end", 1]]);
-    expect(seen.filter(([code]) => code.startsWith(V3_DAEMON_CLOSED_CODE))).toEqual([]);
+    expect(sunk).toEqual([]);
   });
 
   test("the close line names each reason and the refusal families, most first", () => {
