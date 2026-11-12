@@ -352,6 +352,47 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
     ).not.toContain("project-symlink-skipped");
   });
 
+  test("R939: serve-daemon-closed events become v3DaemonCloses and a TIMING sub-line; none, neither", () => {
+    const base: RunEventInput[] = [
+      {
+        type: "mutation-set-generated",
+        siteCount: 0,
+        deployedCount: 0,
+        hangCapableCount: 0,
+        totalFiles: 0,
+        instrumentableFiles: 0,
+        notInstrumentedFiles: [],
+        declarativeSiteFiles: [],
+        preprocExcludedFiles: [],
+        excludedByOnly: 0,
+        excludedByExclude: 0,
+        excludedByOperator: 0,
+      },
+      { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+      { type: "session-finished", elapsedMs: 1 },
+    ];
+    const closed = (reason: string, family?: string): RunEventInput => ({
+      type: "serve-daemon-closed",
+      reason,
+      ...(family !== undefined ? { family } : {}),
+    });
+    const closes: RunEventInput[] = [
+      closed("refusal", "WithEvents subscriber …"),
+      closed("timeout"),
+      closed("refusal", "DateTime before N"),
+      // A warning, even one named like a close, is never counted as one.
+      { type: "warning", code: "al-runner-v3-daemon-closed-refusal", message: "m" },
+    ];
+    const r = buildReport(STATICS, seq([...closes, ...base]));
+    expect(r.v3DaemonCloses).toEqual({ refusal: 2, timeout: 1 });
+    expect(renderConsole(r)).toContain(
+      "serve daemons closed early (each restarts with a warm-up): refusal 2, timeout 1",
+    );
+    const none = buildReport(STATICS, seq(base));
+    expect("v3DaemonCloses" in none).toBe(false);
+    expect(renderConsole(none)).not.toContain("serve daemons closed early");
+  });
+
   test("R786: the serve warm-up fallback warning raises its caveat; no warning, or R761's other fallback warning, does not", () => {
     const base: RunEventInput[] = [
       {

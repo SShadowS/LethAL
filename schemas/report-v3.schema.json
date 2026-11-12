@@ -1493,6 +1493,12 @@
         }
       }
     },
+    "v3DaemonCloses": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
     "permissionCanary": {
       "type": "object",
       "additionalProperties": false,

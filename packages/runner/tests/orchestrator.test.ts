@@ -4179,6 +4179,36 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(rows.filter((r) => r[1] === "pass").every((r) => r[2] === 9)).toBe(true);
     expect(rows.some((r) => r[1] === "pass")).toBe(true);
   });
+  // R939: the session installs a close sink; each close it gets is a `serve-daemon-closed` event,
+  // which the report counts, and never a warning. Removed at the session's end.
+  test("R939: a backend's daemon close becomes an event and the report's v3DaemonCloses, never a warning", async () => {
+    class ClosingBackend extends RecordingBackend {
+      sink: ((c: { readonly reason: string; readonly family?: string }) => void) | undefined;
+      setDaemonCloseSink(sink?: (c: { readonly reason: string; readonly family?: string }) => void) {
+        this.sink = sink;
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (ref.method === "UnsupportedTest") this.sink?.({ reason: "refusal", family: "WithEvents …" });
+        return super.run(ref, opts);
+      }
+    }
+    const dirs = await project();
+    const backend = new ClosingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const closed = events.filter((e) => e.type === "serve-daemon-closed");
+    expect(closed.length).toBeGreaterThan(0);
+    expect(closed[0]).toMatchObject({ reason: "refusal", family: "WithEvents …" });
+    expect(report.v3DaemonCloses).toEqual({ refusal: closed.length });
+    expect(events.some((e) => e.type === "warning" && e.code.includes("daemon"))).toBe(false);
+    expect(backend.sink).toBeUndefined();
+  });
   // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
   // only when that frame is a page call in the test app's source; the same text at any other
   // statement is an ordinary failure.

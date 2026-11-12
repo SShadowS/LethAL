@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 903 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**23 of 903 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -946,8 +946,8 @@ that ordering is the priority.
 - **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
 - **R935** · `corpus-snapshot diff` refuses with "no master entry" when origin/master moves while the job waits for a heavy slot: it should pin the master commit it dumped · [R935.md](docs/roadmap/R935.md) · done (b7404cc1)
 - **R938** · LethAL runs al-runner v3 in its default `saas` environment, while the bc servers are on-prem: tests that expect an on-prem server fail at baseline on v3 only · [R938.md](docs/roadmap/R938.md) · open
-- **R939** · A v3 serve session does not say why it closed a daemon, so a session with many restarts (18 daemons for one app) cannot be explained from its report · [R939.md](docs/roadmap/R939.md) · open
-- **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · open
+- **R939** · A v3 serve session does not say why it closed a daemon, so a session with many restarts (18 daemons for one app) cannot be explained from its report · [R939.md](docs/roadmap/R939.md) · done (851969de; report 195ef055)
+- **R940** · The R912 estimate is called a lower bound, but on v3 serve it ran from 1.4x over to 5.8x under the mutants phase: it is neither bound · [R940.md](docs/roadmap/R940.md) · done (08c571fa): relabelled with the measured spread; no bound exists to promise
 
 ---
 

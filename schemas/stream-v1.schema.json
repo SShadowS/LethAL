@@ -1738,6 +1738,29 @@
       ],
       "properties": {
         "type": {
+          "const": "serve-daemon-closed"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "reason",
+        "seq"
+      ],
+      "properties": {
+        "type": {
           "const": "quarantined"
         },
         "reason": {

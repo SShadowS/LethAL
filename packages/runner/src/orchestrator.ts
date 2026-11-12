@@ -204,6 +204,7 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
   cutWindows,
@@ -4811,7 +4812,18 @@ async function withBackendRefusals(
  */
 function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   backend.setNotify?.((code, message) => emit({ type: "warning", code, message }));
-  return () => backend.setNotify?.(undefined);
+  // R939: a serve daemon's early close is an event of its own, not a warning (gates pin warnings).
+  backend.setDaemonCloseSink?.((c) =>
+    emit({
+      type: "serve-daemon-closed",
+      reason: c.reason,
+      ...(c.family !== undefined ? { family: c.family } : {}),
+    }),
+  );
+  return () => {
+    backend.setNotify?.(undefined);
+    backend.setDaemonCloseSink?.(undefined);
+  };
 }
 
 /** R-300b: hands the session's effective build symbols to a backend that takes them. */
@@ -6042,7 +6054,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   emit({
     type: "phase-entered",
     phase: "mutants",
-    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of covering-test time${longNote}`,
+    detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})${longNote}`,
   });
   const mutantsStartedMs = Date.now();
   const baselineReused: ReusedBaseline | undefined =
