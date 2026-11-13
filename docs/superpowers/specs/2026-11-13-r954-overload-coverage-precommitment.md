@@ -21,3 +21,13 @@ Procedures with their own name are unchanged. Identity (`IDENTITY_SCHEME`, hashe
   153 file/procedure pairs). Cryptography Management re-run on the same build and config as R-950 (al-runner edge-c8fe56e05,
   `/coord/handoff/R-950/v3.crypto.json`, `--mutant-timeout-ms 180000`), new LethAL against R-950's report, per mutant by site offsets:
   every verdict identical except survived -> no-coverage, and only among the at-risk mutants of `count.tsv` for that report.
+
+## Amendment (2026-11-13, after the build review, before any gate or measured run)
+
+- **"A killed mutant stays killed" holds except in bcdev HUB coverage mode** (opt-in, in no gate): hub coverage carries no overload
+  index, so an overloaded public procedure's mutants get no exact claim there and become no-coverage, killed ones included. That is
+  the safe direction (unscored, never a false survivor); overloaded locals keep the object-grain fallback.
+- A run started before R965 and continued with `--resume`/`--resume-run`, or an installed artifact from before R965, keeps the old
+  name-keyed coverage for the verdicts it carries; R965's text says so. The predictions above are about fresh runs.
+- The review's probe confirmed `sandbox-wrapped`'s `Pick` gets no overload index (each `#if` arm is its own object node), so the
+  wrapped legs are still predicted unchanged.
