@@ -90,6 +90,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
   CDO_SLICE_FILE,
+  LEG_T_OWN_COUNTS,
   V3LegEnvironment,
   V3LegFailure,
   V3LegHeld,
@@ -2431,7 +2432,8 @@ async function legT(
   if (recordRequested(TABLES_BASELINE_PATH)) {
     // R810: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
     if (activePin !== undefined) return { outcome: "pass", r };
-    assertCounts(r, "T", 298, 60, 60, 418);
+    const t = LEG_T_OWN_COUNTS;
+    assertCounts(r, "T", t.killed, t.survived, t.noCoverage, t.total);
     must(
       r.unsupportedTests.length === 3,
       `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,

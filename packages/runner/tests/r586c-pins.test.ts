@@ -408,9 +408,9 @@ describe("R586c leg T: the seven rows", () => {
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
   });
-  test("T-pin-0 (B1): all seven still survived, 298/60/60, with the pin: exactly held (no pin: pass)", () => {
-    expect(judge(ownRows, { pinned: false, counts: [298, 60, 60] }).outcome).toBe("pass");
-    const j = judge(ownRows, { counts: [298, 60, 60] });
+  test("T-pin-0 (B1): all seven still survived, the baseline's 298/54/66, with the pin: exactly held (no pin: pass)", () => {
+    expect(judge(ownRows, { pinned: false, counts: [298, 54, 66] }).outcome).toBe("pass");
+    const j = judge(ownRows, { counts: [298, 54, 66] });
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
     expect(j.lines.some((l) => l.startsWith("T: pin-mismatch: "))).toBe(true);
@@ -436,8 +436,8 @@ describe("R586c leg T: the seven rows", () => {
     const now = movedNow.map((r, i) => (i === 0 ? { ...r, killingTest: "SomeTest" } : r));
     expect(judge(now).outcome).not.toBe("pass");
   });
-  test("T-pin-3: counts 298/60/60 with the seven moved is gate-fail", () => {
-    expect(judge(movedNow, { counts: [298, 60, 60] }).outcome).toBe("gate-fail");
+  test("T-pin-3: the baseline's counts 298/54/66 with the seven moved is gate-fail", () => {
+    expect(judge(movedNow, { counts: [298, 54, 66] }).outcome).toBe("gate-fail");
   });
   test("T-pin-3: Sleep index 1 + 0 and unsupportedTests 2 are gate-fail", () => {
     expect(judge(movedNow, { extra: { sleepIndex: { target: 1, test: 0 } } }).outcome).toBe(

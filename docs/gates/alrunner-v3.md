@@ -203,10 +203,10 @@ The legs:
     R647), the leg first classifies its rows and compares them with its own baseline (`compareMutants`), and prints
     every differing row as one receipt line, `T: <held|gate-fail>: <mutantCode> <key>: <old> -> <new> (<reason>)`.
     Only then does `judgeLegT` (`al-runner-v3-gate.ts`) judge, in order: Sleep index 0 + 0, 3 refused tests, the
-    pinned 52, then the classification. `held` needs the compare's differing keys to equal the held keys, and has
+    pinned known differences (52 then, 58 since R975), then the classification. `held` needs the compare's differing keys to equal the held keys, and has
     no count check. Since [[R650]], `held` also meets R556's bare-hash refusal (`bareHashRows`, the predicate
     `assertGateBaseline` uses): a run with a row missing its mutated-text hash, against an own baseline that has
-    hashes, is `gate-fail`. `pass` needs 0 compare differences, then 298 / 60 / 60 over 418, then the baseline compare.
+    hashes, is `gate-fail`. `pass` needs 0 compare differences, then the pinned counts over 418 (298 / 54 / 66 since R975; 298 / 60 / 60 before), then the baseline compare.
     The record branch still checks the counts first. A build that changes the 3 refused tests (the Commit tests)
     is `gate-fail` by design.
   - X (d), since r10: right after its session, the leg prints `SleeperDoubles`'s `baseline-batch-finished`

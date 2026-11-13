@@ -2070,6 +2070,63 @@ ${TRIGGER_TABLE_AL}#endif
       expect(warned).toBe(false);
       expect(report.untargetedTriggerCount).toBe(0);
     });
+
+    test("R975 review: a reused (--resume) baseline does not decide by line; its triggers keep FALLBACK 1", async () => {
+      // R926's condition, wired in the orchestrator (`lineTrusted`): a row that did not run in this
+      // session cannot place a trigger by line. Red if the wiring trusts every row.
+      const dirs = await makeProject(TWO_TEST_AL);
+      await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      // R495: a served, installed test app, so run 1's identity is proven and run 2 can resume.
+      await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+      const make = () => {
+        const b = new StubBackend(CAPS_NST, () => "pass");
+        Object.assign(b, servesTestApp());
+        b.lineCoverageFor = () => [4];
+        b.tableLinesFor = () => [1];
+        return b;
+      };
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const first = await runSession({ backend: make(), store, ...dirs, selectorIds });
+        const tableCodes = first.mutants
+          .filter((m) => m.file.includes("SandboxTable"))
+          .map((m) => m.mutantCode);
+        const lineNoCoverage = first.mutants.filter(
+          (m) => m.file.includes("SandboxTable") && m.verdict === "no-coverage",
+        );
+        expect(lineNoCoverage.length).toBeGreaterThan(0);
+        // Leave every mutant to score again, so the batch reuses run 1's baseline snapshot.
+        store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+        store.db.run("DELETE FROM mutants");
+        store.db.run("UPDATE runs SET finished_at = NULL");
+        const events: RunEvent[] = [];
+        const second = await runSession({
+          backend: make(),
+          store,
+          ...dirs,
+          selectorIds,
+          resume: 1,
+          emit: [(e) => events.push(e)],
+        });
+        expect(
+          events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused"),
+        ).toBe(true);
+        const again = second.mutants.filter((m) => tableCodes.includes(m.mutantCode));
+        expect(again.length).toBe(tableCodes.length);
+        for (const m of lineNoCoverage) {
+          const now = again.find((x) => x.mutantCode === m.mutantCode);
+          expect([m.mutantCode, now?.verdict, now?.coverageAttribution]).toEqual([
+            m.mutantCode,
+            "survived",
+            "object",
+          ]);
+        }
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    });
   });
 
   // R609. al-runner-v3 refused a test MID-RUN (runnerRow "runner-refused") and recorded what it reached

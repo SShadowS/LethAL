@@ -388,7 +388,8 @@ export interface ExplainScore {
  *
  * `executionProven` is the atom the $18.56 sentence had to be derived to obtain. It is `true` only
  * for `exact` attribution — a MEMBER-level coverage match, i.e. a test measured to have executed
- * this procedure. `object` and `all-green` mean some test touched the object, or nothing placed the
+ * this procedure — and for `line` (R975), a test measured to have executed the mutant's own
+ * statement line. `object` and `all-green` mean some test touched the object, or nothing placed the
  * mutant at all; neither proves the mutated code ran.
  */
 export interface ExplainSurvivor {
@@ -1475,8 +1476,9 @@ function survivorOf(
     mutatedText: m.mutatedText,
     attribution,
     // The one derivation this projection makes about the TARGET, and it is a restatement of a
-    // measurement rather than a judgement: `exact` is a member-level coverage match.
-    executionProven: attribution === "exact",
+    // measurement rather than a judgement: `exact` is a member-level coverage match, `line` (R975)
+    // a match on the mutant's own statement line.
+    executionProven: attribution === "exact" || attribution === "line",
     coveringTests: m.coveringTests,
     guardEvidence,
     reach,
