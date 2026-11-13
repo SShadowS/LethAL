@@ -41,3 +41,13 @@ Build now lethal/r948 at a6088667 (adds a review round: lending-tag order, memor
   exactly `["al-runner-v3-isolate-tests", "al-runner-v3-memory-guard"]`.
 - The memory guard's refusal path is unit-tested only (the gate's reader is fixed under the bound); the legs exercise the pass path.
 - Falsifiers as above, for DBI too; every leg other than DB and DBI unchanged.
+
+## Amendment 2 (2026-11-13, before any gate ran): a named skip is a note, not a BLOCK
+
+Build now lethal/r948 at 6400433e (2596b7fe plus origin/master merged, including R-945; S1E's pins are unchanged by that merge).
+A daemon answer the fill skips (a row too slow to stand under the budget rule, a request error, a refused or foreign row) is named in
+`daemonBaselineReport()` (`skippedTooSlow`, `skippedError`, `skippedOther`, `sampledSkipped`) and printed as a note. The exact-count
+checks above become: `served + skippedTooSlow + skippedError + skippedOther === expected` (DB: codeunits less the sample; DBI:
+per-test requests less the sample) and `compared + sampledSkipped === sampled`. A silent drop (nothing taken, nothing named) still
+fails, and `dropped` must still be undefined. The prediction stays: no skips on an unloaded container (`served` equal to `expected`);
+a run with named skips passes and is reported with its skip list.
