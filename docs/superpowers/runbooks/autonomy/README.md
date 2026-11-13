@@ -77,10 +77,16 @@ next free id right before writing).
   `heavy.2` and `heavy.3`, with `flock`. It refuses a fourth heavy job, and a third BaseApp
   (BC.History) corpus job (R642). Known limit: two corpus jobs started from ONE shell (`a & b`) share a
   process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
-  jobs take a slot themselves with `scripts/heavy-slot.sh <baseapp|other> <cmd...>` (R905). It takes
-  the first free slot, writes its pid into the lock and `/coord/locks/heavy.<n>.class` (`baseapp <pid>`
-  or `other <pid>`), runs the same guard as `corpus-snapshot.ts` (exit 75 and no command when it
-  refuses), and removes the class on exit. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
+  jobs take a slot themselves with `scripts/heavy-slot.sh [--wait] [--peak <p>] <baseapp|other> <cmd...>`
+  (R905, R934, R952). It takes the first free slot, writes its pid into the lock and
+  `/coord/locks/heavy.<n>.class` (`<class> <pid> <peak GiB>`), runs the same guard as `corpus-snapshot.ts`
+  (exit 75 and no command when it refuses), and removes the class on exit. `--wait` queues in FIFO
+  order instead of exit 75. `--peak` declares the job's expected memory peak: `serve` 16, `baseline` 12,
+  `gate` 2, `build` 1 GiB, or a number; none means the class default (`other` 16, `baseapp` 12). The guard
+  also applies the memory rule (R953): the container's cgroup (`memory.max`, 32 GiB) must hold what is
+  used now plus the job's peak plus a 4 GiB reserve, and the held slots' declared peaks plus the job's
+  peak plus the reserve. Declare the smallest honest peak: an undeclared `other` job counts as a long
+  serve run, so two of them never run together. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
   they take their own slot, so the job would hold two. Say `baseapp` for any job over BC.History or a COPY of it, `other` for the
   rest. The guard reads the class: while a BaseApp-class job runs, or any held slot has `baseapp` or
   NO readable class (a dead pid reads as none), at most two heavy jobs run in all; with none, three.
@@ -128,7 +134,9 @@ next free id right before writing).
     running). A run with `--workers N` is one heavy job, but it holds N daemons: count about 2.3 GB
     each against the 10 GB floor. Not while a BaseApp (BC.History) corpus job runs:
     then the limit stays two in all. The slot class file (`heavy.<n>.class`, written by
-    `scripts/heavy-slot.sh`, R905) is how the guard knows: a slot with no class counts as BaseApp. Never start a heavy job under 10 GB available (`free -g`). A
+    `scripts/heavy-slot.sh`, R905) is how the guard knows: a slot with no class counts as BaseApp. Memory
+    is the cgroup's, not what `free -g` shows (that is the host's): `heavy-slot.sh` checks it itself
+    (R952); for a job outside it, check `memory.max` less `memory.current` in `/sys/fs/cgroup`. A
     timing run whose figures will be quoted runs on a quiet machine, or reports the load beside its
     figures (R760: load inflated times 1.4-2.3x).
   - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
