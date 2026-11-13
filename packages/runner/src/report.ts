@@ -1944,6 +1944,12 @@ export interface SessionReport {
     };
     /** R955: `true` when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is 0 when none was given). */
     readonly stoppedBySignal?: true;
+    /** R948: the memory guard stopped the run: the container's bytes in use, the bound (its cgroup limit less the headroom), and the cgroup file the limit came from. */
+    readonly stoppedByMemory?: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    };
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -4038,7 +4044,22 @@ export function renderConsole(r: SessionReport): string {
   // R912: a qualifier on the score: the mutants not reached are not in it.
   if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
-    if (bs?.inAutoRebaseline === true) {
+    const mem = r.timeBudget.stoppedByMemory;
+    if (mem !== undefined) {
+      // R948: no --time-budget was spent; say memory, never "--time-budget 0 s".
+      const gib = (n: number) => (n / 2 ** 30).toFixed(1);
+      lines.push(
+        `STOPPED BY THE MEMORY GUARD: the container used ${gib(mem.usedBytes)} GiB, over the ${gib(mem.boundBytes)} GiB bound (its limit in ${mem.source} less the headroom), and stayed there, so no new test call was started (R948). Free memory or raise the limit, or lower "alRunnerV3.memoryHeadroomGb", then continue with --resume.`,
+      );
+      if (bs !== undefined) {
+        lines.push(
+          `The memory guard stopped ${bs.inAutoRebaseline === true ? "the auto isolation re-baseline" : "the baseline"} after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score.`,
+        );
+      }
+      lines.push(
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
+      );
+    } else if (bs?.inAutoRebaseline === true) {
       lines.push(
         `TIME BUDGET REACHED IN THE AUTO ISOLATION RE-BASELINE: every one of the ${bs.testsTotal} baseline test(s) ran once, then the budget ran out while isolation "auto" re-ran codeunits one test at a time. Every codeunit stayed on test, no isolation choice was made, and no mutant of that batch was scored.`,
       );
@@ -4052,9 +4073,11 @@ export function renderConsole(r: SessionReport): string {
         "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955).",
       );
     }
-    lines.push(
-      `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
-    );
+    if (mem === undefined) {
+      lines.push(
+        `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
+      );
+    }
   }
   // These mutants were scored against EVERY green test rather than against tests coverage placed
   // in their table — honest (better than dropping them as no-coverage) but slower and coarser, and

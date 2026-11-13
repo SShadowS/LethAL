@@ -564,6 +564,12 @@ export type RunEventInput =
       };
       /** R955: present when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is then the budget given, or 0 for none). */
       readonly stoppedBySignal?: true;
+      /** R948: present when the memory guard stopped the session: bytes in use, the bound, the cgroup file the limit came from. */
+      readonly stoppedByMemory?: {
+        readonly usedBytes: number;
+        readonly boundBytes: number;
+        readonly source: string;
+      };
     }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 

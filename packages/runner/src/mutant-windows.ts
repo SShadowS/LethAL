@@ -131,6 +131,14 @@ export function formatEstimate(ms: number): string {
 }
 
 /** The `--time-budget` clock of one session, shared by every batch. */
+/** R948: what the memory guard saw when it stopped the session. */
+export interface MemoryStop {
+  readonly usedBytes: number;
+  readonly boundBytes: number;
+  /** The cgroup file the limit came from. */
+  readonly source: string;
+}
+
 export class TimeBudget {
   /** Set by the first `reach`; later calls change nothing. */
   reached:
@@ -155,6 +163,15 @@ export class TimeBudget {
   /** R955: spend the budget now. A session with no `--time-budget` has `seconds` of Infinity. */
   stop(): void {
     this.signalled = true;
+  }
+  /**
+   * R948: set by the memory guard: the container stayed over its bound. It spends the budget like a
+   * signal (every R955 check and after-call drop applies); the report names memory, not a signal.
+   */
+  memory: MemoryStop | undefined;
+  stopForMemory(info: MemoryStop): void {
+    this.memory ??= info;
+    this.stop();
   }
   remainingMs(): number {
     if (this.signalled) return 0;

@@ -5935,7 +5935,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       );
     }
   } finally {
-    backend.baselinePhase?.(false);
+    await backend.baselinePhase?.(false); // R948: closes the baseline's own daemon
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -6733,10 +6733,7 @@ async function runSessionBody(
     backend: backendName,
     // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
     // the other way, by the one check every lend passes.
-    runnerBuild:
-      v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
-        : undefined,
+    runnerBuild: v3Build !== undefined ? lendingRunnerBuild(cfg.backend, v3Build) : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
   const resumeInputs = await resumeInputsOf(cfg.backend);
@@ -7154,6 +7151,13 @@ async function runSessionBody(
   // R517: before the first run; every worker gets the same pair below. al-runner --server starts
   // its daemon with the larger of the two as its one in-run stop.
   cfg.backend.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
+  // R948: a backend that runs calls ahead of the loop below checks the same stop state, and its
+  // memory guard stops the session through the budget (R955's path).
+  cfg.backend.useStopHandle?.({
+    spent: () => timeBudget.exhausted,
+    signalled: () => timeBudget.signalled,
+    stopForMemory: (info) => timeBudget.stopForMemory(info),
+  });
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
   const groupRuns = resolveGroupRuns({
     groupRuns: cfg.groupRuns,
@@ -8955,7 +8959,10 @@ async function runSessionBody(
     emit({
       type: "time-budget-reached",
       budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
-      ...(timeBudget.signalled ? { stoppedBySignal: true as const } : {}),
+      ...(timeBudget.signalled && timeBudget.memory === undefined
+        ? { stoppedBySignal: true as const }
+        : {}),
+      ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -12006,6 +12013,15 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    // R948: the memory guard, per group start (each lane's loop too): when it stops the session
+    // this group is not started, and the budget it spent ends the loop and the report names memory.
+    if (args.backend.mayStartGroup !== undefined && !(await args.backend.mayStartGroup())) {
+      // Sequential: `budgetSpent` counts this mutant and the rest as left out. A lane: its commit is
+      // closed as a budget stop (`runMutantsParallel` counts the window's unrecorded mutants).
+      args.sink?.memoryStop(m.mutantId);
+      budgetSpent(at);
+      break;
+    }
     args.sink?.begin(m.mutantId);
     if (covering.length === 0) {
       // Defensive: the covering-test list resolved to zero refs (e.g. a
@@ -13001,6 +13017,22 @@ async function runMutantsParallel(
       },
     });
     if (widest === undefined || ran.started > widest.started) widest = ran;
+    if (commit.stoppedByGuard) {
+      // R948: the memory guard refused a group in some lane: the session ends as a budget stop, with
+      // this window's unrecorded covered mutants and every later window's counted as left out.
+      const covered = (x: { readonly mutantId: string }) =>
+        args.perMutantTests.get(x.mutantId) !== undefined;
+      const left =
+        commit.unrecorded(window.filter(covered).map((x) => x.mutantId)).length +
+        windows
+          .slice(wi + 1)
+          .flat()
+          .filter(covered).length;
+      if (left > 0 && args.timeBudget !== undefined) {
+        reachBudget(args.timeBudget, left, args.batchIndex + 1);
+      }
+      break;
+    }
   }
   // One notice for the call: the window that started the most lanes speaks for it.
   if (paced && widest !== undefined)
@@ -13052,6 +13084,27 @@ function assertSameResumeInputs(
     throw new Error(
       `${flag}: ${why}. A .NET sidecar or demo data can turn a refused test into a run, so the old verdicts would describe another setup (R886). Drop the resume flag to run from scratch.`,
     );
+}
+
+/**
+ * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
+ * strips the end-anchored ` environment-X[ license-H][ isolation-auto]`, and ` isolation-auto` must be
+ * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
+ */
+export function lendingRunnerBuild(
+  backend: ExecutionBackend,
+  v3Build: { readonly version: string; readonly binarySha256: string },
+): string {
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+}
+
+/**
+ * R948: ` baseline-daemon` when the session's baseline comes from a serve daemon, else nothing. It is
+ * in the lending key (`runner_build`), so a baseline snapshot or history recorded from a daemon
+ * baseline is lent only to a daemon-baseline session, and a one-shot one only to a one-shot session.
+ */
+export function baselineSourceTag(backend: { readonly baselineDaemon?: boolean }): string {
+  return backend.baselineDaemon === true ? " baseline-daemon" : "";
 }
 
 /**

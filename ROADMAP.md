@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 923 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 923 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -966,7 +966,7 @@ that ordering is the priority.
 - **R958** · Under `--isolate-tests`, a stop signal does not stop the parallel isolated-baseline fill: the workers keep starting one process per remaining test until the suite is done · [R958.md](docs/roadmap/R958.md) · open
 - **R959** · `--resume-run` refuses after a host reboot (server generation changed), so a user redid 589 decided mutants, although a reboot of a container with a persistent database usually keeps the apps and data the verdicts were measured against · [R959.md](docs/roadmap/R959.md) · open
 - **R960** · On the default transport, a serve warm-up that refuses the whole batch (`entries-batch-refused`) stops the session after its baseline instead of falling back to one-shot · [R960.md](docs/roadmap/R960.md) · open
-- **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · open
+- **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · done (2596b7fe)
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 
 ---
