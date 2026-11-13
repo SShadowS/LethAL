@@ -208,6 +208,12 @@ Its first line (`al-runner-v3-memory-guard`) names the bound and its source; wit
 `al-runner-v3-memory-guard-off`. If the container stays over the bound for five minutes, the run stops by name
 (`al-runner-v3-memory-bound`), the call it blocked is dropped like one a stop signal ended, a mutant group in progress
 finishes, and the report carries `timeBudget.stoppedByMemory`; continue with `--resume`.
+**Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
+(`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
+baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
+LethAL is not lent to, or resumed by, a new serve-entries session (and the other way round), and a one-shot session
+(`"transport": "one-shot"`, or a `--resume` that forces one-shot) neither lends to nor borrows from one. Start a fresh
+run; the `--resume` refusal names the two builds.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 

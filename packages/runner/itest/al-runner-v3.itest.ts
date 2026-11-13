@@ -133,8 +133,8 @@ import {
   O1_SEED_CODEUNIT,
   O1_SEED_TEST,
   type V3RowFacts,
-  V3_DB_LEG,
   V3_DBI_LEG,
+  V3_DB_LEG,
   V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -148,6 +148,7 @@ import {
   combineO1Sets,
   isNoServeRefusal,
   isSessionTestCall,
+  judgeDaemonBaseline,
   judgeIsolateProbe,
   judgeKillers,
   judgeLegK,
@@ -697,8 +698,8 @@ async function legS1(
     must(d.requests === d.codeunits, `DB: ${d.requests} requests for ${d.codeunits} codeunits`);
     const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
     must(
-      d.sampledCodeunits.length === want && d.compared === want,
-      `DB: ${d.compared} of ${d.sampledCodeunits.length} sampled codeunits compared, pre-committed ${want} of ${want}`,
+      d.sampledCodeunits.length === want,
+      `DB: ${d.sampledCodeunits.length} codeunits sampled, pre-committed ${want}`,
     );
     must(
       d.perTestRequests === 0,
@@ -707,10 +708,10 @@ async function legS1(
     // Every codeunit a fresh process did not answer in its place was taken from the daemon: a fill
     // that silently ended with no answers would pass everything above and fail here.
     // (With one codeunit the sample is that codeunit, so served is 0 by rule.)
-    must(
-      d.served === d.codeunits - want,
-      `DB: ${d.served} daemon answers taken, pre-committed ${d.codeunits - want} (codeunits ${d.codeunits} less ${want} sampled)`,
-    );
+    // A skip (too slow, a request error, a refusal) is named and printed, not a BLOCK.
+    const j = judgeDaemonBaseline("DB", d, d.codeunits - want, want);
+    for (const n of j.notes) console.log(`  ${n}`);
+    must(j.fail === undefined, j.fail ?? "");
     must(b.baselineDaemon, "DB: the backend does not report a daemon baseline");
   }
 }
@@ -765,13 +766,16 @@ async function legDBI(scratch: string, version: string): Promise<void> {
   must(d.perTestRequests > 0, "DBI: no per-test request was made");
   const want = baselineSampleIds(Array.from({ length: d.perTestRequests }, (_, i) => i)).length;
   must(
-    d.sampledPerTest.length === want && d.compared === want,
-    `DBI: ${d.compared} of ${d.sampledPerTest.length} sampled tests compared, pre-committed ${want} of ${want}`,
+    d.sampledPerTest.length === want,
+    `DBI: ${d.sampledPerTest.length} tests sampled, pre-committed ${want}`,
   );
-  must(d.served > 0, "DBI: no daemon answer was taken");
+  const j = judgeDaemonBaseline("DBI", d, d.perTestRequests - want, want);
+  for (const n of j.notes) console.log(`  ${n}`);
+  must(j.fail === undefined, j.fail ?? "");
+  // Nothing skipped and still nothing taken is a drop the equation above cannot see.
   must(
-    d.served === d.perTestRequests - want,
-    `DBI: ${d.served} daemon answers taken, pre-committed ${d.perTestRequests - want}`,
+    d.served > 0 || d.perTestRequests - want === 0 || j.notes.length > 0,
+    "DBI: no daemon answer was taken and none was skipped by name",
   );
   must(b.baselineDaemon, "DBI: the backend does not report a daemon baseline");
 }

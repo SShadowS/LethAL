@@ -6528,6 +6528,13 @@ describe("R948 A: the baseline through one daemon", () => {
     await baseline(r.b, SUITE3);
     // The two samples, and CU (3000 ms x 2 >= the 5000 ms floor): three processes.
     expect(oneShotCodeunits(r).sort()).toEqual([String(CU), String(CU2), String(CU3)].sort());
+    // The skip is counted and named, so a gate can tell it from a silent drop.
+    const rep = r.b.daemonBaselineReport();
+    expect(rep.skippedTooSlow).toEqual([`Codeunit${CU}`]);
+    expect([rep.skippedError, rep.skippedOther, rep.sampledSkipped]).toEqual([[], [], []]);
+    expect(rep.served + rep.skippedTooSlow.length).toBe(
+      rep.codeunits - rep.sampledCodeunits.length,
+    );
   });
 
   test("a dirty daemon: the row stands, the daemon is closed, the next codeunit starts a fresh one, nothing is re-run", async () => {

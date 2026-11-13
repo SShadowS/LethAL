@@ -1,6 +1,7 @@
 // R948: the pure pieces: the cross-check's sample and comparison, the cgroup reader and the bound.
 // The reader is handed a fake file reader: no test reads the real /sys, /proc or /coord.
 import { describe, expect, test } from "bun:test";
+import { judgeDaemonBaseline } from "../itest/alrunner-v3-legs";
 import {
   baselineSampleIds,
   compareBaselineAnswers,
@@ -9,6 +10,53 @@ import {
   readCgroupMemory,
 } from "../src/al-runner-v3-baseline-check";
 import type { V3CoverageRead } from "../src/al-runner-v3-sleep";
+
+describe("R948: legs DB and DBI count every answer as taken or skipped by name", () => {
+  const none = {
+    served: 0,
+    compared: 0,
+    skippedTooSlow: [],
+    skippedError: [],
+    skippedOther: [],
+    sampledSkipped: [],
+  };
+  test("all taken: passes with no notes", () => {
+    expect(judgeDaemonBaseline("DB", { ...none, served: 3, compared: 2 }, 3, 2)).toEqual({
+      notes: [],
+    });
+  });
+  test("a named skip (too slow, an error, a refusal) is a note, never a failure", () => {
+    const j = judgeDaemonBaseline(
+      "DB",
+      {
+        ...none,
+        served: 1,
+        compared: 2,
+        skippedTooSlow: ["A"],
+        skippedError: ["B"],
+        skippedOther: ["C"],
+      },
+      4,
+      2,
+    );
+    expect(j.fail).toBeUndefined();
+    expect(j.notes.join("\n")).toContain("too slow: A");
+    expect(j.notes.join("\n")).toContain("request error: B");
+    expect(j.notes.join("\n")).toContain("refused or odd row: C");
+  });
+  test("a silent drop (nothing taken, nothing named) fails", () => {
+    expect(judgeDaemonBaseline("DB", { ...none, compared: 2 }, 3, 2).fail).toContain("silent drop");
+  });
+  test("a sampled item is compared or skipped by name; otherwise it fails", () => {
+    expect(
+      judgeDaemonBaseline("DBI", { ...none, served: 3, compared: 1, sampledSkipped: ["T"] }, 3, 2)
+        .fail,
+    ).toBeUndefined();
+    expect(judgeDaemonBaseline("DBI", { ...none, served: 3, compared: 1 }, 3, 2).fail).toContain(
+      "sampled compared",
+    );
+  });
+});
 
 describe("R948: the duration a budget will read", () => {
   test("a row's own duration wins; with none, the call's wall time is the duration, as in the verdict", () => {

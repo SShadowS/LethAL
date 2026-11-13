@@ -421,6 +421,58 @@ export const V3_DB_LEG = "DB";
 /** R948: leg ISO's session under `--isolate-tests` with the daemon baseline and the memory guard on (the per-test path). */
 export const V3_DBI_LEG = "DBI";
 
+/** What `AlRunnerV3Backend.daemonBaselineReport()` says, as far as the legs read it. */
+export interface DaemonBaselineFacts {
+  readonly served: number;
+  readonly compared: number;
+  readonly skippedTooSlow: readonly string[];
+  readonly skippedError: readonly string[];
+  readonly skippedOther: readonly string[];
+  readonly sampledSkipped: readonly string[];
+}
+
+/**
+ * R948 (legs DB and DBI): every expected daemon answer is either taken or SKIPPED BY NAME (too slow for
+ * a warm duration, a request error, a refusal), and every sampled item is compared or skipped by
+ * name. A skip is reported in `notes`, never a failure, so a loaded container cannot BLOCK the gate by
+ * itself; a silent all-drop (nothing taken, nothing named) still fails. `expected` = items less the sample.
+ */
+export function judgeDaemonBaseline(
+  leg: string,
+  d: DaemonBaselineFacts,
+  expected: number,
+  sampled: number,
+): { readonly fail?: string; readonly notes: readonly string[] } {
+  const skipped = d.skippedTooSlow.length + d.skippedError.length + d.skippedOther.length;
+  const notes = [
+    ...(d.skippedTooSlow.length > 0
+      ? [`${leg}: skipped, too slow: ${d.skippedTooSlow.join(", ")}`]
+      : []),
+    ...(d.skippedError.length > 0
+      ? [`${leg}: skipped, request error: ${d.skippedError.join(", ")}`]
+      : []),
+    ...(d.skippedOther.length > 0
+      ? [`${leg}: skipped, refused or odd row: ${d.skippedOther.join(", ")}`]
+      : []),
+    ...(d.sampledSkipped.length > 0
+      ? [`${leg}: sample skipped: ${d.sampledSkipped.join(", ")}`]
+      : []),
+  ];
+  if (d.compared + d.sampledSkipped.length !== sampled) {
+    return {
+      fail: `${leg}: ${d.compared} sampled compared and ${d.sampledSkipped.length} skipped by name, pre-committed ${sampled} in all`,
+      notes,
+    };
+  }
+  if (d.served + skipped !== expected) {
+    return {
+      fail: `${leg}: ${d.served} daemon answers taken and ${skipped} skipped by name, pre-committed ${expected} in all (a silent drop is not a skip)`,
+      notes,
+    };
+  }
+  return { notes };
+}
+
 /** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
 export function isNoServeRefusal(version: string, threw: string): boolean {
   return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);

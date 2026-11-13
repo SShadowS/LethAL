@@ -1953,7 +1953,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     perTestSampled: [] as number[],
     compared: 0,
     served: 0,
+    skippedTooSlow: [] as string[],
+    skippedError: [] as string[],
+    skippedOther: [] as string[],
+    sampledSkipped: [] as string[],
   };
+
+  /**
+   * R948: a daemon answer the fill did not keep, named. A sampled one is counted apart (the sample's
+   * own `compared` shows it); the others are the three reasons a gate may accept as "reported, not a
+   * regression": too slow for a warm duration to be trusted, a request error, or a refused/odd row.
+   */
+  private noteSkip(kind: "tooSlow" | "error" | "other", name: string, sampled: boolean): void {
+    const s = this.baselineStats;
+    if (sampled) s.sampledSkipped.push(name);
+    else if (kind === "tooSlow") s.skippedTooSlow.push(name);
+    else if (kind === "error") s.skippedError.push(name);
+    else s.skippedOther.push(name);
+  }
   /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
    *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
   get inRunStopIsBudget(): boolean {
@@ -3559,6 +3576,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           got = undefined;
         }
         if (got === undefined) {
+          this.noteSkip("error", `Codeunit${id}`, sample.has(id));
           unusable += 1;
           if (unusable >= 2) {
             this.dropDaemonBaseline("two serve requests in a row gave no usable baseline answer");
@@ -3569,6 +3587,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         unusable = 0;
         // The duration the budget will use is the verdict's: the row's, else the call's wall time.
         const tooSlow = durationCouldMoveBudget(got.rows, got.wallMs, f.floorMs);
+        if (tooSlow && !sample.has(id)) this.noteSkip("tooSlow", `Codeunit${id}`, false);
         if (sample.has(id) || tooSlow) {
           const shot = await this.oneShotBaselineAnswer(lane, id, stopSeconds, coverage);
           if (shot === undefined) {
@@ -3637,20 +3656,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           got = await this.baselineRequest(lane, mode, key, stopSeconds, coverage);
         } catch (err) {
           if (!(err instanceof AlRunnerServerRequestError)) throw err;
+          this.noteSkip("error", `${ref.codeunitName}.${ref.method}`, sample.has(i));
           continue;
         } finally {
           this.memoryRelease();
         }
         if (this.stopHandle?.signalled() === true) break; // R955: that call is dropped
         const [row] = got?.rows ?? [];
+        const name = `${ref.codeunitName}.${ref.method}`;
         if (
           got === undefined ||
           got.rows.length !== 1 ||
           row === undefined ||
           row.notRun ||
-          row.method.toLowerCase() !== ref.method.toLowerCase() ||
-          durationCouldMoveBudget([row], got.wallMs, f.floorMs)
+          row.method.toLowerCase() !== ref.method.toLowerCase()
         ) {
+          this.noteSkip("other", name, sample.has(i));
+          continue;
+        }
+        if (durationCouldMoveBudget([row], got.wallMs, f.floorMs)) {
+          this.noteSkip("tooSlow", name, sample.has(i));
           continue;
         }
         const one = this.isolated(key);
@@ -3798,10 +3823,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly compared: number;
     /** Answers a daemon gave that calls actually took (a fresh process's answer in its place is not counted). */
     readonly served: number;
+    /** Names of answers not kept because 2 x duration >= floor (a warm duration could move a budget). */
+    readonly skippedTooSlow: readonly string[];
+    /** Names of answers lost to a serve request error or an unusable answer. */
+    readonly skippedError: readonly string[];
+    /** Names of per-test answers that were a refusal or not that test's row. */
+    readonly skippedOther: readonly string[];
+    /** Sampled items whose daemon answer was skipped (so `compared` is short by this many). */
+    readonly sampledSkipped: readonly string[];
   } {
     const s = this.baselineStats;
     return {
       served: s.served,
+      skippedTooSlow: [...s.skippedTooSlow],
+      skippedError: [...s.skippedError],
+      skippedOther: [...s.skippedOther],
+      sampledSkipped: [...s.sampledSkipped],
       dropped: this.daemonBaselineOff,
       codeunits: s.codeunits,
       requests: s.requests,
