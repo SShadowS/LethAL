@@ -418,6 +418,7 @@ function fakeServe(script: ServeScript = {}) {
     const handle: ServerProcessHandle = {
       stdout: out,
       stderr: err,
+      pid: 90_000 + daemon, // R952: what the recycle bound's RSS seam is asked about (never a real /proc read)
       kill: () => {
         kills.push(daemon);
         out.end();
@@ -599,7 +600,8 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
-  Object.assign(b.seams, opts.seams ?? {});
+  // R952: the recycle bound's RSS read is unreadable unless a test says otherwise (tests never read /proc).
+  Object.assign(b.seams, { rssReader: () => undefined }, opts.seams ?? {});
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
@@ -7139,6 +7141,91 @@ describe("R948: a throw after the memory hold gives the hold back", () => {
     await writeFile(join(blocked, "x"), "x");
     await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
     expect(held(r.b)).toBe(0);
+  });
+});
+
+describe("R952 (R948): a serve daemon past its size or request bound is recycled", () => {
+  const GIB = 2 ** 30;
+  /** Each mutant prefetched on its own (one ensureDaemon each), then run: every verdict, and the rig. */
+  const session = async (opts: RigOpts) => {
+    const r = await rig({ serve: { rows: killsM1 }, oneShotRows: killsM1, ...opts });
+    await baseline(r.b, SUITE1);
+    const verdicts: string[] = [];
+    for (const m of ["M0001", "M0002", "M0003"]) {
+      await r.b.prefetchMutants(plans([m]));
+      await r.b.activate(m);
+      for (const t of SUITE1) verdicts.push(`${m} ${t.method} ${outcome(await r.b.run(t, OPTS))}`);
+    }
+    return { r, verdicts, closes: [...r.b.daemonCloses().byReason] };
+  };
+
+  test("no bound reached: no recycle (the control)", async () => {
+    const c = await session({});
+    expect(c.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  test("daemonMaxRequests: a daemon past it is replaced, and every verdict equals the control's", async () => {
+    const control = await session({});
+    const s = await session({ extra: { daemonMaxRequests: 2 } });
+    const recycles = s.closes.find(([why]) => why === "recycle")?.[1] ?? 0;
+    expect(recycles).toBeGreaterThan(0);
+    expect(s.r.serve.daemons.length).toBe(control.r.serve.daemons.length + recycles);
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(s.verdicts).toContain("M0001 A fail,"); // a kill is in the comparison, not only passes
+  });
+
+  test("daemonMaxRssGb: only the daemon over the size is replaced; the default is 6 GiB", async () => {
+    const control = await session({});
+    // The first daemon the bound asks about GROWS: 1 GiB at its first check (warm-up and one request),
+    // 7 GiB after that. Every other daemon stays at 1 GiB.
+    let first: number | undefined;
+    let checks = 0;
+    const reader = (pid: number) => {
+      first ??= pid;
+      if (pid !== first) return GIB;
+      checks++;
+      return checks === 1 ? GIB : 7 * GIB;
+    };
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: reader },
+      notify: (code) => notices.push(code),
+    });
+    expect(s.closes.find(([why]) => why === "recycle")?.[1]).toBe(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(notices).not.toContain("al-runner-v3-daemon-recycle-off");
+    // at 5 GiB the default bound (6) is not reached; at 0 the bound is off whatever the size
+    const under = await session({ seams: { rssReader: () => 5 * GIB } });
+    expect(under.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    const off = await session({
+      extra: { daemonMaxRssGb: 0 },
+      seams: { rssReader: () => 100 * GIB },
+    });
+    expect(off.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  // Review r1: a project whose fresh daemon is already over the size would otherwise pay a warm-up
+  // per request. The bound turns itself off for the session, said once; nothing is recycled.
+  test("a daemon already over the size after its warm-up: the size bound goes off, said once", async () => {
+    const control = await session({});
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: () => 7 * GIB },
+      notify: (code) => notices.push(code),
+    });
+    expect(s.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    expect(notices.filter((c) => c === "al-runner-v3-daemon-recycle-off")).toHaveLength(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    // the request bound is not affected by it
+    const r = await session({
+      seams: { rssReader: () => 7 * GIB },
+      extra: { daemonMaxRequests: 2 },
+    });
+    expect(r.closes.find(([why]) => why === "recycle")?.[1] ?? 0).toBeGreaterThan(0);
+  });
+
+  test("a recycle is not routine: it costs a warm-up, so it reaches the close sink", () => {
+    expect(V3_ROUTINE_CLOSES.has("recycle")).toBe(false);
   });
 });
 

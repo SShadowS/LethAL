@@ -15,6 +15,8 @@
  *     "noClient": false,                                       // R907; true passes --no-client: tests run as a session without a client (GuiAllowed() false, as on BC's web-service path); a pass that rests on an unprobed assumption is flagged
  *     "isolation": "auto",                                    // R896; "auto" (default): per codeunit, "method" where the baseline passes strictly more tests so; R890: "test" or "method" force one mode
  *     "memoryHeadroomGb": 4,                                  // R948; no new test call starts while the container uses more than its cgroup limit less this many GiB; the run then stops with its report. 0 = guard off
+ *     "daemonMaxRssGb": 6,                                    // R952 (R948); a serve daemon whose RSS passed this many GiB is replaced by a fresh one before its next request. 0 = off
+ *     "daemonMaxRequests": 0,                                 // R952 (R948); a serve daemon is replaced after this many requests. 0 (default) = off
  *     "license": "<optional .bclicense file>",             // R956; passed as --license on every al-runner call that runs tests; its sha256 is in the fingerprint and the report
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
@@ -70,6 +72,10 @@ export interface AlRunnerV3ConfigSection {
    * report if that does not clear. `0` turns the guard off. Default `MEMORY_HEADROOM_GB_DEFAULT` (4).
    */
   readonly memoryHeadroomGb: number;
+  /** R952 (R948): replace a serve daemon whose RSS passed this many GiB; 0 = off. Default `V3_DAEMON_MAX_RSS_GB_DEFAULT`. */
+  readonly daemonMaxRssGb: number;
+  /** R952 (R948): replace a serve daemon after this many requests; 0 (default) = off. */
+  readonly daemonMaxRequests: number;
 }
 
 /**
@@ -100,6 +106,13 @@ export async function readLicenseIdentity(path: string): Promise<V3LicenseIdenti
  */
 export const V3_DOWNLOAD_DEMO_DATA_DEFAULT = true;
 
+/**
+ * R952 (R948): THE default of `alRunnerV3.daemonMaxRssGb`. One daemon grew from 1.9 GB to 9.7 GB
+ * over a long Subcontracting run (R948); a serve run's tree reached 15.7 GB of the container's 32 GiB.
+ * 6 GiB lets a daemon pass its working set many times over before one fresh warm-up replaces it.
+ */
+export const V3_DAEMON_MAX_RSS_GB_DEFAULT = 6;
+
 /** R907: THE default of `alRunnerV3.noClient`: off, so a run is as before. */
 export const V3_NO_CLIENT_DEFAULT = false;
 
@@ -108,6 +121,8 @@ export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
   "memoryHeadroomGb",
+  "daemonMaxRssGb",
+  "daemonMaxRequests",
   "license",
   "environment",
   "isolation",
@@ -290,8 +305,30 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.memoryHeadroomGb" must be a number of GiB, 0 or more (0 turns the memory guard off), got ${JSON.stringify(r.memoryHeadroomGb)} (R948).`,
     );
   }
+  if (
+    r.daemonMaxRssGb !== undefined &&
+    (typeof r.daemonMaxRssGb !== "number" ||
+      !Number.isFinite(r.daemonMaxRssGb) ||
+      r.daemonMaxRssGb < 0)
+  ) {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.daemonMaxRssGb" must be a number of GiB, 0 or more (0 turns the daemon size bound off), got ${JSON.stringify(r.daemonMaxRssGb)} (R952).`,
+    );
+  }
+  if (
+    r.daemonMaxRequests !== undefined &&
+    (typeof r.daemonMaxRequests !== "number" ||
+      !Number.isInteger(r.daemonMaxRequests) ||
+      r.daemonMaxRequests < 0)
+  ) {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.daemonMaxRequests" must be a whole number, 0 or more (0 turns the request bound off), got ${JSON.stringify(r.daemonMaxRequests)} (R952).`,
+    );
+  }
   return {
     memoryHeadroomGb: r.memoryHeadroomGb ?? MEMORY_HEADROOM_GB_DEFAULT,
+    daemonMaxRssGb: r.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT,
+    daemonMaxRequests: r.daemonMaxRequests ?? 0,
     downloadDemoData: r.downloadDemoData ?? V3_DOWNLOAD_DEMO_DATA_DEFAULT,
     noClient: r.noClient ?? V3_NO_CLIENT_DEFAULT,
     path: (r.path as string | undefined) ?? defaultV3Path(exists, home),
