@@ -974,7 +974,7 @@ that ordering is the priority.
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 - **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · open
-- **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' fails on a busy container: the guard counts the container's real heavy jobs, so the plain caller gets exit 75 · [R967.md](docs/roadmap/R967.md) · done (fce3b9fb)
+- **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' flaked (exit 75): the refused waiter's own 0.05 s out-of-turn retry held the free slot while the plain caller tried · [R967.md](docs/roadmap/R967.md) · done (fce3b9fb)
 - **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
 
 ---
