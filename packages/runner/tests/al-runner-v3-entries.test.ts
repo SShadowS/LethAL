@@ -2072,6 +2072,43 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
     expect(String(err)).not.toContain("warmup-disagrees");
   });
+
+  const warmupRefusal = async (source: "default" | "explicit", earlierWarmups = 0) => {
+    const r = await rig({
+      serve: { rows: refuseFrom(0), echo: refusedEcho(0) },
+      oneShotRows: allPass,
+    });
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
+    await baseline(r.b, SUITE1);
+    // R960 review a: a session that already warmed a daemon up (another mode, a restart).
+    (r.b as unknown as { stats: { warmups: number } }).stats.warmups = earlierWarmups;
+    return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+  };
+
+  test("R960: default + the whole warm-up refused: the typed fallback signal, naming the reason", async () => {
+    const err = await warmupRefusal("default");
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain("entries-batch-refused");
+    expect(String(err)).toContain(UNLISTED);
+    // R960 review b: a whole-request refusal, not a row R612 refuses; no R635 plan suffix.
+    expect((err as AlRunnerV3ServeFallbackWarmupError).wholeRequest).toBe(true);
+    expect(String(err)).toContain("met a refusal of the whole warm-up request");
+    expect(String(err)).not.toContain("which R612 refuses by name");
+    expect(String(err)).not.toContain("(R635 plan §3, §6)");
+  });
+
+  test("R960 review a: a LATER warm-up's whole-request refusal still fails by name (no session re-run)", async () => {
+    const err = await warmupRefusal("default", 1);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(err).not.toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+  });
+
+  test("R960: explicit + the whole warm-up refused: still fails by name", async () => {
+    const err = await warmupRefusal("explicit");
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+  });
 });
 
 describe("11: what counts as a refusal of the WHOLE request", () => {
@@ -5084,6 +5121,38 @@ describe("R790: the speculative baseline", () => {
     expect(speculative(spec.b)).toBeUndefined();
   });
 
+  test("R958: a spent stop starts no speculative call; unspent, the call runs", async () => {
+    for (const spent of [true, false]) {
+      const l = await layout(TARGET_AL, SUITE1);
+      const one = fakeOneShot(allPass);
+      const b = new AlRunnerV3Backend(
+        {
+          alRunnerPath: "/fake/al-runner",
+          environmentChoice: { value: "saas", source: "config" },
+          instrumentedDir: l.scratch,
+          testDir: l.testDir,
+          packagesDir: l.deps,
+          bcVersion: "28.0.46665.47126",
+          selectorObjectId: SELECTOR_ID,
+          alcPath: "/fake/alc",
+          coverage: "none",
+          transport: "serve-entries",
+          speculateBaseline: true,
+        },
+        one.spawn,
+        fakeAlc(),
+        fakeServe().spawn,
+      );
+      b.useBuildSymbols([]);
+      b.useDiscoveredTests(SUITE1);
+      b.useSessionTests(SUITE1);
+      b.useMutantBudgetFloor(1000, 1000);
+      b.useStopHandle({ spent: () => spent, signalled: () => false, stopForMemory: () => {} });
+      await b.deploy(l.batch);
+      expect(one.calls).toHaveLength(spent ? 0 : 1);
+    }
+  });
+
   test("a byte that changes while the calls run: never served, the baseline runs live", async () => {
     const l = await layout(TARGET_AL, SUITE1);
     const one = fakeOneShot(allPass);
@@ -5585,6 +5654,41 @@ describe("R857: --isolate-tests", () => {
         expect(r.one.peak()).toBe(n);
         expect(r.one.calls).toHaveLength(methods.length);
       }
+    });
+
+    // R958: a stop (budget, signal or memory all read as spent()) starts no further process.
+    const fill = async (stopAfter: number, processes: number) => {
+      const box: { r?: Rig } = {};
+      const r = await rig({
+        ...opts,
+        extra: { isolateTests: true, isolatedBaselineProcesses: processes },
+        stopHandle: {
+          spent: () => (box.r?.one.calls.length ?? 0) >= stopAfter,
+          signalled: () => false,
+          stopForMemory: () => {},
+        },
+      });
+      box.r = r;
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS); // takes the fill
+      r.b.baselinePhase(false);
+      return r;
+    };
+
+    test("R958: stopped after two, one worker starts no third process", async () => {
+      const r = await fill(2, 1);
+      expect(r.one.calls).toHaveLength(2);
+    });
+
+    test("R958: stopped after four, four workers start no fifth process", async () => {
+      const r = await fill(4, 4);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("R958: never stopped, every test runs", async () => {
+      const r = await fill(Number.POSITIVE_INFINITY, 4);
+      expect(r.one.calls).toHaveLength(methods.length);
     });
 
     test("off, the baseline stays one process at a time", async () => {
