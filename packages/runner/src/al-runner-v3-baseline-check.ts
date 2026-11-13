@@ -58,15 +58,31 @@ function hitSet(
     readonly file: string;
     readonly statements?: readonly { line?: number; hits?: number }[];
   }[],
-): string {
-  const out: string[] = [];
+): Set<string> {
+  const out = new Set<string>();
   for (const f of files) {
     for (const s of f.statements ?? []) {
-      if ((s.hits ?? 0) > 0) out.push(`${f.file.replace(/\\/g, "/").toLowerCase()}:${s.line}`);
+      if ((s.hits ?? 0) > 0) out.add(`${f.file.replace(/\\/g, "/").toLowerCase()}:${s.line}`);
     }
   }
-  return [...new Set(out)].sort().join("|");
+  return out;
 }
+
+/** How many differing keys a message names per side. */
+const NAMED_KEYS = 5;
+
+/** `daemon only 3: a:1, b:2, c:3; one-shot only 0`, or `undefined` when the sets are equal. Keys are `file:line` only. */
+function keyDiff(daemon: ReadonlySet<string>, oneShot: ReadonlySet<string>): string | undefined {
+  const onlyD = [...daemon].filter((k) => !oneShot.has(k)).sort();
+  const onlyO = [...oneShot].filter((k) => !daemon.has(k)).sort();
+  if (onlyD.length === 0 && onlyO.length === 0) return undefined;
+  const side = (name: string, keys: readonly string[]) =>
+    `${name} only ${keys.length}${keys.length > 0 ? `: ${keys.slice(0, NAMED_KEYS).join(", ")}${keys.length > NAMED_KEYS ? ", ..." : ""}` : ""}`;
+  return `${side("daemon", onlyD)}; ${side("one-shot", onlyO)}`;
+}
+
+const describeRow = (r: ComparableRow): string =>
+  `${r.status}${r.notRun ? ", not run" : ""}${r.flagged === true ? ", flagged" : ""}`;
 
 /**
  * Differences between a daemon answer and a fresh process's answer for ONE codeunit, per test:
@@ -90,20 +106,24 @@ export function compareBaselineAnswers(
       why.push(`${m}: a row only the ${a === undefined ? "one-shot" : "daemon"} answer has`);
       continue;
     }
-    if (a.status !== b.status || a.notRun !== b.notRun || a.flagged !== b.flagged) {
+    // Which field differs, by name (never the text itself).
+    const fields = [
+      ...(a.status !== b.status ? ["status"] : []),
+      ...(a.notRun !== b.notRun ? ["notRun"] : []),
+      ...((a.flagged ?? false) !== (b.flagged ?? false) ? ["flagged"] : []),
+      ...((a.message ?? "") !== (b.message ?? "") ? ["failText"] : []),
+    ];
+    if (fields.length > 0) {
       why.push(
-        `${m}: daemon ${a.status}${a.notRun ? " (not run)" : ""}, one-shot ${b.status}${b.notRun ? " (not run)" : ""}`,
+        `${m}: differs in ${fields.join(", ")} (daemon ${describeRow(a)}; one-shot ${describeRow(b)})`,
       );
-    } else if ((a.message ?? "") !== (b.message ?? "")) {
-      why.push(`${m}: the fail text differs`);
     }
   }
   if (daemon.coverage.kind !== oneShot.coverage.kind) {
     why.push(`coverage: daemon ${daemon.coverage.kind}, one-shot ${oneShot.coverage.kind}`);
   } else if (daemon.coverage.kind === "doc" && oneShot.coverage.kind === "doc") {
-    if (hitSet(daemon.coverage.coverage) !== hitSet(oneShot.coverage.coverage)) {
-      why.push("coverage: the whole call's hit set differs");
-    }
+    const whole = keyDiff(hitSet(daemon.coverage.coverage), hitSet(oneShot.coverage.coverage));
+    if (whole !== undefined) why.push(`coverage: the whole call differs (${whole})`);
     const per = (c: V3CoverageRead) =>
       new Map(
         c.kind === "doc"
@@ -113,7 +133,11 @@ export function compareBaselineAnswers(
     const pd = per(daemon.coverage);
     const po = per(oneShot.coverage);
     for (const t of [...new Set([...pd.keys(), ...po.keys()])].sort()) {
-      if (pd.get(t) !== po.get(t)) why.push(`${t}: the per-test coverage set differs`);
+      const diff = keyDiff(pd.get(t) ?? new Set(), po.get(t) ?? new Set());
+      if (diff !== undefined) why.push(`${t}: coverage differs (${diff})`);
+      else if (pd.has(t) !== po.has(t)) {
+        why.push(`${t}: coverage entry only in the ${pd.has(t) ? "daemon" : "one-shot"} answer`);
+      }
     }
   }
   return why;

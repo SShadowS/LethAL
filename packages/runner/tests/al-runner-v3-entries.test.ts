@@ -6509,7 +6509,12 @@ describe("R948 A: the baseline through one daemon", () => {
     });
     await baseline(r.b, SUITE2);
     expect(dropNotice(seen)).toHaveLength(1);
-    expect(dropNotice(seen)[0]?.[1]).toContain("fail text");
+    expect(dropNotice(seen)[0]?.[1]).toContain("differs in failText");
+    // The structured field names the test and the field, uncut.
+    const rep = r.b.daemonBaselineReport();
+    expect(rep.dropped).toContain(`codeunit ${CU2}`);
+    expect(rep.droppedDetail).toHaveLength(1);
+    expect(rep.droppedDetail[0]).toContain("c: differs in failText");
   });
 
   test("the per-test coverage set is compared exactly", async () => {
@@ -6529,7 +6534,12 @@ describe("R948 A: the baseline through one daemon", () => {
     });
     await baseline(r.b, SUITE2);
     expect(dropNotice(seen)).toHaveLength(1);
-    expect(dropNotice(seen)[0]?.[1]).toContain("coverage");
+    expect(dropNotice(seen)[0]?.[1]).toContain("coverage differs (daemon only 1");
+    // Only the coverage differs: no row field is named, and the keys are file:line only.
+    const detail = r.b.daemonBaselineReport().droppedDetail.join(" ");
+    expect(detail).toContain("coverage differs");
+    expect(detail).toContain(":99");
+    expect(detail).not.toContain("differs in");
   });
 
   test("durations: a codeunit whose daemon duration could move a budget (2 x d >= floor) runs one-shot and its answer stands", async () => {

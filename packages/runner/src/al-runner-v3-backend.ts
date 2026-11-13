@@ -1932,6 +1932,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private daemonBaselineFilled = false;
   /** R948: why the daemon baseline was dropped. Session-wide (a deploy keeps it): the baseline is then one-shot for every batch. */
   private daemonBaselineOff: string | undefined;
+  /** R948: per differing test, which field differs (`compareBaselineAnswers`' lines); names, fields and `file:line` keys only. */
+  private daemonBaselineDetail: string[] = [];
   /** R948: the session's stop state (`useStopHandle`). */
   private stopHandle: StopHandle | undefined;
   /** R948: the memory guard: decided once, on the first need. `"off"`: said why, or silent when no headroom was given. */
@@ -3406,8 +3408,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R948: the cross-check failed or the daemon proved unusable: the whole session's baseline goes
    * back to one process per codeunit, never a mix, and one notice names why.
    */
-  private dropDaemonBaseline(why: string): void {
+  private dropDaemonBaseline(why: string, detail: readonly string[] = []): void {
     this.daemonBaselineOff = why;
+    this.daemonBaselineDetail = [...detail];
     this.daemonBaseline.clear();
     this.notify(
       "al-runner-v3-baseline-daemon-dropped",
@@ -3619,6 +3622,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             if (why.length > 0) {
               this.dropDaemonBaseline(
                 `the daemon's baseline of codeunit ${id} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+                why,
               );
               return;
             }
@@ -3717,6 +3721,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (why.length > 0) {
             this.dropDaemonBaseline(
               `the daemon's per-test baseline of ${ref.codeunitName}.${ref.method} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+              why,
             );
             return;
           }
@@ -3828,6 +3833,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R948: what the daemon baseline did, for the gate and the tests. */
   daemonBaselineReport(): {
     readonly dropped: string | undefined;
+    /** Why it was dropped, per differing test and field (`failText`, `coverage`, ...), uncut. */
+    readonly droppedDetail: readonly string[];
     readonly codeunits: number;
     readonly requests: number;
     readonly sampledCodeunits: readonly number[];
@@ -3853,6 +3860,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       skippedOther: [...s.skippedOther],
       sampledSkipped: [...s.sampledSkipped],
       dropped: this.daemonBaselineOff,
+      droppedDetail: [...this.daemonBaselineDetail],
       codeunits: s.codeunits,
       requests: s.requests,
       sampledCodeunits: s.sampled,
