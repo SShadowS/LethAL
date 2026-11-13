@@ -332,7 +332,7 @@ describe("R905 a heavy-slot.sh holder is trusted, so its job counts once", () =>
   // in a group of its own, and that shell names the job. It is the launcher, not a second job.
   const job = "bun x.ts /work/src/BC.History/BaseApp";
   const launcher = (pid: number, wrapperArgs: string) =>
-    `${pid} 1 ${pid} /bin/bash -c source /h/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh ${wrapperArgs} ${job}'`;
+    `${pid} 1 ${pid} /bin/bash -c source /tmp/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh ${wrapperArgs} ${job}'`;
   test("R952: the shell that launched a holding wrapper is no job; the slot is the job", () => {
     const rows = [
       launcher(400, "baseapp"),

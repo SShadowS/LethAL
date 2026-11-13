@@ -744,7 +744,7 @@ describe("R633 I2 and M5", () => {
       pid: 1,
       ppid: 0,
       pgid: 1,
-      args: `/bin/bash -c source /h/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh --wait other ${cmd}'`,
+      args: `/bin/bash -c source /tmp/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh --wait other ${cmd}'`,
     };
     const waiter = {
       pid: 2,
