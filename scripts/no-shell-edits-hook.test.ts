@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { isInPlaceSed } from "../.claude/hooks/no-shell-edits";
 
 const HOOK = join(import.meta.dir, "..", ".claude", "hooks", "no-shell-edits.ts");
 
@@ -23,7 +22,6 @@ describe("no-shell-edits hook (owner, 2026-11-13)", () => {
     "mv a b; sed -i 's|r943|r944|' /dev/null",
     "find . -name '*.ts' | xargs sed -i 's/a/b/'",
   ])("refuses %s", (cmd) => {
-    expect(isInPlaceSed(cmd)).toBe(true);
     expect(runHook(cmd)).toBe(2);
   });
 
@@ -34,7 +32,6 @@ describe("no-shell-edits hook (owner, 2026-11-13)", () => {
     "echo used sed earlier",
     "git log --grep=sed",
   ])("allows %s", (cmd) => {
-    expect(isInPlaceSed(cmd)).toBe(false);
     expect(runHook(cmd)).toBe(0);
   });
 
