@@ -675,10 +675,18 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * Measured: test codeunits named `Names Ø Tests`, `Names A:B Tests`, `Names A'B Tests`, `-Lead ...`,
  * `(Lead) ...` and `/Lead ...` ran explicit serve-entries and one-shot per mutant equal (48 of 48,
  * `/coord/handoff/R-929/names/`), and the raw serve rows carry the name only in `codeunitName`.
- * A METHOD name outside the shape falls the default back to one-shot (`unproven-test-name-shape`).
+ * R937 (coord R-957): an invented app with 15 test codeunits, one method shape each, ran explicit
+ * serve-entries and one-shot on edge c8fe56e05, per mutant equal (97 mutants, 0 differences;
+ * killingTest equal to the declared name; `/coord/handoff/R-957/shapes/result.md`). New: a first
+ * character `-`, `+` or `_`; inner `:`, `'`, `#`, `+`, `Ø`, `Æ`, `Å` (`&`, `(` and a space were
+ * proven before). Never run, so still unproven: lower-case `ø`, `"`, `\`, `*`, `%`, `,`, a leading
+ * or trailing space, a first `)`, a first `Ø`/`Æ`/`Å`. The inner dot is not in this pattern: it
+ * depends on the build (#5798) and is read through `serveRowFields` in `pickTransport`.
+ * A METHOD name outside the shape makes ITS codeunit run one-shot inside the serve session
+ * (`oneShotCodeunits`), or the whole default session one-shot where that cannot be done.
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
-  method: /^[A-Za-z0-9](?:[A-Za-z0-9_()/&åæ-]| (?=[^ ]))*$/,
+  method: /^[A-Za-z0-9_+-](?:[A-Za-z0-9_()/&åæ:'#+ØÆÅ-]| (?=[^ ]))*$/,
 } as const;
 
 /**
@@ -687,7 +695,7 @@ export const V3_SERVE_PROVEN_NAME_SHAPES = {
  * is not (a leading space, say) is named with no characters.
  */
 export function unprovenNamePart(method: string): string {
-  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ-]/.test(c)))];
+  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ:'#+ØÆÅ-]/.test(c)))];
   return `method "${method}"${chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : ""}`;
 }
 
@@ -1880,6 +1888,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get skipAfterTimeout(): boolean {
     return this.skipAfterTimeoutLearned && !this.entries;
   }
+  /** R937: the refs that go to serve; a one-shot codeunit's tests (by codeunit id, never by call id) do not. */
+  private serveRefs(refs: readonly TestMethodRef[]): TestMethodRef[] {
+    return refs.filter((r) => !this.oneShotCodeunits.has(r.codeunitId));
+  }
+  /** R937: as `skipAfterTimeout`, for codeunit `cu`: a one-shot codeunit inside a serve session carries the flag. */
+  private skipAfterTimeoutOn(cu: number): boolean {
+    return this.skipAfterTimeoutLearned && (!this.entries || this.oneShotCodeunits.has(cu));
+  }
   /** R919: see `ExecutionBackend.skipAfterTimeoutSupported`. */
   get skipAfterTimeoutSupported(): boolean {
     return this.skipAfterTimeoutLearned;
@@ -2055,6 +2071,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private transportFrozen = false;
   /** R857: why the default transport fell back, for `--isolate-tests`' refusal. */
   private fallbackReasons: readonly string[] = [];
+  /**
+   * R937: test codeunits holding a method name serve-entries is not proven for. On the default
+   * transport they run one-shot inside the serve session (every serve phase skips them); the rest
+   * stay on serve. Empty on an explicit transport and on a one-shot session.
+   */
+  private oneShotCodeunits: ReadonlySet<number> = new Set();
   private discovered: readonly TestMethodRef[] = [];
   /** §4: set ONLY by the orchestrator's `baselinePhase` bracket. */
   private inBaseline = false;
@@ -2783,7 +2805,32 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     // R922 item 3 (R-929): the method only; a codeunit's name never reaches serve's addressing.
     const odd = this.discovered.filter((t) => !methodShape(t.method));
-    if (odd.length > 0) {
+    // R937: only the codeunits holding such a method run one-shot, inside the serve session, where
+    // nothing else already sends the session to one-shot and `--isolate-tests` / isolation "method"
+    // (one entry per test for EVERY codeunit) are not in use; otherwise the old reason stands.
+    const perCodeunit =
+      odd.length > 0 &&
+      this.cfg.transport === "serve-entries" &&
+      reasons.length === 0 &&
+      !V3_NO_SERVE_ENTRIES.includes(version) &&
+      this.cfg.serveFallbackWarmup === undefined &&
+      !this.isolatesTests; // includes isolation "method"; "auto" (the default) and "test" are fine
+    if (perCodeunit) {
+      const byCodeunit = new Map<number, { name: string; methods: Set<string> }>();
+      for (const t of odd) {
+        const e = byCodeunit.get(t.codeunitId) ?? { name: t.codeunitName, methods: new Set() };
+        e.methods.add(unprovenNamePart(t.method));
+        byCodeunit.set(t.codeunitId, e);
+      }
+      this.oneShotCodeunits = new Set(byCodeunit.keys());
+      const named = [...byCodeunit].map(
+        ([id, e]) => `codeunit ${id} "${e.name}" (${[...e.methods].join("; ")})`,
+      );
+      this.notify(
+        "al-runner-v3-serve-default-fallback",
+        `[lethal] al-runner-v3-serve-default-fallback: this session runs on the serve-entries default, but ${named.length} test codeunit(s) run one-shot inside it, because a method name serve-entries is not proven for: ${named.slice(0, 5).join(", ")}${named.length > 5 ? `, and ${named.length - 5} more` : ""}. Every other codeunit runs on serve. Set "alRunnerV3.transport" in the config to choose a transport yourself (R937).`,
+      );
+    } else if (odd.length > 0) {
       // R922: name the unproven method and its characters, not the whole test name.
       const named = [...new Set(odd.map((t) => unprovenNamePart(t.method)))];
       reasons.push(
@@ -3702,7 +3749,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.daemonBaselineFilled || f === undefined) return;
     this.daemonBaselineFilled = true;
     const all = [...this.suitePerCodeunit.keys()]
-      .filter((id) => !this.perTest(id))
+      .filter((id) => !this.perTest(id) && !this.oneShotCodeunits.has(id)) // R937: one-shot codeunits stay out
       .sort((a, b) => a - b);
     if (this.seams.reverseBaselineOrder === true) all.reverse();
     // R951 (R6): a codeunit whose sample's one-shot run was skipped never gets a daemon answer.
@@ -3879,7 +3926,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const f = this.budgetFloor;
     if (f === undefined) return;
     // The refs this fill answers, in queue order; the sample is by position in that order.
-    const eligible = queue.filter((ref) => this.isolated(this.callId(ref)) !== undefined);
+    const eligible = this.serveRefs(queue).filter(
+      (ref) => this.isolated(this.callId(ref)) !== undefined,
+    ); // R937: a one-shot codeunit's tests stay out
     // R951 (R6): a test whose sample's one-shot run was skipped never gets a daemon answer.
     const refs = eligible.filter((ref) => !this.uncleanCalls.has(this.callId(ref)));
     for (const ref of eligible) {
@@ -4295,7 +4344,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
-      skipAfterTimeout: this.skipAfterTimeout && o.mutantActive === true,
+      skipAfterTimeout: this.skipAfterTimeoutOn(o.id) && o.mutantActive === true,
       ...(this.sidecarPath !== undefined
         ? { dotnetSidecar: this.sidecarPath, dotnetAssemblyDirs: this.dotnetAssemblyDirs() }
         : {}),
@@ -4922,7 +4971,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
       const made =
-        this.entries && !this.inBaseline
+        this.entries && !this.inBaseline && !this.oneShotCodeunits.has(ref.codeunitId)
           ? await this.liveCall(lane, ref)
           : await this.callCodeunit(lane, ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
@@ -4958,7 +5007,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
      */
     if (
       !alone &&
-      this.skipAfterTimeout &&
+      this.skipAfterTimeoutOn(ref.codeunitId) &&
       !this.isBaselineCall(lane) &&
       call.refusal === undefined &&
       call.missing === undefined
@@ -5101,7 +5150,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const index = this.sleepIndex;
       if (index === undefined)
         throw new Error("al-runner-v3: no Sleep index for the deployed batch");
-      if (this.entries) {
+      if (this.entries && !this.oneShotCodeunits.has(ref.codeunitId)) {
         // R635 §5: an entry carries no coverage. An empty index has nothing to find; otherwise
         // the window gives this (mutant, codeunit) a coverage read, once.
         if (index.sizes.target + index.sizes.test === 0) return verdict;
@@ -5352,6 +5401,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.checkBound(lane);
       raw = spec;
     } else {
+      // R937: a one-shot codeunit of a serve session reads the mutant from the resource selector,
+      // as serve does: the file says the mutant for this one process, NONE is restored after it.
+      const mutantInFile =
+        this.entries && this.oneShotCodeunits.has(id) && lane.lastActivated !== null
+          ? lane.lastActivated
+          : undefined;
       const made = await this.spawnCodeunit({
         id,
         stopSeconds,
@@ -5361,10 +5416,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         activeDir: lane.realActive ?? resolve(lane.activeDir()),
         testDir: this.realTestDir ?? resolve(this.cfg.testDir),
         // R652: the last await before the spawn; nothing below reads the disk before v3 does.
-        beforeSpawn: () => this.checkBound(lane),
+        beforeSpawn: async () => {
+          await this.checkBound(lane);
+          if (mutantInFile !== undefined)
+            await writeFile(lane.resourcePath(), mutantInFile, "utf8");
+        },
         ...(onlyTest !== undefined ? { onlyTest } : {}),
         mutantActive: aloneTest === undefined && !this.isBaselineCall(lane),
-      }).finally(() => {
+      }).finally(async () => {
+        if (mutantInFile !== undefined) {
+          await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
+        }
         if (held) this.memoryRelease();
       });
       if ("spawnError" in made) {
@@ -6041,7 +6103,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (!this.entries) return;
     this.prefetched = new Map();
     for (const p of opts?.batchPlans ?? [])
-      for (const cu of new Set(p.refs.map((r) => this.callId(r)))) this.union.add(cu);
+      for (const cu of new Set(this.serveRefs(p.refs).map((r) => this.callId(r))))
+        this.union.add(cu);
     if (opts?.batchPlans !== undefined) {
       this.prefetchBatch = { groups: opts.batchPlans.length, size: 0, ran: false };
     }
@@ -6056,13 +6119,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async prefetchWindow(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void> {
-    const groups: EntryGroup[] = plans.map((p) => ({
-      mutantId: p.mutantId,
-      // By size, as R857's test ids are negative and numbered in the order the tests first ran.
-      codeunits: [...new Set(p.refs.map((r) => this.callId(r)))].sort(
-        (a, b) => Math.abs(a) - Math.abs(b),
-      ),
-    }));
+    const groups: EntryGroup[] = plans
+      .map((p) => ({
+        mutantId: p.mutantId,
+        // By size, as R857's test ids are negative and numbered in the order the tests first ran.
+        // R937: a one-shot codeunit is never an entry; its call is made live, one-shot.
+        codeunits: [...new Set(this.serveRefs(p.refs).map((r) => this.callId(r)))].sort(
+          (a, b) => Math.abs(a) - Math.abs(b),
+        ),
+      }))
+      .filter((g) => g.codeunits.length > 0); // R937: a mutant only one-shot codeunits cover sends no group
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
     const queue = chunkGroups(groups);
     const resent = new Set<string>();
@@ -6248,7 +6314,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !this.entries ||
       this.entriesRefused !== undefined ||
       this.inBaseline ||
-      lane.lastActivated !== mutantId
+      lane.lastActivated !== mutantId ||
+      this.oneShotCodeunits.has(ref.codeunitId) // R937: no serve pair for a one-shot codeunit
     ) {
       return;
     }

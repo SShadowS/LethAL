@@ -650,7 +650,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
       "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
       "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
-      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
+      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922). " +
+      "When only some test codeunits hold such a method name (and nothing else forces one-shot), " +
+      "only THOSE codeunits ran one-shot, inside the serve session, and every other codeunit ran on " +
+      "serve; the warning then names each such codeunit and its methods (R937).",
     entailedNegative:
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
       "serve-entries default is proven against.",
