@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 931 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 932 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -976,6 +976,7 @@ that ordering is the priority.
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · open
 - **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' fails on a busy container: the guard counts the container's real heavy jobs, so the plain caller gets exit 75 · [R967.md](docs/roadmap/R967.md) · open
 - **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
+- **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · open
 
 ---
 
