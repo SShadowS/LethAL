@@ -76,10 +76,10 @@ const row = (method: string, o: Record<string, unknown> = {}) => ({
 });
 const cov = (perTest: Record<string, number[]>): V3CoverageRead => ({
   kind: "doc",
-  coverage: [{ file: "/a/T.al", statements: [{ line: 1, hits: 1 }] }],
+  coverage: [{ file: "/a/Tfile", statements: [{ line: 1, hits: 1 }] }],
   perTestCoverage: Object.entries(perTest).map(([test, lines]) => ({
     test,
-    coverage: [{ file: "/a/T.al", statements: lines.map((line) => ({ line, hits: 1 })) }],
+    coverage: [{ file: "/a/Tfile", statements: lines.map((line) => ({ line, hits: 1 })) }],
   })),
 });
 
@@ -160,7 +160,7 @@ describe("R948: comparing a daemon answer with a fresh process's", () => {
         ...same,
         coverage: cov({ "Codeunit1.A": [1, 5], "Codeunit1.B": [2] }),
       }),
-    ).toEqual(["codeunit1.a: coverage differs (daemon only 0; one-shot only 1: /a/t.al:5)"]);
+    ).toEqual(["codeunit1.a: coverage differs (daemon only 0; one-shot only 1: /a/tfile:5)"]);
     // Counts, and at most five keys per side: line numbers and file names only, no source text.
     const many = (lines: number[]) => cov({ "Codeunit1.A": lines, "Codeunit1.B": [2] });
     const wide = compareBaselineAnswers(
@@ -168,24 +168,24 @@ describe("R948: comparing a daemon answer with a fresh process's", () => {
       { ...same, coverage: many([1, 10, 11, 12, 13, 14, 15]) },
     );
     expect(wide).toEqual([
-      "codeunit1.a: coverage differs (daemon only 0; one-shot only 6: /a/t.al:10, /a/t.al:11, /a/t.al:12, /a/t.al:13, /a/t.al:14, ...)",
+      "codeunit1.a: coverage differs (daemon only 0; one-shot only 6: /a/tfile:10, /a/tfile:11, /a/tfile:12, /a/tfile:13, /a/tfile:14, ...)",
     ]);
     const wider: V3CoverageRead = {
       kind: "doc",
-      coverage: [{ file: "/a/T.al", statements: [{ line: 9, hits: 1 }] }],
+      coverage: [{ file: "/a/Tfile", statements: [{ line: 9, hits: 1 }] }],
       perTestCoverage: [
         {
           test: "Codeunit1.A",
-          coverage: [{ file: "/a/T.al", statements: [{ line: 1, hits: 1 }] }],
+          coverage: [{ file: "/a/Tfile", statements: [{ line: 1, hits: 1 }] }],
         },
         {
           test: "Codeunit1.B",
-          coverage: [{ file: "/a/T.al", statements: [{ line: 2, hits: 1 }] }],
+          coverage: [{ file: "/a/Tfile", statements: [{ line: 2, hits: 1 }] }],
         },
       ],
     };
     expect(compareBaselineAnswers(same, { ...same, coverage: wider })).toEqual([
-      "coverage: the whole call differs (daemon only 1: /a/t.al:1; one-shot only 1: /a/t.al:9)",
+      "coverage: the whole call differs (daemon only 1: /a/tfile:1; one-shot only 1: /a/tfile:9)",
     ]);
     expect(
       compareBaselineAnswers(same, { ...same, coverage: { kind: "unavailable", why: "none" } })[0],
@@ -198,7 +198,7 @@ describe("R948: comparing a daemon answer with a fresh process's", () => {
       perTestCoverage: [
         {
           test: "Codeunit1.A",
-          coverage: [{ file: "/a/T.al", statements: [{ line: 4, hits: 0 }] }],
+          coverage: [{ file: "/a/Tfile", statements: [{ line: 4, hits: 0 }] }],
         },
       ],
     };
