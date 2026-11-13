@@ -2679,6 +2679,58 @@ describe("R-435: a timeout after an earlier refusal or stop in the same call is 
       expect(v.refusedAfterStop).toBeUndefined();
     });
   });
+
+  // R978 (R-967): a refusal whose cause is the call's first row that did not pass, a plain failure.
+  // Measured on Recurrence Schedule: al-runner refuses the later test ("a test before this one ...
+  // did not pass ... not trusted"); the covering loop must go on so the failure's own row decides.
+  describe("R978: refusedAfterStop after a plain failure", () => {
+    const failed = (method: string) => ({
+      method,
+      status: "fail" as const,
+      message: "Assert.AreEqual failed. Expected:<1> (Integer). Actual:<2> (Integer).",
+    });
+    const pass = (method: string) => ({ method, status: "pass" as const });
+    test("C1: [A pass, F fail, B refusal] flags B with the failed test's name; F itself is a fail", async () => {
+      const rows = [pass("A"), failed("F"), refused("B")];
+      const b = await verdictOf(rows, "B");
+      expect(b.runnerRow).toBe("runner-refused");
+      expect(b.refusedAfterStop).toBe("F");
+      const f = await verdictOf(rows, "F");
+      expect(f.outcome).toBe("fail");
+      expect(f.refusedAfterStop).toBeUndefined();
+    });
+    test("C2: the failure AFTER the refusal does not flag it", async () => {
+      const v = await verdictOf([pass("A"), refused("B"), failed("F")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("C3: an earlier refusal is the call's first row that did not pass: not flagged", async () => {
+      const v = await verdictOf([refused("E"), failed("F"), refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("C4: a first failure holding the refusal marker is not a plain failure: not flagged", async () => {
+      const marker = {
+        method: "F",
+        status: "fail" as const,
+        message: "NotRun: out-of-scope: Commit",
+      };
+      const v = await verdictOf([marker, refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("C6: a first row in error (not a plain fail, no refusal marker) is not a plain failure: not flagged", async () => {
+      const errored = { method: "F", status: "error" as const, message: "a runtime error" };
+      const v = await verdictOf([errored, refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("C7: a first fail that is a timeout's wording is left to R639's own rule: not flagged here", async () => {
+      const slow = { method: "F", status: "fail" as const, message: STOP };
+      const v = await verdictOf([slow, refused("B")], "B");
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+    test("C5: no mutant active (the baseline call): not flagged", async () => {
+      const v = await verdictOf([failed("F"), refused("B")], "B", false);
+      expect(v.refusedAfterStop).toBeUndefined();
+    });
+  });
 });
 
 describe("T24 (I1) and I3: the notes", () => {

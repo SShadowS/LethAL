@@ -5089,19 +5089,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           runnerRow: "runner-test-error",
         };
     }
-    // R639: v3's refusal that follows a timeout, where that timeout is the call's FIRST not-run row.
+    // R639: v3's refusal that follows a timeout, where that timeout is the call's FIRST not-run row
+    // (R978: or a plain failure, the call's first row that did not pass).
     // The refused row's cause is the stop's cascade, so the covering loop may go on to the next
     // test (the row it asks for is the row it would get were that test first in the order). A
     // refusal after an earlier non-timeout refusal is not flagged: that partial state is unknown.
     if (verdict.runnerRow === "runner-refused" && row.notRun) {
+      const at = call.rows.indexOf(row);
       const first = call.rows.findIndex((r) => r.notRun);
       const stop = call.rows[first];
-      if (
-        stop !== undefined &&
-        first < call.rows.indexOf(row) &&
-        V3_TIMEOUT_MESSAGE.test(stop.message ?? "")
-      )
+      if (stop !== undefined && first < at && V3_TIMEOUT_MESSAGE.test(stop.message ?? ""))
         return { ...verdict, refusedAfterStop: stop.method };
+      // R978 (R-967): the same for a refusal whose cause is a plain FAILURE: the call's first row that
+      // did not pass came before this one and failed (no refusal marker, not a timeout), from a clean
+      // state (every row before it passed). Measured: al-runner refuses a later test "a test before this
+      // one in the codeunit did not pass (<T>: failed ...) ... this failure is not trusted", and LethAL
+      // ended the mutant there before its covering order reached <T>, a kill BC scores (Recurrence
+      // Schedule, 76 mutants). The loop goes on; <T>'s own row then decides, under the usual rules.
+      // (This refused row is itself a row that did not pass, so a first such row that is a plain fail
+      // necessarily came before it.)
+      const bad = call.rows.find((r) => r.notRun || r.status !== "pass");
+      if (
+        bad !== undefined &&
+        bad.status === "fail" &&
+        !isV3RefusalText(bad.message) &&
+        !V3_TIMEOUT_MESSAGE.test(bad.message ?? "")
+      )
+        return { ...verdict, refusedAfterStop: bad.method };
     }
     // A covering pass under a mutant: §6.
     // §6 on RAW lines whatever the session's coverage mode (none, or refused for a multi-object
