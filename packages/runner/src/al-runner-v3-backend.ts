@@ -5001,6 +5001,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         rows: viaDaemon.rows,
         stopSeconds,
         wallMs: viaDaemon.wallMs,
+        // R963: one daemon baseline answer is one request (`baselineRequest`, one `plain()` per call): its own call id.
+        callId: randomUUID(),
         coverage: viaDaemon.coverage,
         ...(noCoverage ? { noCoverage: true } : {}),
       };
