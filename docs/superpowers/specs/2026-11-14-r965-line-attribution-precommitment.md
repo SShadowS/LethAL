@@ -84,3 +84,18 @@ object-decided, as amendment 1 says. No verdict or killing test moves: the note 
 
 **Prediction.** WR and WRE read exactly `0/M0075, 0/M0076, 0/M0082, 0/M0089`; `V3_WR_STATE_NOTES` and its unit test move to those four on
 lethal/r-965. Everything else stays as amendments 1 and 2 say.
+
+## Amendment 4 (2026-11-13): WRE's serve counter `entriesSent` 448 → 436
+
+The second record run (lethal/r-965 at db99e00a; `/coord/handoff/R-965/v3record3.log`) matched amendment 3: WR and WRE 62/31/9 with the
+four state notes. WR recorded `al-runner-v3.wrapped.baseline.json` (to be deleted and recorded again, as the gate says). WRE then failed
+on R918's pinned serve counters: `entriesSent` 436, pinned 448; `warmups` 1, `liveRequests` 1, `boundChecks` 3, `pairRequests` 62 and
+`echoMismatches` 0 equal their pins. The run also lacked `LETHAL_ITEST_V3_TABLES` and `LETHAL_ITEST_V3_CDO`, so D1, D1c and T did not
+run and the tables baseline was not recorded.
+
+**Cause (inferred, not counted per mutant).** `entriesSent` counts the entries of every request. The 6 twin `OnOpenPage` mutants that
+moved to `no-coverage` are no longer run, so their entries are no longer sent: 12 = 6 x 2. This figure was read from the run, not
+predicted; it is a cost counter and moves no verdict. MOE's counters are unchanged.
+
+**Prediction for the next record (the full gate, both variables set).** WRE `entriesSent` **436**, its other counters as pinned; every
+other figure as amendments 1 to 3 say.
