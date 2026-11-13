@@ -429,6 +429,8 @@ export interface DaemonBaselineFacts {
   readonly skippedError: readonly string[];
   readonly skippedOther: readonly string[];
   readonly sampledSkipped: readonly string[];
+  /** R951: skipped samples replaced by another item (that item leaves the served pool and joins the sample). */
+  readonly replaced: number;
 }
 
 /**
@@ -457,16 +459,18 @@ export function judgeDaemonBaseline(
     ...(d.sampledSkipped.length > 0
       ? [`${leg}: sample skipped: ${d.sampledSkipped.join(", ")}`]
       : []),
+    ...(d.replaced > 0 ? [`${leg}: ${d.replaced} skipped sample(s) replaced by another item`] : []),
   ];
-  if (d.compared + d.sampledSkipped.length !== sampled) {
+  // R951: each replacement is one more sample, taken from the items that would have been served.
+  if (d.compared + d.sampledSkipped.length !== sampled + d.replaced) {
     return {
-      fail: `${leg}: ${d.compared} sampled compared and ${d.sampledSkipped.length} skipped by name, pre-committed ${sampled} in all`,
+      fail: `${leg}: ${d.compared} sampled compared and ${d.sampledSkipped.length} skipped by name, pre-committed ${sampled} in all plus ${d.replaced} replaced`,
       notes,
     };
   }
-  if (d.served + skipped !== expected) {
+  if (d.served + skipped + d.replaced !== expected) {
     return {
-      fail: `${leg}: ${d.served} daemon answers taken and ${skipped} skipped by name, pre-committed ${expected} in all (a silent drop is not a skip)`,
+      fail: `${leg}: ${d.served} daemon answers taken, ${skipped} skipped by name and ${d.replaced} moved to the sample, pre-committed ${expected} in all (a silent drop is not a skip)`,
       notes,
     };
   }

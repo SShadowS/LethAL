@@ -52,6 +52,54 @@ export function baselineSampleIds(
   return [...new Set(idx)].map((i) => ids[i]).filter((x): x is number => x !== undefined);
 }
 
+/** R951: the fewest clean compared samples a fill may end with (or fewer when the plan holds fewer). */
+export const BASELINE_MIN_CLEAN_SAMPLES = 4;
+
+/**
+ * R951 (R2): why a one-shot run gave no answer, and the ones that only SKIP the sample (replaced by
+ * another): no process ran or it did not finish. Anything else (an exit outside 0/1/7/8, rows that
+ * do not decode) drops the session by name.
+ */
+export const SKIPPABLE_NO_ANSWER: readonly string[] = ["memory-gate", "spawn-error", "timed-out"];
+
+/** The exit codes a one-shot answer may carry and still be read as rows (`cleanBaselineAnswer`'s). */
+export const ONE_SHOT_EXITS: readonly number[] = [0, 1, 7, 8];
+
+/**
+ * R951 (R5): the cross-check's sample as a fill walks `order`, with replacements. A skipped sample
+ * is replaced by the next item after the loop's position that is not yet sampled (`next`), or, when
+ * none is left (the LAST sample), by the last earlier unsampled item that qualifies (`last`).
+ * Position 0 is never a sample (a fresh daemon shows no built-up state).
+ */
+export class SamplePlan<T> {
+  private readonly picked: Set<T>;
+  constructor(
+    private readonly order: readonly T[],
+    planned: Iterable<T>,
+  ) {
+    this.picked = new Set(planned);
+  }
+  has(k: T): boolean {
+    return this.picked.has(k);
+  }
+  next(pos: number, ok: (k: T) => boolean): T | undefined {
+    for (const k of this.order.slice(pos + 1)) {
+      if (!this.picked.has(k) && ok(k)) return this.take(k);
+    }
+    return undefined;
+  }
+  last(ok: (k: T) => boolean): T | undefined {
+    for (const k of this.order.slice(1).reverse()) {
+      if (!this.picked.has(k) && ok(k)) return this.take(k);
+    }
+    return undefined;
+  }
+  private take(k: T): T {
+    this.picked.add(k);
+    return k;
+  }
+}
+
 /** Every `file:line` a statement hit, sorted: the exact coverage set of one coverage list. */
 function hitSet(
   files: readonly {
