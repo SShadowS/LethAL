@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  SELECTOR_INHERENT_PERMISSIONS,
   SELECTOR_RESOURCE_NAME,
   emitMutationSelector,
   emitRegisterInstall,
@@ -222,14 +223,33 @@ describe("selector single-sourced identity", () => {
     expect(guard).toBeLessThan(read);
   });
 
-  test("R887: BC's selector is byte-identical to the one before the install guard", () => {
-    // sha256 of emitMutationSelector for this config on master 9336bb6a, before R-884. BC publishes
-    // the target before any mutant is set, so it needs no guard, and its emitted AL must not move.
+  test("R887: BC's selector is byte-identical to the one before the install guard, plus R979's property", () => {
+    // sha256 of emitMutationSelector for this config. R887 pinned master 9336bb6a's bytes (a93133c7...): BC publishes the
+    // target before any mutant is set, so it needs no install guard. R979 moved it on purpose, by exactly one line.
     const bc = emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP });
     expect(new Bun.CryptoHasher("sha256").update(bc).digest("hex")).toBe(
-      "a93133c7487fecec9f342124c4d6d177eb2222ded6d988a6f61be446050ab24c",
+      "802a9d85a34dd44d0a279397dad97709b92557553b43f11e3a520ee7539c4803",
     );
     expect(bc).not.toContain("GetExecutionContext");
+    // the R887 bytes, recovered by removing R979's line
+    const before = bc.replace(`    ${SELECTOR_INHERENT_PERMISSIONS}\n\n`, "");
+    expect(new Bun.CryptoHasher("sha256").update(before).digest("hex")).toBe(
+      "a93133c7487fecec9f342124c4d6d177eb2222ded6d988a6f61be446050ab24c",
+    );
+  });
+
+  test("R979: every selector emitter grants itself Execute, so an exact permission set cannot block it", () => {
+    const sources = {
+      bc: emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP }),
+      static: emitStaticSelector({ objectId: IDS.selectorId, activeId: "M0001", artifactId: ART, targetAppId: APP }),
+      staticBaseline: emitStaticSelector({ objectId: IDS.selectorId, activeId: "", artifactId: ART, targetAppId: APP }),
+      resource: emitResourceSelector({ objectId: IDS.selectorId, artifactId: ART, targetAppId: APP }),
+    };
+    for (const [kind, al] of Object.entries(sources)) {
+      // an object property: inside the codeunit's braces, before its first procedure
+      const head = al.slice(al.indexOf("{"), al.indexOf("procedure"));
+      expect({ kind, has: head.includes("InherentPermissions = X;") }).toEqual({ kind, has: true });
+    }
   });
 
   test("install registers identity read from the selector, not from args", () => {
