@@ -103,6 +103,9 @@ async function fixtureSymbols(): Promise<string> {
 
 export async function scaffold(o: NewOptions): Promise<void> {
   const dir = resolve(o.dir);
+  // A test app with no test codeunit only fails ("no tests discovered"), so refuse it here rather than after a slot wait.
+  if ((o.tests ?? []).length === 0)
+    throw new Error("repro-scaffold: give at least one --test <file.al>");
   if (existsSync(dir) && readdirSync(dir).length > 0)
     throw new Error(`repro-scaffold: ${dir} exists and is not empty`);
   const symbols = o.symbols ?? (await fixtureSymbols());
@@ -150,9 +153,13 @@ export function compareReports(a: readonly Row[], b: readonly Row[]): string[] {
   return out;
 }
 
-function compare(dir: string): number {
-  const read = (n: string) =>
-    (JSON.parse(readFileSync(join(dir, `${n}.report.json`), "utf8")) as { mutants: Row[] }).mutants;
+export function compare(dir: string): number {
+  const read = (n: string) => {
+    const f = join(dir, `${n}.report.json`);
+    if (!existsSync(f))
+      throw new Error(`repro-scaffold compare: the ${n} run wrote no report; see ${n}.stderr.txt`);
+    return (JSON.parse(readFileSync(f, "utf8")) as { mutants: Row[] }).mutants;
+  };
   const a = read("default");
   const diffs = compareReports(a, read("oneshot"));
   console.log(`repro-scaffold compare: ${a.length} mutants, ${diffs.length} difference(s)`);

@@ -3,7 +3,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compareReports, scaffold } from "./repro-scaffold.ts";
+import { compare, compareReports, scaffold } from "./repro-scaffold.ts";
 
 const TMP = mkdtempSync(join(tmpdir(), "repro-scaffold-test-"));
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));
@@ -50,15 +50,42 @@ describe("R934 repro-scaffold new", () => {
   });
 
   test("refuses a folder that is not empty, and symbols without the sandbox app's package", async () => {
+    const al = join(TMP, "Repro2.Codeunit.al");
+    writeFileSync(al, 'codeunit 79151 "Repro Tests 2" { Subtype = Test; }\n');
     const dir = join(TMP, "r2");
     mkdirSync(dir);
     writeFileSync(join(dir, "keep"), "x");
-    await expect(scaffold({ dir, symbols: symbols() })).rejects.toThrow(/exists and is not empty/);
+    await expect(scaffold({ dir, tests: [al], symbols: symbols() })).rejects.toThrow(
+      /exists and is not empty/,
+    );
     const empty = join(TMP, "sym-empty");
     mkdirSync(empty);
-    await expect(scaffold({ dir: join(TMP, "r3"), symbols: empty })).rejects.toThrow(
+    await expect(scaffold({ dir: join(TMP, "r3"), tests: [al], symbols: empty })).rejects.toThrow(
       /no LethAL Sandbox App symbol package/,
     );
+  });
+
+  // Live smoke 2026-11-13: without a --test the test app held no test codeunit, and both runs failed "no tests discovered".
+  test("refuses no --test before writing anything", async () => {
+    const dir = join(TMP, "r4");
+    await expect(scaffold({ dir, symbols: symbols() })).rejects.toThrow(/at least one --test/);
+    await expect(scaffold({ dir, tests: [], symbols: symbols() })).rejects.toThrow(
+      /at least one --test/,
+    );
+    expect(existsSync(dir)).toBe(false);
+  });
+});
+
+describe("R934 repro-scaffold compare of a folder", () => {
+  // Live smoke 2026-11-13: a failed run wrote no report and compare crashed with a bare ENOENT.
+  test("names the run that wrote no report", () => {
+    const dir = join(TMP, "c1");
+    mkdirSync(dir);
+    expect(() => compare(dir)).toThrow(/the default run wrote no report; see default\.stderr\.txt/);
+    writeFileSync(join(dir, "default.report.json"), JSON.stringify({ mutants: [] }));
+    expect(() => compare(dir)).toThrow(/the oneshot run wrote no report; see oneshot\.stderr\.txt/);
+    writeFileSync(join(dir, "oneshot.report.json"), JSON.stringify({ mutants: [] }));
+    expect(compare(dir)).toBe(0);
   });
 });
 
