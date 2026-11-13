@@ -1044,6 +1044,7 @@ describe("7: selector parity: v2's staged resource selector bytes, and the echo"
       `codeunit 50000 "Mutation Selector"
 {
     SingleInstance = true;
+    InherentPermissions = X;
 
     var
         Loaded: Boolean;

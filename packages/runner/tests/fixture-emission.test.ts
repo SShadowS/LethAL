@@ -87,6 +87,8 @@ import { removeScratchDir } from "./helpers/scratch";
  * and sandbox-coverage-probe re-pinned (manifest included). In sandbox-data the project-wide M-codes
  * of later mutants shift (DataBlankOps M0024 -> M0025), so files with no new mutant moved too.
  */
+// R979: each fixture's MutationSelector.Codeunit.al re-pinned for its one new line, `InherentPermissions = X;`; no other
+// file moved.
 const PINNED: Record<
   string,
   {
@@ -100,7 +102,7 @@ const PINNED: Record<
       "MutationRegister.Codeunit.al":
         "f53090ac30665fb4a555c7908a59480b27edd7c2de5b4211567611ef83c821bd",
       "MutationSelector.Codeunit.al":
-        "10d1c6b17cf465a4a272e4f8a795d408dceb950d160fd37c90f49671eecfffbb",
+        "446a30f346c22cdbb61a142714553a1e2b36011d054fb1526f93626bdc3903d2",
       "MutationUpgrade.Codeunit.al":
         "185c89c06210c95fd6b0d5cd920f7b4fcf48f39e8877477ebb69a6ead72a9482",
       "SandboxLogic.Codeunit.al":
@@ -162,7 +164,7 @@ const PINNED: Record<
       "MutationRegister.Codeunit.al":
         "bcaa8ed28992b8e244a4174e2235c57575f3677c37de65fd7318c3b41b891830",
       "MutationSelector.Codeunit.al":
-        "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
+        "e91a2054b3d343a3167427f857a9b8ce40c744923b5d0f6252940b314dd9461b",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
       "mutant-manifest.json": "71d0df781e280c4397e3c6da36e37a60290a64a0dd7ab9430d129695fe6aeaa3",
@@ -175,7 +177,7 @@ const PINNED: Record<
       "MutationRegister.Codeunit.al":
         "5dc811a3a1661531502dd68b7da0849c7973a76bb2fb04486ccb595b0e7acbab",
       "MutationSelector.Codeunit.al":
-        "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
+        "91db5782e095e250389e0367a19b933f4e14ed147e040970a4085c4a4c4c84e2",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
       "mutant-manifest.json": "46c8966f800d1fdbeb41a3500be81c37f5a4e10dcd2d969173d23ecc9ed327f6",
@@ -189,7 +191,7 @@ const PINNED: Record<
       "MutationRegister.Codeunit.al":
         "d5323d90636f04e1f396e0ee09abbda22c3f73f2b54c87d8486f84b1277d9a05",
       "MutationSelector.Codeunit.al":
-        "761229a7c2c2edaa674509cd00a51e53118742a676a957645d3d33cb3f30966d",
+        "84adcb52cad3e21a121f74e84361895869efeeddc576499b0c21ff004598f7c3",
       "MutationUpgrade.Codeunit.al":
         "4a52c84af5a27079132374f5737fb95f13d9721f616e70c2b62f83e6d90d7378",
       "mutant-manifest.json": "12bcdc9dba86a43e763a5a78f5f77cd32b539233b15c7568abdb144a612ee65f",
@@ -205,7 +207,7 @@ const PINNED: Record<
       "MutationRegister.Codeunit.al":
         "1aa4b2864eb595876331cc2243269bff718b4416cc6857a3a50f279d4f73b4d6",
       "MutationSelector.Codeunit.al":
-        "92665291bf3ca3853f231cc5d821b0e70b422d8b6d3eb8a5637befdbde752879",
+        "84e7b616ad0d5a102711e748de055aab4e710622d6ab477dc1f9ee9b9d5a043c",
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",

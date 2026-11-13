@@ -241,9 +241,23 @@ describe("selector single-sourced identity", () => {
   test("R979: every selector emitter grants itself Execute, so an exact permission set cannot block it", () => {
     const sources = {
       bc: emitMutationSelector({ ...IDS, artifactId: ART, targetAppId: APP }),
-      static: emitStaticSelector({ objectId: IDS.selectorId, activeId: "M0001", artifactId: ART, targetAppId: APP }),
-      staticBaseline: emitStaticSelector({ objectId: IDS.selectorId, activeId: "", artifactId: ART, targetAppId: APP }),
-      resource: emitResourceSelector({ objectId: IDS.selectorId, artifactId: ART, targetAppId: APP }),
+      static: emitStaticSelector({
+        objectId: IDS.selectorId,
+        activeId: "M0001",
+        artifactId: ART,
+        targetAppId: APP,
+      }),
+      staticBaseline: emitStaticSelector({
+        objectId: IDS.selectorId,
+        activeId: "",
+        artifactId: ART,
+        targetAppId: APP,
+      }),
+      resource: emitResourceSelector({
+        objectId: IDS.selectorId,
+        artifactId: ART,
+        targetAppId: APP,
+      }),
     };
     for (const [kind, al] of Object.entries(sources)) {
       // an object property: inside the codeunit's braces, before its first procedure

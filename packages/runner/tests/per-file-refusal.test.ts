@@ -291,7 +291,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     expect(all.digest("hex")).toBe(
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
-      "12e54fd3e5437ddcba10460e702d8463d3fbf094171233f49f80aac86d041065",
+      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 12e54fd3...1065;
+      // fixture-emission's per-file pins show the selector as the one file that changed).
+      "470ab1e641bb5f21cb92e532e5fff3fd2e5d3b1c7b95024a32b1b483780f67cc",
     );
   }, 60_000);
 });
