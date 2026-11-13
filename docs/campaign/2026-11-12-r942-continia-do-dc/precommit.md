@@ -74,3 +74,22 @@ re-baselined one test per process. Its time is not counted; no figure of it is u
 The resumed run is a fresh window 1 (no `--resume`: window 1 stored nothing usable), then windows 2 and 3 with `--resume`, as above.
 The before/after baseline time on R956's diagnosis slice (three test files; before 287.5 s, every test refused) is measured first and
 recorded in R956 and the result.
+
+## Amendment 2 (2026-11-13, before the next DO window): the resumed window 1b was OOM-killed; transport one-shot
+
+**What happened since amendment 1.** The fresh window 1b (license, master 81c59409) was OOM-killed 2 h 27 min into its baseline at a
+30.8 GB tree (R961); no figure of it is used. R-944, R-948, R-949 and R-951 followed (time budget bounds the baseline; memory guard;
+daemon baseline with an in-session cross-check). On DO the daemon baseline is not faster (R968: refusal restarts and per-request
+uncached compiles; a 3,564 s fill reached 1 of 1,979 tests), so DO runs on the one-shot baseline.
+
+**What changes.** Config `v3.do-lic-oneshot.json` = `v3.do-lic.json` plus `alRunnerV3.transport: "one-shot"` — the only switch that turns
+the daemon baseline off, and it makes the mutant phase one-shot too (slower per mutant than serve; the reason is R968, the deviation is
+named). Same al-runner build (edge-2bd87774f, explicit path), license, environment, selector ids, scope and tests. LethAL: master at the
+run (it carries the memory guard and the R955 budget stop); each report names its sha. Every window runs under the external watchdog as
+well (SIGTERM at a 20 GB tree or under 4 GiB container headroom; SIGKILL of its own tree at 26 GB) and the interim admission rule
+(current + 12 GiB < 28 GiB).
+
+**Windows.** A fresh window 1c (no `--resume`), then 2c and 3c with `--resume`, `--time-budget 14400` each. Expected from R-948's
+one-shot fallback (1,201 of 1,979 tests in 3,526 s): the baseline alone about 1.6 h, so window 1c reaches the mutant phase. Purpose, per
+the orchestrator: al-runner refusals and differences on real ISV code (each an invented repro and an upstream issue, no Continia source
+text); throughput is reported, not predicted.
