@@ -68,3 +68,19 @@ and T on a pinned build may write only committed rows. So the record goes by R84
   written.
 - Then delete the two baselines, record on `current`, re-run without the variable to a pass, and delete these two expected files in
   the commit that lands the baselines.
+
+## Amendment 3 (2026-11-13): WR's state notes lose M0090 and M0096
+
+The first record run (lethal/r-965 at 92385352, `current` edge-c8fe56e05; `/coord/handoff/R-965/v3record2.log`) wrote nothing: WR and
+WRE failed on their pinned `[v3-codeunit-state-possible]` set (`V3_WR_STATE_NOTES`), which the observing runs never reached because
+WR's counts failed first. Read: `0/M0075, 0/M0076, 0/M0082, 0/M0089`; pinned: those plus `0/M0090, 0/M0096`. Every other leg passed.
+
+**Cause.** M0090 (`WrappedYBandTwin.Report.al` line 23, `OnAfterGetRecord`, remove-assignment) and M0096 (line 53, `OnPreReport`,
+shift-integer) are trigger kills of `BandYRunTwin`. The note marks a kill whose killer ran after another COVERING test of the same codeunit.
+Under the object rule `BandYDirectTwin` counted as covering them, because it calls `Band` on the same report, and it runs first. Under
+line attribution it hits neither line 23 nor 53, so it no longer covers them and the note goes. The kept four follow the same rule:
+M0075, M0076 and M0082 are in the `#if`-wrapped original (no `reachLine`), and M0089 is an empty-block (no `reachLine`); all stay
+object-decided, as amendment 1 says. No verdict or killing test moves: the note changes no verdict.
+
+**Prediction.** WR and WRE read exactly `0/M0075, 0/M0076, 0/M0082, 0/M0089`; `V3_WR_STATE_NOTES` and its unit test move to those four on
+lethal/r-965. Everything else stays as amendments 1 and 2 say.
