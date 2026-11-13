@@ -86,7 +86,7 @@ const describeRow = (r: ComparableRow): string =>
 
 /**
  * Differences between a daemon answer and a fresh process's answer for ONE codeunit, per test:
- * status, notRun, `flagged`, the fail text, and the exact per-test coverage set (and the whole
+ * status, notRun, the fail text (NOT `flagged`: serve cannot report it, R949), and the exact per-test coverage set (and the whole
  * call's). Empty: they agree. Durations are not compared (a warm daemon is faster by design; the
  * budget rule handles that).
  */
@@ -110,7 +110,7 @@ export function compareBaselineAnswers(
     const fields = [
       ...(a.status !== b.status ? ["status"] : []),
       ...(a.notRun !== b.notRun ? ["notRun"] : []),
-      ...((a.flagged ?? false) !== (b.flagged ?? false) ? ["flagged"] : []),
+      // R949: `flagged` is never compared: serve rows cannot carry it (upstream issue 7954).
       ...((a.message ?? "") !== (b.message ?? "") ? ["failText"] : []),
     ];
     if (fields.length > 0) {

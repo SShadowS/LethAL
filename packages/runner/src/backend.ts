@@ -108,6 +108,11 @@ export interface TestVerdict {
    */
   readonly flagged?: true;
   /**
+   * R949: on a `pass`, the answer came from a serve daemon, whose rows cannot carry `flagged`: the
+   * flagged state is UNKNOWN (never read it as unflagged). Absent for a one-shot answer.
+   */
+  readonly flaggedUnknown?: true;
+  /**
    * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
    * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
    * confirm is judged against `min(budget, reportedStopMs, backend.inRunStopMs)`. Absent: the

@@ -339,6 +339,8 @@ export type RunEventInput =
         /** R907: a `pass` al-runner flagged (it rests on an unprobed assumption); this session's own
          *  baseline run only. Absent otherwise. */
         readonly flagged?: true;
+        /** R949: a `pass` a serve daemon answered: its flagged state is unknown. Absent otherwise. */
+        readonly flaggedUnknown?: true;
       }[];
     }
   | {

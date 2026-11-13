@@ -6461,6 +6461,32 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.requests).toHaveLength(asked);
   });
 
+  test("R949: a daemon-answered pass has flagged UNKNOWN; a one-shot-answered one does not; one notice says how many and cites the issue", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({ notify: (c, m) => seen.push([c, m]) });
+    const v = await baseline(r.b, SUITE3);
+    // Only CU came from the daemon alone (see the test above); CU2 and CU3 were answered by a fresh process.
+    expect(v.map((x) => x.flaggedUnknown === true)).toEqual([true, true, false, false]);
+    const n = seen.filter(([c]) => c === "al-runner-v3-serve-flagged-unknown");
+    expect(n).toHaveLength(1);
+    expect(n[0]?.[1]).toContain("issues/7954");
+    expect(n[0]?.[1]).toContain("up to 2 passing tests");
+    expect(r.b.daemonBaselineReport().dropped).toBeUndefined();
+  });
+
+  test("R949: no daemon answer used, no notice and no unknown", async () => {
+    const seen: [string, string][] = [];
+    const r = await rig({
+      suite: SUITE3,
+      floor: [5000, 2000],
+      oneShotCoverage: plainCoverage,
+      notify: (c, m) => seen.push([c, m]),
+    });
+    const v = await baseline(r.b, SUITE3);
+    expect(v.some((x) => x.flaggedUnknown === true)).toBe(false);
+    expect(seen.some(([c]) => c === "al-runner-v3-serve-flagged-unknown")).toBe(false);
+  });
+
   test("agreement keeps it: the same suite without the leak raises no notice and runs no live process", async () => {
     const seen: [string, string][] = [];
     const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]) });

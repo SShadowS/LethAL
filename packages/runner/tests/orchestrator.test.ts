@@ -24212,11 +24212,13 @@ describe("R907: --no-client in a session", () => {
     readonly noClient = true;
     flaggedMethods = new Set<string>(["Flagged", "Failing"]);
     refuseMutants = false;
+    unknownMethods = new Set<string>(["Plain", "Failing"]); // R949: answered by a serve daemon
     override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
       const v = await super.run(ref, opts);
       const active = this.activations.at(-1) ?? null;
       if (active === null) {
-        return this.flaggedMethods.has(ref.method) ? { ...v, flagged: true } : v;
+        const w = this.unknownMethods.has(ref.method) ? { ...v, flaggedUnknown: true as const } : v;
+        return this.flaggedMethods.has(ref.method) ? { ...w, flagged: true } : w;
       }
       if (this.refuseMutants) {
         return {
@@ -24255,6 +24257,15 @@ describe("R907: --no-client in a session", () => {
     expect(rec("Plain")).not.toHaveProperty("baselineFlagged");
     expect(rec("Failing")).toBeDefined();
     expect(rec("Failing")).not.toHaveProperty("baselineFlagged");
+  });
+
+  test("R949: testMethods: baselineFlaggedUnknown on a daemon-answered pass only; a known flag wins; a failing test and a one-shot pass carry none", async () => {
+    const report = await sessionOf(stub());
+    const rec = (m: string) => report.testMethods?.find((t) => t.name === `Sandbox Tests.${m}`);
+    expect(rec("Plain")?.baselineFlaggedUnknown).toBe(true);
+    expect(rec("Plain")).not.toHaveProperty("baselineFlagged"); // unknown is not unflagged, and not flagged
+    expect(rec("Flagged")).not.toHaveProperty("baselineFlaggedUnknown");
+    expect(rec("Failing")).not.toHaveProperty("baselineFlaggedUnknown"); // a failing test is not a pass
   });
 
   test("the report's execution context is threaded from the backend: noClient true, guiAllowed false", async () => {

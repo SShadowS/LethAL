@@ -127,9 +127,9 @@ describe("R948: comparing a daemon answer with a fresh process's", () => {
     expect(compareBaselineAnswers(d({ notRun: true }), same)).toEqual([
       "a: differs in notRun (daemon pass, not run; one-shot pass)",
     ]);
-    expect(compareBaselineAnswers(d({ flagged: true }), same)).toEqual([
-      "a: differs in flagged (daemon pass, flagged; one-shot pass)",
-    ]);
+    // R949: `flagged` is never a difference, in either direction (serve cannot report it).
+    expect(compareBaselineAnswers(d({ flagged: true }), same)).toEqual([]);
+    expect(compareBaselineAnswers(same, d({ flagged: true }))).toEqual([]);
     // The text itself is never in the message, only the field's name.
     expect(
       compareBaselineAnswers(
@@ -147,7 +147,7 @@ describe("R948: comparing a daemon answer with a fresh process's", () => {
       ...same,
       rows: [row("A", { status: "fail", message: "x", flagged: true }), row("B")],
     };
-    expect(compareBaselineAnswers(d, same)[0]).toContain("differs in status, flagged, failText");
+    expect(compareBaselineAnswers(d, same)[0]).toContain("differs in status, failText");
   });
   test("a row only one side has", () => {
     expect(compareBaselineAnswers({ ...same, rows: [row("A")] }, same)[0]).toContain(
