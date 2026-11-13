@@ -66,13 +66,16 @@ export function writeSlotClass(
  * R952 (R953): admission by memory. The container's limit is its cgroup's `memory.max` (32 GiB),
  * shared by every lane, not the host's memory `free` shows. Expected peaks, from R-934's 30 s samples
  * of every held slot's process tree (R952, R948) and the orchestrator's interim table (2026-11-13):
- * a long v3 serve run 12.4-15.7 GB -> 16; a BaseApp-class v3 run 3.8-5.3 GB, a BaseApp instrumentation
- * job about 10.6 GB -> 12 (R-942's DO baseline reached 30.8 GB and was OOM-killed: such a job declares
- * its own, larger peak and runs under a watchdog); the v3 gate about 2.0 GB -> 2; a module pool build
- * 0.37-0.55 GB -> 1. A job that declares nothing gets its class's default: `other` 16, `baseapp` 12.
+ * a long v3 serve run reached 12.4-15.7 GB with an unbounded daemon; with R948's daemon cap
+ * (`daemonMaxRssGb` 6, the default) Subcontracting's 2 h serve run peaked at 7,927 MiB (7.7 GiB: its
+ * daemon at 5,988 MiB plus LethAL and the rest; its baseline 7.8 GB) -> 8; a BaseApp-class v3 run
+ * 3.8-5.3 GB, a BaseApp instrumentation job about 10.6 GB -> 12 (R-942's DO baseline reached 30.8 GB
+ * and was OOM-killed: such a job declares its own, larger peak and runs under a watchdog); the v3 gate
+ * about 2.0 GB -> 2; a module pool build 0.37-0.55 GB -> 1. A job that declares nothing gets its
+ * class's default: `other` 8 (a capped serve run), `baseapp` 12.
  */
-export const PEAK_GIB = { serve: 16, baseline: 12, gate: 2, build: 1 } as const;
-export const DEFAULT_PEAK_GIB: Readonly<Record<SlotClass, number>> = { baseapp: 12, other: 16 };
+export const PEAK_GIB = { serve: 8, baseline: 12, gate: 2, build: 1 } as const;
+export const DEFAULT_PEAK_GIB: Readonly<Record<SlotClass, number>> = { baseapp: 12, other: 8 };
 /** GiB kept free below `memory.max` for the sessions, caches and non-heavy work the cgroup also counts. */
 export const MEMORY_RESERVE_GIB = 4;
 

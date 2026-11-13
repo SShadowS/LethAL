@@ -81,12 +81,13 @@ next free id right before writing).
   (R905, R934, R952). It takes the first free slot, writes its pid into the lock and
   `/coord/locks/heavy.<n>.class` (`<class> <pid> <peak GiB>`), runs the same guard as `corpus-snapshot.ts`
   (exit 75 and no command when it refuses), and removes the class on exit. `--wait` queues in FIFO
-  order instead of exit 75. `--peak` declares the job's expected memory peak: `serve` 16, `baseline` 12,
-  `gate` 2, `build` 1 GiB, or a number; none means the class default (`other` 16, `baseapp` 12). The guard
-  also applies the memory rule (R953): the container's cgroup (`memory.max`, 32 GiB) must hold what is
-  used now plus the job's peak plus a 4 GiB reserve, and the held slots' declared peaks plus the job's
-  peak plus the reserve. Declare the smallest honest peak: an undeclared `other` job counts as a long
-  serve run, so two of them never run together. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
+  order instead of exit 75. `--peak` declares the job's expected memory peak: `serve` 8 (a serve run with
+  the default 6 GiB daemon cap, R948), `baseline` 12, `gate` 2, `build` 1 GiB, or a number; none means the
+  class default (`other` 8, `baseapp` 12). The guard also applies the memory rule (R953): the container's
+  cgroup (`memory.max`, 32 GiB) must hold what is used now plus the job's peak plus a 4 GiB reserve, and
+  the held slots' declared peaks plus the job's peak plus the reserve. Declare the smallest honest peak;
+  a serve run with `daemonMaxRssGb: 0`, or a baseline known to grow (R-942's DO reached 30.8 GB), declares
+  its own larger number. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
   they take their own slot, so the job would hold two. Say `baseapp` for any job over BC.History or a COPY of it, `other` for the
   rest. The guard reads the class: while a BaseApp-class job runs, or any held slot has `baseapp` or
   NO readable class (a dead pid reads as none), at most two heavy jobs run in all; with none, three.

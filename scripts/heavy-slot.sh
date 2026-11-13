@@ -3,8 +3,8 @@
 #
 #   scripts/heavy-slot.sh [--wait] [--peak serve|baseline|gate|build|<GiB>] <baseapp|other> <cmd...>
 #
-# R952 (R953) `--peak`: the job's expected memory peak (serve 16, baseline 12, gate 2, build 1 GiB, or
-# a number); none = the class default (other 16, baseapp 12). It goes into the class file
+# R952 (R953) `--peak`: the job's expected memory peak (serve 8, baseline 12, gate 2, build 1 GiB, or
+# a number); none = the class default (other 8, baseapp 12). It goes into the class file
 # ("<class> <pid> <peak>") and the guard admits the job only when the container's cgroup has room for
 # it: used + peak + reserve and the held slots' peaks + peak + reserve both fit under memory.max
 # (scripts/heavy-slot-class.ts, memoryVerdict). A memory refusal is a guard refusal like any other.
@@ -42,7 +42,7 @@ fi
 peak=""
 if [ "${1:-}" = "--peak" ]; then
   case "${2:-}" in
-  serve) peak=16 ;;
+  serve) peak=8 ;;
   baseline) peak=12 ;;
   gate) peak=2 ;;
   build) peak=1 ;;
@@ -65,7 +65,7 @@ case "$cls" in baseapp | other) ;; *)
   ;;
 esac
 shift
-[ -n "$peak" ] || { [ "$cls" = baseapp ] && peak=12 || peak=16; }
+[ -n "$peak" ] || { [ "$cls" = baseapp ] && peak=12 || peak=8; }
 [ $# -gt 0 ] || { echo "heavy-slot: no command" >&2; exit 2; }
 case "$1" in --wait | --peak)
   echo "heavy-slot: $1 goes before the class (order: --wait, --peak, class)" >&2

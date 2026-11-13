@@ -172,7 +172,7 @@ describe("R905 scripts/heavy-slot.sh", () => {
     const dir = fresh();
     const r = run(dir, "other", "sh", "-c", `cat "${dir}/heavy.1.class" "${dir}/heavy.1"; exit 7`);
     // the class file and the lock file name the same pid (the wrapper's)
-    expect(r.stdout.toString()).toMatch(/^other (\d+) 16\n\1\n$/); // R952: other's default peak
+    expect(r.stdout.toString()).toMatch(/^other (\d+) 8\n\1\n$/); // R952: other's default peak
     expect(r.exitCode).toBe(7);
     expect(existsSync(join(dir, "heavy.1.class"))).toBe(false);
     expect(run(dir, "bogus", "true").exitCode).toBe(2);
@@ -541,7 +541,7 @@ describe("R952 (R953) admission by memory", () => {
   });
   test("parsePeak: the four names, a positive number, nothing else", () => {
     expect(["serve", "baseline", "gate", "build", "2.5"].map(parsePeak)).toEqual([
-      16, 12, 2, 1, 2.5,
+      8, 12, 2, 1, 2.5,
     ]);
     expect(["0", "-1", "x", "", "toString", "1e3"].map(parsePeak)).toEqual([
       undefined,
@@ -587,22 +587,28 @@ describe("R952 (R953) admission by memory", () => {
     };
     test("a job whose default peak does not fit exits 75 and does not run; --peak gate fits and runs", () => {
       const dir = fresh();
-      const cg = cgroup(14, 32); // 14 + 16 + 4 = 34 > 32; 14 + 2 + 4 = 20
+      const cg = cgroup(21, 32); // 21 + 8 (other's default) + 4 = 33 > 32; 21 + 2 + 4 = 27
       const ran = join(dir, "ran");
       const r = run(dir, cg, "other", "touch", ran);
       expect(r.exitCode).toBe(75);
       expect(existsSync(ran)).toBe(false);
-      expect(r.stderr.toString()).toContain("REFUSED (used + peak + reserve = 34.0 > 32.0)");
+      expect(r.stderr.toString()).toContain("REFUSED (used + peak + reserve = 33.0 > 32.0)");
       const g = run(dir, cg, "--peak", "gate", "other", "sh", "-c", `cat "${dir}/heavy.1.class"`);
       expect(g.exitCode).toBe(0);
       expect(g.stdout.toString()).toMatch(/^other \d+ 2\n$/);
     });
-    test("a held slot's declared peak counts: a second serve run is refused while the first is young", async () => {
+    test("a held slot's declared peak counts while its job is young; two capped serve runs fit", async () => {
       const dir = fresh();
-      await hold(dir, 1, "other"); // writes "other <pid>": no peak, so other's default, 16
+      await hold(dir, 1, "other");
+      const pid = holders.at(-1);
+      if (pid === undefined) throw new Error("no holder");
+      writeFileSync(join(dir, "heavy.1.class"), `other ${pid} 21\n`); // declares 21 GiB, uses ~nothing yet
       const cg = cgroup(3, 32);
-      expect(run(dir, cg, "--peak", "serve", "other", "true").exitCode).toBe(75);
-      expect(run(dir, cg, "--peak", "build", "other", "true").exitCode).toBe(0);
+      expect(run(dir, cg, "--peak", "serve", "other", "true").exitCode).toBe(75); // 21 + 8 + 4 = 33
+      expect(run(dir, cg, "--peak", "build", "other", "true").exitCode).toBe(0); // 21 + 1 + 4 = 26
+      // an undeclared held `other` slot reads as its default, 8: a serve run fits beside it (8 + 8 + 4)
+      writeFileSync(join(dir, "heavy.1.class"), `other ${pid}\n`);
+      expect(run(dir, cg, "--peak", "serve", "other", "true").exitCode).toBe(0);
     });
     test("a bad or misplaced --peak is exit 2, and nothing runs", () => {
       const dir = fresh();
