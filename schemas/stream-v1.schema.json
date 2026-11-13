@@ -1170,6 +1170,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "procedureOverloadIndex": {
+              "type": "number"
+            },
             "gapId": {
               "type": "string"
             },
@@ -1420,6 +1423,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "procedureOverloadIndex": {
+              "type": "number"
+            },
             "gapId": {
               "type": "string"
             },
@@ -1621,6 +1627,9 @@
               "type": "number"
             },
             "procedureEndLine": {
+              "type": "number"
+            },
+            "procedureOverloadIndex": {
               "type": "number"
             },
             "gapId": {
