@@ -168,6 +168,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
     "lineOfIndex",
     "stripQuotes",
     "enclosingProcedureLike",
+    "overloadIndexOf",
     "coverageArmNamesOf",
     "procedureNameOf",
     "procedureScopeOf",

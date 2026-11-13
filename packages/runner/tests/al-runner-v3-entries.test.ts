@@ -15,6 +15,7 @@ import {
   v3ItestTransport,
   v3SplitLine,
 } from "../itest/al-runner-v3-gate";
+import { judgeDaemonBaseline } from "../itest/alrunner-v3-legs";
 import {
   AlRunnerServer,
   AlRunnerServerRequestError,
@@ -7134,3 +7135,382 @@ async function baselineOne(b: AlRunnerV3Backend, t: TestMethodRef): Promise<Test
     await b.baselinePhase(false);
   }
 }
+
+describe("R951 R1: a one-shot baseline run with no answer says why", () => {
+  const crossChecked = async (o: RigOpts, patch?: (b: AlRunnerV3Backend) => void) => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]), ...o });
+    patch?.(r.b);
+    // The later one-shot calls may refuse by name too (a missing row throws); only the drop is read.
+    await baseline(r.b, SUITE2).catch(() => {});
+    return { notice: dropNotice(seen)[0]?.[1] ?? "", rep: r.b.daemonBaselineReport() };
+  };
+  const stubSpawn = (b: AlRunnerV3Backend, made: unknown) => {
+    // Only the first call (the cross-check) is stubbed; the session's later calls run as usual.
+    const holder = b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(b);
+    let first = true;
+    holder.spawnCodeunit = async (...a) => {
+      if (!first) return real(...a);
+      first = false;
+      return made;
+    };
+  };
+
+  test("memory-gate: the one-shot run is refused at the bound", async () => {
+    const r = await rig({
+      extra: { memoryHeadroomGb: 4 },
+      seams: {
+        memoryReader: () => ({
+          usedBytes: 30 * GIB,
+          maxBytes: 32 * GIB,
+          source: "/sys/fs/cgroup/memory.max",
+        }),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+      },
+      stopHandle: { spent: () => false, signalled: () => false, stopForMemory: () => {} },
+    });
+    const priv = r.b as unknown as {
+      makeLane(k: number): unknown;
+      oneShotBaselineAnswer(l: unknown, id: number, s: number, c: boolean): Promise<unknown>;
+    };
+    expect(await priv.oneShotBaselineAnswer(priv.makeLane(0), CU, 1, false)).toEqual({
+      noAnswer: "memory-gate",
+    });
+  });
+
+  test("spawn-error and timed-out", async () => {
+    for (const [made, reason] of [
+      [{ spawnError: "boom", wallMs: 0 }, "spawn-error"],
+      [{ timedOut: true, wallMs: 1 }, "timed-out"],
+    ] as const) {
+      const { notice, rep } = await crossChecked({}, (b) => stubSpawn(b, made));
+      // R2: no process answered, so the sample is SKIPPED by name; the only sample leaves none clean.
+      expect(notice).toContain("too few clean cross-check samples: 0 of 1");
+      expect(rep.sampledSkipped).toEqual([`Codeunit${CU2} (${reason})`]);
+      expect(rep.droppedDetail).toEqual(["too-few-clean-samples:0/1"]);
+    }
+  });
+
+  test("exit-<n> outside 0/1/7/8 drops, naming it", async () => {
+    const { notice, rep } = await crossChecked({ oneShotAnswer: { exitCode: 6, stderr: "" } });
+    expect(notice).toContain("(exit-6)");
+    expect(rep.droppedDetail).toEqual(["exit-6"]);
+    expect(rep.sampledSkipped).toEqual([]);
+  });
+
+  test("R2: exit 7 and 8 are answers, compared: equal keeps the daemon baseline", async () => {
+    for (const exitCode of [7, 8]) {
+      const { notice, rep } = await crossChecked({ oneShotAnswer: { exitCode, stderr: "" } });
+      expect(notice).toBe("");
+      expect(rep).toMatchObject({ dropped: undefined, compared: 1, sampledSkipped: [] });
+    }
+  });
+
+  test("R2: exit 7 with a notRun row the daemon did not have is a real difference: drop", async () => {
+    const notRunC: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "C" && d < 0 ? { ...x, status: "error" as const, notRun: true } : x,
+      );
+    const { notice, rep } = await crossChecked({
+      oneShotAnswer: { exitCode: 7, stderr: "" },
+      serve: { rows: allPass },
+      oneShotRows: notRunC,
+    });
+    expect(notice).toContain("differs in");
+    expect(rep.droppedDetail.join(" ")).toContain("notRun");
+    expect(rep.compared).toBe(1);
+  });
+
+  test("rows-undecodable", async () => {
+    const bad = { exitCode: 0, stderr: "", stdout: "not json" };
+    const { notice, rep } = await crossChecked({
+      oneShotAnswer: bad as unknown as { exitCode: number; stderr: string },
+    });
+    expect(notice).toContain("(rows-undecodable)");
+    expect(rep.droppedDetail).toEqual(["rows-undecodable"]);
+  });
+
+  test("row-missing:<test name>", async () => {
+    const noB: RowsFn = (m, cu, d, n) => allPass(m, cu, d, n).filter((x) => x.method !== "C");
+    const { notice, rep } = await crossChecked({ serve: { rows: allPass }, oneShotRows: noB });
+    // R2: a missing row is compared, and is a real difference.
+    expect(notice).toContain("differs from a fresh process's");
+    expect(rep.droppedDetail).toEqual(["c: a row only the daemon answer has"]);
+  });
+});
+
+// R951 R2-R6: skip reasons, replacement, kept one-shot answers, the session-long set.
+describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
+  // Six whole codeunits; the plan samples the 2nd (index 1) and the last (index 5).
+  const CUS = [79110, 79111, 79112, 79113, 79114, 79115];
+  for (const c of CUS) SUITE_METHODS[c] = ["T"];
+  const SUITE6 = CUS.map((c) => ref("T", c));
+  const six = (o: RigOpts = {}) => dbRig({ suite: SUITE6, ...o });
+  /** Make one-shot runs of the listed codeunits give `made` instead of a process. */
+  const stubCus = (b: AlRunnerV3Backend, made: Record<number, unknown>, seen: number[] = []) => {
+    const holder = b as unknown as {
+      spawnCodeunit: (...a: { id: number }[]) => Promise<unknown>;
+    };
+    const real = holder.spawnCodeunit.bind(b);
+    holder.spawnCodeunit = async (...a) => {
+      const id = a[0]?.id ?? 0;
+      seen.push(id);
+      // Only the first spawn of a codeunit (the cross-check) is stubbed; its live call runs as usual.
+      const stub = seen.filter((x) => x === id).length === 1 ? made[id] : undefined;
+      return stub ?? real(...a);
+    };
+    return seen;
+  };
+  const rep = (r: Rig) => r.b.daemonBaselineReport();
+
+  test("no skip: nothing replaced, sums unchanged", async () => {
+    const r = await six();
+    await baseline(r.b, SUITE6);
+    expect(rep(r)).toMatchObject({
+      replaced: 0,
+      compared: 2,
+      served: 4,
+      sampledSkipped: [],
+      dropped: undefined,
+    });
+  });
+
+  test("a skipped middle sample (wall timeout) is replaced FORWARD; the report names reason and replacement", async () => {
+    const r = await six();
+    stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
+    await baseline(r.b, SUITE6);
+    expect(rep(r)).toMatchObject({
+      dropped: undefined,
+      compared: 2,
+      replaced: 1,
+      sampledSkipped: [`Codeunit${CUS[1]} (timed-out)`],
+      replacements: { [`Codeunit${CUS[1]}`]: `Codeunit${CUS[2]}` },
+      served: 3, // 6 - 2 samples - 1 replacement
+    });
+  });
+
+  test("a skipped LAST sample is replaced BACKWARD (the last unsampled codeunit)", async () => {
+    const r = await six();
+    stubCus(r.b, { [CUS[5] ?? 0]: { spawnError: "boom", wallMs: 0 } });
+    await baseline(r.b, SUITE6);
+    expect(rep(r)).toMatchObject({
+      dropped: undefined,
+      compared: 2,
+      replaced: 1,
+      sampledSkipped: [`Codeunit${CUS[5]} (spawn-error)`],
+      replacements: { [`Codeunit${CUS[5]}`]: `Codeunit${CUS[4]}` },
+      served: 3,
+    });
+  });
+
+  test("too few clean samples drops by name; a drop with all samples skipped keeps nothing from the daemon", async () => {
+    const seen: [string, string][] = [];
+    const r = await six({ notify: (c, m) => seen.push([c, m]) });
+    const bad = { timedOut: true, wallMs: 1 };
+    // Every codeunit's one-shot run times out: samples and their replacements all skip.
+    stubCus(r.b, Object.fromEntries(CUS.slice(1).map((c) => [c, bad])));
+    await baseline(r.b, SUITE6);
+    expect(dropNotice(seen)[0]?.[1]).toContain("too few clean cross-check samples: 0 of 2");
+    expect(rep(r).served).toBe(0);
+  });
+
+  test("R3: after a drop the one-shot answers already obtained are served with no second call; nothing a daemon answered is", async () => {
+    const seen: [string, string][] = [];
+    // The last sample differs between daemon and process: the drop comes after sample 1 was compared.
+    const leakLast: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CUS[5] && d >= 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    const r = await six({
+      notify: (c, m) => seen.push([c, m]),
+      serve: { rows: leakLast },
+      oneShotRows: allPass,
+    });
+    await baseline(r.b, SUITE6);
+    expect(dropNotice(seen)).toHaveLength(1);
+    // CUS[1] was compared one-shot before the drop: its baseline call is served from the kept store
+    // (one process in all); CUS[5] ran twice (the cross-check, then its own live call); the others once.
+    const spawns = (id: number) => oneShotCodeunits(r).filter((x) => x === String(id)).length;
+    expect(spawns(CUS[1] ?? 0)).toBe(1);
+    expect(spawns(CUS[5] ?? 0)).toBe(2);
+    expect(spawns(CUS[0] ?? 0)).toBe(1);
+    expect(rep(r).served).toBe(0);
+  });
+
+  test("R3: a deploy clears the kept one-shot answers", async () => {
+    const r = await six();
+    const kept = (b: AlRunnerV3Backend) => b as unknown as { oneShotKept: Map<number, unknown> };
+    kept(r.b).oneShotKept.set(1, {});
+    (r.b as unknown as { resetLayoutState(): void }).resetLayoutState();
+    expect(kept(r.b).oneShotKept.size).toBe(0);
+  });
+
+  test("R6: a codeunit whose sample was skipped is never served from the daemon, and the set survives a deploy", async () => {
+    const r = await six();
+    stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
+    await baseline(r.b, SUITE6);
+    const unclean = (b: AlRunnerV3Backend) =>
+      (b as unknown as { uncleanCalls: Set<number> }).uncleanCalls;
+    expect([...unclean(r.b)]).toEqual([CUS[1] ?? 0]);
+    await r.b.deploy(r.l.batch);
+    expect([...unclean(r.b)]).toEqual([CUS[1] ?? 0]);
+    // A second fill (the next batch) asks the daemon for every codeunit but that one.
+    const before = r.serve.requests.length;
+    await baseline(r.b, SUITE6);
+    const asked = r.serve.requests.slice(before).map((q) => q.ids[0]);
+    expect(asked).not.toContain(`plain:Codeunit${CUS[1]}.`);
+    expect(asked).toContain(`plain:Codeunit${CUS[0]}.`);
+  });
+
+  test("R5: the per-test fill (--isolate-tests) skips and replaces the same way", async () => {
+    const r = await six({ extra: { isolateTests: true } });
+    stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
+    await baseline(r.b, SUITE6);
+    expect(rep(r)).toMatchObject({
+      dropped: undefined,
+      compared: 2,
+      replaced: 1,
+      sampledSkipped: [`Tests${CUS[1]}.T (timed-out)`],
+      replacements: { [`Tests${CUS[1]}.T`]: `Tests${CUS[2]}.T` },
+      served: 3,
+    });
+  });
+
+  test("R6: a spent budget starts no replacement", async () => {
+    let spawned: number[] = [];
+    const r = await six({
+      stopHandle: {
+        // spent once the first (skipped) sample's one-shot run is over
+        spent: () => spawned.length >= 1,
+        signalled: () => false,
+        stopForMemory: () => {},
+      },
+    });
+    spawned = stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
+    await baseline(r.b, SUITE6);
+    expect(rep(r)).toMatchObject({ replaced: 0, dropped: undefined });
+  });
+
+  test("review 1: a per-test fill that drops after the whole-codeunit fill served nothing a daemon answered", async () => {
+    const A1 = 79210;
+    const B1 = 79211;
+    const C1 = 79212;
+    const D1 = 79213;
+    SUITE_METHODS[A1] = ["T"];
+    SUITE_METHODS[B1] = ["T"];
+    SUITE_METHODS[C1] = ["T"];
+    SUITE_METHODS[D1] = ["T", "U"];
+    const suite = [ref("T", D1), ref("U", D1), ref("T", A1), ref("T", B1), ref("T", C1)];
+    // The per-test sample (D1.U) differs between daemon and process: the drop comes AFTER the
+    // whole-codeunit fill has put A1's daemon answer (and two kept shots) into the store.
+    const leakU: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === D1 && x.method === "U" && d >= 0
+          ? { ...x, status: "fail" as const, message: "leaked" }
+          : x,
+      );
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite,
+      notify: (c, m) => seen.push([c, m]),
+      serve: { rows: leakU },
+      oneShotRows: allPass,
+      extra: { isolation: "auto" },
+    });
+    r.b.baselinePhase(true);
+    try {
+      r.b.chooseIsolation(D1, "method");
+    } finally {
+      r.b.baselinePhase(false);
+    }
+    await baseline(r.b, suite);
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(rep(r).served).toBe(0);
+    // A1 was never a sample: its only process is its own live call (a daemon answer in the kept
+    // store would have been served with no process). B1 and C1 were samples: one process each, kept.
+    const spawns = (id: number) => oneShotCodeunits(r).filter((x) => x === String(id)).length;
+    expect(spawns(A1)).toBe(1);
+    expect(spawns(B1)).toBe(1);
+    expect(spawns(C1)).toBe(1);
+  });
+
+  test("review 2: a one-shot sample answer with a duplicated row is not served (the live path's row check)", async () => {
+    const dupC: RowsFn = (m, cu, d, n) => {
+      const rows = allPass(m, cu, d, n);
+      const c = rows.find((x) => x.method === "C");
+      return c === undefined ? rows : [...rows, c];
+    };
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite: SUITE2,
+      notify: (c, m) => seen.push([c, m]),
+      serve: { rows: allPass },
+      oneShotRows: dupC,
+    });
+    await baseline(r.b, SUITE2).catch(() => {}); // the live one-shot call refuses the duplicate too
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(rep(r).droppedDetail).toEqual(["one-shot-row-count"]);
+  });
+
+  test("review 2: serving an exit-8 one-shot answer (daemonBaseline) raises the .NET-helper notice", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite: SUITE2,
+      notify: (c, m) => seen.push([c, m]),
+      oneShotAnswer: { exitCode: 8, stderr: "" },
+    });
+    await baseline(r.b, SUITE2);
+    expect(rep(r)).toMatchObject({ dropped: undefined, compared: 1 });
+    // CU2's sample (exit 8) was served, not re-run: its one process is the cross-check.
+    expect(oneShotCodeunits(r).filter((x) => x === String(CU2))).toHaveLength(1);
+    expect(seen.filter(([c]) => c === "al-runner-v3-dotnet-helper-missing")).toHaveLength(1);
+  });
+
+  test("review 2: serving an exit-8 one-shot answer from the kept store raises the notice too", async () => {
+    const seen: [string, string][] = [];
+    const leakLast: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CUS[5] && d >= 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    const r = await six({
+      notify: (c, m) => seen.push([c, m]),
+      serve: { rows: leakLast },
+      oneShotRows: allPass,
+    });
+    // CUS[1]'s cross-check process exits 8; every other process exits 0.
+    const holder = r.b as unknown as {
+      spawnCodeunit: (...a: { id: number }[]) => Promise<{ res: { exitCode: number } }>;
+    };
+    const real = holder.spawnCodeunit.bind(r.b);
+    let first = true;
+    holder.spawnCodeunit = async (...a) => {
+      const made = await real(...a);
+      if (a[0]?.id !== CUS[1] || !first) return made;
+      first = false;
+      return { ...made, res: { ...made.res, exitCode: 8 } };
+    };
+    await baseline(r.b, SUITE6);
+    expect(dropNotice(seen)).toHaveLength(1);
+    const spawns = oneShotCodeunits(r).filter((x) => x === String(CUS[1])).length;
+    expect(spawns).toBe(1); // served from the kept store, not re-run
+    expect(seen.filter(([c]) => c === "al-runner-v3-dotnet-helper-missing")).toHaveLength(1);
+  });
+
+  test("review 3: a forward replacement the loop never reaches is not counted", async () => {
+    let n = 0;
+    const r = await six({
+      // spent() is read at each loop top and once after the skipped sample's run: the 4th read is
+      // the loop top before the replacement (CUS[2]), where the fill stops.
+      stopHandle: { spent: () => ++n >= 4, signalled: () => false, stopForMemory: () => {} },
+    });
+    stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
+    await baseline(r.b, SUITE6);
+    const d = rep(r);
+    expect(d.sampledSkipped).toEqual([`Codeunit${CUS[1]} (timed-out)`]);
+    expect(d).toMatchObject({ replaced: 0, replacements: {} });
+    // The first sum holds for what was reached: 1 sample, skipped by name, nothing replaced.
+    expect(judgeDaemonBaseline("DB", d, 0, 1).fail ?? "").not.toContain("in all plus");
+  });
+});

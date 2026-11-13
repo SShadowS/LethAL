@@ -654,10 +654,16 @@ export function alRunnerCoverageFromServer(
       const key = `${at.objectType}:${at.objectId}:${procedure ?? ""}:${at.objectLine ?? -1}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      // R965: which overload the line is in, when the name is shared. Only the line can say.
+      const overloadIndex =
+        procedure !== undefined && procedure !== "" && at.objectLine !== undefined
+          ? index.lineMap.overloadIndexAt(at.objectType, at.objectId, at.objectLine)
+          : undefined;
       entries.push({
         objectType: at.objectType,
         objectId: at.objectId,
         ...(procedure !== undefined && procedure !== "" ? { procedure } : {}),
+        ...(overloadIndex !== undefined ? { overloadIndex } : {}),
         ...(at.objectLine !== undefined ? { line: at.objectLine } : {}),
       });
     }

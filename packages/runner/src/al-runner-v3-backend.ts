@@ -73,7 +73,11 @@ import {
   serveDaemonReusable,
 } from "./al-runner-server";
 import {
+  BASELINE_MIN_CLEAN_SAMPLES,
   type MemorySample,
+  ONE_SHOT_EXITS,
+  SKIPPABLE_NO_ANSWER,
+  SamplePlan,
   baselineSampleIds,
   compareBaselineAnswers,
   durationCouldMoveBudget,
@@ -839,6 +843,15 @@ export class AlRunnerV3MemoryBoundError extends Error {
 /** R948: see `ExecutionBackend.useStopHandle`. */
 type StopHandle = Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0];
 
+/**
+ * R951 (R1): a one-shot baseline run that gave no answer, and why: `memory-gate`, `spawn-error`,
+ * `timed-out`, `exit-<n>`, `rows-undecodable`, or `row-missing:<test name>`. (`budget-spent` is the
+ * caller's: it sees the spent budget after the run and stops without a drop.)
+ */
+interface NoOneShotAnswer {
+  readonly noAnswer: string;
+}
+
 /** R948: one codeunit's (or one test's) baseline answer, as `callCodeunit` reads it. */
 interface BaselineAnswer {
   readonly rows: readonly V3Row[];
@@ -849,6 +862,8 @@ interface BaselineAnswer {
   readonly withCoverage: boolean;
   /** Set on an answer a serve daemon gave (not one a fresh process gave in its place). */
   readonly fromDaemon?: true;
+  /** R951: a fresh process's answer whose exit was 8 (serving it raises the .NET-helper notice, as a live call does). */
+  readonly exit8?: true;
 }
 
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
@@ -1963,6 +1978,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R948: the daemon baseline's answers by call id (a codeunit's, or one test's), each served once; reset by a deploy. */
   private daemonBaseline = new Map<number, BaselineAnswer>();
   private daemonBaselineFilled = false;
+  /**
+   * R951 (R3): one-shot answers a dropped daemon baseline had already obtained (the cross-check's and
+   * the too-slow re-runs'), served in place of a re-run. Reset by a deploy with the two above. Only
+   * defined answers, and never one a daemon gave.
+   */
+  private oneShotKept = new Map<number, BaselineAnswer>();
+  /**
+   * R951 (R6): calls (a codeunit id, or a per-test call id) whose sample's one-shot run was skipped.
+   * A daemon answer for one is never used for the rest of the SESSION: not reset by a deploy.
+   */
+  private readonly uncleanCalls = new Set<number>();
   /** R949: the once-per-session notice that daemon answers carry no `flagged`. */
   private flaggedUnknownNoted = false;
   /** R948: why the daemon baseline was dropped. Session-wide (a deploy keeps it): the baseline is then one-shot for every batch. */
@@ -1998,16 +2024,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     skippedError: [] as string[],
     skippedOther: [] as string[],
     sampledSkipped: [] as string[],
+    /** R951: skipped sample name -> the name that replaced it (`replaced` is its size). */
+    replacements: {} as Record<string, string>,
   };
 
   /**
    * R948: a daemon answer the fill did not keep, named. A sampled one is counted apart (the sample's
    * own `compared` shows it); the others are the three reasons a gate may accept as "reported, not a
    * regression": too slow for a warm duration to be trusted, a request error, or a refused/odd row.
+   * R951: a sampled skip carries its reason, `Name (reason)`.
    */
-  private noteSkip(kind: "tooSlow" | "error" | "other", name: string, sampled: boolean): void {
+  private noteSkip(
+    kind: "tooSlow" | "error" | "other",
+    name: string,
+    sampled: boolean,
+    reason?: string,
+  ): void {
     const s = this.baselineStats;
-    if (sampled) s.sampledSkipped.push(name);
+    if (sampled) s.sampledSkipped.push(reason !== undefined ? `${name} (${reason})` : name);
     else if (kind === "tooSlow") s.skippedTooSlow.push(name);
     else if (kind === "error") s.skippedError.push(name);
     else s.skippedOther.push(name);
@@ -2952,6 +2986,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.isolatedFilled = false;
     this.daemonBaseline = new Map(); // R948: nor these
     this.daemonBaselineFilled = false;
+    this.oneShotKept = new Map(); // R951: nor these
   }
 
   /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
@@ -3445,9 +3480,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R948: the cross-check failed or the daemon proved unusable: the whole session's baseline goes
    * back to one process per codeunit, never a mix, and one notice names why.
    */
-  private dropDaemonBaseline(why: string, detail: readonly string[] = []): void {
+  private dropDaemonBaseline(
+    why: string,
+    detail: readonly string[] = [],
+    /** R951 (R3): one-shot answers this fill already obtained; they are kept and served in place of a re-run. */
+    shots: ReadonlyMap<number, BaselineAnswer> = new Map(),
+  ): void {
     this.daemonBaselineOff = why;
     this.daemonBaselineDetail = [...detail];
+    // A fresh process's answer an earlier fill kept stands too; a daemon's does not.
+    for (const [k, a] of [...this.daemonBaseline, ...shots]) {
+      if (a.fromDaemon !== true) this.oneShotKept.set(k, a);
+    }
     this.daemonBaseline.clear();
     this.notify(
       "al-runner-v3-baseline-daemon-dropped",
@@ -3502,6 +3546,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
+  /** The exit-8 notice, once per deploy: raised by a live call and by serving a kept exit-8 answer. */
+  private noteDotnetHelper(): void {
+    if (this.dotnetHelperWarned) return;
+    this.dotnetHelperWarned = true;
+    this.notify(
+      "al-runner-v3-dotnet-helper-missing",
+      "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
+    );
+  }
+
   /** R948: whether `rows` hold exactly one row for each of `tests` (a call's answer is cached only then). */
   private hasEveryRow(rows: readonly V3Row[], tests: readonly TestMethodRef[]): boolean {
     return tests.every(
@@ -3521,8 +3575,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
     /** One test alone (a per-test sample): its ref and `--test-exact` selection. Absent: the whole codeunit. */
     only?: { readonly ref: TestMethodRef; readonly test: string },
-  ): Promise<BaselineAnswer | undefined> {
-    if (!(await this.memoryGate(true))) return undefined;
+  ): Promise<BaselineAnswer | NoOneShotAnswer> {
+    if (!(await this.memoryGate(true))) return { noAnswer: "memory-gate" };
     const covDir = join(this.cfg.instrumentedDir, "cov");
     let covPath = "";
     let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
@@ -3546,31 +3600,89 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
     await rm(covPath, { force: true }).catch(() => {});
-    if ("spawnError" in made || made.timedOut) return undefined;
+    if ("spawnError" in made) return { noAnswer: "spawn-error" };
+    if (made.timedOut) return { noAnswer: "timed-out" };
     const { res } = made;
     refuseDependencySkip(res.stderr);
     refuseMissingDependency(res.exitCode, res.stderr);
     const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
     if (compileRefusal !== undefined) throw new AlRunnerV3CompileRefusedError(compileRefusal);
-    if (![0, 1].includes(res.exitCode)) return undefined;
+    // R951 (R2): exit 7 and 8 (tests not run) are answers too, as `cleanBaselineAnswer` reads them;
+    // a missing or not-run row is the caller's to compare, not a reason to have no answer.
+    if (!ONE_SHOT_EXITS.includes(res.exitCode)) return { noAnswer: `exit-${res.exitCode}` };
     const decoded = decodeV3Rows(res.stdout, id);
-    if ("why" in decoded) return undefined;
+    if ("why" in decoded) return { noAnswer: "rows-undecodable" };
     this.observedSeed = decoded.seed ?? this.observedSeed;
-    if (
-      !this.hasEveryRow(
-        decoded.rows,
-        only !== undefined ? [only.ref] : (this.suitePerCodeunit.get(id) ?? []),
-      )
-    ) {
-      return undefined;
-    }
     return {
       rows: decoded.rows,
       coverage: decodeV3Coverage(covText),
       wallMs: made.wallMs,
       stopSeconds,
       withCoverage: coverage,
+      ...(res.exitCode === 8 ? { exit8: true as const } : {}),
     };
+  }
+
+  /**
+   * R951: one sample's cross-check. The one-shot answer (exit 0/1/7/8, decodable rows) is COMPARED
+   * with the daemon's, notRun rows and a missing row included: a difference is real and drops the
+   * session. SKIPPED (the caller replaces it) only when no process answered: memory gate, spawn
+   * error, wall timeout. A spent budget or a stopped memory guard `stop`s first, so no replacement
+   * starts then. Any other no-answer (an exit outside 0/1/7/8, undecodable rows) drops, by name.
+   */
+  private async crossCheckSample(
+    lane: Lane,
+    stopSeconds: number,
+    coverage: boolean,
+    s: {
+      readonly key: number;
+      readonly name: string;
+      readonly id: number;
+      readonly subject: string;
+      readonly what: string;
+      readonly daemon: BaselineAnswer;
+      readonly only?: { readonly ref: TestMethodRef; readonly test: string };
+    },
+  ): Promise<
+    | { readonly kind: "compared"; readonly shot: BaselineAnswer }
+    | { readonly kind: "skipped" | "stop" }
+    | { readonly kind: "dropped"; readonly why: string; readonly detail: string[] }
+  > {
+    const shot = await this.oneShotBaselineAnswer(lane, s.id, stopSeconds, coverage, s.only);
+    if ("noAnswer" in shot) {
+      if (this.stopHandle?.spent() === true || this.memoryStopped) return { kind: "stop" };
+      if (SKIPPABLE_NO_ANSWER.includes(shot.noAnswer)) {
+        this.uncleanCalls.add(s.key); // R6: never served from the daemon, for the whole session
+        this.noteSkip("error", s.name, true, shot.noAnswer);
+        return { kind: "skipped" };
+      }
+      return {
+        kind: "dropped",
+        why: `the cross-check of ${s.subject} got no clean one-shot answer (${shot.noAnswer}) to compare the daemon's with`,
+        detail: [shot.noAnswer],
+      };
+    }
+    if (this.stopHandle?.signalled() === true) return { kind: "stop" };
+    this.baselineStats.compared += 1;
+    const why = compareBaselineAnswers(s.daemon, shot);
+    if (why.length > 0) {
+      return {
+        kind: "dropped",
+        why: `the daemon's ${s.what} of ${s.subject} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+        detail: why,
+      };
+    }
+    // The live path's row check: exactly one row for each wanted test (a duplicated row can compare
+    // equal, since the comparison maps by method name), or this answer is not served.
+    const wanted = s.only !== undefined ? [s.only.ref] : (this.suitePerCodeunit.get(s.id) ?? []);
+    if (!this.hasEveryRow(shot.rows, wanted)) {
+      return {
+        kind: "dropped",
+        why: `the one-shot answer of ${s.subject} does not hold exactly one row for each of its tests`,
+        detail: ["one-shot-row-count"],
+      };
+    }
+    return { kind: "compared", shot };
   }
 
   /**
@@ -3599,20 +3711,81 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const f = this.budgetFloor;
     if (this.daemonBaselineFilled || f === undefined) return;
     this.daemonBaselineFilled = true;
-    const ids = [...this.suitePerCodeunit.keys()]
+    const all = [...this.suitePerCodeunit.keys()]
       .filter((id) => !this.perTest(id))
       .sort((a, b) => a - b);
-    if (this.seams.reverseBaselineOrder === true) ids.reverse();
-    const sample = new Set(baselineSampleIds(ids));
-    this.baselineStats.codeunits = ids.length;
-    this.baselineStats.sampled = [...sample];
+    if (this.seams.reverseBaselineOrder === true) all.reverse();
+    // R951 (R6): a codeunit whose sample's one-shot run was skipped never gets a daemon answer.
+    const ids = all.filter((id) => !this.uncleanCalls.has(id));
+    for (const id of all) {
+      if (this.uncleanCalls.has(id)) this.noteSkip("other", `Codeunit${id}`, false);
+    }
+    const planned = baselineSampleIds(ids);
+    const plan = new SamplePlan(ids, planned);
+    this.baselineStats.codeunits = all.length;
+    this.baselineStats.sampled = [...planned];
     const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
     const answers = new Map<number, BaselineAnswer>();
+    const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
+    const comparedBefore = this.baselineStats.compared;
+    type Step = "ok" | "stop" | "dropped";
+    const check = async (id: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
+      const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
+        key: id,
+        name: `Codeunit${id}`,
+        id,
+        subject: `codeunit ${id}`,
+        what: "baseline",
+        daemon,
+      });
+      if (r.kind === "stop") return "stop";
+      if (r.kind === "dropped") {
+        this.dropDaemonBaseline(r.why, r.detail, shots);
+        return "dropped";
+      }
+      if (r.kind === "compared") {
+        answers.set(id, r.shot);
+        shots.set(id, r.shot);
+        return "ok";
+      }
+      answers.delete(id); // skipped: its daemon answer is unproven and never served (R6)
+      return replace(`Codeunit${id}`, pos);
+    };
+    // R951 (R5): a skipped sample is replaced by the next unsampled codeunit after the loop's
+    // position; the LAST one, with none after it, by the last earlier one a daemon answered.
+    const replace = async (skipped: string, pos: number): Promise<Step> => {
+      const forward = plan.next(pos, () => true);
+      const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
+      if (pick === undefined) return "ok";
+      // Counted only once the pick is compared or skipped: a forward pick the loop never reaches
+      // (the fill stops first) is not a replacement.
+      const daemon = answers.get(pick);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = `Codeunit${pick}`;
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (id: number) => {
+      const skipped = pending.get(id);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = `Codeunit${id}`;
+      pending.delete(id);
+    };
+    let stopped = false;
     let unusable = 0;
     try {
-      for (const id of ids) {
-        if (this.stopHandle?.spent() === true) break; // R955
-        if (!(await this.memoryGate(true))) break; // R948: no new request over the bound
+      for (const [pos, id] of ids.entries()) {
+        if (this.stopHandle?.spent() === true) {
+          stopped = true;
+          break; // R955
+        }
+        if (!(await this.memoryGate(true))) {
+          stopped = true;
+          break; // R948: no new request over the bound
+        }
         let got: BaselineAnswer | undefined;
         try {
           await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
@@ -3624,49 +3797,74 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         } finally {
           this.memoryRelease();
         }
-        if (this.stopHandle?.signalled() === true) break; // R955: that call is dropped
+        if (this.stopHandle?.signalled() === true) {
+          stopped = true;
+          break; // R955: that call is dropped
+        }
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
           got = undefined;
         }
+        const isSample = plan.has(id);
+        reached(id);
         if (got === undefined) {
-          this.noteSkip("error", `Codeunit${id}`, sample.has(id));
+          this.noteSkip("error", `Codeunit${id}`, isSample, "daemon-error");
           unusable += 1;
           if (unusable >= 2) {
-            this.dropDaemonBaseline("two serve requests in a row gave no usable baseline answer");
+            this.dropDaemonBaseline(
+              "two serve requests in a row gave no usable baseline answer",
+              [],
+              shots,
+            );
             return;
+          }
+          if (isSample) {
+            const r = await replace(`Codeunit${id}`, pos);
+            if (r === "dropped") return;
+            if (r === "stop") {
+              stopped = true;
+              break;
+            }
           }
           continue;
         }
         unusable = 0;
         // The duration the budget will use is the verdict's: the row's, else the call's wall time.
         const tooSlow = durationCouldMoveBudget(got.rows, got.wallMs, f.floorMs);
-        if (tooSlow && !sample.has(id)) this.noteSkip("tooSlow", `Codeunit${id}`, false);
-        if (sample.has(id) || tooSlow) {
+        if (tooSlow && !isSample) this.noteSkip("tooSlow", `Codeunit${id}`, false);
+        if (isSample) {
+          const r = await check(id, got, pos);
+          if (r === "dropped") return;
+          if (r === "stop") {
+            stopped = true;
+            break;
+          }
+          continue;
+        }
+        if (tooSlow) {
           const shot = await this.oneShotBaselineAnswer(lane, id, stopSeconds, coverage);
-          if (shot === undefined) {
-            if (!sample.has(id)) continue; // too slow, no clean one-shot: its own call runs it
-            // Out of time or memory is not a mismatch.
-            if (this.stopHandle?.spent() === true || this.memoryStopped) break;
-            this.dropDaemonBaseline(
-              `the cross-check of codeunit ${id} got no clean one-shot answer to compare the daemon's with`,
-            );
-            return;
+          if ("noAnswer" in shot) continue; // no clean one-shot: its own call runs it
+          if (this.stopHandle?.signalled() === true) {
+            stopped = true;
+            break;
           }
-          if (this.stopHandle?.signalled() === true) break;
-          if (sample.has(id)) {
-            this.baselineStats.compared += 1;
-            const why = compareBaselineAnswers(got, shot);
-            if (why.length > 0) {
-              this.dropDaemonBaseline(
-                `the daemon's baseline of codeunit ${id} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
-                why,
-              );
-              return;
-            }
-          }
-          got = shot; // a fresh process's answer, and its durations, stand
+          // A suite test without its row is no answer either (a baseline call would refuse it).
+          if (!this.hasEveryRow(shot.rows, this.suitePerCodeunit.get(id) ?? [])) continue;
+          shots.set(id, shot); // a fresh process's answer, and its durations, stand
+          answers.set(id, shot);
+          continue;
         }
         answers.set(id, got);
+      }
+      // R951 (R5): enough samples compared clean, else the daemon baseline drops by name.
+      const required = Math.min(BASELINE_MIN_CLEAN_SAMPLES, planned.length);
+      const clean = this.baselineStats.compared - comparedBefore;
+      if (!stopped && clean < required) {
+        this.dropDaemonBaseline(
+          `too few clean cross-check samples: ${clean} of ${required}`,
+          [`too-few-clean-samples:${clean}/${required}`],
+          shots,
+        );
+        return;
       }
       for (const [k, v] of answers) this.daemonBaseline.set(k, v);
     } finally {
@@ -3691,80 +3889,154 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const f = this.budgetFloor;
     if (f === undefined) return;
     // The refs this fill answers, in queue order; the sample is by position in that order.
-    const refs = queue.filter((ref) => this.isolated(this.callId(ref)) !== undefined);
-    const sample = new Set(baselineSampleIds(refs.map((_, i) => i)));
-    this.baselineStats.perTestRequests = refs.length;
-    this.baselineStats.perTestSampled = [...sample];
+    const eligible = queue.filter((ref) => this.isolated(this.callId(ref)) !== undefined);
+    // R951 (R6): a test whose sample's one-shot run was skipped never gets a daemon answer.
+    const refs = eligible.filter((ref) => !this.uncleanCalls.has(this.callId(ref)));
+    for (const ref of eligible) {
+      if (this.uncleanCalls.has(this.callId(ref))) {
+        this.noteSkip("other", `${ref.codeunitName}.${ref.method}`, false);
+      }
+    }
+    const keys = refs.map((ref) => this.callId(ref));
+    const refOf = new Map(refs.map((ref) => [this.callId(ref), ref]));
+    const planned = baselineSampleIds(keys.map((_, i) => i))
+      .map((i) => keys[i])
+      .filter((k): k is number => k !== undefined);
+    const plan = new SamplePlan(keys, planned);
+    this.baselineStats.perTestRequests = eligible.length;
+    this.baselineStats.perTestSampled = baselineSampleIds(keys.map((_, i) => i));
     const answers = new Map<number, BaselineAnswer>();
+    const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
+    const comparedBefore = this.baselineStats.compared;
+    const nameOf = (r: TestMethodRef) => `${r.codeunitName}.${r.method}`;
+    type Step = "ok" | "stop" | "dropped";
+    const check = async (key: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
+      const ref = refOf.get(key);
+      const one = this.isolated(key);
+      if (ref === undefined || one === undefined) return "ok";
+      const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
+        key,
+        name: nameOf(ref),
+        id: ref.codeunitId,
+        subject: nameOf(ref),
+        what: "per-test baseline",
+        daemon,
+        only: { ref, test: one.test },
+      });
+      if (r.kind === "stop") return "stop";
+      if (r.kind === "dropped") {
+        this.dropDaemonBaseline(r.why, r.detail, shots);
+        return "dropped";
+      }
+      if (r.kind === "compared") {
+        answers.set(key, r.shot);
+        shots.set(key, r.shot);
+        return "ok";
+      }
+      answers.delete(key); // skipped: its daemon answer is unproven and never served (R6)
+      return replace(nameOf(ref), pos);
+    };
+    // R951 (R5): as the whole-codeunit fill's replacement (forward, the last one backward).
+    const replace = async (skipped: string, pos: number): Promise<Step> => {
+      const forward = plan.next(pos, () => true);
+      const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
+      const ref = pick === undefined ? undefined : refOf.get(pick);
+      if (pick === undefined || ref === undefined) return "ok";
+      // Counted only once the pick is compared or skipped (see the whole-codeunit fill).
+      const daemon = answers.get(pick);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = nameOf(ref);
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (key: number, ref: TestMethodRef) => {
+      const skipped = pending.get(key);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = nameOf(ref);
+      pending.delete(key);
+    };
+    let stopped = false;
     try {
       for (const [i, ref] of refs.entries()) {
         const key = this.callId(ref);
         // The mode is the call's own (`modeOfCall`): codeunit isolation under `method`, test
         // isolation under `--isolate-tests`; both with `runSelectedOnly`.
         const mode = this.modeOfCall(key);
-        if (this.stopHandle?.spent() === true) break; // R955
-        if (!(await this.memoryGate(true))) break; // R948
+        if (this.stopHandle?.spent() === true) {
+          stopped = true;
+          break; // R955
+        }
+        if (!(await this.memoryGate(true))) {
+          stopped = true;
+          break; // R948
+        }
         let got: BaselineAnswer | undefined;
+        let failed = false;
         try {
           await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
           got = await this.baselineRequest(lane, mode, key, stopSeconds, coverage);
         } catch (err) {
           if (!(err instanceof AlRunnerServerRequestError)) throw err;
-          this.noteSkip("error", `${ref.codeunitName}.${ref.method}`, sample.has(i));
-          continue;
+          failed = true;
         } finally {
           this.memoryRelease();
         }
-        if (this.stopHandle?.signalled() === true) break; // R955: that call is dropped
+        if (this.stopHandle?.signalled() === true) {
+          stopped = true;
+          break; // R955: that call is dropped
+        }
         const [row] = got?.rows ?? [];
-        const name = `${ref.codeunitName}.${ref.method}`;
-        if (
-          got === undefined ||
-          got.rows.length !== 1 ||
-          row === undefined ||
-          row.notRun ||
-          row.method.toLowerCase() !== ref.method.toLowerCase()
-        ) {
-          this.noteSkip("other", name, sample.has(i));
+        const name = nameOf(ref);
+        const isSample = plan.has(key);
+        reached(key, ref);
+        // Why the daemon's answer is not kept (R5: a sample is then replaced), if it is not.
+        const skip: { kind: "error" | "other" | "tooSlow"; reason: string } | undefined = failed
+          ? { kind: "error", reason: "daemon-error" }
+          : got === undefined ||
+              got.rows.length !== 1 ||
+              row === undefined ||
+              row.notRun ||
+              row.method.toLowerCase() !== ref.method.toLowerCase()
+            ? { kind: "other", reason: "daemon-odd-row" }
+            : durationCouldMoveBudget([row], got.wallMs, f.floorMs)
+              ? { kind: "tooSlow", reason: "daemon-too-slow" }
+              : undefined;
+        if (skip !== undefined || got === undefined) {
+          this.noteSkip(skip?.kind ?? "other", name, isSample, skip?.reason);
+          if (isSample) {
+            const r = await replace(name, i);
+            if (r === "dropped") return;
+            if (r === "stop") {
+              stopped = true;
+              break;
+            }
+          }
           continue;
         }
-        if (durationCouldMoveBudget([row], got.wallMs, f.floorMs)) {
-          this.noteSkip("tooSlow", name, sample.has(i));
-          continue;
-        }
-        const one = this.isolated(key);
-        if (sample.has(i) && one !== undefined) {
+        if (isSample) {
           // The cross-check: this test alone in a fresh process, compared per test.
-          const shot = await this.oneShotBaselineAnswer(
-            lane,
-            ref.codeunitId,
-            stopSeconds,
-            coverage,
-            {
-              ref,
-              test: one.test,
-            },
-          );
-          if (shot === undefined) {
-            if (this.stopHandle?.spent() === true || this.memoryStopped) break;
-            this.dropDaemonBaseline(
-              `the cross-check of ${ref.codeunitName}.${ref.method} got no clean one-shot answer to compare the daemon's with`,
-            );
-            return;
+          const r = await check(key, got, i);
+          if (r === "dropped") return;
+          if (r === "stop") {
+            stopped = true;
+            break;
           }
-          if (this.stopHandle?.signalled() === true) break;
-          this.baselineStats.compared += 1;
-          const why = compareBaselineAnswers(got, shot);
-          if (why.length > 0) {
-            this.dropDaemonBaseline(
-              `the daemon's per-test baseline of ${ref.codeunitName}.${ref.method} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
-              why,
-            );
-            return;
-          }
-          got = shot;
+          continue;
         }
         answers.set(key, got);
+      }
+      const required = Math.min(BASELINE_MIN_CLEAN_SAMPLES, planned.length);
+      const clean = this.baselineStats.compared - comparedBefore;
+      if (!stopped && clean < required) {
+        this.dropDaemonBaseline(
+          `too few clean cross-check samples: ${clean} of ${required}`,
+          [`too-few-clean-samples:${clean}/${required}`],
+          shots,
+        );
+        return;
       }
       for (const [k, v] of answers) this.daemonBaseline.set(k, v);
     } finally {
@@ -3780,20 +4052,30 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     stopSeconds: number,
     coverage: boolean,
   ): Promise<BaselineAnswer | undefined> {
-    if (!this.inBaseline || lane.lastActivated !== null || !this.daemonBaselineOn())
-      return undefined;
+    if (!this.inBaseline || lane.lastActivated !== null) return undefined;
+    // R951 (R3): after a drop, the one-shot answers the fill had obtained stand in place of a re-run.
+    const kept = (): BaselineAnswer | undefined => {
+      if (!this.baselineDaemon || this.daemonBaselineOff === undefined) return undefined;
+      const k = this.oneShotKept.get(key);
+      this.oneShotKept.delete(key);
+      if (k?.stopSeconds !== stopSeconds || k.withCoverage !== coverage) return undefined;
+      if (k.exit8 === true) this.noteDotnetHelper();
+      return k;
+    };
+    if (!this.daemonBaselineOn()) return kept();
     // Whole codeunits first, always: their fill and cross-check end before ANY daemon answer, a
     // per-test one included, is served (on batch 2+ under auto a `method` call can come first).
     // A drop there leaves nothing served and the session one-shot.
     await this.fillDaemonBaseline(lane, stopSeconds, coverage);
-    if (!this.daemonBaselineOn()) return undefined;
+    if (!this.daemonBaselineOn()) return kept();
     if (perTest) {
       await this.fillIsolatedBaseline(lane, stopSeconds, coverage);
-      if (!this.daemonBaselineOn()) return undefined;
+      if (!this.daemonBaselineOn()) return kept();
     }
     const a = this.daemonBaseline.get(key);
     this.daemonBaseline.delete(key);
     if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
+    if (a.exit8 === true) this.noteDotnetHelper(); // a served one-shot exit-8 answer, as a live call
     if (a.fromDaemon === true) {
       this.baselineStats.served += 1;
       // R949: once per session, when the first daemon answer is used. No count here: later batches and
@@ -3899,9 +4181,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly skippedOther: readonly string[];
     /** Sampled items whose daemon answer was skipped (so `compared` is short by this many). */
     readonly sampledSkipped: readonly string[];
+    /** R951: how many skipped samples were replaced by another item. */
+    readonly replaced: number;
+    /** R951: skipped sample name -> the name that replaced it. */
+    readonly replacements: Readonly<Record<string, string>>;
   } {
     const s = this.baselineStats;
     return {
+      replaced: Object.keys(s.replacements).length,
+      replacements: { ...s.replacements },
       served: s.served,
       skippedTooSlow: [...s.skippedTooSlow],
       skippedError: [...s.skippedError],
@@ -5131,13 +5419,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ),
       };
     }
-    if (res.exitCode === 8 && !this.dotnetHelperWarned) {
-      this.dotnetHelperWarned = true;
-      this.notify(
-        "al-runner-v3-dotnet-helper-missing",
-        "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
-      );
-    }
+    if (res.exitCode === 8) this.noteDotnetHelper();
     const decoded = decodeV3Rows(res.stdout, id);
     if ("why" in decoded) {
       return { verdict: transportFailure(ref, `codeunit ${id}: ${decoded.why}`, wallMs) };
