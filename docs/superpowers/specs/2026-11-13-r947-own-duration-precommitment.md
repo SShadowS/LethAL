@@ -22,3 +22,15 @@ Written 2026-11-13 by lane preproc, before the build and any measured run. Surve
 - **Moved, by design:** `mutant-scored.durationMs` and the per-mutant time in reports and rate lines, for mutants whose rows shared a
   call without own times (each call's wall is no longer charged once per row). Example to check: Password's IsPasswordStrong
   mutants. No committed sample report or snapshot is expected to move; if one does, it is reviewed and named.
+
+## Amendment (2026-11-13, after the build, before any gate or measured run)
+
+- **Item 2 withdrawn.** R515's raise (`noteMeasured`) runs only where the in-run stop IS the budget (`inRunStopIsBudget`: bcdev, and
+  al-runner-v3 one-shot, `!this.entries`); there a confirmation is one test's own call, so its wall is honest. On serve-entries it
+  never runs, so the batched 620 s wall never raised a budget. The raise is unchanged; one-shot and bcdev budgets are byte-identical.
+- **Snapshots moved, reviewed:** `packages/runner/tests/__snapshots__/orchestrator.test.ts.snap`, C02-04 characterization 3 (grouped,
+  chunked) and 4 (warm kills): five mutant `duration_ms` values, 15 -> 5, 10 -> 5, 25 -> 5, 10 -> 5, 25 -> 5. The stub backend gives
+  every row of a call the same 5 ms wall and no own time; each call is now charged once, not once per row (item 3). Nothing else in
+  the file moves.
+- **Gates (orchestrator's table):** the full v3 gate, `itest:bcdev` and `itest:lend` on one bc server: no figure moves. Also a store
+  written before `own_duration_ms` existed opens, gains the column and resumes (`--resume`) with its verdicts carried.
