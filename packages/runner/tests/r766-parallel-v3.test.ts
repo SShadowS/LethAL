@@ -202,6 +202,8 @@ class ParStub implements ExecutionBackend {
       ref,
       outcome: "pass",
       durationMs: this.baselineMs,
+      // R963: v3 reports the test's own time; without it the estimate splits one call's wall.
+      measuredDurationMs: this.baselineMs,
       coverage: {
         granularity: "procedure" as const,
         entries: ["P1", "P2", "P3"].map((procedure) => ({
