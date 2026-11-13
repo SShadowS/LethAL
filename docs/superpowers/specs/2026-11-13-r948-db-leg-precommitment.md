@@ -27,3 +27,17 @@ pins do not move. A difference in any of them is a BLOCK. DB is not in `V3_GATE_
 
 Any DB per-mutant difference from `bcdev.baseline.json`; the daemon baseline dropped (`dropped` set) or not used; a sample count off
 the rule; any warning beyond the guard's line; any other leg moving.
+
+## Amendment 1 (2026-11-13, before any gate ran): DB's served count and the new leg DBI
+
+Build now lethal/r948 at a6088667 (adds a review round: lending-tag order, memory stop under `--workers`, hold release on throw).
+- **DB, added:** `served === codeunits - sampled` (daemon answers actually taken by calls; with a single codeunit `served` is 0 by
+  rule, so this bites only with two or more codeunits).
+- **New leg DBI** (after DB in the default legs, not in `V3_GATE_LEGS`): the ISO leg's session (S1's project under `isolateTests`),
+  serve-entries, `daemonBaseline: true`, the guard on with the fixed 1-of-32 GiB reader. Predicted: 22 mutants, 3 killed / 14 survived /
+  5 no-coverage, per mutant equal to `bcdev.baseline.json` as ISO; `executionContexts[0].isolateTests` true; no state notes;
+  `daemonBaselineReport()` with `dropped` undefined, `baselineDaemon` true, `perTestRequests` > 0, `sampledPerTest.length` ==
+  `compared` == the sample rule's count for `perTestRequests`, `served` > 0 and `served === perTestRequests - sampled`; warning set
+  exactly `["al-runner-v3-isolate-tests", "al-runner-v3-memory-guard"]`.
+- The memory guard's refusal path is unit-tested only (the gate's reader is fixed under the bound); the legs exercise the pass path.
+- Falsifiers as above, for DBI too; every leg other than DB and DBI unchanged.
