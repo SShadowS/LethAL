@@ -3764,17 +3764,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
     if (a.fromDaemon === true) {
       this.baselineStats.served += 1;
-      // R949: once per session, when the first daemon answer is used: how many passes are unknown.
+      // R949: once per session, when the first daemon answer is used. No count here: later batches and
+      // per-test fills are not known yet; the report's per-test `baselineFlaggedUnknown` is the record.
       if (!this.flaggedUnknownNoted) {
         this.flaggedUnknownNoted = true;
-        let n = a.rows.filter((r) => r.status === "pass" && !r.notRun).length;
-        for (const o of this.daemonBaseline.values()) {
-          if (o.fromDaemon === true)
-            n += o.rows.filter((r) => r.status === "pass" && !r.notRun).length;
-        }
         this.notify(
           "al-runner-v3-serve-flagged-unknown",
-          `[lethal] al-runner-v3-serve-flagged-unknown: the baseline came from an al-runner serve daemon, whose rows carry no "flagged" (a pass resting on an unprobed assumption), so up to ${n} passing tests have an UNKNOWN flagged state; the report marks them baselineFlaggedUnknown, never unflagged. Upstream: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7954 (R949).`,
+          `[lethal] al-runner-v3-serve-flagged-unknown: the baseline came from an al-runner serve daemon, whose rows carry no "flagged" (a pass resting on an unprobed assumption), so every passing test the daemon answered has an UNKNOWN flagged state; the report marks each one baselineFlaggedUnknown, never unflagged. Upstream: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7954 (R949).`,
         );
       }
     }

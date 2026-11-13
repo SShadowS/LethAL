@@ -6461,7 +6461,7 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.requests).toHaveLength(asked);
   });
 
-  test("R949: a daemon-answered pass has flagged UNKNOWN; a one-shot-answered one does not; one notice says how many and cites the issue", async () => {
+  test("R949: a daemon-answered pass has flagged UNKNOWN; a one-shot-answered one does not; one notice, no count (the report is the record), cites the issue", async () => {
     const seen: [string, string][] = [];
     const r = await dbRig({ notify: (c, m) => seen.push([c, m]) });
     const v = await baseline(r.b, SUITE3);
@@ -6470,7 +6470,10 @@ describe("R948 A: the baseline through one daemon", () => {
     const n = seen.filter(([c]) => c === "al-runner-v3-serve-flagged-unknown");
     expect(n).toHaveLength(1);
     expect(n[0]?.[1]).toContain("issues/7954");
-    expect(n[0]?.[1]).toContain("up to 2 passing tests");
+    expect(n[0]?.[1]).toContain(
+      "every passing test the daemon answered has an UNKNOWN flagged state",
+    );
+    expect(n[0]?.[1]).not.toMatch(/up to \d/); // R949 review: a count here undercounted later batches
     expect(r.b.daemonBaselineReport().dropped).toBeUndefined();
   });
 

@@ -24268,6 +24268,15 @@ describe("R907: --no-client in a session", () => {
     expect(rec("Failing")).not.toHaveProperty("baselineFlaggedUnknown"); // a failing test is not a pass
   });
 
+  test("R949: a pass both flagged and daemon-answered reports the known flag, never unknown", async () => {
+    const b = stub();
+    b.unknownMethods = new Set<string>(["Plain", "Failing", "Flagged"]);
+    const report = await sessionOf(b);
+    const rec = (m: string) => report.testMethods?.find((t) => t.name === `Sandbox Tests.${m}`);
+    expect(rec("Flagged")?.baselineFlagged).toBe(true);
+    expect(rec("Flagged")).not.toHaveProperty("baselineFlaggedUnknown");
+  });
+
   test("the report's execution context is threaded from the backend: noClient true, guiAllowed false", async () => {
     const report = await sessionOf(stub());
     const ctx = report.validity.executionContexts.find((c) => c.runner === "fenced");
