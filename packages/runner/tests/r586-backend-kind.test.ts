@@ -429,6 +429,27 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R956: the license goes in the lending build, the fingerprint and the report; absent, none moves", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withLicense = (sha256: string) =>
+        Object.assign(withProbe(new V3KindStub([]), []), { license: { path: "/l/x", sha256 } });
+      const none = await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const a = await v3Session(root, store, withLicense("a".repeat(64)));
+      await v3Session(root, store, withLicense("b".repeat(64)));
+      const [r1, r2, r3] = [store.getRun(1), store.getRun(2), store.getRun(3)];
+      expect(r1?.runnerBuild).not.toContain("license-");
+      expect(r2?.runnerBuild).toBe(`${r1?.runnerBuild} license-aaaaaaaa`);
+      expect(r3?.runnerBuild).toBe(`${r1?.runnerBuild} license-bbbbbbbb`);
+      expect(r2?.configFingerprint).not.toBe(r1?.configFingerprint);
+      expect(none.validity.executionContexts[0]).not.toHaveProperty("license");
+      expect(a.validity.executionContexts[0]?.license).toEqual({
+        path: "/l/x",
+        sha256: "a".repeat(64),
+      });
+    });
+  });
+
   test("R938: the environment goes in the build, the fingerprint and the report; a resume under another one is refused", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
@@ -483,6 +504,32 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
         (e: unknown) => e,
       );
       expect(String(other)).toContain("recorded under environment onprem");
+    });
+  });
+
+  test("R956: the other-environment refusal still names the environment when a license is set", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withEnv = (value: "saas" | "onprem") =>
+        Object.assign(withProbe(new V3KindStub([]), []), {
+          environmentChoice: { value, source: "config" as const },
+          license: { path: "/l/x", sha256: "a".repeat(64) },
+        });
+      await v3Session(root, store, withEnv("onprem"));
+      expect(store.getRun(1)?.runnerBuild).toContain(" environment-onprem license-aaaaaaaa");
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const other = await v3Session(root, store, withEnv("saas"), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(other)).toContain("recorded under environment onprem");
+      // Another license as well is not "the same build under another environment".
+      const otherLicense = Object.assign(withEnv("saas"), {
+        license: { path: "/l/y", sha256: "b".repeat(64) },
+      });
+      const unrelated = await v3Session(root, store, otherLicense, { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(unrelated)).not.toContain("recorded under environment");
     });
   });
 

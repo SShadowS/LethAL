@@ -133,20 +133,50 @@ export function formatEstimate(ms: number): string {
 /** The `--time-budget` clock of one session, shared by every batch. */
 export class TimeBudget {
   /** Set by the first `reach`; later calls change nothing. */
-  reached: { readonly unscheduledCount: number; readonly firstUnstartedBatch: number } | undefined;
+  reached:
+    | {
+        readonly unscheduledCount: number;
+        readonly firstUnstartedBatch: number;
+        /** R955: set when the budget ran out inside a baseline: its tests run and total. */
+        readonly baselineStopped?: {
+          readonly testsRun: number;
+          readonly testsTotal: number;
+          readonly inAutoRebaseline?: true;
+        };
+      }
+    | undefined;
   constructor(
     readonly seconds: number,
     private readonly startMs: number,
     private readonly now: () => number,
   ) {}
+  /** R955: set by `stop()` (a SIGTERM or SIGINT); the budget is then spent, whatever the clock says. */
+  signalled = false;
+  /** R955: spend the budget now. A session with no `--time-budget` has `seconds` of Infinity. */
+  stop(): void {
+    this.signalled = true;
+  }
   remainingMs(): number {
+    if (this.signalled) return 0;
     return this.startMs + this.seconds * 1000 - this.now();
   }
   get exhausted(): boolean {
     return this.reached !== undefined || this.remainingMs() <= 0;
   }
   /** `firstUnstartedBatch`: the first batch index the session never started. */
-  reach(unscheduledCount: number, firstUnstartedBatch: number): void {
-    this.reached ??= { unscheduledCount, firstUnstartedBatch };
+  reach(
+    unscheduledCount: number,
+    firstUnstartedBatch: number,
+    baselineStopped?: {
+      readonly testsRun: number;
+      readonly testsTotal: number;
+      readonly inAutoRebaseline?: true;
+    },
+  ): void {
+    this.reached ??= {
+      unscheduledCount,
+      firstUnstartedBatch,
+      ...(baselineStopped !== undefined ? { baselineStopped } : {}),
+    };
   }
 }

@@ -197,6 +197,22 @@
                     ]
                   }
                 }
+              },
+              "license": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
@@ -1514,6 +1530,28 @@
         },
         "batchesNotStarted": {
           "type": "number"
+        },
+        "baselineStopped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "testsRun",
+            "testsTotal"
+          ],
+          "properties": {
+            "testsRun": {
+              "type": "number"
+            },
+            "testsTotal": {
+              "type": "number"
+            },
+            "inAutoRebaseline": {
+              "const": true
+            }
+          }
+        },
+        "stoppedBySignal": {
+          "const": true
         }
       }
     },
@@ -1583,7 +1621,6 @@
               "chosen",
               "tests",
               "testPassed",
-              "methodPassed",
               "reason",
               "lostUnderMethod"
             ],

@@ -14,14 +14,16 @@
  *     "downloadDemoData": true,                                // R885; false passes --no-download (offline, gates); true: the feed's copy replaces an older Microsoft app in .alpackages
  *     "noClient": false,                                       // R907; true passes --no-client: tests run as a session without a client (GuiAllowed() false, as on BC's web-service path); a pass that rests on an unprobed assumption is flagged
  *     "isolation": "auto",                                    // R896; "auto" (default): per codeunit, "method" where the baseline passes strictly more tests so; R890: "test" or "method" force one mode
+ *     "license": "<optional .bclicense file>",               // R956; passed as --license on every al-runner call that runs tests; its sha256 is in the fingerprint and the report
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
  */
+import { createHash } from "node:crypto";
 import { constants, accessSync, existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { AL_RUNNER_V3_DEFAULT_PATH } from "./al-runner-v3-pin";
 import { homeDir } from "./home";
 import { symbolPackageIdentity } from "./published-test-app";
@@ -58,6 +60,30 @@ export interface AlRunnerV3ConfigSection {
   readonly isolation: "auto" | "test" | "method";
   /** R938: `--environment` for every al-runner call. Absent: the target's launch.json decides, else no flag. */
   readonly environment?: "saas" | "onprem";
+  /** R956: a `.bclicense` file, absolute, passed as `--license <path>` on every al-runner call that runs tests. Absent: none. */
+  readonly license?: string;
+}
+
+/**
+ * R956: the license file's identity as the report and the fingerprint carry it: its path and the
+ * sha256 of its bytes, never its contents.
+ */
+export interface V3LicenseIdentity {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+/** R956: reads the file `alRunnerV3.license` names. Throws by name when it cannot be read. */
+export async function readLicenseIdentity(path: string): Promise<V3LicenseIdentity> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await readFile(path);
+  } catch (e) {
+    throw new Error(
+      `al-runner-v3-license-unreadable: "alRunnerV3.license" is ${path}, which cannot be read (${e instanceof Error ? e.message : String(e)}) (R956).`,
+    );
+  }
+  return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
 /**
@@ -73,6 +99,7 @@ export const V3_NO_CLIENT_DEFAULT = false;
 export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
+  "license",
   "environment",
   "isolation",
   "downloadDemoData",
@@ -198,6 +225,27 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.environment" must be "saas" or "onprem", got ${JSON.stringify(r.environment)} (R938).`,
     );
   }
+  // R956: refused by name before anything runs; the file is read (and hashed) once, by the caller.
+  if (r.license !== undefined) {
+    if (typeof r.license !== "string" || r.license === "") {
+      throw new Error(
+        `al-runner-v3-config-refused: "alRunnerV3.license" must be a non-empty path to a .bclicense file, got ${JSON.stringify(r.license)} (R956).`,
+      );
+    }
+    let readable = exists(r.license);
+    if (readable) {
+      try {
+        accessSync(r.license, constants.R_OK);
+      } catch {
+        readable = false;
+      }
+    }
+    if (!readable) {
+      throw new Error(
+        `al-runner-v3-license-missing: "alRunnerV3.license" is ${r.license}, which does not exist or cannot be read (R956). Fix the path or drop the key.`,
+      );
+    }
+  }
   for (const k of ["path", "alcPath", "cacheDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
@@ -238,6 +286,7 @@ export function validateAlRunnerV3Config(
     ...(r.dotnetSidecar !== undefined ? { dotnetSidecar: r.dotnetSidecar as string | false } : {}),
     isolation: (r.isolation as "auto" | "test" | "method" | undefined) ?? V3_ISOLATION_DEFAULT,
     ...(r.environment !== undefined ? { environment: r.environment as "saas" | "onprem" } : {}),
+    ...(typeof r.license === "string" ? { license: resolve(r.license) } : {}),
   };
 }
 

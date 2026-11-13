@@ -1187,6 +1187,19 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
+  test("R956: the daemon argv carries --license <path> only when the license is set", async () => {
+    const on = (
+      await readyRig({
+        mutants: ["M0001"],
+        extra: { license: { path: "/l/x.bclicense", sha256: "a".repeat(64) } },
+      })
+    ).serve.daemons[0];
+    expect(on?.[(on?.indexOf("--license") ?? -2) + 1]).toBe("/l/x.bclicense");
+    expect((await readyRig({ mutants: ["M0001"] })).serve.daemons[0] ?? []).not.toContain(
+      "--license",
+    );
+  });
+
   test("R938: the daemon argv carries --environment <value> (the stated one)", async () => {
     const on = (
       await readyRig({

@@ -39,6 +39,7 @@ import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertAlcRunnable,
   assertBcVersionMatchesPackages,
+  readLicenseIdentity,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
@@ -3149,6 +3150,8 @@ async function buildAlRunnerV3Backend(
   // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
   // environment is unknown (owner's ruling A), before the version check, alc or any compile.
   const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
+  // R956: the license file is read (and hashed) here, before anything runs; unreadable is refused by name.
+  const license = c.license !== undefined ? await readLicenseIdentity(c.license) : undefined;
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
   if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
@@ -3189,6 +3192,7 @@ async function buildAlRunnerV3Backend(
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
       environmentChoice, // R938
+      ...(license !== undefined ? { license } : {}), // R956
       isolation: c.isolation, // R890, R896
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
