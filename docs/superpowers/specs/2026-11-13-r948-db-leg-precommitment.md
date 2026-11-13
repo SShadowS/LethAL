@@ -51,3 +51,24 @@ checks above become: `served + skippedTooSlow + skippedError + skippedOther === 
 per-test requests less the sample) and `compared + sampledSkipped === sampled`. A silent drop (nothing taken, nothing named) still
 fails, and `dropped` must still be undefined. The prediction stays: no skips on an unloaded container (`served` equal to `expected`);
 a run with named skips passes and is reported with its skip list.
+
+## Amendment 3 (2026-11-13, after the first gate run, before any change to K): leg K moves, and this file said it would not
+
+**What happened.** The first full v3 gate on 0604b3cb (`/coord/handoff/R-948/v3gate.log`) passed every leg, DB and DBI as predicted
+above (DB: 22 mutants, 0 differences, serve counters equal to S1E_PINS; DBI: 22, 0 differences, `served` 1 of 2 per-test requests
+with 1 sampled), and D1, D1c and T, but **BLOCKed at K**: its warning set gained `al-runner-v3-memory-guard`. "Every other leg is
+unchanged" above was wrong: K is the one leg that builds its backend through `cli.ts`'s `buildBackend`, which turns on both the daemon
+baseline and the guard for every serve-entries session. The survey behind that sentence looked only at legs constructing the
+backend directly.
+
+**K's new predictions** (committed before K's expectations are edited or the gate re-run):
+- Per mutant equal to `bcdev.baseline.json` (3 killed / 14 survived / 5 no-coverage over 22, the 5 all in `SandboxPricing`), as
+  before.
+- `serveSpawns` **2** (was 1): the baseline's own daemon and the mutant phase's.
+- `oneShotTestCalls` **1** (unchanged in number): now the cross-check sample of K's single test codeunit, no longer the one-shot
+  baseline.
+- Warning set gains exactly `al-runner-v3-memory-guard`.
+- K's guard reads the REAL cgroup (only DB and DBI fix the reader): on a container above `memory.max` - 4 GiB the leg would wait or
+  stop. Gate runs therefore start only under the interim admission rule (current + 2 GiB < 28 GiB); a guard stop in K is reported,
+  not a regression.
+Every leg other than DB, DBI and K: unchanged.
