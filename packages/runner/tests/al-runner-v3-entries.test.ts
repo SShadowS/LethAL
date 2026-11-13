@@ -5644,16 +5644,17 @@ describe("R857: --isolate-tests", () => {
 
     // R958: a stop (budget, signal or memory all read as spent()) starts no further process.
     const fill = async (stopAfter: number, processes: number) => {
-      let r: Rig | undefined;
-      r = await rig({
+      const box: { r?: Rig } = {};
+      const r = await rig({
         ...opts,
         extra: { isolateTests: true, isolatedBaselineProcesses: processes },
         stopHandle: {
-          spent: () => (r?.one.calls.length ?? 0) >= stopAfter,
+          spent: () => (box.r?.one.calls.length ?? 0) >= stopAfter,
           signalled: () => false,
           stopForMemory: () => {},
         },
       });
+      box.r = r;
       r.b.baselinePhase(true);
       await r.b.activate(null);
       await r.b.run(ref("A"), OPTS); // takes the fill
