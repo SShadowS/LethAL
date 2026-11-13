@@ -964,13 +964,23 @@ export function v3RowVerdict(
   callStopSeconds: number,
   wallMs: number,
   coverage: CoverageMap | undefined,
+  callId?: string,
 ): TestVerdict {
+  // R963: the row's own time, or nothing: `wallMs` is the call's and is never the test's. A row
+  // with none carries its call's identity instead, so the call's wall is charged once (`callId`).
+  const measured =
+    typeof row.durationMs === "number" && Number.isFinite(row.durationMs) && row.durationMs >= 0
+      ? { measuredDurationMs: row.durationMs }
+      : callId !== undefined
+        ? { callId }
+        : {};
   if (row.notRun) {
     if (row.status !== "error") {
       return {
         ref,
         outcome: "error",
         durationMs: wallMs,
+        ...measured,
         failureMessage: `al-runner-v3 contract: ${row.name} is notRun with status "${row.status}"; never scored (R586 §5)`,
         operation: "completed-accepted",
         runnerRow: "runner-test-error",
@@ -984,6 +994,7 @@ export function v3RowVerdict(
           ref,
           outcome: "error",
           durationMs: wallMs,
+          ...measured,
           failureMessage: `al-runner-v3 contract: ${row.name} reports a ${n}s stop, but the call was sent --test-timeout-secs ${callStopSeconds}; never scored (R586 §5)`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -993,6 +1004,7 @@ export function v3RowVerdict(
         ref,
         outcome: "timeout",
         durationMs: wallMs,
+        ...measured,
         reportedStopMs: n * 1000,
         timeoutIn: "body",
         failureMessage: row.message ?? "",
@@ -1002,6 +1014,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
+      ...measured,
       failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
@@ -1018,12 +1031,13 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
+      ...measured,
       failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
     };
   }
-  const verdict = verdictFromRunnerTest(
+  const classified = verdictFromRunnerTest(
     ref,
     row.name,
     {
@@ -1036,6 +1050,10 @@ export function v3RowVerdict(
     wallMs,
     coverage,
   );
+  const verdict =
+    classified.measuredDurationMs === undefined && callId !== undefined
+      ? { ...classified, callId }
+      : classified;
   // R925: a real failure (a kill) carries message + "\n" + stackTrace, as the BC path does
   // (`failureTextOf`). Added AFTER the verdict is classified, so every classifier above reads the
   // message alone; no refusal, timeout or error text gets a stack.
@@ -1189,6 +1207,8 @@ interface CallRows {
   readonly rows: readonly V3Row[];
   readonly stopSeconds: number;
   readonly wallMs: number;
+  /** R963: this call's identity (fresh per al-runner process or serve request): its rows with no own time share its wall. */
+  readonly callId: string;
   readonly coverage: V3CoverageRead;
   /** R635: every row of this call is `error` (`entries-echo-mismatch`, `-coverage-disagreement`). */
   readonly refusal?: string;
@@ -4728,7 +4748,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `al-runner-v3: coverage is on and v3's --coverage-json gave no per-test coverage for ${row.name} (${call.coverage.kind === "unavailable" ? call.coverage.why : "no single per-test entry"}); refusing rather than reading it as "covered nothing" (R586 §6)`,
       );
     }
-    const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
+    const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage, call.callId);
     if (lane.lastActivated === null) return verdict;
     // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
     // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
@@ -4744,6 +4764,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ref,
         outcome: "error",
         durationMs: call.wallMs,
+        ...(verdict.measuredDurationMs !== undefined
+          ? { measuredDurationMs: verdict.measuredDurationMs }
+          : {}),
+        ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
         failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
         operation: "completed-accepted",
         runnerRow: "runner-refused",
@@ -4763,6 +4787,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
+          ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
           failureMessage: `${row.message ?? ""} [al-runner v3: a timeout after ${earlier.map((r) => r.method).join(", ")} refused or stopped earlier in the same call is not trusted; never scored (R-435)]`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -4836,6 +4864,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
+          ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
           failureMessage: note,
           operation: "completed-accepted",
           runnerRow: "runner-refused",
@@ -5002,6 +5034,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         rows: viaDaemon.rows,
         stopSeconds,
         wallMs: viaDaemon.wallMs,
+        // R963: one daemon baseline answer is one request (`baselineRequest`, one `plain()` per call): its own call id.
+        callId: randomUUID(),
         coverage: viaDaemon.coverage,
         ...(noCoverage ? { noCoverage: true } : {}),
       };
@@ -5141,6 +5175,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       rows: decoded.rows,
       stopSeconds,
       wallMs,
+      callId: randomUUID(),
       coverage: decodeV3Coverage(covText),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
@@ -5610,6 +5645,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
     const results = new Map<string, Map<number, CallRows>>();
+    const requestCallId = randomUUID(); // R963: one id for the whole request: they share one wall
     let echoWhy: string | undefined;
     const reached = new Set<string>();
     for (const e of standing) {
@@ -5630,6 +5666,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         rows: mine,
         stopSeconds: s,
         wallMs,
+        callId: requestCallId,
         coverage: { kind: "unavailable", why: "an entries answer carries no coverage (R635 §5)" },
         ...(echoWhy !== undefined
           ? {

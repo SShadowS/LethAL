@@ -196,6 +196,8 @@ interface FakeRow {
   notRun?: boolean;
   /** R907: al-runner's `flagged` (a pass resting on an unprobed assumption). */
   flagged?: boolean;
+  /** R963: the row has NO `durationMs` of its own (al-runner may omit it). */
+  noDuration?: boolean;
 }
 /** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
 const stopMsOf = (message: string | undefined): number => {
@@ -485,7 +487,7 @@ function fakeServe(script: ServeScript = {}) {
             type: "test",
             name: `Codeunit${cu}.${r.method}`,
             status: r.status,
-            durationMs: stopMsOf(r.message),
+            ...(r.noDuration === true ? {} : { durationMs: stopMsOf(r.message) }),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
             ...(r.flagged !== undefined ? { flagged: r.flagged } : {}),
@@ -1396,6 +1398,36 @@ describe("9: a prefetched answer is consumed once", () => {
       ["NONE|echo", `NONE|${CU}`],
       ["M0001|echo", `M0001|${CU}`],
     ]);
+  });
+});
+
+describe("R963: a serve-entries request is one call: its rows with no own time share one callId", () => {
+  const noOwn: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((r) => ({ ...r, noDuration: true }));
+  test("every verdict of one request (two mutants, two tests each) carries the SAME callId; another request gets a different one", async () => {
+    const r = await rig({ serve: { rows: noOwn } });
+    const base = await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001", "M0002"], SUITE1));
+    const n0 = r.serve.requests.length;
+    const got: TestVerdict[] = [];
+    for (const m of ["M0001", "M0002"]) {
+      await r.b.activate(m);
+      for (const t of SUITE1) got.push(await r.b.run(t, OPTS));
+    }
+    expect(r.serve.requests.length).toBe(n0); // all four came from the one prefetch request
+    expect(got.map((v) => v.measuredDurationMs)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const ids = new Set(got.map((v) => v.callId));
+    expect(ids.size).toBe(1);
+    const [id] = [...ids];
+    expect(typeof id).toBe("string");
+    const baseIds = new Set(base.map((v) => v.callId));
+    expect(baseIds.size).toBe(1);
+    expect(baseIds.has(id)).toBe(false);
   });
 });
 
@@ -4960,7 +4992,9 @@ describe("R790: the speculative baseline", () => {
     // Served, not re-run: no new one-shot call in the baseline; the sequential one made its call there.
     expect(spec.one.calls).toHaveLength(1);
     expect(seq.one.calls).toHaveLength(1);
-    const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
+    // R963: `callId` is a fresh identity per call, so it differs between two runs by design.
+    const plain = (vs: TestVerdict[]) =>
+      vs.map((v) => ({ ...v, durationMs: 0, callId: undefined }));
     expect(plain(a)).toEqual(plain(s));
   });
 

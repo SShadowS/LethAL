@@ -89,9 +89,16 @@ export interface CoverageMap {
 export interface TestVerdict {
   readonly ref: TestMethodRef;
   readonly outcome: TestOutcome;
+  /**
+   * R963: the CALL's wall clock (round trip, plus a compile per call on al-runner one-shot; a whole
+   * batch's on a grouped call), NOT the test's own time. It is the timeout budget's clock. Never read
+   * it as how long the test took: that is `measuredDurationMs`, and when that is absent the test's
+   * time is UNKNOWN (a batch's wall must not be charged to each of its rows).
+   */
   readonly durationMs: number;
   /**
-   * R272: this test's own duration, on a `pass` (and since R934, on al-runner, a `fail` too: a
+   * R963: the test's OWN duration, when the backend measured it; absent = unknown, never the call's
+   * wall (R272/R934). R272: on a `pass` (and since R934, on al-runner, a `fail` too: a
    * mutant's summed time reads it; every reader that wants a pass checks the outcome). The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
@@ -101,6 +108,12 @@ export interface TestVerdict {
    * Absent: not measured per test.
    */
   readonly measuredDurationMs?: number;
+  /**
+   * R963: INTERNAL, never in a report or an event. The identity of the al-runner call or serve
+   * request this row came from, set only on a row with no `measuredDurationMs`: all rows of one call
+   * share it, so their shared `durationMs` (the call's wall) is charged once, not once per row.
+   */
+  readonly callId?: string;
   /**
    * R907: on a `pass`, al-runner's `flagged: true`: the pass rests on an unprobed assumption (for
    * example a test that went through Confirm, StrMenu or a page under `--no-client`). Absent when
