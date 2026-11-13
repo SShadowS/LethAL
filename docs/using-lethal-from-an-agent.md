@@ -195,6 +195,19 @@ same commit as your binary (the sidecar is not in the release files), run from a
 `doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. A run records the
 sidecar it used (the dll's sha256, or `none`) and `downloadDemoData`; `--resume` and `--resume-run` refuse a run
 whose record differs, or is missing (a v3 run from before R886), and say which setting changed from what to what. The project's own gates set `dotnetSidecar: false`.
+**The baseline daemon and the memory guard (R948).** On the serve transport the baseline runs through one serve daemon
+(one request per test codeunit, with coverage), not one al-runner process per codeunit. A few codeunits (the first, the
+last and every 25th, at most eight) are also run as fresh processes and compared test by test (status, fail text, exact
+coverage set). Any difference drops the daemon baseline for the whole session with the warning
+`al-runner-v3-baseline-daemon-dropped`; the baseline then runs one process per codeunit. A codeunit slow enough that a
+warm daemon's shorter time could shrink a budget is re-run as a fresh process. Codeunits that isolation `auto` moves to
+`method` run as one request per test on one codeunit-isolation daemon.
+`"memoryHeadroomGb"` (default 4, `0` = off) sets the memory guard: it reads the container's cgroup (`memory.current` less
+reclaimable cache, against `memory.max`) and starts no new test call while use is over `memory.max` less that headroom.
+Its first line (`al-runner-v3-memory-guard`) names the bound and its source; with no readable cgroup it says
+`al-runner-v3-memory-guard-off`. If the container stays over the bound for five minutes, the run stops by name
+(`al-runner-v3-memory-bound`), the call it blocked is dropped like one a stop signal ended, a mutant group in progress
+finishes, and the report carries `timeBudget.stoppedByMemory`; continue with `--resume`.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 
