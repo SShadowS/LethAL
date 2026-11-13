@@ -3299,7 +3299,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await mkdir(this.lane.scratchCwd(), { recursive: true });
       const calls = new Map<number, SpeculativeCall>();
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
-        if (signal.aborted) return undefined;
+        if (signal.aborted || this.stopHandle?.spent() === true) return undefined; // R958
         // R896: a codeunit on "method" runs per test (`fillIsolatedBaseline`), never whole.
         if (this.perTest(id)) continue;
         this.callSeq += 1;
@@ -5621,7 +5621,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
         "warmup",
         mode,
-      );
+      ).catch((err: unknown) => {
+        // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
+        // named row does (R786). An explicit transport keeps failing by name.
+        if (
+          this.cfg.transportSource === "default" &&
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          throw new AlRunnerV3ServeFallbackWarmupError(
+            "the whole warm-up request (entries-batch-refused)",
+            err.message.slice(err.code.length + 2),
+          );
+        }
+        throw err;
+      });
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
       const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
