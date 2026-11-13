@@ -103,7 +103,15 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { type SlotClass, readSlotClass } from "./heavy-slot-class";
+import {
+  DEFAULT_PEAK_GIB,
+  PEAK_GIB,
+  type SlotClass,
+  memoryVerdict,
+  readContainerMemory,
+  readSlot,
+  readSlotClass,
+} from "./heavy-slot-class";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -148,6 +156,12 @@ export interface UpdateDeps {
   now(): string;
   /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
   heavyJobs(): Promise<number>;
+  /**
+   * R952 (R953): the memory rule for this gate (`--peak gate`) against the cgroup and the held slots'
+   * declared peaks. Undefined, or an answer of undefined (no cgroup limit to read): the job count
+   * and `freeGb` decide, as before.
+   */
+  gateMemory?(): Promise<{ readonly refuse: boolean; readonly message: string } | undefined>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -924,8 +938,10 @@ export function argv0FromCmdline(cmdline: string): string | undefined {
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
  * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
  */
-/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] <class> ...`). */
-const HEAVY_SLOT_WRAPPER = /(^|\s)(\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(baseapp|other)\s/;
+/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] [--peak <p>] <class> ...`). */
+// R952: anchored at the command's start (heavy-slot.sh, or bash/sh running it), as corpus-snapshot's is.
+const HEAVY_SLOT_WRAPPER =
+  /^(?:(?:\S*\/)?(?:ba)?sh\s+)?(?:\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(--peak\s+\S+\s+)?(baseapp|other)\s/;
 
 export function countHeavyJobs(
   procs: readonly Proc[],
@@ -939,12 +955,25 @@ export function countHeavyJobs(
   // (`bash -c 'cd /work/src/BC.History && bun census.ts .'`: only the shell names the corpus).
   const isJob = (p: Proc): boolean =>
     HEAVY_JOB.test(p.args) && !p.args.includes("--worker") && !WATCHER.test(p.args);
+  // R952 review: the shells that launched a wrapper (the Bash tool's `bash -c ... eval '...
+  // heavy-slot.sh ...'`) are not the job either: its slot or its own command is.
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const aboveWrapper = new Set<number>();
+  for (const p of procs) {
+    if (!HEAVY_SLOT_WRAPPER.test(p.args)) continue;
+    for (
+      let q = byPid.get(p.ppid);
+      q !== undefined && !aboveWrapper.has(q.pid);
+      q = byPid.get(q.ppid)
+    )
+      aboveWrapper.add(q.pid);
+  }
   const groups = new Set<number>();
   for (const p of procs) {
     if (READER.test(p.args) || !HEAVY_JOB.test(p.args) || p.args.includes("--worker")) continue;
     // R934: `heavy-slot.sh` itself is never the job: a holder's slot counts in `heldSlots`, its
     // command counts on its own, and a queued `--wait` waiter holds no slot and runs nothing yet.
-    if (HEAVY_SLOT_WRAPPER.test(p.args)) continue;
+    if (HEAVY_SLOT_WRAPPER.test(p.args) || aboveWrapper.has(p.pid)) continue;
     if (WATCHER.test(p.args)) {
       const below = descendants(procs, p.pid);
       if (procs.some((q) => below.has(q.pid) && isJob(q))) continue;
@@ -972,6 +1001,14 @@ export function updateExitCode(mustRun: boolean, out: readonly string[]): number
  * jobs then), because the gate is not itself a BaseApp job but would be the third.
  */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
+  // R952 (R953): where the cgroup names a limit, memory decides, not the job count: a busy day with
+  // memory free no longer skips the gate (2026-11-13: skipped twice at 3 jobs, 12.5 GiB used of 32).
+  const mem = await deps.gateMemory?.();
+  if (mem !== undefined) {
+    if (!mem.refuse) return false;
+    await deps.log(`${deps.now()} ${what}: skipped for the day: ${mem.message}`);
+    return true;
+  }
   const heavy = await deps.heavyJobs();
   if (heavy >= 3) {
     await deps.log(
@@ -1490,6 +1527,21 @@ export function realDeps(root = ROOT): UpdateDeps {
         parsePs(ps.stdout.toString()),
         held.length,
         held.map((n) => readSlotClass(lockDir(), n)),
+      );
+    },
+    gateMemory: async () => {
+      const sample = readContainerMemory();
+      if (sample?.maxBytes === undefined) return undefined;
+      const held = SLOTS.filter(
+        (n) =>
+          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
+            .exitCode === SLOT_BUSY,
+      );
+      const unclassed = Math.max(...Object.values(DEFAULT_PEAK_GIB));
+      return memoryVerdict(
+        sample,
+        held.map((n) => readSlot(lockDir(), n)?.peakGiB ?? unclassed),
+        PEAK_GIB.gate,
       );
     },
     freeGb: async () => {

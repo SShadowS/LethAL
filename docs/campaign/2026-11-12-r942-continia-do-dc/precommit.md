@@ -93,3 +93,19 @@ well (SIGTERM at a 20 GB tree or under 4 GiB container headroom; SIGKILL of its 
 one-shot fallback (1,201 of 1,979 tests in 3,526 s): the baseline alone about 1.6 h, so window 1c reaches the mutant phase. Purpose, per
 the orchestrator: al-runner refusals and differences on real ISV code (each an invented repro and an upstream issue, no Continia source
 text); throughput is reported, not predicted.
+
+## Amendment 3 (2026-11-13, before window 1d): isolation "test"
+
+**Window 1c** (one-shot, isolation auto, master e8bf6c18): the baseline completed, 1,580 of 1,979 green in 6,450 s; R896's `auto` then
+re-baselined the cascade codeunits one process per test, 4 at a time; the run's tree reached 20 GB with the container at 2 GiB headroom
+and the external watchdog stopped it (SIGTERM; R955 wrote the report; 0 mutants). LethAL's memory guard checks only at call boundaries
+([[R970]]).
+
+**Change.** Config `v3.do-lic-oneshot-test.json` = `v3.do-lic-oneshot.json` plus `alRunnerV3.isolation: "test"`: no auto re-baseline.
+Named deviation: a codeunit whose later tests al-runner refuses by cascade ("an earlier test of this codeunit ... changed an isolated
+storage key or a number series", R890) keeps those tests REFUSED — they are not run per test and cover no mutant; their mutants are
+scored by the remaining tests only (a refused test is never a killing test). Reason: R970 (the per-test fill is not memory-safe yet).
+**Fresh window 1d** (no `--resume`: `isolation` is part of the run fingerprint, so 1c's run is not resumable under "test"), then 2d and
+3d with `--resume`, `--time-budget 14400` each, master at the run (now carrying R-952's memory-aware `heavy-slot.sh --peak baseline`),
+the external watchdog and the same build, license, environment, scope and selector ids. Expected: the baseline (about 1.8 h, as 1c's)
+then the mutant phase.

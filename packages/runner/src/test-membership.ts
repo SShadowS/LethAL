@@ -157,7 +157,7 @@ export class ServerGenerationChangedError extends Error {
 
   constructor(flag: string, runId: number, recorded: string | null, current: string) {
     super(
-      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). Drop the flag to run from scratch.`,
+      `${flag}: run ${runId} ${recorded === null ? "has no server generation (none recorded)" : `recorded server generation ${recorded}`}, and the server now reports ${current}. The server was restarted or its lease force-reset since that run${recorded === null ? ", or the run predates R680" : ""}, so the apps and data its verdicts were measured against may be gone. None of its verdicts is carried (R680). What to do: if the server lost its database (an in-memory server restarted, or a new container), re-run its setup first, then drop the flag and run from scratch; if you ran force-reset-lease on a server whose database survived (for example after a host reboot left a lease operation open), LethAL cannot yet tell that apart from a lost database (R969), so drop the flag and run from scratch as well. Either way the earlier run's report stays readable as a record.`,
     );
     this.name = "ServerGenerationChangedError";
     this.flag = flag;

@@ -418,6 +418,7 @@ function fakeServe(script: ServeScript = {}) {
     const handle: ServerProcessHandle = {
       stdout: out,
       stderr: err,
+      pid: 90_000 + daemon, // R952: what the recycle bound's RSS seam is asked about (never a real /proc read)
       kill: () => {
         kills.push(daemon);
         out.end();
@@ -599,7 +600,8 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
-  Object.assign(b.seams, opts.seams ?? {});
+  // R952: the recycle bound's RSS read is unreadable unless a test says otherwise (tests never read /proc).
+  Object.assign(b.seams, { rssReader: () => undefined }, opts.seams ?? {});
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
@@ -2071,6 +2073,43 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
     expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
     expect(String(err)).not.toContain("warmup-disagrees");
+  });
+
+  const warmupRefusal = async (source: "default" | "explicit", earlierWarmups = 0) => {
+    const r = await rig({
+      serve: { rows: refuseFrom(0), echo: refusedEcho(0) },
+      oneShotRows: allPass,
+    });
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
+    await baseline(r.b, SUITE1);
+    // R960 review a: a session that already warmed a daemon up (another mode, a restart).
+    (r.b as unknown as { stats: { warmups: number } }).stats.warmups = earlierWarmups;
+    return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+  };
+
+  test("R960: default + the whole warm-up refused: the typed fallback signal, naming the reason", async () => {
+    const err = await warmupRefusal("default");
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain("entries-batch-refused");
+    expect(String(err)).toContain(UNLISTED);
+    // R960 review b: a whole-request refusal, not a row R612 refuses; no R635 plan suffix.
+    expect((err as AlRunnerV3ServeFallbackWarmupError).wholeRequest).toBe(true);
+    expect(String(err)).toContain("met a refusal of the whole warm-up request");
+    expect(String(err)).not.toContain("which R612 refuses by name");
+    expect(String(err)).not.toContain("(R635 plan §3, §6)");
+  });
+
+  test("R960 review a: a LATER warm-up's whole-request refusal still fails by name (no session re-run)", async () => {
+    const err = await warmupRefusal("default", 1);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(err).not.toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
+  });
+
+  test("R960: explicit + the whole warm-up refused: still fails by name", async () => {
+    const err = await warmupRefusal("explicit");
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
   });
 });
 
@@ -5084,6 +5123,38 @@ describe("R790: the speculative baseline", () => {
     expect(speculative(spec.b)).toBeUndefined();
   });
 
+  test("R958: a spent stop starts no speculative call; unspent, the call runs", async () => {
+    for (const spent of [true, false]) {
+      const l = await layout(TARGET_AL, SUITE1);
+      const one = fakeOneShot(allPass);
+      const b = new AlRunnerV3Backend(
+        {
+          alRunnerPath: "/fake/al-runner",
+          environmentChoice: { value: "saas", source: "config" },
+          instrumentedDir: l.scratch,
+          testDir: l.testDir,
+          packagesDir: l.deps,
+          bcVersion: "28.0.46665.47126",
+          selectorObjectId: SELECTOR_ID,
+          alcPath: "/fake/alc",
+          coverage: "none",
+          transport: "serve-entries",
+          speculateBaseline: true,
+        },
+        one.spawn,
+        fakeAlc(),
+        fakeServe().spawn,
+      );
+      b.useBuildSymbols([]);
+      b.useDiscoveredTests(SUITE1);
+      b.useSessionTests(SUITE1);
+      b.useMutantBudgetFloor(1000, 1000);
+      b.useStopHandle({ spent: () => spent, signalled: () => false, stopForMemory: () => {} });
+      await b.deploy(l.batch);
+      expect(one.calls).toHaveLength(spent ? 0 : 1);
+    }
+  });
+
   test("a byte that changes while the calls run: never served, the baseline runs live", async () => {
     const l = await layout(TARGET_AL, SUITE1);
     const one = fakeOneShot(allPass);
@@ -5585,6 +5656,41 @@ describe("R857: --isolate-tests", () => {
         expect(r.one.peak()).toBe(n);
         expect(r.one.calls).toHaveLength(methods.length);
       }
+    });
+
+    // R958: a stop (budget, signal or memory all read as spent()) starts no further process.
+    const fill = async (stopAfter: number, processes: number) => {
+      const box: { r?: Rig } = {};
+      const r = await rig({
+        ...opts,
+        extra: { isolateTests: true, isolatedBaselineProcesses: processes },
+        stopHandle: {
+          spent: () => (box.r?.one.calls.length ?? 0) >= stopAfter,
+          signalled: () => false,
+          stopForMemory: () => {},
+        },
+      });
+      box.r = r;
+      r.b.baselinePhase(true);
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS); // takes the fill
+      r.b.baselinePhase(false);
+      return r;
+    };
+
+    test("R958: stopped after two, one worker starts no third process", async () => {
+      const r = await fill(2, 1);
+      expect(r.one.calls).toHaveLength(2);
+    });
+
+    test("R958: stopped after four, four workers start no fifth process", async () => {
+      const r = await fill(4, 4);
+      expect(r.one.calls).toHaveLength(4);
+    });
+
+    test("R958: never stopped, every test runs", async () => {
+      const r = await fill(Number.POSITIVE_INFINITY, 4);
+      expect(r.one.calls).toHaveLength(methods.length);
     });
 
     test("off, the baseline stays one process at a time", async () => {
@@ -7035,6 +7141,91 @@ describe("R948: a throw after the memory hold gives the hold back", () => {
     await writeFile(join(blocked, "x"), "x");
     await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
     expect(held(r.b)).toBe(0);
+  });
+});
+
+describe("R952 (R948): a serve daemon past its size or request bound is recycled", () => {
+  const GIB = 2 ** 30;
+  /** Each mutant prefetched on its own (one ensureDaemon each), then run: every verdict, and the rig. */
+  const session = async (opts: RigOpts) => {
+    const r = await rig({ serve: { rows: killsM1 }, oneShotRows: killsM1, ...opts });
+    await baseline(r.b, SUITE1);
+    const verdicts: string[] = [];
+    for (const m of ["M0001", "M0002", "M0003"]) {
+      await r.b.prefetchMutants(plans([m]));
+      await r.b.activate(m);
+      for (const t of SUITE1) verdicts.push(`${m} ${t.method} ${outcome(await r.b.run(t, OPTS))}`);
+    }
+    return { r, verdicts, closes: [...r.b.daemonCloses().byReason] };
+  };
+
+  test("no bound reached: no recycle (the control)", async () => {
+    const c = await session({});
+    expect(c.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  test("daemonMaxRequests: a daemon past it is replaced, and every verdict equals the control's", async () => {
+    const control = await session({});
+    const s = await session({ extra: { daemonMaxRequests: 2 } });
+    const recycles = s.closes.find(([why]) => why === "recycle")?.[1] ?? 0;
+    expect(recycles).toBeGreaterThan(0);
+    expect(s.r.serve.daemons.length).toBe(control.r.serve.daemons.length + recycles);
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(s.verdicts).toContain("M0001 A fail,"); // a kill is in the comparison, not only passes
+  });
+
+  test("daemonMaxRssGb: only the daemon over the size is replaced; the default is 6 GiB", async () => {
+    const control = await session({});
+    // The first daemon the bound asks about GROWS: 1 GiB at its first check (warm-up and one request),
+    // 7 GiB after that. Every other daemon stays at 1 GiB.
+    let first: number | undefined;
+    let checks = 0;
+    const reader = (pid: number) => {
+      first ??= pid;
+      if (pid !== first) return GIB;
+      checks++;
+      return checks === 1 ? GIB : 7 * GIB;
+    };
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: reader },
+      notify: (code) => notices.push(code),
+    });
+    expect(s.closes.find(([why]) => why === "recycle")?.[1]).toBe(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(notices).not.toContain("al-runner-v3-daemon-recycle-off");
+    // at 5 GiB the default bound (6) is not reached; at 0 the bound is off whatever the size
+    const under = await session({ seams: { rssReader: () => 5 * GIB } });
+    expect(under.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    const off = await session({
+      extra: { daemonMaxRssGb: 0 },
+      seams: { rssReader: () => 100 * GIB },
+    });
+    expect(off.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  // Review r1: a project whose fresh daemon is already over the size would otherwise pay a warm-up
+  // per request. The bound turns itself off for the session, said once; nothing is recycled.
+  test("a daemon already over the size after its warm-up: the size bound goes off, said once", async () => {
+    const control = await session({});
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: () => 7 * GIB },
+      notify: (code) => notices.push(code),
+    });
+    expect(s.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    expect(notices.filter((c) => c === "al-runner-v3-daemon-recycle-off")).toHaveLength(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    // the request bound is not affected by it
+    const r = await session({
+      seams: { rssReader: () => 7 * GIB },
+      extra: { daemonMaxRequests: 2 },
+    });
+    expect(r.closes.find(([why]) => why === "recycle")?.[1] ?? 0).toBeGreaterThan(0);
+  });
+
+  test("a recycle is not routine: it costs a warm-up, so it reaches the close sink", () => {
+    expect(V3_ROUTINE_CLOSES.has("recycle")).toBe(false);
   });
 });
 

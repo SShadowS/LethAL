@@ -252,6 +252,22 @@ export function durationCouldMoveBudget(
   return rows.some((r) => 2 * (r.durationMs ?? wallMs) >= floorMs);
 }
 
+/**
+ * R952 (R948): a process's resident memory in bytes (`VmRSS` of `/proc/<pid>/status`), or undefined
+ * when it cannot be read (no /proc, a dead pid). `read` is injectable: tests never read `/proc`.
+ */
+export function readProcessRssBytes(
+  pid: number,
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+): number | undefined {
+  try {
+    const m = /^VmRSS:\s+(\d+)\s+kB$/m.exec(read(`/proc/${pid}/status`));
+    return m?.[1] === undefined ? undefined : Number(m[1]) * 1024;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The most bytes in use before no new call starts: the limit less the headroom. */
 export function memoryBoundBytes(maxBytes: number, headroomGb: number): number {
   return Math.max(0, maxBytes - Math.round(headroomGb * 2 ** 30));

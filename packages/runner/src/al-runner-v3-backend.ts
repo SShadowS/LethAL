@@ -83,8 +83,10 @@ import {
   durationCouldMoveBudget,
   memoryBoundBytes,
   readCgroupMemory,
+  readProcessRssBytes,
 } from "./al-runner-v3-baseline-check";
 import {
+  V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
   V3_NO_CLIENT_DEFAULT,
   assertBcVersionMatchesPackages,
@@ -636,9 +638,11 @@ export class AlRunnerV3ServeFallbackWarmupError extends Error {
   constructor(
     readonly row: string,
     readonly rowReason: string,
+    /** R960: the whole warm-up request was refused (R635 §6), not one row R612 refuses. */
+    readonly wholeRequest = false,
   ) {
     super(
-      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}). \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (R786)`,
+      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default ${wholeRequest ? `met a refusal of the whole warm-up request (entries-batch-refused: ${rowReason}; R635 §6)` : `met the warm-up row ${row}, which R612 refuses by name (${rowReason})`}. \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (${wholeRequest ? "R960" : "R786"})`,
     );
     this.name = "AlRunnerV3ServeFallbackWarmupError";
   }
@@ -806,6 +810,10 @@ export interface AlRunnerV3Config {
    * Absent: no guard, silently (unit tests). `0`: off by the config, said once. The CLI always sets it.
    */
   readonly memoryHeadroomGb?: number;
+  /** R952 (R948): recycle a serve daemon whose RSS passed this many GiB (`alRunnerV3.daemonMaxRssGb`); 0 = off. Absent: `V3_DAEMON_MAX_RSS_GB_DEFAULT`. */
+  readonly daemonMaxRssGb?: number;
+  /** R952 (R948): recycle a serve daemon after this many requests (`alRunnerV3.daemonMaxRequests`); absent or 0 = off. */
+  readonly daemonMaxRequests?: number;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
@@ -1263,7 +1271,9 @@ export type V3DaemonCloseReason =
   | "deploy"
   | "mutant-stop"
   | "session-end"
-  | "baseline-end";
+  | "baseline-end"
+  /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
+  | "recycle";
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
  *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own. */
@@ -1426,6 +1436,8 @@ interface Daemon {
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
   /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
   baselineStop?: number;
+  /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
+  requests: number;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -2101,6 +2113,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     afterSpeculation?: () => Promise<void>;
     /** R948: replaces the cgroup reader of the memory guard (tests never read `/sys`). */
     memoryReader?: () => MemorySample | undefined;
+    /** R952: replaces the daemon RSS reader of the recycle bound (tests never read `/proc`). */
+    rssReader?: (pid: number) => number | undefined;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
@@ -3299,7 +3313,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await mkdir(this.lane.scratchCwd(), { recursive: true });
       const calls = new Map<number, SpeculativeCall>();
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
-        if (signal.aborted) return undefined;
+        if (signal.aborted || this.stopHandle?.spent() === true) return undefined; // R958
         // R896: a codeunit on "method" runs per test (`fillIsolatedBaseline`), never whole.
         if (this.perTest(id)) continue;
         this.callSeq += 1;
@@ -5505,14 +5519,49 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async ensureDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const had = lane.daemonFor(mode);
     // R954: a daemon started under another stop (before `useMutantStop`) is replaced.
-    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) return had;
-    if (had !== undefined) await this.closeLane(lane, "mutant-stop");
+    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) {
+      // R952 (R948): a daemon past its size or request bound is replaced by a fresh one, warmed up and
+      // checked against the baseline like any restarted daemon.
+      if (!this.overRecycleBound(had)) return had;
+      await this.closeLane(lane, "recycle");
+    } else if (had !== undefined) await this.closeLane(lane, "mutant-stop");
     const before = lane.timers.warmupMs;
     const d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
     lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
     lane.daemonStarts += 1;
     return d;
   }
+
+  /**
+   * R952 (R948): whether `d` is past `alRunnerV3.daemonMaxRequests` (entries requests sent to it,
+   * warm-up included, through `send()`; the coverage window's plain requests are not counted) or
+   * `daemonMaxRssGb` (its process's resident memory). A bound of 0 is off; an RSS that cannot be read
+   * (no /proc) never recycles. A daemon already over the size after its warm-up and at most one more
+   * request is the project's working set, not growth: recycling it would only buy a warm-up per
+   * request, so the size bound is turned off for the session, said once (review r1).
+   */
+  private overRecycleBound(d: Daemon): boolean {
+    const maxRequests = this.cfg.daemonMaxRequests ?? 0;
+    if (maxRequests > 0 && d.requests >= maxRequests) return true;
+    const maxGb = this.cfg.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT;
+    if (!(maxGb > 0) || this.rssBoundOff) return false;
+    const pid = d.server.pid;
+    if (pid === undefined) return false;
+    const rss = (this.seams.rssReader ?? readProcessRssBytes)(pid);
+    if (rss === undefined || rss <= maxGb * 2 ** 30) return false;
+    if (d.requests <= 2) {
+      this.rssBoundOff = true;
+      this.notify(
+        "al-runner-v3-daemon-recycle-off",
+        `[lethal] al-runner-v3-daemon-recycle-off: a serve daemon is already ${(rss / 2 ** 30).toFixed(1)} GiB after ${d.requests} request(s), over "alRunnerV3.daemonMaxRssGb" (${maxGb}); recycling would only add a warm-up per request, so the size bound is off for this session (R952). Raise the bound for this project, or rely on the run's memory guard.`,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /** R952 review r1: set when a fresh daemon was already over the size bound. */
+  private rssBoundOff = false;
 
   /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
   private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {
@@ -5538,7 +5587,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         : []),
     ]);
     this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false, stopSeconds };
+    const daemon: Daemon = { server, dirty: false, stopSeconds, requests: 0 };
     lane.setDaemon(mode, daemon);
     return daemon;
   }
@@ -5621,7 +5670,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
         "warmup",
         mode,
-      );
+      ).catch((err: unknown) => {
+        // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
+        // named row does (R786). An explicit transport keeps failing by name. Only at the
+        // session's FIRST warm-up (review a): a later daemon (another mode, a restart) would
+        // re-run the session and throw away verdicts already scored, so it fails as before.
+        if (
+          this.cfg.transportSource === "default" &&
+          this.stats.warmups === 1 &&
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          throw new AlRunnerV3ServeFallbackWarmupError(
+            "the whole warm-up request (entries-batch-refused)",
+            err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, ""),
+            true,
+          );
+        }
+        throw err;
+      });
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
       const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
@@ -5725,6 +5792,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
+    daemon.requests += 1;
     const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
       alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
     );
