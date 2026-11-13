@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 932 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 933 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -365,6 +365,7 @@ that ordering is the priority.
 - **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · done (285ba3f9)
 - **R963** · A v3 test row with no duration of its own is stored with the whole call's wall time as if it were the test's: a kill confirmation in a batch with a hung entry reads 620 s for a test that takes 8 ms · [R963.md](docs/roadmap/R963.md) · done (240d2c1b)
 - **R965** · A v3 mutant in one overload of a procedure is attributed 'exact' coverage by tests that only call ANOTHER overload, so a mutant no test executes is scored survived (Cryptography Management: SignedXml.SetSigningKey) · [R965.md](docs/roadmap/R965.md) · done (c4312b52)
+- **R970** · The v3 memory guard checks only at call boundaries, so the per-test re-baseline's parallel processes outgrew it: DO's window reached a 20 GB tree with the container at 2 GiB headroom · [R970.md](docs/roadmap/R970.md) · open
 
 ## Product gaps a real project hits
 
@@ -960,11 +961,11 @@ that ordering is the priority.
 - **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
 - **R949** · CI saves the 3.85 GB LLVM cache once per BRANCH (GitHub scopes caches by branch), so a few branches fill the 10 GB repo limit and evict the other caches · [R949.md](docs/roadmap/R949.md) · done (4e1c1f0a): restore on every branch, save on master only; branch CI 43232433178 restored master's pair…
 - **R954** · On al-runner v3 the per-mutant budget floor (180 s, set for BC's publish latency) makes each mutant that slows a millisecond test cost three minutes: Password's hour went on 18 such timeouts and 48 mutants were left unscored · [R954.md](docs/roadmap/R954.md) · done (095fc380)
-- **R948** · An al-runner v3 serve daemon's memory only grows while it serves (9.7 GB after about 2 h on Subcontracting): LethAL has no daemon memory guard · [R948.md](docs/roadmap/R948.md) · open
+- **R948** · An al-runner v3 serve daemon's memory only grows while it serves (9.7 GB after about 2 h on Subcontracting): LethAL has no daemon memory guard · [R948.md](docs/roadmap/R948.md) · done (00375c69)
 - **R950** · The al-runner update moves `current` only when no al-runner runs anywhere, so with lanes on v3 all day a passed edge build waits indefinitely, though a process on an explicit build path is not touched by the move · [R950.md](docs/roadmap/R950.md) · done (79e60793): the move guard counts only processes started through current/ (or unreadable); LethAL's own…
 - **R951** · R900's probing path (the BC service folder) is not enough for Base Application: alc also needs the ASP.NET Core shared framework (`Microsoft.AspNetCore.StaticFiles`) · [R951.md](docs/roadmap/R951.md) · done (c061534c)
 - **R952** · Heavy slots: a FIFO --wait queue in heavy-slot.sh, and the slot class measured against memory (a module pool build is `other`; the class no longer tracks memory) · [R952.md](docs/roadmap/R952.md) · done (ed8fe655)
-- **R953** · Heavy jobs are admitted by class (two with a BaseApp-class job, three otherwise), but the class no longer tracks memory: admit them by a memory budget instead · [R953.md](docs/roadmap/R953.md) · open
+- **R953** · Heavy jobs are admitted by class (two with a BaseApp-class job, three otherwise), but the class no longer tracks memory: admit them by a memory budget instead · [R953.md](docs/roadmap/R953.md) · done (00375c69)
 - **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause: no license, so every test was refused · [R956.md](docs/roadmap/R956.md) · done (285ba3f9)
 - **R957** · BC.History batch 7 on al-runner v3 edge-2bd87774f: eight System Application modules, three upstream issues (a .NET exception refused where BC ignores the text, ten refusal causes, a Blob lost through FieldRef.Value after Clear) · [R957.md](docs/roadmap/R957.md) · closed 2026-11-12 — measured and filed upstream (#7924, #7934, #7935); LethAL's own gap is R954
 - **R958** · Under `--isolate-tests`, a stop signal does not stop the parallel isolated-baseline fill: the workers keep starting one process per remaining test until the suite is done · [R958.md](docs/roadmap/R958.md) · done (8a4fa0c9)
@@ -974,7 +975,7 @@ that ordering is the priority.
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 - **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · open
-- **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' fails on a busy container: the guard counts the container's real heavy jobs, so the plain caller gets exit 75 · [R967.md](docs/roadmap/R967.md) · open
+- **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' flaked (exit 75): the refused waiter's own 0.05 s out-of-turn retry held the free slot while the plain caller tried · [R967.md](docs/roadmap/R967.md) · done (fce3b9fb)
 - **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
 - **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · open
 

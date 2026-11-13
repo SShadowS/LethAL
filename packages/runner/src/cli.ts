@@ -3192,6 +3192,8 @@ async function buildAlRunnerV3Backend(
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
       memoryHeadroomGb: c.memoryHeadroomGb, // R948
+      daemonMaxRssGb: c.daemonMaxRssGb, // R952
+      daemonMaxRequests: c.daemonMaxRequests, // R952
       daemonBaseline: c.transport === "serve-entries", // R948: the baseline through one daemon
       environmentChoice, // R938
       ...(license !== undefined ? { license } : {}), // R956

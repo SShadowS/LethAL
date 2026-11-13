@@ -48,7 +48,9 @@ import {
   v3RowVerdict,
   v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
+import { readProcessRssBytes } from "../src/al-runner-v3-baseline-check";
 import {
+  V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
   V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
@@ -1426,6 +1428,39 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ noClient: true }).noClient).toBe(true);
     expect(v({ noClient: false }).noClient).toBe(false);
     expect(() => v({ noClient: "yes" })).toThrow("noClient");
+  });
+
+  test("R952 the daemon recycle keys: defaults, 0 allowed, anything else refused by name", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).daemonMaxRssGb).toBe(V3_DAEMON_MAX_RSS_GB_DEFAULT);
+    expect(V3_DAEMON_MAX_RSS_GB_DEFAULT).toBe(6);
+    expect(v({}).daemonMaxRequests).toBe(0);
+    expect(v({ daemonMaxRssGb: 0, daemonMaxRequests: 0 })).toMatchObject({
+      daemonMaxRssGb: 0,
+      daemonMaxRequests: 0,
+    });
+    expect(v({ daemonMaxRssGb: 2.5, daemonMaxRequests: 40 })).toMatchObject({
+      daemonMaxRssGb: 2.5,
+      daemonMaxRequests: 40,
+    });
+    for (const bad of [-1, "6", Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => v({ daemonMaxRssGb: bad })).toThrow('"alRunnerV3.daemonMaxRssGb" must be');
+    for (const bad of [-1, 2.5, "40", Number.NaN])
+      expect(() => v({ daemonMaxRequests: bad })).toThrow('"alRunnerV3.daemonMaxRequests" must be');
+  });
+
+  test("R952 readProcessRssBytes: VmRSS in kB as bytes; unreadable or without the line, undefined", () => {
+    const status = "Name:\tal-runner\nVmPeak:\t 999 kB\nVmRSS:\t 2048 kB\nThreads:\t9\n";
+    expect(readProcessRssBytes(42, (p) => (p === "/proc/42/status" ? status : ""))).toBe(
+      2048 * 1024,
+    );
+    expect(readProcessRssBytes(42, () => "Name:\tx\n")).toBeUndefined();
+    expect(
+      readProcessRssBytes(42, () => {
+        throw new Error("ENOENT");
+      }),
+    ).toBeUndefined();
   });
 
   test("R907 --no-client: v3CallArgv adds it after --bc-version when on, never when off", () => {

@@ -119,6 +119,8 @@ function fake(o: {
   warnFacts?: Record<string, string>;
   heavy?: number;
   free?: number;
+  /** R952: the memory rule's answer for the gate; "no-limit" answers undefined (no cgroup limit). Absent: no such dep. */
+  mem?: { refuse: boolean; message: string } | "no-limit";
   /** Written as `gate.log` beside the receipt, as `realDeps().runGate` does (R633 I1). */
   gateLog?: string;
   /** The gate throws this after writing its files (a non-zero exit). */
@@ -159,6 +161,9 @@ function fake(o: {
     procsWithCwdUnder: async () => o.orphans ?? [],
     heavyJobs: async () => o.heavy ?? 0,
     freeGb: async () => o.free ?? 20,
+    ...(o.mem !== undefined
+      ? { gateMemory: async () => (o.mem === "no-limit" ? undefined : o.mem) }
+      : {}),
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
@@ -535,6 +540,26 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(fake({ outcome: "pass", heavy: 2, free: 10 }).deps)).toEqual(["pass"]);
   });
 
+  test("R952: where the cgroup names a limit, the memory rule decides, not the job count", async () => {
+    await setup();
+    // 3 heavy jobs and 2 GB by free: skipped before; memory admits the gate, so it runs
+    const busy = fake({ outcome: "pass", heavy: 3, free: 2, mem: { refuse: false, message: "admitted" } });
+    expect(await updateOnce(busy.deps)).toEqual(["pass"]);
+    // no heavy job at all, but memory refuses: skipped, and the log names the memory reading
+    const full = fake({
+      outcome: "pass",
+      heavy: 0,
+      mem: { refuse: true, message: "memory: max 32.0 GiB ... -> REFUSED (x)" },
+    });
+    expect(await updateOnce(full.deps)).toEqual(["skipped"]);
+    expect(full.seen.gates).toEqual([]);
+    expect(full.seen.logs.join("\n")).toContain("skipped for the day: memory: max 32.0 GiB");
+    // no cgroup limit to read: the job count decides as before
+    const host = fake({ outcome: "pass", heavy: 3, mem: "no-limit" });
+    expect(await updateOnce(host.deps)).toEqual(["skipped"]);
+    expect(host.seen.logs.join("\n")).toContain("3 heavy jobs are running");
+  });
+
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
     await setup();
     const i = fake({
@@ -694,6 +719,42 @@ describe("R633 I2 and M5", () => {
     const holder = { pid: 3, ppid: 0, pgid: 3, args: `bash scripts/heavy-slot.sh other ${cmd}` };
     const job = { pid: 4, ppid: 3, pgid: 3, args: cmd };
     expect(countHeavyJobs([waiter, sleeping, holder, job], 1)).toBe(1);
+  });
+  test("R952: a --peak waiter is no job; a job whose argv only mentions heavy-slot.sh is still one", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const waiter = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `bash scripts/heavy-slot.sh --wait --peak gate other ${cmd}`,
+    };
+    expect(countHeavyJobs([waiter], 0)).toBe(0);
+    // the counted direction: a heavy job in its own group naming the wrapper later in its argv
+    const mention = {
+      pid: 5,
+      ppid: 0,
+      pgid: 5,
+      args: `${cmd} --note scripts/heavy-slot.sh other x`,
+    };
+    expect(countHeavyJobs([mention], 0)).toBe(1);
+  });
+  test("R952 review: the Bash tool's shell that launched a queued waiter is no job", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const shell = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `/bin/bash -c source /tmp/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh --wait other ${cmd}'`,
+    };
+    const waiter = {
+      pid: 2,
+      ppid: 1,
+      pgid: 2,
+      args: `bash scripts/heavy-slot.sh --wait other ${cmd}`,
+    };
+    expect(countHeavyJobs([shell, waiter], 0)).toBe(0);
+    // the same shell with no wrapper below it still names a job of its own
+    expect(countHeavyJobs([shell], 0)).toBe(1);
   });
   // R930: the shape measured 2026-11-11 with an invented command: the harness's shell, the job's
   // shell and `timeout` (which moves itself into a new group) are three groups for one job.

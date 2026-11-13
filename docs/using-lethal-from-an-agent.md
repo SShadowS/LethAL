@@ -208,6 +208,11 @@ Its first line (`al-runner-v3-memory-guard`) names the bound and its source; wit
 `al-runner-v3-memory-guard-off`. If the container stays over the bound for five minutes, the run stops by name
 (`al-runner-v3-memory-bound`), the call it blocked is dropped like one a stop signal ended, a mutant group in progress
 finishes, and the report carries `timeBudget.stoppedByMemory`; continue with `--resume`.
+`"daemonMaxRssGb"` (default 6, `0` = off) and `"daemonMaxRequests"` (default `0` = off) bound one serve daemon (R952): before
+a daemon is reused, one whose resident memory passed the size, or that served that many entries requests, is replaced by a
+fresh daemon (close reason `recycle`, one warm-up each). Measured verdict-neutral with a recycle after every request. A
+daemon already over the size right after its warm-up is the project's working set: the size bound is then turned off for
+the session, said once as `al-runner-v3-daemon-recycle-off`.
 **Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
 (`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
 baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
