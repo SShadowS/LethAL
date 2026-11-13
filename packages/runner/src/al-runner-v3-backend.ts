@@ -833,6 +833,15 @@ export class AlRunnerV3MemoryBoundError extends Error {
 /** R948: see `ExecutionBackend.useStopHandle`. */
 type StopHandle = Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0];
 
+/**
+ * R951 (R1): a one-shot baseline run that gave no answer, and why: `memory-gate`, `spawn-error`,
+ * `timed-out`, `exit-<n>`, `rows-undecodable`, or `row-missing:<test name>`. (`budget-spent` is the
+ * caller's: it sees the spent budget after the run and stops without a drop.)
+ */
+interface NoOneShotAnswer {
+  readonly noAnswer: string;
+}
+
 /** R948: one codeunit's (or one test's) baseline answer, as `callCodeunit` reads it. */
 interface BaselineAnswer {
   readonly rows: readonly V3Row[];
@@ -3489,8 +3498,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
     /** One test alone (a per-test sample): its ref and `--test-exact` selection. Absent: the whole codeunit. */
     only?: { readonly ref: TestMethodRef; readonly test: string },
-  ): Promise<BaselineAnswer | undefined> {
-    if (!(await this.memoryGate(true))) return undefined;
+  ): Promise<BaselineAnswer | NoOneShotAnswer> {
+    if (!(await this.memoryGate(true))) return { noAnswer: "memory-gate" };
     const covDir = join(this.cfg.instrumentedDir, "cov");
     let covPath = "";
     let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
@@ -3514,23 +3523,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
     await rm(covPath, { force: true }).catch(() => {});
-    if ("spawnError" in made || made.timedOut) return undefined;
+    if ("spawnError" in made) return { noAnswer: "spawn-error" };
+    if (made.timedOut) return { noAnswer: "timed-out" };
     const { res } = made;
     refuseDependencySkip(res.stderr);
     refuseMissingDependency(res.exitCode, res.stderr);
     const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
     if (compileRefusal !== undefined) throw new AlRunnerV3CompileRefusedError(compileRefusal);
-    if (![0, 1].includes(res.exitCode)) return undefined;
+    if (![0, 1].includes(res.exitCode)) return { noAnswer: `exit-${res.exitCode}` };
     const decoded = decodeV3Rows(res.stdout, id);
-    if ("why" in decoded) return undefined;
+    if ("why" in decoded) return { noAnswer: "rows-undecodable" };
     this.observedSeed = decoded.seed ?? this.observedSeed;
-    if (
-      !this.hasEveryRow(
-        decoded.rows,
-        only !== undefined ? [only.ref] : (this.suitePerCodeunit.get(id) ?? []),
-      )
-    ) {
-      return undefined;
+    const wanted = only !== undefined ? [only.ref] : (this.suitePerCodeunit.get(id) ?? []);
+    const missing = wanted.find((t) => !this.hasEveryRow(decoded.rows, [t]));
+    if (missing !== undefined) {
+      return { noAnswer: `row-missing:${missing.codeunitName}.${missing.method}` };
     }
     return {
       rows: decoded.rows,
@@ -3611,12 +3618,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (tooSlow && !sample.has(id)) this.noteSkip("tooSlow", `Codeunit${id}`, false);
         if (sample.has(id) || tooSlow) {
           const shot = await this.oneShotBaselineAnswer(lane, id, stopSeconds, coverage);
-          if (shot === undefined) {
+          if ("noAnswer" in shot) {
             if (!sample.has(id)) continue; // too slow, no clean one-shot: its own call runs it
             // Out of time or memory is not a mismatch.
             if (this.stopHandle?.spent() === true || this.memoryStopped) break;
             this.dropDaemonBaseline(
-              `the cross-check of codeunit ${id} got no clean one-shot answer to compare the daemon's with`,
+              `the cross-check of codeunit ${id} got no clean one-shot answer (${shot.noAnswer}) to compare the daemon's with`,
+              [shot.noAnswer],
             );
             return;
           }
@@ -3713,10 +3721,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               test: one.test,
             },
           );
-          if (shot === undefined) {
+          if ("noAnswer" in shot) {
             if (this.stopHandle?.spent() === true || this.memoryStopped) break;
             this.dropDaemonBaseline(
-              `the cross-check of ${ref.codeunitName}.${ref.method} got no clean one-shot answer to compare the daemon's with`,
+              `the cross-check of ${ref.codeunitName}.${ref.method} got no clean one-shot answer (${shot.noAnswer}) to compare the daemon's with`,
+              [shot.noAnswer],
             );
             return;
           }

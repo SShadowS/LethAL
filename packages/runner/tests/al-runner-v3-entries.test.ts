@@ -7013,3 +7013,81 @@ async function baselineOne(b: AlRunnerV3Backend, t: TestMethodRef): Promise<Test
     await b.baselinePhase(false);
   }
 }
+
+describe("R951 R1: a one-shot baseline run with no answer says why", () => {
+  const crossChecked = async (o: RigOpts, patch?: (b: AlRunnerV3Backend) => void) => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]), ...o });
+    patch?.(r.b);
+    // The later one-shot calls may refuse by name too (a missing row throws); only the drop is read.
+    await baseline(r.b, SUITE2).catch(() => {});
+    return { notice: dropNotice(seen)[0]?.[1] ?? "", rep: r.b.daemonBaselineReport() };
+  };
+  const stubSpawn = (b: AlRunnerV3Backend, made: unknown) => {
+    // Only the first call (the cross-check) is stubbed; the session's later calls run as usual.
+    const holder = b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(b);
+    let first = true;
+    holder.spawnCodeunit = async (...a) => {
+      if (!first) return real(...a);
+      first = false;
+      return made;
+    };
+  };
+
+  test("memory-gate: the one-shot run is refused at the bound", async () => {
+    const r = await rig({
+      extra: { memoryHeadroomGb: 4 },
+      seams: {
+        memoryReader: () => ({
+          usedBytes: 30 * GIB,
+          maxBytes: 32 * GIB,
+          source: "/sys/fs/cgroup/memory.max",
+        }),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+      },
+      stopHandle: { spent: () => false, signalled: () => false, stopForMemory: () => {} },
+    });
+    const priv = r.b as unknown as {
+      makeLane(k: number): unknown;
+      oneShotBaselineAnswer(l: unknown, id: number, s: number, c: boolean): Promise<unknown>;
+    };
+    expect(await priv.oneShotBaselineAnswer(priv.makeLane(0), CU, 1, false)).toEqual({
+      noAnswer: "memory-gate",
+    });
+  });
+
+  test("spawn-error and timed-out", async () => {
+    for (const [made, reason] of [
+      [{ spawnError: "boom", wallMs: 0 }, "spawn-error"],
+      [{ timedOut: true, wallMs: 1 }, "timed-out"],
+    ] as const) {
+      const { notice, rep } = await crossChecked({}, (b) => stubSpawn(b, made));
+      expect(notice).toContain(`no clean one-shot answer (${reason}) to compare`);
+      expect(rep.droppedDetail).toEqual([reason]);
+    }
+  });
+
+  test("exit-<n>", async () => {
+    const { notice, rep } = await crossChecked({ oneShotAnswer: { exitCode: 7, stderr: "" } });
+    expect(notice).toContain("(exit-7)");
+    expect(rep.droppedDetail).toEqual(["exit-7"]);
+  });
+
+  test("rows-undecodable", async () => {
+    const bad = { exitCode: 0, stderr: "", stdout: "not json" };
+    const { notice, rep } = await crossChecked({
+      oneShotAnswer: bad as unknown as { exitCode: number; stderr: string },
+    });
+    expect(notice).toContain("(rows-undecodable)");
+    expect(rep.droppedDetail).toEqual(["rows-undecodable"]);
+  });
+
+  test("row-missing:<test name>", async () => {
+    const noB: RowsFn = (m, cu, d, n) => allPass(m, cu, d, n).filter((x) => x.method !== "C");
+    const { notice, rep } = await crossChecked({ serve: { rows: allPass }, oneShotRows: noB });
+    expect(notice).toContain(`(row-missing:Tests${CU2}.C)`);
+    expect(rep.droppedDetail).toEqual([`row-missing:Tests${CU2}.C`]);
+  });
+});
