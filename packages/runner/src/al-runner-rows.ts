@@ -153,6 +153,8 @@ export function verdictFromRunnerTest(
     readonly abortProven?: boolean;
     /** R907: al-runner's `flagged`: a pass that rests on an unprobed assumption. */
     readonly flagged?: boolean;
+    /** R949: the row came from a serve daemon, which cannot report `flagged`: unknown, not false. */
+    readonly flaggedUnknown?: boolean;
   },
   durationMs: number,
   coverage: CoverageMap | undefined,
@@ -170,6 +172,7 @@ export function verdictFromRunnerTest(
       durationMs,
       ...measured,
       ...(t.flagged === true ? { flagged: true as const } : {}),
+      ...(t.flaggedUnknown === true && t.flagged !== true ? { flaggedUnknown: true as const } : {}),
       ...(coverage !== undefined ? { coverage } : {}),
     };
   }

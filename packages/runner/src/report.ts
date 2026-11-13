@@ -1213,6 +1213,12 @@ export interface TestMethodRecord {
    *  this test that al-runner flagged (the pass rests on an unprobed assumption). Absent otherwise
    *  (unflagged, failing, resume-reused, another backend). Only al-runner sets it. */
   readonly baselineFlagged?: true;
+  /** R949: `true` when this test's baseline pass came from an al-runner serve daemon, whose rows
+   *  carry no `flagged` (upstream issue 7954): its flagged state is UNKNOWN, never "unflagged".
+   *  Like `baselineFlagged`, set only for a baseline that ran in THIS session: absent for a one-shot
+   *  answer (see `baselineFlagged`), no pass, or a resume-reused baseline (a resumed report says
+   *  nothing about the flag either way). */
+  readonly baselineFlaggedUnknown?: true;
 }
 
 /** Per-procedure survivor rollup — see `SessionReport.survivorsByProcedure`. */

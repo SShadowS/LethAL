@@ -6495,6 +6495,35 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.requests).toHaveLength(asked);
   });
 
+  test("R949: a daemon-answered pass has flagged UNKNOWN; a one-shot-answered one does not; one notice, no count (the report is the record), cites the issue", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({ notify: (c, m) => seen.push([c, m]) });
+    const v = await baseline(r.b, SUITE3);
+    // Only CU came from the daemon alone (see the test above); CU2 and CU3 were answered by a fresh process.
+    expect(v.map((x) => x.flaggedUnknown === true)).toEqual([true, true, false, false]);
+    const n = seen.filter(([c]) => c === "al-runner-v3-serve-flagged-unknown");
+    expect(n).toHaveLength(1);
+    expect(n[0]?.[1]).toContain("issues/7954");
+    expect(n[0]?.[1]).toContain(
+      "every passing test the daemon answered has an UNKNOWN flagged state",
+    );
+    expect(n[0]?.[1]).not.toMatch(/up to \d/); // R949 review: a count here undercounted later batches
+    expect(r.b.daemonBaselineReport().dropped).toBeUndefined();
+  });
+
+  test("R949: no daemon answer used, no notice and no unknown", async () => {
+    const seen: [string, string][] = [];
+    const r = await rig({
+      suite: SUITE3,
+      floor: [5000, 2000],
+      oneShotCoverage: plainCoverage,
+      notify: (c, m) => seen.push([c, m]),
+    });
+    const v = await baseline(r.b, SUITE3);
+    expect(v.some((x) => x.flaggedUnknown === true)).toBe(false);
+    expect(seen.some(([c]) => c === "al-runner-v3-serve-flagged-unknown")).toBe(false);
+  });
+
   test("agreement keeps it: the same suite without the leak raises no notice and runs no live process", async () => {
     const seen: [string, string][] = [];
     const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]) });
@@ -6543,7 +6572,12 @@ describe("R948 A: the baseline through one daemon", () => {
     });
     await baseline(r.b, SUITE2);
     expect(dropNotice(seen)).toHaveLength(1);
-    expect(dropNotice(seen)[0]?.[1]).toContain("fail text");
+    expect(dropNotice(seen)[0]?.[1]).toContain("differs in failText");
+    // The structured field names the test and the field, uncut.
+    const rep = r.b.daemonBaselineReport();
+    expect(rep.dropped).toContain(`codeunit ${CU2}`);
+    expect(rep.droppedDetail).toHaveLength(1);
+    expect(rep.droppedDetail[0]).toContain("c: differs in failText");
   });
 
   test("the per-test coverage set is compared exactly", async () => {
@@ -6563,7 +6597,12 @@ describe("R948 A: the baseline through one daemon", () => {
     });
     await baseline(r.b, SUITE2);
     expect(dropNotice(seen)).toHaveLength(1);
-    expect(dropNotice(seen)[0]?.[1]).toContain("coverage");
+    expect(dropNotice(seen)[0]?.[1]).toContain("coverage differs (daemon only 1");
+    // Only the coverage differs: no row field is named, and the keys are file:line only.
+    const detail = r.b.daemonBaselineReport().droppedDetail.join(" ");
+    expect(detail).toContain("coverage differs");
+    expect(detail).toContain(":99");
+    expect(detail).not.toContain("differs in");
   });
 
   test("durations: a codeunit whose daemon duration could move a budget (2 x d >= floor) runs one-shot and its answer stands", async () => {

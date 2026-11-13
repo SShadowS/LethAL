@@ -6052,6 +6052,10 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           : {}),
         // R907: al-runner's flagged pass, this session's own baseline only (as `durationMs`).
         ...(ranHere.has(b.ref) && b.verdict.flagged === true ? { flagged: true as const } : {}),
+        // R949: a serve daemon answered, so flagged is unknown (never unflagged).
+        ...(ranHere.has(b.ref) && b.verdict.outcome === "pass" && b.verdict.flaggedUnknown === true
+          ? { flaggedUnknown: true as const }
+          : {}),
       };
     }),
   });
