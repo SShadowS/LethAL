@@ -650,7 +650,8 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
   },
   legT: {
     rows: T_ROWS_8078BCF49,
-    counts: { killed: 326, survived: 73, noCoverage: 19 },
+    // R975 (R-965 amendment 2): 6 Data Main OnValidate mutants survived -> no-coverage by line attribution.
+    counts: { killed: 326, survived: 67, noCoverage: 25 },
     total: 418,
     refusedTests: 0,
   },

@@ -1577,7 +1577,8 @@ async function legWR(scratch: string, serve = false): Promise<SessionReport> {
   const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
   for (const l of arms) console.log(`    - ${l}`);
   must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
-  assertCounts(r, leg, 62, 37, 3, 102);
+  // R975 (R-965 amendment 2): 6 unwrapped twin OnOpenPage mutants read no-coverage by line attribution.
+  assertCounts(r, leg, 62, 31, 9, 102);
   assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
   if (serve) logServeCounters(b, "WRE");
   return r;
@@ -2437,9 +2438,9 @@ async function legT(
     assertIndex(b, "T", 0, 0);
     notes();
     // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
-    // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
+    // the pinned 58, by key and transition (41 Commit, 7 duplicate key, 4 TestPage, 6 R975 line-decided).
     const why = knownDifferencesRefusal(bc, now, TABLES_KNOWN_DIFFERENCES);
-    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
+    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 58"}`);
     must(why === undefined, `T: ${why}`);
     return { outcome: "pass", r };
   }

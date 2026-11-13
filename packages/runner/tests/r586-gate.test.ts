@@ -669,8 +669,8 @@ describe("RC-4 (M5): leg T's known set is pinned by key and transition", () => {
     const own3 = [row("K1", "no-coverage"), row("K2", "killed", "T2"), row("K3", "survived")];
     expect(knownDifferencesRefusal(bc, own3, pinned)).toMatch(/K1/);
   });
-  test("the committed table holds exactly 52 distinct keys", () => {
-    expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(52);
+  test("the committed table holds exactly 58 distinct keys (52 + R975's 6)", () => {
+    expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(58);
   });
 });
 

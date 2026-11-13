@@ -907,16 +907,17 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
       expect(r.issue).toMatch(r.key.includes("|Data Commit ") ? /\/5607$/ : /\/5603$/);
     }
   });
-  test("leg T: the counts are the committed baseline's 298/60/60 plus exactly these moves", () => {
+  // R975 (R-965 amendment 2): the baseline was 298/60/60 until 6 Data Main rows read no-coverage.
+  test("leg T: the counts are the committed baseline's 298/54/66 plus exactly these moves", () => {
     const rows = need(bPin).legT.rows;
     const n = (v: string) =>
       rows.filter((r) => r.verdict === v).length - rows.filter((r) => r.from?.verdict === v).length;
     expect(need(bPin).legT.counts).toEqual({
       killed: 298 + n("killed"),
-      survived: 60 + n("survived"),
-      noCoverage: 60 + n("no-coverage"),
+      survived: 54 + n("survived"),
+      noCoverage: 66 + n("no-coverage"),
     });
-    expect(need(bPin).legT.counts).toEqual({ killed: 326, survived: 73, noCoverage: 19 });
+    expect(need(bPin).legT.counts).toEqual({ killed: 326, survived: 67, noCoverage: 25 });
     expect(need(bPin).legT.total).toBe(418);
     expect(need(bPin).legT.refusedTests).toBe(0);
   });
