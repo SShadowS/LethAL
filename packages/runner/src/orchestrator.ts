@@ -177,8 +177,10 @@ import {
   IsolationChoiceChangedError,
   type IsolationChoiceRow,
   chooseCodeunitIsolation,
+  isZeroGreen,
   isolationCandidates,
   methodCodeunits,
+  zeroGreenIsolationRow,
 } from "./isolation-auto";
 import { largeMethodSuspect, largeMethodWarning, largeMethodsOf } from "./large-fold";
 import {
@@ -405,6 +407,27 @@ export const BASELINE_TIMEOUT_DEFAULT = 120_000;
  * enforcing performance, so a floor that generous costs nothing real.
  */
 export const MIN_MUTANT_BUDGET_MS = 180_000;
+// The comment above argues for BC's floor, and it still is BC's. Since R954, `al-runner-v3` with no
+// --mutant-timeout-ms uses the measured rule below instead; an explicit value wins everywhere.
+
+/**
+ * R954: al-runner-v3's default mutant stop, `max(60 s, 20 x the largest GREEN baseline test + 5 s)`, a
+ * running maximum over the session's batches (each batch is judged with the value its runs were sent).
+ * On v3 a stop below a mutant's real finish is a false `timeout-killed`, and R91's point still holds: no
+ * multiple of a baseline predicts slowness the mutation itself causes. So the guard is the ABSOLUTE 60 s
+ * floor, measured (`/coord/handoff/R-945/study/README.md`): 41,521 finished mutant calls over 60 v3
+ * stores, none cut from F = 60 s, k = 20, while smaller floors cut real finishes. What v3 drops is BC's
+ * publish and session latency, which is what the extra 120 s of the 180 s floor paid for.
+ */
+export const V3_MUTANT_STOP_MIN_MS = 60_000;
+export const V3_MUTANT_STOP_FACTOR = 20;
+export const V3_MUTANT_STOP_PAD_MS = 5_000;
+export function v3MutantStopMs(largestGreenBaselineMs: number): number {
+  return Math.max(
+    V3_MUTANT_STOP_MIN_MS,
+    V3_MUTANT_STOP_FACTOR * largestGreenBaselineMs + V3_MUTANT_STOP_PAD_MS,
+  );
+}
 
 /**
  * R198: the whole of one `RunMutantMany` call must answer inside this, measured server-side from
@@ -1682,6 +1705,11 @@ export interface SessionConfig {
    * is. A positive integer.
    */
   readonly timeBudgetSeconds?: number;
+  /**
+   * R955, test seam: registers the handler that spends the time budget on SIGTERM or SIGINT and
+   * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
+   */
+  readonly registerStopSignal?: (stop: () => void) => () => void;
   /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to `Date.now`. */
   readonly clockMs?: () => number;
   /**
@@ -2390,6 +2418,8 @@ export async function isolateAndNote(args: {
   readonly configPath: string | undefined;
   /** R739: the session's emitter, for the rebase-collision warning. */
   readonly emit?: RunEmitter;
+  /** R955: checked before each candidate compile; spent (budget or stop signal) ends the search with no verdict. */
+  readonly timeBudget?: TimeBudget;
 }): Promise<IsolationPlan> {
   const fixedIds = fixedIdsOf(args.subsetMutants);
   const singletonText = new Map<MutantManifestEntry, string>();
@@ -2397,6 +2427,12 @@ export async function isolateAndNote(args: {
   let compiles = 0;
   try {
     const outcome = await isolateBreakingMutants(args.subsetMutants, async (subset) => {
+      // R955: out of time, or a stop signal (which also kills alc): no further compile, no verdict.
+      if (args.timeBudget?.exhausted === true) {
+        throw new BisectPrepareError(
+          new Error("the time budget is spent or a stop signal arrived; no verdict (R955)"),
+        );
+      }
       compiles++;
       try {
         await prepareArtifactDir({
@@ -3545,8 +3581,8 @@ interface LeaseSessionDeps {
   readonly emit: RunEmitter;
   /**
    * R508: called once, on the FIRST loss, after the latch is set. Writes the lost batch's
-   * correction to the store at once, so a process killed before its `finally` (there is no
-   * SIGINT/SIGTERM handler) does not leave that batch carryable. Must not throw.
+   * correction to the store at once, so a process killed before its `finally` (SIGKILL; a SIGINT
+   * or SIGTERM only spends the time budget, R955) does not leave that batch carryable. Must not throw.
    */
   readonly onLost: (batchIndex: number) => void;
 }
@@ -4888,6 +4924,11 @@ interface BatchScope {
    * `--resume` carries from, whose stored choice the new one must equal.
    */
   readonly isolationAuto?: { decided: boolean; readonly resumedRunId: number | undefined };
+  /**
+   * R954: present only on al-runner-v3 with no `--mutant-timeout-ms`. `ms` is the session's mutant
+   * stop so far (the largest `v3MutantStopMs` of any batch's baseline); `undefined` before the first.
+   */
+  readonly v3MutantStop?: { ms: number | undefined };
 }
 type BaselineRow = { readonly ref: TestMethodRef; readonly verdict: TestVerdict };
 
@@ -4955,6 +4996,8 @@ interface ScoreBatchInput {
   /** For the section G note only: `compiled?.artifactId`, or the bound artifact's id. */
   readonly artifactId: string | undefined;
   readonly tests: readonly TestMethodRef[];
+  /** R955: this batch's mutant total: the count left out when the time budget ends its baseline. Absent: 0. */
+  readonly mutantCount?: number;
   /** R686: the session's test-arm evidence is R403's compiled membership of the PUBLISHED package
    *  (`{kind: "compiled", from: "published-package"}`). Absent or false: not proven. */
   readonly testsCompiledInPublishedPackage?: boolean;
@@ -4995,7 +5038,7 @@ interface ReusedBaseline {
 /** "unsafe": latched during the baseline (the caller stops the session).
  *  "nothing-to-run": `select` returned undefined (the caller moves to the next batch).
  *  "scored": the covering loop and the gate ran; the caller checks `safety.isUnsafe` itself. */
-type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored";
+type ScoreBatchResult = "unsafe" | "nothing-to-run" | "scored" | "budget-in-baseline";
 
 /** C02-04: design section 6's fail-loud check that a fenceable authoritative backend has a lease. */
 function assertLeaseConfigured(
@@ -5087,6 +5130,30 @@ function resolveGroupRuns(a: {
     });
   }
   return groupRuns;
+}
+
+/**
+ * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN baseline
+ * durations (`baselineDuration` holds green tests only). Tells the backend and says it on stderr once
+ * per value (once per session in practice). Otherwise returns the configured floor unchanged.
+ */
+function applyV3MutantStop(
+  scope: BatchScope,
+  baselineDuration: ReadonlyMap<string, number>,
+): number {
+  const held = scope.v3MutantStop;
+  if (held === undefined) return scope.minMutantBudgetMs;
+  let largest = 0;
+  for (const ms of baselineDuration.values()) largest = Math.max(largest, ms);
+  const s = Math.max(held.ms ?? 0, v3MutantStopMs(largest));
+  if (s !== held.ms) {
+    held.ms = s;
+    (scope.parallel?.owner ?? scope.backend).useMutantStop?.(s);
+    console.warn(
+      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green baseline ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s)); --mutant-timeout-ms overrides it`,
+    );
+  }
+  return s;
 }
 
 /** C02-04: acquire, bind and start the session's lease (design section 6 step 1). */
@@ -5576,6 +5643,7 @@ async function chooseIsolationAuto(
   batchIdx: number,
   baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }>,
   resumedRunId: number | undefined,
+  mutantCount: number,
 ): Promise<void> {
   const { backend, store, runId, emit } = scope;
   const choose = (cu: number, mode: "test" | "method"): void => {
@@ -5584,12 +5652,39 @@ async function chooseIsolationAuto(
     }
     backend.chooseIsolation(cu, mode);
   };
-  const candidates = isolationCandidates(baseline);
+  const allCandidates = isolationCandidates(baseline);
+  // R956: a codeunit with 0 green under `test` stays there, with no per-test baseline.
+  const zeroGreen = new Set(
+    allCandidates.filter((cu) => isZeroGreen(baseline.filter((b) => b.ref.codeunitId === cu))),
+  );
+  const candidates = allCandidates.filter((cu) => !zeroGreen.has(cu));
   for (const cu of candidates) choose(cu, "method");
   const methodVerdicts = new Map<string, TestVerdict>();
   for (const b of baseline) {
     if (!candidates.includes(b.ref.codeunitId)) continue;
+    // R955: out of budget mid re-baseline: every candidate goes back to `test`, no choice is made,
+    // and the stop is recorded as one in the auto re-baseline; `scoreBatch` then scores nothing.
+    if (scope.timeBudget?.exhausted === true) {
+      scope.timeBudget.reach(mutantCount, batchIdx + 1, {
+        testsRun: baseline.length,
+        testsTotal: baseline.length,
+        inAutoRebaseline: true,
+      });
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
     const { verdict, stop } = await dispatchUnmutated(scope, b.ref);
+    // R955: a call a stop signal ended may be a killed al-runner, not a result: dropped, so it never
+    // feeds the choice.
+    if (scope.timeBudget?.signalled === true) {
+      scope.timeBudget.reach(mutantCount, batchIdx + 1, {
+        testsRun: baseline.length,
+        testsTotal: baseline.length,
+        inAutoRebaseline: true,
+      });
+      for (const cu of candidates) choose(cu, "test");
+      return;
+    }
     if (stop) {
       // The session stops (`safety`); nothing is chosen, stored or reported. Build review 3: every
       // candidate goes back to `test`, so the backend matches the `test` rows `baseline` holds.
@@ -5600,8 +5695,14 @@ async function chooseIsolationAuto(
   }
   const rows: IsolationChoiceRow[] = [];
   const choice: Record<string, "test" | "method"> = {};
-  for (const cu of candidates) {
+  for (const cu of allCandidates) {
     const testRows = baseline.filter((b) => b.ref.codeunitId === cu);
+    if (zeroGreen.has(cu)) {
+      backend.noteReusedBaseline?.(testRows);
+      choice[String(cu)] = "test";
+      rows.push(zeroGreenIsolationRow(testRows));
+      continue;
+    }
     const methodRows = testRows.map((b) => {
       const verdict = methodVerdicts.get(testKeyOf(b.ref));
       if (verdict === undefined)
@@ -5651,7 +5752,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     killLedger,
     sessionReuse,
     groupRuns,
-    minMutantBudgetMs,
   } = scope;
   const batchIdx = input.batchIndex;
   const tests = input.tests;
@@ -5792,7 +5892,24 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       }
     }
     for (const ref of reused !== undefined ? [] : tests) {
+      // R955: the budget bounds the baseline too: no new baseline call once it has run out.
+      if (scope.timeBudget?.exhausted === true) {
+        scope.timeBudget.reach(input.mutantCount ?? 0, batchIdx + 1, {
+          testsRun: baseline.length,
+          testsTotal: tests.length,
+        });
+        break;
+      }
       const { verdict: v, stop } = await dispatchUnmutated(scope, ref);
+      // R955: a stop signal reaches the whole process group, so a call that ended while it arrived
+      // may be a killed al-runner, not a test result: its row is dropped, never kept as a red test.
+      if (scope.timeBudget?.signalled === true) {
+        scope.timeBudget.reach(input.mutantCount ?? 0, batchIdx + 1, {
+          testsRun: baseline.length,
+          testsTotal: tests.length,
+        });
+        break;
+      }
       if (stop) break;
       baseline.push({ ref, verdict: v });
       ranHere.add(ref);
@@ -5807,7 +5924,13 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       baseline.length === tests.length
     ) {
       auto.decided = true;
-      await chooseIsolationAuto(scope, batchIdx, baseline, auto.resumedRunId);
+      await chooseIsolationAuto(
+        scope,
+        batchIdx,
+        baseline,
+        auto.resumedRunId,
+        input.mutantCount ?? 0,
+      );
     }
   } finally {
     backend.baselinePhase?.(false);
@@ -5930,6 +6053,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       };
     }),
   });
+  // R955: the budget ran out inside this baseline (the event above carries the tests that ran): the
+  // partial baseline selects and scores nothing.
+  if (scope.timeBudget?.reached?.baselineStopped !== undefined) return "budget-in-baseline";
   // R139: REFUSE rather than measure. Placed after the emit above so the event stream and the
   // store still record what this baseline observed, and before any mutant of this batch runs.
   //
@@ -6023,6 +6149,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     measuredDuration,
     memberCountsByTest: memberCounts,
   } = plan;
+  // R954: the floor every mutant budget uses; v3's own rule after its baseline, else the configured one.
+  const minMutantBudgetMs = applyV3MutantStop(scope, baselineDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
   const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
@@ -6154,6 +6282,25 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     safety.latchUnsafe(note);
   }
   return "scored";
+}
+
+/**
+ * R955: the default `SessionConfig.registerStopSignal`. The FIRST SIGTERM or SIGINT spends the time
+ * budget (the run stops at its next check and writes its report); the handlers are `once`, so a
+ * second signal takes the default action and ends the process at once. The returned remover runs
+ * when the session ends.
+ */
+export function registerProcessStopSignal(stop: () => void): () => void {
+  const signals = ["SIGTERM", "SIGINT"] as const;
+  const handler = (): void => {
+    // No listener is left, so a second signal takes the default action and ends the process.
+    for (const s of signals) process.off(s, handler);
+    stop();
+  };
+  for (const s of signals) process.once(s, handler);
+  return () => {
+    for (const s of signals) process.off(s, handler);
+  };
 }
 
 export async function runSession(cfg: SessionConfig): Promise<SessionReport> {
@@ -6586,7 +6733,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -6628,6 +6775,7 @@ async function runSessionBody(
     ...(cfg.backend.environmentChoice !== undefined
       ? { v3Environment: cfg.backend.environmentChoice.value }
       : {}), // R938
+    ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -6753,10 +6901,14 @@ async function runSessionBody(
   const sessionStartedMs = Date.now();
   // R912: the `--time-budget` clock starts with the session, and is shared by every batch.
   const clockMs = cfg.clockMs ?? Date.now;
-  const timeBudget =
-    cfg.timeBudgetSeconds !== undefined
-      ? new TimeBudget(cfg.timeBudgetSeconds, clockMs(), clockMs)
-      : undefined;
+  // R955: always one: with no `--time-budget` it is unlimited until a SIGTERM or SIGINT spends it,
+  // and then the run stops through the same checks and writes its report (time-budget-reached).
+  const timeBudget = new TimeBudget(
+    cfg.timeBudgetSeconds ?? Number.POSITIVE_INFINITY,
+    clockMs(),
+    clockMs,
+  );
+  cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -7388,6 +7540,10 @@ async function runSessionBody(
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
         : {}),
+      // R954: v3's own mutant stop, unless the caller gave --mutant-timeout-ms.
+      ...(isLocalRunner(caps.kind) && cfg.mutantTimeoutMs === undefined
+        ? { v3MutantStop: { ms: undefined } }
+        : {}),
     };
     // R-422: the backslash-path warning fires once per session; every batch re-reads the same
     // manifest snapshot, so every batch would report the same changes.
@@ -8010,6 +8166,7 @@ async function runSessionBody(
           excludeOutputs: cfg.excludeOutputs ?? [],
           configPath: cfg.configPath,
           emit,
+          timeBudget,
         });
         emit({
           type: "warning",
@@ -8672,6 +8829,8 @@ async function runSessionBody(
         batchIndex: batchIdx,
         artifactId: compiled?.artifactId,
         tests,
+        // R955: the runnable mutants: a stranded one is already recorded as skipped.
+        mutantCount: runnable.length,
         // R686 (build review B1): a hook session's proven app is the read AFTER its hook, which the
         // pre-lease membership check never saw; only a hook-free session's proof covers the check.
         testsCompiledInPublishedPackage:
@@ -8700,6 +8859,7 @@ async function runSessionBody(
         },
         select,
       });
+      if (scored === "budget-in-baseline") break; // R955: reported once, after the loop
       if (scored === "unsafe") break; // stop the whole session: no mutant scheduling, no next batch
       if (scored === "nothing-to-run") continue;
       // R69 (closed): record this batch's unsupported-only candidates — deliberately AFTER both
@@ -8792,9 +8952,13 @@ async function runSessionBody(
   if (timeBudget?.reached !== undefined) {
     emit({
       type: "time-budget-reached",
-      budgetSeconds: timeBudget.seconds,
+      budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
+      ...(timeBudget.signalled ? { stoppedBySignal: true as const } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
+      ...(timeBudget.reached.baselineStopped !== undefined
+        ? { baselineStopped: timeBudget.reached.baselineStopped }
+        : {}),
     });
   }
 
@@ -8965,6 +9129,8 @@ async function runSessionBody(
                   },
                 }
               : {}),
+            // R956: the license file by path and sha256, never its contents.
+            ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
           },
         }
       : {}),
@@ -11818,7 +11984,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     if (win !== undefined && prefetch !== undefined) {
       const clock = args.timeBudget;
       await prefetch.call(args.backend, prefetchPlans({ ...args, mutants: win }), {
-        ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+        // R955: no clamp for a session with no `--time-budget` (its clock is only a signal latch).
+        ...(clock !== undefined && Number.isFinite(clock.seconds)
+          ? { remainingMs: () => clock.remainingMs() }
+          : {}),
         ...(firstWindow ? { batchPlans: prefetchPlans(args) } : {}),
       });
       firstWindow = false;
@@ -12730,7 +12899,9 @@ async function runMutantsParallel(
     if (spent()) break;
     const clock = args.timeBudget;
     await owner.prefetchMutants?.(prefetchPlans({ ...args, mutants: window }), {
-      ...(clock !== undefined ? { remainingMs: () => clock.remainingMs() } : {}),
+      ...(clock !== undefined && Number.isFinite(clock.seconds)
+        ? { remainingMs: () => clock.remainingMs() }
+        : {}),
       ...(wi === 0 ? { batchPlans: prefetchPlans(args) } : {}),
     });
     // The prefetch itself can use up the budget: no lane runs a live mutant after that.

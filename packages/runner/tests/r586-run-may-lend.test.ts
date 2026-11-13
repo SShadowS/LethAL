@@ -34,6 +34,23 @@ describe("T14: runMayLend", () => {
     );
     expect(lender.runMayLend(run("al-runner-v3", iso), session(iso), ctx)).toBeUndefined();
   });
+  test("R956: a run under a license and a run with none lend to neither other; the same license lends", () => {
+    const lic = `${B1} license-aaaaaaaa`;
+    const session = (runnerBuild: string) => ({ backend: "al-runner-v3", runnerBuild }) as const;
+    for (const site of ["history", "resume"] as const) {
+      const c = { site };
+      expect(lender.runMayLend(run("al-runner-v3", lic), session(B1), c)?.step).toBe(
+        "backend-build",
+      );
+      expect(lender.runMayLend(run("al-runner-v3", B1), session(lic), c)?.step).toBe(
+        "backend-build",
+      );
+      expect(
+        lender.runMayLend(run("al-runner-v3", lic), session(`${B1} license-bbbbbbbb`), c)?.step,
+      ).toBe("backend-build");
+      expect(lender.runMayLend(run("al-runner-v3", lic), session(lic), c)).toBeUndefined();
+    }
+  });
   test("v3 lends to the same build only; another build or an unrecorded one refuses", () => {
     expect(
       lender.runMayLend(run("al-runner-v3", B1), { backend: "al-runner-v3", runnerBuild: B1 }, ctx),

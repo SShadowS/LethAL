@@ -486,6 +486,11 @@ export interface ExecutionBackend {
    */
   readonly environmentChoice?: V3EnvironmentChoice | undefined;
   /**
+   * R956, al-runner-v3 only: `alRunnerV3.license`, the `.bclicense` file passed as `--license` on every
+   * call that runs tests: its path and the sha256 of its bytes. In the fingerprint and the report.
+   */
+  readonly license?: { readonly path: string; readonly sha256: string } | undefined;
+  /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */
   readonly skipAfterTimeout?: boolean;
@@ -684,6 +689,14 @@ export interface ExecutionBackend {
    * without it.
    */
   useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
+
+  /**
+   * R954, OPTIONAL: al-runner v3 only, and only without `--mutant-timeout-ms`: the session's mutant
+   * stop (`max(60 s, 20 x the largest green baseline + 5 s)`), given after the baseline and before
+   * the mutant loop (again if a later batch raises it). From then on the serve daemon's stop is this,
+   * not the baseline timeout.
+   */
+  useMutantStop?(ms: number): void;
 
   /**
    * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send

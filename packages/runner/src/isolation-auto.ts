@@ -15,7 +15,8 @@ export interface IsolationChoiceRow {
   /** How many of the codeunit's tests the baseline ran in this batch (both passes ran the same). */
   readonly tests: number;
   readonly testPassed: number;
-  readonly methodPassed: number;
+  /** Absent when `method` was never measured for this codeunit (R956: 0 green under `test`). */
+  readonly methodPassed?: number;
   readonly reason: string;
   /**
    * Each test that passed under `test` and not under `method`: what `method` OBSERVED (outcome and
@@ -51,6 +52,34 @@ export function isolationCandidates(baseline: readonly Row[]): number[] {
   const out = new Set<number>();
   for (const b of baseline) if (isIsolationCandidateVerdict(b.verdict)) out.add(b.ref.codeunitId);
   return [...out];
+}
+
+/**
+ * R956: a codeunit with no green test under `test` (every test red or refused) is kept on `test`
+ * and never re-baselined one test per process: a tie at 0 decides nothing, and on DO's app the
+ * per-test passes cost hours.
+ */
+export function isZeroGreen(testRows: readonly Row[]): boolean {
+  // A cascade row ("an earlier test of this codeunit ...") is a later test v3 never ran because an
+  // earlier one was refused: `method` may well pass it (R921), so such a codeunit is measured.
+  return testRows.every(
+    (r) => r.verdict.outcome !== "pass" && !V3_CASCADE_ROW.test(r.verdict.failureMessage ?? ""),
+  );
+}
+
+/** The choice row for a zero-green codeunit (R956): kept on `test`, nothing was measured under `method`. */
+export function zeroGreenIsolationRow(testRows: readonly Row[]): IsolationChoiceRow {
+  const first = testRows[0];
+  if (first === undefined) throw new Error("zeroGreenIsolationRow: no test rows (R956)");
+  return {
+    codeunitId: first.ref.codeunitId,
+    name: first.ref.codeunitName,
+    chosen: "test",
+    tests: testRows.length,
+    testPassed: 0,
+    reason: "0 green under test: a tie at 0 decides nothing, kept on test (R956)",
+    lostUnderMethod: [],
+  };
 }
 
 /**

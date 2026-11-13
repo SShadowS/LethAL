@@ -39,6 +39,7 @@ import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertAlcRunnable,
   assertBcVersionMatchesPackages,
+  readLicenseIdentity,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
@@ -1096,7 +1097,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
                              count because BC recompiles server-side
-  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
+  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms; on al-runner-v3
+                             max(60 s, 20 x the largest green baseline test + 5 s), R954). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
   --time-budget <seconds>    stop scheduling once the session has run this long: work in flight ends,
                              the report leaves out the mutants not reached (not survivors), and
@@ -3148,6 +3150,8 @@ async function buildAlRunnerV3Backend(
   // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
   // environment is unknown (owner's ruling A), before the version check, alc or any compile.
   const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
+  // R956: the license file is read (and hashed) here, before anything runs; unreadable is refused by name.
+  const license = c.license !== undefined ? await readLicenseIdentity(c.license) : undefined;
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
   if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
@@ -3188,6 +3192,7 @@ async function buildAlRunnerV3Backend(
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
       environmentChoice, // R938
+      ...(license !== undefined ? { license } : {}), // R956
       isolation: c.isolation, // R890, R896
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
