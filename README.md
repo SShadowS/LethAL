@@ -633,7 +633,7 @@ Cost and recovery:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published build. Publish cost scales with guard count, since BC recompiles server-side |
-| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
+| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget. On `al-runner-v3` the default is instead `max(60000, 20 × the largest green baseline test + 5000)` ms (R954). Applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
 | `--baseline-timeout-ms <n>` | `120000` | How long one baseline test may run before LethAL stops it. Raise it for a test that is slow rather than hung. Past the request ceiling minus 30 s, a run warns (`baseline-timeout-over-ceiling`): a hosting gateway can then cut a hung test's call before LethAL can stop it, and the run quarantines |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
@@ -674,6 +674,16 @@ Point it at a Windows BC service folder's assemblies, even when alc runs on Linu
 folder copied from a BC 28.4 server on Linux (the one measured), alc failed DotNet generic conversions
 (AL0133, AL0122) in Microsoft's System Application modules that build cleanly with the Windows BC 28.4
 service folder, on Windows alc as well as Linux alc.
+
+Base Application needs one more folder: it uses `Microsoft.AspNetCore.StaticFiles`, which is part of
+the ASP.NET Core shared framework, and a BC service folder does not carry it. List the framework's
+folder AFTER the service folder, for example
+`["/srv/bc/Service", "/usr/share/dotnet/shared/Microsoft.AspNetCore.App/10.0.14"]`
+(`dotnet --list-runtimes` shows where yours is; 10.0.14 built BC 28's Base Application). LethAL does
+not add it for you, because the order of the folders matters; when an ASP.NET Core assembly is
+missing, the AL0451 error says which folder to add (R951). Measured with alc only: with
+`--backend al-runner-v3` the folder also reaches al-runner's .NET sidecar, which has not been
+measured with it.
 
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
 `4` nothing scored, meaning every mutant errored and the run measured nothing.
@@ -885,7 +895,7 @@ a LethAL feature or a mode.
   on [docs/gates/alrunner.md](docs/gates/alrunner.md).
 - **`al-runner-v3` (the Rust al-runner, R586) is not authoritative.** A gated build only (R586c, R814), and
   configured in an `alRunnerV3` section (`packagesDir` and the four-number `bcVersion` required, and `environment` (`"onprem"` or `"saas"`) unless the target's `.vscode/launch.json` names one, R938;
-  `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`; with it on, the feed's copy replaces an older Microsoft app in `.alpackages`), `dotnetSidecar` optional (R886: a path to al-runner's .NET helper, passed as `--dotnet-sidecar`; absent: the pinned build's own, when the update script built one; `false`: none); the section alone is a complete config, see
+  `coverage`, `path`, `alcPath`, `cacheDir`, `downloadDemoData` optional (R885: al-runner downloads the CRONUS demo data of `bcVersion` into `cacheDir` unless `downloadDemoData` is `false`; with it on, the feed's copy replaces an older Microsoft app in `.alpackages`), `dotnetSidecar` optional (R886: a path to al-runner's .NET helper, passed as `--dotnet-sidecar`; absent: the pinned build's own, when the update script built one; `false`: none), `license` optional (R956: a path to a `.bclicense` file, passed as al-runner's license switch on every al-runner call that runs tests, one-shot and serve; refused by name when the file is missing; its path and sha256 (never its contents) are in the report's `executionContexts[]` and its hash is in the run fingerprint, so a run under another license is not resumed; a test al-runner refuses with "no license file loaded" is reported with a pointer to this setting), `memoryHeadroomGb` optional (R948: default 4, `0` = off; no new test call starts while the container's memory, read from its cgroup, is over `memory.max` less this many GiB; if it stays over for five minutes the run stops by name and the report says `timeBudget.stoppedByMemory`). A serve-entries session also records ` baseline-daemon` in its lending build (its baseline comes from one serve daemon), so runs stored before R948 are not lent to or resumed by a new serve-entries session, nor the other way round: start a fresh run; the section alone is a complete config, see
   [Running without a BC server](#running-without-a-bc-server-the-al-runner-v3-backend)). Measured on alpha.2 and re-read on alpha.5 and its edge build (the same readings), it
   differs from BC in ways that change
   verdicts:

@@ -69,6 +69,13 @@ export interface CoverageEntry {
   readonly objectId: number;
   readonly procedure?: string;
   readonly line?: number;
+  /**
+   * R965: set only when `procedure` names SEVERAL same-named procedures of the object (overloads):
+   * the 0-based source-order position of the one this observation ran in, from the line map. A
+   * name alone cannot tell the overloads apart. Absent means "not known", never "the only one".
+   * Matched against `MutantManifestEntry.procedureOverloadIndex` in `coverageFilter`.
+   */
+  readonly overloadIndex?: number;
 }
 
 export interface CoverageMap {
@@ -89,9 +96,16 @@ export interface CoverageMap {
 export interface TestVerdict {
   readonly ref: TestMethodRef;
   readonly outcome: TestOutcome;
+  /**
+   * R963: the CALL's wall clock (round trip, plus a compile per call on al-runner one-shot; a whole
+   * batch's on a grouped call), NOT the test's own time. It is the timeout budget's clock. Never read
+   * it as how long the test took: that is `measuredDurationMs`, and when that is absent the test's
+   * time is UNKNOWN (a batch's wall must not be charged to each of its rows).
+   */
   readonly durationMs: number;
   /**
-   * R272: this test's own duration, on a `pass` (and since R934, on al-runner, a `fail` too: a
+   * R963: the test's OWN duration, when the backend measured it; absent = unknown, never the call's
+   * wall (R272/R934). R272: on a `pass` (and since R934, on al-runner, a `fail` too: a
    * mutant's summed time reads it; every reader that wants a pass checks the outcome). The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
@@ -102,11 +116,22 @@ export interface TestVerdict {
    */
   readonly measuredDurationMs?: number;
   /**
+   * R963: INTERNAL, never in a report or an event. The identity of the al-runner call or serve
+   * request this row came from, set only on a row with no `measuredDurationMs`: all rows of one call
+   * share it, so their shared `durationMs` (the call's wall) is charged once, not once per row.
+   */
+  readonly callId?: string;
+  /**
    * R907: on a `pass`, al-runner's `flagged: true`: the pass rests on an unprobed assumption (for
    * example a test that went through Confirm, StrMenu or a page under `--no-client`). Absent when
    * false or not reported. Only al-runner sets it.
    */
   readonly flagged?: true;
+  /**
+   * R949: on a `pass`, the answer came from a serve daemon, whose rows cannot carry `flagged`: the
+   * flagged state is UNKNOWN (never read it as unflagged). Absent for a one-shot answer.
+   */
+  readonly flaggedUnknown?: true;
   /**
    * R517: on a `timeout`, the stop the runner says it ENFORCED, parsed from al-runner's row
    * (`Test exceeded {N}s timeout.`, or R534's OnRun-trigger wording, N x 1000). The position-1
@@ -486,6 +511,11 @@ export interface ExecutionBackend {
    */
   readonly environmentChoice?: V3EnvironmentChoice | undefined;
   /**
+   * R956, al-runner-v3 only: `alRunnerV3.license`, the `.bclicense` file passed as `--license` on every
+   * call that runs tests: its path and the sha256 of its bytes. In the fingerprint and the report.
+   */
+  readonly license?: { readonly path: string; readonly sha256: string } | undefined;
+  /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */
   readonly skipAfterTimeout?: boolean;
@@ -686,6 +716,14 @@ export interface ExecutionBackend {
   useMutantBudgetFloor?(floorMs: number, baselineTimeoutMs: number): void;
 
   /**
+   * R954, OPTIONAL: al-runner v3 only, and only without `--mutant-timeout-ms`: the session's mutant
+   * stop (`max(60 s, 20 x the largest green baseline + 5 s)`), given after the baseline and before
+   * the mutant loop (again if a later batch raises it). From then on the serve daemon's stop is this,
+   * not the baseline timeout.
+   */
+  useMutantStop?(ms: number): void;
+
+  /**
    * R586 (F5), OPTIONAL: a mutant's covering tests and the budget the covering loop will send
    * each, given once per mutant after its activation and before its first run. al-runner v3 runs
    * a whole test codeunit per call, so it sends the call the LARGEST budget of the refs it serves.
@@ -738,7 +776,38 @@ export interface ExecutionBackend {
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
-  baselinePhase?(on: boolean): void;
+  baselinePhase?(on: boolean): void | Promise<void>;
+
+  /**
+   * R948, OPTIONAL (al-runner v3): the session's stop state, given once with the budget floor. The
+   * backend asks `spent()` before each request of a baseline it runs ahead of the orchestrator's
+   * own loop (R955: no new call once the budget is out or a stop signal came), `signalled()` after
+   * each (a call a signal ended is dropped), and calls `stopForMemory` when the container stays over
+   * its memory bound: the session then stops through R955's path, and the report names memory.
+   */
+  useStopHandle?(handle: {
+    spent(): boolean;
+    signalled(): boolean;
+    stopForMemory(info: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    }): void;
+  }): void;
+
+  /**
+   * R948, OPTIONAL: asked right before the mutant loop activates a mutant (each lane's loop too,
+   * so per activation, not per window). `false`: the memory guard stopped the session (it has
+   * spent the budget through `useStopHandle`), so this group is NOT started and no later one is.
+   */
+  mayStartGroup?(): Promise<boolean>;
+
+  /**
+   * R948, OPTIONAL: true when this session's baseline comes from a serve daemon. Part of what
+   * lends: its ` baseline-daemon` tag is in `runner_build`, so a snapshot or history from a daemon
+   * baseline is not lent to a one-shot session, nor the other way.
+   */
+  readonly baselineDaemon?: boolean;
 
   /**
    * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that

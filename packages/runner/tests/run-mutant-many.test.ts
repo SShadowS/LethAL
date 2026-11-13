@@ -308,6 +308,12 @@ describe("runMany — a well-formed answer becomes per-method verdicts (R198 §3
     expect(r.verdicts[0]?.attestation).toEqual({ observedAny: true, identityMismatch: false });
   });
 
+  test("R963: each grouped entry carries its own server-reported time as measuredDurationMs", async () => {
+    const r = await transport(fakes({ many: odata(answer()) }).fetchFn).runMany(req());
+    if (r.kind !== "verdicts") throw new Error("expected verdicts");
+    expect(r.verdicts.map((v) => v.measuredDurationMs)).toEqual([41, 42, 43]);
+  });
+
   test("failure: a passing prefix then the failing entry, and nothing after it", async () => {
     const inner = answer({
       endedBy: "failure",

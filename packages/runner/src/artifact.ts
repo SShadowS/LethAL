@@ -371,7 +371,7 @@ export class ArtifactCompiler {
     const scratch = toForwardSlashes(
       join(this.cfg.outputDir, `${name}.${crypto.randomUUID()}.partial.app`),
     );
-    let res: { exitCode: number; stdout: string; stderr: string };
+    let res: { exitCode: number; signalCode?: string; stdout: string; stderr: string };
     const probing = this.cfg.assemblyProbingPaths ?? [];
     try {
       const symbols = this.cfg.preprocessorSymbols ?? [];
@@ -401,7 +401,9 @@ export class ArtifactCompiler {
       if (err instanceof AlcCompileError) {
         const note = await flatNamesNote(projectDir);
         // R900: an assembly alc could not find names the probing paths it was (not) given.
-        const probingNote = err.message.includes("AL0451") ? al0451Note(probing) : undefined;
+        const probingNote = err.message.includes("AL0451")
+          ? al0451Note(probing, err.message)
+          : undefined;
         const notes = [note, probingNote].filter((n) => n !== undefined);
         if (notes.length > 0) throw new AlcCompileError([err.message, ...notes].join("\n"));
       }
@@ -410,10 +412,18 @@ export class ArtifactCompiler {
   }
 
   private async placeOutput(
-    res: { exitCode: number; stdout: string; stderr: string },
+    res: { exitCode: number; signalCode?: string; stdout: string; stderr: string },
     scratch: string,
     name: string,
   ): Promise<{ readonly appPath: string; readonly sha256: string }> {
+    // R955: alc ended by a signal (a Ctrl-C or `timeout` reaches the whole process group) said
+    // nothing about the source. Never a compile verdict: bisection reads AlcCompileError as "does
+    // not compile".
+    if (res.signalCode !== undefined) {
+      throw new ArtifactPrepareError(
+        `alc was ended by signal ${res.signalCode} (exit ${res.exitCode}); that is not a compile verdict (R955)`,
+      );
+    }
     if (res.exitCode !== 0) {
       // R461: BOTH streams, labelled. `stderr || stdout` let a stderr warning hide a stdout error.
       throw new AlcCompileError(

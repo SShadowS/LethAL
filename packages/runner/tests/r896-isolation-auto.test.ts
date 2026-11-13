@@ -18,7 +18,9 @@ import type { RunEvent } from "../src/events";
 import {
   IsolationChoiceChangedError,
   chooseCodeunitIsolation,
+  isZeroGreen,
   isolationCandidates,
+  zeroGreenIsolationRow,
 } from "../src/isolation-auto";
 import { type SessionConfig, runSession } from "../src/orchestrator";
 import { splitBackend } from "../src/parallel-queue";
@@ -298,6 +300,35 @@ describe("R896: the choice (strictly more passes)", () => {
   });
 });
 
+describe("R956: zero green", () => {
+  test("isZeroGreen: only a codeunit with no pass; one green keeps today's rule", () => {
+    expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "fail")])).toBe(true);
+    expect(isZeroGreen([rowOf("A1", "fail"), rowOf("A2", "pass")])).toBe(false);
+    const row = zeroGreenIsolationRow([rowOf("A1", "fail")]);
+    expect(row).toMatchObject({ chosen: "test", tests: 1, testPassed: 0 });
+    expect(row).not.toHaveProperty("methodPassed");
+    expect(row.reason).toContain("(R956)");
+  });
+  test("a by-name refusal alone is zero green; a cascade row (R921) keeps the per-test re-baseline", () => {
+    const refused = rowOf("A1", "error", {
+      runnerRow: "runner-refused",
+      failureMessage: "NotRun: this test is refused by name",
+    });
+    expect(isZeroGreen([refused, rowOf("A2", "fail")])).toBe(true);
+    const cascade = rowOf("A2", "error", {
+      runnerRow: "runner-refused",
+      failureMessage:
+        "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran",
+    });
+    expect(isZeroGreen([refused, cascade])).toBe(false);
+    const plainCascade = rowOf("A2", "error", {
+      runnerRow: "runner-refused",
+      failureMessage: "NotRun: an earlier test of this codeunit changed an isolated storage key",
+    });
+    expect(isZeroGreen([plainCascade])).toBe(false);
+  });
+});
+
 describe("R896: the session", () => {
   test("auto: a candidate switches inside the bracket, its method rows replace the test rows (coverage, green set), reported and stored", async () => {
     await inProject(async (root) => {
@@ -360,16 +391,78 @@ describe("R896: the session", () => {
         ref.method === "C1" || (mutant !== null && ref.method === "A2") ? "fail" : "pass",
       );
       const { report } = await session(root, store, b);
-      expect(b.chooseCalls).toEqual([
-        [C, "method"],
-        [C, "test"],
-      ]);
+      // R956: C has 0 green under test, so it is never sent to method and never re-baselined.
+      expect(b.chooseCalls).toEqual([]);
+      expect(b.runs.filter((r) => r.mode === "method")).toEqual([]);
+      expect(b.runs.filter((r) => r.test === "C1" && r.inBaseline)).toHaveLength(1);
       expect(report.isolation?.codeunits).toEqual([
-        expect.objectContaining({ codeunitId: C, chosen: "test", testPassed: 0, methodPassed: 0 }),
+        expect.objectContaining({
+          codeunitId: C,
+          chosen: "test",
+          testPassed: 0,
+          reason: "0 green under test: a tie at 0 decides nothing, kept on test (R956)",
+        }),
       ]);
+      // `method` was never measured, so the row says nothing about it.
+      expect(report.isolation?.codeunits[0]).not.toHaveProperty("methodPassed");
       expect(b.noted).toEqual([["C1=fail"]]);
       expect(store.runIsolationChoice(1)).toEqual({ [C]: "test" });
       expect(renderConsole(report)).toContain("0 codeunit(s) switched to method, 1 stayed on test");
+    });
+  });
+
+  test("R955: a budget that runs out in the auto re-baseline is reported as that, and scores nothing", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const b = autoStub(switchesA);
+      // One fake second per call: the four baseline calls use the 4 s, so the first re-baseline
+      // call finds the budget spent.
+      const { report } = await session(root, store, b, {
+        timeBudgetSeconds: 4,
+        clockMs: () => 1_000_000 + b.runs.length * 1000,
+      });
+      expect(b.runs.filter((r) => r.mode === "method")).toEqual([]);
+      expect(b.runs).toHaveLength(4);
+      expect(report.timeBudget?.baselineStopped).toEqual({
+        testsRun: 4,
+        testsTotal: 4,
+        inAutoRebaseline: true,
+      });
+      expect(report.timeBudget?.unscheduledCount).toBeGreaterThan(0);
+      expect(report.mutants).toEqual([]);
+      expect(report.isolation).toBeUndefined();
+      expect(store.runIsolationChoice(1)).toBeNull();
+      expect(renderConsole(report)).toContain("AUTO ISOLATION RE-BASELINE");
+    });
+  });
+
+  test("R955: the last re-baseline call killed by a stop signal is dropped: no choice stored, stopped in the auto re-baseline", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      let stop: () => void = () => {};
+      // A2's method run is the last re-baseline call: the signal arrives in it and it comes back red.
+      const b = autoStub((ref, mode, mutant) => {
+        if (ref.method === "A2" && mode === "method" && mutant === null) {
+          stop();
+          return "fail";
+        }
+        return switchesA(ref, mode, mutant);
+      });
+      const { report } = await session(root, store, b, {
+        registerStopSignal: (s) => {
+          stop = s;
+          return () => {};
+        },
+      });
+      expect(report.timeBudget).toMatchObject({
+        stoppedBySignal: true,
+        baselineStopped: { testsRun: 4, testsTotal: 4, inAutoRebaseline: true },
+      });
+      expect(store.runIsolationChoice(1)).toBeNull();
+      expect(report.isolation).toBeUndefined();
+      expect(report.mutants).toEqual([]);
+      // Every candidate is back on test.
+      expect(b.mode.get(A)).toBe("test");
     });
   });
 
@@ -403,13 +496,12 @@ describe("R896: the session", () => {
             : "pass",
       );
       const out = await session(root, store, b).catch((e: unknown) => e);
+      // R956: C has 0 green under test, so it is not a candidate and never goes to method.
       expect(b.chooseCalls).toEqual([
         [A, "method"],
-        [C, "method"],
         [A, "test"],
-        [C, "test"],
       ]);
-      expect([b.mode.get(A), b.mode.get(C)]).toEqual(["test", "test"]);
+      expect([b.mode.get(A), b.mode.get(C)]).toEqual(["test", undefined]);
       expect(store.runIsolationChoice(1)).toBeNull();
       expect(
         out instanceof Error

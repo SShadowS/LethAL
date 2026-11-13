@@ -48,7 +48,9 @@ import {
   v3RowVerdict,
   v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
+import { readProcessRssBytes } from "../src/al-runner-v3-baseline-check";
 import {
+  V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
   V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
@@ -1428,6 +1430,39 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(() => v({ noClient: "yes" })).toThrow("noClient");
   });
 
+  test("R952 the daemon recycle keys: defaults, 0 allowed, anything else refused by name", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).daemonMaxRssGb).toBe(V3_DAEMON_MAX_RSS_GB_DEFAULT);
+    expect(V3_DAEMON_MAX_RSS_GB_DEFAULT).toBe(6);
+    expect(v({}).daemonMaxRequests).toBe(0);
+    expect(v({ daemonMaxRssGb: 0, daemonMaxRequests: 0 })).toMatchObject({
+      daemonMaxRssGb: 0,
+      daemonMaxRequests: 0,
+    });
+    expect(v({ daemonMaxRssGb: 2.5, daemonMaxRequests: 40 })).toMatchObject({
+      daemonMaxRssGb: 2.5,
+      daemonMaxRequests: 40,
+    });
+    for (const bad of [-1, "6", Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => v({ daemonMaxRssGb: bad })).toThrow('"alRunnerV3.daemonMaxRssGb" must be');
+    for (const bad of [-1, 2.5, "40", Number.NaN])
+      expect(() => v({ daemonMaxRequests: bad })).toThrow('"alRunnerV3.daemonMaxRequests" must be');
+  });
+
+  test("R952 readProcessRssBytes: VmRSS in kB as bytes; unreadable or without the line, undefined", () => {
+    const status = "Name:\tal-runner\nVmPeak:\t 999 kB\nVmRSS:\t 2048 kB\nThreads:\t9\n";
+    expect(readProcessRssBytes(42, (p) => (p === "/proc/42/status" ? status : ""))).toBe(
+      2048 * 1024,
+    );
+    expect(readProcessRssBytes(42, () => "Name:\tx\n")).toBeUndefined();
+    expect(
+      readProcessRssBytes(42, () => {
+        throw new Error("ENOENT");
+      }),
+    ).toBeUndefined();
+  });
+
   test("R907 --no-client: v3CallArgv adds it after --bc-version when on, never when off", () => {
     const a = {
       alRunnerPath: "/b",
@@ -1443,6 +1478,21 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(on[on.indexOf("--bc-version") + 2]).toBe("--no-client");
     expect(v3CallArgv({ ...a, noClient: false })).not.toContain("--no-client");
     expect(v3CallArgv(a)).not.toContain("--no-client");
+  });
+
+  test("R956 a one-shot call carries --license <path> exactly when the license is set", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ license: { path: "/l/x.bclicense", sha256: "a".repeat(64) } });
+    expect(on[on.indexOf("--license") + 1]).toBe("/l/x.bclicense");
+    expect(await run({})).not.toContain("--license");
   });
 
   test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
@@ -2171,6 +2221,38 @@ describe("§5 the row decoder", () => {
     notRun: false,
     ...o,
   });
+  test("R956: a refusal for a missing license names alRunnerV3.license; another refusal does not", () => {
+    const refuse = (message: string) =>
+      v3RowVerdict(r, row({ status: "error", notRun: true, message }), 3, 10, undefined);
+    const lic = refuse("NotRun: this test reads a license, with no license file loaded");
+    expect(lic.runnerRow).toBe("runner-refused");
+    expect(lic.failureMessage).toContain("set alRunnerV3.license to a .bclicense file (R956)");
+    expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.license");
+  });
+  // R963: a row with no durationMs of its own has an UNKNOWN test time; the call's wall (here 777)
+  // is never stored as the test's. With one, it is passed through. Each branch its own test.
+  const WALL = 777;
+  const verdictOf = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) =>
+    v3RowVerdict(r, row(o), 3, WALL, undefined);
+  const branches: ReadonlyArray<[string, Partial<Parameters<typeof v3RowVerdict>[1]>]> = [
+    ["pass", { status: "pass" }],
+    ["fail", { status: "fail", message: "Assert.AreEqual failed" }],
+    ["refusal (notRun)", { status: "error", notRun: true, message: "NotRun: something else" }],
+    ["timeout (notRun)", { status: "error", notRun: true, message: "Test exceeded 3s timeout." }],
+    ["unclassified error", { status: "error", message: "boom" }],
+  ];
+  for (const [name, o] of branches) {
+    test(`R963: a ${name} row without durationMs has no measuredDurationMs; the call's wall stays durationMs`, () => {
+      const v = verdictOf(o);
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBeUndefined();
+    });
+    test(`R963: a ${name} row with durationMs passes it through as measuredDurationMs`, () => {
+      const v = verdictOf({ ...o, durationMs: 8 });
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBe(8);
+    });
+  }
   test("notRun with pass or fail is a contract error, never a verdict", () => {
     for (const status of ["pass", "fail"] as const) {
       const v = v3RowVerdict(r, row({ status, notRun: true }), 3, 10, undefined);

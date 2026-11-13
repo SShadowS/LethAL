@@ -512,7 +512,14 @@ class SurvivingBackend implements ExecutionBackend {
         ? {
             coverage: {
               granularity: "procedure" as const,
-              entries: [{ objectType: "Codeunit", objectId: 50100, procedure: "Pick" }],
+              // R965: both overloads of Pick ran; an entry with no overload index would give an
+              // overloaded mutant no exact claim.
+              entries: [0, 1].map((overloadIndex) => ({
+                objectType: "Codeunit",
+                objectId: 50100,
+                procedure: "Pick",
+                overloadIndex,
+              })),
             },
           }
         : { attestation: { observedAny: true, identityMismatch: false } }),

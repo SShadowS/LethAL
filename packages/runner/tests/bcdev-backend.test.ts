@@ -3519,6 +3519,50 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     expect(said).not.toContain("Codeunit:79100");
   });
 
+  // R965: two overloads of one name. Lines 5 and 10 are the two bodies.
+  const OVER_AL = `codeunit 79170 "Over"
+{
+    procedure Pick(A: Integer)
+    begin
+        Message('i');
+    end;
+
+    procedure Pick(A: Text)
+    begin
+        Message('t');
+    end;
+}
+`;
+  const OVER: ExtraObjects = {
+    files: { "Over.Codeunit.al": OVER_AL },
+    codeunits: [{ Id: 79170, Name: "Over" }],
+  };
+  async function coverageFor(lines: number[]): Promise<unknown> {
+    const { backend, cleanup } = await deployed(
+      { coverage: lines.map((lineNo) => ({ objectType: 5, objectId: 79170, lineNo, hits: 1 })) },
+      OVER,
+    );
+    try {
+      const verdict = await backend.run(ref, { coverage: "fenced", timeoutMs: 1000 });
+      return "coverage" in verdict ? verdict.coverage?.entries : undefined;
+    } finally {
+      await cleanup();
+    }
+  }
+
+  test("R965: rows in both overloads keep one entry per overload, each with its own index", async () => {
+    expect(await coverageFor([5, 10, 5, 10])).toEqual([
+      { objectType: "Codeunit", objectId: 79170, procedure: "Pick", overloadIndex: 0 },
+      { objectType: "Codeunit", objectId: 79170, procedure: "Pick", overloadIndex: 1 },
+    ]);
+  });
+
+  test("R965: a row in the second overload alone names the second overload only", async () => {
+    expect(await coverageFor([10])).toEqual([
+      { objectType: "Codeunit", objectId: 79170, procedure: "Pick", overloadIndex: 1 },
+    ]);
+  });
+
   // R748: every notice of one test, as [code, message], through the real line map.
   async function notesFor(
     coverage: unknown[],

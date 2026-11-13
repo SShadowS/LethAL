@@ -329,6 +329,12 @@ export function filterHistory(
  */
 export interface CoverageIndex {
   readonly byMember: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * R965. The entries of `byMember` that carry an `overloadIndex`, keyed `<member key>#<index>`.
+   * A mutant in an overloaded procedure reads ONLY this map (see `overloadKeyOf`): `byMember` holds
+   * the name alone, and a name does not say which overload ran.
+   */
+  readonly byMemberOverload: ReadonlyMap<string, ReadonlySet<string>>;
   readonly byObject: ReadonlyMap<string, ReadonlySet<string>>;
   /**
    * Only the PROCEDURE-LESS observations (`CoverageEntry.procedure` absent): "this test
@@ -392,6 +398,11 @@ export function memberKeyOf(
   context: string,
 ): string {
   return `${objectKeyOf(objectType, objectId, context)}::${member.toLowerCase()}`;
+}
+
+/** R965: `byMemberOverload`'s key for one overload of a member. */
+export function overloadKeyOf(memberKey: string, overloadIndex: number): string {
+  return `${memberKey}#${overloadIndex}`;
 }
 
 export interface CoverageSplit {
@@ -495,6 +506,7 @@ export function buildCoverageIndex(
   baseline: ReadonlyArray<{ ref: TestMethodRef; coverage?: CoverageMap }>,
 ): CoverageIndex {
   const byMember = new Map<string, Set<string>>();
+  const byMemberOverload = new Map<string, Set<string>>();
   const byObject = new Map<string, Set<string>>();
   const byObjectUnnamed = new Map<string, Set<string>>();
   const byObjectNamingGap = new Set<string>();
@@ -556,9 +568,18 @@ export function buildCoverageIndex(
         byMember.set(memberKey, memberSet);
       }
       memberSet.add(testKeyOf(b.ref));
+      if (e.overloadIndex !== undefined) {
+        const overloadKey = overloadKeyOf(memberKey, e.overloadIndex);
+        let overloadSet = byMemberOverload.get(overloadKey);
+        if (!overloadSet) {
+          overloadSet = new Set();
+          byMemberOverload.set(overloadKey, overloadSet);
+        }
+        overloadSet.add(testKeyOf(b.ref));
+      }
     }
   }
-  return { byMember, byObject, byObjectUnnamed, byObjectNamingGap };
+  return { byMember, byMemberOverload, byObject, byObjectUnnamed, byObjectNamingGap };
 }
 
 export function coverageFilter(
@@ -644,7 +665,14 @@ export function coverageFilter(
     const memberNames = m.procedureName !== "" ? [m.procedureName] : (m.coverageArmNames ?? [""]);
     let testKeys: ReadonlySet<string> | undefined;
     for (const name of memberNames) {
-      const hit = index.byMember.get(memberKeyOf(m.objectType, m.codeunitId, name, context));
+      // R965: an overloaded procedure's mutant reads only the entries that ran THAT overload. An
+      // entry with no `overloadIndex` (hub coverage, a backend without lines) is unknown for it:
+      // no exact claim, never a survivor on a guess.
+      const memberKey = memberKeyOf(m.objectType, m.codeunitId, name, context);
+      const hit =
+        m.procedureOverloadIndex !== undefined
+          ? index.byMemberOverload.get(overloadKeyOf(memberKey, m.procedureOverloadIndex))
+          : index.byMember.get(memberKey);
       if (hit === undefined) continue;
       testKeys = testKeys === undefined ? hit : new Set([...testKeys, ...hit]);
     }

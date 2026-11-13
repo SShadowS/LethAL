@@ -23,7 +23,15 @@
  * each mutant's group vouched for by an echo test (`al-runner-v3-entries.ts`).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import {
   cp,
   mkdir,
@@ -65,6 +73,20 @@ import {
   serveDaemonReusable,
 } from "./al-runner-server";
 import {
+  BASELINE_MIN_CLEAN_SAMPLES,
+  type MemorySample,
+  ONE_SHOT_EXITS,
+  SKIPPABLE_NO_ANSWER,
+  SamplePlan,
+  baselineSampleIds,
+  compareBaselineAnswers,
+  durationCouldMoveBudget,
+  memoryBoundBytes,
+  readCgroupMemory,
+  readProcessRssBytes,
+} from "./al-runner-v3-baseline-check";
+import {
+  V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
   V3_NO_CLIENT_DEFAULT,
   assertBcVersionMatchesPackages,
@@ -200,6 +222,16 @@ export { V3_TIMEOUT_MESSAGE };
  */
 const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
+/**
+ * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
+ * that holds it gets the pointer; every other refusal text is unchanged (so no stored text moves).
+ */
+export function licensePointer(message: string | undefined): string {
+  return message?.includes("with no license file loaded") === true
+    ? " [set alRunnerV3.license to a .bclicense file (R956)]"
+    : "";
+}
 
 /**
  * R678: a reused snapshot's stored verdict carries the v3 notRun refusal text but not
@@ -606,9 +638,11 @@ export class AlRunnerV3ServeFallbackWarmupError extends Error {
   constructor(
     readonly row: string,
     readonly rowReason: string,
+    /** R960: the whole warm-up request was refused (R635 §6), not one row R612 refuses. */
+    readonly wholeRequest = false,
   ) {
     super(
-      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}). \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (R786)`,
+      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default ${wholeRequest ? `met a refusal of the whole warm-up request (entries-batch-refused: ${rowReason}; R635 §6)` : `met the warm-up row ${row}, which R612 refuses by name (${rowReason})`}. \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (${wholeRequest ? "R960" : "R786"})`,
     );
     this.name = "AlRunnerV3ServeFallbackWarmupError";
   }
@@ -696,6 +730,8 @@ export interface AlRunnerV3Config {
    * on every al-runner call, one-shot and serve. REQUIRED: the constructor refuses a config without it.
    */
   readonly environmentChoice: V3EnvironmentChoice;
+  /** R956: `alRunnerV3.license`: `--license <path>` on every al-runner call that runs tests, one-shot and serve. */
+  readonly license?: { readonly path: string; readonly sha256: string };
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -763,10 +799,74 @@ export interface AlRunnerV3Config {
    * key. Unset: read at construction from `LETHAL_V3_SPECULATE_BASELINE` ("1" = on; unset or empty = off).
    */
   readonly speculateBaseline?: boolean;
+  /**
+   * R948: under serve-entries, run the baseline through ONE serve daemon (a `plain()` request per
+   * codeunit, with coverage) instead of one al-runner process per codeunit, cross-checked against
+   * fresh processes (`baselineSampleIds`). Internal, not a config key; the CLI sets it. Absent: off.
+   */
+  readonly daemonBaseline?: boolean;
+  /**
+   * R948: the memory guard's headroom in GiB below the cgroup's `memory.max` (`alRunnerV3.memoryHeadroomGb`).
+   * Absent: no guard, silently (unit tests). `0`: off by the config, said once. The CLI always sets it.
+   */
+  readonly memoryHeadroomGb?: number;
+  /** R952 (R948): recycle a serve daemon whose RSS passed this many GiB (`alRunnerV3.daemonMaxRssGb`); 0 = off. Absent: `V3_DAEMON_MAX_RSS_GB_DEFAULT`. */
+  readonly daemonMaxRssGb?: number;
+  /** R952 (R948): recycle a serve daemon after this many requests (`alRunnerV3.daemonMaxRequests`); absent or 0 = off. */
+  readonly daemonMaxRequests?: number;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
 export const ISOLATED_BASELINE_PROCESSES = 4;
+
+/** R948: the memory guard reads again every `MEMORY_POLL_MS` while over the bound, at most `MEMORY_WAIT_POLLS` times (5 minutes). */
+export const MEMORY_POLL_MS = 2000;
+export const MEMORY_WAIT_POLLS = 150;
+/** R948: what the guard counts one started al-runner process or request at (measured 2-3.3 GB, R961). */
+export const MEMORY_CALL_ESTIMATE_BYTES = 3 * 2 ** 30;
+
+/**
+ * R948: the container stayed over the memory bound and nothing could stop the session through the
+ * budget (no stop handle: a backend used outside `runSession`). Inside a session the report says it.
+ */
+export class AlRunnerV3MemoryBoundError extends Error {
+  constructor(
+    readonly usedBytes: number,
+    readonly boundBytes: number,
+    readonly source: string,
+  ) {
+    super(
+      `al-runner-v3-memory-bound: the container uses ${(usedBytes / 2 ** 30).toFixed(1)} GiB, over the ${(boundBytes / 2 ** 30).toFixed(1)} GiB bound (the limit in ${source} less "alRunnerV3.memoryHeadroomGb"), and stayed there; no new test call was started (R948).`,
+    );
+    this.name = "AlRunnerV3MemoryBoundError";
+  }
+}
+
+/** R948: see `ExecutionBackend.useStopHandle`. */
+type StopHandle = Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0];
+
+/**
+ * R951 (R1): a one-shot baseline run that gave no answer, and why: `memory-gate`, `spawn-error`,
+ * `timed-out`, `exit-<n>`, `rows-undecodable`, or `row-missing:<test name>`. (`budget-spent` is the
+ * caller's: it sees the spent budget after the run and stops without a drop.)
+ */
+interface NoOneShotAnswer {
+  readonly noAnswer: string;
+}
+
+/** R948: one codeunit's (or one test's) baseline answer, as `callCodeunit` reads it. */
+interface BaselineAnswer {
+  readonly rows: readonly V3Row[];
+  readonly coverage: V3CoverageRead;
+  readonly wallMs: number;
+  readonly stopSeconds: number;
+  /** Whether it was asked for coverage. */
+  readonly withCoverage: boolean;
+  /** Set on an answer a serve daemon gave (not one a fresh process gave in its place). */
+  readonly fromDaemon?: true;
+  /** R951: a fresh process's answer whose exit was 8 (serving it raises the .NET-helper notice, as a live call does). */
+  readonly exit8?: true;
+}
 
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
 export const SPECULATE_BASELINE_ENV = "LETHAL_V3_SPECULATE_BASELINE";
@@ -800,6 +900,8 @@ export interface V3Row {
   readonly notRun: boolean;
   /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
   readonly flagged?: true;
+  /** R949: set on a row a serve daemon answered: serve rows never carry `flagged`, so it is unknown, not false. */
+  readonly flaggedUnknown?: true;
 }
 
 /**
@@ -876,13 +978,23 @@ export function v3RowVerdict(
   callStopSeconds: number,
   wallMs: number,
   coverage: CoverageMap | undefined,
+  callId?: string,
 ): TestVerdict {
+  // R963: the row's own time, or nothing: `wallMs` is the call's and is never the test's. A row
+  // with none carries its call's identity instead, so the call's wall is charged once (`callId`).
+  const measured =
+    typeof row.durationMs === "number" && Number.isFinite(row.durationMs) && row.durationMs >= 0
+      ? { measuredDurationMs: row.durationMs }
+      : callId !== undefined
+        ? { callId }
+        : {};
   if (row.notRun) {
     if (row.status !== "error") {
       return {
         ref,
         outcome: "error",
         durationMs: wallMs,
+        ...measured,
         failureMessage: `al-runner-v3 contract: ${row.name} is notRun with status "${row.status}"; never scored (R586 §5)`,
         operation: "completed-accepted",
         runnerRow: "runner-test-error",
@@ -896,6 +1008,7 @@ export function v3RowVerdict(
           ref,
           outcome: "error",
           durationMs: wallMs,
+          ...measured,
           failureMessage: `al-runner-v3 contract: ${row.name} reports a ${n}s stop, but the call was sent --test-timeout-secs ${callStopSeconds}; never scored (R586 §5)`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -905,6 +1018,7 @@ export function v3RowVerdict(
         ref,
         outcome: "timeout",
         durationMs: wallMs,
+        ...measured,
         reportedStopMs: n * 1000,
         timeoutIn: "body",
         failureMessage: row.message ?? "",
@@ -914,7 +1028,8 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}`,
+      ...measured,
+      failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
       // R609: what the test reached before v3 refused it (a note only; see the orchestrator).
@@ -930,12 +1045,13 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
-      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]`,
+      ...measured,
+      failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
     };
   }
-  const verdict = verdictFromRunnerTest(
+  const classified = verdictFromRunnerTest(
     ref,
     row.name,
     {
@@ -943,10 +1059,15 @@ export function v3RowVerdict(
       ...(row.message !== undefined ? { message: row.message } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
       ...(row.flagged === true ? { flagged: true } : {}),
+      ...(row.flaggedUnknown === true ? { flaggedUnknown: true } : {}),
     },
     wallMs,
     coverage,
   );
+  const verdict =
+    classified.measuredDurationMs === undefined && callId !== undefined
+      ? { ...classified, callId }
+      : classified;
   // R925: a real failure (a kill) carries message + "\n" + stackTrace, as the BC path does
   // (`failureTextOf`). Added AFTER the verdict is classified, so every classifier above reads the
   // message alone; no refusal, timeout or error text gets a stack.
@@ -957,14 +1078,15 @@ export function v3RowVerdict(
   return verdict;
 }
 
-/** R886: the file `alRunnerV3.dotnetSidecar` names, absolute; refused by name when it is missing. */
+/** R886: the file `alRunnerV3.dotnetSidecar` names, absolute and with its symlinks resolved (R950: once, as the
+ *  binary is, so a move of `current` never swaps the sidecar under a running session); refused by name when missing. */
 export function namedSidecar(configured: string): string {
   const path = resolve(configured);
   if (!existsSync(path))
     throw new Error(
       `al-runner-v3-dotnet-sidecar-missing: "alRunnerV3.dotnetSidecar" is ${path}, which does not exist (R886). Fix the path, or set it to false.`,
     );
-  return path;
+  return realpathSync(path);
 }
 
 /**
@@ -1004,6 +1126,8 @@ export function v3CallArgv(a: {
   readonly noClient?: boolean;
   /** R938: `--environment <value>`. Absent: not passed. */
   readonly environment?: "saas" | "onprem";
+  /** R956: `--license <path>`. Absent: not passed. */
+  readonly license?: string;
   /** R885: pass `--no-download`. Absent: v3 may download the demo data (its default). */
   readonly noDownload?: boolean;
   /** R886: `--dotnet-sidecar <dll>`. Absent: not passed. */
@@ -1039,6 +1163,7 @@ export function v3CallArgv(a: {
     a.bcVersion,
     ...(a.noClient === true ? ["--no-client"] : []),
     ...(a.environment !== undefined ? ["--environment", a.environment] : []),
+    ...(a.license !== undefined ? ["--license", a.license] : []),
     ...(a.noDownload === true ? ["--no-download"] : []),
     ...(a.dotnetSidecar !== undefined
       ? [
@@ -1096,6 +1221,8 @@ interface CallRows {
   readonly rows: readonly V3Row[];
   readonly stopSeconds: number;
   readonly wallMs: number;
+  /** R963: this call's identity (fresh per al-runner process or serve request): its rows with no own time share its wall. */
+  readonly callId: string;
   readonly coverage: V3CoverageRead;
   /** R635: every row of this call is `error` (`entries-echo-mismatch`, `-coverage-disagreement`). */
   readonly refusal?: string;
@@ -1142,13 +1269,20 @@ export type V3DaemonCloseReason =
   | "dependency-skip"
   | "probe"
   | "deploy"
-  | "session-end";
+  | "mutant-stop"
+  | "session-end"
+  | "baseline-end"
+  /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
+  | "recycle";
 
-/** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink. */
+/** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
+ *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own. */
 export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
   "probe",
   "deploy",
+  "mutant-stop",
   "session-end",
+  "baseline-end",
 ]);
 
 /**
@@ -1295,9 +1429,15 @@ export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
   readonly server: AlRunnerServer;
+  /** R954: the `--test-timeout` seconds it started with; `ensureDaemon` restarts one that differs. */
+  readonly stopSeconds: number;
   dirty: boolean;
   /** R939: why `dirty` was set (the first unkept row's reason), for the close count. */
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
+  /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
+  baselineStop?: number;
+  /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
+  requests: number;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -1684,6 +1824,11 @@ class Lane {
     this.daemons.set(modeKey(mode), d);
   }
 
+  /** R948: true while this lane holds a daemon the baseline started (it carries its own stop). */
+  hasBaselineDaemon(): boolean {
+    return [...this.daemons.values()].some((d) => d.baselineStop !== undefined);
+  }
+
   dropPair(): void {
     this.pair = undefined;
     this.pairVerdict = undefined;
@@ -1736,6 +1881,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R938: see `ExecutionBackend.environmentChoice`. */
   get environmentChoice(): V3EnvironmentChoice {
     return this.cfg.environmentChoice;
+  }
+  /** R956: see `ExecutionBackend.license`. */
+  get license(): { readonly path: string; readonly sha256: string } | undefined {
+    return this.cfg.license;
   }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
@@ -1828,6 +1977,77 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R866: `fillIsolatedBaseline`'s answers by call id, each served once; reset by a deploy. */
   private isolatedBaseline = new Map<number, SpeculativeCall>();
   private isolatedFilled = false;
+  /** R948: the daemon baseline's answers by call id (a codeunit's, or one test's), each served once; reset by a deploy. */
+  private daemonBaseline = new Map<number, BaselineAnswer>();
+  private daemonBaselineFilled = false;
+  /**
+   * R951 (R3): one-shot answers a dropped daemon baseline had already obtained (the cross-check's and
+   * the too-slow re-runs'), served in place of a re-run. Reset by a deploy with the two above. Only
+   * defined answers, and never one a daemon gave.
+   */
+  private oneShotKept = new Map<number, BaselineAnswer>();
+  /**
+   * R951 (R6): calls (a codeunit id, or a per-test call id) whose sample's one-shot run was skipped.
+   * A daemon answer for one is never used for the rest of the SESSION: not reset by a deploy.
+   */
+  private readonly uncleanCalls = new Set<number>();
+  /** R949: the once-per-session notice that daemon answers carry no `flagged`. */
+  private flaggedUnknownNoted = false;
+  /** R948: why the daemon baseline was dropped. Session-wide (a deploy keeps it): the baseline is then one-shot for every batch. */
+  private daemonBaselineOff: string | undefined;
+  /** R948: per differing test, which field differs (`compareBaselineAnswers`' lines); names, fields and `file:line` keys only. */
+  private daemonBaselineDetail: string[] = [];
+  /** R948: the session's stop state (`useStopHandle`). */
+  private stopHandle: StopHandle | undefined;
+  /** R948: the memory guard: decided once, on the first need. `"off"`: said why, or silent when no headroom was given. */
+  private memoryGuard:
+    | {
+        readonly read: () => MemorySample | undefined;
+        readonly boundBytes: number;
+        readonly source: string;
+      }
+    | "off"
+    | undefined;
+  /** R948: set when the guard stopped the session; every later gate answers no. */
+  private memoryStopped = false;
+  /** R948: gate callers take turns; each pass that holds counts `memoryEstimate()` until released. */
+  private memoryChain: Promise<void> = Promise.resolve();
+  private memoryHeld = 0;
+  /** R948: what the daemon baseline did (`daemonBaselineReport`). */
+  private readonly baselineStats = {
+    codeunits: 0,
+    requests: 0,
+    sampled: [] as number[],
+    perTestRequests: 0,
+    perTestSampled: [] as number[],
+    compared: 0,
+    served: 0,
+    skippedTooSlow: [] as string[],
+    skippedError: [] as string[],
+    skippedOther: [] as string[],
+    sampledSkipped: [] as string[],
+    /** R951: skipped sample name -> the name that replaced it (`replaced` is its size). */
+    replacements: {} as Record<string, string>,
+  };
+
+  /**
+   * R948: a daemon answer the fill did not keep, named. A sampled one is counted apart (the sample's
+   * own `compared` shows it); the others are the three reasons a gate may accept as "reported, not a
+   * regression": too slow for a warm duration to be trusted, a request error, or a refused/odd row.
+   * R951: a sampled skip carries its reason, `Name (reason)`.
+   */
+  private noteSkip(
+    kind: "tooSlow" | "error" | "other",
+    name: string,
+    sampled: boolean,
+    reason?: string,
+  ): void {
+    const s = this.baselineStats;
+    if (sampled) s.sampledSkipped.push(reason !== undefined ? `${name} (${reason})` : name);
+    else if (kind === "tooSlow") s.skippedTooSlow.push(name);
+    else if (kind === "error") s.skippedError.push(name);
+    else s.skippedOther.push(name);
+  }
   /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
    *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
   get inRunStopIsBudget(): boolean {
@@ -1891,6 +2111,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     noSpeculativeBaseline?: true;
     /** R790: runs once the speculative calls ended, before their second binding read. */
     afterSpeculation?: () => Promise<void>;
+    /** R948: replaces the cgroup reader of the memory guard (tests never read `/sys`). */
+    memoryReader?: () => MemorySample | undefined;
+    /** R952: replaces the daemon RSS reader of the recycle bound (tests never read `/proc`). */
+    rssReader?: (pid: number) => number | undefined;
+    /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
+    memorySleep?: (ms: number) => Promise<void>;
+    /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
+    memoryWaitPolls?: number;
+    /** R948: bytes one started process or request is counted at by the guard. Absent: `MEMORY_CALL_ESTIMATE_BYTES`. */
+    memoryEstimateBytes?: number;
+    /** R948: runs the daemon baseline's codeunits last to first (the order proof's second order). */
+    reverseBaselineOrder?: true;
   } = {};
   /** R798: R790's speculative baseline is opt-in (option or env, read at construction). */
   private readonly speculateOn: boolean;
@@ -2659,16 +2891,38 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.budgetFloor = { floorMs, baselineTimeoutMs };
   }
 
+  /** R954: the session's mutant stop, once the orchestrator gave one (no `--mutant-timeout-ms`). */
+  useMutantStop(ms: number): void {
+    // No dropPair: ensureDaemon replaces a daemon whose stop differs, and the baseline bracket dropped any pair.
+    this.mutantStopMs = ms;
+  }
+  private mutantStopMs: number | undefined;
+
   private serveStopSeconds(): number | undefined {
     const f = this.budgetFloor;
-    return f === undefined ? undefined : stopSecondsOf(Math.max(f.floorMs, f.baselineTimeoutMs));
+    if (f === undefined) return undefined;
+    if (this.mutantStopMs !== undefined) return stopSecondsOf(this.mutantStopMs); // R954
+    return stopSecondsOf(Math.max(f.floorMs, f.baselineTimeoutMs));
   }
 
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
-  baselinePhase(on: boolean): void {
+  baselinePhase(on: boolean): void | Promise<void> {
     this.dropPair();
     this.pairStore.clear();
     this.inBaseline = on;
+    // R948: the baseline's own daemon is closed before the mutant phase starts its own (its stop
+    // differs, and it holds 2-3 GB).
+    if (!on && this.laneList.some((l) => l.hasBaselineDaemon())) return this.closeBaselineDaemons();
+  }
+
+  private async closeBaselineDaemons(): Promise<void> {
+    for (const l of this.laneList)
+      if (l.hasBaselineDaemon()) await this.closeLane(l, "baseline-end");
+  }
+
+  /** R948: see `ExecutionBackend.useStopHandle`. */
+  useStopHandle(handle: StopHandle): void {
+    this.stopHandle = handle;
   }
 
   /** R635: the transport's counters (serve-entries). */
@@ -2732,6 +2986,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.speculative = undefined; // R790: never served across deploys
     this.isolatedBaseline = new Map(); // R866: nor these
     this.isolatedFilled = false;
+    this.daemonBaseline = new Map(); // R948: nor these
+    this.daemonBaselineFilled = false;
+    this.oneShotKept = new Map(); // R951: nor these
   }
 
   /** A batch as v3 reads it: control files dropped, the static selector at the baseline. R635: in
@@ -2782,6 +3039,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   async deploy(instrumentedDir: string): Promise<null> {
     this.preRunDemoLine(); // R885
+    this.announceMemoryGuard(); // R948: the guard's first line, before any process starts
     await this.closeAllDaemons("deploy");
     this.resetLayoutState();
     const active = this.lane.activeDir();
@@ -2797,6 +3055,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.budgetFloor !== undefined &&
       this.suitePerCodeunit.size > 0 &&
       !this.isolatesTests && // R857: its calls run whole codeunits
+      this.cfg.daemonBaseline !== true && // R948: the daemon baseline replaces those processes
       this.seams.noSpeculativeBaseline !== true;
     const abort = new AbortController();
     // Option 4: alc's writes from an identical batch, placed first, so the calls read what alc leaves.
@@ -3054,7 +3313,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await mkdir(this.lane.scratchCwd(), { recursive: true });
       const calls = new Map<number, SpeculativeCall>();
       for (const id of [...this.suitePerCodeunit.keys()].sort((a, b) => a - b)) {
-        if (signal.aborted) return undefined;
+        if (signal.aborted || this.stopHandle?.spent() === true) return undefined; // R958
         // R896: a codeunit on "method" runs per test (`fillIsolatedBaseline`), never whole.
         if (this.perTest(id)) continue;
         this.callSeq += 1;
@@ -3133,6 +3392,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.isolatedFilled || f === undefined) return;
     this.isolatedFilled = true;
     const queue = [...this.suitePerCodeunit.values()].flat();
+    // R948: one codeunit-isolation daemon answers every test, one request each; a test it cannot
+    // answer cleanly is left for its own call, which runs it alone one-shot as before.
+    if (this.daemonBaselineOn())
+      return this.fillIsolatedViaDaemon(lane, queue, stopSeconds, coverage);
     const covDir = join(this.cfg.instrumentedDir, "cov");
     await this.checkBound(lane); // R652: the bytes these read; each answer is checked again when served
     const worker = async () => {
@@ -3140,18 +3403,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const key = this.callId(ref);
         const onlyTest = this.isolated(key)?.test;
         if (onlyTest === undefined) continue;
+        // R948: over the memory bound no new process starts; the test is left unanswered, and its
+        // own call (gated too) is then dropped like a signalled one.
+        if (this.stopHandle?.spent() === true || !(await this.memoryGate(true))) {
+          queue.length = 0;
+          return;
+        }
         this.callSeq += 1;
         const covPath = join(covDir, `call-${this.callSeq}.json`);
-        await rm(covPath, { force: true });
-        const made = await this.spawnCodeunit({
-          id: ref.codeunitId,
-          stopSeconds,
-          coverageJson: coverage ? covPath : undefined,
-          cwd: lane.scratchCwd(),
-          activeDir: lane.realActive ?? resolve(lane.activeDir()),
-          testDir: this.realTestDir ?? resolve(this.cfg.testDir),
-          onlyTest,
-        });
+        let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
+        try {
+          await rm(covPath, { force: true });
+          made = await this.spawnCodeunit({
+            id: ref.codeunitId,
+            stopSeconds,
+            coverageJson: coverage ? covPath : undefined,
+            cwd: lane.scratchCwd(),
+            activeDir: lane.realActive ?? resolve(lane.activeDir()),
+            testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+            onlyTest,
+          });
+        } finally {
+          this.memoryRelease();
+        }
         const covText = coverage
           ? await readFile(covPath, "utf8").catch(() => undefined)
           : undefined;
@@ -3197,6 +3471,780 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !row.notRun &&
       row.method.toLowerCase() === ref.method.toLowerCase()
     );
+  }
+
+  /** R948: whether the baseline runs through a serve daemon (serve-entries, asked for, not dropped). */
+  private daemonBaselineOn(): boolean {
+    return this.cfg.daemonBaseline === true && this.entries && this.daemonBaselineOff === undefined;
+  }
+
+  /**
+   * R948: the cross-check failed or the daemon proved unusable: the whole session's baseline goes
+   * back to one process per codeunit, never a mix, and one notice names why.
+   */
+  private dropDaemonBaseline(
+    why: string,
+    detail: readonly string[] = [],
+    /** R951 (R3): one-shot answers this fill already obtained; they are kept and served in place of a re-run. */
+    shots: ReadonlyMap<number, BaselineAnswer> = new Map(),
+  ): void {
+    this.daemonBaselineOff = why;
+    this.daemonBaselineDetail = [...detail];
+    // A fresh process's answer an earlier fill kept stands too; a daemon's does not.
+    for (const [k, a] of [...this.daemonBaseline, ...shots]) {
+      if (a.fromDaemon !== true) this.oneShotKept.set(k, a);
+    }
+    this.daemonBaseline.clear();
+    this.notify(
+      "al-runner-v3-baseline-daemon-dropped",
+      `[lethal] al-runner-v3-baseline-daemon-dropped: ${why}. The baseline of this session runs one al-runner process per codeunit instead, so it is slower; no daemon answer is used (R948).`,
+    );
+  }
+
+  /** R948: the baseline's own daemon for `mode`, started with the baseline's stop; replaced when its stop differs. */
+  private async baselineDaemonFor(
+    lane: Lane,
+    mode: RequestMode,
+    stopSeconds: number,
+  ): Promise<Daemon> {
+    const had = lane.daemonFor(mode);
+    if (had !== undefined && had.baselineStop === stopSeconds) return had;
+    if (had !== undefined) await this.closeLane(lane, "baseline-end");
+    this.transportFrozen = true; // R761
+    const d = await this.spawnDaemon(lane, mode, stopSeconds);
+    d.baselineStop = stopSeconds;
+    return d;
+  }
+
+  /**
+   * R948: one `plain()` request on the baseline daemon: `call` (a codeunit, or one test's id under
+   * `mode`) with coverage. A daemon that kept a row R612 does not keep is closed and the NEXT request
+   * starts a fresh one: the row stands, nothing is re-run. `undefined`: the answer is not usable
+   * (a suite test without exactly one row, or no coverage), so that call runs one-shot.
+   * A request error propagates as `AlRunnerServerRequestError` (the daemon is already closed).
+   */
+  private async baselineRequest(
+    lane: Lane,
+    mode: RequestMode,
+    call: number,
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<BaselineAnswer | undefined> {
+    const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
+    const started = Date.now();
+    const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
+    const wallMs = Date.now() - started;
+    if (daemon.dirty) {
+      await this.closeLane(lane, daemon.dirtyWhy?.reason ?? "unkept-row", daemon.dirtyWhy?.family);
+    }
+    if (coverage && out.coverage.kind === "unavailable") return undefined;
+    return {
+      rows: out.rows.map((r) => ({ ...r, flaggedUnknown: true as const })), // R949
+      coverage: out.coverage,
+      wallMs,
+      stopSeconds,
+      withCoverage: coverage,
+      fromDaemon: true,
+    };
+  }
+
+  /** The exit-8 notice, once per deploy: raised by a live call and by serving a kept exit-8 answer. */
+  private noteDotnetHelper(): void {
+    if (this.dotnetHelperWarned) return;
+    this.dotnetHelperWarned = true;
+    this.notify(
+      "al-runner-v3-dotnet-helper-missing",
+      "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
+    );
+  }
+
+  /** R948: whether `rows` hold exactly one row for each of `tests` (a call's answer is cached only then). */
+  private hasEveryRow(rows: readonly V3Row[], tests: readonly TestMethodRef[]): boolean {
+    return tests.every(
+      (t) => rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length === 1,
+    );
+  }
+
+  /**
+   * R948: codeunit `id` as a fresh one-shot process, for the cross-check and for a codeunit too slow
+   * for the daemon's duration to be trusted. Refusals a baseline call would raise are raised here
+   * (a skipped dependency, a missing one, a compile refusal: R944). `undefined`: no clean answer.
+   */
+  private async oneShotBaselineAnswer(
+    lane: Lane,
+    id: number,
+    stopSeconds: number,
+    coverage: boolean,
+    /** One test alone (a per-test sample): its ref and `--test-exact` selection. Absent: the whole codeunit. */
+    only?: { readonly ref: TestMethodRef; readonly test: string },
+  ): Promise<BaselineAnswer | NoOneShotAnswer> {
+    if (!(await this.memoryGate(true))) return { noAnswer: "memory-gate" };
+    const covDir = join(this.cfg.instrumentedDir, "cov");
+    let covPath = "";
+    let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
+    try {
+      await mkdir(covDir, { recursive: true });
+      this.callSeq += 1;
+      covPath = join(covDir, `call-${this.callSeq}.json`);
+      await rm(covPath, { force: true });
+      made = await this.spawnCodeunit({
+        id,
+        stopSeconds,
+        coverageJson: coverage ? covPath : undefined,
+        cwd: lane.scratchCwd(),
+        activeDir: lane.realActive ?? resolve(lane.activeDir()),
+        testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+        beforeSpawn: () => this.checkBound(lane),
+        ...(only !== undefined ? { onlyTest: only.test } : {}),
+      });
+    } finally {
+      this.memoryRelease(); // a throw anywhere from the mkdir on still gives the hold back
+    }
+    const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
+    await rm(covPath, { force: true }).catch(() => {});
+    if ("spawnError" in made) return { noAnswer: "spawn-error" };
+    if (made.timedOut) return { noAnswer: "timed-out" };
+    const { res } = made;
+    refuseDependencySkip(res.stderr);
+    refuseMissingDependency(res.exitCode, res.stderr);
+    const compileRefusal = v3CompileRefusal(res.exitCode, `${res.stdout}\n${res.stderr}`);
+    if (compileRefusal !== undefined) throw new AlRunnerV3CompileRefusedError(compileRefusal);
+    // R951 (R2): exit 7 and 8 (tests not run) are answers too, as `cleanBaselineAnswer` reads them;
+    // a missing or not-run row is the caller's to compare, not a reason to have no answer.
+    if (!ONE_SHOT_EXITS.includes(res.exitCode)) return { noAnswer: `exit-${res.exitCode}` };
+    const decoded = decodeV3Rows(res.stdout, id);
+    if ("why" in decoded) return { noAnswer: "rows-undecodable" };
+    this.observedSeed = decoded.seed ?? this.observedSeed;
+    return {
+      rows: decoded.rows,
+      coverage: decodeV3Coverage(covText),
+      wallMs: made.wallMs,
+      stopSeconds,
+      withCoverage: coverage,
+      ...(res.exitCode === 8 ? { exit8: true as const } : {}),
+    };
+  }
+
+  /**
+   * R951: one sample's cross-check. The one-shot answer (exit 0/1/7/8, decodable rows) is COMPARED
+   * with the daemon's, notRun rows and a missing row included: a difference is real and drops the
+   * session. SKIPPED (the caller replaces it) only when no process answered: memory gate, spawn
+   * error, wall timeout. A spent budget or a stopped memory guard `stop`s first, so no replacement
+   * starts then. Any other no-answer (an exit outside 0/1/7/8, undecodable rows) drops, by name.
+   */
+  private async crossCheckSample(
+    lane: Lane,
+    stopSeconds: number,
+    coverage: boolean,
+    s: {
+      readonly key: number;
+      readonly name: string;
+      readonly id: number;
+      readonly subject: string;
+      readonly what: string;
+      readonly daemon: BaselineAnswer;
+      readonly only?: { readonly ref: TestMethodRef; readonly test: string };
+    },
+  ): Promise<
+    | { readonly kind: "compared"; readonly shot: BaselineAnswer }
+    | { readonly kind: "skipped" | "stop" }
+    | { readonly kind: "dropped"; readonly why: string; readonly detail: string[] }
+  > {
+    const shot = await this.oneShotBaselineAnswer(lane, s.id, stopSeconds, coverage, s.only);
+    if ("noAnswer" in shot) {
+      if (this.stopHandle?.spent() === true || this.memoryStopped) return { kind: "stop" };
+      if (SKIPPABLE_NO_ANSWER.includes(shot.noAnswer)) {
+        this.uncleanCalls.add(s.key); // R6: never served from the daemon, for the whole session
+        this.noteSkip("error", s.name, true, shot.noAnswer);
+        return { kind: "skipped" };
+      }
+      return {
+        kind: "dropped",
+        why: `the cross-check of ${s.subject} got no clean one-shot answer (${shot.noAnswer}) to compare the daemon's with`,
+        detail: [shot.noAnswer],
+      };
+    }
+    if (this.stopHandle?.signalled() === true) return { kind: "stop" };
+    this.baselineStats.compared += 1;
+    const why = compareBaselineAnswers(s.daemon, shot);
+    if (why.length > 0) {
+      return {
+        kind: "dropped",
+        why: `the daemon's ${s.what} of ${s.subject} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+        detail: why,
+      };
+    }
+    // The live path's row check: exactly one row for each wanted test (a duplicated row can compare
+    // equal, since the comparison maps by method name), or this answer is not served.
+    const wanted = s.only !== undefined ? [s.only.ref] : (this.suitePerCodeunit.get(s.id) ?? []);
+    if (!this.hasEveryRow(shot.rows, wanted)) {
+      return {
+        kind: "dropped",
+        why: `the one-shot answer of ${s.subject} does not hold exactly one row for each of its tests`,
+        detail: ["one-shot-row-count"],
+      };
+    }
+    return { kind: "compared", shot };
+  }
+
+  /**
+   * R948: at the first baseline call of a batch, every suite codeunit through ONE serve daemon (a
+   * `plain()` request each, with coverage, started with the baseline's own stop), ahead of the
+   * orchestrator's loop; each call then takes its answer (`takeDaemonBaseline`).
+   *
+   * Safeguards, each before an answer is kept:
+   * - R652: the bound is checked before every request. R955: `spent()` before each, `signalled()`
+   *   after (the call a stop signal ended is dropped). The memory guard gates each request.
+   * - The cross-check (adversary item 1): the first and last codeunit, and every
+   *   `BASELINE_SAMPLE_EVERY`th, are also run one-shot and compared test by test (status, notRun,
+   *   fail text, exact coverage set). Any difference, or a sample with no clean one-shot answer,
+   *   drops the daemon baseline for the whole session. Nothing is served before the fill ends, so
+   *   no verdict ever rests on an answer that is dropped later.
+   * - Durations: a daemon is warm, so its durations are shorter than a fresh process's. A budget is
+   *   `max(2 x duration, floor)`; a codeunit with any test where `2 x duration >= floor` is re-run
+   *   one-shot and its one-shot answer stands, so a warm duration never moves a budget (R790's rule).
+   * - Two requests in a row without a usable answer drop the daemon baseline too.
+   */
+  private async fillDaemonBaseline(
+    lane: Lane,
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<void> {
+    const f = this.budgetFloor;
+    if (this.daemonBaselineFilled || f === undefined) return;
+    this.daemonBaselineFilled = true;
+    const all = [...this.suitePerCodeunit.keys()]
+      .filter((id) => !this.perTest(id))
+      .sort((a, b) => a - b);
+    if (this.seams.reverseBaselineOrder === true) all.reverse();
+    // R951 (R6): a codeunit whose sample's one-shot run was skipped never gets a daemon answer.
+    const ids = all.filter((id) => !this.uncleanCalls.has(id));
+    for (const id of all) {
+      if (this.uncleanCalls.has(id)) this.noteSkip("other", `Codeunit${id}`, false);
+    }
+    const planned = baselineSampleIds(ids);
+    const plan = new SamplePlan(ids, planned);
+    this.baselineStats.codeunits = all.length;
+    this.baselineStats.sampled = [...planned];
+    const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
+    const answers = new Map<number, BaselineAnswer>();
+    const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
+    const comparedBefore = this.baselineStats.compared;
+    type Step = "ok" | "stop" | "dropped";
+    const check = async (id: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
+      const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
+        key: id,
+        name: `Codeunit${id}`,
+        id,
+        subject: `codeunit ${id}`,
+        what: "baseline",
+        daemon,
+      });
+      if (r.kind === "stop") return "stop";
+      if (r.kind === "dropped") {
+        this.dropDaemonBaseline(r.why, r.detail, shots);
+        return "dropped";
+      }
+      if (r.kind === "compared") {
+        answers.set(id, r.shot);
+        shots.set(id, r.shot);
+        return "ok";
+      }
+      answers.delete(id); // skipped: its daemon answer is unproven and never served (R6)
+      return replace(`Codeunit${id}`, pos);
+    };
+    // R951 (R5): a skipped sample is replaced by the next unsampled codeunit after the loop's
+    // position; the LAST one, with none after it, by the last earlier one a daemon answered.
+    const replace = async (skipped: string, pos: number): Promise<Step> => {
+      const forward = plan.next(pos, () => true);
+      const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
+      if (pick === undefined) return "ok";
+      // Counted only once the pick is compared or skipped: a forward pick the loop never reaches
+      // (the fill stops first) is not a replacement.
+      const daemon = answers.get(pick);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = `Codeunit${pick}`;
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (id: number) => {
+      const skipped = pending.get(id);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = `Codeunit${id}`;
+      pending.delete(id);
+    };
+    let stopped = false;
+    let unusable = 0;
+    try {
+      for (const [pos, id] of ids.entries()) {
+        if (this.stopHandle?.spent() === true) {
+          stopped = true;
+          break; // R955
+        }
+        if (!(await this.memoryGate(true))) {
+          stopped = true;
+          break; // R948: no new request over the bound
+        }
+        let got: BaselineAnswer | undefined;
+        try {
+          await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
+          this.baselineStats.requests += 1;
+          got = await this.baselineRequest(lane, mode, id, stopSeconds, coverage);
+        } catch (err) {
+          if (!(err instanceof AlRunnerServerRequestError)) throw err;
+          got = undefined; // the daemon was closed; this codeunit runs one-shot
+        } finally {
+          this.memoryRelease();
+        }
+        if (this.stopHandle?.signalled() === true) {
+          stopped = true;
+          break; // R955: that call is dropped
+        }
+        if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
+          got = undefined;
+        }
+        const isSample = plan.has(id);
+        reached(id);
+        if (got === undefined) {
+          this.noteSkip("error", `Codeunit${id}`, isSample, "daemon-error");
+          unusable += 1;
+          if (unusable >= 2) {
+            this.dropDaemonBaseline(
+              "two serve requests in a row gave no usable baseline answer",
+              [],
+              shots,
+            );
+            return;
+          }
+          if (isSample) {
+            const r = await replace(`Codeunit${id}`, pos);
+            if (r === "dropped") return;
+            if (r === "stop") {
+              stopped = true;
+              break;
+            }
+          }
+          continue;
+        }
+        unusable = 0;
+        // The duration the budget will use is the verdict's: the row's, else the call's wall time.
+        const tooSlow = durationCouldMoveBudget(got.rows, got.wallMs, f.floorMs);
+        if (tooSlow && !isSample) this.noteSkip("tooSlow", `Codeunit${id}`, false);
+        if (isSample) {
+          const r = await check(id, got, pos);
+          if (r === "dropped") return;
+          if (r === "stop") {
+            stopped = true;
+            break;
+          }
+          continue;
+        }
+        if (tooSlow) {
+          const shot = await this.oneShotBaselineAnswer(lane, id, stopSeconds, coverage);
+          if ("noAnswer" in shot) continue; // no clean one-shot: its own call runs it
+          if (this.stopHandle?.signalled() === true) {
+            stopped = true;
+            break;
+          }
+          // A suite test without its row is no answer either (a baseline call would refuse it).
+          if (!this.hasEveryRow(shot.rows, this.suitePerCodeunit.get(id) ?? [])) continue;
+          shots.set(id, shot); // a fresh process's answer, and its durations, stand
+          answers.set(id, shot);
+          continue;
+        }
+        answers.set(id, got);
+      }
+      // R951 (R5): enough samples compared clean, else the daemon baseline drops by name.
+      const required = Math.min(BASELINE_MIN_CLEAN_SAMPLES, planned.length);
+      const clean = this.baselineStats.compared - comparedBefore;
+      if (!stopped && clean < required) {
+        this.dropDaemonBaseline(
+          `too few clean cross-check samples: ${clean} of ${required}`,
+          [`too-few-clean-samples:${clean}/${required}`],
+          shots,
+        );
+        return;
+      }
+      for (const [k, v] of answers) this.daemonBaseline.set(k, v);
+    } finally {
+      // The test-mode daemon is not needed again; the per-test baseline starts its own.
+      await this.closeLane(lane, "baseline-end");
+    }
+  }
+
+  /**
+   * R948 (B): R896 `method` codeunits, and `--isolate-tests`, as per-test requests to ONE
+   * codeunit-isolation daemon (`testIsolation: "codeunit"` + `runSelectedOnly`), not one process per
+   * test. Acceptance is `aloneAnswer`'s: exactly one row, that test's, and it ran. Any other answer,
+   * a request error, and a test slow enough that a warm duration could move a budget are left
+   * unanswered: that test's own call runs it alone one-shot, as before.
+   */
+  private async fillIsolatedViaDaemon(
+    lane: Lane,
+    queue: readonly TestMethodRef[],
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<void> {
+    const f = this.budgetFloor;
+    if (f === undefined) return;
+    // The refs this fill answers, in queue order; the sample is by position in that order.
+    const eligible = queue.filter((ref) => this.isolated(this.callId(ref)) !== undefined);
+    // R951 (R6): a test whose sample's one-shot run was skipped never gets a daemon answer.
+    const refs = eligible.filter((ref) => !this.uncleanCalls.has(this.callId(ref)));
+    for (const ref of eligible) {
+      if (this.uncleanCalls.has(this.callId(ref))) {
+        this.noteSkip("other", `${ref.codeunitName}.${ref.method}`, false);
+      }
+    }
+    const keys = refs.map((ref) => this.callId(ref));
+    const refOf = new Map(refs.map((ref) => [this.callId(ref), ref]));
+    const planned = baselineSampleIds(keys.map((_, i) => i))
+      .map((i) => keys[i])
+      .filter((k): k is number => k !== undefined);
+    const plan = new SamplePlan(keys, planned);
+    this.baselineStats.perTestRequests = eligible.length;
+    this.baselineStats.perTestSampled = baselineSampleIds(keys.map((_, i) => i));
+    const answers = new Map<number, BaselineAnswer>();
+    const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
+    const comparedBefore = this.baselineStats.compared;
+    const nameOf = (r: TestMethodRef) => `${r.codeunitName}.${r.method}`;
+    type Step = "ok" | "stop" | "dropped";
+    const check = async (key: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
+      const ref = refOf.get(key);
+      const one = this.isolated(key);
+      if (ref === undefined || one === undefined) return "ok";
+      const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
+        key,
+        name: nameOf(ref),
+        id: ref.codeunitId,
+        subject: nameOf(ref),
+        what: "per-test baseline",
+        daemon,
+        only: { ref, test: one.test },
+      });
+      if (r.kind === "stop") return "stop";
+      if (r.kind === "dropped") {
+        this.dropDaemonBaseline(r.why, r.detail, shots);
+        return "dropped";
+      }
+      if (r.kind === "compared") {
+        answers.set(key, r.shot);
+        shots.set(key, r.shot);
+        return "ok";
+      }
+      answers.delete(key); // skipped: its daemon answer is unproven and never served (R6)
+      return replace(nameOf(ref), pos);
+    };
+    // R951 (R5): as the whole-codeunit fill's replacement (forward, the last one backward).
+    const replace = async (skipped: string, pos: number): Promise<Step> => {
+      const forward = plan.next(pos, () => true);
+      const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
+      const ref = pick === undefined ? undefined : refOf.get(pick);
+      if (pick === undefined || ref === undefined) return "ok";
+      // Counted only once the pick is compared or skipped (see the whole-codeunit fill).
+      const daemon = answers.get(pick);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = nameOf(ref);
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (key: number, ref: TestMethodRef) => {
+      const skipped = pending.get(key);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = nameOf(ref);
+      pending.delete(key);
+    };
+    let stopped = false;
+    try {
+      for (const [i, ref] of refs.entries()) {
+        const key = this.callId(ref);
+        // The mode is the call's own (`modeOfCall`): codeunit isolation under `method`, test
+        // isolation under `--isolate-tests`; both with `runSelectedOnly`.
+        const mode = this.modeOfCall(key);
+        if (this.stopHandle?.spent() === true) {
+          stopped = true;
+          break; // R955
+        }
+        if (!(await this.memoryGate(true))) {
+          stopped = true;
+          break; // R948
+        }
+        let got: BaselineAnswer | undefined;
+        let failed = false;
+        try {
+          await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
+          got = await this.baselineRequest(lane, mode, key, stopSeconds, coverage);
+        } catch (err) {
+          if (!(err instanceof AlRunnerServerRequestError)) throw err;
+          failed = true;
+        } finally {
+          this.memoryRelease();
+        }
+        if (this.stopHandle?.signalled() === true) {
+          stopped = true;
+          break; // R955: that call is dropped
+        }
+        const [row] = got?.rows ?? [];
+        const name = nameOf(ref);
+        const isSample = plan.has(key);
+        reached(key, ref);
+        // Why the daemon's answer is not kept (R5: a sample is then replaced), if it is not.
+        const skip: { kind: "error" | "other" | "tooSlow"; reason: string } | undefined = failed
+          ? { kind: "error", reason: "daemon-error" }
+          : got === undefined ||
+              got.rows.length !== 1 ||
+              row === undefined ||
+              row.notRun ||
+              row.method.toLowerCase() !== ref.method.toLowerCase()
+            ? { kind: "other", reason: "daemon-odd-row" }
+            : durationCouldMoveBudget([row], got.wallMs, f.floorMs)
+              ? { kind: "tooSlow", reason: "daemon-too-slow" }
+              : undefined;
+        if (skip !== undefined || got === undefined) {
+          this.noteSkip(skip?.kind ?? "other", name, isSample, skip?.reason);
+          if (isSample) {
+            const r = await replace(name, i);
+            if (r === "dropped") return;
+            if (r === "stop") {
+              stopped = true;
+              break;
+            }
+          }
+          continue;
+        }
+        if (isSample) {
+          // The cross-check: this test alone in a fresh process, compared per test.
+          const r = await check(key, got, i);
+          if (r === "dropped") return;
+          if (r === "stop") {
+            stopped = true;
+            break;
+          }
+          continue;
+        }
+        answers.set(key, got);
+      }
+      const required = Math.min(BASELINE_MIN_CLEAN_SAMPLES, planned.length);
+      const clean = this.baselineStats.compared - comparedBefore;
+      if (!stopped && clean < required) {
+        this.dropDaemonBaseline(
+          `too few clean cross-check samples: ${clean} of ${required}`,
+          [`too-few-clean-samples:${clean}/${required}`],
+          shots,
+        );
+        return;
+      }
+      for (const [k, v] of answers) this.daemonBaseline.set(k, v);
+    } finally {
+      await this.closeLane(lane, "baseline-end");
+    }
+  }
+
+  /** R948: the answer the daemon baseline holds for this baseline call, taken once, if it matches. */
+  private async takeDaemonBaseline(
+    lane: Lane,
+    key: number,
+    perTest: boolean,
+    stopSeconds: number,
+    coverage: boolean,
+  ): Promise<BaselineAnswer | undefined> {
+    if (!this.inBaseline || lane.lastActivated !== null) return undefined;
+    // R951 (R3): after a drop, the one-shot answers the fill had obtained stand in place of a re-run.
+    const kept = (): BaselineAnswer | undefined => {
+      if (!this.baselineDaemon || this.daemonBaselineOff === undefined) return undefined;
+      const k = this.oneShotKept.get(key);
+      this.oneShotKept.delete(key);
+      if (k?.stopSeconds !== stopSeconds || k.withCoverage !== coverage) return undefined;
+      if (k.exit8 === true) this.noteDotnetHelper();
+      return k;
+    };
+    if (!this.daemonBaselineOn()) return kept();
+    // Whole codeunits first, always: their fill and cross-check end before ANY daemon answer, a
+    // per-test one included, is served (on batch 2+ under auto a `method` call can come first).
+    // A drop there leaves nothing served and the session one-shot.
+    await this.fillDaemonBaseline(lane, stopSeconds, coverage);
+    if (!this.daemonBaselineOn()) return kept();
+    if (perTest) {
+      await this.fillIsolatedBaseline(lane, stopSeconds, coverage);
+      if (!this.daemonBaselineOn()) return kept();
+    }
+    const a = this.daemonBaseline.get(key);
+    this.daemonBaseline.delete(key);
+    if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
+    if (a.exit8 === true) this.noteDotnetHelper(); // a served one-shot exit-8 answer, as a live call
+    if (a.fromDaemon === true) {
+      this.baselineStats.served += 1;
+      // R949: once per session, when the first daemon answer is used. No count here: later batches and
+      // per-test fills are not known yet; the report's per-test `baselineFlaggedUnknown` is the record.
+      if (!this.flaggedUnknownNoted) {
+        this.flaggedUnknownNoted = true;
+        this.notify(
+          "al-runner-v3-serve-flagged-unknown",
+          `[lethal] al-runner-v3-serve-flagged-unknown: the baseline came from an al-runner serve daemon, whose rows carry no "flagged" (a pass resting on an unprobed assumption), so every passing test the daemon answered has an UNKNOWN flagged state; the report marks each one baselineFlaggedUnknown, never unflagged. Upstream: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7954 (R949).`,
+        );
+      }
+    }
+    return a;
+  }
+
+  /** R948: the guard's first line: the bound and where it came from, or why there is none. Once. */
+  private announceMemoryGuard(): void {
+    if (this.memoryGuard !== undefined) return;
+    const headroom = this.cfg.memoryHeadroomGb;
+    this.memoryGuard = "off";
+    if (headroom === undefined) return; // no guard asked for (unit tests)
+    if (headroom === 0) {
+      this.notify(
+        "al-runner-v3-memory-guard-off",
+        '[lethal] al-runner-v3-memory-guard-off: "alRunnerV3.memoryHeadroomGb" is 0, so nothing stops this run before the container\'s memory limit (R948).',
+      );
+      return;
+    }
+    const read = this.seams.memoryReader ?? (() => readCgroupMemory());
+    const s = read();
+    if (s === undefined || s.maxBytes === undefined) {
+      this.notify(
+        "al-runner-v3-memory-guard-off",
+        `[lethal] al-runner-v3-memory-guard-off: ${s === undefined ? "no cgroup v2 memory.current can be read here" : `${s.source} names no limit`}, so nothing stops this run before the container's memory limit (R948).`,
+      );
+      return;
+    }
+    const gib = (n: number) => (n / 2 ** 30).toFixed(1);
+    const boundBytes = memoryBoundBytes(s.maxBytes, headroom);
+    this.notify(
+      "al-runner-v3-memory-guard",
+      `[lethal] al-runner-v3-memory-guard: no new test call starts while the container uses more than ${gib(boundBytes)} GiB (${s.source} is ${gib(s.maxBytes)} GiB, less ${headroom} GiB headroom); it waits, then stops the run and writes its report (R948).`,
+    );
+    this.memoryGuard = { read, boundBytes, source: s.source };
+  }
+
+  /**
+   * R948: `true` when a new call or request may start. Over the bound it re-reads (waiting
+   * `MEMORY_POLL_MS` between reads, at most `MEMORY_WAIT_POLLS` times); if it never clears, the
+   * session is stopped through the budget (`stopForMemory`, R955's path) and this and every later
+   * gate answers `false`. Called only at call boundaries: never inside a request or a mutant group.
+   */
+  private memoryGate(hold = false): Promise<boolean> {
+    // One caller at a time: callers that arrive together read and reserve in turn, so they cannot all
+    // pass at "the bound less a little" (each started process or request is `memoryEstimate()` bytes
+    // that the container's reading does not show yet).
+    const turn = this.memoryChain.then(() => this.memoryGateOne(hold));
+    this.memoryChain = turn.then(
+      () => undefined,
+      () => undefined,
+    );
+    return turn;
+  }
+
+  /** R948: what one started process or request is counted at until its caller releases it. */
+  private memoryEstimate(): number {
+    return this.seams.memoryEstimateBytes ?? MEMORY_CALL_ESTIMATE_BYTES;
+  }
+
+  /** R948: the caller of `memoryGate(true)` has finished its process or request: its reservation ends. */
+  private memoryRelease(): void {
+    if (this.memoryHeld > 0) this.memoryHeld -= 1;
+  }
+
+  /** R948: asked before the mutant loop activates a mutant: `false` = the guard stopped the session. */
+  mayStartGroup(): Promise<boolean> {
+    return this.memoryGate(false);
+  }
+
+  /** R948: true when this session's baseline comes from a serve daemon (see `ExecutionBackend.baselineDaemon`). */
+  get baselineDaemon(): boolean {
+    return this.cfg.daemonBaseline === true && this.entries;
+  }
+
+  /** R948: what the daemon baseline did, for the gate and the tests. */
+  daemonBaselineReport(): {
+    readonly dropped: string | undefined;
+    /** Why it was dropped, per differing test and field (`failText`, `coverage`, ...), uncut. */
+    readonly droppedDetail: readonly string[];
+    readonly codeunits: number;
+    readonly requests: number;
+    readonly sampledCodeunits: readonly number[];
+    readonly perTestRequests: number;
+    readonly sampledPerTest: readonly number[];
+    readonly compared: number;
+    /** Answers a daemon gave that calls actually took (a fresh process's answer in its place is not counted). */
+    readonly served: number;
+    /** Names of answers not kept because 2 x duration >= floor (a warm duration could move a budget). */
+    readonly skippedTooSlow: readonly string[];
+    /** Names of answers lost to a serve request error or an unusable answer. */
+    readonly skippedError: readonly string[];
+    /** Names of per-test answers that were a refusal or not that test's row. */
+    readonly skippedOther: readonly string[];
+    /** Sampled items whose daemon answer was skipped (so `compared` is short by this many). */
+    readonly sampledSkipped: readonly string[];
+    /** R951: how many skipped samples were replaced by another item. */
+    readonly replaced: number;
+    /** R951: skipped sample name -> the name that replaced it. */
+    readonly replacements: Readonly<Record<string, string>>;
+  } {
+    const s = this.baselineStats;
+    return {
+      replaced: Object.keys(s.replacements).length,
+      replacements: { ...s.replacements },
+      served: s.served,
+      skippedTooSlow: [...s.skippedTooSlow],
+      skippedError: [...s.skippedError],
+      skippedOther: [...s.skippedOther],
+      sampledSkipped: [...s.sampledSkipped],
+      dropped: this.daemonBaselineOff,
+      droppedDetail: [...this.daemonBaselineDetail],
+      codeunits: s.codeunits,
+      requests: s.requests,
+      sampledCodeunits: s.sampled,
+      perTestRequests: s.perTestRequests,
+      sampledPerTest: s.perTestSampled,
+      compared: s.compared,
+    };
+  }
+
+  private async memoryGateOne(hold: boolean): Promise<boolean> {
+    this.announceMemoryGuard();
+    const g = this.memoryGuard;
+    if (g === undefined || g === "off") return true;
+    if (this.memoryStopped) return false;
+    const polls = this.seams.memoryWaitPolls ?? MEMORY_WAIT_POLLS;
+    const sleep =
+      this.seams.memorySleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let used = 0;
+    let closed = false;
+    for (let i = 0; ; i += 1) {
+      const s = g.read();
+      if (s === undefined) return true; // unreadable now: the first read decided the guard is on, so this is not a stop
+      used = s.usedBytes + this.memoryHeld * this.memoryEstimate();
+      if (used <= g.boundBytes) {
+        if (hold) this.memoryHeld += 1;
+        return true;
+      }
+      if (i >= polls) break;
+      if (!closed) {
+        // Over the bound: the baseline's own daemon holds 2-3 GB and is not needed while waiting.
+        closed = true;
+        await this.closeBaselineDaemons();
+      }
+      await sleep(MEMORY_POLL_MS);
+    }
+    this.memoryStopped = true;
+    const info = { usedBytes: used, boundBytes: g.boundBytes, source: g.source };
+    this.notify(
+      "al-runner-v3-memory-bound",
+      `[lethal] al-runner-v3-memory-bound: the container uses ${(used / 2 ** 30).toFixed(1)} GiB, over the ${(g.boundBytes / 2 ** 30).toFixed(1)} GiB bound, and stayed there; no new test call starts and the run stops with its report (R948).`,
+    );
+    if (this.stopHandle === undefined) {
+      throw new AlRunnerV3MemoryBoundError(info.usedBytes, info.boundBytes, info.source);
+    }
+    this.stopHandle.stopForMemory(info);
+    return false;
   }
 
   /** R866: the answer `fillIsolatedBaseline` holds for this baseline call, taken once, if it matches. */
@@ -3255,6 +4303,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       bcVersion: this.cfg.bcVersion,
       noClient: this.noClient,
       environment: this.environmentChoice.value,
+      ...(this.cfg.license !== undefined ? { license: this.cfg.license.path } : {}), // R956
       noDownload: this.noDownload(),
       // R907: only a call with a mutant active; a baseline Sleep test stopped at the limit would
       // otherwise leave its codeunit's later tests not run, counted refused at baseline.
@@ -3384,6 +4433,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       dependencyArtifactAppsDir: () => b.dependencyArtifactAppsDir(),
       latched: () => b.latched(),
       activate: (id) => b.activateOn(lane, id),
+      mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
@@ -3397,6 +4447,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       useDiscoveredTests: no("useDiscoveredTests"),
       useSessionTests: no("useSessionTests"),
       useMutantBudgetFloor: no("useMutantBudgetFloor"),
+      useMutantStop: no("useMutantStop"),
       useBuildSymbols: no("useBuildSymbols"),
       baselinePhase: no("baselinePhase"),
       noteReusedBaseline: no("noteReusedBaseline"),
@@ -3694,6 +4745,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async activateOn(lane: Lane, mutantId: string | null): Promise<void> {
+    // R948: the memory guard is asked BEFORE this call, by the mutant loop (`mayStartGroup`): a
+    // group the guard stopped is never activated, so nothing here waits or stops.
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
     lane.aloneAfterStop = new Map();
@@ -3988,7 +5041,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `al-runner-v3: coverage is on and v3's --coverage-json gave no per-test coverage for ${row.name} (${call.coverage.kind === "unavailable" ? call.coverage.why : "no single per-test entry"}); refusing rather than reading it as "covered nothing" (R586 §6)`,
       );
     }
-    const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage);
+    const verdict = v3RowVerdict(ref, row, call.stopSeconds, call.wallMs, coverage, call.callId);
     if (lane.lastActivated === null) return verdict;
     // R586c (B2): alpha.5 counts a Sleep toward --test-timeout-secs on a VIRTUAL clock, so a test it
     // "stopped at 3 s" returned after a few ms. A genuine CPU stop has a wall time of at least the
@@ -4004,6 +5057,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ref,
         outcome: "error",
         durationMs: call.wallMs,
+        ...(verdict.measuredDurationMs !== undefined
+          ? { measuredDurationMs: verdict.measuredDurationMs }
+          : {}),
+        ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
         failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
         operation: "completed-accepted",
         runnerRow: "runner-refused",
@@ -4023,6 +5080,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
+          ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
           failureMessage: `${row.message ?? ""} [al-runner v3: a timeout after ${earlier.map((r) => r.method).join(", ")} refused or stopped earlier in the same call is not trusted; never scored (R-435)]`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -4096,6 +5157,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
+          ...(verdict.callId !== undefined ? { callId: verdict.callId } : {}),
           failureMessage: note,
           operation: "completed-accepted",
           runnerRow: "runner-refused",
@@ -4243,12 +5308,56 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const coverageRequested = !noCoverage && !(this.sleepRuleRetired && !this.isBaselineCall(lane));
     // R790 (A1): a baseline call deploy() already ran, on the proved bytes, is served once instead of
     // a spawn; everything below reads its raw answer exactly as a live one's.
+    // R948: under serve-entries the baseline's answers come from one daemon (`fillDaemonBaseline`,
+    // `fillIsolatedViaDaemon`); a call it could not answer, or a session that dropped the daemon
+    // baseline, runs one-shot below exactly as before.
+    const viaDaemon =
+      aloneTest === undefined
+        ? await this.takeDaemonBaseline(
+            lane,
+            key,
+            onlyTest !== undefined,
+            stopSeconds,
+            coverageRequested,
+          )
+        : undefined;
+    if (viaDaemon !== undefined) {
+      await this.checkBound(lane); // R652: as before a send; the bytes now are the proved bytes
+      const call: CallRows = {
+        rows: viaDaemon.rows,
+        stopSeconds,
+        wallMs: viaDaemon.wallMs,
+        // R963: one daemon baseline answer is one request (`baselineRequest`, one `plain()` per call): its own call id.
+        callId: randomUUID(),
+        coverage: viaDaemon.coverage,
+        ...(noCoverage ? { noCoverage: true } : {}),
+      };
+      this.noteBaselineRows(lane, key, viaDaemon.rows);
+      lane.rowsByCodeunit.set(key, call);
+      return { call };
+    }
     const spec =
-      aloneTest !== undefined
+      aloneTest !== undefined || viaDaemon !== undefined
         ? undefined
         : onlyTest !== undefined
           ? await this.takeIsolated(lane, key, stopSeconds, coverageRequested)
           : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
+    // R948: a baseline call over the memory bound starts no process and is dropped like a signalled
+    // one (the orchestrator sees the stop and discards its row): never a verdict, never stored.
+    let held = false;
+    if (spec === undefined && aloneTest === undefined && this.isBaselineCall(lane)) {
+      held = true;
+      if (!(await this.memoryGate(true))) {
+        held = false;
+        return {
+          verdict: transportFailure(
+            ref,
+            "al-runner-v3-memory-bound: the container is over its memory bound, so this baseline call was not started and its row is dropped (R948)",
+            0,
+          ),
+        };
+      }
+    }
     let raw: SpawnedCall;
     if (spec !== undefined) {
       // R652: still checked, as before a send: the bytes now are the proved bytes.
@@ -4267,6 +5376,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         beforeSpawn: () => this.checkBound(lane),
         ...(onlyTest !== undefined ? { onlyTest } : {}),
         mutantActive: aloneTest === undefined && !this.isBaselineCall(lane),
+      }).finally(() => {
+        if (held) this.memoryRelease();
       });
       if ("spawnError" in made) {
         return {
@@ -4310,13 +5421,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ),
       };
     }
-    if (res.exitCode === 8 && !this.dotnetHelperWarned) {
-      this.dotnetHelperWarned = true;
-      this.notify(
-        "al-runner-v3-dotnet-helper-missing",
-        "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
-      );
-    }
+    if (res.exitCode === 8) this.noteDotnetHelper();
     const decoded = decodeV3Rows(res.stdout, id);
     if ("why" in decoded) {
       return { verdict: transportFailure(ref, `codeunit ${id}: ${decoded.why}`, wallMs) };
@@ -4357,6 +5462,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       rows: decoded.rows,
       stopSeconds,
       wallMs,
+      callId: randomUUID(),
       coverage: decodeV3Coverage(covText),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
@@ -4412,13 +5518,50 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async ensureDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const had = lane.daemonFor(mode);
-    if (had !== undefined) return had;
+    // R954: a daemon started under another stop (before `useMutantStop`) is replaced.
+    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) {
+      // R952 (R948): a daemon past its size or request bound is replaced by a fresh one, warmed up and
+      // checked against the baseline like any restarted daemon.
+      if (!this.overRecycleBound(had)) return had;
+      await this.closeLane(lane, "recycle");
+    } else if (had !== undefined) await this.closeLane(lane, "mutant-stop");
     const before = lane.timers.warmupMs;
     const d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
     lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
     lane.daemonStarts += 1;
     return d;
   }
+
+  /**
+   * R952 (R948): whether `d` is past `alRunnerV3.daemonMaxRequests` (entries requests sent to it,
+   * warm-up included, through `send()`; the coverage window's plain requests are not counted) or
+   * `daemonMaxRssGb` (its process's resident memory). A bound of 0 is off; an RSS that cannot be read
+   * (no /proc) never recycles. A daemon already over the size after its warm-up and at most one more
+   * request is the project's working set, not growth: recycling it would only buy a warm-up per
+   * request, so the size bound is turned off for the session, said once (review r1).
+   */
+  private overRecycleBound(d: Daemon): boolean {
+    const maxRequests = this.cfg.daemonMaxRequests ?? 0;
+    if (maxRequests > 0 && d.requests >= maxRequests) return true;
+    const maxGb = this.cfg.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT;
+    if (!(maxGb > 0) || this.rssBoundOff) return false;
+    const pid = d.server.pid;
+    if (pid === undefined) return false;
+    const rss = (this.seams.rssReader ?? readProcessRssBytes)(pid);
+    if (rss === undefined || rss <= maxGb * 2 ** 30) return false;
+    if (d.requests <= 2) {
+      this.rssBoundOff = true;
+      this.notify(
+        "al-runner-v3-daemon-recycle-off",
+        `[lethal] al-runner-v3-daemon-recycle-off: a serve daemon is already ${(rss / 2 ** 30).toFixed(1)} GiB after ${d.requests} request(s), over "alRunnerV3.daemonMaxRssGb" (${maxGb}); recycling would only add a warm-up per request, so the size bound is off for this session (R952). Raise the bound for this project, or rely on the run's memory guard.`,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /** R952 review r1: set when a fresh daemon was already over the size bound. */
+  private rssBoundOff = false;
 
   /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
   private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {
@@ -4433,6 +5576,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.cfg.bcVersion,
       "--environment",
       this.environmentChoice.value,
+      ...(this.cfg.license !== undefined ? ["--license", this.cfg.license.path] : []), // R956
       ...(this.noDownload() ? ["--no-download"] : []),
       ...(this.sidecarPath !== undefined
         ? [
@@ -4443,7 +5587,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         : []),
     ]);
     this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false };
+    const daemon: Daemon = { server, dirty: false, stopSeconds, requests: 0 };
     lane.setDaemon(mode, daemon);
     return daemon;
   }
@@ -4526,7 +5670,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
         "warmup",
         mode,
-      );
+      ).catch((err: unknown) => {
+        // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
+        // named row does (R786). An explicit transport keeps failing by name. Only at the
+        // session's FIRST warm-up (review a): a later daemon (another mode, a restart) would
+        // re-run the session and throw away verdicts already scored, so it fails as before.
+        if (
+          this.cfg.transportSource === "default" &&
+          this.stats.warmups === 1 &&
+          err instanceof AlRunnerV3EntriesRefusedError &&
+          err.code === "al-runner-v3-entries-batch-refused"
+        ) {
+          throw new AlRunnerV3ServeFallbackWarmupError(
+            "the whole warm-up request (entries-batch-refused)",
+            err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, ""),
+            true,
+          );
+        }
+        throw err;
+      });
       const disagree: string[] = [];
       const echo = rows.get(sent[0]?.id ?? "") ?? [];
       const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
@@ -4630,6 +5792,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
+    daemon.requests += 1;
     const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
       alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
     );
@@ -4823,6 +5986,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
     const results = new Map<string, Map<number, CallRows>>();
+    const requestCallId = randomUUID(); // R963: one id for the whole request: they share one wall
     let echoWhy: string | undefined;
     const reached = new Set<string>();
     for (const e of standing) {
@@ -4843,6 +6007,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         rows: mine,
         stopSeconds: s,
         wallMs,
+        callId: requestCallId,
         coverage: { kind: "unavailable", why: "an entries answer carries no coverage (R635 §5)" },
         ...(echoWhy !== undefined
           ? {
@@ -4950,6 +6115,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const queue = chunkGroups(groups);
     const resent = new Set<string>();
     for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+      // R948: a prefetch request starts no group while the container is over its memory bound; the
+      // session stops by the guard (R955's path), so the rest is never scored.
+      if (!(await this.memoryGate())) break;
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
         // R766 (b): the shared prefetch runs on lane 0 with the N = 1 grouping; any lane consumes it.
@@ -5404,8 +6572,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mode: RequestMode,
     call: number,
     coverage: boolean,
+    /** R948: the baseline daemon's own stop; absent: the mutant phase's `serveStopSeconds`. */
+    stopSeconds?: number,
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
-    const s = this.serveStopSeconds() ?? 1;
+    const s = stopSeconds ?? this.serveStopSeconds() ?? 1;
     const one = this.isolated(call);
     const cu = one?.codeunit ?? call;
     const body = {

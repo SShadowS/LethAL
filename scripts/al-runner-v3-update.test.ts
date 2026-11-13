@@ -31,7 +31,9 @@ import {
   type UpdateDeps,
   V3_CDO_DEFAULT,
   candidates,
+  argv0FromCmdline,
   countHeavyJobs,
+  movesUnder,
   dailyOnce,
   edgeOnce,
   edgeRejudge,
@@ -117,6 +119,8 @@ function fake(o: {
   warnFacts?: Record<string, string>;
   heavy?: number;
   free?: number;
+  /** R952: the memory rule's answer for the gate; "no-limit" answers undefined (no cgroup limit). Absent: no such dep. */
+  mem?: { refuse: boolean; message: string } | "no-limit";
   /** Written as `gate.log` beside the receipt, as `realDeps().runGate` does (R633 I1). */
   gateLog?: string;
   /** The gate throws this after writing its files (a non-zero exit). */
@@ -157,6 +161,9 @@ function fake(o: {
     procsWithCwdUnder: async () => o.orphans ?? [],
     heavyJobs: async () => o.heavy ?? 0,
     freeGb: async () => o.free ?? 20,
+    ...(o.mem !== undefined
+      ? { gateMemory: async () => (o.mem === "no-limit" ? undefined : o.mem) }
+      : {}),
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
@@ -533,6 +540,26 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(fake({ outcome: "pass", heavy: 2, free: 10 }).deps)).toEqual(["pass"]);
   });
 
+  test("R952: where the cgroup names a limit, the memory rule decides, not the job count", async () => {
+    await setup();
+    // 3 heavy jobs and 2 GB by free: skipped before; memory admits the gate, so it runs
+    const busy = fake({ outcome: "pass", heavy: 3, free: 2, mem: { refuse: false, message: "admitted" } });
+    expect(await updateOnce(busy.deps)).toEqual(["pass"]);
+    // no heavy job at all, but memory refuses: skipped, and the log names the memory reading
+    const full = fake({
+      outcome: "pass",
+      heavy: 0,
+      mem: { refuse: true, message: "memory: max 32.0 GiB ... -> REFUSED (x)" },
+    });
+    expect(await updateOnce(full.deps)).toEqual(["skipped"]);
+    expect(full.seen.gates).toEqual([]);
+    expect(full.seen.logs.join("\n")).toContain("skipped for the day: memory: max 32.0 GiB");
+    // no cgroup limit to read: the job count decides as before
+    const host = fake({ outcome: "pass", heavy: 3, mem: "no-limit" });
+    expect(await updateOnce(host.deps)).toEqual(["skipped"]);
+    expect(host.seen.logs.join("\n")).toContain("3 heavy jobs are running");
+  });
+
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
     await setup();
     const i = fake({
@@ -632,6 +659,35 @@ linuxOnly("T19: the v3 update gate", () => {
   });
 });
 
+describe("R950: which running process a move of `current` affects", () => {
+  const root = "/work/tools/al-runner-v3";
+  const exe = `${root}/edge-42af5d384-42af5d384/al-runner`;
+  test("one started through current/ counts; one on an explicit build path does not", () => {
+    expect(movesUnder(root, exe, `${root}/current/al-runner`)).toBe(true);
+    expect(movesUnder(root, exe, exe)).toBe(false);
+    expect(movesUnder(root, exe, `${root}/edge-2bd87774f-2bd87774f/al-runner`)).toBe(false);
+  });
+  test("the safe side: an unreadable or relative argv[0] counts; a process off root never does", () => {
+    expect(movesUnder(root, exe, undefined)).toBe(true);
+    expect(movesUnder(root, exe, "al-runner")).toBe(true);
+    expect(movesUnder(root, "/usr/bin/bash", `${root}/current/al-runner`)).toBe(false);
+  });
+  test("a non-normal path through current/ counts (build review r1)", () => {
+    for (const a of [
+      `${root}//current/al-runner`,
+      `${root}/./current/al-runner`,
+      `${root}/edge-x/../current/al-runner`,
+    ])
+      expect(movesUnder(root, exe, a), a).toBe(true);
+  });
+  test("argv[0] is the cmdline's first NUL-separated field; none when the cmdline is empty", () => {
+    expect(argv0FromCmdline(`${root}/current/al-runner\0serve\0--x\0`)).toBe(
+      `${root}/current/al-runner`,
+    );
+    expect(argv0FromCmdline("")).toBeUndefined();
+  });
+});
+
 describe("R633 I2 and M5", () => {
   test("I2: a skipped --regate exits 2; a skipped alpha run, or a regate that ran, exits 0", () => {
     expect(updateExitCode(true, ["skipped"])).toBe(2);
@@ -649,6 +705,56 @@ describe("R633 I2 and M5", () => {
       p(5, "bun packages/runner/itest/al-runner-v3.itest.ts --worker 1", 88),
     ];
     expect(countHeavyJobs(procs, 1)).toBe(1);
+  });
+  test("R934: a queued heavy-slot.sh --wait waiter is no job; a holding wrapper counts once, by its slot", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const waiter = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `bash scripts/heavy-slot.sh --wait other ${cmd}`,
+    };
+    const sleeping = { pid: 2, ppid: 1, pgid: 1, args: "sleep 5" };
+    expect(countHeavyJobs([waiter, sleeping], 0)).toBe(0);
+    const holder = { pid: 3, ppid: 0, pgid: 3, args: `bash scripts/heavy-slot.sh other ${cmd}` };
+    const job = { pid: 4, ppid: 3, pgid: 3, args: cmd };
+    expect(countHeavyJobs([waiter, sleeping, holder, job], 1)).toBe(1);
+  });
+  test("R952: a --peak waiter is no job; a job whose argv only mentions heavy-slot.sh is still one", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const waiter = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `bash scripts/heavy-slot.sh --wait --peak gate other ${cmd}`,
+    };
+    expect(countHeavyJobs([waiter], 0)).toBe(0);
+    // the counted direction: a heavy job in its own group naming the wrapper later in its argv
+    const mention = {
+      pid: 5,
+      ppid: 0,
+      pgid: 5,
+      args: `${cmd} --note scripts/heavy-slot.sh other x`,
+    };
+    expect(countHeavyJobs([mention], 0)).toBe(1);
+  });
+  test("R952 review: the Bash tool's shell that launched a queued waiter is no job", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const shell = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `/bin/bash -c source /tmp/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh --wait other ${cmd}'`,
+    };
+    const waiter = {
+      pid: 2,
+      ppid: 1,
+      pgid: 2,
+      args: `bash scripts/heavy-slot.sh --wait other ${cmd}`,
+    };
+    expect(countHeavyJobs([shell, waiter], 0)).toBe(0);
+    // the same shell with no wrapper below it still names a job of its own
+    expect(countHeavyJobs([shell], 0)).toBe(1);
   });
   // R930: the shape measured 2026-11-11 with an invented command: the harness's shell, the job's
   // shell and `timeout` (which moves itself into a new group) are three groups for one job.

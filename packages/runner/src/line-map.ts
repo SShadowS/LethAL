@@ -474,6 +474,20 @@ export class LineMap {
   }
 
   /**
+   * R965: when the procedure `lookup` names for `lineNo` shares its name with another procedure of
+   * the object (an overload), its 0-based source-order position among them; else `undefined`.
+   * The manifest's `procedureOverloadIndex` counts the same way over the source, so the two meet.
+   */
+  overloadIndexAt(objectType: string, objectId: number, lineNo: number): number | undefined {
+    const entry = this.byObject.get(keyOf(objectType, objectId));
+    const name = this.lookup(objectType, objectId, lineNo);
+    if (entry === undefined || name === undefined) return undefined;
+    const same = entry.procedures.filter((p) => p.name.toLowerCase() === name.toLowerCase());
+    if (same.length < 2) return undefined;
+    return same.findIndex((p) => lineNo >= p.firstLine && lineNo <= p.lastLine);
+  }
+
+  /**
    * R318: the coverage name of the RENAMED split member whose span alone holds `lineNo`, when
    * `scope` (the producer's own name for the statement, al-runner `--server`'s `st.scope`) is one
    * of that member's arm names. Else `undefined`, and the caller keeps `scope`.

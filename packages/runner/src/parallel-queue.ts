@@ -59,6 +59,7 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     activate: (id) => lane0.activate(id),
     run: (ref, opts) => lane0.run(ref, opts),
     baselinePhase: (on) => owner.baselinePhase?.(on),
+    mayStartGroup: () => lane0.mayStartGroup?.() ?? Promise.resolve(true), // R948
     noteReusedBaseline: (baseline) => owner.noteReusedBaseline?.(baseline),
     // R896: the choice is the owner's (every lane reads it); absent on an owner without auto.
     ...(owner.chooseIsolation !== undefined
@@ -96,6 +97,12 @@ export interface LaneSink {
   finish(mutantId: string, commit: () => void, stop?: Error): void;
   /** The loop ended the shard after this mutant because the session latched unsafe (N = 1's `break`). */
   unsafeBreak(mutantId: string): void;
+  /**
+   * R948: the memory guard refused to start `mutantId`'s group. The session's budget is spent (the
+   * guard did it); this closes the commit without an error, so the window ends as a budget stop
+   * (`stoppedByGuard`) and never as R766's "never finished or recorded" throw.
+   */
+  memoryStop(mutantId: string): void;
 }
 
 /** The session-stopping error of a parallel run; `cause` is the first cause, `discarded` the mutant codes. */
@@ -190,6 +197,7 @@ export class OrderedCommit {
       },
       finish: (code, commit, stop) => this.finish(code, commit, stop),
       unsafeBreak: (code) => this.unsafeBreak(code),
+      memoryStop: (code) => this.memoryStop(code),
     };
     return { sink, current: () => current };
   }
@@ -257,6 +265,24 @@ export class OrderedCommit {
       cause: "the session latched unsafe",
       benign: true,
     });
+  }
+
+  /** R948: true once a lane's refused group closed this commit (see `LaneSink.memoryStop`). */
+  stoppedByGuard = false;
+
+  private memoryStop(code: string): void {
+    this.stoppedByGuard = true;
+    this.closeWith({
+      selfIdx: this.idx(code),
+      selfKept: false,
+      cause: "the memory guard stopped the session",
+      benign: true,
+    });
+  }
+
+  /** The `codes` of this window that were not recorded (by the guard's stop): left out of the report. */
+  unrecorded(codes: readonly string[]): string[] {
+    return codes.filter((c) => !this.committed.has(this.idx(c)));
   }
 
   /** A lane's loop threw while working on `code` (or on its unit's first mutant when none began). */

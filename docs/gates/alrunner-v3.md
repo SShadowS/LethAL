@@ -60,7 +60,8 @@ The legs:
   never as a plain `fail`.
   Since R612 (plan `docs/superpowers/plans/2026-10-22-r612-v3-serve-keep-rule.md`), 1 is a WARN fact
   (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over four codeunits (five tests) and checks each
-  row against its entry of `V3_SERVE_SAFE_REFUSALS` (four entries: http, commit, cascade, onrun-failed), the reasons
+  row against its entry of `V3_SERVE_SAFE_REFUSALS` (the fact pins four entries: http, commit, cascade, onrun-failed; the
+  seven R945 entries are not in it, since it runs without the .NET helper, and a reworded text of theirs only closes), the reasons
   after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
   `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose

@@ -48,7 +48,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { AL_RUNNER_V3_DEFAULT_PATH } from "../packages/runner/src/al-runner-v3-pin.ts";
+import {
+  AL_RUNNER_V3_DEFAULT_PATH,
+  resolveV3Binary,
+} from "../packages/runner/src/al-runner-v3-pin.ts";
+
+/** R950: `current` resolved ONCE, so every subject and repeat runs the build the table names, even if `current` moves. */
+const V3_BINARY = resolveV3Binary(AL_RUNNER_V3_DEFAULT_PATH);
 import {
   HEAVY_GUARD_EXIT,
   SLOTS,
@@ -392,7 +398,7 @@ function subjects(o: {
   cacheDir: string | undefined;
 }): Subject[] {
   const v3 = (packagesDir: string, bcVersion: string, coverage: "al-runner" | "none") => ({
-    path: AL_RUNNER_V3_DEFAULT_PATH,
+    path: V3_BINARY,
     packagesDir,
     bcVersion,
     coverage,
@@ -617,7 +623,7 @@ async function main(argv: readonly string[]): Promise<void> {
       encoding: "utf8",
     }).stdout.trim(),
     date: new Date().toISOString(),
-    build: spawnSync(AL_RUNNER_V3_DEFAULT_PATH, ["--version"], { encoding: "utf8" }).stdout.trim(),
+    build: spawnSync(V3_BINARY, ["--version"], { encoding: "utf8" }).stdout.trim(),
     notes,
   };
   const runs: RunTiming[] = [];

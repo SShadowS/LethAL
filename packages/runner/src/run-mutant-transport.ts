@@ -1783,7 +1783,14 @@ export class RunMutantTransport {
       } else if (v.outcome !== "pass") {
         return malformed(`endedBy ${endedBy} but entry ${i + 1} did not pass`);
       }
-      verdicts.push({ ...v, attestation, ...session });
+      // R963: `raw.durationMs` is THIS entry's own server-reported time (the call's wall is the
+      // result's `durationMs`), so it is the test's own time, as `BcDevBackend.run` sets for one call.
+      verdicts.push({
+        ...v,
+        ...(raw.durationMs >= 0 ? { measuredDurationMs: raw.durationMs } : {}),
+        attestation,
+        ...session,
+      });
     }
     return { kind: "verdicts", endedBy, ranCount, verdicts, durationMs };
   }

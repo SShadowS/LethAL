@@ -42,7 +42,7 @@
  *    script's own commit (logged `stale-gated`); if that does not pass, `current` stays and the
  *    candidate is judged at the script's commit. A script commit off origin/master is refused.
  * 4. Outcomes: `pass` -> installed, `.gated` written, its row in the ledger, and on the edge track
- *    `current` moved (unless a v3 process is running: "deferred: in use"); `gate-fail` -> `failed/`
+ *    `current` moved (unless a process started through `current/` runs, R950: "deferred: in use"); `gate-fail` -> `failed/`
  *    for good; `held` (every difference a move toward BC or a named refusal; read the receipt's
  *    lines) -> `held/`, never blacklisted, a line for the orchestrator to re-pre-commit;
  *    `infra-fail` -> nothing kept, retried next run, a line after 3 in a row.
@@ -69,7 +69,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -103,7 +103,15 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { type SlotClass, readSlotClass } from "./heavy-slot-class";
+import {
+  DEFAULT_PEAK_GIB,
+  PEAK_GIB,
+  type SlotClass,
+  memoryVerdict,
+  readContainerMemory,
+  readSlot,
+  readSlotClass,
+} from "./heavy-slot-class";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -142,12 +150,18 @@ export interface UpdateDeps {
     env: Readonly<Record<string, string>>,
     log: (line: string) => Promise<void>,
   ): Promise<void>;
-  /** A running process whose executable resolves under `root`. */
+  /** A running process a move of `current` would affect (`movesUnder`). */
   inUse(): Promise<boolean>;
   log(line: string): Promise<void>;
   now(): string;
   /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
   heavyJobs(): Promise<number>;
+  /**
+   * R952 (R953): the memory rule for this gate (`--peak gate`) against the cgroup and the held slots'
+   * declared peaks. Undefined, or an answer of undefined (no cgroup limit to read): the job count
+   * and `freeGb` decide, as before.
+   */
+  gateMemory?(): Promise<{ readonly refuse: boolean; readonly message: string } | undefined>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -897,11 +911,38 @@ export const HEAVY_JOB =
   /(^|\/)bun packages\/runner\/itest\/[\w-]+\.itest\.ts|cli\.ts run|(^|\/)bun scripts\/verify\.ts|\/work\/src\/(BC\.History|DC|DO|do-lethal)/;
 
 /**
+ * R950: whether a move of `current` would change what a running process runs. It runs an al-runner build
+ * (`exe` resolves under `root`), and it was started through `<root>/current/` or its `argv[0]` is unreadable or
+ * relative (the safe side). One started with an explicit build path (`<root>/<build>/al-runner`) is untouched by
+ * the move: LethAL spawns the path it was given and never re-reads `current` for it.
+ */
+export function movesUnder(root: string, exe: string, argv0: string | undefined): boolean {
+  if (!exe.startsWith(`${root}/`)) return false;
+  // POSIX on every platform: these are Linux `/proc` paths (`path.normalize` is win32 on Windows CI).
+  if (argv0 === undefined || !posix.isAbsolute(argv0)) return true;
+  // Normalised, so `<root>//current/`, `<root>/./current/` and `<root>/x/../current/` count too.
+  const a = posix.normalize(argv0);
+  if (!a.startsWith(`${root}/`)) return true;
+  return a.startsWith(`${root}/current/`);
+}
+
+/** R950: argv[0] from a `/proc/<pid>/cmdline` text (NUL-separated); `undefined` when there is none. */
+export function argv0FromCmdline(cmdline: string): string | undefined {
+  const first = cmdline.split("\0")[0];
+  return first === undefined || first === "" ? undefined : first;
+}
+
+/**
  * R851: heavy JOBS, not processes. One job is a wrapper shell, `flock`, `bun run`, a bun child and
  * workers: on 2026-11-06 one corpus job read as 6 and skipped a release for the day. A job is a
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
  * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
  */
+/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] [--peak <p>] <class> ...`). */
+// R952: anchored at the command's start (heavy-slot.sh, or bash/sh running it), as corpus-snapshot's is.
+const HEAVY_SLOT_WRAPPER =
+  /^(?:(?:\S*\/)?(?:ba)?sh\s+)?(?:\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(--peak\s+\S+\s+)?(baseapp|other)\s/;
+
 export function countHeavyJobs(
   procs: readonly Proc[],
   heldSlots: number,
@@ -914,9 +955,25 @@ export function countHeavyJobs(
   // (`bash -c 'cd /work/src/BC.History && bun census.ts .'`: only the shell names the corpus).
   const isJob = (p: Proc): boolean =>
     HEAVY_JOB.test(p.args) && !p.args.includes("--worker") && !WATCHER.test(p.args);
+  // R952 review: the shells that launched a wrapper (the Bash tool's `bash -c ... eval '...
+  // heavy-slot.sh ...'`) are not the job either: its slot or its own command is.
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const aboveWrapper = new Set<number>();
+  for (const p of procs) {
+    if (!HEAVY_SLOT_WRAPPER.test(p.args)) continue;
+    for (
+      let q = byPid.get(p.ppid);
+      q !== undefined && !aboveWrapper.has(q.pid);
+      q = byPid.get(q.ppid)
+    )
+      aboveWrapper.add(q.pid);
+  }
   const groups = new Set<number>();
   for (const p of procs) {
     if (READER.test(p.args) || !HEAVY_JOB.test(p.args) || p.args.includes("--worker")) continue;
+    // R934: `heavy-slot.sh` itself is never the job: a holder's slot counts in `heldSlots`, its
+    // command counts on its own, and a queued `--wait` waiter holds no slot and runs nothing yet.
+    if (HEAVY_SLOT_WRAPPER.test(p.args) || aboveWrapper.has(p.pid)) continue;
     if (WATCHER.test(p.args)) {
       const below = descendants(procs, p.pid);
       if (procs.some((q) => below.has(q.pid) && isJob(q))) continue;
@@ -944,6 +1001,14 @@ export function updateExitCode(mustRun: boolean, out: readonly string[]): number
  * jobs then), because the gate is not itself a BaseApp job but would be the third.
  */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
+  // R952 (R953): where the cgroup names a limit, memory decides, not the job count: a busy day with
+  // memory free no longer skips the gate (2026-11-13: skipped twice at 3 jobs, 12.5 GiB used of 32).
+  const mem = await deps.gateMemory?.();
+  if (mem !== undefined) {
+    if (!mem.refuse) return false;
+    await deps.log(`${deps.now()} ${what}: skipped for the day: ${mem.message}`);
+    return true;
+  }
   const heavy = await deps.heavyJobs();
   if (heavy >= 3) {
     await deps.log(
@@ -1437,7 +1502,12 @@ export function realDeps(root = ROOT): UpdateDeps {
       for (const pid of await readdir("/proc")) {
         if (!/^\d+$/.test(pid)) continue;
         const exe = await readlink(`/proc/${pid}/exe`).catch(() => "");
-        if (exe.startsWith(`${root}/`)) return true;
+        if (!exe.startsWith(`${root}/`)) continue;
+        // argv[0] is the path the process was started with; undefined when unreadable.
+        const argv0 = await readFile(`/proc/${pid}/cmdline`, "utf8")
+          .then(argv0FromCmdline)
+          .catch(() => undefined);
+        if (movesUnder(root, exe, argv0)) return true;
       }
       return false;
     },
@@ -1457,6 +1527,21 @@ export function realDeps(root = ROOT): UpdateDeps {
         parsePs(ps.stdout.toString()),
         held.length,
         held.map((n) => readSlotClass(lockDir(), n)),
+      );
+    },
+    gateMemory: async () => {
+      const sample = readContainerMemory();
+      if (sample?.maxBytes === undefined) return undefined;
+      const held = SLOTS.filter(
+        (n) =>
+          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
+            .exitCode === SLOT_BUSY,
+      );
+      const unclassed = Math.max(...Object.values(DEFAULT_PEAK_GIB));
+      return memoryVerdict(
+        sample,
+        held.map((n) => readSlot(lockDir(), n)?.peakGiB ?? unclassed),
+        PEAK_GIB.gate,
       );
     },
     freeGb: async () => {
