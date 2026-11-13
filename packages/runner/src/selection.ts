@@ -373,6 +373,12 @@ export interface CoverageIndex {
    * object, at lookup (`byObjectNamingGap`).
    */
   readonly lineComplete: boolean;
+  /**
+   * R975. Object keys where a coverage entry carried NO line (the resolver placed the statement in
+   * no object line, `placeStatement`): such entries feed `byObject` but not `byLine`, so a line
+   * answer for that object is incomplete. Filled only when `lineComplete`.
+   */
+  readonly byObjectLineless: ReadonlySet<string>;
 }
 
 /**
@@ -525,13 +531,23 @@ export function testKeyOf(ref: TestMethodRef): string {
 export function buildCoverageIndex(
   baseline: ReadonlyArray<{ ref: TestMethodRef; coverage?: CoverageMap }>,
   /** R975: `lines: true` also indexes line hits (see `CoverageIndex.lineComplete`). */
-  opts: { readonly lines?: boolean } = {},
+  opts: {
+    readonly lines?: boolean;
+    /**
+     * R926's condition: a row counts for the line rule only if it ran in THIS session (a reused
+     * snapshot's rows do not). One untrusted row leaves the whole index not line-complete.
+     */
+    readonly lineTrusted?: (ref: TestMethodRef) => boolean;
+  } = {},
 ): CoverageIndex {
   const byLine = new Map<string, Set<string>>();
+  const byObjectLineless = new Set<string>();
   const lineComplete =
     opts.lines === true &&
     baseline.length > 0 &&
-    baseline.every((b) => b.coverage?.granularity === "line");
+    baseline.every(
+      (b) => b.coverage?.granularity === "line" && (opts.lineTrusted?.(b.ref) ?? true),
+    );
   const byMember = new Map<string, Set<string>>();
   const byMemberOverload = new Map<string, Set<string>>();
   const byObject = new Map<string, Set<string>>();
@@ -558,6 +574,7 @@ export function buildCoverageIndex(
         byObject.set(objectKey, objectSet);
       }
       objectSet.add(testKeyOf(b.ref));
+      if (lineComplete && e.line === undefined) byObjectLineless.add(objectKey);
       if (lineComplete && e.line !== undefined) {
         const lineKey = `${objectKey}:${e.line}`;
         let lineSet = byLine.get(lineKey);
@@ -623,6 +640,7 @@ export function buildCoverageIndex(
     byObjectNamingGap,
     byLine,
     lineComplete,
+    byObjectLineless,
   };
 }
 
@@ -751,7 +769,15 @@ export function coverageFilter(
       m.reachLine !== undefined
     ) {
       const objectKey = objectKeyOf(m.objectType, m.codeunitId, context);
-      if (!index.byObjectNamingGap.has(objectKey)) {
+      // Only where some green test's coverage includes the object: a table trigger whose object NO
+      // green test touched keeps FALLBACK 2 and R140's decline (coverage that saw nothing of the
+      // object cannot then say the site was not hit). A line-less entry in the object leaves its
+      // line answer incomplete too.
+      if (
+        index.byObject.has(objectKey) &&
+        !index.byObjectNamingGap.has(objectKey) &&
+        !index.byObjectLineless.has(objectKey)
+      ) {
         const hit = index.byLine.get(`${objectKey}:${m.reachLine}`);
         if (hit === undefined || hit.size === 0) {
           uncovered.push(m);

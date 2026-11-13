@@ -5028,7 +5028,11 @@ interface ScoreBatchInput {
     readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
-  readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
+  /** `ranHere`: the baseline refs whose row ran in THIS session (a reused snapshot's did not). */
+  readonly select: (
+    baseline: readonly BaselineRow[],
+    ranHere: ReadonlySet<TestMethodRef>,
+  ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
 interface ReusedBaseline {
@@ -6145,7 +6149,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
-  const plan = input.select(baseline);
+  const plan = input.select(baseline, ranHere);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -8363,7 +8367,10 @@ async function runSessionBody(
           .filter(([p]) => p.toLowerCase().endsWith(".al"))
           .map(([, b]) => b.toString("utf8")),
       ]);
-      const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
+      const select = (
+        baseline: readonly BaselineRow[],
+        ranHere: ReadonlySet<TestMethodRef>,
+      ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
         if (greenTests.length === 0) {
@@ -8520,7 +8527,11 @@ async function runSessionBody(
               ref: b.ref,
               ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
             })),
-            { lines: true }, // R975: trigger mutants are placed by line where every test has line coverage
+            // R975: trigger mutants are placed by line where every test has line coverage. R926's
+            // condition: only rows that ran this session count (a reused snapshot's do not). The
+            // isolation mode is the one `baseline` ended under: `select` runs right after any
+            // `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
+            { lines: true, lineTrusted: (ref) => ranHere.has(ref) },
           );
           const split = coverageFilter(
             execute.filter((m) => !candidates.has(m.mutantId)),

@@ -19467,11 +19467,11 @@ describe("GH-24: per-mutant reach", () => {
   // R926 review C: FALLBACK 2 ("all-green") ran every test BECAUSE coverage saw nothing of the
   // object, so that same coverage cannot say the site was not hit. Coverage names only the
   // codeunit; the table's trigger mutants take the fallback and survive.
-  // R975: with COMPLETE line coverage a trigger nobody hit is no-coverage (line rule), so this
-  // fallback is reached only when some test has no line coverage: BTest has none here.
+  // R975: the line rule leaves a table whose object NO green test touched on FALLBACK 2, so this
+  // stays reachable with complete line coverage; only the guard decides here.
   test("R926: an all-green-attributed survivor is never called unreached", async () => {
     const dirs = await makeProjectWithTriggerTable();
-    const backend = v3Backend((ref) => (ref.method === "ATest" ? [4] : undefined));
+    const backend = v3Backend(() => [4]);
     const events: RunEvent[] = [];
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -19487,12 +19487,15 @@ describe("GH-24: per-mutant reach", () => {
       expect(report.untargetedTriggerCount).toBe(table.length);
       expect(table.some((m) => m.verdict === "survived")).toBe(true);
       for (const m of table) expect(reachOf(m)).toEqual({});
-      // R975: BTest has no line coverage, so no reach is decided in this session; the decided
-      // control lives in the R926 tests above, which run on complete line coverage.
+      // The control: the codeunit's survivors in the same session ARE decided.
       const code = events.filter(
         (e): e is Scored => e.type === "mutant-scored" && e.mutant.file.includes("SandboxLogic"),
       );
-      for (const e of code) expect(reachOf(e)).toEqual({});
+      const decided = decidedOf(code);
+      expect(decided.length).toBeGreaterThan(0);
+      for (const e of decided) {
+        expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
+      }
     } finally {
       warnSpy.mockRestore();
     }

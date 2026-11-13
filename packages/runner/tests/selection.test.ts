@@ -1343,8 +1343,12 @@ describe("R975: trigger mutants placed by line coverage", () => {
     baseline: Parameters<typeof buildCoverageIndex>[0],
     mutants: unknown[] = [onOpen, onAction],
     lines = true,
+    lineTrusted?: (ref: { codeunitId: number; method: string }) => boolean,
   ) => {
-    const index = buildCoverageIndex(baseline, { lines });
+    const index = buildCoverageIndex(baseline, {
+      lines,
+      ...(lineTrusted !== undefined ? { lineTrusted } : {}),
+    });
     return coverageFilter(mutants as never, index, [t1, t2], undefined, false, new Map(), () => {});
   };
   const lineBaseline = [
@@ -1419,5 +1423,67 @@ describe("R975: trigger mutants placed by line coverage", () => {
     const proc = entry({ mutantId: "M0012", objectType: "page", codeunitId: 50100, reachLine: 12 });
     const split = run(lineBaseline, [proc]);
     expect(split.uncovered.map((m) => m.mutantId)).toEqual(["M0012"]);
+  });
+
+  // R926's condition: a row that did not run this session (a reused snapshot) cannot decide.
+  test("a row that did not run this session keeps FALLBACK 1; trusted rows get the line answer", () => {
+    const stale = run(lineBaseline, [onAction], true, (ref) => ref.method !== t2.method);
+    expect(stale.covered.get("M0011")).toEqual([t1, t2]);
+    expect(stale.attribution.get("M0011")).toBe("object");
+    const fresh = run(lineBaseline, [onAction], true, () => true);
+    expect(fresh.uncovered.map((m) => m.mutantId)).toEqual(["M0011"]);
+  });
+
+  // `placeStatement` can return no object line: such an entry feeds byObject, not byLine.
+  test("a line-less entry in the object keeps FALLBACK 1; one in ANOTHER object does not", () => {
+    const lineless = (objectType: string, objectId: number) => ({ objectType, objectId });
+    const withGap = (o: { objectType: string; objectId: number }) => [
+      {
+        ref: t1,
+        coverage: { granularity: "line" as const, entries: [...covOf([5, 12]).entries, o] },
+      },
+      { ref: t2, coverage: covOf([5]) },
+    ];
+    const same = run(withGap(lineless("Page", 50100)), [onAction]);
+    expect(same.covered.get("M0011")).toEqual([t1, t2]);
+    expect(same.attribution.get("M0011")).toBe("object");
+    const other = run(withGap(lineless("Codeunit", 9)), [onAction]);
+    expect(other.uncovered.map((m) => m.mutantId)).toEqual(["M0011"]);
+  });
+
+  // R140/FALLBACK 2: coverage that saw nothing of a table cannot say its trigger was not hit.
+  describe("table triggers", () => {
+    const tableTrigger = entry({
+      mutantId: "M0013",
+      objectType: "table",
+      codeunitId: 50200,
+      procedureName: "",
+      triggerName: "OnInsert",
+      reachGrain: "statement",
+      reachLine: 7,
+    });
+    test("an object no green test touched still takes FALLBACK 2 (all-green)", () => {
+      const split = run(lineBaseline, [tableTrigger]);
+      expect(split.covered.get("M0013")).toEqual([t1, t2]);
+      expect(split.attribution.get("M0013")).toBe("all-green");
+      expect(split.untargetedTriggerCount).toBe(1);
+    });
+    test("an object some green test touched is decided by line", () => {
+      const touched = [
+        {
+          ref: t1,
+          coverage: {
+            granularity: "line" as const,
+            entries: [{ objectType: "Table", objectId: 50200, line: 3 }],
+          },
+        },
+        { ref: t2, coverage: covOf([5]) },
+      ];
+      const miss = run(touched, [tableTrigger]);
+      expect(miss.uncovered.map((m) => m.mutantId)).toEqual(["M0013"]);
+      const hit = run(touched, [{ ...tableTrigger, reachLine: 3 }]);
+      expect(hit.covered.get("M0013")).toEqual([t1]);
+      expect(hit.attribution.get("M0013")).toBe("line");
+    });
   });
 });
