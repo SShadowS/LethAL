@@ -1519,7 +1519,8 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
     warmups: 1,
     liveRequests: 1,
     boundChecks: 3,
-    entriesSent: 448,
+    // R975 (R-965 amendment 4): 448 until the 6 twin OnOpenPage mutants read no-coverage and were not sent.
+    entriesSent: 436,
     pairRequests: 62,
     echoMismatches: 0,
   },
