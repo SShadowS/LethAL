@@ -36,3 +36,18 @@ which errs on the safe side.
 one leg that sets the floor itself (`useMutantBudgetFloor(180_000, 120_000)`) keeps doing so.
 
 **bcdev:** unchanged; the change is v3 only, which the gate table and the unit tests show.
+
+## Amendment (2026-11-13, after the build and its review, before any measured run of the change)
+
+- **The 16 Password mutants over 60 s are not real finishes.** Nine `TestVerifyStrongPasswordSequences` calls (baseline 97 ms) ended
+  `pass`/`fail` at 181-184 s in R-940's run; re-run on master with a 600 s stop (`/coord/handoff/R-945/slow/`), the same calls ended
+  `pass` at 611-673 s and the session did not finish in 2.5 h. They hang and are reported at whatever the stop is, so a 60 s stop
+  cuts no real finish there. Prediction unchanged: verdicts identical except possibly those 16, and only toward `timeout-killed` or
+  `error`. Whether al-runner reports a stopped test as `pass` or LethAL copies a request's wall onto a row whose own entry hung is
+  being measured (`/coord/handoff/R-945/probe-stop2/`); a guard for it is a separate change, not part of this one.
+- **Where the stop is named:** on stderr once per session (`[lethal] al-runner-v3 mutant stop N s (R954: ...)`), not in the report
+  or the events file. Above, "the report and the run header" is withdrawn: a report field ripples through every schema and sample.
+- **One value for the session** is withdrawn: S is a running maximum over the session's batches, and each batch's runs are judged
+  with the stop they were sent.
+- **The v3 gate:** still no figure moves. The baseline runs one-shot, and no serve daemon exists between the baseline and the
+  stop being set, so S1E's pinned `warmups: 1` and every other serve counter are unchanged, and no `mutant-stop` close appears.
