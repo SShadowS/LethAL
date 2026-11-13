@@ -246,6 +246,8 @@
     "redact-campaign-report.test.ts",
     "redact-campaign-report.ts",
     "render-overlay.ts",
+    "repro-scaffold.test.ts",
+    "repro-scaffold.ts",
     "snapshot-late-write.test.ts",
     "statement-containers.ts",
     "test-preload.ts",
