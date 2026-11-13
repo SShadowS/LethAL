@@ -19,7 +19,15 @@ describe("R948: legs DB and DBI count every answer as taken or skipped by name",
     skippedError: [],
     skippedOther: [],
     sampledSkipped: [],
+    replaced: 0,
   };
+  test("R951: a replacement is one more sample and one less served answer", () => {
+    // 5 items, 2 sampled; one sample skipped by name and replaced: 2 compared, 2 served, 1 moved.
+    const ok = { ...none, served: 2, compared: 2, sampledSkipped: ["A (timed-out)"], replaced: 1 };
+    expect(judgeDaemonBaseline("DB", ok, 3, 2).fail).toBeUndefined();
+    expect(judgeDaemonBaseline("DB", { ...ok, replaced: 0 }, 3, 2).fail).toContain("sampled");
+    expect(judgeDaemonBaseline("DB", { ...ok, served: 3 }, 3, 2).fail).toContain("silent drop");
+  });
   test("all taken: passes with no notes", () => {
     expect(judgeDaemonBaseline("DB", { ...none, served: 3, compared: 2 }, 3, 2)).toEqual({
       notes: [],

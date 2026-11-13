@@ -7,6 +7,7 @@ import {
   type MutationSpec,
   astSubtreeHash,
   gapBlockOf,
+  isObjectContainer,
   isProcedureLike,
   memberSpanText,
   procedureLikeNameNode,
@@ -497,6 +498,15 @@ export interface MutantManifestEntry {
   readonly procedureStartLine?: number;
   readonly procedureEndLine?: number;
   /**
+   * R965: set ONLY when the enclosing procedure shares its name with another procedure of the
+   * object (an overload): its 0-based source-order position among them. Coverage names a member by
+   * name alone, so without it a test that ran one overload would cover every overload's mutants.
+   * `coverageFilter` then accepts only coverage entries carrying the same `overloadIndex`. A line
+   * number cannot do this job: coverage lines are in the instrumented text's frame, these are not.
+   * Absent on a procedure whose name is its own, and on manifests written before R965.
+   */
+  readonly procedureOverloadIndex?: number;
+  /**
    * C02-09: the id of this mutant's gap, `gapIdOf` over its gap block (`gapBlockOf`, the innermost
    * branch body holding the mutated node). Mutants that share a block share an id. Always written
    * by `writeInstrumentedProject`; optional only so manifests and streams written before C02-09
@@ -637,6 +647,36 @@ function enclosingProcedureLike(node: ALSyntaxNode): ALSyntaxNode | null {
   let current: ALSyntaxNode | null = node.parent;
   while (current !== null && !isProcedureLike(current)) current = current.parent;
   return current;
+}
+
+/**
+ * R965: see `MutantManifestEntry.procedureOverloadIndex`. `member`'s 0-based source-order position
+ * among the procedures of its object that carry the same name (case-insensitive, quotes ignored),
+ * or `undefined` when it has a name of its own that no other procedure shares, or no single name.
+ * Counted exactly as the runner's line map counts spans (`LineMap.overloadIndexAt`).
+ */
+function overloadIndexOf(member: ALSyntaxNode | null): number | undefined {
+  if (member === null || !isProcedureLike(member)) return undefined;
+  const nameOf = (p: ALSyntaxNode): string | undefined => {
+    const n = procedureLikeNameNode(p);
+    return n === null ? undefined : n.text.replace(/^"|"$/g, "").toLowerCase();
+  };
+  const name = nameOf(member);
+  if (name === undefined) return undefined;
+  let object: ALSyntaxNode = member;
+  while (object.parent !== null && !isObjectContainer(object.parent)) object = object.parent;
+  const same: ALSyntaxNode[] = [];
+  const walk = (n: ALSyntaxNode): void => {
+    if (isProcedureLike(n)) {
+      if (nameOf(n) === name) same.push(n);
+      return;
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(object);
+  if (same.length < 2) return undefined;
+  const at = same.findIndex((p) => p.startIndex === member.startIndex);
+  return at === -1 ? undefined : at;
 }
 
 /**
@@ -863,6 +903,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
       const procedureScope = procedureScopeOf(spec, f.source);
       const coverageArmNames = coverageArmNamesOf(spec, armNamesCache);
       const member = enclosingMemberOf(spec);
+      const overloadIndex = overloadIndexOf(member);
       const block = gapBlockOf(spec.before);
       const inFile = `${block.startIndex}\n${block.endIndex}`;
       let gap = gapOf.get(inFile);
@@ -917,6 +958,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
             }
           : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
+        ...(overloadIndex !== undefined ? { procedureOverloadIndex: overloadIndex } : {}),
         ...(spec.platformKillMechanism !== undefined
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),

@@ -69,6 +69,13 @@ export interface CoverageEntry {
   readonly objectId: number;
   readonly procedure?: string;
   readonly line?: number;
+  /**
+   * R965: set only when `procedure` names SEVERAL same-named procedures of the object (overloads):
+   * the 0-based source-order position of the one this observation ran in, from the line map. A
+   * name alone cannot tell the overloads apart. Absent means "not known", never "the only one".
+   * Matched against `MutantManifestEntry.procedureOverloadIndex` in `coverageFilter`.
+   */
+  readonly overloadIndex?: number;
 }
 
 export interface CoverageMap {
