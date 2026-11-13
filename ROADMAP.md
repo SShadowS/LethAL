@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 943 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 944 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -367,7 +367,7 @@ that ordering is the priority.
 - **R965** · A v3 mutant in one overload of a procedure is attributed 'exact' coverage by tests that only call ANOTHER overload, so a mutant no test executes is scored survived (Cryptography Management: SignedXml.SetSigningKey) · [R965.md](docs/roadmap/R965.md) · done (c4312b52)
 - **R970** · The v3 memory guard checks only at call boundaries, so the per-test re-baseline's parallel processes outgrew it: DO's window reached a 20 GB tree with the container at 2 GiB headroom · [R970.md](docs/roadmap/R970.md) · open
 - **R975** · On al-runner v3, trigger mutants take R29's object-level fallback although v3's per-test LINE coverage could decide them: on Continia DO all 215 scored mutants were object-attributed, and at least 94 never-executed trigger statements were reported survived · [R975.md](docs/roadmap/R975.md) · open
-- **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · open
+- **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
 - **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
 
 ## Product gaps a real project hits
@@ -985,7 +985,8 @@ that ordering is the priority.
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
 - **R973** · BC.History batch 9 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (ToBase64 of an InStream drops its line breaks) and six new refusal causes filed upstream · [R973.md](docs/roadmap/R973.md) · closed 2026-11-13 — measured and filed upstream…
 - **R974** · heavy-slot-class.test.ts 'the order is kept: the older waiter runs first' flaked after R960 raised the slot files to six: it held only three, so a waiter could run at once · [R974.md](docs/roadmap/R974.md) · done (65787092)
-- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · open
+- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · closed 2026-11-13 — the mutant phase already skips when nothing is covered; the cost was daemon restarts in…
+- **R981** · A v3 refusal 'store error platform table ... has no provider' closed the serve daemon: APIV1 restarted it 100 times in its baseline; measured clean, it now keeps the daemon · [R981.md](docs/roadmap/R981.md) · done (37404d12)
 - **R980** · BC.History inventory and batch 10 on al-runner v3 edge-c8fe56e05: 54 small projects left outside BaseApp; one wrong result (forwarded .NET code ends lines with LF) and new refusals filed upstream · [R980.md](docs/roadmap/R980.md) · closed 2026-11-13 — measured and filed upstream…
 - **R982** · Continia Document Output's al-runner baseline refusals reduced, and the dependency-install question answered: al-runner does run a dependency app's install codeunit; DO's 32 'not activated' failures are Continia's online activation · [R982.md](docs/roadmap/R982.md) · closed 2026-11-14 — measured; filed upstream (#8004) and counted (#7775); the install question answered by…
 
