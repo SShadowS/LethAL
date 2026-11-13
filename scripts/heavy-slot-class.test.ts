@@ -473,20 +473,34 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
 
   // Review: a head waiter the guard refuses (baseapp over the two-job cap, a slot free) must not keep
   // an `other` job, which the cap admits, out of that slot.
+  // R967 (R952): hermetic. Every guard here reads the injected empty `ps` (LETHAL_HEAVY_PS_FILE), a
+  // temp lock folder and, through the preload, no cgroup; the flake was the waiter's own out-of-turn
+  // retry holding the free slot for the length of its guard while the plain caller tried. So the
+  // waiter polls every 30 s: it marks itself on its FIRST try (before any sleep) and then sleeps
+  // through the whole plain call. That it still runs once a job ends is the next test, with no
+  // plain caller to race.
   test("a guard-refused head waiter marks itself and lets a plain caller take the free slot", async () => {
     const dir = fresh();
-    const p1 = await holdSlot(dir, 1, "other");
+    await holdSlot(dir, 1, "other");
     await holdSlot(dir, 2, "other");
     const marker = join(dir, "ba");
-    // Poll 2 s: the waiter marks itself on its first try (before any sleep); a fast poll would make
-    // its own out-of-turn retries hold the free slot while the plain caller tries (R952: flaky at 0.05).
-    const w = start(dir, "2", "--wait", "baseapp", "touch", marker);
+    const w = start(dir, "30", "--wait", "baseapp", "touch", marker);
     expect(await until(() => tickets(dir).some((t) => t.endsWith(".refused")))).toBe(true);
     const plain = start(dir, "0.05", "other", "touch", join(dir, "plain"));
     expect(await plain.exited).toBe(0);
     expect(existsSync(join(dir, "plain"))).toBe(true);
     expect(existsSync(marker)).toBe(false);
-    // Still a waiter: once a job ends it runs, and its ticket and marker go.
+    w.kill("SIGKILL");
+  });
+
+  test("a guard-refused waiter stays a waiter: once a job ends it runs, and its ticket and marker go", async () => {
+    const dir = fresh();
+    const p1 = await holdSlot(dir, 1, "other");
+    await holdSlot(dir, 2, "other");
+    const marker = join(dir, "ba");
+    const w = start(dir, "0.05", "--wait", "baseapp", "touch", marker);
+    expect(await until(() => tickets(dir).some((t) => t.endsWith(".refused")))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
     process.kill(p1, "SIGKILL");
     expect(await w.exited).toBe(0);
     expect(existsSync(marker)).toBe(true);
