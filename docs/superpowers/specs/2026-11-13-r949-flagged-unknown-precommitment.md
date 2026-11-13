@@ -27,3 +27,14 @@ pass the daemon answered has its flagged state UNKNOWN: `testMethods[].baselineF
 
 **Live expectation (DO, measured after the gates):** on the 38-test slice the daemon baseline is no longer dropped for `flagged`; if it
 is dropped, the detail names another field and that is reported, not hidden.
+
+## Amendment 1 (2026-11-13, before any gate ran on the change)
+
+- **Build:** lethal/r-949 at 8c677f6c (5be22dc7, the DBI expectation 5e5b7ca2, review fixes 38e3abfd: the notice no longer states a
+  count, a resume note on `baselineFlaggedUnknown`, a test that a known flag wins; origin/master merged).
+- **al-runner:** master's R814 moved the gated `current` to **edge-c8fe56e05** after this file was written; the v3 gate runs on it.
+  The predictions above stand on that build (DBI gains exactly `al-runner-v3-serve-flagged-unknown`; DB and K unchanged; every other
+  leg unchanged; any per-mutant difference a BLOCK). If c8fe56e05's serve rows carried `flagged`, nothing here changes: the notice
+  keys on a daemon answer being used, not on the field's absence.
+- **Live, already measured on DO's 38-test slice** (R-949 build 5be22dc7, al-runner edge-2bd87774f as R-942's config pins, before the
+  gates): the daemon baseline was kept (no drop), the notice printed, 33 of 38 green as before; baseline 39.8 s.
