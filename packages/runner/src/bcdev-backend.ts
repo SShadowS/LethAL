@@ -1590,13 +1590,20 @@ export class BcDevMcpBackend implements ExecutionBackend {
           namingGaps.push({ objectType, objectId: row.objectId });
         }
       }
-      const key = `${objectType}:${row.objectId}:${procedure ?? ""}`;
+      // R965: the overload the row ran in, when the name is shared; part of the dedupe key, or the
+      // second overload's row would be dropped as a repeat of the first.
+      const overloadIndex =
+        procedure !== undefined
+          ? lineMap.overloadIndexAt(objectType, row.objectId, row.lineNo)
+          : undefined;
+      const key = `${objectType}:${row.objectId}:${procedure ?? ""}:${overloadIndex ?? ""}`;
       if (seen.has(key)) continue;
       seen.add(key);
       entries.push({
         objectType,
         objectId: row.objectId,
         ...(procedure !== undefined ? { procedure } : {}),
+        ...(overloadIndex !== undefined ? { overloadIndex } : {}),
       });
     }
     // Distinct `type:id` keys actually seen, so the diagnostic can show BOTH sides of the
