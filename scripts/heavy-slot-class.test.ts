@@ -444,8 +444,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   test("a caller without --wait does not overtake a live waiter for a slot that just freed", async () => {
     const dir = fresh();
     const p1 = await holdSlot(dir, 1, "other");
-    await holdSlot(dir, 2, "other");
-    await holdSlot(dir, 3, "other");
+    for (const n of [2, 3, 4, 5, 6]) await holdSlot(dir, n, "other"); // R960: every slot held
     // The waiter polls every 30 s, so the freed slot stays free while the plain caller tries.
     const w = start(dir, "30", "--wait", "other", "true");
     expect(await until(() => tickets(dir).length === 1)).toBe(true);
@@ -533,6 +532,7 @@ describe("R952 (R953) admission by memory", () => {
   test("no cgroup, or a cgroup with no limit: admitted, and the message says the rule is off", () => {
     expect(memoryVerdict(undefined, [16, 16], 16)).toEqual({
       refuse: false,
+      off: true,
       message: "memory rule off: no cgroup v2 memory.current can be read",
     });
     const v = memoryVerdict(sample(31), [16, 16], 16);
@@ -622,6 +622,80 @@ describe("R952 (R953) admission by memory", () => {
         expect(run(dir, cg, ...args).exitCode).toBe(2);
       expect(existsSync(ran)).toBe(false);
     });
+    // R960 (owner ruling 2026-11-13): with a cgroup limit, memory is the only rule. Three held
+    // BaseApp-class slots (the old cap: two jobs in all) do not refuse a job that fits; with no cgroup
+    // limit, the old count rule still decides.
+    test("R960: memory alone decides; three held BaseApp slots no longer refuse a job that fits", async () => {
+      const dir = fresh();
+      for (const n of [1, 2, 3]) {
+        await hold(dir, n, "baseapp");
+        const pid = holders.at(-1);
+        if (pid === undefined) throw new Error("no holder");
+        writeFileSync(join(dir, `heavy.${n}.class`), `baseapp ${pid} 2\n`); // small declared peaks
+      }
+      const ran = join(dir, "ran");
+      const fits = run(dir, cgroup(5, 32), "--peak", "gate", "baseapp", "touch", ran); // 5+2+4, 6+2+4
+      expect(fits.exitCode).toBe(0);
+      expect(existsSync(ran)).toBe(true);
+      // the same slots on a host with no cgroup limit: the count rule (two jobs with BaseApp) refuses
+      const host = run(dir, join(dir, "no-cgroup"), "--peak", "gate", "baseapp", "true");
+      expect(host.exitCode).toBe(75);
+      expect(host.stderr.toString()).toContain("memory rule off");
+    });
+    test("R960: with no slot held at all, a job whose peak does not fit is still refused", () => {
+      const dir = fresh();
+      const r = run(dir, cgroup(25, 32), "--peak", "serve", "other", "true"); // 25 + 8 + 4 = 37
+      expect(r.exitCode).toBe(75);
+      expect(r.stderr.toString()).toContain("REFUSED (used + peak + reserve = 37.0 > 32.0)");
+    });
+  });
+
+  test("R960: guardInSlot decides by memory alone where the cgroup names a limit", async () => {
+    const dir = fresh();
+    const cg = fresh();
+    writeFileSync(join(cg, "memory.current"), `${4 * GIB}\n`);
+    writeFileSync(join(cg, "memory.max"), `${32 * GIB}\n`);
+    const old = {
+      lock: process.env.LETHAL_HEAVY_LOCK_DIR,
+      cg: process.env.LETHAL_HEAVY_CGROUP_DIR,
+    };
+    process.env.LETHAL_HEAVY_LOCK_DIR = dir;
+    process.env.LETHAL_HEAVY_CGROUP_DIR = cg;
+    const psOf =
+      (...rows: string[]) =>
+      () =>
+        ["PID PPID PGID COMMAND", "1 0 1 init", ...rows].join("\n");
+    const census = (pid: number) => `${pid} 1 ${pid} bun census.ts /work/src/BC.History/BaseApp`;
+    try {
+      // (A) review r1: two young BaseApp jobs in no slot reserve their default peaks (12 each), which
+      // memory.current (4) does not show: 12 + 12 + 12 + 4 = 40 > 32, refused.
+      expect(() => guardInSlot(1, true, () => {}, psOf(census(700), census(800)))).toThrow(
+        RefusedError,
+      );
+      // (B) one held BaseApp slot declaring 2 GiB and one unslotted BaseApp job: the old count rule
+      // refuses a third BaseApp job; memory admits it (2 + 12 + 12 + 4 = 30).
+      await hold(dir, 2, "baseapp");
+      const pid = holders.at(-1);
+      if (pid === undefined) throw new Error("no holder");
+      writeFileSync(join(dir, "heavy.2"), `${pid}\n`);
+      writeFileSync(join(dir, "heavy.2.class"), `baseapp ${pid} 2\n`);
+      // the holder's ps row is the wrapper's, so both rules trust it as a BaseApp-class slot
+      const one = psOf(
+        `${pid} 1 ${pid} /bin/bash scripts/heavy-slot.sh --peak 2 baseapp sleep 30`,
+        census(800),
+      );
+      expect(() => guardInSlot(1, true, () => {}, one)).not.toThrow();
+      // (C) the same on a host with no cgroup limit: the count rule refuses
+      process.env.LETHAL_HEAVY_CGROUP_DIR = join(dir, "no-cgroup");
+      expect(() => guardInSlot(1, true, () => {}, one)).toThrow(RefusedError);
+    } finally {
+      for (const [k, v] of [
+        ["LETHAL_HEAVY_LOCK_DIR", old.lock],
+        ["LETHAL_HEAVY_CGROUP_DIR", old.cg],
+      ] as const)
+        if (v === undefined) Reflect.deleteProperty(process.env, k);
+        else process.env[k] = v;
+    }
   });
 
   test("guardInSlot applies the memory rule too", () => {
