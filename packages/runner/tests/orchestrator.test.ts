@@ -2008,7 +2008,8 @@ ${TRIGGER_TABLE_AL}#endif
         mutant === null && ref.method === RED && redTouchesTable !== "none" ? "fail" : "pass",
       );
       backend.lineCoverageFor = () => [4];
-      backend.tableLinesFor = (ref) => (ref.method === RED ? (redTouchesTable === true ? [1] : []) : [1]);
+      backend.tableLinesFor = (ref) =>
+        ref.method === RED ? (redTouchesTable === true ? [1] : []) : [1];
       const events: RunEvent[] = [];
       const store = new ResultsStore(":memory:");
       const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
