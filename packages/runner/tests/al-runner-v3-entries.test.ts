@@ -4949,7 +4949,9 @@ describe("R790: the speculative baseline", () => {
     // Served, not re-run: no new one-shot call in the baseline; the sequential one made its call there.
     expect(spec.one.calls).toHaveLength(1);
     expect(seq.one.calls).toHaveLength(1);
-    const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
+    // R963: `callId` is a fresh identity per call, so it differs between two runs by design.
+    const plain = (vs: TestVerdict[]) =>
+      vs.map((v) => ({ ...v, durationMs: 0, callId: undefined }));
     expect(plain(a)).toEqual(plain(s));
   });
 
