@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**31 of 940 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 941 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -984,7 +984,8 @@ that ordering is the priority.
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
 - **R973** · BC.History batch 9 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (ToBase64 of an InStream drops its line breaks) and six new refusal causes filed upstream · [R973.md](docs/roadmap/R973.md) · closed 2026-11-13 — measured and filed upstream…
 - **R974** · heavy-slot-class.test.ts 'the order is kept: the older waiter runs first' flaked after R960 raised the slot files to six: it held only three, so a waiter could run at once · [R974.md](docs/roadmap/R974.md) · done (65787092)
-- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · open
+- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · closed 2026-11-13 — the mutant phase already skips when nothing is covered; the cost was daemon restarts in…
+- **R981** · A v3 refusal 'store error platform table ... has no provider' closed the serve daemon: APIV1 restarted it 100 times in its baseline; measured clean, it now keeps the daemon · [R981.md](docs/roadmap/R981.md) · open
 
 ---
 

@@ -750,7 +750,7 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
     String.raw`${DOTNET}System\.TimeZoneInfo\.Local: refused by policy: member 'System\.TimeZoneInfo\.Local' \(time zone that bypasses the host\)$`,
   ),
   /**
-   * R979 (coord R-967): a read of a platform table al-runner's store has no provider for. Measured
+   * R981 (coord R-967): a read of a platform table al-runner's store has no provider for. Measured
    * clean as R945's families were (`/coord/handoff/R-967/probe/`, edge-c8fe56e05): refusers on
    * `Api Web Service` (2000000193) and `Tenant Media Set` (2000000183), each after R-937's standard
    * writes; 27 readers on one kept daemon all equal the control, 20 fresh daemons one answer equal to

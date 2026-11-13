@@ -304,7 +304,7 @@ describe("serveDaemonReusable, the rule alone", () => {
       ],
     },
   };
-  // R979 (coord R-967): the no-provider family, measured clean on two platform tables.
+  // R981 (coord R-967): the no-provider family, measured clean on two platform tables.
   R945["platform-no-provider"] = {
     keeps: [
       `${P}store error platform table 'Api Web Service' (2000000193) has no provider`,
