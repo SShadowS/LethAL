@@ -210,7 +210,8 @@ const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
       killingTest: null,
       issue: `${REPO}/5788`,
     })),
-    counts: { killed: 298, survived: 53, noCoverage: 60 },
+    // R975 (R-965): 6 Data Main rows survived -> no-coverage in the committed baseline (was 298/53/60).
+    counts: { killed: 298, survived: 47, noCoverage: 66 },
     total: 418,
   },
   xb: { exitCode: 3, passed: 0, notRun: 0 },
