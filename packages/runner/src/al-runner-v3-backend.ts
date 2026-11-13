@@ -856,6 +856,8 @@ interface BaselineAnswer {
   readonly withCoverage: boolean;
   /** Set on an answer a serve daemon gave (not one a fresh process gave in its place). */
   readonly fromDaemon?: true;
+  /** R951: a fresh process's answer whose exit was 8 (serving it raises the .NET-helper notice, as a live call does). */
+  readonly exit8?: true;
 }
 
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
@@ -3532,6 +3534,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
+  /** The exit-8 notice, once per deploy: raised by a live call and by serving a kept exit-8 answer. */
+  private noteDotnetHelper(): void {
+    if (this.dotnetHelperWarned) return;
+    this.dotnetHelperWarned = true;
+    this.notify(
+      "al-runner-v3-dotnet-helper-missing",
+      "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
+    );
+  }
+
   /** R948: whether `rows` hold exactly one row for each of `tests` (a call's answer is cached only then). */
   private hasEveryRow(rows: readonly V3Row[], tests: readonly TestMethodRef[]): boolean {
     return tests.every(
@@ -3595,6 +3607,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       wallMs: made.wallMs,
       stopSeconds,
       withCoverage: coverage,
+      ...(res.exitCode === 8 ? { exit8: true as const } : {}),
     };
   }
 
@@ -3645,6 +3658,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind: "dropped",
         why: `the daemon's ${s.what} of ${s.subject} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
         detail: why,
+      };
+    }
+    // The live path's row check: exactly one row for each wanted test (a duplicated row can compare
+    // equal, since the comparison maps by method name), or this answer is not served.
+    const wanted = s.only !== undefined ? [s.only.ref] : (this.suitePerCodeunit.get(s.id) ?? []);
+    if (!this.hasEveryRow(shot.rows, wanted)) {
+      return {
+        kind: "dropped",
+        why: `the one-shot answer of ${s.subject} does not hold exactly one row for each of its tests`,
+        detail: ["one-shot-row-count"],
       };
     }
     return { kind: "compared", shot };
@@ -3722,9 +3745,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const forward = plan.next(pos, () => true);
       const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
       if (pick === undefined) return "ok";
-      this.baselineStats.replacements[skipped] = `Codeunit${pick}`;
+      // Counted only once the pick is compared or skipped: a forward pick the loop never reaches
+      // (the fill stops first) is not a replacement.
       const daemon = answers.get(pick);
-      return forward !== undefined || daemon === undefined ? "ok" : check(pick, daemon, pos);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = `Codeunit${pick}`;
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (id: number) => {
+      const skipped = pending.get(id);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = `Codeunit${id}`;
+      pending.delete(id);
     };
     let stopped = false;
     let unusable = 0;
@@ -3757,6 +3793,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           got = undefined;
         }
         const isSample = plan.has(id);
+        reached(id);
         if (got === undefined) {
           this.noteSkip("error", `Codeunit${id}`, isSample, "daemon-error");
           unusable += 1;
@@ -3893,9 +3930,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const pick = forward ?? plan.last((c) => answers.get(c)?.fromDaemon === true);
       const ref = pick === undefined ? undefined : refOf.get(pick);
       if (pick === undefined || ref === undefined) return "ok";
-      this.baselineStats.replacements[skipped] = nameOf(ref);
+      // Counted only once the pick is compared or skipped (see the whole-codeunit fill).
       const daemon = answers.get(pick);
-      return forward !== undefined || daemon === undefined ? "ok" : check(pick, daemon, pos);
+      if (forward !== undefined || daemon === undefined) {
+        pending.set(pick, skipped);
+        return "ok";
+      }
+      const r = await check(pick, daemon, pos);
+      if (r !== "stop") this.baselineStats.replacements[skipped] = nameOf(ref);
+      return r;
+    };
+    const pending = new Map<number, string>(); // forward pick -> the sample it replaces
+    const reached = (key: number, ref: TestMethodRef) => {
+      const skipped = pending.get(key);
+      if (skipped !== undefined) this.baselineStats.replacements[skipped] = nameOf(ref);
+      pending.delete(key);
     };
     let stopped = false;
     try {
@@ -3930,6 +3979,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const [row] = got?.rows ?? [];
         const name = nameOf(ref);
         const isSample = plan.has(key);
+        reached(key, ref);
         // Why the daemon's answer is not kept (R5: a sample is then replaced), if it is not.
         const skip: { kind: "error" | "other" | "tooSlow"; reason: string } | undefined = failed
           ? { kind: "error", reason: "daemon-error" }
@@ -3996,7 +4046,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (!this.baselineDaemon || this.daemonBaselineOff === undefined) return undefined;
       const k = this.oneShotKept.get(key);
       this.oneShotKept.delete(key);
-      return k?.stopSeconds === stopSeconds && k.withCoverage === coverage ? k : undefined;
+      if (k?.stopSeconds !== stopSeconds || k.withCoverage !== coverage) return undefined;
+      if (k.exit8 === true) this.noteDotnetHelper();
+      return k;
     };
     if (!this.daemonBaselineOn()) return kept();
     // Whole codeunits first, always: their fill and cross-check end before ANY daemon answer, a
@@ -4011,6 +4063,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const a = this.daemonBaseline.get(key);
     this.daemonBaseline.delete(key);
     if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
+    if (a.exit8 === true) this.noteDotnetHelper(); // a served one-shot exit-8 answer, as a live call
     if (a.fromDaemon === true) {
       this.baselineStats.served += 1;
       // R949: once per session, when the first daemon answer is used. No count here: later batches and
@@ -5354,13 +5407,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ),
       };
     }
-    if (res.exitCode === 8 && !this.dotnetHelperWarned) {
-      this.dotnetHelperWarned = true;
-      this.notify(
-        "al-runner-v3-dotnet-helper-missing",
-        "[lethal] al-runner-v3-dotnet-helper-missing: v3 exited 8, some tests were not run because its .NET helper could not be used; those tests are never scored (R586 §5).",
-      );
-    }
+    if (res.exitCode === 8) this.noteDotnetHelper();
     const decoded = decodeV3Rows(res.stdout, id);
     if ("why" in decoded) {
       return { verdict: transportFailure(ref, `codeunit ${id}: ${decoded.why}`, wallMs) };
