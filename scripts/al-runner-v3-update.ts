@@ -103,7 +103,15 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { type SlotClass, readSlotClass } from "./heavy-slot-class";
+import {
+  DEFAULT_PEAK_GIB,
+  PEAK_GIB,
+  type SlotClass,
+  memoryVerdict,
+  readContainerMemory,
+  readSlot,
+  readSlotClass,
+} from "./heavy-slot-class";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -148,6 +156,12 @@ export interface UpdateDeps {
   now(): string;
   /** Heavy jobs running container-wide (bun itests, `cli.ts run`, corpus jobs, verify). */
   heavyJobs(): Promise<number>;
+  /**
+   * R952 (R953): the memory rule for this gate (`--peak gate`) against the cgroup and the held slots'
+   * declared peaks. Undefined, or an answer of undefined (no cgroup limit to read): the job count
+   * and `freeGb` decide, as before.
+   */
+  gateMemory?(): Promise<{ readonly refuse: boolean; readonly message: string } | undefined>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -987,6 +1001,14 @@ export function updateExitCode(mustRun: boolean, out: readonly string[]): number
  * jobs then), because the gate is not itself a BaseApp job but would be the third.
  */
 async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean> {
+  // R952 (R953): where the cgroup names a limit, memory decides, not the job count: a busy day with
+  // memory free no longer skips the gate (2026-11-13: skipped twice at 3 jobs, 12.5 GiB used of 32).
+  const mem = await deps.gateMemory?.();
+  if (mem !== undefined) {
+    if (!mem.refuse) return false;
+    await deps.log(`${deps.now()} ${what}: skipped for the day: ${mem.message}`);
+    return true;
+  }
   const heavy = await deps.heavyJobs();
   if (heavy >= 3) {
     await deps.log(
@@ -1505,6 +1527,21 @@ export function realDeps(root = ROOT): UpdateDeps {
         parsePs(ps.stdout.toString()),
         held.length,
         held.map((n) => readSlotClass(lockDir(), n)),
+      );
+    },
+    gateMemory: async () => {
+      const sample = readContainerMemory();
+      if (sample?.maxBytes === undefined) return undefined;
+      const held = SLOTS.filter(
+        (n) =>
+          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
+            .exitCode === SLOT_BUSY,
+      );
+      const unclassed = Math.max(...Object.values(DEFAULT_PEAK_GIB));
+      return memoryVerdict(
+        sample,
+        held.map((n) => readSlot(lockDir(), n)?.peakGiB ?? unclassed),
+        PEAK_GIB.gate,
       );
     },
     freeGb: async () => {

@@ -119,6 +119,8 @@ function fake(o: {
   warnFacts?: Record<string, string>;
   heavy?: number;
   free?: number;
+  /** R952: the memory rule's answer for the gate; "no-limit" answers undefined (no cgroup limit). Absent: no such dep. */
+  mem?: { refuse: boolean; message: string } | "no-limit";
   /** Written as `gate.log` beside the receipt, as `realDeps().runGate` does (R633 I1). */
   gateLog?: string;
   /** The gate throws this after writing its files (a non-zero exit). */
@@ -159,6 +161,9 @@ function fake(o: {
     procsWithCwdUnder: async () => o.orphans ?? [],
     heavyJobs: async () => o.heavy ?? 0,
     freeGb: async () => o.free ?? 20,
+    ...(o.mem !== undefined
+      ? { gateMemory: async () => (o.mem === "no-limit" ? undefined : o.mem) }
+      : {}),
     root,
     listReleases: async () =>
       o.tags ?? ["edge", "v3.0.0-alpha.3", "v3.0.0-alpha.2", "v3.0.0-alpha.1"],
@@ -533,6 +538,26 @@ linuxOnly("T19: the v3 update gate", () => {
       expect(a.seen.logs.join("\n")).toMatch(/skipped for the day/);
     }
     expect(await updateOnce(fake({ outcome: "pass", heavy: 2, free: 10 }).deps)).toEqual(["pass"]);
+  });
+
+  test("R952: where the cgroup names a limit, the memory rule decides, not the job count", async () => {
+    await setup();
+    // 3 heavy jobs and 2 GB by free: skipped before; memory admits the gate, so it runs
+    const busy = fake({ outcome: "pass", heavy: 3, free: 2, mem: { refuse: false, message: "admitted" } });
+    expect(await updateOnce(busy.deps)).toEqual(["pass"]);
+    // no heavy job at all, but memory refuses: skipped, and the log names the memory reading
+    const full = fake({
+      outcome: "pass",
+      heavy: 0,
+      mem: { refuse: true, message: "memory: max 32.0 GiB ... -> REFUSED (x)" },
+    });
+    expect(await updateOnce(full.deps)).toEqual(["skipped"]);
+    expect(full.seen.gates).toEqual([]);
+    expect(full.seen.logs.join("\n")).toContain("skipped for the day: memory: max 32.0 GiB");
+    // no cgroup limit to read: the job count decides as before
+    const host = fake({ outcome: "pass", heavy: 3, mem: "no-limit" });
+    expect(await updateOnce(host.deps)).toEqual(["skipped"]);
+    expect(host.seen.logs.join("\n")).toContain("3 heavy jobs are running");
   });
 
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
