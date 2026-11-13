@@ -409,10 +409,13 @@ export const MIN_MUTANT_BUDGET_MS = 180_000;
 // --mutant-timeout-ms uses the measured rule below instead; an explicit value wins everywhere.
 
 /**
- * R954: al-runner-v3's default mutant stop, `max(60 s, 20 x the largest GREEN baseline test + 5 s)`,
- * one value for the session. v3 has no server to strand, so BC's 180 s floor (R91/R47) is not needed.
- * Measured basis (`/coord/handoff/R-945/study/README.md`): 41,521 finished mutant calls over 60 v3
- * stores; zero would be cut from F = 60 s, k = 20; smaller floors cut real finishes.
+ * R954: al-runner-v3's default mutant stop, `max(60 s, 20 x the largest GREEN baseline test + 5 s)`, a
+ * running maximum over the session's batches (each batch is judged with the value its runs were sent).
+ * On v3 a stop below a mutant's real finish is a false `timeout-killed`, and R91's point still holds: no
+ * multiple of a baseline predicts slowness the mutation itself causes. So the guard is the ABSOLUTE 60 s
+ * floor, measured (`/coord/handoff/R-945/study/README.md`): 41,521 finished mutant calls over 60 v3
+ * stores, none cut from F = 60 s, k = 20, while smaller floors cut real finishes. What v3 drops is BC's
+ * publish and session latency, which is what the extra 120 s of the 180 s floor paid for.
  */
 export const V3_MUTANT_STOP_MIN_MS = 60_000;
 export const V3_MUTANT_STOP_FACTOR = 20;
