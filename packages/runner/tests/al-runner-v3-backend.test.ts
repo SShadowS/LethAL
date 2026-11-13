@@ -2726,6 +2726,13 @@ describe("R-435: a timeout after an earlier refusal or stop in the same call is 
       const v = await verdictOf([slow, refused("B")], "B");
       expect(v.refusedAfterStop).toBeUndefined();
     });
+    test("C8 (review): [A pass, F fail, B refused, T timeout]: B is flagged, but T stays untrusted (R-435), never a timeout kill", async () => {
+      const rows = [pass("A"), failed("F"), refused("B"), timedOut("T")];
+      expect((await verdictOf(rows, "B")).refusedAfterStop).toBe("F");
+      const t = await verdictOf(rows, "T");
+      expect(t.outcome).toBe("error");
+      expect(t.runnerRow).toBe("runner-test-error");
+    });
     test("C5: no mutant active (the baseline call): not flagged", async () => {
       const v = await verdictOf([failed("F"), refused("B")], "B", false);
       expect(v.refusedAfterStop).toBeUndefined();

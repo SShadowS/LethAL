@@ -5100,9 +5100,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const stop = call.rows[first];
       if (stop !== undefined && first < at && V3_TIMEOUT_MESSAGE.test(stop.message ?? ""))
         return { ...verdict, refusedAfterStop: stop.method };
-      // R978 (R-967): the same for a refusal whose cause is a plain FAILURE: the call's first row that
-      // did not pass came before this one and failed (no refusal marker, not a timeout), from a clean
-      // state (every row before it passed). Measured: al-runner refuses a later test "a test before this
+      // R978 (R-967): the same for a refusal after a plain FAILURE: the call's first row that did not
+      // pass came before this one and failed (no refusal marker, not a timeout), from a clean state
+      // (every row before it passed). The refusal's own cause is not checked (it may be its own Commit,
+      // say): the flag only lets the loop go on, and the earlier failure is a measured one either way;
+      // a timeout after it stays untrusted under R-435 (test C8). Measured: al-runner refuses a later test "a test before this
       // one in the codeunit did not pass (<T>: failed ...) ... this failure is not trusted", and LethAL
       // ended the mutant there before its covering order reached <T>, a kill BC scores (Recurrence
       // Schedule, 76 mutants). The loop goes on; <T>'s own row then decides, under the usual rules.

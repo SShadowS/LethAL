@@ -309,6 +309,8 @@ describe("serveDaemonReusable, the rule alone", () => {
     keeps: [
       `${P}store error platform table 'Api Web Service' (2000000193) has no provider`,
       `${P}store error platform table 'Tenant Media Set' (2000000183) has no provider`,
+      // an Insert's wording (no "store error"), measured clean too
+      `${P}platform table 'Api Web Service' (2000000193) has no provider`,
     ],
     closes: [
       // a tail after the measured wording, and a write that is not the measured read

@@ -757,8 +757,10 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * it, the pid unchanged, no panic text. The refusal is the store's, before any row is read, so the
    * table is a parameter. APIV1 restarted its daemon 100 times in its baseline on this family (R964).
    */
+  // Build review: a WRITE gives the same text without `store error ` (an Insert on `Api Web Service`,
+  // measured clean with the same kit), so the prefix is optional; both forms are measured.
   "platform-no-provider":
-    /^NotRun: out-of-scope: store error platform table '[^'\n]+' \(\d+\) has no provider$/,
+    /^NotRun: out-of-scope: (?:store error )?platform table '[^'\n]+' \(\d+\) has no provider$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
