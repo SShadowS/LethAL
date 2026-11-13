@@ -2674,7 +2674,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R954: the session's mutant stop, once the orchestrator gave one (no `--mutant-timeout-ms`). */
   useMutantStop(ms: number): void {
-    this.dropPair();
+    // No dropPair: ensureDaemon replaces a daemon whose stop differs, and the baseline bracket dropped any pair.
     this.mutantStopMs = ms;
   }
   private mutantStopMs: number | undefined;
