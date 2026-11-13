@@ -123,9 +123,7 @@ export function memoryVerdict(
   const why = !nowFits
     ? `used + peak + reserve = ${f(used + peakGiB + reserveGiB)}`
     : `held peaks + peak + reserve = ${f(held + peakGiB + reserveGiB)}`;
-  const message =
-    `memory: max ${f(max)} GiB, used ${f(used)}, held slots' peaks ${f(held)} (${heldPeaksGiB.length}), ` +
-    `this job's peak ${f(peakGiB)}, reserve ${f(reserveGiB)} -> ` +
-    (nowFits && peaksFit ? "admitted" : `REFUSED (${why} > ${f(max)})`);
+  const outcome = nowFits && peaksFit ? "admitted" : `REFUSED (${why} > ${f(max)})`;
+  const message = `memory: max ${f(max)} GiB, used ${f(used)}, held slots' peaks ${f(held)} (${heldPeaksGiB.length}), this job's peak ${f(peakGiB)}, reserve ${f(reserveGiB)} -> ${outcome}`;
   return { refuse: !(nowFits && peaksFit), message };
 }
