@@ -2194,6 +2194,30 @@ describe("§5 the row decoder", () => {
     expect(lic.failureMessage).toContain("set alRunnerV3.license to a .bclicense file (R956)");
     expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.license");
   });
+  // R963: a row with no durationMs of its own has an UNKNOWN test time; the call's wall (here 777)
+  // is never stored as the test's. With one, it is passed through. Each branch its own test.
+  const WALL = 777;
+  const verdictOf = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) =>
+    v3RowVerdict(r, row(o), 3, WALL, undefined);
+  const branches: ReadonlyArray<[string, Partial<Parameters<typeof v3RowVerdict>[1]>]> = [
+    ["pass", { status: "pass" }],
+    ["fail", { status: "fail", message: "Assert.AreEqual failed" }],
+    ["refusal (notRun)", { status: "error", notRun: true, message: "NotRun: something else" }],
+    ["timeout (notRun)", { status: "error", notRun: true, message: "Test exceeded 3s timeout." }],
+    ["unclassified error", { status: "error", message: "boom" }],
+  ];
+  for (const [name, o] of branches) {
+    test(`R963: a ${name} row without durationMs has no measuredDurationMs; the call's wall stays durationMs`, () => {
+      const v = verdictOf(o);
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBeUndefined();
+    });
+    test(`R963: a ${name} row with durationMs passes it through as measuredDurationMs`, () => {
+      const v = verdictOf({ ...o, durationMs: 8 });
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBe(8);
+    });
+  }
   test("notRun with pass or fail is a contract error, never a verdict", () => {
     for (const status of ["pass", "fail"] as const) {
       const v = v3RowVerdict(r, row({ status, notRun: true }), 3, 10, undefined);

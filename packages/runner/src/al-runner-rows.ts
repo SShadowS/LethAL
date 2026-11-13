@@ -183,6 +183,7 @@ export function verdictFromRunnerTest(
       ref,
       outcome: "timeout",
       durationMs,
+      ...measured,
       ...(reportedStopMs !== undefined ? { reportedStopMs } : {}),
       timeoutIn,
       ...(t.message !== undefined ? { failureMessage: t.message } : {}),
@@ -202,6 +203,7 @@ export function verdictFromRunnerTest(
       ref,
       outcome: "error",
       durationMs,
+      ...measured,
       failureMessage: `${t.message} [al-runner refused this surface (out-of-scope), so whether the mutant changes this test's outcome on BC is unknown: NOT scored as a kill; measure this test on bcdev (R534)]`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
@@ -222,6 +224,7 @@ export function verdictFromRunnerTest(
     ref,
     outcome: "error",
     durationMs,
+    ...measured,
     failureMessage: `${AL_RUNNER_UNCLASSIFIED_ERROR}: al-runner reported status ${JSON.stringify(
       t.status,
     )} for ${wanted} with message ${JSON.stringify(t.message ?? "<none>")}. That is not an assertion failure, so it is NOT scored as a kill. al-runner answered, so it is not re-sent and does not stop the session (R534); if this is a timeout whose wording changed again, add it to RUNNER_TIMEOUT_MESSAGE.`,

@@ -897,12 +897,18 @@ export function v3RowVerdict(
   wallMs: number,
   coverage: CoverageMap | undefined,
 ): TestVerdict {
+  // R963: the row's own time, or nothing: `wallMs` is the call's and is never the test's.
+  const measured =
+    typeof row.durationMs === "number" && Number.isFinite(row.durationMs) && row.durationMs >= 0
+      ? { measuredDurationMs: row.durationMs }
+      : {};
   if (row.notRun) {
     if (row.status !== "error") {
       return {
         ref,
         outcome: "error",
         durationMs: wallMs,
+        ...measured,
         failureMessage: `al-runner-v3 contract: ${row.name} is notRun with status "${row.status}"; never scored (R586 §5)`,
         operation: "completed-accepted",
         runnerRow: "runner-test-error",
@@ -916,6 +922,7 @@ export function v3RowVerdict(
           ref,
           outcome: "error",
           durationMs: wallMs,
+          ...measured,
           failureMessage: `al-runner-v3 contract: ${row.name} reports a ${n}s stop, but the call was sent --test-timeout-secs ${callStopSeconds}; never scored (R586 §5)`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -925,6 +932,7 @@ export function v3RowVerdict(
         ref,
         outcome: "timeout",
         durationMs: wallMs,
+        ...measured,
         reportedStopMs: n * 1000,
         timeoutIn: "body",
         failureMessage: row.message ?? "",
@@ -934,6 +942,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
+      ...measured,
       failureMessage: `${row.message ?? "<no message>"} ${V3_NOT_RUN_SUFFIX}${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-refused",
@@ -950,6 +959,7 @@ export function v3RowVerdict(
       ref,
       outcome: "error",
       durationMs: wallMs,
+      ...measured,
       failureMessage: `${row.message ?? ""} [al-runner v3: a ${row.status} that holds v3's refusal marker; never scored (R639, R675)]${licensePointer(row.message)}`,
       operation: "completed-accepted",
       runnerRow: "runner-test-error",
@@ -4047,6 +4057,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ref,
         outcome: "error",
         durationMs: call.wallMs,
+        ...(verdict.measuredDurationMs !== undefined
+          ? { measuredDurationMs: verdict.measuredDurationMs }
+          : {}),
         failureMessage: `${row.message ?? ""} [al-runner v3: stopped on v3's virtual clock; BC's real wait unknown; never scored]`,
         operation: "completed-accepted",
         runnerRow: "runner-refused",
@@ -4066,6 +4079,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
           failureMessage: `${row.message ?? ""} [al-runner v3: a timeout after ${earlier.map((r) => r.method).join(", ")} refused or stopped earlier in the same call is not trusted; never scored (R-435)]`,
           operation: "completed-accepted",
           runnerRow: "runner-test-error",
@@ -4139,6 +4155,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ref,
           outcome: "error",
           durationMs: call.wallMs,
+          ...(verdict.measuredDurationMs !== undefined
+            ? { measuredDurationMs: verdict.measuredDurationMs }
+            : {}),
           failureMessage: note,
           operation: "completed-accepted",
           runnerRow: "runner-refused",
