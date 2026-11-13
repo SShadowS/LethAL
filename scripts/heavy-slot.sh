@@ -9,7 +9,8 @@
 # it: used + peak + reserve and the held slots' peaks + peak + reserve both fit under memory.max
 # (scripts/heavy-slot-class.ts, memoryVerdict). A memory refusal is a guard refusal like any other.
 # R960 (owner ruling 2026-11-13): where the cgroup names a limit, memory is the ONLY rule: no job
-# count, no BaseApp-class cap. The six slot files are a ceiling set high enough not to bind. On a
+# count, no BaseApp-class cap; a heavy job in no slot counts at its class default peak. The six slot
+# files are a ceiling that binds only when six small jobs run at once. On a
 # host with no cgroup limit, the old count rule (two jobs while a BaseApp-class job runs, else
 # three) still decides.
 #

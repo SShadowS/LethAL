@@ -650,7 +650,7 @@ describe("R952 (R953) admission by memory", () => {
     });
   });
 
-  test("R960: guardInSlot decides by memory alone where the cgroup names a limit", () => {
+  test("R960: guardInSlot decides by memory alone where the cgroup names a limit", async () => {
     const dir = fresh();
     const cg = fresh();
     writeFileSync(join(cg, "memory.current"), `${4 * GIB}\n`);
@@ -661,18 +661,33 @@ describe("R952 (R953) admission by memory", () => {
     };
     process.env.LETHAL_HEAVY_LOCK_DIR = dir;
     process.env.LETHAL_HEAVY_CGROUP_DIR = cg;
-    // Two other BaseApp corpus jobs in the ps view: the old count cap refuses a third BaseApp job.
-    const ps = () =>
-      [
-        "PID PPID PGID COMMAND",
-        "1 0 1 init",
-        "700 1 700 bun census.ts /work/src/BC.History/BaseApp",
-        "800 1 800 bun census.ts /work/src/BC.History/Other",
-      ].join("\n");
+    const psOf =
+      (...rows: string[]) =>
+      () =>
+        ["PID PPID PGID COMMAND", "1 0 1 init", ...rows].join("\n");
+    const census = (pid: number) => `${pid} 1 ${pid} bun census.ts /work/src/BC.History/BaseApp`;
     try {
-      expect(() => guardInSlot(1, true, () => {}, ps)).not.toThrow(); // memory: 4 + 12 + 4 fits
+      // (A) review r1: two young BaseApp jobs in no slot reserve their default peaks (12 each), which
+      // memory.current (4) does not show: 12 + 12 + 12 + 4 = 40 > 32, refused.
+      expect(() => guardInSlot(1, true, () => {}, psOf(census(700), census(800)))).toThrow(
+        RefusedError,
+      );
+      // (B) one held BaseApp slot declaring 2 GiB and one unslotted BaseApp job: the old count rule
+      // refuses a third BaseApp job; memory admits it (2 + 12 + 12 + 4 = 30).
+      await hold(dir, 2, "baseapp");
+      const pid = holders.at(-1);
+      if (pid === undefined) throw new Error("no holder");
+      writeFileSync(join(dir, "heavy.2"), `${pid}\n`);
+      writeFileSync(join(dir, "heavy.2.class"), `baseapp ${pid} 2\n`);
+      // the holder's ps row is the wrapper's, so both rules trust it as a BaseApp-class slot
+      const one = psOf(
+        `${pid} 1 ${pid} /bin/bash scripts/heavy-slot.sh --peak 2 baseapp sleep 30`,
+        census(800),
+      );
+      expect(() => guardInSlot(1, true, () => {}, one)).not.toThrow();
+      // (C) the same on a host with no cgroup limit: the count rule refuses
       process.env.LETHAL_HEAVY_CGROUP_DIR = join(dir, "no-cgroup");
-      expect(() => guardInSlot(1, true, () => {}, ps)).toThrow(RefusedError); // count rule, no limit
+      expect(() => guardInSlot(1, true, () => {}, one)).toThrow(RefusedError);
     } finally {
       for (const [k, v] of [
         ["LETHAL_HEAVY_LOCK_DIR", old.lock],

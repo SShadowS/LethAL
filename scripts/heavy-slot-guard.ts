@@ -17,7 +17,14 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { HEAVY_GUARD_EXIT, SLOTS, heavyVerdict, parsePs, slotHeld } from "./corpus-snapshot.ts";
+import {
+  HEAVY_GUARD_EXIT,
+  SLOTS,
+  heavyVerdict,
+  parsePs,
+  slotHeld,
+  unslottedPeaks,
+} from "./corpus-snapshot.ts";
 import {
   DEFAULT_PEAK_GIB,
   memoryVerdict,
@@ -34,12 +41,6 @@ if (import.meta.main) {
   if (!(peak > 0)) throw new Error(`heavy-slot-guard: bad peak ${peakArg}`);
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
   const slots = held.map((s) => readSlot(dir, s));
-  // A held slot with no readable class (a bare flock, or a pid that died) counts at the larger default.
-  const heldPeaks = slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB)));
-  const m = memoryVerdict(readContainerMemory(), heldPeaks, peak);
-  console.error(m.message);
-  if (m.off !== true) process.exit(m.refuse ? HEAVY_GUARD_EXIT : 0);
-  // No cgroup limit: the count verdict, as before R953.
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
@@ -48,8 +49,24 @@ if (import.meta.main) {
     psFile !== undefined
       ? readFileSync(psFile, "utf8")
       : Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString();
+  const procs = parsePs(ps);
+  // A held slot with no readable class (a bare flock, or a pid that died) counts at the larger default;
+  // a heavy job in no slot at its class default (review r1: memory.current holds only what it uses now).
+  const heldPeaks = [
+    ...slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
+    ...unslottedPeaks(
+      procs,
+      process.pid,
+      pids,
+      slots.map((s) => s?.cls),
+    ),
+  ];
+  const m = memoryVerdict(readContainerMemory(), heldPeaks, peak);
+  console.error(m.message);
+  if (m.off !== true) process.exit(m.refuse ? HEAVY_GUARD_EXIT : 0);
+  // No cgroup limit: the count verdict, as before R953.
   const v = heavyVerdict(
-    parsePs(ps),
+    procs,
     process.pid,
     pids,
     held.length,

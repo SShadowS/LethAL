@@ -75,8 +75,9 @@ next free id right before writing).
   --master` and `diff <set> --branch <worktree> [--projects ...]` (R593); it keys each entry by its
   dumper (`<sha>/<set>/<dumperKey>/`) and takes one of the heavy slots, `/coord/locks/heavy.1` to
   `heavy.6`, with `flock`. **Admission is by memory only (owner ruling 2026-11-13, R960):** where the
-  cgroup names a limit, no job count and no BaseApp-class cap applies; six slot files are only a
-  ceiling set high enough not to bind. The old count rule (R642: two jobs while a BaseApp corpus job
+  cgroup names a limit, no job count and no BaseApp-class cap applies (a heavy job found in no slot
+  counts at its class default peak); six slot files are only a ceiling, which binds only when six
+  small jobs run at once. The old count rule (R642: two jobs while a BaseApp corpus job
   runs, else three) decides only on a host with no cgroup limit, where its `ps` scan applies (two corpus
   jobs started from ONE shell (`a & b`) share a process group and count as one, and a job on a corpus
   COPY is invisible to it). Jobs that are not `corpus-snapshot.ts` take a slot themselves with `scripts/heavy-slot.sh [--wait] [--peak <p>] <baseapp|other> <cmd...>`
