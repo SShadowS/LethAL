@@ -85,7 +85,40 @@ describe("R934 repro-scaffold compare of a folder", () => {
     writeFileSync(join(dir, "default.report.json"), JSON.stringify({ mutants: [] }));
     expect(() => compare(dir)).toThrow(/the oneshot run wrote no report; see oneshot\.stderr\.txt/);
     writeFileSync(join(dir, "oneshot.report.json"), JSON.stringify({ mutants: [] }));
+    // Review: empty against empty is refused, never a match.
+    expect(() => compare(dir)).toThrow(/a report with no mutants \(default 0, one-shot 0\)/);
+    const one = {
+      file: "src/A.al",
+      startIndex: 1,
+      endIndex: 2,
+      operatorName: "op",
+      verdict: "killed",
+    };
+    writeFileSync(join(dir, "default.report.json"), JSON.stringify({ mutants: [one] }));
+    expect(() => compare(dir)).toThrow(/default 1, one-shot 0/);
+    writeFileSync(join(dir, "oneshot.report.json"), JSON.stringify({ mutants: [one] }));
     expect(compare(dir)).toBe(0);
+  });
+
+  // Review: a re-run whose run fails must not compare the previous run's report.
+  test("run.sh deletes the old reports first and skips the compare after a failed run", async () => {
+    const al = join(TMP, "Repro3.Codeunit.al");
+    writeFileSync(al, 'codeunit 79152 "Repro Tests 3" { Subtype = Test; }\n');
+    const dir = join(TMP, "r5");
+    await scaffold({
+      dir,
+      tests: [al],
+      symbols: symbols(),
+      alRunner: "/x/al-runner",
+      alc: "/x/alc",
+    });
+    const sh = readFileSync(join(dir, "run.sh"), "utf8");
+    expect(sh).toContain(
+      'rm -f "$D/$name.sqlite"* "$D/$name.report.json" "$D/$name.events.ndjson"',
+    );
+    expect(sh).toMatch(
+      /\[ "\$failed" -eq 0 \] \|\| \{[^}]*exit 1; \}\nbun scripts\/repro-scaffold\.ts compare/,
+    );
   });
 });
 

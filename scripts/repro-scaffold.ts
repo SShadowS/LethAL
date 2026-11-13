@@ -82,14 +82,19 @@ function runScript(dir: string): string {
 # repro-scaffold.ts: the repro on the DEFAULT transport and on one-shot, then the per-mutant compare.
 cd ${JSON.stringify(REPO)} || exit 9
 D=${JSON.stringify(dir)}
+failed=0
 for name in default oneshot; do
-  rm -f "$D/$name.sqlite"*
+  # a re-run must never compare against the previous run's report
+  rm -f "$D/$name.sqlite"* "$D/$name.report.json" "$D/$name.events.ndjson"
   bash scripts/heavy-slot.sh --wait other timeout 3600 bun packages/runner/src/cli.ts run --project "$D/app" --tests "$D/app-test" \\
     --backend al-runner-v3 --config "$D/v3.$name.json" --db "$D/$name.sqlite" \\
     --out "$D/$name.report.json" --progress-out "$D/$name.events.ndjson" > "$D/$name.stdout.txt" 2> "$D/$name.stderr.txt"
-  echo "$name rc=$?"
+  rc=$?
+  echo "$name rc=$rc"
+  [ "$rc" -eq 0 ] || failed=1
 done
 grep -h "serve-default-fallback" "$D/default.stderr.txt" | cut -c1-300
+[ "$failed" -eq 0 ] || { echo "repro-scaffold: a run failed (see its stderr.txt); no compare" >&2; exit 1; }
 bun scripts/repro-scaffold.ts compare "$D"
 `;
 }
@@ -161,7 +166,13 @@ export function compare(dir: string): number {
     return (JSON.parse(readFileSync(f, "utf8")) as { mutants: Row[] }).mutants;
   };
   const a = read("default");
-  const diffs = compareReports(a, read("oneshot"));
+  const b = read("oneshot");
+  // Empty against empty is no evidence of agreement.
+  if (a.length === 0 || b.length === 0)
+    throw new Error(
+      `repro-scaffold compare: a report with no mutants (default ${a.length}, one-shot ${b.length}); nothing to compare`,
+    );
+  const diffs = compareReports(a, b);
   console.log(`repro-scaffold compare: ${a.length} mutants, ${diffs.length} difference(s)`);
   for (const d of diffs) console.log(`  ${d}`);
   return diffs.length === 0 ? 0 : 1;

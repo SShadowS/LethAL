@@ -175,6 +175,10 @@ describe("R905 scripts/heavy-slot.sh", () => {
     expect(r.exitCode).toBe(7);
     expect(existsSync(join(dir, "heavy.1.class"))).toBe(false);
     expect(run(dir, "bogus", "true").exitCode).toBe(2);
+    // R934 review: `other --wait cmd` would hold a slot and run a command named --wait
+    const misplaced = run(dir, "other", "--wait", "touch", join(dir, "ran"));
+    expect(misplaced.exitCode).toBe(2);
+    expect(existsSync(join(dir, "ran"))).toBe(false);
   });
   test("two held baseapp slots: the wrapper exits 75 and does not run the command", async () => {
     const dir = fresh();
@@ -416,5 +420,38 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     expect(await plain.exited).toBe(75);
     expect(existsSync(join(dir, "plain"))).toBe(false);
     w.kill("SIGKILL");
+  });
+
+  // Review: a waiter SIGKILLed whose pid is reused by an unrelated process must not block forever.
+  test("a ticket whose live pid is not a heavy-slot.sh is dropped", async () => {
+    const dir = fresh();
+    mkdirSync(join(dir, "heavy-queue"), { recursive: true });
+    const other = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+    holders.push(other.pid);
+    writeFileSync(join(dir, "heavy-queue", `000000000001.${other.pid}`), "");
+    const plain = start(dir, "0.05", "other", "touch", join(dir, "plain"));
+    expect(await plain.exited).toBe(0);
+    expect(existsSync(join(dir, "plain"))).toBe(true);
+    expect(tickets(dir)).toEqual([]);
+  });
+
+  // Review: a head waiter the guard refuses (baseapp over the two-job cap, a slot free) must not keep
+  // an `other` job, which the cap admits, out of that slot.
+  test("a guard-refused head waiter marks itself and lets a plain caller take the free slot", async () => {
+    const dir = fresh();
+    const p1 = await holdSlot(dir, 1, "other");
+    await holdSlot(dir, 2, "other");
+    const marker = join(dir, "ba");
+    const w = start(dir, "0.05", "--wait", "baseapp", "touch", marker);
+    expect(await until(() => tickets(dir).some((t) => t.endsWith(".refused")))).toBe(true);
+    const plain = start(dir, "0.05", "other", "touch", join(dir, "plain"));
+    expect(await plain.exited).toBe(0);
+    expect(existsSync(join(dir, "plain"))).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+    // Still a waiter: once a job ends it runs, and its ticket and marker go.
+    process.kill(p1, "SIGKILL");
+    expect(await w.exited).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    expect(tickets(dir)).toEqual([]);
   });
 });

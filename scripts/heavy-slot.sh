@@ -13,9 +13,15 @@
 #
 # R934 `--wait`: instead of exit 75, take a numbered ticket in <lock dir>/heavy-queue/ and wait in
 # FIFO order. Only the oldest LIVE ticket tries for a slot, every LETHAL_HEAVY_POLL_S seconds
-# (default 5); a ticket whose pid is gone is dropped, so a dead waiter never blocks the queue. The
-# caps are the guard's, unchanged, and a waiter holding no slot is no job to either guard. A caller
-# WITHOUT --wait exits 75 while any live ticket waits, so it cannot overtake the queue.
+# (default 5); a ticket whose pid is gone, or is no longer a heavy-slot.sh, is dropped, so a dead
+# waiter never blocks the queue. The caps are the guard's, unchanged, and a waiter holding no slot
+# is no job to either guard. A caller WITHOUT --wait exits 75 while any live ticket waits, so it
+# cannot overtake the queue.
+# A waiter the GUARD refused (a free slot, but over the cap for its class: a baseapp waiter while
+# two jobs run) marks its ticket `.refused`. It then retries every poll out of turn, and no longer
+# blocks the waiters behind it or plain callers, so a slot it may not take is not left empty. The
+# price: a refused waiter can be overtaken while it stays refused. corpus-snapshot.ts and
+# v3-timing.ts take their slots without looking at the queue.
 #
 # Exit code: the command's; 75 when all slots are held, the guard refused or a waiter queues (retry
 # later); 2 for a bad class, a bad lock folder or a flock failure (retrying never helps).
@@ -35,6 +41,7 @@ case "$cls" in baseapp | other) ;; *)
 esac
 shift
 [ $# -gt 0 ] || { echo "heavy-slot: no command" >&2; exit 2; }
+[ "$1" != "--wait" ] || { echo "heavy-slot: --wait goes before the class" >&2; exit 2; }
 dir="${LETHAL_HEAVY_LOCK_DIR:-/coord/locks}"
 mkdir -p "$dir" || exit 2
 qdir="$dir/heavy-queue"
@@ -43,25 +50,30 @@ poll="${LETHAL_HEAVY_POLL_S:-5}"
 ticket=""
 class=""
 cleanup() {
-  [ -n "$ticket" ] && rm -f "$qdir/$ticket"
+  [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
   [ -n "$class" ] && rm -f "$class"
 }
 trap cleanup EXIT
 
-# The oldest ticket whose pid is alive; dead ones are removed on the way.
+# The oldest live ticket that the guard has not refused; dead tickets (and their markers) are
+# removed on the way. Live = the pid exists AND is a heavy-slot.sh, so a reused pid is not a waiter.
 head_ticket() {
   local f pid
   for f in $(ls "$qdir" 2>/dev/null | sort); do
+    case "$f" in *.refused) continue ;; esac
     pid="${f#*.}"
-    if [ -d "/proc/$pid" ]; then
-      echo "$f"
-      return
+    if ! grep -qa "heavy-slot.sh" "/proc/$pid/cmdline" 2>/dev/null; then
+      rm -f "$qdir/$f" "$qdir/$f.refused"
+      continue
     fi
-    rm -f "$qdir/$f"
+    [ -e "$qdir/$f.refused" ] && continue
+    echo "$f"
+    return
   done
 }
 
-# One pass over the slots: runs the command and exits with its code, or returns 75.
+# One pass over the slots: runs the command and exits with its code, or returns 75 (all held) or
+# 76 (the guard refused).
 try_once() {
   local n rc g
   for n in 1 2 3; do
@@ -80,7 +92,7 @@ try_once() {
     "${BUN:-bun}" "$(dirname "$0")/heavy-slot-guard.ts" "$dir" "$n" "$cls"
     g=$?
     if [ "$g" -eq 0 ]; then
-      [ -n "$ticket" ] && rm -f "$qdir/$ticket"
+      [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
       ticket=""
       "$@"
       exit $?
@@ -88,7 +100,7 @@ try_once() {
     rm -f "$class" # refused: the slot is released and the command does not run
     class=""
     exec 9>&-
-    [ "$g" -eq 75 ] && return 75
+    [ "$g" -eq 75 ] && return 76
     exit 2
   done
   return 75
@@ -115,8 +127,9 @@ ticket="$(printf '%012d' "$seq").$$"
 exec 8>&-
 echo "heavy-slot: queued as ticket $seq ($qdir)" >&2
 while :; do
-  if [ "$(head_ticket)" = "$ticket" ]; then
+  if [ -e "$qdir/$ticket.refused" ] || [ "$(head_ticket)" = "$ticket" ]; then
     try_once "$@"
+    [ $? -eq 76 ] && : >"$qdir/$ticket.refused"
   fi
   sleep "$poll"
 done
