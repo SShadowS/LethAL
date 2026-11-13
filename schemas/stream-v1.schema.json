@@ -869,6 +869,9 @@
               },
               "flagged": {
                 "const": true
+              },
+              "flaggedUnknown": {
+                "const": true
               }
             }
           }
