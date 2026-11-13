@@ -477,6 +477,13 @@ export interface CoverageSplit {
    * BEFORE every lookup and fallback, so no coverage mode and no fallback can score one.
    */
   readonly refused: ReadonlyMap<string, string>;
+  /**
+   * R975. Mutant ids in `uncovered` because the LINE rule found no test that hit their statement.
+   * A subset of `uncovered`. The orchestrator's second call (against the non-green tests) must not
+   * let these reach FALLBACK 2: it routes them there only where a non-green test touched the object
+   * (R140's naming of that test), never to "all the failing tests".
+   */
+  readonly lineUncovered: ReadonlySet<string>;
 }
 
 /** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
@@ -711,6 +718,7 @@ export function coverageFilter(
   /** R175 — see `CoverageSplit.unplaceable`. A subset of `uncovered`, scored identically. */
   const unplaceable = new Set<string>();
   const refused = new Map<string, string>();
+  const lineUncovered = new Set<string>();
   for (const m of mutants) {
     const context = `mutant ${m.mutantId} (${m.file})`;
     const refusal = refusedObjects.get(objectKeyOf(m.objectType, m.codeunitId, context));
@@ -780,6 +788,7 @@ export function coverageFilter(
       ) {
         const hit = index.byLine.get(`${objectKey}:${m.reachLine}`);
         if (hit === undefined || hit.size === 0) {
+          lineUncovered.add(m.mutantId);
           uncovered.push(m);
           continue;
         }
@@ -932,5 +941,13 @@ export function coverageFilter(
       `[lethal] ${refused.size} mutant(s) read no-coverage because coverage is refused for their object (R298):\n${reasons.join("\n")}`,
     );
   }
-  return { covered, uncovered, untargetedTriggerCount, attribution, unplaceable, refused };
+  return {
+    covered,
+    uncovered,
+    untargetedTriggerCount,
+    attribution,
+    unplaceable,
+    refused,
+    lineUncovered,
+  };
 }
