@@ -763,6 +763,20 @@ export interface ExecutionBackend {
   }): void;
 
   /**
+   * R948, OPTIONAL: asked right before the mutant loop activates a mutant (each lane's loop too,
+   * so per activation, not per window). `false`: the memory guard stopped the session (it has
+   * spent the budget through `useStopHandle`), so this group is NOT started and no later one is.
+   */
+  mayStartGroup?(): Promise<boolean>;
+
+  /**
+   * R948, OPTIONAL: true when this session's baseline comes from a serve daemon. Part of what
+   * lends: its ` baseline-daemon` tag is in `runner_build`, so a snapshot or history from a daemon
+   * baseline is not lent to a one-shot session, nor the other way.
+   */
+  readonly baselineDaemon?: boolean;
+
+  /**
    * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that
    * shard with its covering refs. al-runner v3's serve-entries transport sends them as entries
    * and keeps each fully valid answer for that mutant's first activation.

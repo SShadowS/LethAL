@@ -76,6 +76,7 @@ import {
   type MemorySample,
   baselineSampleIds,
   compareBaselineAnswers,
+  durationCouldMoveBudget,
   memoryBoundBytes,
   readCgroupMemory,
 } from "./al-runner-v3-baseline-check";
@@ -809,6 +810,8 @@ export const ISOLATED_BASELINE_PROCESSES = 4;
 /** R948: the memory guard reads again every `MEMORY_POLL_MS` while over the bound, at most `MEMORY_WAIT_POLLS` times (5 minutes). */
 export const MEMORY_POLL_MS = 2000;
 export const MEMORY_WAIT_POLLS = 150;
+/** R948: what the guard counts one started al-runner process or request at (measured 2-3.3 GB, R961). */
+export const MEMORY_CALL_ESTIMATE_BYTES = 3 * 2 ** 30;
 
 /**
  * R948: the container stayed over the memory bound and nothing could stop the session through the
@@ -1936,6 +1939,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     | undefined;
   /** R948: set when the guard stopped the session; every later gate answers no. */
   private memoryStopped = false;
+  /** R948: gate callers take turns; each pass that holds counts `memoryEstimate()` until released. */
+  private memoryChain: Promise<void> = Promise.resolve();
+  private memoryHeld = 0;
+  /** R948: what the daemon baseline did (`daemonBaselineReport`). */
+  private readonly baselineStats = {
+    codeunits: 0,
+    requests: 0,
+    sampled: [] as number[],
+    perTestRequests: 0,
+    perTestSampled: [] as number[],
+    compared: 0,
+  };
   /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
    *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
   get inRunStopIsBudget(): boolean {
@@ -2005,6 +2020,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
     memoryWaitPolls?: number;
+    /** R948: bytes one started process or request is counted at by the guard. Absent: `MEMORY_CALL_ESTIMATE_BYTES`. */
+    memoryEstimateBytes?: number;
     /** R948: runs the daemon baseline's codeunits last to first (the order proof's second order). */
     reverseBaselineOrder?: true;
   } = {};
@@ -3279,7 +3296,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         if (onlyTest === undefined) continue;
         // R948: over the memory bound no new process starts; the test is left unanswered, and its
         // own call (gated too) is then dropped like a signalled one.
-        if (this.stopHandle?.spent() === true || !(await this.memoryGate())) {
+        if (this.stopHandle?.spent() === true || !(await this.memoryGate(true))) {
           queue.length = 0;
           return;
         }
@@ -3294,7 +3311,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           activeDir: lane.realActive ?? resolve(lane.activeDir()),
           testDir: this.realTestDir ?? resolve(this.cfg.testDir),
           onlyTest,
-        });
+        }).finally(() => this.memoryRelease());
         const covText = coverage
           ? await readFile(covPath, "utf8").catch(() => undefined)
           : undefined;
@@ -3361,7 +3378,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** R948: the baseline's own daemon for `mode`, started with the baseline's stop; replaced when its stop differs. */
-  private async baselineDaemon(
+  private async baselineDaemonFor(
     lane: Lane,
     mode: RequestMode,
     stopSeconds: number,
@@ -3389,7 +3406,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     stopSeconds: number,
     coverage: boolean,
   ): Promise<BaselineAnswer | undefined> {
-    const daemon = await this.baselineDaemon(lane, mode, stopSeconds);
+    const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
     const started = Date.now();
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
     const wallMs = Date.now() - started;
@@ -3417,8 +3434,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     id: number,
     stopSeconds: number,
     coverage: boolean,
+    /** One test alone (a per-test sample): its ref and `--test-exact` selection. Absent: the whole codeunit. */
+    only?: { readonly ref: TestMethodRef; readonly test: string },
   ): Promise<BaselineAnswer | undefined> {
-    if (!(await this.memoryGate())) return undefined;
+    if (!(await this.memoryGate(true))) return undefined;
     const covDir = join(this.cfg.instrumentedDir, "cov");
     await mkdir(covDir, { recursive: true });
     this.callSeq += 1;
@@ -3432,7 +3451,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       activeDir: lane.realActive ?? resolve(lane.activeDir()),
       testDir: this.realTestDir ?? resolve(this.cfg.testDir),
       beforeSpawn: () => this.checkBound(lane),
-    });
+      ...(only !== undefined ? { onlyTest: only.test } : {}),
+    }).finally(() => this.memoryRelease());
     const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
     await rm(covPath, { force: true }).catch(() => {});
     if ("spawnError" in made || made.timedOut) return undefined;
@@ -3445,7 +3465,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const decoded = decodeV3Rows(res.stdout, id);
     if ("why" in decoded) return undefined;
     this.observedSeed = decoded.seed ?? this.observedSeed;
-    if (!this.hasEveryRow(decoded.rows, this.suitePerCodeunit.get(id) ?? [])) return undefined;
+    if (
+      !this.hasEveryRow(
+        decoded.rows,
+        only !== undefined ? [only.ref] : (this.suitePerCodeunit.get(id) ?? []),
+      )
+    ) {
+      return undefined;
+    }
     return {
       rows: decoded.rows,
       coverage: decodeV3Coverage(covText),
@@ -3486,20 +3513,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       .sort((a, b) => a - b);
     if (this.seams.reverseBaselineOrder === true) ids.reverse();
     const sample = new Set(baselineSampleIds(ids));
+    this.baselineStats.codeunits = ids.length;
+    this.baselineStats.sampled = [...sample];
     const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
     const answers = new Map<number, BaselineAnswer>();
     let unusable = 0;
     try {
       for (const id of ids) {
         if (this.stopHandle?.spent() === true) break; // R955
-        if (!(await this.memoryGate())) break; // R948: no new request over the bound
+        if (!(await this.memoryGate(true))) break; // R948: no new request over the bound
         await this.checkBound(lane); // R652
         let got: BaselineAnswer | undefined;
         try {
+          this.baselineStats.requests += 1;
           got = await this.baselineRequest(lane, mode, id, stopSeconds, coverage);
         } catch (err) {
           if (!(err instanceof AlRunnerServerRequestError)) throw err;
           got = undefined; // the daemon was closed; this codeunit runs one-shot
+        } finally {
+          this.memoryRelease();
         }
         if (this.stopHandle?.signalled() === true) break; // R955: that call is dropped
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
@@ -3514,12 +3546,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           continue;
         }
         unusable = 0;
-        const tooSlow = got.rows.some((r) => 2 * (r.durationMs ?? 0) >= f.floorMs);
+        // The duration the budget will use is the verdict's: the row's, else the call's wall time.
+        const tooSlow = durationCouldMoveBudget(got.rows, got.wallMs, f.floorMs);
         if (sample.has(id) || tooSlow) {
           const shot = await this.oneShotBaselineAnswer(lane, id, stopSeconds, coverage);
           if (shot === undefined) {
             if (!sample.has(id)) continue; // too slow, no clean one-shot: its own call runs it
-            if (this.stopHandle?.spent() === true) break; // out of time or memory, not a mismatch
+            // Out of time or memory is not a mismatch.
+            if (this.stopHandle?.spent() === true || this.memoryStopped) break;
             this.dropDaemonBaseline(
               `the cross-check of codeunit ${id} got no clean one-shot answer to compare the daemon's with`,
             );
@@ -3527,6 +3561,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           }
           if (this.stopHandle?.signalled() === true) break;
           if (sample.has(id)) {
+            this.baselineStats.compared += 1;
             const why = compareBaselineAnswers(got, shot);
             if (why.length > 0) {
               this.dropDaemonBaseline(
@@ -3561,13 +3596,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<void> {
     const f = this.budgetFloor;
     if (f === undefined) return;
-    const mode: RequestMode = { testIsolation: "codeunit", runSelectedOnly: true };
+    // The refs this fill answers, in queue order; the sample is by position in that order.
+    const refs = queue.filter((ref) => this.isolated(this.callId(ref)) !== undefined);
+    const sample = new Set(baselineSampleIds(refs.map((_, i) => i)));
+    this.baselineStats.perTestRequests = refs.length;
+    this.baselineStats.perTestSampled = [...sample];
+    const answers = new Map<number, BaselineAnswer>();
     try {
-      for (const ref of queue) {
+      for (const [i, ref] of refs.entries()) {
         const key = this.callId(ref);
-        if (this.isolated(key) === undefined) continue;
+        // The mode is the call's own (`modeOfCall`): codeunit isolation under `method`, test
+        // isolation under `--isolate-tests`; both with `runSelectedOnly`.
+        const mode = this.modeOfCall(key);
         if (this.stopHandle?.spent() === true) break; // R955
-        if (!(await this.memoryGate())) break; // R948
+        if (!(await this.memoryGate(true))) break; // R948
         await this.checkBound(lane); // R652
         let got: BaselineAnswer | undefined;
         try {
@@ -3575,6 +3617,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         } catch (err) {
           if (!(err instanceof AlRunnerServerRequestError)) throw err;
           continue;
+        } finally {
+          this.memoryRelease();
         }
         if (this.stopHandle?.signalled() === true) break; // R955: that call is dropped
         const [row] = got?.rows ?? [];
@@ -3584,12 +3628,44 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           row === undefined ||
           row.notRun ||
           row.method.toLowerCase() !== ref.method.toLowerCase() ||
-          2 * (row.durationMs ?? 0) >= f.floorMs
+          durationCouldMoveBudget([row], got.wallMs, f.floorMs)
         ) {
           continue;
         }
-        this.daemonBaseline.set(key, got);
+        const one = this.isolated(key);
+        if (sample.has(i) && one !== undefined) {
+          // The cross-check: this test alone in a fresh process, compared per test.
+          const shot = await this.oneShotBaselineAnswer(
+            lane,
+            ref.codeunitId,
+            stopSeconds,
+            coverage,
+            {
+              ref,
+              test: one.test,
+            },
+          );
+          if (shot === undefined) {
+            if (this.stopHandle?.spent() === true || this.memoryStopped) break;
+            this.dropDaemonBaseline(
+              `the cross-check of ${ref.codeunitName}.${ref.method} got no clean one-shot answer to compare the daemon's with`,
+            );
+            return;
+          }
+          if (this.stopHandle?.signalled() === true) break;
+          this.baselineStats.compared += 1;
+          const why = compareBaselineAnswers(got, shot);
+          if (why.length > 0) {
+            this.dropDaemonBaseline(
+              `the daemon's per-test baseline of ${ref.codeunitName}.${ref.method} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+            );
+            return;
+          }
+          got = shot;
+        }
+        answers.set(key, got);
       }
+      for (const [k, v] of answers) this.daemonBaseline.set(k, v);
     } finally {
       await this.closeLane(lane, "baseline-end");
     }
@@ -3605,8 +3681,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<BaselineAnswer | undefined> {
     if (!this.inBaseline || lane.lastActivated !== null || !this.daemonBaselineOn())
       return undefined;
-    if (perTest) await this.fillIsolatedBaseline(lane, stopSeconds, coverage);
-    else await this.fillDaemonBaseline(lane, stopSeconds, coverage);
+    // Whole codeunits first, always: their fill and cross-check end before ANY daemon answer, a
+    // per-test one included, is served (on batch 2+ under auto a `method` call can come first).
+    // A drop there leaves nothing served and the session one-shot.
+    await this.fillDaemonBaseline(lane, stopSeconds, coverage);
+    if (!this.daemonBaselineOn()) return undefined;
+    if (perTest) {
+      await this.fillIsolatedBaseline(lane, stopSeconds, coverage);
+      if (!this.daemonBaselineOn()) return undefined;
+    }
     const a = this.daemonBaseline.get(key);
     this.daemonBaseline.delete(key);
     return a?.stopSeconds === stopSeconds && a.withCoverage === coverage ? a : undefined;
@@ -3649,7 +3732,61 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * session is stopped through the budget (`stopForMemory`, R955's path) and this and every later
    * gate answers `false`. Called only at call boundaries: never inside a request or a mutant group.
    */
-  private async memoryGate(): Promise<boolean> {
+  private memoryGate(hold = false): Promise<boolean> {
+    // One caller at a time: callers that arrive together read and reserve in turn, so they cannot all
+    // pass at "the bound less a little" (each started process or request is `memoryEstimate()` bytes
+    // that the container's reading does not show yet).
+    const turn = this.memoryChain.then(() => this.memoryGateOne(hold));
+    this.memoryChain = turn.then(
+      () => undefined,
+      () => undefined,
+    );
+    return turn;
+  }
+
+  /** R948: what one started process or request is counted at until its caller releases it. */
+  private memoryEstimate(): number {
+    return this.seams.memoryEstimateBytes ?? MEMORY_CALL_ESTIMATE_BYTES;
+  }
+
+  /** R948: the caller of `memoryGate(true)` has finished its process or request: its reservation ends. */
+  private memoryRelease(): void {
+    if (this.memoryHeld > 0) this.memoryHeld -= 1;
+  }
+
+  /** R948: asked before the mutant loop activates a mutant: `false` = the guard stopped the session. */
+  mayStartGroup(): Promise<boolean> {
+    return this.memoryGate(false);
+  }
+
+  /** R948: true when this session's baseline comes from a serve daemon (see `ExecutionBackend.baselineDaemon`). */
+  get baselineDaemon(): boolean {
+    return this.cfg.daemonBaseline === true && this.entries;
+  }
+
+  /** R948: what the daemon baseline did, for the gate and the tests. */
+  daemonBaselineReport(): {
+    readonly dropped: string | undefined;
+    readonly codeunits: number;
+    readonly requests: number;
+    readonly sampledCodeunits: readonly number[];
+    readonly perTestRequests: number;
+    readonly sampledPerTest: readonly number[];
+    readonly compared: number;
+  } {
+    const s = this.baselineStats;
+    return {
+      dropped: this.daemonBaselineOff,
+      codeunits: s.codeunits,
+      requests: s.requests,
+      sampledCodeunits: s.sampled,
+      perTestRequests: s.perTestRequests,
+      sampledPerTest: s.perTestSampled,
+      compared: s.compared,
+    };
+  }
+
+  private async memoryGateOne(hold: boolean): Promise<boolean> {
     this.announceMemoryGuard();
     const g = this.memoryGuard;
     if (g === undefined || g === "off") return true;
@@ -3658,12 +3795,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const sleep =
       this.seams.memorySleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     let used = 0;
+    let closed = false;
     for (let i = 0; ; i += 1) {
       const s = g.read();
       if (s === undefined) return true; // unreadable now: the first read decided the guard is on, so this is not a stop
-      used = s.usedBytes;
-      if (used <= g.boundBytes) return true;
+      used = s.usedBytes + this.memoryHeld * this.memoryEstimate();
+      if (used <= g.boundBytes) {
+        if (hold) this.memoryHeld += 1;
+        return true;
+      }
       if (i >= polls) break;
+      if (!closed) {
+        // Over the bound: the baseline's own daemon holds 2-3 GB and is not needed while waiting.
+        closed = true;
+        await this.closeBaselineDaemons();
+      }
       await sleep(MEMORY_POLL_MS);
     }
     this.memoryStopped = true;
@@ -3865,6 +4011,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       dependencyArtifactAppsDir: () => b.dependencyArtifactAppsDir(),
       latched: () => b.latched(),
       activate: (id) => b.activateOn(lane, id),
+      mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
@@ -4175,9 +4322,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async activateOn(lane: Lane, mutantId: string | null): Promise<void> {
-    // R948: a mutant's group starts here. Over the memory bound it waits, and if the wait does not
-    // clear the session is stopped (R955's path); this group then finishes, and none starts after it.
-    if (mutantId !== null) await this.memoryGate();
+    // R948: the memory guard is asked BEFORE this call, by the mutant loop (`mayStartGroup`): a
+    // group the guard stopped is never activated, so nothing here waits or stops.
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
     lane.aloneAfterStop = new Map();
@@ -4761,8 +4907,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : this.takeSpeculative(lane, id, stopSeconds, coverageRequested);
     // R948: a baseline call over the memory bound starts no process and is dropped like a signalled
     // one (the orchestrator sees the stop and discards its row): never a verdict, never stored.
+    let held = false;
     if (spec === undefined && aloneTest === undefined && this.isBaselineCall(lane)) {
-      if (!(await this.memoryGate())) {
+      held = true;
+      if (!(await this.memoryGate(true))) {
+        held = false;
         return {
           verdict: transportFailure(
             ref,
@@ -4790,6 +4939,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         beforeSpawn: () => this.checkBound(lane),
         ...(onlyTest !== undefined ? { onlyTest } : {}),
         mutantActive: aloneTest === undefined && !this.isBaselineCall(lane),
+      }).finally(() => {
+        if (held) this.memoryRelease();
       });
       if ("spawnError" in made) {
         return {

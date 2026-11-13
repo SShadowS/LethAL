@@ -353,6 +353,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // R866: leg ISO's own session runs under --isolate-tests, which says so.
   "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],
   "al-runner-v3/S1E": [],
+  // R948: leg DB's reader is fixed by the leg (a 32 GiB limit), so its guard line is the one warning.
+  "al-runner-v3/DB": ["al-runner-v3-memory-guard"],
   "al-runner-v3/N1S": [],
   // R782: N1E now completes on a #5798-fixed build; its set is empty (precommitment addendum 5587b588,
   // docs/superpowers/specs/2026-10-25-r782-serve-row-fields-precommitment-addendum-1.md).

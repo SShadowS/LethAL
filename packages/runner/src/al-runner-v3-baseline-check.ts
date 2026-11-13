@@ -21,13 +21,15 @@ export interface ComparableRow {
 }
 
 /** How many codeunits apart the sample is, and the most it holds (each one-shot run costs a minute). */
-export const BASELINE_SAMPLE_EVERY = 25;
-export const BASELINE_SAMPLE_CAP = 8;
+export const BASELINE_SAMPLE_EVERY = 10;
+export const BASELINE_SAMPLE_CAP = 16;
 
 /**
- * The codeunits re-run one-shot: the first and the last baselined, plus every
- * `BASELINE_SAMPLE_EVERY`th between, at most `BASELINE_SAMPLE_CAP` (the first, the last, and an even
- * thinning of the rest). `ids` is in baseline order. Deterministic: no clock, no randomness.
+ * The items re-run one-shot: the 2nd and the LAST baselined, plus every `BASELINE_SAMPLE_EVERY`th
+ * (index 10, 20, ...), at most `BASELINE_SAMPLE_CAP` (the 2nd, the last, and an even thinning of the
+ * rest). Index 0 is never a sample: it runs on a fresh daemon, which cannot show state a long run
+ * builds up. With a single item there is nothing else to compare, so that one is the sample. `ids`
+ * is in baseline order. Deterministic: no clock, no randomness. 112 codeunits give 13 samples.
  */
 export function baselineSampleIds(
   ids: readonly number[],
@@ -35,8 +37,9 @@ export function baselineSampleIds(
   cap: number = BASELINE_SAMPLE_CAP,
 ): number[] {
   if (ids.length === 0) return [];
-  const picked = new Set<number>([0, ids.length - 1]);
-  for (let i = 0; i < ids.length; i += every) picked.add(i);
+  if (ids.length === 1) return [...ids];
+  const picked = new Set<number>([1, ids.length - 1]);
+  for (let i = every; i < ids.length; i += every) picked.add(i);
   let idx = [...picked].sort((a, b) => a - b);
   if (idx.length > cap) {
     const middle = idx.slice(1, -1);
@@ -44,7 +47,7 @@ export function baselineSampleIds(
     const thinned = Array.from({ length: room }, (_, k) =>
       middle.at(Math.floor(((k + 0.5) * middle.length) / room)),
     ).filter((x): x is number => x !== undefined);
-    idx = [idx[0] ?? 0, ...thinned, idx.at(-1) ?? 0];
+    idx = [idx[0] ?? 1, ...thinned, idx.at(-1) ?? 1];
   }
   return [...new Set(idx)].map((i) => ids[i]).filter((x): x is number => x !== undefined);
 }
@@ -161,6 +164,20 @@ export function readCgroupMemory(
     ...(max !== undefined ? { maxBytes: max } : {}),
     source: `${dir}/memory.max`,
   };
+}
+
+/**
+ * A budget is `max(2 x duration, floor)`, and the duration it reads is the verdict's: the row's own
+ * `durationMs`, else the call's wall time. A warm daemon shortens both, so an answer may stand only
+ * when `2 x duration < floor` for every row, on that same duration (R790's rule). True: re-run that
+ * codeunit (or test) one-shot and use its answer.
+ */
+export function durationCouldMoveBudget(
+  rows: readonly { readonly durationMs?: number }[],
+  wallMs: number,
+  floorMs: number,
+): boolean {
+  return rows.some((r) => 2 * (r.durationMs ?? wallMs) >= floorMs);
 }
 
 /** The most bytes in use before no new call starts: the limit less the headroom. */

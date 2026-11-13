@@ -60,6 +60,7 @@ import {
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
+import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import {
@@ -132,6 +133,7 @@ import {
   O1_SEED_CODEUNIT,
   O1_SEED_TEST,
   type V3RowFacts,
+  V3_DB_LEG,
   V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -291,6 +293,7 @@ const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
 const ORACLE_BC_BUILD: Record<string, string> = {
   S1: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   S1E: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  DB: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
   D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
   D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
@@ -588,9 +591,17 @@ const S1E_PINS = {
   pairBatchRefused: 0,
 } as const;
 
-/** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
-async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): Promise<void> {
-  const serve = leg === "S1E";
+/**
+ * S1 one-shot (`entries` off), S1E (same project and assertions under serve-entries), or DB (R948:
+ * S1E with `daemonBaseline` and the memory guard at its default headroom: the same per-mutant table
+ * and serve counters, plus the daemon baseline used and cross-checked).
+ */
+async function legS1(
+  scratch: string,
+  leg: "S1" | "S1E" | "DB" = "S1",
+  version = "",
+): Promise<void> {
+  const serve = leg !== "S1";
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -599,8 +610,22 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79199,
       ...(serve ? { transport: "serve-entries" as const } : {}),
+      // The CLI's own two settings (`buildAlRunnerV3Backend`): only the CLI sets them, so a leg that
+      // wants the user's path sets them here, with the config's default headroom.
+      ...(leg === "DB"
+        ? { daemonBaseline: true, memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT }
+        : {}),
     }),
   );
+  // A fixed reader (32 GiB limit, 1 GiB used) keeps the guard's one warning the same on every host;
+  // the real cgroup reader is unit-tested against fake files.
+  if (leg === "DB") {
+    b.seams.memoryReader = () => ({
+      usedBytes: 2 ** 30,
+      maxBytes: 32 * 2 ** 30,
+      source: "/sys/fs/cgroup/memory.max",
+    });
+  }
   let r: SessionReport;
   try {
     r = await session(scratch, b, {
@@ -611,7 +636,7 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
   } catch (e) {
     // A build with no serve path refuses `entries` by name: not applicable, as N1E reads it.
     if (serve && !isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
-      console.log("  S1E: not applicable: this build has no serve-entries path");
+      console.log(`  ${leg}: not applicable: this build has no serve-entries path`);
       return;
     }
     throw e;
@@ -653,13 +678,31 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       pairBatchRefused: s.pairBatchRefused,
     };
     console.log(
-      `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
+      `  ${leg}: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
     for (const [k, v] of Object.entries(S1E_PINS)) {
       const g = got[k as keyof typeof got];
-      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761, R778)`);
+      must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`);
     }
-    must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+    must(s.echoMismatches === 0, `${leg}: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+  }
+  if (leg === "DB") {
+    // R948: the daemon baseline was USED, not dropped, and its cross-check ran and agreed.
+    const d = b.daemonBaselineReport();
+    console.log(`  DB: daemon baseline ${JSON.stringify(d)}`);
+    must(d.dropped === undefined, `DB: the daemon baseline was dropped: ${d.dropped}`);
+    must(d.codeunits >= 1, "DB: the daemon baseline asked for no codeunit");
+    must(d.requests === d.codeunits, `DB: ${d.requests} requests for ${d.codeunits} codeunits`);
+    const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
+    must(
+      d.sampledCodeunits.length === want && d.compared === want,
+      `DB: ${d.compared} of ${d.sampledCodeunits.length} sampled codeunits compared, pre-committed ${want} of ${want}`,
+    );
+    must(
+      d.perTestRequests === 0,
+      `DB: ${d.perTestRequests} per-test requests under isolation test`,
+    );
+    must(b.baselineDaemon, "DB: the backend does not report a daemon baseline");
   }
 }
 
@@ -2469,6 +2512,7 @@ async function main(): Promise<void> {
         if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
         else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
+        else if (leg === V3_DB_LEG) await legS1(scratch, V3_DB_LEG, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

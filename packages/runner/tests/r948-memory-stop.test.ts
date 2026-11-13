@@ -107,11 +107,28 @@ class Backend implements ExecutionBackend {
     return null;
   }
   async compileCheck(): Promise<void> {}
-  async activate(): Promise<void> {}
+  /** Mutant groups activated (not the null activations). */
+  groupsStarted = 0;
+  asks = 0;
+  stopped = false;
+  /** The guard refuses at this group ask (it stops the session there). */
+  refuseOnAsk: number | undefined;
+  async mayStartGroup(): Promise<boolean> {
+    this.asks += 1;
+    if (this.refuseOnAsk === this.asks) {
+      this.handle?.stopForMemory(INFO);
+      this.stopped = true;
+    }
+    return !this.stopped;
+  }
+  async activate(id?: string | null): Promise<void> {
+    if (id !== null && id !== undefined) this.groupsStarted += 1;
+  }
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     this.calls += 1;
     if (this.stopOnCall === this.calls) {
       this.handle?.stopForMemory(INFO);
+      this.stopped = true;
       if (this.dropIt) {
         return {
           ref,
@@ -179,19 +196,33 @@ describe("R948: the memory guard stops a session through R955's path", () => {
     });
   });
 
-  test("in the mutant phase: the call in flight keeps its verdict, no later group starts, and the report names memory", async () => {
+  test("in the mutant phase: the group in flight keeps its verdicts, EXACTLY one is scored, no later group is activated, and the report names memory", async () => {
     await inProject(async (root) => {
       const full = await session(root, new Backend());
-      const total = full.report.mutants.length;
-      expect(total).toBeGreaterThan(1);
+      expect(full.report.mutants.length).toBeGreaterThan(1);
       const b = new Backend();
-      b.stopOnCall = 6; // after the four baseline calls: inside the mutant loop
+      b.stopOnCall = 6; // after the four baseline calls: inside the first group
       const { report } = await session(root, b);
       expect(report.timeBudget?.stoppedByMemory).toEqual(INFO);
       expect(report.timeBudget?.baselineStopped).toBeUndefined();
-      expect(report.mutants.length).toBeLessThan(total);
-      expect(report.mutants.length).toBeGreaterThan(0); // the group in flight finished and is scored
+      expect(b.groupsStarted).toBe(1);
+      expect(report.mutants).toHaveLength(1);
       expect(report.mutants.every((m) => m.verdict !== "error")).toBe(true);
+    });
+  });
+
+  test("a group the guard refuses at its start is NOT started and not scored; the console says memory, never a spent --time-budget of 0 s", async () => {
+    await inProject(async (root) => {
+      const b = new Backend();
+      b.refuseOnAsk = 2;
+      const { report } = await session(root, b);
+      expect(b.groupsStarted).toBe(1);
+      expect(report.mutants).toHaveLength(1);
+      expect(report.timeBudget?.stoppedByMemory).toEqual(INFO);
+      const text = renderConsole(report);
+      expect(text).toContain("STOPPED BY THE MEMORY GUARD");
+      expect(text).not.toContain("--time-budget 0 s");
+      expect(text).not.toContain("TIME BUDGET REACHED");
     });
   });
 

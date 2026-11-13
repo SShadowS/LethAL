@@ -408,6 +408,16 @@ const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries`
 /** R761: S1's project under serve-entries (`legS1E`); serve by construction, whatever the run's transport. */
 export const V3_S1E_LEG = "S1E";
 
+/**
+ * R948: S1E with the baseline through one serve daemon (`daemonBaseline`) and the memory guard on at
+ * its default headroom, per mutant equal to the same frozen table S1E reads (`bcdev.baseline.json`),
+ * the same serve counters, and the daemon baseline asserted USED (not dropped) with its cross-check
+ * sample run and compared. Serve by construction. Not in `V3_GATE_LEGS` (a build gated before this
+ * leg stays gated); every gate runs it from now on. Only the CLI sets `daemonBaseline`, so without
+ * this leg no gate would run the path users get.
+ */
+export const V3_DB_LEG = "DB";
+
 /** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
 export function isNoServeRefusal(version: string, threw: string): boolean {
   return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);
@@ -487,6 +497,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "C",
     "S1",
     V3_S1E_LEG,
+    V3_DB_LEG, // R948: not in V3_GATE_LEGS, as ISO is not
     "S3",
     "N1",
     V3_N1E_LEG,

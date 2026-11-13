@@ -6682,7 +6682,7 @@ async function runSessionBody(
     // the other way, by the one check every lend passes.
     runnerBuild:
       v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
+        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${baselineSourceTag(cfg.backend)}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
         : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
@@ -11951,6 +11951,12 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    // R948: the memory guard, per group start (each lane's loop too): when it stops the session
+    // this group is not started, and the budget it spent ends the loop and the report names memory.
+    if (args.backend.mayStartGroup !== undefined && !(await args.backend.mayStartGroup())) {
+      budgetSpent(at);
+      break;
+    }
     args.sink?.begin(m.mutantId);
     if (covering.length === 0) {
       // Defensive: the covering-test list resolved to zero refs (e.g. a
@@ -12967,6 +12973,15 @@ function assertSameResumeInputs(
  * `observedBcBuild`), `undefined` on every other backend. A v3 backend that cannot say refuses the
  * session: its run row would lend under no build.
  */
+/**
+ * R948: ` baseline-daemon` when the session's baseline comes from a serve daemon, else nothing. It is
+ * in the lending key (`runner_build`), so a baseline snapshot or history recorded from a daemon
+ * baseline is lent only to a daemon-baseline session, and a one-shot one only to a one-shot session.
+ */
+export function baselineSourceTag(backend: { readonly baselineDaemon?: boolean }): string {
+  return backend.baselineDaemon === true ? " baseline-daemon" : "";
+}
+
 async function runnerBuildOf(
   backend: ExecutionBackend,
   kind: BackendCapabilities["kind"],

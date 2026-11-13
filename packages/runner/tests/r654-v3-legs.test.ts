@@ -87,6 +87,7 @@ describe("R654 S2: the leg sets", () => {
       "C",
       "S1",
       "S1E", // R761: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
+      "DB", // R948: S1E with the daemon baseline and the memory guard; not in V3_GATE_LEGS
       "S3",
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
@@ -107,6 +108,7 @@ describe("R654 S2: the leg sets", () => {
       "C",
       "S1",
       "S1E",
+      "DB",
       "S3",
       "N1",
       "N1E",
@@ -174,6 +176,7 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
   const candidateLegs = (k: string | undefined) => ({
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
     ISO: "pass", // R857: a default leg outside V3_GATE_LEGS
+    DB: "pass", // R948: so is DB
     ...(k !== undefined ? { K: k } : {}),
   });
 

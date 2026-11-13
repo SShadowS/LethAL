@@ -62,7 +62,9 @@ import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/a
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import type { SpawnFn } from "../src/publisher";
+import { baselineSourceTag } from "../src/orchestrator";
 import { installResourceSelector } from "../src/resource-selector";
+import { backendBuildRefusal } from "../src/store";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -2748,6 +2750,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "C",
       "S1",
       "S1E",
+      "DB",
       "S3",
       "N1",
       "N1E",
@@ -6403,8 +6406,16 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.daemons[0]?.join(" ")).toContain("--test-timeout 1");
     for (const q of r.serve.requests) expect(q.body.coverage).toBe(true);
     // (the baseline call's own timeout, OPTS' 1000 ms, not the mutant phase's 5 s)
-    // The sample: CU (first) and CU3 (last), one process each; CU2 came from the daemon alone.
-    expect(oneShotCodeunits(r)).toEqual([String(CU), String(CU3)]);
+    // The sample: the 2nd (CU2) and the last (CU3), one process each; never index 0, so CU came from
+    // the daemon alone.
+    expect(oneShotCodeunits(r)).toEqual([String(CU2), String(CU3)]);
+    expect(r.b.daemonBaselineReport()).toMatchObject({
+      dropped: undefined,
+      codeunits: 3,
+      requests: 3,
+      sampledCodeunits: [CU2, CU3],
+      compared: 2,
+    });
     expect(r.serve.closes).toHaveLength(1);
     expect(r.b.daemonCloses().byReason.get("baseline-end")).toBeGreaterThanOrEqual(1);
     await r.b.prefetchMutants(plans(["M0001"], SUITE3));
@@ -6427,8 +6438,8 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]); // the fresh process's answer stands
     expect(dropNotice(seen)).toHaveLength(1);
     expect(dropNotice(seen)[0]?.[1]).toContain(`codeunit ${CU2}`);
-    // Two sample runs, then every codeunit one-shot: no verdict rests on the daemon.
-    expect(oneShotCodeunits(r)).toEqual([String(CU), String(CU2), String(CU), String(CU2)]);
+    // The sample run (CU2), then every codeunit one-shot: no verdict rests on the daemon.
+    expect(oneShotCodeunits(r)).toEqual([String(CU2), String(CU), String(CU2)]);
     const asked = r.serve.requests.length;
     await baseline(r.b, SUITE2); // a second baseline of the session asks the daemon nothing
     expect(r.serve.requests).toHaveLength(asked);
@@ -6439,7 +6450,7 @@ describe("R948 A: the baseline through one daemon", () => {
     const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]) });
     await baseline(r.b, SUITE2);
     expect(dropNotice(seen)).toHaveLength(0);
-    expect(oneShotCodeunits(r)).toEqual([String(CU), String(CU2)]); // the two samples only
+    expect(oneShotCodeunits(r)).toEqual([String(CU2)]); // the sample (the 2nd) only
   });
 
   test("order: a leak only the reversed order shows is caught there, and not in the forward order", async () => {
@@ -6471,7 +6482,7 @@ describe("R948 A: the baseline through one daemon", () => {
     const seen: [string, string][] = [];
     const text: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
-        x.method === "A"
+        x.method === "C"
           ? { ...x, status: "fail" as const, message: d >= 0 ? "boom daemon" : "boom" }
           : x,
       );
@@ -6506,13 +6517,13 @@ describe("R948 A: the baseline through one daemon", () => {
   });
 
   test("durations: a codeunit whose daemon duration could move a budget (2 x d >= floor) runs one-shot and its answer stands", async () => {
-    const slowCu2: RowsFn = (m, cu, d, n) =>
+    const slowCu: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
-        cu === CU2 ? { ...x, message: "Test exceeded 3s timeout." } : x,
+        cu === CU ? { ...x, message: "Test exceeded 3s timeout." } : x,
       );
-    const r = await dbRig({ serve: { rows: slowCu2 } });
+    const r = await dbRig({ serve: { rows: slowCu } });
     await baseline(r.b, SUITE3);
-    // The two samples, and CU2 (3000 ms x 2 >= the 5000 ms floor): three processes.
+    // The two samples, and CU (3000 ms x 2 >= the 5000 ms floor): three processes.
     expect(oneShotCodeunits(r).sort()).toEqual([String(CU), String(CU2), String(CU3)].sort());
   });
 
@@ -6542,20 +6553,20 @@ describe("R948 A: the baseline through one daemon", () => {
     rr = spentAfterTwo;
     await baseline(spentAfterTwo.b, SUITE3);
     expect(spentAfterTwo.serve.requests).toHaveLength(2); // CU3 never asked
-    // CU (sample) + CU2 from the daemon; CU3 runs live: two processes.
+    // CU from the daemon, CU2 (sample) one-shot; CU3 runs live: two processes.
     expect(oneShotCodeunits(spentAfterTwo)).toHaveLength(2);
 
     const signalled = await dbRig({
       stopHandle: {
-        spent: () => asked() >= 2,
-        signalled: () => asked() >= 2,
+        spent: () => asked() >= 1,
+        signalled: () => asked() >= 1,
         stopForMemory: () => {},
       },
     });
     rr = signalled;
     await baseline(signalled.b, SUITE3);
-    expect(signalled.serve.requests).toHaveLength(2);
-    // CU (sample, kept) + CU2 dropped (live) + CU3 live: three processes.
+    expect(signalled.serve.requests).toHaveLength(1);
+    // The first request's call is dropped, nothing is kept: all three codeunits run live.
     expect(oneShotCodeunits(signalled)).toHaveLength(3);
   });
 });
@@ -6568,7 +6579,11 @@ describe("R948 B: `method` codeunits as per-test requests", () => {
     const r = await methodRig();
     const v = await baseline(r.b, SUITE2);
     expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]);
-    expect(r.one.calls).toHaveLength(0);
+    // Only the cross-check's sample (the 2nd test and the last, B and C) runs as a process.
+    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1))).toEqual([
+      "B",
+      "C",
+    ]);
     expect(r.serve.requests).toHaveLength(3);
     for (const q of r.serve.requests) {
       expect(q.body.testIsolation).toBe("codeunit");
@@ -6589,10 +6604,10 @@ describe("R948 B: `method` codeunits as per-test requests", () => {
       );
     const r = await methodRig({ serve: { rows: refusedA } });
     const v = await baseline(r.b, SUITE2);
-    expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon
-    expect(r.one.calls).toHaveLength(1);
-    expect(r.one.calls[0]).toContain("--test-exact");
-    expect(r.one.calls[0]?.join(" ")).toContain(`Codeunit${CU}.A`);
+    expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
+    // A alone one-shot (the daemon's answer was a refusal), plus the sample's B and C.
+    const asked = r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1));
+    expect(asked.sort()).toEqual(["A", "B", "C"]);
   });
 });
 
@@ -6715,21 +6730,155 @@ describe("R948 C: the memory guard", () => {
     r.b.baselinePhase(false);
     expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "error"]); // C was never started
     expect(v[2]?.failureMessage).toContain("memory-bound");
-    expect(r.serve.requests).toHaveLength(1); // only CU was asked
-    expect(oneShotCodeunits(r)).toEqual([String(CU)]); // its cross-check only
+    expect(r.serve.requests).toHaveLength(2); // CU, then CU2, whose cross-check was blocked
+    expect(oneShotCodeunits(r)).toEqual([]); // no process started over the bound
     expect(r.stops).toHaveLength(1);
   });
 
-  test("a mutant group is never cut: over the bound at its start it waits, stops the session, and still runs", async () => {
+  test("a group start asks the guard: under the bound it may start; over it for good it waits, stops the session once, and is told no, now and after", async () => {
+    let used = GIB;
+    const r = await guarded(() => used, { polls: 1 });
+    await baseline(r.b, SUITE1);
+    expect(await r.b.mayStartGroup()).toBe(true);
+    used = 30 * GIB;
+    expect(await r.b.mayStartGroup()).toBe(false);
+    expect(r.stops).toHaveLength(1);
+    expect(r.sleeps).toHaveLength(1);
+    expect(await r.b.mayStartGroup()).toBe(false); // at once, nothing more is waited or reported
+    expect([r.stops.length, r.sleeps.length]).toEqual([1, 1]);
+  });
+
+  test("activate itself neither waits nor stops: the question is asked before it, so a refused group is never activated", async () => {
     let used = GIB;
     const r = await guarded(() => used, { polls: 1 });
     await baseline(r.b, SUITE1);
     used = 30 * GIB;
     await r.b.activate("M0001");
+    expect([r.stops.length, r.sleeps.length]).toEqual([0, 0]);
+  });
+
+  test("callers take turns and each one that holds counts an estimated cost: two at 26 of 28 GiB do not both pass", async () => {
+    const r = await guarded(() => 26 * GIB, { polls: 1, seams: { memoryEstimateBytes: 3 * GIB } });
+    const gate = (h: boolean) =>
+      (r.b as unknown as { memoryGate(h: boolean): Promise<boolean> }).memoryGate(h);
+    const release = () => (r.b as unknown as { memoryRelease(): void }).memoryRelease();
+    const [a, b] = await Promise.all([gate(true), gate(true)]);
+    expect([a, b]).toEqual([true, false]); // the second sees the first's 3 GiB on top of 26
     expect(r.stops).toHaveLength(1);
-    const v = await r.b.run(ref("A"), OPTS);
-    expect(v.outcome).toBe("pass"); // the group ran; the orchestrator starts no later one
-    expect(r.stops).toHaveLength(1);
+    // (the first still holds; the session is stopped, so every later gate says no)
+    expect(await gate(true)).toBe(false);
+    release();
+  });
+
+  test("a released reservation is not counted again", async () => {
+    const r = await guarded(() => 26 * GIB, { polls: 1, seams: { memoryEstimateBytes: 3 * GIB } });
+    const gate = (h: boolean) =>
+      (r.b as unknown as { memoryGate(h: boolean): Promise<boolean> }).memoryGate(h);
+    const release = () => (r.b as unknown as { memoryRelease(): void }).memoryRelease();
+    expect(await gate(true)).toBe(true);
+    release();
+    expect(await gate(true)).toBe(true);
+    expect(r.stops).toHaveLength(0);
+  });
+
+  test("before it waits the guard closes the baseline's daemon (it holds 2-3 GB)", async () => {
+    let reads = 0;
+    let closesAtFirstSleep = -1;
+    const held: { rig?: Rig } = {};
+    const r = await guarded(() => (++reads <= 2 ? GIB : 30 * GIB), {
+      suite: SUITE2,
+      floor: [5000, 2000],
+      oneShotCoverage: plainCoverage,
+      serve: { coverage: plainCoverage },
+      extra: { daemonBaseline: true },
+      polls: 1,
+      seams: {
+        memorySleep: async () => {
+          if (closesAtFirstSleep < 0) closesAtFirstSleep = held.rig?.serve.closes.length ?? -2;
+        },
+      },
+    });
+    held.rig = r;
+    await baselineOne(r.b, ref("A"));
+    // CU's request ran on daemon 0; the gate for CU2 found the bound passed and closed it first.
+    expect(closesAtFirstSleep).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("R948 ordering and the per-test cross-check", () => {
+  test("a per-test call that comes FIRST (batch 2 under auto) still waits for the whole-codeunit fill and its cross-check, which can drop the daemon baseline before anything is served", async () => {
+    const seen: [string, string][] = [];
+    const leakCu2: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CU2 && d >= 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    // CU is the `method` codeunit; CU2 a whole-codeunit one whose daemon answer leaks (sampled: the 2nd).
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolation: "auto" },
+      serve: { rows: leakCu2 },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    (r.b as unknown as { chooseIsolation(cu: number, m: "method"): void }).chooseIsolation(
+      CU,
+      "method",
+    );
+    // Only CU's per-test call is made first; no daemon answer for it may be served before the check.
+    const v = await baselineOne(r.b, ref("A"));
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(v.outcome).toBe("pass"); // from a one-shot process, not from a served daemon answer
+    expect(r.one.calls.some((c) => c.includes("--test-exact"))).toBe(true);
+  });
+
+  test("under --isolate-tests (every codeunit per-test) the per-test requests have their own cross-check: a difference drops the daemon baseline", async () => {
+    const seen: [string, string][] = [];
+    const leak: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolateTests: true },
+      serve: { rows: leak },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    const v = await baseline(r.b, SUITE2);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]); // the fresh processes' answers
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(r.b.daemonBaselineReport().sampledPerTest).toEqual([1, 2]);
+  });
+
+  test("--isolate-tests: per-test requests agree with fresh processes: the daemon baseline stays, in test isolation with runSelectedOnly", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolateTests: true },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    await baseline(r.b, SUITE2);
+    expect(dropNotice(seen)).toHaveLength(0);
+    for (const q of r.serve.requests) {
+      expect(q.body.testIsolation).toBe("test");
+      expect(q.body.runSelectedOnly).toBe(true);
+    }
+    expect(r.b.daemonBaselineReport()).toMatchObject({ perTestRequests: 3, compared: 2 });
+  });
+
+  test("a baseline snapshot's lending key names its source: a daemon baseline is tagged, a one-shot one is not", async () => {
+    const on = await dbRig({ suite: SUITE2 });
+    const off = await rig({ suite: SUITE2 });
+    expect(baselineSourceTag(on.b)).toBe(" baseline-daemon");
+    expect(baselineSourceTag(off.b)).toBe("");
+    const run = (runnerBuild: string) => ({ id: 1, backend: "al-runner-v3", runnerBuild });
+    const lend = (tagRun: string, tagSession: string) =>
+      backendBuildRefusal(run(`v3 sha${tagRun}`), {
+        backend: "al-runner-v3",
+        runnerBuild: `v3 sha${tagSession}`,
+      });
+    expect(lend(" baseline-daemon", "")).toContain("only to the same build"); // daemon snapshot, one-shot session
+    expect(lend("", " baseline-daemon")).toContain("only to the same build"); // and the other way
+    expect(lend(" baseline-daemon", " baseline-daemon")).toBeUndefined();
+    expect(lend("", "")).toBeUndefined();
   });
 });
 

@@ -4,10 +4,21 @@ import { describe, expect, test } from "bun:test";
 import {
   baselineSampleIds,
   compareBaselineAnswers,
+  durationCouldMoveBudget,
   memoryBoundBytes,
   readCgroupMemory,
 } from "../src/al-runner-v3-baseline-check";
 import type { V3CoverageRead } from "../src/al-runner-v3-sleep";
+
+describe("R948: the duration a budget will read", () => {
+  test("a row's own duration wins; with none, the call's wall time is the duration, as in the verdict", () => {
+    expect(durationCouldMoveBudget([{ durationMs: 100 }], 9000, 5000)).toBe(false);
+    expect(durationCouldMoveBudget([{}], 3000, 5000)).toBe(true); // 2 x 3000 >= 5000
+    expect(durationCouldMoveBudget([{}], 2000, 5000)).toBe(false);
+    expect(durationCouldMoveBudget([{ durationMs: 2600 }], 0, 5000)).toBe(true);
+    expect(durationCouldMoveBudget([], 9000, 5000)).toBe(false);
+  });
+});
 
 const row = (method: string, o: Record<string, unknown> = {}) => ({
   method,
@@ -25,21 +36,24 @@ const cov = (perTest: Record<string, number[]>): V3CoverageRead => ({
 });
 
 describe("R948: the cross-check's sample", () => {
-  test("empty, one, and two codeunits", () => {
+  test("empty; one (nothing else to compare, so that one); two (the 2nd, which is also the last)", () => {
     expect(baselineSampleIds([])).toEqual([]);
     expect(baselineSampleIds([7])).toEqual([7]);
-    expect(baselineSampleIds([7, 9])).toEqual([7, 9]);
+    expect(baselineSampleIds([7, 9])).toEqual([9]);
   });
-  test("always the first and the last, plus every 25th", () => {
+  test("the 2nd and the last, plus every 10th; never index 0", () => {
     const ids = Array.from({ length: 60 }, (_, i) => 1000 + i);
-    expect(baselineSampleIds(ids)).toEqual([1000, 1025, 1050, 1059]);
+    expect(baselineSampleIds(ids)).toEqual([1001, 1010, 1020, 1030, 1040, 1050, 1059]);
+    expect(baselineSampleIds(ids)).not.toContain(1000);
   });
-  test("at most eight, still the first and the last, and the same every time", () => {
-    const ids = Array.from({ length: 400 }, (_, i) => i);
+  test("112 codeunits: 13 samples; at most 16 however many; the 2nd and the last stay; the same every time", () => {
+    const k = Array.from({ length: 112 }, (_, i) => i);
+    expect(baselineSampleIds(k)).toHaveLength(13);
+    const ids = Array.from({ length: 900 }, (_, i) => i);
     const a = baselineSampleIds(ids);
-    expect(a.length).toBeLessThanOrEqual(8);
-    expect(a[0]).toBe(0);
-    expect(a.at(-1)).toBe(399);
+    expect(a.length).toBeLessThanOrEqual(16);
+    expect(a[0]).toBe(1);
+    expect(a.at(-1)).toBe(899);
     expect(baselineSampleIds(ids)).toEqual(a);
   });
 });
