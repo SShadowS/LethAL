@@ -197,6 +197,9 @@ describe("R905 scripts/heavy-slot.sh", () => {
     expect(r.exitCode).toBe(75);
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(join(dir, "heavy.3.class"))).toBe(false);
+    // R-963 review: a guard refusal names itself, apart from "all heavy slots held"
+    expect(r.stderr.toString()).toContain("the guard refused");
+    expect(r.stderr.toString()).not.toContain("all heavy slots held");
   });
   test("two held other slots: the wrapper runs the command", async () => {
     const dir = fresh();
@@ -444,7 +447,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     expect(tickets(dir)).toEqual([]);
   });
 
-  test("the caps are unchanged: with two BaseApp slots held a waiter waits, and runs once one frees", async () => {
+  test("no cgroup (count rule): with two BaseApp slots held a waiter waits, and runs once one frees", async () => {
     const dir = fresh();
     const p1 = await holdSlot(dir, 1, "baseapp");
     await holdSlot(dir, 2, "baseapp");
