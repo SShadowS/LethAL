@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 923 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 924 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -968,6 +968,7 @@ that ordering is the priority.
 - **R960** · On the default transport, a serve warm-up that refuses the whole batch (`entries-batch-refused`) stops the session after its baseline instead of falling back to one-shot · [R960.md](docs/roadmap/R960.md) · open
 - **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · done (2596b7fe)
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
+- **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
 
 ---
 
