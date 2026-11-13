@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**25 of 918 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 920 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -963,6 +963,8 @@ that ordering is the priority.
 - **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause: no license, so every test was refused · [R956.md](docs/roadmap/R956.md) · done (285ba3f9)
 - **R957** · BC.History batch 7 on al-runner v3 edge-2bd87774f: eight System Application modules, three upstream issues (a .NET exception refused where BC ignores the text, ten refusal causes, a Blob lost through FieldRef.Value after Clear) · [R957.md](docs/roadmap/R957.md) · closed 2026-11-12 — measured and filed upstream (#7924, #7934, #7935); LethAL's own gap is R954
 - **R958** · Under `--isolate-tests`, a stop signal does not stop the parallel isolated-baseline fill: the workers keep starting one process per remaining test until the suite is done · [R958.md](docs/roadmap/R958.md) · open
+- **R959** · `--resume-run` refuses after a host reboot (server generation changed), so a user redid 589 decided mutants, although a reboot of a container with a persistent database usually keeps the apps and data the verdicts were measured against · [R959.md](docs/roadmap/R959.md) · open
+- **R960** · On the default transport, a serve warm-up that refuses the whole batch (`entries-batch-refused`) stops the session after its baseline instead of falling back to one-shot · [R960.md](docs/roadmap/R960.md) · open
 
 ---
 
