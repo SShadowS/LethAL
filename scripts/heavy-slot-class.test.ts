@@ -10,7 +10,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RefusedError, guardInSlot, heavyVerdict, parsePs, slotHeld } from "./corpus-snapshot.ts";
+import {
+  RefusedError,
+  SLOTS,
+  guardInSlot,
+  heavyVerdict,
+  parsePs,
+  slotHeld,
+} from "./corpus-snapshot.ts";
 import { memoryVerdict, parsePeak, readSlot, readSlotClass } from "./heavy-slot-class.ts";
 
 // R905. Every lock dir here is a temp dir; nothing touches /coord.
@@ -190,6 +197,9 @@ describe("R905 scripts/heavy-slot.sh", () => {
     expect(r.exitCode).toBe(75);
     expect(existsSync(marker)).toBe(false);
     expect(existsSync(join(dir, "heavy.3.class"))).toBe(false);
+    // R-963 review: a guard refusal names itself, apart from "all heavy slots held"
+    expect(r.stderr.toString()).toContain("the guard refused");
+    expect(r.stderr.toString()).not.toContain("all heavy slots held");
   });
   test("two held other slots: the wrapper runs the command", async () => {
     const dir = fresh();
@@ -200,14 +210,15 @@ describe("R905 scripts/heavy-slot.sh", () => {
     expect(r.exitCode).toBe(0);
     expect(existsSync(marker)).toBe(true);
   });
+  // R-963: EVERY slot (SLOTS), so the exit 75 is "all held", not the count fallback's refusal.
   test("all slots held: exit 75, and a busy slot's pid in the lock file survives", async () => {
     const dir = fresh();
-    for (const n of [1, 2, 3]) writeFileSync(join(dir, `heavy.${n}`), "12345\n");
-    for (const n of [1, 2, 3]) await hold(dir, n, "other");
+    for (const n of SLOTS) writeFileSync(join(dir, `heavy.${n}`), "12345\n");
+    for (const n of SLOTS) await hold(dir, n, "other");
     const r = run(dir, "other", "true");
     expect(r.exitCode).toBe(75);
-    for (const n of [1, 2, 3])
-      expect(readFileSync(join(dir, `heavy.${n}`), "utf8")).toBe("12345\n");
+    expect(r.stderr.toString()).toContain("all heavy slots held");
+    for (const n of SLOTS) expect(readFileSync(join(dir, `heavy.${n}`), "utf8")).toBe("12345\n");
   });
   test("a flock failure other than busy is exit 2, not 75", () => {
     const dir = fresh();
@@ -356,7 +367,10 @@ describe("R905 a heavy-slot.sh holder is trusted, so its job counts once", () =>
 describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   const script = join(import.meta.dir, "heavy-slot.sh");
   const EMPTY_PS = "PID PPID PGID COMMAND\n1 0 1 init\n";
-  const start = (dir: string, poll: string, ...args: string[]) => {
+  const start = (dir: string, poll: string, ...args: string[]) =>
+    startIn(dir, undefined, poll, ...args);
+  /** R-963: `cg` names a fake cgroup folder (the memory rule decides, as in the container); none = no limit. */
+  const startIn = (dir: string, cg: string | undefined, poll: string, ...args: string[]) => {
     const psFile = join(dir, "ps.txt");
     writeFileSync(psFile, EMPTY_PS);
     return Bun.spawn(["bash", script, ...args], {
@@ -366,6 +380,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
         BUN: process.execPath,
         LETHAL_HEAVY_PS_FILE: psFile,
         LETHAL_HEAVY_POLL_S: poll,
+        ...(cg !== undefined ? { LETHAL_HEAVY_CGROUP_DIR: cg } : {}),
       },
       stdout: "ignore",
       stderr: "ignore",
@@ -397,15 +412,20 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
 
   test("the order is kept: the older waiter runs first, even when the younger polls faster", async () => {
     const dir = fresh();
-    const pids = [
-      await holdSlot(dir, 1, "other"),
-      await holdSlot(dir, 2, "other"),
-      await holdSlot(dir, 3, "other"),
-    ];
+    // R-963: EVERY slot is held (R960 raised them to six; holding three left three free, so a waiter
+    // could run at once, before the queue was set up: 2 failures in 12). Only slot 1 is ever freed.
+    // A roomy fake cgroup (1 of 64 GiB) makes the memory rule decide, as in the container: with no
+    // limit, the count fallback would refuse beside five held slots and nobody would ever run.
+    const pids: number[] = [];
+    for (const n of SLOTS) pids.push(await holdSlot(dir, n, "other"));
+    const cg = join(dir, "cgroup");
+    mkdirSync(cg);
+    writeFileSync(join(cg, "memory.current"), `${2 ** 30}\n`);
+    writeFileSync(join(cg, "memory.max"), `${64 * 2 ** 30}\n`);
     const order = join(dir, "order");
-    const a = start(dir, "0.4", "--wait", "other", "sh", "-c", `echo A >> "${order}"`);
+    const a = startIn(dir, cg, "0.4", "--wait", "other", "sh", "-c", `echo A >> "${order}"`);
     expect(await until(() => tickets(dir).length === 1)).toBe(true);
-    const b = start(dir, "0.02", "--wait", "other", "sh", "-c", `echo B >> "${order}"`);
+    const b = startIn(dir, cg, "0.02", "--wait", "other", "sh", "-c", `echo B >> "${order}"`);
     expect(await until(() => tickets(dir).length === 2)).toBe(true);
     process.kill(pids[0] ?? 0, "SIGKILL");
     await a.exited;
@@ -427,7 +447,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     expect(tickets(dir)).toEqual([]);
   });
 
-  test("the caps are unchanged: with two BaseApp slots held a waiter waits, and runs once one frees", async () => {
+  test("no cgroup (count rule): with two BaseApp slots held a waiter waits, and runs once one frees", async () => {
     const dir = fresh();
     const p1 = await holdSlot(dir, 1, "baseapp");
     await holdSlot(dir, 2, "baseapp");
@@ -444,7 +464,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   test("a caller without --wait does not overtake a live waiter for a slot that just freed", async () => {
     const dir = fresh();
     const p1 = await holdSlot(dir, 1, "other");
-    for (const n of [2, 3, 4, 5, 6]) await holdSlot(dir, n, "other"); // R960: every slot held
+    for (const n of SLOTS.slice(1)) await holdSlot(dir, n, "other"); // every slot held (R-963: SLOTS)
     // The waiter polls every 30 s, so the freed slot stays free while the plain caller tries.
     const w = start(dir, "30", "--wait", "other", "true");
     expect(await until(() => tickets(dir).length === 1)).toBe(true);

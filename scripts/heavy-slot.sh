@@ -146,7 +146,11 @@ if [ "$wait" -eq 0 ]; then
     exit 75
   fi
   try_once "$@"
-  echo "heavy-slot: all six heavy slots held or the guard refused ($dir/heavy.1 .. heavy.6)" >&2
+  if [ $? -eq 76 ]; then
+    echo "heavy-slot: the guard refused (its verdict is above)" >&2
+  else
+    echo "heavy-slot: all heavy slots held ($dir/heavy.1 .. heavy.6)" >&2
+  fi
   exit 75
 fi
 
