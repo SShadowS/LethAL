@@ -10769,6 +10769,10 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect(msg).toContain(`--resume-run ${first.runId}`);
         expect(msg).toContain(G1);
         expect(msg).toContain(G2);
+        // R959: the message says what to do in each case (a lost database; a force-reset on a surviving one).
+        expect(msg).toContain("re-run its setup first, then drop the flag and run from scratch");
+        expect(msg).toContain("if you ran force-reset-lease on a server whose database survived");
+        expect(msg).toContain("(R969)");
         expect(maxRunId(r.store)).toBe(first.runId);
         r.store.close();
       });
