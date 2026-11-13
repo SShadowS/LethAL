@@ -381,6 +381,7 @@ export async function runV3LaneTrace(): Promise<V3LaneTrace> {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: scratch,
         testDir,
         packagesDir: deps,

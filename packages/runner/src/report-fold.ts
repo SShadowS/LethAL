@@ -126,6 +126,11 @@ export interface FoldStatics {
     readonly isolateTests?: true;
     /** R907: this run's tests ran in a session without a client (`--no-client`). */
     readonly noClient?: true;
+    /** R938 — see `ExecutionContext.environment`. */
+    readonly environment?: {
+      readonly value: "saas" | "onprem";
+      readonly source: "config" | "launch.json";
+    };
   };
 }
 
@@ -225,6 +230,17 @@ export interface FoldedReport {
     readonly budgetSeconds: number;
     readonly unscheduledCount: number;
     readonly batchesNotStarted: number;
+    readonly baselineStopped?: {
+      readonly testsRun: number;
+      readonly testsTotal: number;
+      readonly inAutoRebaseline?: true;
+    };
+    readonly stoppedBySignal?: true;
+    readonly stoppedByMemory?: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    };
   };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
@@ -413,10 +429,20 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
    *  the end of the fold for why the second half cannot simply be "a batch published". */
   let sawCoverageSplit = false;
   let sawGreenBaselineBatch = false;
+  /** R955: the green batches, and the last batch whose baseline finished (the one a budget stop cut short). */
+  const greenBatchIndexes: number[] = [];
+  let lastBaselineBatchIndex: number | undefined;
 
   let quarantinedReason: string | undefined;
   let timeBudget:
-    | { budgetSeconds: number; unscheduledCount: number; batchesNotStarted: number }
+    | {
+        budgetSeconds: number;
+        unscheduledCount: number;
+        batchesNotStarted: number;
+        baselineStopped?: { testsRun: number; testsTotal: number; inAutoRebaseline?: true };
+        stoppedBySignal?: true;
+        stoppedByMemory?: { usedBytes: number; boundBytes: number; source: string };
+      }
     | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
   let isolationRows: IsolationChoiceRow[] | undefined;
@@ -476,7 +502,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         // A batch whose baseline is entirely red does not — `runSession` records every mutant
         // "no green baseline tests" and `continue`s BEFORE step 5 — so it owes no `coverage-split`
         // and must not be counted as evidence that one is missing.
-        if (e.verdicts.some((v) => v.outcome === "pass")) sawGreenBaselineBatch = true;
+        lastBaselineBatchIndex = e.batchIndex;
+        if (e.verdicts.some((v) => v.outcome === "pass")) {
+          sawGreenBaselineBatch = true;
+          greenBatchIndexes.push(e.batchIndex);
+        }
         for (const v of e.verdicts) {
           if (v.outcome !== "pass") baselineGreen = false;
           // Task 6 (spec §9): "did not pass at baseline" — fail/error only, the SAME predicate
@@ -511,6 +541,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           budgetSeconds: e.budgetSeconds,
           unscheduledCount: e.unscheduledCount,
           batchesNotStarted: e.batchesNotStarted,
+          ...(e.baselineStopped !== undefined ? { baselineStopped: e.baselineStopped } : {}),
+          ...(e.stoppedBySignal === true ? { stoppedBySignal: true as const } : {}),
+          ...(e.stoppedByMemory !== undefined ? { stoppedByMemory: e.stoppedByMemory } : {}),
         };
         break;
       case "session-finished":
@@ -726,7 +759,17 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   //
   // `caps.coverage === "none"` owes nothing either: that branch gives every mutant every green test
   // by construction and never calls `coverageFilter`.
-  if (statics.caps.coverage !== "none" && sawGreenBaselineBatch && !sawCoverageSplit) {
+  // R955: a baseline the time budget stopped selects nothing, so THAT batch (the last one to finish a
+  // baseline) owes no split; an earlier green batch still does.
+  const owingGreenBatch = greenBatchIndexes.some(
+    (i) => timeBudget?.baselineStopped === undefined || i !== lastBaselineBatchIndex,
+  );
+  if (
+    statics.caps.coverage !== "none" &&
+    sawGreenBaselineBatch &&
+    owingGreenBatch &&
+    !sawCoverageSplit
+  ) {
     throw new Error(
       `foldEvents: a batch finished baseline with at least one green test under coverage mode "${statics.caps.coverage}", but no coverage-split event arrived — untargetedTriggerCount would be reported as a measured 0 when nothing measured it. One coverage-split per such batch is mandatory.`,
     );

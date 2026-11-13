@@ -32,6 +32,28 @@ fetch() { # url sha256 file
   fi
 }
 
+banner_ok() { # exe path: true when it runs and says exactly clang version $VERSION
+  local b
+  [ -x "$1" ] && b="$("$1" --version 2>/dev/null | head -n 1)" && case "$b" in
+    "clang version $VERSION "* | "clang version $VERSION") true ;;
+    *) false ;;
+  esac
+}
+
+# CI restores $dest from actions/cache. Use it only when the clang inside says exactly $VERSION;
+# anything else (empty dir, wrong banner) falls through to the pinned download below.
+case "$key" in
+  win32-x64) cbin="$dest/LLVM/bin" cexe=clang-cl.exe ;;
+  linux-x64 | linux-arm64 | darwin-arm64) cbin="$dest/bin" cexe=clang ;;
+  *) cbin="" cexe="" ;;
+esac
+if [ -n "$cbin" ] && banner_ok "$cbin/$cexe"; then
+  echo "install-llvm: using cached $cbin/$cexe: $("$cbin/$cexe" --version | head -n 1)"
+  if [ -n "${GITHUB_ENV:-}" ]; then echo "LLVM_BIN=$cbin" >>"$GITHUB_ENV"; fi
+  echo "LLVM_BIN=$cbin"
+  exit 0
+fi
+
 mkdir -p "$dest"
 case "$key" in
   win32-x64)

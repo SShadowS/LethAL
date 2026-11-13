@@ -23,6 +23,7 @@ import { emitStaticSelector } from "@lethal/schemata";
 import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3Backend,
+  AlRunnerV3CompileRefusedError,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
@@ -42,6 +43,7 @@ import {
   stopSecondsOf,
   v3CallArgv,
   v3CallDeadlineMs,
+  v3CompileRefusal,
   v3MissingDependencies,
   v3RowVerdict,
   v3TestDataOffNote,
@@ -309,6 +311,7 @@ function backendOf(
   return new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/alrunner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: l.scratch,
       testDir: l.testDir,
       packagesDir: l.deps,
@@ -1224,6 +1227,24 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(await callArgv({ dotnetSidecar: false })).not.toContain("--dotnet-sidecar");
   });
 
+  test("R941/R943: each probing path is a --dotnet-assembly-dir after the sidecar, in order and absolute; none without a sidecar or paths", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r943-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const dirs = (argv: readonly string[]) =>
+      argv.flatMap((a, i) => (a === "--dotnet-assembly-dir" ? [argv[i + 1]] : []));
+    const on = await callArgv({
+      dotnetSidecar: dll,
+      assemblyProbingPaths: ["rel/one", "/abs/two"],
+    });
+    // resolve() on both: on Windows an absolute "/abs/two" gains the drive letter.
+    expect(dirs(on)).toEqual([resolve("rel/one"), resolve("/abs/two")]);
+    expect(on.indexOf("--dotnet-assembly-dir")).toBeGreaterThan(on.indexOf("--dotnet-sidecar"));
+    expect(
+      dirs(await callArgv({ dotnetSidecar: false, assemblyProbingPaths: ["/abs/two"] })),
+    ).toEqual([]);
+    expect(dirs(await callArgv({ dotnetSidecar: dll }))).toEqual([]);
+  });
+
   test("R886: a named sidecar that is missing refuses the session by name", async () => {
     const l = await layout();
     const b = backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
@@ -1422,6 +1443,46 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(on[on.indexOf("--bc-version") + 2]).toBe("--no-client");
     expect(v3CallArgv({ ...a, noClient: false })).not.toContain("--no-client");
     expect(v3CallArgv(a)).not.toContain("--no-client");
+  });
+
+  test("R956 a one-shot call carries --license <path> exactly when the license is set", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ license: { path: "/l/x.bclicense", sha256: "a".repeat(64) } });
+    expect(on[on.indexOf("--license") + 1]).toBe("/l/x.bclicense");
+    expect(await run({})).not.toContain("--license");
+  });
+
+  test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ environmentChoice: { value: "onprem", source: "config" } });
+    expect(on[on.indexOf("--environment") + 1]).toBe("onprem");
+    const off = await run({ environmentChoice: { value: "saas", source: "config" } });
+    expect(off[off.indexOf("--environment") + 1]).toBe("saas");
+  });
+
+  test("R938: a backend built directly with no environment is refused by name", () => {
+    const l = {} as Layout;
+    expect(() =>
+      backendOf(l, fakeV3(allPass).spawn, fakeAlc().io, {
+        environmentChoice: undefined as never,
+      }),
+    ).toThrow('set alRunnerV3.environment to "onprem" or "saas"');
   });
 
   test("R907 a one-shot call carries --no-client exactly when the backend's noClient is on", async () => {
@@ -1763,6 +1824,46 @@ describe("§4 selection, the cache and T5 / T21 / T28 / T29", () => {
     return b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
   };
 
+  // R944: v3's own words for a compile refusal (Guided Experience on edge-42af5d384, /coord/handoff/R-932/).
+  const COMPILE_REFUSED =
+    "al-runner 3.0.0-alpha.14+edge.20261111 (42af5d384)\nSeed: 1\ncompile: active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level\nthe APPs do not compile: 1 error(s); no test ran (exit 3)\nResult: COMPILE ERRORS (exit 3)\n";
+
+  test("R944: a compile refusal stops the session once by name, quoting the compiler line; not a per-test transport failure", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate(null);
+    const err = await b
+      .run(ref("A"), { coverage: "none", timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3CompileRefusedError);
+    expect(String(err)).toContain("al-runner-v3-compile-refused");
+    expect((err as AlRunnerV3CompileRefusedError).compilerLines).toEqual([
+      "active/ChecklistBannerImpl.Codeunit.al(2655,5): error AL0161: 'GetRoleCenterBannerPartID' is inaccessible due to its protection level",
+    ]);
+  });
+
+  test("R944: under a mutant a compile refusal is that batch's transport failure, never a session stop", async () => {
+    const l = await layout();
+    const v3 = fakeV3(allPass, { exit: 3, stdout: "", stderr: () => COMPILE_REFUSED });
+    const b = backendOf(l, v3.spawn, fakeAlc().io);
+    await b.deploy(l.batch);
+    await b.activate("M0001");
+    const v = await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("v3 exited 3");
+  });
+
+  test("R944: v3CompileRefusal reads only an exit 3 that says COMPILE ERRORS", () => {
+    expect(v3CompileRefusal(3, COMPILE_REFUSED)?.length).toBe(1);
+    expect(v3CompileRefusal(1, COMPILE_REFUSED)).toBeUndefined();
+    expect(v3CompileRefusal(3, "something else exited 3\n")).toBeUndefined();
+    expect(v3CompileRefusal(3, "Result: COMPILE ERRORS (exit 3)\n")).toEqual([
+      "(no error AL line in its output)",
+    ]);
+  });
+
   test("R815: exit6Kind reads v3's words; anything else is unknown, never a guess", () => {
     expect(exit6Kind(RAN_NO_TEST)).toBe("ran-no-test");
     expect(exit6Kind(SELECTION_MISS)).toBe("selection-miss");
@@ -2085,6 +2186,38 @@ describe("§5 the row decoder", () => {
     notRun: false,
     ...o,
   });
+  test("R956: a refusal for a missing license names alRunnerV3.license; another refusal does not", () => {
+    const refuse = (message: string) =>
+      v3RowVerdict(r, row({ status: "error", notRun: true, message }), 3, 10, undefined);
+    const lic = refuse("NotRun: this test reads a license, with no license file loaded");
+    expect(lic.runnerRow).toBe("runner-refused");
+    expect(lic.failureMessage).toContain("set alRunnerV3.license to a .bclicense file (R956)");
+    expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.license");
+  });
+  // R963: a row with no durationMs of its own has an UNKNOWN test time; the call's wall (here 777)
+  // is never stored as the test's. With one, it is passed through. Each branch its own test.
+  const WALL = 777;
+  const verdictOf = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) =>
+    v3RowVerdict(r, row(o), 3, WALL, undefined);
+  const branches: ReadonlyArray<[string, Partial<Parameters<typeof v3RowVerdict>[1]>]> = [
+    ["pass", { status: "pass" }],
+    ["fail", { status: "fail", message: "Assert.AreEqual failed" }],
+    ["refusal (notRun)", { status: "error", notRun: true, message: "NotRun: something else" }],
+    ["timeout (notRun)", { status: "error", notRun: true, message: "Test exceeded 3s timeout." }],
+    ["unclassified error", { status: "error", message: "boom" }],
+  ];
+  for (const [name, o] of branches) {
+    test(`R963: a ${name} row without durationMs has no measuredDurationMs; the call's wall stays durationMs`, () => {
+      const v = verdictOf(o);
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBeUndefined();
+    });
+    test(`R963: a ${name} row with durationMs passes it through as measuredDurationMs`, () => {
+      const v = verdictOf({ ...o, durationMs: 8 });
+      expect(v.durationMs).toBe(WALL);
+      expect(v.measuredDurationMs).toBe(8);
+    });
+  }
   test("notRun with pass or fail is a contract error, never a verdict", () => {
     for (const status of ["pass", "fail"] as const) {
       const v = v3RowVerdict(r, row({ status, notRun: true }), 3, 10, undefined);

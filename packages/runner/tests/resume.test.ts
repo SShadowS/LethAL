@@ -826,6 +826,53 @@ describe("ResultsStore resume queries (R47)", () => {
     ).toBe(id);
   });
 
+  test("R903: a run on ANOTHER backend is never found, even with the same fingerprint — verdicts do not carry across backends", () => {
+    const store = new ResultsStore(":memory:");
+    const id = store.createRun({
+      testScope: [],
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "al-runner-v3",
+      appVersion: "1.0.0.0",
+      configFingerprint: "fp",
+      runnerBuild: "b",
+    });
+    store.recordMutant(id, {
+      mutantCode: "M0001",
+      astHash: "h",
+      codeunitName: "C",
+      procedureName: "Post",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "survived",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    // Recorded on v3 and searched from bcdev: a bcdev search has no runner-build filter, so only
+    // the backend key keeps the v3 run out (the other way round, the build filter alone would).
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "bcdev",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+      }),
+    ).toBeNull();
+    expect(
+      store.findResumableRun({
+        projectPath: "/p",
+        backend: "al-runner-v3",
+        configFingerprint: "fp",
+        carryableVerdicts: CARRY,
+        runnerBuild: "b",
+      }),
+    ).toBe(id);
+  });
+
   test("a FINISHED run is not resumable — there is nothing left to score", () => {
     const store = new ResultsStore(":memory:");
     const id = store.createRun({
@@ -5608,6 +5655,27 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(slowBudgetsInOrder(today)).toEqual([8_000, 8_200, 8_200]);
   });
 
+  /** R963: BSlow hung under every mutant; each confirm's call wall is 620 s. `inRunStopIsBudget`
+   *  false is the serve-entries shape, where a batched call's wall is shared by its rows. */
+  async function wallConfirm(inRunStopIsBudget: boolean) {
+    const dirs = await twoTestProject(false);
+    const store = new ResultsStore(":memory:");
+    const today = scriptBSlow(
+      new ClockBackend(4_000, { mutatedMs: Number.POSITIVE_INFINITY, inRunStopIsBudget }),
+      { confirmMs: [620_000, 620_000, 620_000] },
+    );
+    await runSession({ ...opts(store, dirs), backend: today });
+    return today;
+  }
+
+  test("R963: on serve (the in-run stop is not the budget) a 620 s call wall raises no budget", async () => {
+    expect(slowBudgetsInOrder(await wallConfirm(false))).toEqual([8_000, 8_000, 8_000]);
+  });
+
+  test("R963: where the in-run stop IS the budget (bcdev, v3 one-shot) the confirm's wall still raises it, as before", async () => {
+    expect(slowBudgetsInOrder(await wallConfirm(true))).toEqual([8_000, 1_240_000, 1_240_000]);
+  });
+
   test("R515 H: a confirm faster than the baseline never lowers a budget below twice the baseline", async () => {
     // M0001: confirm 3000 (below the 4000 baseline) -> kill. Every later budget stays 8000; a
     // budget taken from the confirm alone would be 6000.
@@ -6702,7 +6770,9 @@ describe("R912: windows and --time-budget", () => {
     const run = await runWith(5, {}, (b) => {
       b.mutantRow = { callMs: 60_000 };
     });
-    const ran = run.report.mutants.filter((m) => m.verdict === "survived" || m.verdict === "killed");
+    const ran = run.report.mutants.filter(
+      (m) => m.verdict === "survived" || m.verdict === "killed",
+    );
     expect(ran.length).toBeGreaterThan(0);
     for (const m of ran) {
       expect(m.durationMs).toBeGreaterThanOrEqual(60_000);

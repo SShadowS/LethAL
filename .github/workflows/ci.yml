@@ -41,9 +41,23 @@ jobs:
       # Pinned by URL and sha256, and refused unless clang-cl says exactly 23.1.2. Not
       # KyleMayes/install-llvm-action: its asset list ends at 21.1.8 (run 36443811955). The script
       # exports LLVM_BIN for the steps below; release.yml uses the same script on every target.
+      # The cache holds the unpacked install dir; install-llvm.sh uses it only when the clang inside
+      # says exactly 23.1.2, and otherwise installs as before (R-936). R949: every branch RESTORES (a
+      # branch reads master's entry), only master SAVES, so one ~1 GB entry per OS exists instead of
+      # one per branch (GitHub scopes caches by branch; 10 GB per repo).
+      - id: llvm-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/llvm-23.1.2
+          key: llvm-23.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
       - name: LLVM 23.1.2 (clang-cl builds the grammar)
         shell: bash
         run: bash scripts/install-llvm.sh win32-x64
+      - if: github.ref == 'refs/heads/master' && steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/llvm-23.1.2
+          key: llvm-23.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -102,8 +116,19 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # R949: restore everywhere, save only on master (see the Windows job).
+      - id: llvm-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/llvm-23.1.2
+          key: llvm-23.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
       - name: LLVM 23.1.2 (clang builds the grammar)
         run: bash scripts/install-llvm.sh linux-x64
+      - if: github.ref == 'refs/heads/master' && steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/llvm-23.1.2
+          key: llvm-23.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |

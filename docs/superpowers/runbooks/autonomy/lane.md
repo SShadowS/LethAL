@@ -40,6 +40,8 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    the container, `H:\lethal-coord\handoff\...` on the host).
    Then refresh your bc configs: `bun scripts/bc-linux-setup.ts --server all --write-config-only`.
    It makes no server call and prints no secret. A config left on an old host is refused (R867).
+   A fresh gate worktree (configs, `.alpackages`, native parser, pre-flight) is one command:
+   `bun scripts/gate-worktree-setup.ts --server bcN --alpackages-from <checkout>` (R-936).
 4. `coord status --lane <lane>`: a `doing` run of yours -> continue it with the token from your
    handoff. Otherwise wait for `next: <id>` from the orchestrator, or take `coord next <lane>`.
 5. Tell the orchestrator you are alive, always, also after a `/clear` or a resume: send
@@ -70,6 +72,12 @@ Below, `<session>`, `<worktree>`, `<branch>` and `<lane>` mean your row.
    `node_modules`). Keep notes, plans, logs, scripts and every file your submit note or a
    roadmap item cites. Delete only paths you listed first, never by a wildcard over `/coord`.
    (Owner, 2026-10-23: 28 GB of finished tasks' census output had piled up.)
+   **Never delete `/coord/cache/corpus-builds/`** (R-935): the shared, read-only corpus builds every lane reads. Before you
+   delete a corpus tree, package pool or module pool you built, put it there once with
+   `bun scripts/corpus-build-cache.ts put <name> --corpus <corpus> --from <dir> [--probing <dirs>]` (the script's header
+   says how entries are named and checked), and say its entry in your handoff. Before you build one, look there first:
+   `bun scripts/corpus-build-cache.ts list`, then `path <name> --corpus <corpus> [--probing <dirs>]` prints a checked entry.
+   The one exception: a `.tmp-*` folder there is a `put` that died; remove it (`chmod -R u+w` first) only when no `put` runs.
 
 ## Which model a subagent runs on
 

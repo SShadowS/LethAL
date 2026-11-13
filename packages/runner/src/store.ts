@@ -594,7 +594,8 @@ CREATE TABLE IF NOT EXISTS test_results (
   failure_message TEXT,
   op_kind TEXT,
   session_id INTEGER,
-  codeunit_name TEXT
+  codeunit_name TEXT,
+  own_duration_ms INTEGER
 );
 CREATE TABLE IF NOT EXISTS publish_outcomes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -860,6 +861,9 @@ export class ResultsStore {
       // R-371: NULL on an older row; verify's too-many-new-tests refusal then names no cause.
       ["runs", "test_digest_parts TEXT", runCols],
       ["test_results", "codeunit_name TEXT", trCols],
+      // R963: the test's OWN time; NULL = unknown (and on every older row). `duration_ms` is the
+      // CALL's wall clock, shared by every row of a batched call: never read it as a test's time.
+      ["test_results", "own_duration_ms INTEGER", trCols],
       // R360: the instrumented payload digest, and which run pruned the batch's bundle. NULL on an
       // older row, which verify refuses as "recorded before R360", never reads as a value.
       ["batch_artifacts", "payload_sha256 TEXT", baCols],
@@ -1358,6 +1362,39 @@ export class ResultsStore {
     return row === null
       ? null
       : { runId: row.id, coverageMode: parseCoverageMode(row.coverage_mode, row.id) };
+  }
+
+  /**
+   * R938: the most recent unfinished al-runner-v3 run for this project that holds something to carry
+   * and equals this session's `runnerBuild` in everything but its `environment-<value>` tag: it
+   * ran under another environment (`environment` is that value) or before the environment was
+   * recorded (`null`). `--resume` never resumes it; this exists so the refusal can name it.
+   */
+  unfinishedRunUnderOtherEnvironment(q: {
+    projectPath: string;
+    backend: string;
+    runnerBuild: string;
+    carryableVerdicts: readonly string[];
+  }): { runId: number; environment: string | null } | null {
+    const placeholders = q.carryableVerdicts.map(() => "?").join(", ");
+    const rows = this.db
+      .query(
+        `SELECT id, runner_build FROM runs WHERE project_path = ? AND backend = ? AND runner_build IS NOT NULL AND finished_at IS NULL AND EXISTS (SELECT 1 FROM mutants m WHERE m.run_id = runs.id AND (${EFFECTIVE_VERDICT_SQL}) IN (${placeholders})) ORDER BY id DESC`,
+      )
+      .all(q.projectPath, q.backend, ...q.carryableVerdicts) as {
+      id: number;
+      runner_build: string;
+    }[];
+    // The tag sits before the optional license tag (R956) and the (always last) isolation-auto tag;
+    // both stay in the stripped build, so another license is still a different build.
+    const tag = / environment-(saas|onprem)( license-[0-9a-f]{8})?( isolation-auto)?$/;
+    const strip = (b: string) => b.replace(tag, "$2$3");
+    for (const r of rows) {
+      if (r.runner_build === q.runnerBuild || strip(r.runner_build) !== strip(q.runnerBuild))
+        continue;
+      return { runId: r.id, environment: tag.exec(r.runner_build)?.[1] ?? null };
+    }
+    return null;
   }
 
   /** R-278: the run's recorded test digests, or `null` for a run recorded before them. A value
@@ -2351,11 +2388,13 @@ export class ResultsStore {
     failureMessage?: string,
     opKind?: "single" | "many",
     sessionId?: number,
+    ownDurationMs?: number,
   ): void {
+    // R963: `durationMs` is the call's wall clock; `ownDurationMs` the test's own time (NULL = unknown).
     this.db
       .query(
-        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, codeunit_name, method, outcome, duration_ms, failure_message, op_kind, session_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO test_results (run_id, mutant_row_id, mutant_code, codeunit_id, codeunit_name, method, outcome, duration_ms, failure_message, op_kind, session_id, own_duration_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -2369,6 +2408,7 @@ export class ResultsStore {
         failureMessage ?? null,
         opKind ?? null,
         sessionId ?? null,
+        ownDurationMs ?? null,
       );
   }
 

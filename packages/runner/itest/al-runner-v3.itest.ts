@@ -60,6 +60,7 @@ import {
   V3_REFUSED_NEARBY_TAG,
   V3_STATE_NOTE_TAG,
 } from "../src/al-runner-v3-backend";
+import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
 import {
@@ -109,6 +110,8 @@ import {
   legOutcomeOfError,
   observeWithReceiptRefusal,
   recordRefusal,
+  v3GateBackendCfg,
+  v3ItestEnvironment,
   v3ItestLegTransport,
   v3ItestTransport,
   v3ReceiptOutcome,
@@ -130,6 +133,8 @@ import {
   O1_SEED_CODEUNIT,
   O1_SEED_TEST,
   type V3RowFacts,
+  V3_DBI_LEG,
+  V3_DB_LEG,
   V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -143,6 +148,7 @@ import {
   combineO1Sets,
   isNoServeRefusal,
   isSessionTestCall,
+  judgeDaemonBaseline,
   judgeIsolateProbe,
   judgeKillers,
   judgeLegK,
@@ -267,6 +273,8 @@ const V3_WORKERS = ((raw) => {
 const TABLES = process.env.LETHAL_ITEST_V3_TABLES === "1";
 /** R635: `{}` unless the transport flags are set (`v3ItestTransport`). */
 const TRANSPORT = v3ItestTransport(process.env);
+/** R938: every leg's `--environment`: `saas` unless `LETHAL_ITEST_V3_ENVIRONMENT=onprem`. */
+const ENVIRONMENT = v3ItestEnvironment(process.env);
 const REPORT_DIR = process.env.LETHAL_ITEST_V3_REPORT_DIR;
 const CONTROL_DIR = process.env.LETHAL_ITEST_V3_CONTROL_DIR;
 const SANDBOX_BC = "28.0.46665.47126";
@@ -287,6 +295,8 @@ const LEGS = (process.env.LETHAL_ITEST_V3_LEGS ?? configured.join(","))
 const ORACLE_BC_BUILD: Record<string, string> = {
   S1: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   S1E: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  DB: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  DBI: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
   D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
   D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
@@ -317,22 +327,17 @@ function backendCfg(
       "instrumentedDir" | "testDir" | "packagesDir" | "bcVersion" | "selectorObjectId"
     >,
 ): AlRunnerV3Config {
-  return {
-    alRunnerPath: BIN,
-    alcPath: ALC,
-    cacheDir: CACHE,
-    // R885: a frozen gate never fetches demo data (500 MB) or dependency apps from the network:
-    // the fixtures need none, and every call carries --no-download as it did before R885.
-    downloadDemoData: false,
-    // R886: the frozen figures were measured with no .NET sidecar; a pinned build's own sidecar
-    // would be picked up by default and could turn a refusal into a run. Off, explicitly.
-    dotnetSidecar: false,
-    isolation: "test", // R890: the gate keeps `--isolation test`, explicitly
-    coverage: "al-runner",
-    ...(CANDIDATE ? { candidate: true } : {}),
-    ...TRANSPORT,
-    ...o,
-  };
+  return v3GateBackendCfg(
+    {
+      alRunnerPath: BIN,
+      alcPath: ALC,
+      cacheDir: CACHE,
+      candidate: CANDIDATE,
+      transport: TRANSPORT,
+      environment: ENVIRONMENT,
+    },
+    o,
+  );
 }
 
 /** r9 §2: this leg's sessions' `unlike-bc` warnings, drained into the receipt after each leg. */
@@ -589,9 +594,17 @@ const S1E_PINS = {
   pairBatchRefused: 0,
 } as const;
 
-/** S1 one-shot (`entries` off) or S1E (same project and assertions under serve-entries). */
-async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): Promise<void> {
-  const serve = leg === "S1E";
+/**
+ * S1 one-shot (`entries` off), S1E (same project and assertions under serve-entries), or DB (R948:
+ * S1E with `daemonBaseline` and the memory guard at its default headroom: the same per-mutant table
+ * and serve counters, plus the daemon baseline used and cross-checked).
+ */
+async function legS1(
+  scratch: string,
+  leg: "S1" | "S1E" | "DB" = "S1",
+  version = "",
+): Promise<void> {
+  const serve = leg !== "S1";
   const b = new AlRunnerV3Backend(
     backendCfg({
       instrumentedDir: join(scratch, "backend"),
@@ -600,8 +613,22 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       bcVersion: SANDBOX_BC,
       selectorObjectId: 79199,
       ...(serve ? { transport: "serve-entries" as const } : {}),
+      // The CLI's own two settings (`buildAlRunnerV3Backend`): only the CLI sets them, so a leg that
+      // wants the user's path sets them here, with the config's default headroom.
+      ...(leg === "DB"
+        ? { daemonBaseline: true, memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT }
+        : {}),
     }),
   );
+  // A fixed reader (32 GiB limit, 1 GiB used) keeps the guard's one warning the same on every host;
+  // the real cgroup reader is unit-tested against fake files.
+  if (leg === "DB") {
+    b.seams.memoryReader = () => ({
+      usedBytes: 2 ** 30,
+      maxBytes: 32 * 2 ** 30,
+      source: "/sys/fs/cgroup/memory.max",
+    });
+  }
   let r: SessionReport;
   try {
     r = await session(scratch, b, {
@@ -612,7 +639,7 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
   } catch (e) {
     // A build with no serve path refuses `entries` by name: not applicable, as N1E reads it.
     if (serve && !isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
-      console.log("  S1E: not applicable: this build has no serve-entries path");
+      console.log(`  ${leg}: not applicable: this build has no serve-entries path`);
       return;
     }
     throw e;
@@ -654,14 +681,103 @@ async function legS1(scratch: string, leg: "S1" | "S1E" = "S1", version = ""): P
       pairBatchRefused: s.pairBatchRefused,
     };
     console.log(
-      `  S1E: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
+      `  ${leg}: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
     for (const [k, v] of Object.entries(S1E_PINS)) {
       const g = got[k as keyof typeof got];
-      must(g === v, `S1E: ${k} ${g}, pre-committed ${v} (R761, R778)`);
+      must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`);
     }
-    must(s.echoMismatches === 0, `S1E: ${s.echoMismatches} echo mismatches, pre-committed 0`);
+    must(s.echoMismatches === 0, `${leg}: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
+  if (leg === "DB") {
+    // R948: the daemon baseline was USED, not dropped, and its cross-check ran and agreed.
+    const d = b.daemonBaselineReport();
+    console.log(`  DB: daemon baseline ${JSON.stringify(d)}`);
+    must(d.dropped === undefined, `DB: the daemon baseline was dropped: ${d.dropped}`);
+    must(d.codeunits >= 1, "DB: the daemon baseline asked for no codeunit");
+    must(d.requests === d.codeunits, `DB: ${d.requests} requests for ${d.codeunits} codeunits`);
+    const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
+    must(
+      d.sampledCodeunits.length === want,
+      `DB: ${d.sampledCodeunits.length} codeunits sampled, pre-committed ${want}`,
+    );
+    must(
+      d.perTestRequests === 0,
+      `DB: ${d.perTestRequests} per-test requests under isolation test`,
+    );
+    // Every codeunit a fresh process did not answer in its place was taken from the daemon: a fill
+    // that silently ended with no answers would pass everything above and fail here.
+    // (With one codeunit the sample is that codeunit, so served is 0 by rule.)
+    // A skip (too slow, a request error, a refusal) is named and printed, not a BLOCK.
+    const j = judgeDaemonBaseline("DB", d, d.codeunits - want, want);
+    for (const n of j.notes) console.log(`  ${n}`);
+    must(j.fail === undefined, j.fail ?? "");
+    must(b.baselineDaemon, "DB: the backend does not report a daemon baseline");
+  }
+}
+
+/**
+ * R948: leg DBI = leg ISO's session (S1's project under `--isolate-tests`, every test its own request)
+ * with the baseline through the daemon and the memory guard at its default headroom. Per mutant equal
+ * to what ISO asserts; the per-test requests were made, the per-test sample ran and agreed, and the
+ * daemon's answers were taken. As in DB the reader is fixed under the bound: the guard's REFUSAL path
+ * is unit-tested (a live gate cannot make the container run out of memory on purpose).
+ */
+async function legDBI(scratch: string, version: string): Promise<void> {
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-tests"),
+      packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 79199,
+      transport: "serve-entries",
+      isolateTests: true,
+      daemonBaseline: true,
+      memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT,
+    }),
+  );
+  b.seams.memoryReader = () => ({
+    usedBytes: 2 ** 30,
+    maxBytes: 32 * 2 ** 30,
+    source: "/sys/fs/cgroup/memory.max",
+  });
+  let r: SessionReport;
+  try {
+    r = await session(scratch, b, {
+      projectDir: fixture("sandbox-app"),
+      testDir: fixture("sandbox-tests"),
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    });
+  } catch (e) {
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  DBI: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+  assertCounts(r, "DBI", 3, 14, 5, 22);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "DBI");
+  must(r.validity.executionContexts[0]?.isolateTests === true, "DBI: the report hides the mode");
+  must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "DBI: a state note under --isolate-tests");
+  const d = b.daemonBaselineReport();
+  console.log(`  DBI: daemon baseline ${JSON.stringify(d)}`);
+  must(d.dropped === undefined, `DBI: the daemon baseline was dropped: ${d.dropped}`);
+  must(d.perTestRequests > 0, "DBI: no per-test request was made");
+  const want = baselineSampleIds(Array.from({ length: d.perTestRequests }, (_, i) => i)).length;
+  must(
+    d.sampledPerTest.length === want,
+    `DBI: ${d.sampledPerTest.length} tests sampled, pre-committed ${want}`,
+  );
+  const j = judgeDaemonBaseline("DBI", d, d.perTestRequests - want, want);
+  for (const n of j.notes) console.log(`  ${n}`);
+  must(j.fail === undefined, j.fail ?? "");
+  // Nothing skipped and still nothing taken is a drop the equation above cannot see.
+  must(
+    d.served > 0 || d.perTestRequests - want === 0 || j.notes.length > 0,
+    "DBI: no daemon answer was taken and none was skipped by name",
+  );
+  must(b.baselineDaemon, "DBI: the backend does not report a daemon baseline");
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -1516,6 +1632,7 @@ async function legK(scratch: string): Promise<void> {
             bcVersion: SANDBOX_BC,
             alcPath: ALC,
             cacheDir: CACHE,
+            environment: ENVIRONMENT,
           }),
           // R885: the gate stays offline (see backendCfg above); K's defaults are otherwise unchanged.
           downloadDemoData: false,
@@ -2405,6 +2522,7 @@ async function main(): Promise<void> {
     });
   const dirty = dirtyFromStatus(statusNow());
   console.log(`al-runner-v3 itest: LethAL ${lethalHead}${dirty ? " (DIRTY)" : ""}`);
+  console.log(`al-runner-v3 itest: environment ${ENVIRONMENT} (every leg; R938)`);
   console.log(
     `al-runner-v3 itest: ${version} sha256 ${sha} (${BIN})${CANDIDATE ? " CANDIDATE" : ""}; legs ${LEGS.join(",")}`,
   );
@@ -2468,6 +2586,8 @@ async function main(): Promise<void> {
         if (leg === "C") lines.push(...(await legC(scratch)).map((l) => `C: ${l}`));
         else if (leg === "S1") await legS1(scratch);
         else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
+        else if (leg === V3_DB_LEG) await legS1(scratch, V3_DB_LEG, version);
+        else if (leg === V3_DBI_LEG) await legDBI(scratch, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

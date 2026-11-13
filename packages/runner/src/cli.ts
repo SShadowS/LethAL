@@ -39,9 +39,11 @@ import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertAlcRunnable,
   assertBcVersionMatchesPackages,
+  readLicenseIdentity,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
+import { chooseV3Environment, describeV3Environment } from "./al-runner-v3-environment";
 import { checkGated, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
@@ -1095,7 +1097,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
                              count because BC recompiles server-side
-  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms). The budget is
+  --mutant-timeout-ms <n>    floor for a mutant's time budget (default ${MIN_MUTANT_BUDGET_MS} ms; on al-runner-v3
+                             max(60 s, 20 x the largest green baseline test + 5 s), R954). The budget is
                              max(2 x that test's baseline, this). Exceeding it quarantines the run
   --time-budget <seconds>    stop scheduling once the session has run this long: work in flight ends,
                              the report leaves out the mutants not reached (not survivors), and
@@ -3144,6 +3147,11 @@ async function buildAlRunnerV3Backend(
     warn: () => {},
   });
   const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+  // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
+  // environment is unknown (owner's ruling A), before the version check, alc or any compile.
+  const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
+  // R956: the license file is read (and hashed) here, before anything runs; unreadable is refused by name.
+  const license = c.license !== undefined ? await readLicenseIdentity(c.license) : undefined;
   await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
   if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
   const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
@@ -3158,6 +3166,7 @@ async function buildAlRunnerV3Backend(
     deps.source,
   );
   console.warn(AL_RUNNER_V3_NOT_AUTHORITATIVE);
+  console.warn(describeV3Environment(environmentChoice));
   return new AlRunnerV3Backend(
     {
       alRunnerPath: c.path,
@@ -3182,6 +3191,10 @@ async function buildAlRunnerV3Backend(
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
+      memoryHeadroomGb: c.memoryHeadroomGb, // R948
+      daemonBaseline: c.transport === "serve-entries", // R948: the baseline through one daemon
+      environmentChoice, // R938
+      ...(license !== undefined ? { license } : {}), // R956
       isolation: c.isolation, // R890, R896
       ...(c.dotnetSidecar !== undefined ? { dotnetSidecar: c.dotnetSidecar } : {}), // R886
       ...(deps.preprocessorSymbols.length > 0
@@ -4935,6 +4948,27 @@ export async function buildDoctorDeps(
             }
           };
         })();
+  // R938: the same decision `run` makes, so doctor and run agree. Without `--project` the target's
+  // launch.json cannot be read, so only the config key can answer.
+  const v3EnvCheck =
+    configFile.alRunnerV3 === undefined
+      ? undefined
+      : async () => {
+          try {
+            const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+            if (c.environment === undefined && opts.projectDir === undefined) {
+              return {
+                ok: true,
+                details:
+                  'alRunnerV3.environment is not set; pass --project so the target\'s .vscode/launch.json can answer, or set it to "onprem" or "saas"',
+              };
+            }
+            const choice = await chooseV3Environment(opts.projectDir ?? "", c.environment);
+            return { ok: true, details: describeV3Environment(choice) };
+          } catch (err) {
+            return { ok: false, details: err instanceof Error ? err.message : String(err) };
+          }
+        };
   // R900: every backend compiles with alc, so the check is on every config, given `--project`.
   const probingProject = opts.projectDir;
   const probingCheck =
@@ -4942,7 +4976,14 @@ export async function buildDoctorDeps(
       ? {}
       : { assemblyProbingPaths: () => assemblyProbingPathsFor(probingProject, configFile) };
   if (v3Only && v3Check !== undefined) {
-    return { cfg: {}, deps: { alRunnerV3: v3Check, ...probingCheck } };
+    return {
+      cfg: {},
+      deps: {
+        alRunnerV3: v3Check,
+        ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
+        ...probingCheck,
+      },
+    };
   }
   const readOnly = prepareBcdevReadOnly(configFile, {
     runId: "doctor",
@@ -5210,6 +5251,7 @@ export async function buildDoctorDeps(
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
+      ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
       ...probingCheck,
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),

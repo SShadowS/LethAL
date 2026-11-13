@@ -1691,6 +1691,9 @@ CLI flags:
     // Required: the folder v3 and alc both read packages from, and a four-number BC build.
     "packagesDir": "/path/to/.alpackages",
     "bcVersion": "28.0.46665.47126",
+    // R938: required unless the target's .vscode/launch.json has an environmentType (OnPrem ->
+    // "onprem"; Sandbox, Production -> "saas"). The server environment the tests expect.
+    "environment": "saas",
     // Optional, shown with their defaults. "serverMode", "selectorMode" and "alRunnerPath" are
     // refused by name.
     // The default is the pinned build when /work/tools has one (LethAL's own boxes), else

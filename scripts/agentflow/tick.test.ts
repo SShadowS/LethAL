@@ -56,11 +56,14 @@ describe("the happy path", () => {
     expect(w.journal).toEqual([
       "claim:42:https://example.invalid/session",
       "lease-acquire:agent-data:run-1",
+      "lease-acquire:agent-app:run-1",
       "gate:tables",
       "gate:chunked",
+      "gate:alrunner-v3",
       "pr:Fix the thing (#42)",
       "merge:77:HEAD",
       "lease-release:agent-data:run-1",
+      "lease-release:agent-app:run-1",
     ]);
   });
 });
@@ -74,7 +77,7 @@ describe("a dry run ranks and picks, and stops", () => {
     expect(out.status).toBe("dry-run");
     if (out.status !== "dry-run") throw new Error("unreachable");
     expect(out.issue).toBe(42);
-    expect(out.legs).toEqual(["tables", "chunked"]);
+    expect(out.legs).toEqual(["tables", "chunked", "alrunner-v3"]);
 
     // The witness. Every fake write appends here, so an empty journal is evidence rather than the
     // absence of an error.

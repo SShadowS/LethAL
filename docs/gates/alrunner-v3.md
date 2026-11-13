@@ -60,7 +60,8 @@ The legs:
   never as a plain `fail`.
   Since R612 (plan `docs/superpowers/plans/2026-10-22-r612-v3-serve-keep-rule.md`), 1 is a WARN fact
   (`V3_WARN_FACTS`): `serve-keep-reasons` runs one `alrunner serve` daemon over four codeunits (five tests) and checks each
-  row against its entry of `V3_SERVE_SAFE_REFUSALS` (four entries: http, commit, cascade, onrun-failed), the reasons
+  row against its entry of `V3_SERVE_SAFE_REFUSALS` (the fact pins four entries: http, commit, cascade, onrun-failed; the
+  seven R945 entries are not in it, since it runs without the .NET helper, and a reworded text of theirs only closes), the reasons
   after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
   `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
@@ -257,6 +258,7 @@ Each leg first checks its pre-committed table. A difference is `gate-fail`, and 
   - **K is outside `V3_GATE_LEGS`, by the orchestrator's ruling**, because the CLI's config cannot name a candidate build. Two conditions hold it, both pinned in `tests/r654-v3-legs.test.ts`:
     1. On a candidate (`LETHAL_ALRUNNER_V3_CANDIDATE=1`), K does not run. Its value in the itest's leg summary is `"K":"skipped (candidate build)"`, and its reason goes into the log and the receipt lines. It is never silent.
     2. On a gated build, a K that is anything but a pass FAILS the itest, a skip included (`v3ItestFailures`). So K can never become an always-skipped leg.
+  - **R938: every leg states its environment.** The gate passes `--environment saas` on every leg (the value the pinned tables were measured under; K states it in its `alRunnerV3` section), and prints `al-runner-v3 itest: environment <value> (every leg; R938)` after the LethAL line. `LETHAL_ITEST_V3_ENVIRONMENT=saas|onprem` sets it for every leg (any other value is refused by name); an `onprem` run is a measurement, not a pass against the frozen figures.
   - **R586c: K can run on a candidate** with `LETHAL_ITEST_V3_K_ON_CANDIDATE=1` (any other value is refused by name). The itest then passes the test-only `alRunnerCandidate` seam to `buildBackend` (no CLI flag, no config key; `alRunnerV3.candidate` is rejected). With the variable set, a K skip on a candidate fails the itest. K is still outside `V3_GATE_LEGS`, and its result is read from the log, not the receipt.
 
   The update gate's receipt outcome reads only `V3_GATE_LEGS` (which now holds MO and WR, below).

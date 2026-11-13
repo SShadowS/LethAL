@@ -175,6 +175,24 @@ const isOneOf =
   (p: string) =>
     paths.includes(p);
 
+/**
+ * R-936: unit-test files and the helpers and data under `packages/<pkg>/tests/`. Verified by grep
+ * when this was written: no itest, no `src` file and no script imports or reads anything under
+ * `packages/*\/tests/`, and itests never import a `.test.ts`. A gate that starts to read one must
+ * remove it from here (gate-table.test.ts checks the itests' imports).
+ */
+export const isTestOnly = (p: string): boolean =>
+  // The orchestrator's ruling (R654 S2): all of scripts/agentflow/** selects the full set. Its own
+  // tests test this table, so they are not test-only.
+  !p.startsWith("scripts/agentflow/") &&
+  (/^packages\/[^/]+\/tests\//.test(p) || p.endsWith(".test.ts"));
+
+const TEST_ONLY_RULE: Rule = {
+  test: isTestOnly,
+  legs: [],
+  why: "unit tests run in verify; no live gate reads them",
+};
+
 const RULES: readonly Rule[] = [
   {
     test: (p) => p.startsWith("docs/") || (p.endsWith(".md") && !p.includes("/")),
@@ -249,7 +267,8 @@ const RULES: readonly Rule[] = [
     test: startsWith("fixtures/sandbox-app/", "fixtures/sandbox-tests/"),
     // verify and testapp measure this fixture pair (verify-gaps.ts pins its gap ids; testapp
     // republishes sandbox-tests).
-    legs: ["bcdev", "alrunner-v3", "verify", "testapp"],
+    // lease and stale-publish publish this pair too (their PROJECT_DIR / TEST_DIR).
+    legs: ["bcdev", "alrunner-v3", "verify", "testapp", "lease", "stale-publish"],
     why: "the codeunit fixture and its suite",
   },
   {
@@ -259,13 +278,59 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith("fixtures/sandbox-data/", "fixtures/sandbox-data-tests/"),
-    legs: ["tables", "chunked"],
+    // alrunner-v3: its tables and CDO legs compile and run these (al-runner-v3.itest.ts).
+    legs: ["tables", "chunked", "alrunner-v3"],
     why: "the table fixture and its suite",
   },
   {
     test: startsWith("fixtures/sandbox-hang/", "fixtures/sandbox-hang-tests/"),
     legs: ["hang"],
     why: "the hang fixture and its suite",
+  },
+  // R-936. Each fixture below is named by an itest, so it selects that itest's leg. The names and
+  // wrapped pairs are also read by `itest:bcdev-names` and `itest:bcdev-wrapped`. Those two are
+  // NOT in LEGS (there is no such leg), so they are covered here by selecting `bcdev`, the nearest
+  // leg that exercises the same backend. gate-table.test.ts derives the read set from the itests
+  // and fails when a fixture an itest names does not select that itest's leg.
+  {
+    test: startsWith(
+      "fixtures/sandbox-names/",
+      "fixtures/sandbox-names-tests/",
+      "fixtures/sandbox-wrapped/",
+      "fixtures/sandbox-wrapped-tests/",
+    ),
+    legs: ["bcdev", "alrunner-v3"],
+    why: "read by the bcdev-names and bcdev-wrapped variants and by the v3 gate",
+  },
+  {
+    test: startsWith(
+      "fixtures/sandbox-layout/",
+      "fixtures/sandbox-layout-tests/",
+      "fixtures/sandbox-multiobject/",
+      "fixtures/sandbox-multiobject-tests/",
+      "fixtures/sandbox-order/",
+      "fixtures/sandbox-order-tests/",
+      "fixtures/sandbox-symbols/",
+      "fixtures/sandbox-symbols-tests/",
+    ),
+    legs: ["alrunner-v3"],
+    why: "fixtures only the v3 gate's legs read",
+  },
+  {
+    test: startsWith(
+      "fixtures/sandbox-codefree/",
+      "fixtures/sandbox-codefree-tests/",
+      "fixtures/sandbox-coverage-probe/",
+      "fixtures/sandbox-dates/",
+      "fixtures/sandbox-dates-tests/",
+      "fixtures/sandbox-optin/",
+      "fixtures/sandbox-optin-tests/",
+      "fixtures/do-campaign/",
+      "fixtures/grammar-probe/",
+      "fixtures/README.md",
+    ),
+    legs: [],
+    why: "fixture data no itest names (unit tests and campaigns read it); a new fixture is NOT listed, so it still defaults to the full set",
   },
   // R271. These rows only add; the general runner row above still applies to the same paths.
   {
@@ -364,7 +429,9 @@ export function selectLegs(changedPaths: readonly string[]): Selection {
     const path = raw.replace(/\\/g, "/");
     if (path.length === 0) throw new GateSelectionError("empty path in changedPaths");
 
-    const matched = RULES.filter((r) => r.test(path));
+    // R-936: a test-only path is matched by its own row ALONE. The general rows below it would
+    // otherwise add legs by union (packages/runner/ selects five), and no gate reads these files.
+    const matched = isTestOnly(path) ? [TEST_ONLY_RULE] : RULES.filter((r) => r.test(path));
     if (matched.length === 0) {
       // Default-deny. See the header: this is the direction incompleteness must fail in.
       unmatched.push(path);

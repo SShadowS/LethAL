@@ -120,6 +120,11 @@ export interface DoctorDeps {
   /** R586: the al-runner-v3 binary: its `--version`, its `.gated` pin and `bcVersion` against the
    *  package folder. Read-only; the session's contract probe is not run here. */
   readonly alRunnerV3?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
+  /** R938: the environment `run` would pass al-runner v3 (value and source), or the refusal. */
+  readonly alRunnerV3Environment?: () => Promise<{
+    readonly ok: boolean;
+    readonly details: string;
+  }>;
   /**
    * Issue #23: the alc compiler's own version (its banner) beside the `Runtime` the server's
    * Microsoft `System` symbol package declares, read from the configured package cache. An alc
@@ -556,6 +561,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     lease,
     toolPaths,
     alRunnerV3,
+    alRunnerV3Environment,
     companies,
     alcRuntime,
     testApp,
@@ -600,6 +606,14 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
       runCheck("al-runner-v3", async () => {
         const s = await alRunnerV3();
         return { name: "al-runner-v3", ok: s.ok, detail: s.details };
+      }),
+    );
+  }
+  if (alRunnerV3Environment !== undefined) {
+    checkPromises.push(
+      runCheck("al-runner-v3-environment", async () => {
+        const s = await alRunnerV3Environment();
+        return { name: "al-runner-v3-environment", ok: s.ok, detail: s.details };
       }),
     );
   }

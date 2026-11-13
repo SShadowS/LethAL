@@ -905,7 +905,6 @@
               "chosen",
               "tests",
               "testPassed",
-              "methodPassed",
               "reason",
               "lostUnderMethod"
             ],
@@ -1793,6 +1792,48 @@
         },
         "batchesNotStarted": {
           "type": "number"
+        },
+        "baselineStopped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "testsRun",
+            "testsTotal"
+          ],
+          "properties": {
+            "testsRun": {
+              "type": "number"
+            },
+            "testsTotal": {
+              "type": "number"
+            },
+            "inAutoRebaseline": {
+              "const": true
+            }
+          }
+        },
+        "stoppedBySignal": {
+          "const": true
+        },
+        "stoppedByMemory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "usedBytes",
+            "boundBytes",
+            "source"
+          ],
+          "properties": {
+            "usedBytes": {
+              "type": "number"
+            },
+            "boundBytes": {
+              "type": "number"
+            },
+            "source": {
+              "type": "string"
+            }
+          }
         },
         "seq": {
           "type": "number"

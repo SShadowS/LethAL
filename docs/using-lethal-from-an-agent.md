@@ -158,8 +158,10 @@ no-coverage. Such a report carries the caveat `al-runner-v3-coverage-off` and na
 `coverageOffFiles` (R907). Do not quote a score from it. Its gate is `itest:alrunner-v3`
 ([docs/gates/alrunner-v3.md](gates/alrunner-v3.md)).
 
-An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, and `bcVersion` as four
-numbers); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
+An `al-runner-v3` config needs ONLY the `alRunnerV3` section (`packagesDir`, `bcVersion` as four
+numbers, and `environment`: `"onprem"` or `"saas"`, the server the target runs on; if you leave it out
+LethAL reads `environmentType` from the target's `.vscode/launch.json`, and if neither names one the run
+is refused before any compile, R938); no `bcdev` section, no server, no credentials. `path` defaults to `~/.local/bin/al-runner`
 (where upstream's installer writes it). Microsoft's symbols
 come from `bun scripts/fetch-ms-symbols.ts <bc-major> <out-dir>` (it prints the `bcVersion`), and `alc`
 comes from the AL Language extension or, on a Linux box with .NET but no VS Code, from
@@ -193,6 +195,25 @@ same commit as your binary (the sidecar is not in the release files), run from a
 `doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. A run records the
 sidecar it used (the dll's sha256, or `none`) and `downloadDemoData`; `--resume` and `--resume-run` refuse a run
 whose record differs, or is missing (a v3 run from before R886), and say which setting changed from what to what. The project's own gates set `dotnetSidecar: false`.
+**The baseline daemon and the memory guard (R948).** On the serve transport the baseline runs through one serve daemon
+(one request per test codeunit, with coverage), not one al-runner process per codeunit. A few codeunits (the first, the
+last and every 25th, at most eight) are also run as fresh processes and compared test by test (status, fail text, exact
+coverage set). Any difference drops the daemon baseline for the whole session with the warning
+`al-runner-v3-baseline-daemon-dropped`; the baseline then runs one process per codeunit. A codeunit slow enough that a
+warm daemon's shorter time could shrink a budget is re-run as a fresh process. Codeunits that isolation `auto` moves to
+`method` run as one request per test on one codeunit-isolation daemon.
+`"memoryHeadroomGb"` (default 4, `0` = off) sets the memory guard: it reads the container's cgroup (`memory.current` less
+reclaimable cache, against `memory.max`) and starts no new test call while use is over `memory.max` less that headroom.
+Its first line (`al-runner-v3-memory-guard`) names the bound and its source; with no readable cgroup it says
+`al-runner-v3-memory-guard-off`. If the container stays over the bound for five minutes, the run stops by name
+(`al-runner-v3-memory-bound`), the call it blocked is dropped like one a stop signal ended, a mutant group in progress
+finishes, and the report carries `timeBudget.stoppedByMemory`; continue with `--resume`.
+**Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
+(`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
+baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
+LethAL is not lent to, or resumed by, a new serve-entries session (and the other way round), and a one-shot session
+(`"transport": "one-shot"`, or a `--resume` that forces one-shot) neither lends to nor borrows from one. Start a fresh
+run; the `--resume` refusal names the two builds.
 A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the binary it used. Full steps:
 [README](../README.md#running-without-a-bc-server-the-al-runner-v3-backend).
 
@@ -299,6 +320,30 @@ The `instead` column is guidance.
 scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the
 mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
 scored (`4`) win over `7`.
+
+Since R955 the budget bounds the baseline too. When it runs out inside the baseline, no more baseline
+calls are made, no mutant of that batch is scored, and the report's `timeBudget.baselineStopped` says how
+many baseline tests ran (`testsRun`) of how many (`testsTotal`); the exit code is still `7`. A baseline
+cut short is not stored, so `--resume` runs it again (raise `--time-budget` or narrow the run).
+
+A SIGTERM or SIGINT spends the same budget (R955), with or without `--time-budget`: the run stops at its next
+check, writes its normal `--out` report with `timeBudget.stoppedBySignal: true` (`budgetSeconds` is 0 when no
+budget was given), and exits `7`. A second signal while it stops ends the process at once. An alc ended
+by a signal is never read as "does not compile" (it is a preparation error), and compile-failure
+isolation stops with no verdict once the budget is spent. If the budget runs out while isolation `auto`
+re-runs codeunits one test at a time, `timeBudget.baselineStopped.inAutoRebaseline` is `true`: no
+isolation choice is made and no mutant of that batch is scored. `timeBudget.unscheduledCount` then
+counts that batch's mutants.
+
+**A license for al-runner (R956).** A test that needs a Business Central license is refused by al-runner
+with "no license file loaded". Set `alRunnerV3.license` to a `.bclicense` file: LethAL passes it as
+al-runner's license switch on every al-runner call that runs tests (one-shot and serve). The report names the file by path
+and sha256 in `executionContexts[].license`, never its contents, and a different license is a different
+run fingerprint, so `--resume` will not mix them. Use only a license you are allowed to use for testing.
+
+**Isolation `auto` and a codeunit with no green test (R956).** A test codeunit whose whole-codeunit baseline
+has no green test stays on `test` and is not re-baselined one test per process; the `isolation` caveat's
+reason says "0 green under test: a tie at 0 decides nothing, kept on test (R956)".
 
 #### Exit code notes (guidance)
 
@@ -1170,7 +1215,10 @@ the assemblies. LethAL takes the folders from the config's top-level `assemblyPr
 the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages` when it
 exists, else none. A missing folder, or a path holding `,` or `;`, is refused by name before any
 compile. The doctor check `assembly-probing-paths` (with `--project`) prints the list and its
-source. On an AL0451 failure the error text names the paths LethAL passed.
+source. On an AL0451 failure the error text names the paths LethAL passed, and, when the missing
+assembly is an ASP.NET Core one (Base Application's `Microsoft.AspNetCore.StaticFiles`), the shared
+framework folder to add after the BC service folder (R951). On al-runner-v3 the same
+folders also reach al-runner's .NET sidecar (al-runner's own assembly-folder option, once per folder).
 
 ## Safety (guidance)
 

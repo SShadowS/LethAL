@@ -247,6 +247,33 @@ describe("ArtifactCompiler and /assemblyprobingpaths", () => {
     expect(err).toBeInstanceOf(AlcCompileError);
     expect((err as Error).message).not.toContain("probing");
   });
+
+  test("R951: an ASP.NET Core assembly also names the shared-framework folder; any other assembly does not", async () => {
+    const failing = (name: string) => ({
+      exitCode: 1,
+      stdout: `dotnet.al(9,3): error AL0451: An assembly named '${name}' could not be found in the assembly probing paths '/svc'`,
+      stderr: "",
+    });
+    const asp = await compilerSeeing(
+      { assemblyProbingPaths: ["/svc"] },
+      failing("Microsoft.AspNetCore.StaticFiles"),
+    )
+      .compiler.compile(INPUT)
+      .catch((e: unknown) => e);
+    expect(asp).toBeInstanceOf(AlcCompileError);
+    expect((asp as Error).message).toContain(
+      "Microsoft.AspNetCore.StaticFiles is part of the ASP.NET Core shared framework",
+    );
+    expect((asp as Error).message).toContain(
+      "<dotnet root>/shared/Microsoft.AspNetCore.App/<version>",
+    );
+    const other = await compilerSeeing({ assemblyProbingPaths: ["/svc"] }, failing("Contoso.Pdf"))
+      .compiler.compile(INPUT)
+      .catch((e: unknown) => e);
+    expect(other).toBeInstanceOf(AlcCompileError);
+    expect((other as Error).message).toContain("these assembly probing paths: /svc");
+    expect((other as Error).message).not.toContain("ASP.NET Core");
+  });
 });
 
 describe("digests", () => {
@@ -386,6 +413,7 @@ describe("buildBackend hands the resolved list to the bcdev compiler", () => {
         } as Parameters<typeof buildBackend>[0],
         {
           alRunnerV3: {
+            environment: "saas", // R938
             path: "/fake/al-runner",
             packagesDir: deps,
             bcVersion: BC,

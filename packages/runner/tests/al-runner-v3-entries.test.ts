@@ -61,8 +61,10 @@ import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
+import { baselineSourceTag } from "../src/orchestrator";
 import type { SpawnFn } from "../src/publisher";
 import { installResourceSelector } from "../src/resource-selector";
+import { backendBuildRefusal } from "../src/store";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
 
 const TARGET_ID = "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a";
@@ -194,6 +196,8 @@ interface FakeRow {
   notRun?: boolean;
   /** R907: al-runner's `flagged` (a pass resting on an unprobed assumption). */
   flagged?: boolean;
+  /** R963: the row has NO `durationMs` of its own (al-runner may omit it). */
+  noDuration?: boolean;
 }
 /** R586c (B2): a real CPU stop takes at least its stop; the fake's stop rows say so. */
 const stopMsOf = (message: string | undefined): number => {
@@ -483,7 +487,7 @@ function fakeServe(script: ServeScript = {}) {
             type: "test",
             name: `Codeunit${cu}.${r.method}`,
             status: r.status,
-            durationMs: stopMsOf(r.message),
+            ...(r.noDuration === true ? {} : { durationMs: stopMsOf(r.message) }),
             ...(r.message !== undefined ? { message: r.message } : {}),
             ...(r.notRun === true ? { notRun: true } : {}),
             ...(r.flagged !== undefined ? { flagged: r.flagged } : {}),
@@ -554,6 +558,10 @@ interface RigOpts {
   pairBatch?: boolean;
   /** R790: backend test seams, set before the deploy. */
   seams?: AlRunnerV3Backend["seams"];
+  /** R948: the backend's notices, collected before the deploy. */
+  notify?: (code: string, message: string) => void;
+  /** R948: the session's stop state, given before the deploy. */
+  stopHandle?: Parameters<AlRunnerV3Backend["useStopHandle"]>[0];
 }
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
@@ -568,6 +576,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const b = new AlRunnerV3Backend(
     {
       alRunnerPath: "/fake/al-runner",
+      environmentChoice: { value: "saas", source: "config" },
       instrumentedDir: l.scratch,
       testDir: l.testDir,
       packagesDir: l.deps,
@@ -590,6 +599,8 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
   Object.assign(b.seams, opts.seams ?? {});
+  if (opts.notify !== undefined) b.setNotify(opts.notify);
+  if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
   return { l, b, serve, one };
 }
@@ -630,6 +641,7 @@ describe("1, 2, 3: the option, its default, the version line", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,
@@ -1185,6 +1197,31 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
+  test("R956: the daemon argv carries --license <path> only when the license is set", async () => {
+    const on = (
+      await readyRig({
+        mutants: ["M0001"],
+        extra: { license: { path: "/l/x.bclicense", sha256: "a".repeat(64) } },
+      })
+    ).serve.daemons[0];
+    expect(on?.[(on?.indexOf("--license") ?? -2) + 1]).toBe("/l/x.bclicense");
+    expect((await readyRig({ mutants: ["M0001"] })).serve.daemons[0] ?? []).not.toContain(
+      "--license",
+    );
+  });
+
+  test("R938: the daemon argv carries --environment <value> (the stated one)", async () => {
+    const on = (
+      await readyRig({
+        mutants: ["M0001"],
+        extra: { environmentChoice: { value: "onprem", source: "launch.json" } },
+      })
+    ).serve.daemons[0];
+    expect(on?.[(on?.indexOf("--environment") ?? -2) + 1]).toBe("onprem");
+    const dflt = (await readyRig({ mutants: ["M0001"] })).serve.daemons[0];
+    expect(dflt?.[(dflt?.indexOf("--environment") ?? -2) + 1]).toBe("saas");
+  });
+
   test("R886: the daemon argv carries --dotnet-sidecar <dll> only when dotnetSidecar names a file", async () => {
     const dll = join(await mkdtemp(join(tmpdir(), "r886-")), "AlDotNetSidecar.dll");
     await writeFile(dll, "x");
@@ -1195,6 +1232,25 @@ describe("R885: demo data, on the serve path", () => {
       const off = await readyRig({ mutants: ["M0001"], extra });
       expect(off.serve.daemons[0] ?? []).not.toContain("--dotnet-sidecar");
     }
+  });
+
+  test("R941/R943: the daemon argv carries each probing path as a --dotnet-assembly-dir, only with a sidecar", async () => {
+    const dll = join(await mkdtemp(join(tmpdir(), "r943-")), "AlDotNetSidecar.dll");
+    await writeFile(dll, "x");
+    const dirs = (argv: readonly string[]) =>
+      argv.flatMap((a, i) => (a === "--dotnet-assembly-dir" ? [argv[i + 1]] : []));
+    const paths = { assemblyProbingPaths: ["/abs/one", "rel/two"] };
+    const on = (await readyRig({ mutants: ["M0001"], extra: { dotnetSidecar: dll, ...paths } }))
+      .serve.daemons[0];
+    // resolve() on both: on Windows an absolute "/abs/one" gains the drive letter.
+    expect(dirs(on ?? [])).toEqual([resolve("/abs/one"), resolve("rel/two")]);
+    const offRig = await readyRig({
+      mutants: ["M0001"],
+      extra: { dotnetSidecar: false as const, ...paths },
+    });
+    // Review: a daemon must have started, or an empty argv would pass this for the wrong reason.
+    expect(offRig.serve.daemons.length).toBeGreaterThanOrEqual(1);
+    expect(dirs(offRig.serve.daemons[0] ?? [])).toEqual([]);
   });
 
   test("the test-data-off note on the daemon's stderr warns once, naming the cacheDir key", async () => {
@@ -1342,6 +1398,36 @@ describe("9: a prefetched answer is consumed once", () => {
       ["NONE|echo", `NONE|${CU}`],
       ["M0001|echo", `M0001|${CU}`],
     ]);
+  });
+});
+
+describe("R963: a serve-entries request is one call: its rows with no own time share one callId", () => {
+  const noOwn: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((r) => ({ ...r, noDuration: true }));
+  test("every verdict of one request (two mutants, two tests each) carries the SAME callId; another request gets a different one", async () => {
+    const r = await rig({ serve: { rows: noOwn } });
+    const base = await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001", "M0002"], SUITE1));
+    const n0 = r.serve.requests.length;
+    const got: TestVerdict[] = [];
+    for (const m of ["M0001", "M0002"]) {
+      await r.b.activate(m);
+      for (const t of SUITE1) got.push(await r.b.run(t, OPTS));
+    }
+    expect(r.serve.requests.length).toBe(n0); // all four came from the one prefetch request
+    expect(got.map((v) => v.measuredDurationMs)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const ids = new Set(got.map((v) => v.callId));
+    expect(ids.size).toBe(1);
+    const [id] = [...ids];
+    expect(typeof id).toBe("string");
+    const baseIds = new Set(base.map((v) => v.callId));
+    expect(baseIds.size).toBe(1);
+    expect(baseIds.has(id)).toBe(false);
   });
 });
 
@@ -2021,7 +2107,21 @@ describe("12: the stop is the daemon's S", () => {
     expect(argv.slice(0, 2)).toEqual([resolve("/fake/al-runner"), "serve"]);
     expect(argv.join(" ")).toContain("--test-timeout 3");
     expect(argv.join(" ")).toContain(`--package-cache ${r.l.deps}`);
-    expect(argv.join(" ")).toContain("--bc-version 28.0.46665.47126 --no-download");
+    expect(argv.join(" ")).toContain(
+      "--bc-version 28.0.46665.47126 --environment saas --no-download",
+    );
+  });
+
+  test("R954: useMutantStop makes S ceil(ms/1000) even when the baseline timeout is larger, and a daemon started under the old stop is replaced", async () => {
+    const r = await readyRig({ floor: [1000, 120_000], mutants: ["M0001"] });
+    expect(r.b.inRunStopMs).toBe(120_000); // before: max(floor, baseline timeout)
+    expect(r.serve.daemons).toHaveLength(1);
+    expect((r.serve.daemons[0] ?? []).join(" ")).toContain("--test-timeout 120");
+    r.b.useMutantStop(60_500);
+    expect(r.b.inRunStopMs).toBe(61_000);
+    await r.b.prefetchMutants(plans(["M0002"]));
+    expect(r.serve.daemons).toHaveLength(2);
+    expect((r.serve.daemons[1] ?? []).join(" ")).toContain("--test-timeout 61");
   });
 
   test("a daemon start before useMutantBudgetFloor throws; no daemon is spawned", async () => {
@@ -2468,6 +2568,7 @@ describe("the CLI threads the option through (wiring)", () => {
       } as Parameters<typeof buildBackend>[0],
       {
         alRunnerV3: {
+          environment: "saas", // R938
           packagesDir: deps,
           bcVersion: "28.0.46665.47126",
           alcPath: "/fake/alc",
@@ -2693,6 +2794,8 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "C",
       "S1",
       "S1E",
+      "DB",
+      "DBI",
       "S3",
       "N1",
       "N1E",
@@ -4089,7 +4192,13 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
     expect(r.serve.daemons).toHaveLength(2); // the warm-up's own daemon, as before
     // R939: the probe's close is counted on the close line, and is routine: never an early close.
     expect([...r.b.daemonCloses().byReason]).toEqual([["probe", 1]]);
-    expect([...V3_ROUTINE_CLOSES].sort()).toEqual(["deploy", "probe", "session-end"]);
+    expect([...V3_ROUTINE_CLOSES].sort()).toEqual([
+      "baseline-end", // R948: the baseline's own daemon
+      "deploy",
+      "mutant-stop",
+      "probe",
+      "session-end",
+    ]);
   });
 
   test("the default transport and an internal caller (no source) never probe", async () => {
@@ -4827,6 +4936,7 @@ describe("R790: the speculative baseline", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,
@@ -4882,7 +4992,9 @@ describe("R790: the speculative baseline", () => {
     // Served, not re-run: no new one-shot call in the baseline; the sequential one made its call there.
     expect(spec.one.calls).toHaveLength(1);
     expect(seq.one.calls).toHaveLength(1);
-    const plain = (vs: TestVerdict[]) => vs.map((v) => ({ ...v, durationMs: 0 }));
+    // R963: `callId` is a fresh identity per call, so it differs between two runs by design.
+    const plain = (vs: TestVerdict[]) =>
+      vs.map((v) => ({ ...v, durationMs: 0, callId: undefined }));
     expect(plain(a)).toEqual(plain(s));
   });
 
@@ -4977,6 +5089,7 @@ describe("R790: the speculative baseline", () => {
     const b = new AlRunnerV3Backend(
       {
         alRunnerPath: "/fake/al-runner",
+        environmentChoice: { value: "saas", source: "config" },
         instrumentedDir: l.scratch,
         testDir: l.testDir,
         packagesDir: l.deps,
@@ -6302,3 +6415,596 @@ describe("R896: isolation auto, per codeunit", () => {
     expect(serve.b.isolationOf(CU)).toBe("method");
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// R948: the baseline through ONE serve daemon, per-test requests for `method` codeunits, the
+// cross-check against fresh processes, and the memory guard. Call counters, never the clock.
+// ---------------------------------------------------------------------------------------------
+const CU3 = 79102;
+SUITE_METHODS[CU3] = ["D"];
+const SUITE3 = [ref("A"), ref("B"), ref("C", CU2), ref("D", CU3)];
+const GIB = 2 ** 30;
+
+/** A rig with the daemon baseline on, a baseline stop (2 s) that differs from the mutant phase's (5 s), and coverage on both transports. */
+function dbRig(o: RigOpts = {}): Promise<Rig> {
+  return rig({
+    suite: SUITE3,
+    floor: [5000, 2000],
+    oneShotCoverage: plainCoverage,
+    ...o,
+    serve: { coverage: plainCoverage, ...(o.serve ?? {}) },
+    extra: { daemonBaseline: true, ...(o.extra ?? {}) },
+  });
+}
+const oneShotCodeunits = (r: Rig) => r.one.calls.map((c) => c[c.indexOf("--codeunit") + 1] ?? "?");
+const dropNotice = (seen: readonly [string, string][]) =>
+  seen.filter(([c]) => c === "al-runner-v3-baseline-daemon-dropped");
+
+describe("R948 A: the baseline through one daemon", () => {
+  test("one daemon answers every codeunit at the baseline's stop; the first and the last are cross-checked one-shot; the middle one is served from the daemon; the daemon is closed before the mutant phase's own", async () => {
+    const r = await dbRig();
+    const v = await baseline(r.b, SUITE3);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(r.serve.requests.map((q) => q.ids[0])).toEqual([
+      `plain:Codeunit${CU}.`,
+      `plain:Codeunit${CU2}.`,
+      `plain:Codeunit${CU3}.`,
+    ]);
+    expect(new Set(r.serve.requests.map((q) => q.daemon))).toEqual(new Set([0]));
+    expect(r.serve.daemons[0]?.join(" ")).toContain("--test-timeout 1");
+    for (const q of r.serve.requests) expect(q.body.coverage).toBe(true);
+    // (the baseline call's own timeout, OPTS' 1000 ms, not the mutant phase's 5 s)
+    // The sample: the 2nd (CU2) and the last (CU3), one process each; never index 0, so CU came from
+    // the daemon alone.
+    expect(oneShotCodeunits(r)).toEqual([String(CU2), String(CU3)]);
+    expect(r.b.daemonBaselineReport()).toMatchObject({
+      dropped: undefined,
+      codeunits: 3,
+      requests: 3,
+      sampledCodeunits: [CU2, CU3],
+      compared: 2,
+      served: 1, // CU only: the two sampled ones were answered by their fresh process
+    });
+    expect(r.serve.closes).toHaveLength(1);
+    expect(r.b.daemonCloses().byReason.get("baseline-end")).toBeGreaterThanOrEqual(1);
+    await r.b.prefetchMutants(plans(["M0001"], SUITE3));
+    expect(r.serve.daemons[1]?.join(" ")).toContain("--test-timeout 5");
+  });
+
+  const leakCu2: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((x) =>
+      cu === CU2 && d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+    );
+
+  test("a daemon answer that differs from a fresh process's drops the daemon baseline for the whole session: one-shot for all, one named notice", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite: SUITE2,
+      serve: { rows: leakCu2 },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    const v = await baseline(r.b, SUITE2);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]); // the fresh process's answer stands
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(dropNotice(seen)[0]?.[1]).toContain(`codeunit ${CU2}`);
+    // The sample run (CU2), then every codeunit one-shot: no verdict rests on the daemon.
+    expect(oneShotCodeunits(r)).toEqual([String(CU2), String(CU), String(CU2)]);
+    expect(r.b.daemonBaselineReport().served).toBe(0); // nothing a daemon said was taken
+    const asked = r.serve.requests.length;
+    await baseline(r.b, SUITE2); // a second baseline of the session asks the daemon nothing
+    expect(r.serve.requests).toHaveLength(asked);
+  });
+
+  test("agreement keeps it: the same suite without the leak raises no notice and runs no live process", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({ suite: SUITE2, notify: (c, m) => seen.push([c, m]) });
+    await baseline(r.b, SUITE2);
+    expect(dropNotice(seen)).toHaveLength(0);
+    expect(oneShotCodeunits(r)).toEqual([String(CU2)]); // the sample (the 2nd) only
+  });
+
+  test("order: a leak only the reversed order shows is caught there, and not in the forward order", async () => {
+    const leakCu: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CU && d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    const forward: [string, string][] = [];
+    const f = await dbRig({
+      suite: SUITE2,
+      serve: { rows: leakCu },
+      notify: (c, m) => forward.push([c, m]),
+    });
+    await baseline(f.b, SUITE2);
+    expect(dropNotice(forward)).toHaveLength(0);
+    const reversed: [string, string][] = [];
+    const g = await dbRig({
+      suite: SUITE2,
+      serve: { rows: leakCu },
+      notify: (c, m) => reversed.push([c, m]),
+      seams: { reverseBaselineOrder: true },
+    });
+    await baseline(g.b, SUITE2);
+    expect(dropNotice(reversed)).toHaveLength(1);
+    expect(g.serve.requests[0]?.ids[0]).toBe(`plain:Codeunit${CU2}.`); // CU2 went first
+  });
+
+  test("the fail text is compared (the rows' class alone would not see it)", async () => {
+    const seen: [string, string][] = [];
+    const text: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "C"
+          ? { ...x, status: "fail" as const, message: d >= 0 ? "boom daemon" : "boom" }
+          : x,
+      );
+    const r = await dbRig({
+      suite: SUITE2,
+      serve: { rows: text },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    await baseline(r.b, SUITE2);
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(dropNotice(seen)[0]?.[1]).toContain("fail text");
+  });
+
+  test("the per-test coverage set is compared exactly", async () => {
+    const seen: [string, string][] = [];
+    const other: CoverageFn = (m, cu, a, t) => {
+      const d = plainCoverage(m, cu, a, t) as {
+        perTestCoverage: { coverage: { statements: { line: number; hits: number }[] }[] }[];
+      };
+      const first = d.perTestCoverage[0]?.coverage[0];
+      if (first !== undefined) first.statements = [{ line: 99, hits: 1 }];
+      return d;
+    };
+    const r = await dbRig({
+      suite: SUITE2,
+      oneShotCoverage: other,
+      notify: (c, m) => seen.push([c, m]),
+    });
+    await baseline(r.b, SUITE2);
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(dropNotice(seen)[0]?.[1]).toContain("coverage");
+  });
+
+  test("durations: a codeunit whose daemon duration could move a budget (2 x d >= floor) runs one-shot and its answer stands", async () => {
+    const slowCu: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CU ? { ...x, message: "Test exceeded 3s timeout." } : x,
+      );
+    const r = await dbRig({ serve: { rows: slowCu } });
+    await baseline(r.b, SUITE3);
+    // The two samples, and CU (3000 ms x 2 >= the 5000 ms floor): three processes.
+    expect(oneShotCodeunits(r).sort()).toEqual([String(CU), String(CU2), String(CU3)].sort());
+    // The skip is counted and named, so a gate can tell it from a silent drop.
+    const rep = r.b.daemonBaselineReport();
+    expect(rep.skippedTooSlow).toEqual([`Codeunit${CU}`]);
+    expect([rep.skippedError, rep.skippedOther, rep.sampledSkipped]).toEqual([[], [], []]);
+    expect(rep.served + rep.skippedTooSlow.length).toBe(
+      rep.codeunits - rep.sampledCodeunits.length,
+    );
+  });
+
+  test("a dirty daemon: the row stands, the daemon is closed, the next codeunit starts a fresh one, nothing is re-run", async () => {
+    const hangsC: RowsFn = (m, cu, d, n) =>
+      cu === CU2
+        ? [{ method: "C", status: "error", notRun: true, message: "Test exceeded 2s timeout." }]
+        : allPass(m, cu, d, n);
+    const r = await dbRig({ serve: { rows: hangsC } });
+    const v = await baseline(r.b, SUITE3);
+    expect(v[2]?.outcome).not.toBe("pass"); // C's timeout row is kept as the baseline's row
+    expect(r.serve.requests.map((q) => q.ids[0])).toEqual([
+      `plain:Codeunit${CU}.`,
+      `plain:Codeunit${CU2}.`,
+      `plain:Codeunit${CU3}.`,
+    ]);
+    expect(r.serve.requests.map((q) => q.daemon)).toEqual([0, 0, 1]); // restarted after C
+    expect(r.b.daemonCloses().byReason.get("timeout")).toBe(1);
+  });
+
+  test("R955: a spent budget starts no further request; a signal drops the call it ended", async () => {
+    let rr: Rig | undefined;
+    const asked = () => rr?.serve.requests.length ?? 0;
+    const spentAfterTwo = await dbRig({
+      stopHandle: { spent: () => asked() >= 2, signalled: () => false, stopForMemory: () => {} },
+    });
+    rr = spentAfterTwo;
+    await baseline(spentAfterTwo.b, SUITE3);
+    expect(spentAfterTwo.serve.requests).toHaveLength(2); // CU3 never asked
+    // CU from the daemon, CU2 (sample) one-shot; CU3 runs live: two processes.
+    expect(oneShotCodeunits(spentAfterTwo)).toHaveLength(2);
+
+    const signalled = await dbRig({
+      stopHandle: {
+        spent: () => asked() >= 1,
+        signalled: () => asked() >= 1,
+        stopForMemory: () => {},
+      },
+    });
+    rr = signalled;
+    await baseline(signalled.b, SUITE3);
+    expect(signalled.serve.requests).toHaveLength(1);
+    // The first request's call is dropped, nothing is kept: all three codeunits run live.
+    expect(oneShotCodeunits(signalled)).toHaveLength(3);
+  });
+});
+
+describe("R948 B: `method` codeunits as per-test requests", () => {
+  const methodRig = (o: RigOpts = {}) =>
+    dbRig({ suite: SUITE2, extra: { isolation: "method" }, ...o });
+
+  test("every test is one request to ONE codeunit-isolation daemon; no process is started", async () => {
+    const r = await methodRig();
+    const v = await baseline(r.b, SUITE2);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]);
+    // Only the cross-check's sample (the 2nd test and the last, B and C) runs as a process.
+    expect(r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1))).toEqual([
+      "B",
+      "C",
+    ]);
+    expect(r.serve.requests).toHaveLength(3);
+    for (const q of r.serve.requests) {
+      expect(q.body.testIsolation).toBe("codeunit");
+      expect(q.body.runSelectedOnly).toBe(true);
+      expect(q.body.coverage).toBe(true);
+      expect(q.daemon).toBe(0);
+    }
+    expect(r.serve.daemons[0]?.join(" ")).toContain("--test-timeout 1");
+    expect(r.serve.closes).toHaveLength(1); // closed when the baseline ended, before any mutant daemon
+  });
+
+  test("an answer that is not exactly that test's row, run, falls back to the test alone one-shot", async () => {
+    const refusedA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "A" && d >= 0
+          ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
+          : x,
+      );
+    const r = await methodRig({ serve: { rows: refusedA } });
+    const v = await baseline(r.b, SUITE2);
+    expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
+    // A alone one-shot (the daemon's answer was a refusal), plus the sample's B and C.
+    const asked = r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1));
+    expect(asked.sort()).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("R948 C: the memory guard", () => {
+  const sampleOf = (usedBytes: number, source = "/sys/fs/cgroup/memory.max") => ({
+    usedBytes,
+    maxBytes: 32 * GIB,
+    source,
+  });
+  const guarded = (
+    used: () => number,
+    o: RigOpts & { polls?: number } = {},
+  ): Promise<
+    Rig & {
+      sleeps: number[];
+      stops: { usedBytes: number; boundBytes: number; source: string }[];
+      seen: [string, string][];
+    }
+  > => {
+    const sleeps: number[] = [];
+    const stops: { usedBytes: number; boundBytes: number; source: string }[] = [];
+    const seen: [string, string][] = [];
+    return rig({
+      ...o,
+      extra: { memoryHeadroomGb: 4, ...(o.extra ?? {}) },
+      notify: (c, m) => seen.push([c, m]),
+      stopHandle: {
+        spent: () => false,
+        signalled: () => false,
+        stopForMemory: (i) => stops.push(i),
+      },
+      seams: {
+        memoryReader: () => sampleOf(used()),
+        memorySleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        memoryWaitPolls: o.polls ?? 2,
+        ...(o.seams ?? {}),
+      },
+    }).then((r) => ({ ...r, sleeps, stops, seen }));
+  };
+
+  test("the first line names the bound and its source", async () => {
+    const r = await guarded(() => GIB);
+    const line = r.seen.find(([c]) => c === "al-runner-v3-memory-guard")?.[1] ?? "";
+    expect(line).toContain("28.0 GiB");
+    expect(line).toContain("/sys/fs/cgroup/memory.max");
+    expect(line).toContain("32.0 GiB");
+    expect(line).toContain("4 GiB headroom");
+  });
+
+  test("no readable cgroup: the guard says it is off, by name, and the run goes on", async () => {
+    const seen: [string, string][] = [];
+    const r = await rig({
+      extra: { memoryHeadroomGb: 4 },
+      notify: (c, m) => seen.push([c, m]),
+      seams: { memoryReader: () => undefined },
+    });
+    const off = seen.find(([c]) => c === "al-runner-v3-memory-guard-off")?.[1] ?? "";
+    expect(off).toContain("no cgroup");
+    expect((await baseline(r.b, SUITE1)).map((v) => v.outcome)).toEqual(["pass", "pass"]);
+  });
+
+  test("over the bound for good: no call starts, the baseline call is dropped (a failure row, nothing stored), and the session is stopped once through the handle", async () => {
+    const r = await guarded(() => 30 * GIB);
+    const a = await baselineOne(r.b, ref("A"));
+    expect(a.outcome).toBe("error");
+    expect(a.failureMessage).toContain("al-runner-v3-memory-bound");
+    expect(r.one.calls).toHaveLength(0);
+    expect(r.stops).toEqual([
+      { usedBytes: 30 * GIB, boundBytes: 28 * GIB, source: "/sys/fs/cgroup/memory.max" },
+    ]);
+    expect(r.sleeps).toHaveLength(2); // it waited through its two polls first
+    const b = await baselineOne(r.b, ref("B")); // later calls are refused at once
+    expect(b.outcome).toBe("error");
+    expect([r.sleeps.length, r.stops.length, r.one.calls.length]).toEqual([2, 1, 0]);
+  });
+
+  test("a bound that clears while it waits is no stop: the call runs", async () => {
+    let reads = 0;
+    const r = await guarded(() => (++reads === 1 ? GIB : reads <= 3 ? 30 * GIB : GIB), {
+      polls: 5,
+    });
+    const a = await baselineOne(r.b, ref("A"));
+    expect(a.outcome).toBe("pass");
+    expect(r.sleeps).toHaveLength(2);
+    expect(r.stops).toHaveLength(0);
+    expect(r.one.calls).toHaveLength(1);
+  });
+
+  test("with no stop handle the guard throws by name", async () => {
+    const r = await rig({
+      extra: { memoryHeadroomGb: 4 },
+      seams: {
+        memoryReader: (() => {
+          let n = 0;
+          return () => sampleOf(++n === 1 ? GIB : 30 * GIB);
+        })(),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+      },
+    });
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow(/al-runner-v3-memory-bound/);
+  });
+
+  test("a daemon baseline stops asking at the bound: what was answered stands, the rest is dropped, one stop", async () => {
+    let reads = 0;
+    const r = await guarded(() => (++reads <= 3 ? GIB : 30 * GIB), {
+      suite: SUITE2,
+      floor: [5000, 2000],
+      oneShotCoverage: plainCoverage,
+      serve: { coverage: plainCoverage },
+      extra: { daemonBaseline: true },
+      polls: 1,
+    });
+    const v: TestVerdict[] = [];
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    for (const t of SUITE2) v.push(await r.b.run(t, OPTS));
+    r.b.baselinePhase(false);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "error"]); // C was never started
+    expect(v[2]?.failureMessage).toContain("memory-bound");
+    expect(r.serve.requests).toHaveLength(2); // CU, then CU2, whose cross-check was blocked
+    expect(oneShotCodeunits(r)).toEqual([]); // no process started over the bound
+    expect(r.stops).toHaveLength(1);
+  });
+
+  test("a group start asks the guard: under the bound it may start; over it for good it waits, stops the session once, and is told no, now and after", async () => {
+    let used = GIB;
+    const r = await guarded(() => used, { polls: 1 });
+    await baseline(r.b, SUITE1);
+    expect(await r.b.mayStartGroup()).toBe(true);
+    used = 30 * GIB;
+    expect(await r.b.mayStartGroup()).toBe(false);
+    expect(r.stops).toHaveLength(1);
+    expect(r.sleeps).toHaveLength(1);
+    expect(await r.b.mayStartGroup()).toBe(false); // at once, nothing more is waited or reported
+    expect([r.stops.length, r.sleeps.length]).toEqual([1, 1]);
+  });
+
+  test("activate itself neither waits nor stops: the question is asked before it, so a refused group is never activated", async () => {
+    let used = GIB;
+    const r = await guarded(() => used, { polls: 1 });
+    await baseline(r.b, SUITE1);
+    used = 30 * GIB;
+    await r.b.activate("M0001");
+    expect([r.stops.length, r.sleeps.length]).toEqual([0, 0]);
+  });
+
+  test("callers take turns and each one that holds counts an estimated cost: two at 26 of 28 GiB do not both pass", async () => {
+    const r = await guarded(() => 26 * GIB, { polls: 1, seams: { memoryEstimateBytes: 3 * GIB } });
+    const gate = (h: boolean) =>
+      (r.b as unknown as { memoryGate(h: boolean): Promise<boolean> }).memoryGate(h);
+    const release = () => (r.b as unknown as { memoryRelease(): void }).memoryRelease();
+    const [a, b] = await Promise.all([gate(true), gate(true)]);
+    expect([a, b]).toEqual([true, false]); // the second sees the first's 3 GiB on top of 26
+    expect(r.stops).toHaveLength(1);
+    // (the first still holds; the session is stopped, so every later gate says no)
+    expect(await gate(true)).toBe(false);
+    release();
+  });
+
+  test("a released reservation is not counted again", async () => {
+    const r = await guarded(() => 26 * GIB, { polls: 1, seams: { memoryEstimateBytes: 3 * GIB } });
+    const gate = (h: boolean) =>
+      (r.b as unknown as { memoryGate(h: boolean): Promise<boolean> }).memoryGate(h);
+    const release = () => (r.b as unknown as { memoryRelease(): void }).memoryRelease();
+    expect(await gate(true)).toBe(true);
+    release();
+    expect(await gate(true)).toBe(true);
+    expect(r.stops).toHaveLength(0);
+  });
+
+  test("before it waits the guard closes the baseline's daemon (it holds 2-3 GB)", async () => {
+    let reads = 0;
+    let closesAtFirstSleep = -1;
+    const held: { rig?: Rig } = {};
+    const r = await guarded(() => (++reads <= 2 ? GIB : 30 * GIB), {
+      suite: SUITE2,
+      floor: [5000, 2000],
+      oneShotCoverage: plainCoverage,
+      serve: { coverage: plainCoverage },
+      extra: { daemonBaseline: true },
+      polls: 1,
+      seams: {
+        memorySleep: async () => {
+          if (closesAtFirstSleep < 0) closesAtFirstSleep = held.rig?.serve.closes.length ?? -2;
+        },
+      },
+    });
+    held.rig = r;
+    await baselineOne(r.b, ref("A"));
+    // CU's request ran on daemon 0; the gate for CU2 found the bound passed and closed it first.
+    expect(closesAtFirstSleep).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("R948 ordering and the per-test cross-check", () => {
+  test("a per-test call that comes FIRST (batch 2 under auto) still waits for the whole-codeunit fill and its cross-check, which can drop the daemon baseline before anything is served", async () => {
+    const seen: [string, string][] = [];
+    const leakCu2: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CU2 && d >= 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    // CU is the `method` codeunit; CU2 a whole-codeunit one whose daemon answer leaks (sampled: the 2nd).
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolation: "auto" },
+      serve: { rows: leakCu2 },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    (r.b as unknown as { chooseIsolation(cu: number, m: "method"): void }).chooseIsolation(
+      CU,
+      "method",
+    );
+    // Only CU's per-test call is made first; no daemon answer for it may be served before the check.
+    const v = await baselineOne(r.b, ref("A"));
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(v.outcome).toBe("pass"); // from a one-shot process, not from a served daemon answer
+    expect(r.one.calls.some((c) => c.includes("--test-exact"))).toBe(true);
+  });
+
+  test("under --isolate-tests (every codeunit per-test) the per-test requests have their own cross-check: a difference drops the daemon baseline", async () => {
+    const seen: [string, string][] = [];
+    const leak: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
+      );
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolateTests: true },
+      serve: { rows: leak },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    const v = await baseline(r.b, SUITE2);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass"]); // the fresh processes' answers
+    expect(dropNotice(seen)).toHaveLength(1);
+    expect(r.b.daemonBaselineReport().sampledPerTest).toEqual([1, 2]);
+  });
+
+  test("--isolate-tests: per-test requests agree with fresh processes: the daemon baseline stays, in test isolation with runSelectedOnly", async () => {
+    const seen: [string, string][] = [];
+    const r = await dbRig({
+      suite: SUITE2,
+      extra: { isolateTests: true },
+      notify: (c, m) => seen.push([c, m]),
+    });
+    await baseline(r.b, SUITE2);
+    expect(dropNotice(seen)).toHaveLength(0);
+    for (const q of r.serve.requests) {
+      expect(q.body.testIsolation).toBe("test");
+      expect(q.body.runSelectedOnly).toBe(true);
+    }
+    expect(r.b.daemonBaselineReport()).toMatchObject({
+      perTestRequests: 3,
+      compared: 2,
+      served: 1,
+    });
+  });
+
+  test("a baseline snapshot's lending key names its source: a daemon baseline is tagged, a one-shot one is not", async () => {
+    const on = await dbRig({ suite: SUITE2 });
+    const off = await rig({ suite: SUITE2 });
+    expect(baselineSourceTag(on.b)).toBe(" baseline-daemon");
+    expect(baselineSourceTag(off.b)).toBe("");
+    const run = (runnerBuild: string) => ({ id: 1, backend: "al-runner-v3", runnerBuild });
+    const lend = (tagRun: string, tagSession: string) =>
+      backendBuildRefusal(run(`v3 sha${tagRun}`), {
+        backend: "al-runner-v3",
+        runnerBuild: `v3 sha${tagSession}`,
+      });
+    expect(lend(" baseline-daemon", "")).toContain("only to the same build"); // daemon snapshot, one-shot session
+    expect(lend("", " baseline-daemon")).toContain("only to the same build"); // and the other way
+    expect(lend(" baseline-daemon", " baseline-daemon")).toBeUndefined();
+    expect(lend("", "")).toBeUndefined();
+  });
+});
+
+describe("R948: a throw after the memory hold gives the hold back", () => {
+  const held = (b: AlRunnerV3Backend) => (b as unknown as { memoryHeld: number }).memoryHeld;
+  const guard = {
+    memoryHeadroomGb: 4,
+    seams: {
+      memoryReader: () => ({
+        usedBytes: GIB,
+        maxBytes: 32 * GIB,
+        source: "/sys/fs/cgroup/memory.max",
+      }),
+    },
+  };
+
+  test("the bound check inside a fill (a tampered batch) throws; nothing stays held", async () => {
+    const r = await dbRig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    await writeFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "codeunit 79000 Other { }");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
+  });
+
+  test("the one-shot cross-check failing before its spawn (its coverage file cannot be removed) releases its hold", async () => {
+    const r = await dbRig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    // The first call takes call-1; the fill's own process takes call-2, whose path is a folder
+    // with a file in it, so removing it throws after the hold was taken.
+    const blocked = join(r.l.scratch, "cov", "call-2.json");
+    await mkdir(blocked, { recursive: true });
+    await writeFile(join(blocked, "x"), "x");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
+  });
+
+  test("the process worker: a throw before its spawn releases its hold", async () => {
+    const r = await rig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { isolateTests: true, memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    // The first call takes call-1; the fill's own process takes call-2, whose path is a folder
+    // with a file in it, so removing it throws after the hold was taken.
+    const blocked = join(r.l.scratch, "cov", "call-2.json");
+    await mkdir(blocked, { recursive: true });
+    await writeFile(join(blocked, "x"), "x");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
+  });
+});
+
+/** One baseline call inside its bracket (the orchestrator's `baselinePhase` and null activation). */
+async function baselineOne(b: AlRunnerV3Backend, t: TestMethodRef): Promise<TestVerdict> {
+  b.baselinePhase(true);
+  try {
+    await b.activate(null);
+    return await b.run(t, OPTS);
+  } finally {
+    await b.baselinePhase(false);
+  }
+}

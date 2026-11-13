@@ -555,6 +555,21 @@ export type RunEventInput =
       readonly budgetSeconds: number;
       readonly unscheduledCount: number;
       readonly batchesNotStarted: number;
+      /** R955: present when the budget ran out inside a baseline: its tests run and total. */
+      readonly baselineStopped?: {
+        readonly testsRun: number;
+        readonly testsTotal: number;
+        /** R955: the budget ran out in the auto isolation's per-test re-baseline, after every test ran once. */
+        readonly inAutoRebaseline?: true;
+      };
+      /** R955: present when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is then the budget given, or 0 for none). */
+      readonly stoppedBySignal?: true;
+      /** R948: present when the memory guard stopped the session: bytes in use, the bound, the cgroup file the limit came from. */
+      readonly stoppedByMemory?: {
+        readonly usedBytes: number;
+        readonly boundBytes: number;
+        readonly source: string;
+      };
     }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 
