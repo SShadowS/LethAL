@@ -12551,10 +12551,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
           // which must therefore read the budget the timed-out run was SENT (`budget`), never a
           // recomputed one (R516 M2): recomputed now, it would already include this measurement.
-          // R963: only the test's OWN time. `durationMs` is the call's wall, which in a batched
-          // confirm holds the hung entries too; unknown raises nothing.
-          if (timedOut && confirm.measuredDurationMs !== undefined)
-            noteMeasured(ref, confirm.measuredDurationMs, m.mutantId);
+          // R963: stays the call's WALL (compile included, which the budget is checked against).
+          // It runs only where `inRunStopIsBudget` (bcdev, v3 one-shot: a confirm is one test's
+          // call); on serve-entries, where a batched wall could be shared, `noteMeasured` returns.
+          if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
           // R517: the stop the run really enforced. al-runner reports it on its timeout row;
           // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
           // bcdev reports none and declares none: the stop is the budget, as before.

@@ -4998,8 +4998,7 @@ class ClockBackend extends CountingBackend {
       const { attestation: _, measuredDurationMs: __, ...rest } = v;
       return { ...rest, outcome: "timeout", durationMs: opts.timeoutMs };
     }
-    // R963: bcdev's shape: one call per test, so the call's wall IS the test's own time.
-    return { ...v, durationMs: ms, measuredDurationMs: ms };
+    return { ...v, durationMs: ms };
   }
   private async many(opts: RunManyOpts): Promise<RunManyResult> {
     const verdicts: TestVerdict[] = [];
@@ -5454,14 +5453,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       const scripted = s.confirmMs?.[confirms];
       confirms += 1;
       const v = await inner(ref, o);
-      if (scripted === undefined || v.outcome !== "pass") return v;
-      // R963: on bcdev's shape the call's wall IS the test's own time, so the script moves both; on
-      // al-runner's shapes only the wall moves (the own figure is the body's).
-      return {
-        ...v,
-        durationMs: scripted,
-        ...(v.measuredDurationMs === v.durationMs ? { measuredDurationMs: scripted } : {}),
-      };
+      return scripted === undefined || v.outcome !== "pass" ? v : { ...v, durationMs: scripted };
     };
     return b;
   }
@@ -5663,35 +5655,25 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(slowBudgetsInOrder(today)).toEqual([8_000, 8_200, 8_200]);
   });
 
-  /** R963: BSlow hung under every mutant; each confirm's call wall is 620 s and it has an own time
-   *  (bcdev's shape: measured = wall) or, `ownTime: false`, none (a batched call's row). */
-  async function batchWallConfirm(ownTime: boolean) {
+  /** R963: BSlow hung under every mutant; each confirm's call wall is 620 s. `inRunStopIsBudget`
+   *  false is the serve-entries shape, where a batched call's wall is shared by its rows. */
+  async function wallConfirm(inRunStopIsBudget: boolean) {
     const dirs = await twoTestProject(false);
     const store = new ResultsStore(":memory:");
-    const today = scriptBSlow(new ClockBackend(4_000, { mutatedMs: Number.POSITIVE_INFINITY }), {
-      confirmMs: [620_000, 620_000, 620_000],
-    });
-    if (!ownTime) {
-      const inner = today.run.bind(today);
-      today.run = async (ref, o) => {
-        const v = await inner(ref, o);
-        if (ref.method !== "BSlow" || today.active !== null || today.mutantRuns === 0) return v;
-        const { measuredDurationMs: _, ...rest } = v;
-        return rest;
-      };
-    }
-    const report = await runSession({ ...opts(store, dirs), backend: today });
-    return { report, today };
+    const today = scriptBSlow(
+      new ClockBackend(4_000, { mutatedMs: Number.POSITIVE_INFINITY, inRunStopIsBudget }),
+      { confirmMs: [620_000, 620_000, 620_000] },
+    );
+    await runSession({ ...opts(store, dirs), backend: today });
+    return today;
   }
 
-  test("R963: a confirmation with a 620 s call wall and no own time does NOT raise the test's budget", async () => {
-    const { today } = await batchWallConfirm(false);
-    expect(slowBudgetsInOrder(today)).toEqual([8_000, 8_000, 8_000]);
+  test("R963: on serve (the in-run stop is not the budget) a 620 s call wall raises no budget", async () => {
+    expect(slowBudgetsInOrder(await wallConfirm(false))).toEqual([8_000, 8_000, 8_000]);
   });
 
-  test("R963: the same confirmation WITH an own time does raise it (bcdev: measured = wall)", async () => {
-    const { today } = await batchWallConfirm(true);
-    expect(slowBudgetsInOrder(today)).toEqual([8_000, 1_240_000, 1_240_000]);
+  test("R963: where the in-run stop IS the budget (bcdev, v3 one-shot) the confirm's wall still raises it, as before", async () => {
+    expect(slowBudgetsInOrder(await wallConfirm(true))).toEqual([8_000, 1_240_000, 1_240_000]);
   });
 
   test("R515 H: a confirm faster than the baseline never lowers a budget below twice the baseline", async () => {
@@ -6035,9 +6017,8 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       mutantTimeoutMs: 120_000,
       backend: today,
     });
-    // R963: R515 re-budgets from the confirm's OWN time only (the 1 s body); its 66 s wall (compile
-    // included) raises nothing, so the budget stays the 120 s floor.
-    expect(slowBudgetsInOrder(today)).toEqual([120_000, 120_000, 120_000]);
+    // R515 then re-budgets from the confirm's wall clock (2 x 66 s), the safe direction.
+    expect(slowBudgetsInOrder(today)).toEqual([120_000, 132_000, 132_000]);
     const scored = scoredOf(report, 0);
     expect(scored.length).toBeGreaterThan(0);
     for (const m of scored) {
@@ -6055,13 +6036,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
       { baselineMs: 1_300 },
     );
     const report = await runSession({ ...opts(store, dirs), backend: today });
-    // R963: R515's raise now reads the confirm's OWN time (the 1500 ms body), not its 1800 ms wall
-    // (compile included): the budget the later mutants are sent is 3000, not 3600. Their 3500 ms
-    // body then times out at the 3 s stop and is confirmed (2 x 1500 <= 3000): kills, as the 2x rule says.
-    expect(falseKills(report, 0).map((m) => m.verdict)).toEqual([
-      "timeout-killed",
-      "timeout-killed",
-    ]);
+    expect(falseKills(report, 0)).toEqual([]);
     const [first] = scoredOf(report, 0);
     expect([first?.verdict, first?.cause]).toEqual(["error", "timeout-unconfirmed"]);
     expect(first?.failureNote).toContain(
