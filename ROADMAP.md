@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 921 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 923 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -363,6 +363,7 @@ that ordering is the priority.
 - **R928** · R500 ignores an XMLport element's `MaxOccurs = Once`, so an export XMLport whose outer `Integer` element wraps its code is refused whole: PEPPOL loses 629 of its 1,072 refused XMLport sites to it · [R928.md](docs/roadmap/R928.md) · done (d5eb16ff)
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
 - **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · done (285ba3f9)
+- **R963** · A v3 test row with no duration of its own is stored with the whole call's wall time as if it were the test's: a kill confirmation in a batch with a hung entry reads 620 s for a test that takes 8 ms · [R963.md](docs/roadmap/R963.md) · done (240d2c1b)
 
 ## Product gaps a real project hits
 
@@ -965,7 +966,8 @@ that ordering is the priority.
 - **R958** · Under `--isolate-tests`, a stop signal does not stop the parallel isolated-baseline fill: the workers keep starting one process per remaining test until the suite is done · [R958.md](docs/roadmap/R958.md) · open
 - **R959** · `--resume-run` refuses after a host reboot (server generation changed), so a user redid 589 decided mutants, although a reboot of a container with a persistent database usually keeps the apps and data the verdicts were measured against · [R959.md](docs/roadmap/R959.md) · open
 - **R960** · On the default transport, a serve warm-up that refuses the whole batch (`entries-batch-refused`) stops the session after its baseline instead of falling back to one-shot · [R960.md](docs/roadmap/R960.md) · open
-- **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · open
+- **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · done (2596b7fe)
+- **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 
 ---
 

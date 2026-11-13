@@ -1552,6 +1552,26 @@
         },
         "stoppedBySignal": {
           "const": true
+        },
+        "stoppedByMemory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "usedBytes",
+            "boundBytes",
+            "source"
+          ],
+          "properties": {
+            "usedBytes": {
+              "type": "number"
+            },
+            "boundBytes": {
+              "type": "number"
+            },
+            "source": {
+              "type": "string"
+            }
+          }
         }
       }
     },

@@ -236,6 +236,11 @@ export interface FoldedReport {
       readonly inAutoRebaseline?: true;
     };
     readonly stoppedBySignal?: true;
+    readonly stoppedByMemory?: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    };
   };
   readonly permissionCanary?: PermissionCanaryResult;
   /** R896 — see `SessionReport.isolation`. */
@@ -436,6 +441,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         batchesNotStarted: number;
         baselineStopped?: { testsRun: number; testsTotal: number; inAutoRebaseline?: true };
         stoppedBySignal?: true;
+        stoppedByMemory?: { usedBytes: number; boundBytes: number; source: string };
       }
     | undefined;
   let permissionCanary: PermissionCanaryResult | undefined;
@@ -537,6 +543,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           batchesNotStarted: e.batchesNotStarted,
           ...(e.baselineStopped !== undefined ? { baselineStopped: e.baselineStopped } : {}),
           ...(e.stoppedBySignal === true ? { stoppedBySignal: true as const } : {}),
+          ...(e.stoppedByMemory !== undefined ? { stoppedByMemory: e.stoppedByMemory } : {}),
         };
         break;
       case "session-finished":

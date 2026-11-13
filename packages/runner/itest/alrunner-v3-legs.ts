@@ -408,6 +408,71 @@ const UNKNOWN_ENTRIES_FIELD = 'the request was refused: "unknown field `entries`
 /** R761: S1's project under serve-entries (`legS1E`); serve by construction, whatever the run's transport. */
 export const V3_S1E_LEG = "S1E";
 
+/**
+ * R948: S1E with the baseline through one serve daemon (`daemonBaseline`) and the memory guard on at
+ * its default headroom, per mutant equal to the same frozen table S1E reads (`bcdev.baseline.json`),
+ * the same serve counters, and the daemon baseline asserted USED (not dropped) with its cross-check
+ * sample run and compared. Serve by construction. Not in `V3_GATE_LEGS` (a build gated before this
+ * leg stays gated); every gate runs it from now on. Only the CLI sets `daemonBaseline`, so without
+ * this leg no gate would run the path users get.
+ */
+export const V3_DB_LEG = "DB";
+
+/** R948: leg ISO's session under `--isolate-tests` with the daemon baseline and the memory guard on (the per-test path). */
+export const V3_DBI_LEG = "DBI";
+
+/** What `AlRunnerV3Backend.daemonBaselineReport()` says, as far as the legs read it. */
+export interface DaemonBaselineFacts {
+  readonly served: number;
+  readonly compared: number;
+  readonly skippedTooSlow: readonly string[];
+  readonly skippedError: readonly string[];
+  readonly skippedOther: readonly string[];
+  readonly sampledSkipped: readonly string[];
+}
+
+/**
+ * R948 (legs DB and DBI): every expected daemon answer is either taken or SKIPPED BY NAME (too slow for
+ * a warm duration, a request error, a refusal), and every sampled item is compared or skipped by
+ * name. A skip is reported in `notes`, never a failure, so a loaded container cannot BLOCK the gate by
+ * itself; a silent all-drop (nothing taken, nothing named) still fails. `expected` = items less the sample.
+ */
+export function judgeDaemonBaseline(
+  leg: string,
+  d: DaemonBaselineFacts,
+  expected: number,
+  sampled: number,
+): { readonly fail?: string; readonly notes: readonly string[] } {
+  const skipped = d.skippedTooSlow.length + d.skippedError.length + d.skippedOther.length;
+  const notes = [
+    ...(d.skippedTooSlow.length > 0
+      ? [`${leg}: skipped, too slow: ${d.skippedTooSlow.join(", ")}`]
+      : []),
+    ...(d.skippedError.length > 0
+      ? [`${leg}: skipped, request error: ${d.skippedError.join(", ")}`]
+      : []),
+    ...(d.skippedOther.length > 0
+      ? [`${leg}: skipped, refused or odd row: ${d.skippedOther.join(", ")}`]
+      : []),
+    ...(d.sampledSkipped.length > 0
+      ? [`${leg}: sample skipped: ${d.sampledSkipped.join(", ")}`]
+      : []),
+  ];
+  if (d.compared + d.sampledSkipped.length !== sampled) {
+    return {
+      fail: `${leg}: ${d.compared} sampled compared and ${d.sampledSkipped.length} skipped by name, pre-committed ${sampled} in all`,
+      notes,
+    };
+  }
+  if (d.served + skipped !== expected) {
+    return {
+      fail: `${leg}: ${d.served} daemon answers taken and ${skipped} skipped by name, pre-committed ${expected} in all (a silent drop is not a skip)`,
+      notes,
+    };
+  }
+  return { notes };
+}
+
 /** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
 export function isNoServeRefusal(version: string, threw: string): boolean {
   return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);
@@ -487,6 +552,8 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "C",
     "S1",
     V3_S1E_LEG,
+    V3_DB_LEG, // R948: not in V3_GATE_LEGS, as ISO is not
+    V3_DBI_LEG, // R948: the per-test path, likewise
     "S3",
     "N1",
     V3_N1E_LEG,
@@ -846,13 +913,17 @@ export function judgeLegK(f: LegKFacts): string[] {
   if (f.coverage !== "al-runner")
     out.push(`K: coverage ${JSON.stringify(f.coverage)} by default, pre-committed "al-runner"`);
   // R761 (pre-commitment master a86927e1): the default is serve-entries where proven, and K's
-  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves: one daemon, and
-  // one one-shot call (the baseline, which serve-entries keeps one-shot).
+  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves. R948 (pre-commitment
+  // amendment 3, master bf8a68cf): cli.ts runs the baseline through its own daemon, so two daemons
+  // (the baseline's and the mutant phase's), and the one one-shot call is now the cross-check sample of
+  // K's single test codeunit, no longer the baseline.
   if (f.inRunStopIsBudget !== false)
     out.push("K: the default transport is not serve-entries (inRunStopIsBudget is not false)");
-  if (f.serveSpawns !== 1) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 1`);
+  if (f.serveSpawns !== 2) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 2`);
   if (f.oneShotTestCalls !== 1)
-    out.push(`K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the baseline)`);
+    out.push(
+      `K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the daemon baseline's cross-check sample)`,
+    );
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
   if (f.noCoverageFiles.length !== 5 || off.length > 0)
