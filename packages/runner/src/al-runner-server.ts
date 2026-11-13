@@ -112,6 +112,8 @@ export interface ServerProcessHandle {
   readonly stdout: AsyncIterable<Uint8Array>;
   readonly stderr: AsyncIterable<Uint8Array>;
   kill(): void;
+  /** R952: the child's pid, for the daemon memory guard's RSS read. Absent in a fake. */
+  readonly pid?: number;
   /**
    * Resolves when the child has actually EXITED, awaited by `close()`.
    *
@@ -278,6 +280,10 @@ const SHUTDOWN_REPLY_WAIT_MS = 500;
 
 export class AlRunnerServer {
   private proc: ServerProcessHandle | undefined;
+  /** R952: the running child's pid (undefined before `start` or in a fake without one). */
+  get pid(): number | undefined {
+    return this.proc?.pid;
+  }
   private stdout: LineReader | undefined;
   private stderrText = "";
   private stderrPump: Promise<void> | undefined;
@@ -630,6 +636,7 @@ export const defaultServerSpawn: ServerSpawnFn = (argv, opts) => {
     stdout: proc.stdout as unknown as AsyncIterable<Uint8Array>,
     stderr: proc.stderr as unknown as AsyncIterable<Uint8Array>,
     kill: () => proc.kill(),
+    pid: proc.pid,
     wait: () => proc.exited,
   };
   return handle;

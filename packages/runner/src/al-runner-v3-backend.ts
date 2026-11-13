@@ -79,8 +79,10 @@ import {
   durationCouldMoveBudget,
   memoryBoundBytes,
   readCgroupMemory,
+  readProcessRssBytes,
 } from "./al-runner-v3-baseline-check";
 import {
+  V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
   V3_NO_CLIENT_DEFAULT,
   assertBcVersionMatchesPackages,
@@ -802,6 +804,10 @@ export interface AlRunnerV3Config {
    * Absent: no guard, silently (unit tests). `0`: off by the config, said once. The CLI always sets it.
    */
   readonly memoryHeadroomGb?: number;
+  /** R952 (R948): recycle a serve daemon whose RSS passed this many GiB (`alRunnerV3.daemonMaxRssGb`); 0 = off. Absent: `V3_DAEMON_MAX_RSS_GB_DEFAULT`. */
+  readonly daemonMaxRssGb?: number;
+  /** R952 (R948): recycle a serve daemon after this many requests (`alRunnerV3.daemonMaxRequests`); absent or 0 = off. */
+  readonly daemonMaxRequests?: number;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
@@ -1248,7 +1254,9 @@ export type V3DaemonCloseReason =
   | "deploy"
   | "mutant-stop"
   | "session-end"
-  | "baseline-end";
+  | "baseline-end"
+  /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
+  | "recycle";
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
  *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own. */
@@ -1411,6 +1419,8 @@ interface Daemon {
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
   /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
   baselineStop?: number;
+  /** R952: requests sent to it (warm-up included), for the recycle bound. */
+  requests: number;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -2067,6 +2077,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     afterSpeculation?: () => Promise<void>;
     /** R948: replaces the cgroup reader of the memory guard (tests never read `/sys`). */
     memoryReader?: () => MemorySample | undefined;
+    /** R952: replaces the daemon RSS reader of the recycle bound (tests never read `/proc`). */
+    rssReader?: (pid: number) => number | undefined;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
@@ -5223,13 +5235,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async ensureDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const had = lane.daemonFor(mode);
     // R954: a daemon started under another stop (before `useMutantStop`) is replaced.
-    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) return had;
-    if (had !== undefined) await this.closeLane(lane, "mutant-stop");
+    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) {
+      // R952 (R948): a daemon past its size or request bound is replaced by a fresh one, warmed up and
+      // checked against the baseline like any restarted daemon.
+      if (!this.overRecycleBound(had)) return had;
+      await this.closeLane(lane, "recycle");
+    } else if (had !== undefined) await this.closeLane(lane, "mutant-stop");
     const before = lane.timers.warmupMs;
     const d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
     lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
     lane.daemonStarts += 1;
     return d;
+  }
+
+  /**
+   * R952 (R948): whether `d` is past `alRunnerV3.daemonMaxRequests` (requests sent to it) or
+   * `daemonMaxRssGb` (its process's resident memory). A bound of 0 is off; an RSS that cannot be read
+   * (no /proc) never recycles.
+   */
+  private overRecycleBound(d: Daemon): boolean {
+    const maxRequests = this.cfg.daemonMaxRequests ?? 0;
+    if (maxRequests > 0 && d.requests >= maxRequests) return true;
+    const maxGb = this.cfg.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT;
+    if (!(maxGb > 0)) return false;
+    const pid = d.server.pid;
+    if (pid === undefined) return false;
+    const rss = (this.seams.rssReader ?? readProcessRssBytes)(pid);
+    return rss !== undefined && rss > maxGb * 2 ** 30;
   }
 
   /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
@@ -5256,7 +5288,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         : []),
     ]);
     this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false, stopSeconds };
+    const daemon: Daemon = { server, dirty: false, stopSeconds, requests: 0 };
     lane.setDaemon(mode, daemon);
     return daemon;
   }
@@ -5443,6 +5475,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
+    daemon.requests += 1;
     const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
       alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
     );

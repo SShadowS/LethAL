@@ -417,6 +417,7 @@ function fakeServe(script: ServeScript = {}) {
     const handle: ServerProcessHandle = {
       stdout: out,
       stderr: err,
+      pid: 90_000 + daemon, // R952: what the recycle bound's RSS seam is asked about (never a real /proc read)
       kill: () => {
         kills.push(daemon);
         out.end();
@@ -598,7 +599,8 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useDiscoveredTests(suite);
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
-  Object.assign(b.seams, opts.seams ?? {});
+  // R952: the recycle bound's RSS read is unreadable unless a test says otherwise (tests never read /proc).
+  Object.assign(b.seams, { rssReader: () => undefined }, opts.seams ?? {});
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
@@ -7034,6 +7036,63 @@ describe("R948: a throw after the memory hold gives the hold back", () => {
     await writeFile(join(blocked, "x"), "x");
     await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
     expect(held(r.b)).toBe(0);
+  });
+});
+
+describe("R952 (R948): a serve daemon past its size or request bound is recycled", () => {
+  const GIB = 2 ** 30;
+  /** Each mutant prefetched on its own (one ensureDaemon each), then run: every verdict, and the rig. */
+  const session = async (opts: RigOpts) => {
+    const r = await rig({ serve: { rows: killsM1 }, oneShotRows: killsM1, ...opts });
+    await baseline(r.b, SUITE1);
+    const verdicts: string[] = [];
+    for (const m of ["M0001", "M0002", "M0003"]) {
+      await r.b.prefetchMutants(plans([m]));
+      await r.b.activate(m);
+      for (const t of SUITE1) verdicts.push(`${m} ${t.method} ${outcome(await r.b.run(t, OPTS))}`);
+    }
+    return { r, verdicts, closes: [...r.b.daemonCloses().byReason] };
+  };
+
+  test("no bound reached: no recycle (the control)", async () => {
+    const c = await session({});
+    expect(c.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  test("daemonMaxRequests: a daemon past it is replaced, and every verdict equals the control's", async () => {
+    const control = await session({});
+    const s = await session({ extra: { daemonMaxRequests: 2 } });
+    const recycles = s.closes.find(([why]) => why === "recycle")?.[1] ?? 0;
+    expect(recycles).toBeGreaterThan(0);
+    expect(s.r.serve.daemons.length).toBe(control.r.serve.daemons.length + recycles);
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(s.verdicts).toContain("M0001 A fail,"); // a kill is in the comparison, not only passes
+  });
+
+  test("daemonMaxRssGb: only the daemon over the size is replaced; the default is 6 GiB", async () => {
+    const control = await session({});
+    const big = new Set<number>();
+    // the first daemon the bound asks about (the mutant phase's, on its second use) is 7 GiB, every other 1 GiB
+    const reader = (pid: number) => {
+      if (big.size > 0 && !big.has(pid)) return GIB;
+      big.add(pid);
+      return 7 * GIB;
+    };
+    const s = await session({ seams: { rssReader: reader } });
+    expect(s.closes.find(([why]) => why === "recycle")?.[1]).toBe(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    // at 5 GiB the default bound (6) is not reached; at 0 the bound is off whatever the size
+    const under = await session({ seams: { rssReader: () => 5 * GIB } });
+    expect(under.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    const off = await session({
+      extra: { daemonMaxRssGb: 0 },
+      seams: { rssReader: () => 100 * GIB },
+    });
+    expect(off.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  test("a recycle is not routine: it costs a warm-up, so it reaches the close sink", () => {
+    expect(V3_ROUTINE_CLOSES.has("recycle")).toBe(false);
   });
 });
 
