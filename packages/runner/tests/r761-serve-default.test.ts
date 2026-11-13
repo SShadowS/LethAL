@@ -148,7 +148,7 @@ describe("R761: the default transport", () => {
 
   test("reason unproven-test-name-shape (method): with another reason, or an isolation mode, the whole session falls back", async () => {
     // R763: "1st" and "has space" are proven since leg N1S; the dot and `ø` are not.
-    for (const method of ["Dot.Step", "Ø Step", "Pct%Step"]) {
+    for (const method of ["Dot.Step", "AØ Step", "Pct%Step"]) {
       const r = await rig(DEFAULT, { tests: [...PLAIN, ref(method)] });
       await r.b.decideTransport({ resume: true });
       expect(r.b.inRunStopIsBudget).toBe(true);
@@ -300,7 +300,7 @@ describe("R761: the default transport", () => {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
     }
     // red when the widening is too loose: the dot is #5798, and characters N1S never ran stay unproven
-    for (const name of ["Dot.Step", "Ø Step", "Tab\tStep", ""]) {
+    for (const name of ["Dot.Step", "AØ Step", "Tab\tStep", ""]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
     }
     // red when only the character set is checked: N1S never ran these positions
@@ -310,29 +310,54 @@ describe("R761: the default transport", () => {
   });
 
   // R937 (coord R-957): the 15 shapes of /coord/handoff/R-957/shapes/result.md, 97 mutants equal.
-  test("R937: the shapes measured under serve in R-957 are proven; the unmeasured ones are not", () => {
-    // red when the widening is missing
-    for (const name of [
+  test("R937: exactly the 15 names of /coord/handoff/R-957/shapes/make.ts are proven; the unmeasured variants are not", async () => {
+    // red when the pattern is narrower than the measurement. The names, as in make.ts's SHAPES list.
+    const MEASURED = [
+      "PlainCheck",
+      "Dot.Check",
       "-Check",
       "+Check",
       "_Check",
       "7Check",
       "A:Check",
       "A'Check",
+      "ØCheck",
+      "ÆCheck",
+      "ÅCheck",
       "A Check",
       "A#Check",
       "A&Check",
       "A(Check",
+    ];
+    expect(MEASURED).toHaveLength(15);
+    for (const name of MEASURED) {
+      // the dot is not in the pattern: a #5798-fixed build reads it through the row fields
+      const fixed = name === "Dot.Check";
+      const r = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(name)],
+        ...(fixed ? { version: FIXED_VERSION, sha: FIXED_SHA } : {}),
+      });
+      await r.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(r.b), r.warnings]).toEqual([name, [], []]);
+      if (!fixed)
+        expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
+    }
+    // red when the pattern is wider than the measurement: none of these ran
+    for (const name of [
       "AØCheck",
       "AÆCheck",
       "AÅCheck",
       "A+Check",
-      "Plain",
-    ]) {
-      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
-    }
-    // red when the widening is too loose: never run, so never admitted
-    for (const name of [
+      "A:",
+      "A:",
+      "Check#",
+      "Check'",
+      "A::Check",
+      "+ Check",
+      "- Check",
+      "-",
+      "+",
+      "_",
       "AøCheck",
       'A"Check',
       "A\\Check",
@@ -342,8 +367,6 @@ describe("R761: the default transport", () => {
       " Check",
       "Check ",
       ")Check",
-      "ØCheck",
-      "ÅCheck",
       "A.Check",
       ".Check",
     ]) {

@@ -287,6 +287,7 @@ function fakeOneShot(
   rows: RowsFn,
   coverage?: CoverageFn,
   answer?: { readonly exitCode: number; readonly stderr: string },
+  echo?: (mutant: string) => string,
 ) {
   const calls: string[][] = [];
   // R866: how many processes ran at one time, by call counters, never by the clock.
@@ -318,7 +319,18 @@ function fakeOneShot(
     if (cov !== undefined) {
       await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(cov));
     }
-    const asked = rows(m, cu, -1, -1).filter((r) => only === null || r.method === only[2]);
+    // R937: the selector's echo codeunit, run one-shot, reports the mutant it read from the file
+    const source: FakeRow[] =
+      cu === ECHO
+        ? [
+            {
+              method: "Echo",
+              status: "fail",
+              message: (echo ?? ((x) => `LETHAL-ECHO:${x}:true`))(m),
+            },
+          ]
+        : rows(m, cu, -1, -1);
+    const asked = source.filter((r) => only === null || r.method === only[2]);
     const tests = asked.map((r) => ({
       codeunit: cu,
       method: r.method,
@@ -549,6 +561,8 @@ interface RigOpts {
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
   oneShotAnswer?: { readonly exitCode: number; readonly stderr: string };
+  /** R937: the message of the echo row a one-shot echo process reports for the mutant it read. */
+  oneShotEcho?: (mutant: string) => string;
   extra?: Partial<AlRunnerV3Config>;
   targetAl?: string;
   suite?: readonly TestMethodRef[];
@@ -573,6 +587,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
     opts.oneShotRows ?? opts.serve?.rows ?? allPass,
     opts.oneShotCoverage,
     opts.oneShotAnswer,
+    opts.oneShotEcho,
   );
   const b = new AlRunnerV3Backend(
     {
@@ -7564,20 +7579,41 @@ describe("R937: a one-shot codeunit inside a serve session", () => {
     const one = r.one.calls.length;
     const sent = r.serve.requests.length;
     expect((await r.b.run(C, OPTS)).outcome).toBe("fail");
-    expect(r.one.calls.length).toBe(one + 1);
+    expect(r.one.calls.length).toBe(one + 2); // the echo process, then the call
+    expect(r.one.calls.at(-2)?.join(" ")).toContain(`--codeunit ${ECHO}`);
     expect(r.one.calls.at(-1)?.join(" ")).toContain(`--codeunit ${CU2}`);
     expect(r.serve.requests.length).toBe(sent);
     expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
     // CU's kill is the prefetched one: no new process, no new request
     expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
-    expect(r.one.calls.length).toBe(one + 1);
+    expect(r.one.calls.length).toBe(one + 2);
     // the kill pair of the one-shot codeunit sends nothing; the confirm runs one-shot, unmutated
     await r.b.sendKillPair("M0001", C);
     expect(r.serve.requests.length).toBe(sent);
     await r.b.activate(null);
     expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
-    expect(r.one.calls.length).toBe(one + 2);
+    expect(r.one.calls.length).toBe(one + 3); // unmutated: no echo
     expect(r.serve.requests.length).toBe(sent);
+  });
+
+  test("a mutant call whose echo does not name the mutant is refused by name, never scored, and its call is not made", async () => {
+    for (const said of ["NONE", "M0002"]) {
+      const r = await rig({
+        suite: SUITE2,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2);
+      await baseline(r.b, SUITE2);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const v = await r.b.run(C, OPTS);
+      expect([said, v.outcome]).toEqual([said, "error"]);
+      expect(v.failureMessage).toContain("entries-echo-mismatch");
+      expect(r.one.calls.length).toBe(before + 1); // the echo only
+      expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
+    }
   });
 
   test("the daemon baseline never asks serve for it; it runs one-shot like a one-shot session's", async () => {

@@ -677,16 +677,20 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * `/coord/handoff/R-929/names/`), and the raw serve rows carry the name only in `codeunitName`.
  * R937 (coord R-957): an invented app with 15 test codeunits, one method shape each, ran explicit
  * serve-entries and one-shot on edge c8fe56e05, per mutant equal (97 mutants, 0 differences;
- * killingTest equal to the declared name; `/coord/handoff/R-957/shapes/result.md`). New: a first
- * character `-`, `+` or `_`; inner `:`, `'`, `#`, `+`, `Ø`, `Æ`, `Å` (`&`, `(` and a space were
- * proven before). Never run, so still unproven: lower-case `ø`, `"`, `\`, `*`, `%`, `,`, a leading
- * or trailing space, a first `)`, a first `Ø`/`Æ`/`Å`. The inner dot is not in this pattern: it
- * depends on the build (#5798) and is read through `serveRowFields` in `pickTransport`.
+ * killingTest equal to the declared name; `/coord/handoff/R-957/shapes/result.md`). Exactly what
+ * ran, and so what is admitted: a FIRST character `Ø`, `Æ` or `Å` (`ØCheck`); a first `-`, `+` or
+ * `_` followed by a letter or digit (`-Check`, `+Check`, `_Check`); `:`, `'` or `#` between two
+ * letters or digits (`A:Check`, `A'Check`, `A#Check`). Never run, so still unproven: `Ø`, `Æ`, `Å`
+ * or `+` after the first character, a trailing or doubled `:`, `'`, `#`, a sign alone or before a
+ * space, lower-case `ø`, `"`, `\`, `*`, `%`, `,`, a leading or trailing space, a first `)`. The
+ * inner dot is not in this pattern: it depends on the build (#5798) and is read through
+ * `serveRowFields` in `pickTransport`.
  * A METHOD name outside the shape makes ITS codeunit run one-shot inside the serve session
  * (`oneShotCodeunits`), or the whole default session one-shot where that cannot be done.
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
-  method: /^[A-Za-z0-9_+-](?:[A-Za-z0-9_()/&åæ:'#+ØÆÅ-]| (?=[^ ]))*$/,
+  method:
+    /^(?:[A-Za-z0-9ØÆÅ]|[-+_](?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
 } as const;
 
 /**
@@ -695,7 +699,7 @@ export const V3_SERVE_PROVEN_NAME_SHAPES = {
  * is not (a leading space, say) is named with no characters.
  */
 export function unprovenNamePart(method: string): string {
-  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ:'#+ØÆÅ-]/.test(c)))];
+  const chars = [...new Set([...method].filter((c) => !/[A-Za-z0-9_ ()/&åæ:'#-]/.test(c)))];
   return `method "${method}"${chars.length > 0 ? ` (${chars.map((c) => JSON.stringify(c)).join(" ")})` : ""}`;
 }
 
@@ -5407,6 +5411,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         this.entries && this.oneShotCodeunits.has(id) && lane.lastActivated !== null
           ? lane.lastActivated
           : undefined;
+      if (mutantInFile !== undefined) {
+        // R937: serve checks the mutant with an echo row; so does this call, in its own process.
+        const why = await this.oneShotEcho(lane, mutantInFile, stopSeconds);
+        if (why !== undefined) {
+          return {
+            verdict: refusalVerdict(
+              ref,
+              `entries-echo-mismatch: the one-shot call of codeunit ${id} under ${mutantInFile} is not trusted (${why}); never scored (R937)`,
+              0,
+            ),
+          };
+        }
+      }
       const made = await this.spawnCodeunit({
         id,
         stopSeconds,
@@ -5520,6 +5537,45 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.noteBaselineRows(lane, key, decoded.rows);
     lane.rowsByCodeunit.set(key, call);
     return { call };
+  }
+
+  /**
+   * R937: the echo for a one-shot codeunit's mutant call: with the resource file saying `m`, one
+   * process runs the selector's echo codeunit, whose single failing row must name `m`
+   * (`echoMismatch`, as serve's). NONE is restored after it. Returns why not, or `undefined`.
+   */
+  private async oneShotEcho(
+    lane: Lane,
+    m: string,
+    stopSeconds: number,
+  ): Promise<string | undefined> {
+    const echoId = this.requireEchoId();
+    try {
+      const made = await this.spawnCodeunit({
+        id: echoId,
+        stopSeconds,
+        coverageJson: undefined,
+        cwd: lane.scratchCwd(),
+        activeDir: lane.realActive ?? resolve(lane.activeDir()),
+        testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+        beforeSpawn: async () => {
+          await this.checkBound(lane);
+          await writeFile(lane.resourcePath(), m, "utf8");
+        },
+      });
+      if ("spawnError" in made) return `could not run v3 for the echo: ${made.spawnError}`;
+      if (made.timedOut) return "the echo process passed LethAL's outer bound";
+      refuseDependencySkip(made.res.stderr);
+      refuseMissingDependency(made.res.exitCode, made.res.stderr);
+      if (![0, 1].includes(made.res.exitCode)) {
+        return `the echo process exited ${made.res.exitCode}: ${made.res.stderr.slice(-200)}`;
+      }
+      const decoded = decodeV3Rows(made.res.stdout, echoId);
+      if ("why" in decoded) return decoded.why;
+      return echoMismatch(decoded.rows, m);
+    } finally {
+      await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
+    }
   }
 
   /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
