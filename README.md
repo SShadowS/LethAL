@@ -633,7 +633,7 @@ Cost and recovery:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--max-guards-per-batch <n>` | *(unbounded)* | Guards per published build. Publish cost scales with guard count, since BC recompiles server-side |
-| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget, applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
+| `--mutant-timeout-ms <n>` | `180000` | Floor for a mutant's time budget. On `al-runner-v3` the default is instead `max(60000, 20 × the largest green baseline test + 5000)` ms (R954). Applied as `max(2 × that test's baseline, floor)`. An explicit value **replaces** the floor rather than stacking with it. The default is deliberately generous: too low leaves the server stuck and blocks every mutant behind it, while too high only makes a genuine hang take longer to score `timeout-killed` |
 | `--baseline-timeout-ms <n>` | `120000` | How long one baseline test may run before LethAL stops it. Raise it for a test that is slow rather than hung. Past the request ceiling minus 30 s, a run warns (`baseline-timeout-over-ceiling`): a hosting gateway can then cut a hung test's call before LethAL can stop it, and the run quarantines |
 | `--resume` / `--resume-run <id>` | *(none)* | Continue an aborted run, reusing verdicts it already measured |
 | `--retry-stranded` | `false` | On resume, retry mutants that left the server stuck. Skipped by default: a mutant that never terminates blocks every mutant behind it |
