@@ -16,6 +16,7 @@ import {
   type Git,
   HEAVY_GUARD_EXIT,
   RefusedError,
+  SLOTS,
   SLOT_BUSY,
   corpusHeadOf,
   diffDumps,
@@ -938,7 +939,7 @@ describe("B5 the heavy-job guard", () => {
     const dir = fresh("locks");
     const held: number[] = [];
     try {
-      for (const n of [1, 2, 3, 4, 5, 6]) {
+      for (const n of SLOTS) {
         expect(trySlots(dir, () => ["true"])).toEqual({ slot: n, code: 0 });
         held.push((await hold(join(dir, `heavy.${n}`))).pid);
       }
@@ -977,7 +978,7 @@ describe("B5 the heavy-job guard", () => {
     const dir = fresh("locks");
     const held: number[] = [];
     try {
-      for (const n of [1, 2, 3, 4, 5, 6]) held.push((await hold(join(dir, `heavy.${n}`))).pid);
+      for (const n of SLOTS) held.push((await hold(join(dir, `heavy.${n}`))).pid);
       await withLockDir(dir, () => {
         const e = refusal(() =>
           slotted("cdo", ["snapshot", "cdo", "--master"], undefined, () => {}),
