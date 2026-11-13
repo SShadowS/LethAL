@@ -34,3 +34,11 @@ Written 2026-11-13 by lane preproc, before the build and any measured run. Surve
   the file moves.
 - **Gates (orchestrator's table):** the full v3 gate, `itest:bcdev` and `itest:lend` on one bc server: no figure moves. Also a store
   written before `own_duration_ms` existed opens, gains the column and resumes (`--resume`) with its verdicts carried.
+
+## Correction (2026-11-13, after the build review, before any gate or measured run)
+
+The "Snapshots moved" item above is WITHDRAWN: those five moves were a defect, not the design. The stub rows carry their OWN 5 ms
+each (as bcdev's grouped entries carry their own server-reported time), and the build's "same wall value = same call" grouping charged
+distinct tests 0 after the first. The grouping is replaced by an explicit `callId` (one per al-runner process or serve request), set
+only on a v3 row with no own time; bcdev's grouped entries set `measuredDurationMs` from their own time; a row with neither keeps the
+pre-R963 charge. **No snapshot moves:** `orchestrator.test.ts.snap` equals master's. Everything else above stands.
