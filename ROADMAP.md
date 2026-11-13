@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 927 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 931 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -364,6 +364,7 @@ that ordering is the priority.
 - **R926** · On al-runner v3 a survivor's reach is never decided, so a mutant no test reaches reads as a covered survivor: 6 of 140 sampled R-913 survivors had 0 hits on their line · [R926.md](docs/roadmap/R926.md) · done (af5b3b8d, 8c96d9a4, 4d52400a): statement-grain reach decided from the baseline's coverage; not-reached…
 - **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · done (285ba3f9)
 - **R963** · A v3 test row with no duration of its own is stored with the whole call's wall time as if it were the test's: a kill confirmation in a batch with a hung entry reads 620 s for a test that takes 8 ms · [R963.md](docs/roadmap/R963.md) · done (240d2c1b)
+- **R965** · A v3 mutant in one overload of a procedure is attributed 'exact' coverage by tests that only call ANOTHER overload, so a mutant no test executes is scored survived (Cryptography Management: SignedXml.SetSigningKey) · [R965.md](docs/roadmap/R965.md) · done (c4312b52)
 
 ## Product gaps a real project hits
 
@@ -972,6 +973,9 @@ that ordering is the priority.
 - **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · done (2596b7fe)
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 - **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
+- **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · open
+- **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' fails on a busy container: the guard counts the container's real heavy jobs, so the plain caller gets exit 75 · [R967.md](docs/roadmap/R967.md) · open
+- **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
 
 ---
 
