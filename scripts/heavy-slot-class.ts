@@ -111,10 +111,11 @@ export function memoryVerdict(
   heldPeaksGiB: readonly number[],
   peakGiB: number,
   reserveGiB: number = MEMORY_RESERVE_GIB,
-): { readonly refuse: boolean; readonly message: string } {
+): { readonly refuse: boolean; readonly message: string; readonly off?: true } {
   if (sample?.maxBytes === undefined)
     return {
       refuse: false,
+      off: true,
       message: `memory rule off: ${sample === undefined ? "no cgroup v2 memory.current can be read" : `${sample.source} names no limit`}`,
     };
   const max = sample.maxBytes / GIB;

@@ -672,7 +672,8 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
 }
 
 /** The heavy slots, tried in this order (owner rule R642: three heavy jobs container-wide). */
-export const SLOTS = [1, 2, 3] as const;
+// R960: six slot files, a ceiling set high enough not to bind: admission is by memory (R953), not by count.
+export const SLOTS = [1, 2, 3, 4, 5, 6] as const;
 /** Heavy jobs container-wide, and of those, BaseApp (BC.History) corpus jobs (R642). */
 const TOTAL_CAP = 3;
 const BASEAPP_CAP = 2;
@@ -701,7 +702,7 @@ function holderIsBaseApp(args: string): boolean {
  * for a BaseApp job (`selfBaseApp`), when the other BaseApp jobs reach 2 (the BaseApp cap): held
  * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
-const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
+const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [1-6]\b/;
 /**
  * R905: a `scripts/heavy-slot.sh [--wait] [--peak <p>] <class> <cmd>` holder writes its own pid in the
  * lock; its class is in its argv. R952: `--peak`, and anchored at the command's start (heavy-slot.sh,
@@ -855,10 +856,23 @@ export function guardInSlot(
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
   writeSlotClass(dir, mine, baseApp ? "baseapp" : "other");
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
+  const slots = held.map((s) => readSlot(dir, s));
+  // R960 (owner ruling 2026-11-13): where the cgroup names a limit, memory alone decides, as
+  // heavy-slot.sh's guard does (an unclassed slot at the larger default); no job count or class cap.
+  const m = memoryVerdict(
+    readContainerMemory(),
+    slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
+    DEFAULT_PEAK_GIB[baseApp ? "baseapp" : "other"],
+  );
+  print(m.message);
+  if (m.off !== true) {
+    if (m.refuse) throw new RefusedError(m.message, true);
+    return;
+  }
+  // No cgroup limit to read: the count verdict, as before R953.
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const slots = held.map((s) => readSlot(dir, s));
   const v = heavyVerdict(
     parsePs(readPs()),
     process.pid,
@@ -869,14 +883,6 @@ export function guardInSlot(
   );
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message, true);
-  // R952 (R953): the memory rule, as heavy-slot.sh's guard applies it (an unclassed slot at the larger default).
-  const m = memoryVerdict(
-    readContainerMemory(),
-    slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
-    DEFAULT_PEAK_GIB[baseApp ? "baseapp" : "other"],
-  );
-  print(m.message);
-  if (m.refuse) throw new RefusedError(m.message, true);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1011,7 +1017,7 @@ export function slotted(
   );
   if (r === null)
     throw new RefusedError(
-      `heavy-job guard: all three heavy slots held (${lockDir()}/heavy.1, heavy.2, heavy.3)`,
+      `heavy-job guard: all ${SLOTS.length} heavy slots held (${lockDir()}/heavy.1 .. heavy.${SLOTS.length})`,
       true,
     );
   return r.code;
