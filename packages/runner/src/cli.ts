@@ -4355,7 +4355,7 @@ export async function runFromCli(
           // R786: parallel lanes need serve-entries, so a one-shot re-run cannot honour --workers.
           if (parsed.workers > 1) {
             throw new Error(
-              `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1, or exclude that test (R786)`,
+              `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1${err.wholeRequest ? " (R960: al-runner refused the whole warm-up request)" : ", or exclude that test (R786)"}`,
             );
           }
           console.warn(

@@ -636,9 +636,11 @@ export class AlRunnerV3ServeFallbackWarmupError extends Error {
   constructor(
     readonly row: string,
     readonly rowReason: string,
+    /** R960: the whole warm-up request was refused (R635 §6), not one row R612 refuses. */
+    readonly wholeRequest = false,
   ) {
     super(
-      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default met the warm-up row ${row}, which R612 refuses by name (${rowReason}). \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (R786)`,
+      `al-runner-v3-serve-default-fallback-warmup: the serve-entries default ${wholeRequest ? `met a refusal of the whole warm-up request (entries-batch-refused: ${rowReason}; R635 §6)` : `met the warm-up row ${row}, which R612 refuses by name (${rowReason})`}. \`lethal run\` (runFromCli) re-runs the session on one-shot; a caller of runSession directly gets this refusal and must do the same (${wholeRequest ? "R960" : "R786"})`,
     );
     this.name = "AlRunnerV3ServeFallbackWarmupError";
   }
@@ -5623,15 +5625,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         mode,
       ).catch((err: unknown) => {
         // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
-        // named row does (R786). An explicit transport keeps failing by name.
+        // named row does (R786). An explicit transport keeps failing by name. Only at the
+        // session's FIRST warm-up (review a): a later daemon (another mode, a restart) would
+        // re-run the session and throw away verdicts already scored, so it fails as before.
         if (
           this.cfg.transportSource === "default" &&
+          this.stats.warmups === 1 &&
           err instanceof AlRunnerV3EntriesRefusedError &&
           err.code === "al-runner-v3-entries-batch-refused"
         ) {
           throw new AlRunnerV3ServeFallbackWarmupError(
             "the whole warm-up request (entries-batch-refused)",
-            err.message.slice(err.code.length + 2),
+            err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, ""),
+            true,
           );
         }
         throw err;

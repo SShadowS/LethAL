@@ -2073,13 +2073,15 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     expect(String(err)).not.toContain("warmup-disagrees");
   });
 
-  const warmupRefusal = async (source: "default" | "explicit") => {
+  const warmupRefusal = async (source: "default" | "explicit", earlierWarmups = 0) => {
     const r = await rig({
       serve: { rows: refuseFrom(0), echo: refusedEcho(0) },
       oneShotRows: allPass,
     });
     (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
     await baseline(r.b, SUITE1);
+    // R960 review a: a session that already warmed a daemon up (another mode, a restart).
+    (r.b as unknown as { stats: { warmups: number } }).stats.warmups = earlierWarmups;
     return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
   };
 
@@ -2088,6 +2090,18 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
     expect(String(err)).toContain("entries-batch-refused");
     expect(String(err)).toContain(UNLISTED);
+    // R960 review b: a whole-request refusal, not a row R612 refuses; no R635 plan suffix.
+    expect((err as AlRunnerV3ServeFallbackWarmupError).wholeRequest).toBe(true);
+    expect(String(err)).toContain("met a refusal of the whole warm-up request");
+    expect(String(err)).not.toContain("which R612 refuses by name");
+    expect(String(err)).not.toContain("(R635 plan §3, §6)");
+  });
+
+  test("R960 review a: a LATER warm-up's whole-request refusal still fails by name (no session re-run)", async () => {
+    const err = await warmupRefusal("default", 1);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(err).not.toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect(String(err)).toContain("al-runner-v3-entries-batch-refused");
   });
 
   test("R960: explicit + the whole warm-up refused: still fails by name", async () => {
