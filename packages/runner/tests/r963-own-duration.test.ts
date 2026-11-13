@@ -6,43 +6,87 @@ import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { verdictFromRunnerTest } from "../src/al-runner-rows";
+import { v3RowVerdict } from "../src/al-runner-v3-backend";
 import type { TestVerdict } from "../src/backend";
 import { measuredDurationOf, ownTimeCharge } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
 import { testDbPath } from "./helpers/test-db";
 
 const ref = (method: string) => ({ codeunitId: 79100, codeunitName: "T", method });
-const verdict = (method: string, durationMs: number, own?: number): TestVerdict => ({
+const verdict = (
+  method: string,
+  durationMs: number,
+  own?: number,
+  callId?: string,
+): TestVerdict => ({
   ref: ref(method),
   outcome: "pass",
   durationMs,
   ...(own !== undefined ? { measuredDurationMs: own } : {}),
+  ...(callId !== undefined ? { callId } : {}),
 });
 
 describe("R963: the mutant's summed test time", () => {
   const sum = (vs: TestVerdict[]) => {
-    const charged = new Set<number>();
+    const charged = new Set<string>();
     return vs.reduce((s, v) => s + ownTimeCharge(v, charged), 0);
   };
-  test("two rows of one call with no own time charge the call's wall once, not twice", () => {
-    expect(sum([verdict("A", 620_000), verdict("B", 620_000)])).toBe(620_000);
+  test("two rows of one callId with no own time charge the call's wall once, not twice", () => {
+    expect(
+      sum([verdict("A", 620_000, undefined, "c1"), verdict("B", 620_000, undefined, "c1")]),
+    ).toBe(620_000);
+  });
+  test("two calls with the SAME wall but different callIds are charged twice", () => {
+    expect(sum([verdict("A", 500, undefined, "c1"), verdict("B", 500, undefined, "c2")])).toBe(
+      1000,
+    );
   });
   test("own times are summed, and the call's wall is not added on top", () => {
-    expect(sum([verdict("A", 620_000, 8), verdict("B", 620_000, 17)])).toBe(25);
+    expect(sum([verdict("A", 620_000, 8, "c1"), verdict("B", 620_000, 17, "c1")])).toBe(25);
   });
-  test("a row with no own time is never charged 0 when it is the only one of its call", () => {
-    expect(sum([verdict("A", 500, 8), verdict("B", 900)])).toBe(908);
+  test("a row with neither own time nor callId keeps the old charge: its own durationMs", () => {
+    expect(sum([verdict("A", 500), verdict("B", 500)])).toBe(1000);
   });
 });
 
 describe("R963: the R914 estimate", () => {
-  test("rows of one call with no own time share the call's wall (charged once in total)", () => {
+  test("rows of one callId with no own time share the call's wall (charged once in total)", () => {
     const m = measuredDurationOf([
-      { ref: ref("A"), verdict: verdict("A", 600) },
-      { ref: ref("B"), verdict: verdict("B", 600) },
-      { ref: ref("C"), verdict: verdict("C", 600, 7) },
+      { ref: ref("A"), verdict: verdict("A", 600, undefined, "c1") },
+      { ref: ref("B"), verdict: verdict("B", 600, undefined, "c1") },
+      { ref: ref("C"), verdict: verdict("C", 600, 7, "c1") },
     ]);
     expect([...m.values()]).toEqual([300, 300, 7]);
+  });
+  test("two calls with the same wall but different callIds do not share it", () => {
+    const m = measuredDurationOf([
+      { ref: ref("A"), verdict: verdict("A", 600, undefined, "c1") },
+      { ref: ref("B"), verdict: verdict("B", 600, undefined, "c2") },
+    ]);
+    expect([...m.values()]).toEqual([600, 600]);
+  });
+  test("a row with neither own time nor callId keeps its own durationMs", () => {
+    const m = measuredDurationOf([{ ref: ref("A"), verdict: verdict("A", 600) }]);
+    expect([...m.values()]).toEqual([600]);
+  });
+});
+
+describe("R963: v3RowVerdict stamps a callId only on a row with no own time", () => {
+  const row = (o: { durationMs?: number }) => ({
+    codeunit: 79100,
+    method: "A",
+    name: "Codeunit79100.A",
+    status: "pass" as const,
+    notRun: false,
+    ...o,
+  });
+  test("no own time: callId set, no measuredDurationMs", () => {
+    const v = v3RowVerdict(ref("A"), row({}), 3, 777, undefined, "call-1");
+    expect([v.callId, v.measuredDurationMs]).toEqual(["call-1", undefined]);
+  });
+  test("an own time: measuredDurationMs set, no callId", () => {
+    const v = v3RowVerdict(ref("A"), row({ durationMs: 8 }), 3, 777, undefined, "call-1");
+    expect([v.callId, v.measuredDurationMs]).toEqual([undefined, 8]);
   });
 });
 

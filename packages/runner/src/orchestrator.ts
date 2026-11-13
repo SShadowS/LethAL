@@ -12079,7 +12079,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // this used to be written to alongside, which nothing ever read.
     let permissionRefusedTest: string | undefined;
     let spent = 0;
-    const chargedWalls = new Set<number>(); // R963: the call walls already charged for rows with no own time
+    const chargedWalls = new Set<string>(); // R963: the calls whose wall is already charged (rows with no own time)
     // Whether any instrumented guard fired during this mutant's runs — see
     // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
     let guardObserved: boolean | undefined;
@@ -12831,32 +12831,35 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
 export function measuredDurationOf(
   green: readonly { ref: TestMethodRef; verdict: TestVerdict }[],
 ): Map<string, number> {
-  // R963: a row with no own time is unknown, not the call's wall. Rows of one call share one wall,
-  // so the unknown rows that share a wall value split it: the call is charged once, in total.
-  // ponytail: a call is recognised by its wall value (no call id reaches here); two separate calls
-  // with the identical wall in ms would split one wall. Add a call id to the verdict if that matters.
-  const unknownPerWall = new Map<number, number>();
-  for (const b of green)
-    if (b.verdict.measuredDurationMs === undefined)
-      unknownPerWall.set(b.verdict.durationMs, (unknownPerWall.get(b.verdict.durationMs) ?? 0) + 1);
+  // R963: a row with no own time but a call id shares its call's wall with that call's other rows,
+  // so they split it: the call is charged once, in total. No call id (a stub): its own wall.
+  const perCall = new Map<string, number>();
+  for (const b of green) {
+    const { measuredDurationMs, callId } = b.verdict;
+    if (measuredDurationMs === undefined && callId !== undefined)
+      perCall.set(callId, (perCall.get(callId) ?? 0) + 1);
+  }
   return new Map(
-    green.map((b) => [
-      testKeyOf(b.ref),
-      b.verdict.measuredDurationMs ??
-        b.verdict.durationMs / (unknownPerWall.get(b.verdict.durationMs) ?? 1),
-    ]),
+    green.map((b) => {
+      const { measuredDurationMs, callId, durationMs } = b.verdict;
+      const ms =
+        measuredDurationMs ??
+        (callId !== undefined ? durationMs / (perCall.get(callId) ?? 1) : durationMs);
+      return [testKeyOf(b.ref), ms];
+    }),
   );
 }
 
 /**
  * R963: what one covering row adds to a mutant's summed test time. Its own time if it has one; a
- * row with none is charged its call's wall once (the first row of that wall), never once per row
- * and never 0 for the whole call. Same wall-as-call-key rule as `measuredDurationOf`.
+ * row with none and a call id is charged its call's wall once per call id (never once per row, never
+ * 0 for the whole call); a row with neither (a backend that sets no call id) its own `durationMs`.
  */
-export function ownTimeCharge(v: TestVerdict, chargedWalls: Set<number>): number {
+export function ownTimeCharge(v: TestVerdict, chargedCalls: Set<string>): number {
   if (v.measuredDurationMs !== undefined) return v.measuredDurationMs;
-  if (chargedWalls.has(v.durationMs)) return 0;
-  chargedWalls.add(v.durationMs);
+  if (v.callId === undefined) return v.durationMs;
+  if (chargedCalls.has(v.callId)) return 0;
+  chargedCalls.add(v.callId);
   return v.durationMs;
 }
 

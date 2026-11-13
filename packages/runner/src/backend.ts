@@ -98,7 +98,7 @@ export interface TestVerdict {
   readonly durationMs: number;
   /**
    * R963: the test's OWN duration, when the backend measured it; absent = unknown, never the call's
-   * wall (R272/R934). R272: on a `pass`, on a `pass` (and since R934, on al-runner, a `fail` too: a
+   * wall (R272/R934). R272: on a `pass` (and since R934, on al-runner, a `fail` too: a
    * mutant's summed time reads it; every reader that wants a pass checks the outcome). The timeout BUDGET still reads `durationMs`; this
    * figure is in the report and, since R517, it is what a position-1 timeout confirm is judged on
    * (`confirm.measuredDurationMs ?? confirm.durationMs`), because it is timed on the same clock as
@@ -108,6 +108,12 @@ export interface TestVerdict {
    * Absent: not measured per test.
    */
   readonly measuredDurationMs?: number;
+  /**
+   * R963: INTERNAL, never in a report or an event. The identity of the al-runner call or serve
+   * request this row came from, set only on a row with no `measuredDurationMs`: all rows of one call
+   * share it, so their shared `durationMs` (the call's wall) is charged once, not once per row.
+   */
+  readonly callId?: string;
   /**
    * R907: on a `pass`, al-runner's `flagged: true`: the pass rests on an unprobed assumption (for
    * example a test that went through Confirm, StrMenu or a page under `--no-client`). Absent when
