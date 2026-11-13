@@ -74,7 +74,14 @@ import { dirname, join, relative } from "node:path";
 import { parseArgs as parseCli } from "node:util";
 import { isEnumeratedAl } from "../packages/runner/src/line-filter.ts";
 import { walkFilesSync } from "../packages/runner/src/walk.ts";
-import { type SlotClass, readSlotClass, writeSlotClass } from "./heavy-slot-class.ts";
+import {
+  DEFAULT_PEAK_GIB,
+  type SlotClass,
+  memoryVerdict,
+  readContainerMemory,
+  readSlot,
+  writeSlotClass,
+} from "./heavy-slot-class.ts";
 import { FORMAT } from "./prod-identity-keys.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..");
@@ -695,10 +702,17 @@ function holderIsBaseApp(args: string): boolean {
  * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
 const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
-/** R905: a `scripts/heavy-slot.sh [--wait] <class> <cmd>` holder writes its own pid in the lock; its class is in its argv. */
-const WRAPPER_HOLDER_RE = /(^|\/)heavy-slot\.sh\s+(?:--wait\s+)?(baseapp|other)(\s|$)/;
+/**
+ * R905: a `scripts/heavy-slot.sh [--wait] [--peak <p>] <class> <cmd>` holder writes its own pid in the
+ * lock; its class is in its argv. R952: `--peak`, and anchored at the command's start (heavy-slot.sh,
+ * or bash/sh running it), as the update script's is: a job that only MENTIONS it later is a job.
+ */
+const WRAPPER_START = String.raw`^(?:(?:\S*\/)?(?:ba)?sh\s+)?(?:\S*\/)?heavy-slot\.sh\s+`;
+const WRAPPER_HOLDER_RE = new RegExp(
+  `${WRAPPER_START}(?:--wait\\s+)?(?:--peak\\s+\\S+\\s+)?(?<cls>baseapp|other)(?:\\s|$)`,
+);
 /** R934: a `heavy-slot.sh --wait` process. One that holds no slot is a waiter: no job (it runs nothing yet). */
-const WAITER_RE = /(^|\/)heavy-slot\.sh\s+--wait\s/;
+const WAITER_RE = new RegExp(`${WRAPPER_START}--wait\\s`);
 
 export function heavyVerdict(
   procs: readonly Proc[],
@@ -728,13 +742,22 @@ export function heavyVerdict(
     if (wrapper === null && !SLOT_HOLDER_RE.test(p.args)) continue;
     trustedSlots++;
     // A wrapper's BaseApp status is its CLASS; holderIsBaseApp parses corpus-snapshot flags.
-    if (wrapper !== null ? wrapper[2] === "baseapp" : holderIsBaseApp(p.args)) baseAppSlots++;
+    if (wrapper !== null ? wrapper.groups?.cls === "baseapp" : holderIsBaseApp(p.args))
+      baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
+    // R952 review: the shells that launched a wrapper (the Bash tool's `bash -c ... eval '...
+    // heavy-slot.sh ...'`, in a group of its own) name the job in their text; the job is this slot.
+    if (wrapper !== null) for (const a of ancestors(procs, s)) skip.add(a);
   }
   // R934: a queued `--wait` wrapper holds no slot and runs nothing; its argv names the job it waits
-  // to run (maybe a BC.History path), which must not count as that job.
+  // to run (maybe a BC.History path), which must not count as that job, and neither must the shells
+  // that launched it (R952 review).
   const holders = new Set(slotPids);
-  for (const p of procs) if (WAITER_RE.test(p.args) && !holders.has(p.pid)) skip.add(p.pid);
+  for (const p of procs)
+    if (WAITER_RE.test(p.args) && !holders.has(p.pid)) {
+      skip.add(p.pid);
+      for (const a of ancestors(procs, p.pid)) skip.add(a);
+    }
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit
   // in their own process groups, R626), else by process group.
   const byPid = new Map(procs.map((p) => [p.pid, p]));
@@ -835,10 +858,25 @@ export function guardInSlot(
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const classes = held.map((s) => readSlotClass(dir, s));
-  const v = heavyVerdict(parsePs(readPs()), process.pid, pids, held.length, baseApp, classes);
+  const slots = held.map((s) => readSlot(dir, s));
+  const v = heavyVerdict(
+    parsePs(readPs()),
+    process.pid,
+    pids,
+    held.length,
+    baseApp,
+    slots.map((s) => s?.cls),
+  );
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message, true);
+  // R952 (R953): the memory rule, as heavy-slot.sh's guard applies it (an unclassed slot at the larger default).
+  const m = memoryVerdict(
+    readContainerMemory(),
+    slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
+    DEFAULT_PEAK_GIB[baseApp ? "baseapp" : "other"],
+  );
+  print(m.message);
+  if (m.refuse) throw new RefusedError(m.message, true);
 }
 
 // ---------------------------------------------------------------------------------------------
