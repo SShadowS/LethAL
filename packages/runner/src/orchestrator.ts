@@ -5501,6 +5501,7 @@ async function dispatchUnmutated(
     v.failureMessage,
     undefined,
     v.sessionId,
+    v.measuredDurationMs,
   );
   // Layer 5C-B1 (design §5/§6/§8): a lease answer must be classified BEFORE the generic
   // `requiresUnsafeLatch` quarantine below, which would otherwise record a durable tier
@@ -5884,6 +5885,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             b.verdict.failureMessage,
             undefined,
             b.verdict.sessionId,
+            b.verdict.measuredDurationMs,
           );
         }
         // R678: the reused verdicts stand in for this batch's baseline calls, so the backend
@@ -11058,6 +11060,8 @@ async function confirmWarm(p: {
     ref: TestMethodRef;
     outcome: TestVerdict["outcome"];
     durationMs: number;
+    /** R963: the test's own time; absent = unknown (`durationMs` is the call's wall). */
+    ownDurationMs?: number;
     failureMessage: string | undefined;
     opKind?: "single" | "many";
     sessionId?: number;
@@ -11122,6 +11126,9 @@ async function confirmWarm(p: {
       ref: verdict.ref,
       outcome: verdict.outcome,
       durationMs: verdict.durationMs,
+      ...(verdict.measuredDurationMs !== undefined
+        ? { ownDurationMs: verdict.measuredDurationMs }
+        : {}),
       failureMessage: verdict.failureMessage,
       opKind: "many",
       ...(verdict.sessionId !== undefined ? { sessionId: verdict.sessionId } : {}),
@@ -11211,6 +11218,7 @@ async function confirmWarm(p: {
       ref: rv.ref,
       outcome: rv.outcome,
       durationMs: rv.durationMs,
+      ...(rv.measuredDurationMs !== undefined ? { ownDurationMs: rv.measuredDurationMs } : {}),
       failureMessage: rv.failureMessage,
       opKind: "many",
       ...(rv.sessionId !== undefined ? { sessionId: rv.sessionId } : {}),
@@ -11386,6 +11394,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
       ref,
       outcome: v.outcome,
       durationMs: v.durationMs,
+      ...(v.measuredDurationMs !== undefined ? { ownDurationMs: v.measuredDurationMs } : {}),
       failureMessage: v.failureMessage,
       opKind,
       ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
@@ -11554,6 +11563,7 @@ async function confirmFoundNone(p: Parameters<typeof confirmWarm>[0]): Promise<F
     ref,
     outcome: v.outcome,
     durationMs: v.durationMs,
+    ...(v.measuredDurationMs !== undefined ? { ownDurationMs: v.measuredDurationMs } : {}),
     failureMessage: v.failureMessage,
     opKind: "single",
     ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
@@ -12085,6 +12095,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // this used to be written to alongside, which nothing ever read.
     let permissionRefusedTest: string | undefined;
     let spent = 0;
+    const chargedWalls = new Set<string>(); // R963: the calls whose wall is already charged (rows with no own time)
     // Whether any instrumented guard fired during this mutant's runs — see
     // `MutantOutcome.guardObserved`. Left undefined on a backend that never attests.
     let guardObserved: boolean | undefined;
@@ -12101,6 +12112,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       ref: TestMethodRef;
       outcome: TestVerdict["outcome"];
       durationMs: number;
+      ownDurationMs?: number;
       failureMessage: string | undefined;
       opKind?: "single" | "many";
       sessionId?: number;
@@ -12158,6 +12170,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         ref,
         outcome: v.outcome,
         durationMs: v.durationMs,
+        ...(v.measuredDurationMs !== undefined ? { ownDurationMs: v.measuredDurationMs } : {}),
         failureMessage: v.failureMessage,
         opKind: step.opKind,
         ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
@@ -12168,8 +12181,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       }
       // R934: the test's own time where the backend measured it. On al-runner `durationMs` is the whole
       // call's (the whole request on serve), so summing it per covering test multiplied it. A row with
-      // no own figure (al-runner reports one on a pass only) still adds its call's time.
-      spent += v.measuredDurationMs ?? v.durationMs;
+      // no own figure is charged its call's wall ONCE per call, not once per row (R963).
+      spent += ownTimeCharge(v, chargedWalls);
       // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
       if (step.discoveryRefused === true) continue;
       // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
@@ -12443,6 +12456,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           ref,
           outcome: confirm.outcome,
           durationMs: confirm.durationMs,
+          ...(confirm.measuredDurationMs !== undefined
+            ? { ownDurationMs: confirm.measuredDurationMs }
+            : {}),
           failureMessage: confirm.failureMessage,
           ...(confirm.sessionId !== undefined ? { sessionId: confirm.sessionId } : {}),
         });
@@ -12551,6 +12567,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
           // which must therefore read the budget the timed-out run was SENT (`budget`), never a
           // recomputed one (R516 M2): recomputed now, it would already include this measurement.
+          // R963: stays the call's WALL (compile included, which the budget is checked against).
+          // It runs only where `inRunStopIsBudget` (bcdev, v3 one-shot: a confirm is one test's
+          // call); on serve-entries, where a batched wall could be shared, `noteMeasured` returns.
           if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
           // R517: the stop the run really enforced. al-runner reports it on its timeout row;
           // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
@@ -12790,6 +12809,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           t.failureMessage,
           t.opKind,
           t.sessionId,
+          t.ownDurationMs,
         );
       }
     };
@@ -12824,12 +12844,39 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
  * R914: each green test's own time. `durationMs` is the whole call (al-runner one-shot adds a compile
  * to it; serve reports the whole suite's), so summing it overstated the estimate about 13 times.
  */
-function measuredDurationOf(
+export function measuredDurationOf(
   green: readonly { ref: TestMethodRef; verdict: TestVerdict }[],
 ): Map<string, number> {
+  // R963: a row with no own time but a call id shares its call's wall with that call's other rows,
+  // so they split it: the call is charged once, in total. No call id (a stub): its own wall.
+  const perCall = new Map<string, number>();
+  for (const b of green) {
+    const { measuredDurationMs, callId } = b.verdict;
+    if (measuredDurationMs === undefined && callId !== undefined)
+      perCall.set(callId, (perCall.get(callId) ?? 0) + 1);
+  }
   return new Map(
-    green.map((b) => [testKeyOf(b.ref), b.verdict.measuredDurationMs ?? b.verdict.durationMs]),
+    green.map((b) => {
+      const { measuredDurationMs, callId, durationMs } = b.verdict;
+      const ms =
+        measuredDurationMs ??
+        (callId !== undefined ? durationMs / (perCall.get(callId) ?? 1) : durationMs);
+      return [testKeyOf(b.ref), ms];
+    }),
   );
+}
+
+/**
+ * R963: what one covering row adds to a mutant's summed test time. Its own time if it has one; a
+ * row with none and a call id is charged its call's wall once per call id (never once per row, never
+ * 0 for the whole call); a row with neither (a backend that sets no call id) its own `durationMs`.
+ */
+export function ownTimeCharge(v: TestVerdict, chargedCalls: Set<string>): number {
+  if (v.measuredDurationMs !== undefined) return v.measuredDurationMs;
+  if (v.callId === undefined) return v.durationMs;
+  if (chargedCalls.has(v.callId)) return 0;
+  chargedCalls.add(v.callId);
+  return v.durationMs;
 }
 
 /** R912: what the window cut and the estimate read: baseline durations, and which codeunits run whole. */
