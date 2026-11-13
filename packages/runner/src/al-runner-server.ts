@@ -749,6 +749,16 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "dotnet-policy-timezone": new RegExp(
     String.raw`${DOTNET}System\.TimeZoneInfo\.Local: refused by policy: member 'System\.TimeZoneInfo\.Local' \(time zone that bypasses the host\)$`,
   ),
+  /**
+   * R979 (coord R-967): a read of a platform table al-runner's store has no provider for. Measured
+   * clean as R945's families were (`/coord/handoff/R-967/probe/`, edge-c8fe56e05): refusers on
+   * `Api Web Service` (2000000193) and `Tenant Media Set` (2000000183), each after R-937's standard
+   * writes; 27 readers on one kept daemon all equal the control, 20 fresh daemons one answer equal to
+   * it, the pid unchanged, no panic text. The refusal is the store's, before any row is read, so the
+   * table is a parameter. APIV1 restarted its daemon 100 times in its baseline on this family (R964).
+   */
+  "platform-no-provider":
+    /^NotRun: out-of-scope: store error platform table '[^'\n]+' \(\d+\) has no provider$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
