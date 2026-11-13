@@ -134,6 +134,7 @@ import {
   O1_SEED_TEST,
   type V3RowFacts,
   V3_DB_LEG,
+  V3_DBI_LEG,
   V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
   V3_K_LEG,
@@ -294,6 +295,7 @@ const ORACLE_BC_BUILD: Record<string, string> = {
   S1: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   S1E: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   DB: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
+  DBI: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
   D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
   D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
@@ -702,8 +704,76 @@ async function legS1(
       d.perTestRequests === 0,
       `DB: ${d.perTestRequests} per-test requests under isolation test`,
     );
+    // Every codeunit a fresh process did not answer in its place was taken from the daemon: a fill
+    // that silently ended with no answers would pass everything above and fail here.
+    // (With one codeunit the sample is that codeunit, so served is 0 by rule.)
+    must(
+      d.served === d.codeunits - want,
+      `DB: ${d.served} daemon answers taken, pre-committed ${d.codeunits - want} (codeunits ${d.codeunits} less ${want} sampled)`,
+    );
     must(b.baselineDaemon, "DB: the backend does not report a daemon baseline");
   }
+}
+
+/**
+ * R948: leg DBI = leg ISO's session (S1's project under `--isolate-tests`, every test its own request)
+ * with the baseline through the daemon and the memory guard at its default headroom. Per mutant equal
+ * to what ISO asserts; the per-test requests were made, the per-test sample ran and agreed, and the
+ * daemon's answers were taken. As in DB the reader is fixed under the bound: the guard's REFUSAL path
+ * is unit-tested (a live gate cannot make the container run out of memory on purpose).
+ */
+async function legDBI(scratch: string, version: string): Promise<void> {
+  const b = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(scratch, "backend"),
+      testDir: fixture("sandbox-tests"),
+      packagesDir: join(fixture("sandbox-tests"), ".alpackages"),
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: 79199,
+      transport: "serve-entries",
+      isolateTests: true,
+      daemonBaseline: true,
+      memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT,
+    }),
+  );
+  b.seams.memoryReader = () => ({
+    usedBytes: 2 ** 30,
+    maxBytes: 32 * 2 ** 30,
+    source: "/sys/fs/cgroup/memory.max",
+  });
+  let r: SessionReport;
+  try {
+    r = await session(scratch, b, {
+      projectDir: fixture("sandbox-app"),
+      testDir: fixture("sandbox-tests"),
+      selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
+    });
+  } catch (e) {
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  DBI: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+  assertCounts(r, "DBI", 3, 14, 5, 22);
+  await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "DBI");
+  must(r.validity.executionContexts[0]?.isolateTests === true, "DBI: the report hides the mode");
+  must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "DBI: a state note under --isolate-tests");
+  const d = b.daemonBaselineReport();
+  console.log(`  DBI: daemon baseline ${JSON.stringify(d)}`);
+  must(d.dropped === undefined, `DBI: the daemon baseline was dropped: ${d.dropped}`);
+  must(d.perTestRequests > 0, "DBI: no per-test request was made");
+  const want = baselineSampleIds(Array.from({ length: d.perTestRequests }, (_, i) => i)).length;
+  must(
+    d.sampledPerTest.length === want && d.compared === want,
+    `DBI: ${d.compared} of ${d.sampledPerTest.length} sampled tests compared, pre-committed ${want} of ${want}`,
+  );
+  must(d.served > 0, "DBI: no daemon answer was taken");
+  must(
+    d.served === d.perTestRequests - want,
+    `DBI: ${d.served} daemon answers taken, pre-committed ${d.perTestRequests - want}`,
+  );
+  must(b.baselineDaemon, "DBI: the backend does not report a daemon baseline");
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -2513,6 +2583,7 @@ async function main(): Promise<void> {
         else if (leg === "S1") await legS1(scratch);
         else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
         else if (leg === V3_DB_LEG) await legS1(scratch, V3_DB_LEG, version);
+        else if (leg === V3_DBI_LEG) await legDBI(scratch, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

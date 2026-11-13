@@ -6680,10 +6680,7 @@ async function runSessionBody(
     backend: backendName,
     // R857: part of what lends, so a run under --isolate-tests lends nothing to a default run, and
     // the other way, by the one check every lend passes.
-    runnerBuild:
-      v3Build !== undefined
-        ? `${v3Build.version} ${v3Build.binarySha256}${cfg.backend.isolatesTests === true ? " isolate-tests" : ""}${cfg.backend.noClient === true ? " no-client" : ""}${cfg.backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${cfg.backend.methodIsolation === true ? " isolation-method" : ""}${cfg.backend.environmentChoice?.value !== undefined ? ` environment-${cfg.backend.environmentChoice.value}` : ""}${cfg.backend.license !== undefined ? ` license-${cfg.backend.license.sha256.slice(0, 8)}` : ""}${baselineSourceTag(cfg.backend)}${cfg.backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`
-        : undefined,
+    runnerBuild: v3Build !== undefined ? lendingRunnerBuild(cfg.backend, v3Build) : undefined,
   };
   // R886: the v3 settings a resume must find unchanged; undefined on a backend with none.
   const resumeInputs = await resumeInputsOf(cfg.backend);
@@ -11954,6 +11951,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // R948: the memory guard, per group start (each lane's loop too): when it stops the session
     // this group is not started, and the budget it spent ends the loop and the report names memory.
     if (args.backend.mayStartGroup !== undefined && !(await args.backend.mayStartGroup())) {
+      // Sequential: `budgetSpent` counts this mutant and the rest as left out. A lane: its commit is
+      // closed as a budget stop (`runMutantsParallel` counts the window's unrecorded mutants).
+      args.sink?.memoryStop(m.mutantId);
       budgetSpent(at);
       break;
     }
@@ -12915,6 +12915,22 @@ async function runMutantsParallel(
       },
     });
     if (widest === undefined || ran.started > widest.started) widest = ran;
+    if (commit.stoppedByGuard) {
+      // R948: the memory guard refused a group in some lane: the session ends as a budget stop, with
+      // this window's unrecorded covered mutants and every later window's counted as left out.
+      const covered = (x: { readonly mutantId: string }) =>
+        args.perMutantTests.get(x.mutantId) !== undefined;
+      const left =
+        commit.unrecorded(window.filter(covered).map((x) => x.mutantId)).length +
+        windows
+          .slice(wi + 1)
+          .flat()
+          .filter(covered).length;
+      if (left > 0 && args.timeBudget !== undefined) {
+        reachBudget(args.timeBudget, left, args.batchIndex + 1);
+      }
+      break;
+    }
   }
   // One notice for the call: the window that started the most lanes speaks for it.
   if (paced && widest !== undefined)
@@ -12969,10 +12985,17 @@ function assertSameResumeInputs(
 }
 
 /**
- * R586: `<--version line> <binary sha256>` of an al-runner-v3 backend (structural, like
- * `observedBcBuild`), `undefined` on every other backend. A v3 backend that cannot say refuses the
- * session: its run row would lend under no build.
+ * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
+ * strips the end-anchored ` environment-X[ license-H][ isolation-auto]`, and ` isolation-auto` must be
+ * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
+export function lendingRunnerBuild(
+  backend: ExecutionBackend,
+  v3Build: { readonly version: string; readonly binarySha256: string },
+): string {
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+}
+
 /**
  * R948: ` baseline-daemon` when the session's baseline comes from a serve daemon, else nothing. It is
  * in the lending key (`runner_build`), so a baseline snapshot or history recorded from a daemon
@@ -12982,6 +13005,11 @@ export function baselineSourceTag(backend: { readonly baselineDaemon?: boolean }
   return backend.baselineDaemon === true ? " baseline-daemon" : "";
 }
 
+/**
+ * R586: `<--version line> <binary sha256>` of an al-runner-v3 backend (structural, like
+ * `observedBcBuild`), `undefined` on every other backend. A v3 backend that cannot say refuses the
+ * session: its run row would lend under no build.
+ */
 async function runnerBuildOf(
   backend: ExecutionBackend,
   kind: BackendCapabilities["kind"],

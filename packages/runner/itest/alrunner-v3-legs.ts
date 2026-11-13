@@ -418,6 +418,9 @@ export const V3_S1E_LEG = "S1E";
  */
 export const V3_DB_LEG = "DB";
 
+/** R948: leg ISO's session under `--isolate-tests` with the daemon baseline and the memory guard on (the per-test path). */
+export const V3_DBI_LEG = "DBI";
+
 /** True when a build with no serve-entries path refused the `entries` field by name (N1E and S1E: not applicable). */
 export function isNoServeRefusal(version: string, threw: string): boolean {
   return V3_NO_SERVE_ENTRIES.includes(version) && threw.includes(UNKNOWN_ENTRIES_FIELD);
@@ -498,6 +501,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     "S1",
     V3_S1E_LEG,
     V3_DB_LEG, // R948: not in V3_GATE_LEGS, as ISO is not
+    V3_DBI_LEG, // R948: the per-test path, likewise
     "S3",
     "N1",
     V3_N1E_LEG,

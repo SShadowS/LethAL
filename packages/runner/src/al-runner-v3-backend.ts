@@ -841,6 +841,8 @@ interface BaselineAnswer {
   readonly stopSeconds: number;
   /** Whether it was asked for coverage. */
   readonly withCoverage: boolean;
+  /** Set on an answer a serve daemon gave (not one a fresh process gave in its place). */
+  readonly fromDaemon?: true;
 }
 
 /** R798: the env var that turns R790's speculative baseline on (it is off by default). */
@@ -1950,6 +1952,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     perTestRequests: 0,
     perTestSampled: [] as number[],
     compared: 0,
+    served: 0,
   };
   /** One-shot: the stop a call is sent is the largest budget of its refs (F5). R635: the
    *  serve-entries daemon has ONE stop for its life, S (R517), never the budget. */
@@ -3302,16 +3305,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         this.callSeq += 1;
         const covPath = join(covDir, `call-${this.callSeq}.json`);
-        await rm(covPath, { force: true });
-        const made = await this.spawnCodeunit({
-          id: ref.codeunitId,
-          stopSeconds,
-          coverageJson: coverage ? covPath : undefined,
-          cwd: lane.scratchCwd(),
-          activeDir: lane.realActive ?? resolve(lane.activeDir()),
-          testDir: this.realTestDir ?? resolve(this.cfg.testDir),
-          onlyTest,
-        }).finally(() => this.memoryRelease());
+        let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
+        try {
+          await rm(covPath, { force: true });
+          made = await this.spawnCodeunit({
+            id: ref.codeunitId,
+            stopSeconds,
+            coverageJson: coverage ? covPath : undefined,
+            cwd: lane.scratchCwd(),
+            activeDir: lane.realActive ?? resolve(lane.activeDir()),
+            testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+            onlyTest,
+          });
+        } finally {
+          this.memoryRelease();
+        }
         const covText = coverage
           ? await readFile(covPath, "utf8").catch(() => undefined)
           : undefined;
@@ -3414,7 +3422,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       await this.closeLane(lane, daemon.dirtyWhy?.reason ?? "unkept-row", daemon.dirtyWhy?.family);
     }
     if (coverage && out.coverage.kind === "unavailable") return undefined;
-    return { rows: out.rows, coverage: out.coverage, wallMs, stopSeconds, withCoverage: coverage };
+    return {
+      rows: out.rows,
+      coverage: out.coverage,
+      wallMs,
+      stopSeconds,
+      withCoverage: coverage,
+      fromDaemon: true,
+    };
   }
 
   /** R948: whether `rows` hold exactly one row for each of `tests` (a call's answer is cached only then). */
@@ -3439,20 +3454,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<BaselineAnswer | undefined> {
     if (!(await this.memoryGate(true))) return undefined;
     const covDir = join(this.cfg.instrumentedDir, "cov");
-    await mkdir(covDir, { recursive: true });
-    this.callSeq += 1;
-    const covPath = join(covDir, `call-${this.callSeq}.json`);
-    await rm(covPath, { force: true });
-    const made = await this.spawnCodeunit({
-      id,
-      stopSeconds,
-      coverageJson: coverage ? covPath : undefined,
-      cwd: lane.scratchCwd(),
-      activeDir: lane.realActive ?? resolve(lane.activeDir()),
-      testDir: this.realTestDir ?? resolve(this.cfg.testDir),
-      beforeSpawn: () => this.checkBound(lane),
-      ...(only !== undefined ? { onlyTest: only.test } : {}),
-    }).finally(() => this.memoryRelease());
+    let covPath = "";
+    let made: Awaited<ReturnType<AlRunnerV3Backend["spawnCodeunit"]>>;
+    try {
+      await mkdir(covDir, { recursive: true });
+      this.callSeq += 1;
+      covPath = join(covDir, `call-${this.callSeq}.json`);
+      await rm(covPath, { force: true });
+      made = await this.spawnCodeunit({
+        id,
+        stopSeconds,
+        coverageJson: coverage ? covPath : undefined,
+        cwd: lane.scratchCwd(),
+        activeDir: lane.realActive ?? resolve(lane.activeDir()),
+        testDir: this.realTestDir ?? resolve(this.cfg.testDir),
+        beforeSpawn: () => this.checkBound(lane),
+        ...(only !== undefined ? { onlyTest: only.test } : {}),
+      });
+    } finally {
+      this.memoryRelease(); // a throw anywhere from the mkdir on still gives the hold back
+    }
     const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
     await rm(covPath, { force: true }).catch(() => {});
     if ("spawnError" in made || made.timedOut) return undefined;
@@ -3522,9 +3543,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const id of ids) {
         if (this.stopHandle?.spent() === true) break; // R955
         if (!(await this.memoryGate(true))) break; // R948: no new request over the bound
-        await this.checkBound(lane); // R652
         let got: BaselineAnswer | undefined;
         try {
+          await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
           this.baselineStats.requests += 1;
           got = await this.baselineRequest(lane, mode, id, stopSeconds, coverage);
         } catch (err) {
@@ -3610,9 +3631,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const mode = this.modeOfCall(key);
         if (this.stopHandle?.spent() === true) break; // R955
         if (!(await this.memoryGate(true))) break; // R948
-        await this.checkBound(lane); // R652
         let got: BaselineAnswer | undefined;
         try {
+          await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
           got = await this.baselineRequest(lane, mode, key, stopSeconds, coverage);
         } catch (err) {
           if (!(err instanceof AlRunnerServerRequestError)) throw err;
@@ -3692,7 +3713,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const a = this.daemonBaseline.get(key);
     this.daemonBaseline.delete(key);
-    return a?.stopSeconds === stopSeconds && a.withCoverage === coverage ? a : undefined;
+    if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
+    if (a.fromDaemon === true) this.baselineStats.served += 1;
+    return a;
   }
 
   /** R948: the guard's first line: the bound and where it came from, or why there is none. Once. */
@@ -3773,9 +3796,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly perTestRequests: number;
     readonly sampledPerTest: readonly number[];
     readonly compared: number;
+    /** Answers a daemon gave that calls actually took (a fresh process's answer in its place is not counted). */
+    readonly served: number;
   } {
     const s = this.baselineStats;
     return {
+      served: s.served,
       dropped: this.daemonBaselineOff,
       codeunits: s.codeunits,
       requests: s.requests,

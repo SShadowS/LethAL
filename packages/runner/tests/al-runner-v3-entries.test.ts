@@ -2751,6 +2751,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "S1",
       "S1E",
       "DB",
+      "DBI",
       "S3",
       "N1",
       "N1E",
@@ -6415,6 +6416,7 @@ describe("R948 A: the baseline through one daemon", () => {
       requests: 3,
       sampledCodeunits: [CU2, CU3],
       compared: 2,
+      served: 1, // CU only: the two sampled ones were answered by their fresh process
     });
     expect(r.serve.closes).toHaveLength(1);
     expect(r.b.daemonCloses().byReason.get("baseline-end")).toBeGreaterThanOrEqual(1);
@@ -6440,6 +6442,7 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(dropNotice(seen)[0]?.[1]).toContain(`codeunit ${CU2}`);
     // The sample run (CU2), then every codeunit one-shot: no verdict rests on the daemon.
     expect(oneShotCodeunits(r)).toEqual([String(CU2), String(CU), String(CU2)]);
+    expect(r.b.daemonBaselineReport().served).toBe(0); // nothing a daemon said was taken
     const asked = r.serve.requests.length;
     await baseline(r.b, SUITE2); // a second baseline of the session asks the daemon nothing
     expect(r.serve.requests).toHaveLength(asked);
@@ -6861,7 +6864,11 @@ describe("R948 ordering and the per-test cross-check", () => {
       expect(q.body.testIsolation).toBe("test");
       expect(q.body.runSelectedOnly).toBe(true);
     }
-    expect(r.b.daemonBaselineReport()).toMatchObject({ perTestRequests: 3, compared: 2 });
+    expect(r.b.daemonBaselineReport()).toMatchObject({
+      perTestRequests: 3,
+      compared: 2,
+      served: 1,
+    });
   });
 
   test("a baseline snapshot's lending key names its source: a daemon baseline is tagged, a one-shot one is not", async () => {
@@ -6879,6 +6886,61 @@ describe("R948 ordering and the per-test cross-check", () => {
     expect(lend("", " baseline-daemon")).toContain("only to the same build"); // and the other way
     expect(lend(" baseline-daemon", " baseline-daemon")).toBeUndefined();
     expect(lend("", "")).toBeUndefined();
+  });
+});
+
+describe("R948: a throw after the memory hold gives the hold back", () => {
+  const held = (b: AlRunnerV3Backend) => (b as unknown as { memoryHeld: number }).memoryHeld;
+  const guard = {
+    memoryHeadroomGb: 4,
+    seams: {
+      memoryReader: () => ({
+        usedBytes: GIB,
+        maxBytes: 32 * GIB,
+        source: "/sys/fs/cgroup/memory.max",
+      }),
+    },
+  };
+
+  test("the bound check inside a fill (a tampered batch) throws; nothing stays held", async () => {
+    const r = await dbRig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    await writeFile(join(r.l.scratch, "active", "Logic.Codeunit.al"), "codeunit 79000 Other { }");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
+  });
+
+  test("the one-shot cross-check failing before its spawn (its coverage file cannot be removed) releases its hold", async () => {
+    const r = await dbRig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    // The first call takes call-1; the fill's own process takes call-2, whose path is a folder
+    // with a file in it, so removing it throws after the hold was taken.
+    const blocked = join(r.l.scratch, "cov", "call-2.json");
+    await mkdir(blocked, { recursive: true });
+    await writeFile(join(blocked, "x"), "x");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
+  });
+
+  test("the process worker: a throw before its spawn releases its hold", async () => {
+    const r = await rig({
+      suite: SUITE2,
+      seams: guard.seams,
+      extra: { isolateTests: true, memoryHeadroomGb: guard.memoryHeadroomGb },
+    });
+    // The first call takes call-1; the fill's own process takes call-2, whose path is a folder
+    // with a file in it, so removing it throws after the hold was taken.
+    const blocked = join(r.l.scratch, "cov", "call-2.json");
+    await mkdir(blocked, { recursive: true });
+    await writeFile(join(blocked, "x"), "x");
+    await expect(baselineOne(r.b, ref("A"))).rejects.toThrow();
+    expect(held(r.b)).toBe(0);
   });
 });
 
