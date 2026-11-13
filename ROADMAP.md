@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 935 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 936 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -980,6 +980,7 @@ that ordering is the priority.
 - **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · open
 - **R971** · BC.History batch 8 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (a var Option parameter loses the caller's members) and three new refusal causes filed upstream · [R971.md](docs/roadmap/R971.md) · closed 2026-11-13 — measured and filed upstream…
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
+- **R973** · BC.History batch 9 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (ToBase64 of an InStream drops its line breaks) and six new refusal causes filed upstream · [R973.md](docs/roadmap/R973.md) · closed 2026-11-13 — measured and filed upstream…
 
 ---
 
