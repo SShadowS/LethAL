@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 932 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 933 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -365,6 +365,7 @@ that ordering is the priority.
 - **R955** · `--time-budget` does not bound the baseline, and a run stopped in the baseline writes no report: DO's 1,979-test baseline ran 4 h 40 min with no mutant decided · [R955.md](docs/roadmap/R955.md) · done (285ba3f9)
 - **R963** · A v3 test row with no duration of its own is stored with the whole call's wall time as if it were the test's: a kill confirmation in a batch with a hung entry reads 620 s for a test that takes 8 ms · [R963.md](docs/roadmap/R963.md) · done (240d2c1b)
 - **R965** · A v3 mutant in one overload of a procedure is attributed 'exact' coverage by tests that only call ANOTHER overload, so a mutant no test executes is scored survived (Cryptography Management: SignedXml.SetSigningKey) · [R965.md](docs/roadmap/R965.md) · done (c4312b52)
+- **R970** · The v3 memory guard checks only at call boundaries, so the per-test re-baseline's parallel processes outgrew it: DO's window reached a 20 GB tree with the container at 2 GiB headroom · [R970.md](docs/roadmap/R970.md) · open
 
 ## Product gaps a real project hits
 
