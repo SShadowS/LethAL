@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 928 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 929 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -973,6 +973,7 @@ that ordering is the priority.
 - **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 - **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · open
+- **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
 
 ---
 
