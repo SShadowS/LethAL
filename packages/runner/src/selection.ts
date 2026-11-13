@@ -360,6 +360,19 @@ export interface CoverageIndex {
    * matters is whether the resolver FAILED here. That is what this set answers.
    */
   readonly byObjectNamingGap: ReadonlySet<string>;
+  /**
+   * R975. `<type>:<id>:<line>` -> the tests whose baseline hit that line (the same key
+   * `baselineReachOf` builds). Filled only when the index was built with `{ lines: true }`.
+   */
+  readonly byLine: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * R975. True only when the index was built with `{ lines: true }` AND every baseline test
+   * carries coverage whose granularity is "line". Decided from the data, never the backend name.
+   * One test with procedure-grain coverage, or none at all, leaves it false: that test may have
+   * run a line `byLine` cannot see, so no line answer is complete. A naming gap is judged per
+   * object, at lookup (`byObjectNamingGap`).
+   */
+  readonly lineComplete: boolean;
 }
 
 /**
@@ -461,7 +474,7 @@ export interface CoverageSplit {
 }
 
 /** How `coverageFilter` placed a mutant's covering tests — see `CoverageSplit.attribution`. */
-export type CoverageAttribution = "exact" | "object" | "all-green";
+export type CoverageAttribution = "exact" | "object" | "all-green" | "line";
 
 /**
  * What each `CoverageAttribution` value MEANS for a reader, moved here verbatim from the prose
@@ -496,6 +509,13 @@ export const ATTRIBUTION_INTERPRETATIONS: Record<CoverageAttribution, Interpreta
     entailedNegative: "Carries the least information of the three.",
     basis: "R29",
   },
+  line: {
+    meaning:
+      "R975. A trigger mutant placed by LINE coverage: these tests' baselines executed the " +
+      "mutated statement's own line. Every test's coverage was line-grain and the object had no " +
+      'naming gap. "Covered but survived" is a real assertion gap, as with `exact`.',
+    basis: "R975",
+  },
 };
 
 export function testKeyOf(ref: TestMethodRef): string {
@@ -504,7 +524,14 @@ export function testKeyOf(ref: TestMethodRef): string {
 
 export function buildCoverageIndex(
   baseline: ReadonlyArray<{ ref: TestMethodRef; coverage?: CoverageMap }>,
+  /** R975: `lines: true` also indexes line hits (see `CoverageIndex.lineComplete`). */
+  opts: { readonly lines?: boolean } = {},
 ): CoverageIndex {
+  const byLine = new Map<string, Set<string>>();
+  const lineComplete =
+    opts.lines === true &&
+    baseline.length > 0 &&
+    baseline.every((b) => b.coverage?.granularity === "line");
   const byMember = new Map<string, Set<string>>();
   const byMemberOverload = new Map<string, Set<string>>();
   const byObject = new Map<string, Set<string>>();
@@ -531,6 +558,15 @@ export function buildCoverageIndex(
         byObject.set(objectKey, objectSet);
       }
       objectSet.add(testKeyOf(b.ref));
+      if (lineComplete && e.line !== undefined) {
+        const lineKey = `${objectKey}:${e.line}`;
+        let lineSet = byLine.get(lineKey);
+        if (!lineSet) {
+          lineSet = new Set();
+          byLine.set(lineKey, lineSet);
+        }
+        lineSet.add(testKeyOf(b.ref));
+      }
 
       // MEMBER level only when the observation actually names a member. The skip is STRUCTURAL —
       // `procedure === undefined`, not a comparison against some sentinel string — so no member
@@ -579,7 +615,15 @@ export function buildCoverageIndex(
       }
     }
   }
-  return { byMember, byMemberOverload, byObject, byObjectUnnamed, byObjectNamingGap };
+  return {
+    byMember,
+    byMemberOverload,
+    byObject,
+    byObjectUnnamed,
+    byObjectNamingGap,
+    byLine,
+    lineComplete,
+  };
 }
 
 export function coverageFilter(
@@ -694,8 +738,29 @@ export function coverageFilter(
     const isTrigger = m.triggerName !== undefined;
     // Recorded BEFORE fallback 1 can overwrite `testKeys`: after it runs, an exact hit and an
     // object-level hit are indistinguishable by inspecting `testKeys` alone.
-    const how: CoverageAttribution =
-      testKeys !== undefined && testKeys.size > 0 ? "exact" : "object";
+    let how: CoverageAttribution = testKeys !== undefined && testKeys.size > 0 ? "exact" : "object";
+    // R975 — LINE grain, before FALLBACK 1. A trigger mutant whose statement line is known
+    // (`reachLine`, in the frame of the backend's line coverage) is decided by which tests' baselines
+    // hit THAT line, when the whole session's coverage is line-grain and this object has no naming
+    // gap. A test that opened the page but never ran the trigger is then not a covering test, and a
+    // trigger no test runs is `no-coverage`, not a survivor. Anything else keeps FALLBACK 1 below.
+    if (
+      (testKeys === undefined || testKeys.size === 0) &&
+      isTrigger &&
+      index.lineComplete &&
+      m.reachLine !== undefined
+    ) {
+      const objectKey = objectKeyOf(m.objectType, m.codeunitId, context);
+      if (!index.byObjectNamingGap.has(objectKey)) {
+        const hit = index.byLine.get(`${objectKey}:${m.reachLine}`);
+        if (hit === undefined || hit.size === 0) {
+          uncovered.push(m);
+          continue;
+        }
+        testKeys = hit;
+        how = "line";
+      }
+    }
     if ((testKeys === undefined || testKeys.size === 0) && isTrigger) {
       testKeys = index.byObject.get(objectKeyOf(m.objectType, m.codeunitId, context));
     }

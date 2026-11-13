@@ -1281,7 +1281,8 @@
           "enum": [
             "exact",
             "object",
-            "all-green"
+            "all-green",
+            "line"
           ]
         },
         "guardObserved": {
@@ -1511,7 +1512,8 @@
           "enum": [
             "exact",
             "object",
-            "all-green"
+            "all-green",
+            "line"
           ]
         },
         "runner": {

@@ -19467,9 +19467,11 @@ describe("GH-24: per-mutant reach", () => {
   // R926 review C: FALLBACK 2 ("all-green") ran every test BECAUSE coverage saw nothing of the
   // object, so that same coverage cannot say the site was not hit. Coverage names only the
   // codeunit; the table's trigger mutants take the fallback and survive.
+  // R975: with COMPLETE line coverage a trigger nobody hit is no-coverage (line rule), so this
+  // fallback is reached only when some test has no line coverage: BTest has none here.
   test("R926: an all-green-attributed survivor is never called unreached", async () => {
     const dirs = await makeProjectWithTriggerTable();
-    const backend = v3Backend(() => [4]);
+    const backend = v3Backend((ref) => (ref.method === "ATest" ? [4] : undefined));
     const events: RunEvent[] = [];
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -19485,13 +19487,12 @@ describe("GH-24: per-mutant reach", () => {
       expect(report.untargetedTriggerCount).toBe(table.length);
       expect(table.some((m) => m.verdict === "survived")).toBe(true);
       for (const m of table) expect(reachOf(m)).toEqual({});
-      // The control: the codeunit's survivors in the same session ARE decided.
+      // R975: BTest has no line coverage, so no reach is decided in this session; the decided
+      // control lives in the R926 tests above, which run on complete line coverage.
       const code = events.filter(
         (e): e is Scored => e.type === "mutant-scored" && e.mutant.file.includes("SandboxLogic"),
       );
-      for (const e of decidedOf(code)) {
-        expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
-      }
+      for (const e of code) expect(reachOf(e)).toEqual({});
     } finally {
       warnSpy.mockRestore();
     }

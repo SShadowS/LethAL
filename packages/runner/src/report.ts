@@ -2221,6 +2221,8 @@ export interface MutantOutcome {
    * they reached the mutated member is unknown. Acting on one of these can mean strengthening a
    * test that never ran the code.
    * `all-green` — coverage placed it nowhere, so every green test ran. Least informative.
+   * `line` (R975) — a trigger mutant placed by LINE coverage: these tests' baselines ran its own
+   * statement's line. As trustworthy as `exact`.
    * Absent when nothing ran (`no-coverage`).
    *
    * Reporting all three as one undifferentiated list is approximate attribution wearing the

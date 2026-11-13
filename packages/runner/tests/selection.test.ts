@@ -1309,3 +1309,115 @@ describe("R-384: coverageFilter's warn parameter", () => {
     }
   });
 });
+
+// R975: a trigger mutant is placed by LINE coverage when every test's coverage is line-grain.
+// Invented page 50100: OnOpenPage's statement is at line 12, an OnAction's at line 20. t1 runs
+// OnOpenPage; t2 only opens the page (hits page-level line 5); nobody invokes the action.
+describe("R975: trigger mutants placed by line coverage", () => {
+  const page = { objectType: "Page", objectId: 50100 };
+  const line = (n: number) => ({ ...page, line: n });
+  const covOf = (lines: number[], over: Record<string, unknown> = {}) => ({
+    granularity: "line" as const,
+    entries: lines.map(line),
+    ...over,
+  });
+  const onOpen = entry({
+    mutantId: "M0010",
+    objectType: "page",
+    codeunitId: 50100,
+    procedureName: "",
+    triggerName: "OnOpenPage",
+    reachGrain: "statement",
+    reachLine: 12,
+  });
+  const onAction = entry({
+    mutantId: "M0011",
+    objectType: "page",
+    codeunitId: 50100,
+    procedureName: "",
+    triggerName: "OnAction",
+    reachGrain: "statement",
+    reachLine: 20,
+  });
+  const run = (
+    baseline: Parameters<typeof buildCoverageIndex>[0],
+    mutants: unknown[] = [onOpen, onAction],
+    lines = true,
+  ) => {
+    const index = buildCoverageIndex(baseline, { lines });
+    return coverageFilter(mutants as never, index, [t1, t2], undefined, false, new Map(), () => {});
+  };
+  const lineBaseline = [
+    { ref: t1, coverage: covOf([5, 12]) },
+    { ref: t2, coverage: covOf([5]) },
+  ];
+
+  test("the never-invoked action is no-coverage; OnOpenPage takes exactly the test that hit its line", () => {
+    const split = run(lineBaseline);
+    expect(split.covered.get("M0010")).toEqual([t1]);
+    expect(split.attribution.get("M0010")).toBe("line");
+    expect(split.uncovered.map((m) => m.mutantId)).toEqual(["M0011"]);
+    expect(split.attribution.has("M0011")).toBe(false);
+  });
+
+  test("procedure-grain coverage keeps FALLBACK 1: both trigger mutants take every test of the object", () => {
+    const procedureOnly = [
+      { ref: t1, coverage: { ...covOf([5, 12]), granularity: "procedure" as const } },
+      { ref: t2, coverage: { ...covOf([5]), granularity: "procedure" as const } },
+    ];
+    const split = run(procedureOnly);
+    expect(split.covered.get("M0010")).toEqual([t1, t2]);
+    expect(split.covered.get("M0011")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0011")).toBe("object");
+  });
+
+  test("an index built without { lines: true } keeps FALLBACK 1", () => {
+    const split = run(lineBaseline, [onAction], false);
+    expect(split.covered.get("M0011")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0011")).toBe("object");
+  });
+
+  test("one test with no coverage at all makes the session incomplete: FALLBACK 1", () => {
+    const split = run([{ ref: t1, coverage: covOf([5, 12]) }, { ref: t2 }], [onAction]);
+    expect(split.covered.get("M0011")).toEqual([t1]);
+    expect(split.attribution.get("M0011")).toBe("object");
+  });
+
+  test("a naming gap in the object keeps FALLBACK 1 for that object", () => {
+    const gap = covOf([5, 12], { namingGaps: [{ objectType: "Page", objectId: 50100 }] });
+    const split = run(
+      [
+        { ref: t1, coverage: gap },
+        { ref: t2, coverage: covOf([5]) },
+      ],
+      [onAction],
+    );
+    expect(split.covered.get("M0011")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0011")).toBe("object");
+  });
+
+  test("a naming gap in ANOTHER object does not stop the line answer here", () => {
+    const gap = covOf([5, 12], { namingGaps: [{ objectType: "Codeunit", objectId: 9 }] });
+    const split = run(
+      [
+        { ref: t1, coverage: gap },
+        { ref: t2, coverage: covOf([5]) },
+      ],
+      [onAction],
+    );
+    expect(split.uncovered.map((m) => m.mutantId)).toEqual(["M0011"]);
+  });
+
+  test("a trigger mutant with no reachLine keeps FALLBACK 1", () => {
+    const noLine = entry({ ...onAction, reachGrain: "block", reachLine: undefined });
+    const split = run(lineBaseline, [noLine]);
+    expect(split.covered.get("M0011")).toEqual([t1, t2]);
+    expect(split.attribution.get("M0011")).toBe("object");
+  });
+
+  test("an ordinary procedure mutant is untouched by the line rule", () => {
+    const proc = entry({ mutantId: "M0012", objectType: "page", codeunitId: 50100, reachLine: 12 });
+    const split = run(lineBaseline, [proc]);
+    expect(split.uncovered.map((m) => m.mutantId)).toEqual(["M0012"]);
+  });
+});

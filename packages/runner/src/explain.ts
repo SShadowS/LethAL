@@ -271,8 +271,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 26: R922 added the caveat value `al-runner-v3-serve-default-fallback` to `$.caveats[].caveat`. A
  * new value, so it bumps (R233); v25 is frozen.
+ *
+ * 27: R975 added the attribution value `line` to `$.survivors[].attribution` (and the suggestions'
+ * member attribution). A new value, so it bumps (R233); v26 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 26;
+export const EXPLAIN_SCHEMA_VERSION = 27;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

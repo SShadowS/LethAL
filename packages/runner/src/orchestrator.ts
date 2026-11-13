@@ -8520,6 +8520,7 @@ async function runSessionBody(
               ref: b.ref,
               ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
             })),
+            { lines: true }, // R975: trigger mutants are placed by line where every test has line coverage
           );
           const split = coverageFilter(
             execute.filter((m) => !candidates.has(m.mutantId)),
