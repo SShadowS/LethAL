@@ -1223,6 +1223,7 @@ export type V3DaemonCloseReason =
   | "dependency-skip"
   | "probe"
   | "deploy"
+  | "mutant-stop"
   | "session-end"
   | "baseline-end";
 
@@ -1231,6 +1232,7 @@ export type V3DaemonCloseReason =
 export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
   "probe",
   "deploy",
+  "mutant-stop",
   "session-end",
   "baseline-end",
 ]);
@@ -1379,6 +1381,8 @@ export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
   readonly server: AlRunnerServer;
+  /** R954: the `--test-timeout` seconds it started with; `ensureDaemon` restarts one that differs. */
+  readonly stopSeconds: number;
   dirty: boolean;
   /** R939: why `dirty` was set (the first unkept row's reason), for the close count. */
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
@@ -2812,9 +2816,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.budgetFloor = { floorMs, baselineTimeoutMs };
   }
 
+  /** R954: the session's mutant stop, once the orchestrator gave one (no `--mutant-timeout-ms`). */
+  useMutantStop(ms: number): void {
+    // No dropPair: ensureDaemon replaces a daemon whose stop differs, and the baseline bracket dropped any pair.
+    this.mutantStopMs = ms;
+  }
+  private mutantStopMs: number | undefined;
+
   private serveStopSeconds(): number | undefined {
     const f = this.budgetFloor;
-    return f === undefined ? undefined : stopSecondsOf(Math.max(f.floorMs, f.baselineTimeoutMs));
+    if (f === undefined) return undefined;
+    if (this.mutantStopMs !== undefined) return stopSecondsOf(this.mutantStopMs); // R954
+    return stopSecondsOf(Math.max(f.floorMs, f.baselineTimeoutMs));
   }
 
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
@@ -4088,6 +4101,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       useDiscoveredTests: no("useDiscoveredTests"),
       useSessionTests: no("useSessionTests"),
       useMutantBudgetFloor: no("useMutantBudgetFloor"),
+      useMutantStop: no("useMutantStop"),
       useBuildSymbols: no("useBuildSymbols"),
       baselinePhase: no("baselinePhase"),
       noteReusedBaseline: no("noteReusedBaseline"),
@@ -5149,7 +5163,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async ensureDaemon(lane: Lane, mode: RequestMode): Promise<Daemon> {
     const had = lane.daemonFor(mode);
-    if (had !== undefined) return had;
+    // R954: a daemon started under another stop (before `useMutantStop`) is replaced.
+    if (had !== undefined && had.stopSeconds === this.serveStopSeconds()) return had;
+    if (had !== undefined) await this.closeLane(lane, "mutant-stop");
     const before = lane.timers.warmupMs;
     const d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
     lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
@@ -5181,7 +5197,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         : []),
     ]);
     this.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false };
+    const daemon: Daemon = { server, dirty: false, stopSeconds };
     lane.setDaemon(mode, daemon);
     return daemon;
   }

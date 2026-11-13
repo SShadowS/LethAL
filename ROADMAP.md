@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 921 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 922 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -957,7 +957,7 @@ that ordering is the priority.
 - **R946** · BC.History batch 6 on v3 (eight System Application modules): the platform System package's grants are not applied (upstream #7853, a whole module refused), and more refusals (upstream #7854) · [R946.md](docs/roadmap/R946.md) · open
 - **R947** · A BC.History identity diff dumps all 519 projects even for a change that can touch a few, and every task rebuilds corpus trees and package pools that an earlier task already built and deleted · [R947.md](docs/roadmap/R947.md) · done (b15ea79b)
 - **R949** · CI saves the 3.85 GB LLVM cache once per BRANCH (GitHub scopes caches by branch), so a few branches fill the 10 GB repo limit and evict the other caches · [R949.md](docs/roadmap/R949.md) · done (4e1c1f0a): restore on every branch, save on master only; branch CI 43232433178 restored master's pair…
-- **R954** · On al-runner v3 the per-mutant budget floor (180 s, set for BC's publish latency) makes each mutant that slows a millisecond test cost three minutes: Password's hour went on 18 such timeouts and 48 mutants were left unscored · [R954.md](docs/roadmap/R954.md) · open
+- **R954** · On al-runner v3 the per-mutant budget floor (180 s, set for BC's publish latency) makes each mutant that slows a millisecond test cost three minutes: Password's hour went on 18 such timeouts and 48 mutants were left unscored · [R954.md](docs/roadmap/R954.md) · done (095fc380)
 - **R950** · The al-runner update moves `current` only when no al-runner runs anywhere, so with lanes on v3 all day a passed edge build waits indefinitely, though a process on an explicit build path is not touched by the move · [R950.md](docs/roadmap/R950.md) · done (79e60793): the move guard counts only processes started through current/ (or unreadable); LethAL's own…
 - **R951** · R900's probing path (the BC service folder) is not enough for Base Application: alc also needs the ASP.NET Core shared framework (`Microsoft.AspNetCore.StaticFiles`) · [R951.md](docs/roadmap/R951.md) · done (c061534c)
 - **R956** · On DO's test app, isolation `auto` moved codeunits to method isolation and re-baselined them one test per al-runner process (about 30 s and 3 GB each): the baseline alone would take about 4 h. Cause: no license, so every test was refused · [R956.md](docs/roadmap/R956.md) · done (285ba3f9)
@@ -966,6 +966,7 @@ that ordering is the priority.
 - **R959** · `--resume-run` refuses after a host reboot (server generation changed), so a user redid 589 decided mutants, although a reboot of a container with a persistent database usually keeps the apps and data the verdicts were measured against · [R959.md](docs/roadmap/R959.md) · open
 - **R960** · On the default transport, a serve warm-up that refuses the whole batch (`entries-batch-refused`) stops the session after its baseline instead of falling back to one-shot · [R960.md](docs/roadmap/R960.md) · open
 - **R961** · On a large v3 test app the baseline runs one al-runner process per codeunit, and `auto` then re-baselines every cascade codeunit one process per test: DO's 1,979-test baseline takes about 2.4 h and grew to 30.8 GB (OOM kill), where one al-runner process runs the suite in 14 s · [R961.md](docs/roadmap/R961.md) · open
+- **R962** · A memory-guard stop under `--workers N` discards mutants that finished but were not yet committed, and counts them as left out although they ran · [R962.md](docs/roadmap/R962.md) · open
 
 ---
 
