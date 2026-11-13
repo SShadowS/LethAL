@@ -1,9 +1,10 @@
 /**
  * R905: the class of a held heavy slot. Whoever takes `<lockDir>/heavy.<n>` writes
- * `<lockDir>/heavy.<n>.class` right after the lock, holding `baseapp <pid>` or `other <pid>`, and
- * removes it on exit. The guard (`heavyVerdict`) reads it: a job over a corpus COPY is invisible to
- * the `ps` scan, so the class is the only way to know a slot is BaseApp-class. The file is stale by
- * pid: a pid that is dead reads as no class. No class counts as BaseApp (the safe side).
+ * `<lockDir>/heavy.<n>.class` right after the lock, holding `<class> <pid> <peak GiB>` (R952), and
+ * removes it on exit. The memory rule (`memoryVerdict`, the only rule under a cgroup limit, R960) reads
+ * its peak; the no-cgroup count fallback (`heavyVerdict`) reads its class, because a job over a corpus
+ * COPY is invisible to the `ps` scan. The file is stale by pid: a pid that is dead reads as no class.
+ * No class counts as BaseApp (the safe side).
  * Shell takers use `scripts/heavy-slot.sh`.
  */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -111,10 +112,11 @@ export function memoryVerdict(
   heldPeaksGiB: readonly number[],
   peakGiB: number,
   reserveGiB: number = MEMORY_RESERVE_GIB,
-): { readonly refuse: boolean; readonly message: string } {
+): { readonly refuse: boolean; readonly message: string; readonly off?: true } {
   if (sample?.maxBytes === undefined)
     return {
       refuse: false,
+      off: true,
       message: `memory rule off: ${sample === undefined ? "no cgroup v2 memory.current can be read" : `${sample.source} names no limit`}`,
     };
   const max = sample.maxBytes / GIB;
