@@ -877,6 +877,8 @@ export interface V3Row {
   readonly notRun: boolean;
   /** R907: al-runner's `flagged: true` (a pass resting on an unprobed assumption). Absent otherwise. */
   readonly flagged?: true;
+  /** R949: set on a row a serve daemon answered: serve rows never carry `flagged`, so it is unknown, not false. */
+  readonly flaggedUnknown?: true;
 }
 
 /**
@@ -1034,6 +1036,7 @@ export function v3RowVerdict(
       ...(row.message !== undefined ? { message: row.message } : {}),
       ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
       ...(row.flagged === true ? { flagged: true } : {}),
+      ...(row.flaggedUnknown === true ? { flaggedUnknown: true } : {}),
     },
     wallMs,
     coverage,
@@ -1950,8 +1953,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R948: the daemon baseline's answers by call id (a codeunit's, or one test's), each served once; reset by a deploy. */
   private daemonBaseline = new Map<number, BaselineAnswer>();
   private daemonBaselineFilled = false;
+  /** R949: the once-per-session notice that daemon answers carry no `flagged`. */
+  private flaggedUnknownNoted = false;
   /** R948: why the daemon baseline was dropped. Session-wide (a deploy keeps it): the baseline is then one-shot for every batch. */
   private daemonBaselineOff: string | undefined;
+  /** R948: per differing test, which field differs (`compareBaselineAnswers`' lines); names, fields and `file:line` keys only. */
+  private daemonBaselineDetail: string[] = [];
   /** R948: the session's stop state (`useStopHandle`). */
   private stopHandle: StopHandle | undefined;
   /** R948: the memory guard: decided once, on the first need. `"off"`: said why, or silent when no headroom was given. */
@@ -3426,8 +3433,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R948: the cross-check failed or the daemon proved unusable: the whole session's baseline goes
    * back to one process per codeunit, never a mix, and one notice names why.
    */
-  private dropDaemonBaseline(why: string): void {
+  private dropDaemonBaseline(why: string, detail: readonly string[] = []): void {
     this.daemonBaselineOff = why;
+    this.daemonBaselineDetail = [...detail];
     this.daemonBaseline.clear();
     this.notify(
       "al-runner-v3-baseline-daemon-dropped",
@@ -3473,7 +3481,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (coverage && out.coverage.kind === "unavailable") return undefined;
     return {
-      rows: out.rows,
+      rows: out.rows.map((r) => ({ ...r, flaggedUnknown: true as const })), // R949
       coverage: out.coverage,
       wallMs,
       stopSeconds,
@@ -3639,6 +3647,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             if (why.length > 0) {
               this.dropDaemonBaseline(
                 `the daemon's baseline of codeunit ${id} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+                why,
               );
               return;
             }
@@ -3737,6 +3746,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (why.length > 0) {
             this.dropDaemonBaseline(
               `the daemon's per-test baseline of ${ref.codeunitName}.${ref.method} differs from a fresh process's (${why.slice(0, 3).join("; ")}${why.length > 3 ? `; and ${why.length - 3} more` : ""})`,
+              why,
             );
             return;
           }
@@ -3772,7 +3782,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const a = this.daemonBaseline.get(key);
     this.daemonBaseline.delete(key);
     if (a?.stopSeconds !== stopSeconds || a.withCoverage !== coverage) return undefined;
-    if (a.fromDaemon === true) this.baselineStats.served += 1;
+    if (a.fromDaemon === true) {
+      this.baselineStats.served += 1;
+      // R949: once per session, when the first daemon answer is used. No count here: later batches and
+      // per-test fills are not known yet; the report's per-test `baselineFlaggedUnknown` is the record.
+      if (!this.flaggedUnknownNoted) {
+        this.flaggedUnknownNoted = true;
+        this.notify(
+          "al-runner-v3-serve-flagged-unknown",
+          `[lethal] al-runner-v3-serve-flagged-unknown: the baseline came from an al-runner serve daemon, whose rows carry no "flagged" (a pass resting on an unprobed assumption), so every passing test the daemon answered has an UNKNOWN flagged state; the report marks each one baselineFlaggedUnknown, never unflagged. Upstream: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7954 (R949).`,
+        );
+      }
+    }
     return a;
   }
 
@@ -3848,6 +3869,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R948: what the daemon baseline did, for the gate and the tests. */
   daemonBaselineReport(): {
     readonly dropped: string | undefined;
+    /** Why it was dropped, per differing test and field (`failText`, `coverage`, ...), uncut. */
+    readonly droppedDetail: readonly string[];
     readonly codeunits: number;
     readonly requests: number;
     readonly sampledCodeunits: readonly number[];
@@ -3873,6 +3896,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       skippedOther: [...s.skippedOther],
       sampledSkipped: [...s.sampledSkipped],
       dropped: this.daemonBaselineOff,
+      droppedDetail: [...this.daemonBaselineDetail],
       codeunits: s.codeunits,
       requests: s.requests,
       sampledCodeunits: s.sampled,

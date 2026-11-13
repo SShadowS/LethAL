@@ -293,6 +293,7 @@ export function testMethodsOf(
   refs: readonly TestMethodRef[],
   durations: ReadonlyMap<string, readonly number[]>,
   flagged: ReadonlySet<string> = new Set(),
+  flaggedUnknown: ReadonlySet<string> = new Set(),
 ): TestMethodRecord[] {
   const identityOf = (r: TestMethodRef) => `${r.codeunitId}::${r.method.toLowerCase()}`;
   const byName = new Map<string, TestMethodRef[]>();
@@ -321,6 +322,9 @@ export function testMethodsOf(
         ...(places.size > 1 ? { lineAmbiguous: true as const } : {}),
         ...(ms !== undefined ? { baselineDurationMs: ms } : {}),
         ...(flagged.has(name) ? { baselineFlagged: true as const } : {}),
+        ...(flaggedUnknown.has(name) && !flagged.has(name)
+          ? { baselineFlaggedUnknown: true as const }
+          : {}),
       };
     });
 }
@@ -378,6 +382,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const baselineDurations = new Map<string, number[]>();
   // R907: tests whose baseline pass al-runner flagged, in a completed batch of this session.
   const baselineFlaggedTests = new Set<string>();
+  // R949: passes a serve daemon answered: flagged unknown.
+  const baselineFlaggedUnknownTests = new Set<string>();
 
   // How many times this run entered the deploy phase — one per batch loop iteration, emitted
   // unconditionally before that batch's deploy attempt (including a failed one), so it counts
@@ -530,6 +536,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
             baselineDurations.set(v.name, [...(baselineDurations.get(v.name) ?? []), v.durationMs]);
           }
           if (v.outcome === "pass" && v.flagged === true) baselineFlaggedTests.add(v.name); // R907
+          if (v.outcome === "pass" && v.flaggedUnknown === true) {
+            baselineFlaggedUnknownTests.add(v.name); // R949
+          }
         }
         break;
       case "quarantined":
@@ -887,7 +896,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
     ...(discoveredTests !== undefined
-      ? { testMethods: testMethodsOf(discoveredTests, baselineDurations, baselineFlaggedTests) }
+      ? {
+          testMethods: testMethodsOf(
+            discoveredTests,
+            baselineDurations,
+            baselineFlaggedTests,
+            baselineFlaggedUnknownTests,
+          ),
+        }
       : {}),
     untargetedTriggerCount,
     groupedCalls,

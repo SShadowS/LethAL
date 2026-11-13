@@ -299,6 +299,9 @@
           },
           "baselineFlagged": {
             "const": true
+          },
+          "baselineFlaggedUnknown": {
+            "const": true
           }
         }
       }
