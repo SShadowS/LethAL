@@ -7071,16 +7071,24 @@ describe("R952 (R948): a serve daemon past its size or request bound is recycled
 
   test("daemonMaxRssGb: only the daemon over the size is replaced; the default is 6 GiB", async () => {
     const control = await session({});
-    const big = new Set<number>();
-    // the first daemon the bound asks about (the mutant phase's, on its second use) is 7 GiB, every other 1 GiB
+    // The first daemon the bound asks about GROWS: 1 GiB at its first check (warm-up and one request),
+    // 7 GiB after that. Every other daemon stays at 1 GiB.
+    let first: number | undefined;
+    let checks = 0;
     const reader = (pid: number) => {
-      if (big.size > 0 && !big.has(pid)) return GIB;
-      big.add(pid);
-      return 7 * GIB;
+      first ??= pid;
+      if (pid !== first) return GIB;
+      checks++;
+      return checks === 1 ? GIB : 7 * GIB;
     };
-    const s = await session({ seams: { rssReader: reader } });
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: reader },
+      notify: (code) => notices.push(code),
+    });
     expect(s.closes.find(([why]) => why === "recycle")?.[1]).toBe(1);
     expect(s.verdicts).toEqual(control.verdicts);
+    expect(notices).not.toContain("al-runner-v3-daemon-recycle-off");
     // at 5 GiB the default bound (6) is not reached; at 0 the bound is off whatever the size
     const under = await session({ seams: { rssReader: () => 5 * GIB } });
     expect(under.closes.filter(([why]) => why === "recycle")).toEqual([]);
@@ -7089,6 +7097,26 @@ describe("R952 (R948): a serve daemon past its size or request bound is recycled
       seams: { rssReader: () => 100 * GIB },
     });
     expect(off.closes.filter(([why]) => why === "recycle")).toEqual([]);
+  });
+
+  // Review r1: a project whose fresh daemon is already over the size would otherwise pay a warm-up
+  // per request. The bound turns itself off for the session, said once; nothing is recycled.
+  test("a daemon already over the size after its warm-up: the size bound goes off, said once", async () => {
+    const control = await session({});
+    const notices: string[] = [];
+    const s = await session({
+      seams: { rssReader: () => 7 * GIB },
+      notify: (code) => notices.push(code),
+    });
+    expect(s.closes.filter(([why]) => why === "recycle")).toEqual([]);
+    expect(notices.filter((c) => c === "al-runner-v3-daemon-recycle-off")).toHaveLength(1);
+    expect(s.verdicts).toEqual(control.verdicts);
+    // the request bound is not affected by it
+    const r = await session({
+      seams: { rssReader: () => 7 * GIB },
+      extra: { daemonMaxRequests: 2 },
+    });
+    expect(r.closes.find(([why]) => why === "recycle")?.[1] ?? 0).toBeGreaterThan(0);
   });
 
   test("a recycle is not routine: it costs a warm-up, so it reaches the close sink", () => {

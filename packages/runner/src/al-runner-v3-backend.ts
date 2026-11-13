@@ -1419,7 +1419,7 @@ interface Daemon {
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
   /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
   baselineStop?: number;
-  /** R952: requests sent to it (warm-up included), for the recycle bound. */
+  /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
   requests: number;
 }
 
@@ -5249,20 +5249,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
-   * R952 (R948): whether `d` is past `alRunnerV3.daemonMaxRequests` (requests sent to it) or
+   * R952 (R948): whether `d` is past `alRunnerV3.daemonMaxRequests` (entries requests sent to it,
+   * warm-up included, through `send()`; the coverage window's plain requests are not counted) or
    * `daemonMaxRssGb` (its process's resident memory). A bound of 0 is off; an RSS that cannot be read
-   * (no /proc) never recycles.
+   * (no /proc) never recycles. A daemon already over the size after its warm-up and at most one more
+   * request is the project's working set, not growth: recycling it would only buy a warm-up per
+   * request, so the size bound is turned off for the session, said once (review r1).
    */
   private overRecycleBound(d: Daemon): boolean {
     const maxRequests = this.cfg.daemonMaxRequests ?? 0;
     if (maxRequests > 0 && d.requests >= maxRequests) return true;
     const maxGb = this.cfg.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT;
-    if (!(maxGb > 0)) return false;
+    if (!(maxGb > 0) || this.rssBoundOff) return false;
     const pid = d.server.pid;
     if (pid === undefined) return false;
     const rss = (this.seams.rssReader ?? readProcessRssBytes)(pid);
-    return rss !== undefined && rss > maxGb * 2 ** 30;
+    if (rss === undefined || rss <= maxGb * 2 ** 30) return false;
+    if (d.requests <= 2) {
+      this.rssBoundOff = true;
+      this.notify(
+        "al-runner-v3-daemon-recycle-off",
+        `[lethal] al-runner-v3-daemon-recycle-off: a serve daemon is already ${(rss / 2 ** 30).toFixed(1)} GiB after ${d.requests} request(s), over "alRunnerV3.daemonMaxRssGb" (${maxGb}); recycling would only add a warm-up per request, so the size bound is off for this session (R952). Raise the bound for this project, or rely on the run's memory guard.`,
+      );
+      return false;
+    }
+    return true;
   }
+
+  /** R952 review r1: set when a fresh daemon was already over the size bound. */
+  private rssBoundOff = false;
 
   /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
   private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {

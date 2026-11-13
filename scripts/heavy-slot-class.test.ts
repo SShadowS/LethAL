@@ -328,6 +328,29 @@ describe("R905 a heavy-slot.sh holder is trusted, so its job counts once", () =>
     const w = heavyVerdict(psOf([...holder, lookalike]), 100, [500], 1, false, ["other"]);
     expect(w.foreign.length).toBe(1);
   });
+  // R952 review (reproduced): the Bash tool runs `bash -c source snap.sh && eval '... heavy-slot.sh ...'`
+  // in a group of its own, and that shell names the job. It is the launcher, not a second job.
+  const job = "bun x.ts /work/src/BC.History/BaseApp";
+  const launcher = (pid: number, wrapperArgs: string) =>
+    `${pid} 1 ${pid} /bin/bash -c source /h/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh ${wrapperArgs} ${job}'`;
+  test("R952: the shell that launched a holding wrapper is no job; the slot is the job", () => {
+    const rows = [
+      launcher(400, "baseapp"),
+      `501 400 501 bash scripts/heavy-slot.sh baseapp ${job}`,
+      `502 501 501 ${job}`,
+    ];
+    const v = heavyVerdict(psOf(rows), 100, [501], 1, false, ["baseapp"]);
+    expect(v.foreign).toEqual([]);
+    expect(v.refuse).toBe(false);
+  });
+  test("R952: the shell that launched a queued waiter is no job either", () => {
+    const rows = [
+      launcher(600, "--wait --peak 4 baseapp"),
+      `601 600 601 bash scripts/heavy-slot.sh --wait --peak 4 baseapp ${job}`,
+    ];
+    const v = heavyVerdict(psOf(rows), 100, [], 0, false, []);
+    expect(v.foreign).toEqual([]);
+  });
 });
 
 describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {

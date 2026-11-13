@@ -745,11 +745,19 @@ export function heavyVerdict(
     if (wrapper !== null ? wrapper.groups?.cls === "baseapp" : holderIsBaseApp(p.args))
       baseAppSlots++;
     for (const d of descendants(procs, s)) skip.add(d);
+    // R952 review: the shells that launched a wrapper (the Bash tool's `bash -c ... eval '...
+    // heavy-slot.sh ...'`, in a group of its own) name the job in their text; the job is this slot.
+    if (wrapper !== null) for (const a of ancestors(procs, s)) skip.add(a);
   }
   // R934: a queued `--wait` wrapper holds no slot and runs nothing; its argv names the job it waits
-  // to run (maybe a BC.History path), which must not count as that job.
+  // to run (maybe a BC.History path), which must not count as that job, and neither must the shells
+  // that launched it (R952 review).
   const holders = new Set(slotPids);
-  for (const p of procs) if (WAITER_RE.test(p.args) && !holders.has(p.pid)) skip.add(p.pid);
+  for (const p of procs)
+    if (WAITER_RE.test(p.args) && !holders.has(p.pid)) {
+      skip.add(p.pid);
+      for (const a of ancestors(procs, p.pid)) skip.add(a);
+    }
   // A job is keyed by its itest:alrunner root when it has one (its workers' al-runner children sit
   // in their own process groups, R626), else by process group.
   const byPid = new Map(procs.map((p) => [p.pid, p]));

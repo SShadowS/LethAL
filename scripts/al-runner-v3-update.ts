@@ -941,12 +941,25 @@ export function countHeavyJobs(
   // (`bash -c 'cd /work/src/BC.History && bun census.ts .'`: only the shell names the corpus).
   const isJob = (p: Proc): boolean =>
     HEAVY_JOB.test(p.args) && !p.args.includes("--worker") && !WATCHER.test(p.args);
+  // R952 review: the shells that launched a wrapper (the Bash tool's `bash -c ... eval '...
+  // heavy-slot.sh ...'`) are not the job either: its slot or its own command is.
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const aboveWrapper = new Set<number>();
+  for (const p of procs) {
+    if (!HEAVY_SLOT_WRAPPER.test(p.args)) continue;
+    for (
+      let q = byPid.get(p.ppid);
+      q !== undefined && !aboveWrapper.has(q.pid);
+      q = byPid.get(q.ppid)
+    )
+      aboveWrapper.add(q.pid);
+  }
   const groups = new Set<number>();
   for (const p of procs) {
     if (READER.test(p.args) || !HEAVY_JOB.test(p.args) || p.args.includes("--worker")) continue;
     // R934: `heavy-slot.sh` itself is never the job: a holder's slot counts in `heldSlots`, its
     // command counts on its own, and a queued `--wait` waiter holds no slot and runs nothing yet.
-    if (HEAVY_SLOT_WRAPPER.test(p.args)) continue;
+    if (HEAVY_SLOT_WRAPPER.test(p.args) || aboveWrapper.has(p.pid)) continue;
     if (WATCHER.test(p.args)) {
       const below = descendants(procs, p.pid);
       if (procs.some((q) => below.has(q.pid) && isJob(q))) continue;

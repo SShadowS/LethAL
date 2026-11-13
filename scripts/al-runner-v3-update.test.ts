@@ -713,6 +713,24 @@ describe("R633 I2 and M5", () => {
     };
     expect(countHeavyJobs([mention], 0)).toBe(1);
   });
+  test("R952 review: the Bash tool's shell that launched a queued waiter is no job", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const shell = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `/bin/bash -c source /h/snap.sh && eval 'cd /w && bash scripts/heavy-slot.sh --wait other ${cmd}'`,
+    };
+    const waiter = {
+      pid: 2,
+      ppid: 1,
+      pgid: 2,
+      args: `bash scripts/heavy-slot.sh --wait other ${cmd}`,
+    };
+    expect(countHeavyJobs([shell, waiter], 0)).toBe(0);
+    // the same shell with no wrapper below it still names a job of its own
+    expect(countHeavyJobs([shell], 0)).toBe(1);
+  });
   // R930: the shape measured 2026-11-11 with an invented command: the harness's shell, the job's
   // shell and `timeout` (which moves itself into a new group) are three groups for one job.
   test("R930: shells above a job's own process add no job; a reader is never one", () => {
