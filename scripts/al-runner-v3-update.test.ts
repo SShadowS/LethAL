@@ -695,6 +695,24 @@ describe("R633 I2 and M5", () => {
     const job = { pid: 4, ppid: 3, pgid: 3, args: cmd };
     expect(countHeavyJobs([waiter, sleeping, holder, job], 1)).toBe(1);
   });
+  test("R952: a --peak waiter is no job; a job whose argv only mentions heavy-slot.sh is still one", () => {
+    const cmd = "bun packages/runner/src/cli.ts run --project /x";
+    const waiter = {
+      pid: 1,
+      ppid: 0,
+      pgid: 1,
+      args: `bash scripts/heavy-slot.sh --wait --peak gate other ${cmd}`,
+    };
+    expect(countHeavyJobs([waiter], 0)).toBe(0);
+    // the counted direction: a heavy job in its own group naming the wrapper later in its argv
+    const mention = {
+      pid: 5,
+      ppid: 0,
+      pgid: 5,
+      args: `${cmd} --note scripts/heavy-slot.sh other x`,
+    };
+    expect(countHeavyJobs([mention], 0)).toBe(1);
+  });
   // R930: the shape measured 2026-11-11 with an invented command: the harness's shell, the job's
   // shell and `timeout` (which moves itself into a new group) are three groups for one job.
   test("R930: shells above a job's own process add no job; a reader is never one", () => {

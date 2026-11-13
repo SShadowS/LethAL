@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RefusedError, guardInSlot, heavyVerdict, parsePs, slotHeld } from "./corpus-snapshot.ts";
-import { readSlotClass } from "./heavy-slot-class.ts";
+import { memoryVerdict, parsePeak, readSlot, readSlotClass } from "./heavy-slot-class.ts";
 
 // R905. Every lock dir here is a temp dir; nothing touches /coord.
 // Not `lethal-*`: the R358 preload check would read a leftover as this file's leak.
@@ -123,7 +123,8 @@ console.log(readSlotClass(${JSON.stringify(dir)}, 2));`;
         () => {},
         () => "PID PPID PGID COMMAND\n1 0 1 init",
       );
-      expect(readFileSync(join(dir, "heavy.1.class"), "utf8")).toBe(`baseapp ${process.pid}\n`);
+      // R952: the class file carries the expected peak (baseapp's default, 12 GiB)
+      expect(readFileSync(join(dir, "heavy.1.class"), "utf8")).toBe(`baseapp ${process.pid} 12\n`);
     } finally {
       if (old === undefined) Reflect.deleteProperty(process.env, "LETHAL_HEAVY_LOCK_DIR");
       else process.env.LETHAL_HEAVY_LOCK_DIR = old;
@@ -171,7 +172,7 @@ describe("R905 scripts/heavy-slot.sh", () => {
     const dir = fresh();
     const r = run(dir, "other", "sh", "-c", `cat "${dir}/heavy.1.class" "${dir}/heavy.1"; exit 7`);
     // the class file and the lock file name the same pid (the wrapper's)
-    expect(r.stdout.toString()).toMatch(/^other (\d+)\n\1\n$/);
+    expect(r.stdout.toString()).toMatch(/^other (\d+) 16\n\1\n$/); // R952: other's default peak
     expect(r.exitCode).toBe(7);
     expect(existsSync(join(dir, "heavy.1.class"))).toBe(false);
     expect(run(dir, "bogus", "true").exitCode).toBe(2);
@@ -315,6 +316,18 @@ describe("R905 a heavy-slot.sh holder is trusted, so its job counts once", () =>
     expect(v.foreign).toEqual([]);
     expect(v.refuse).toBe(false);
   });
+  test("R952: a --peak holder is trusted and a --peak waiter is no job; a job that only mentions it is a job", () => {
+    const holder = wrapper(500, "--wait --peak gate other");
+    const waiter =
+      "700 1 700 /bin/bash scripts/heavy-slot.sh --wait --peak 30 baseapp bun x.ts /work/src/BC.History/BaseApp";
+    const v = heavyVerdict(psOf([...holder, waiter]), 100, [500], 1, false, ["other"]);
+    expect(v.foreign).toEqual([]);
+    // the counted direction: not heavy-slot.sh, so its BaseApp job is foreign
+    const lookalike =
+      "800 1 800 bun x.ts --log scripts/heavy-slot.sh --wait baseapp /work/src/BC.History/BaseApp";
+    const w = heavyVerdict(psOf([...holder, lookalike]), 100, [500], 1, false, ["other"]);
+    expect(w.foreign.length).toBe(1);
+  });
 });
 
 describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
@@ -442,7 +455,9 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     const p1 = await holdSlot(dir, 1, "other");
     await holdSlot(dir, 2, "other");
     const marker = join(dir, "ba");
-    const w = start(dir, "0.05", "--wait", "baseapp", "touch", marker);
+    // Poll 2 s: the waiter marks itself on its first try (before any sleep); a fast poll would make
+    // its own out-of-turn retries hold the free slot while the plain caller tries (R952: flaky at 0.05).
+    const w = start(dir, "2", "--wait", "baseapp", "touch", marker);
     expect(await until(() => tickets(dir).some((t) => t.endsWith(".refused")))).toBe(true);
     const plain = start(dir, "0.05", "other", "touch", join(dir, "plain"));
     expect(await plain.exited).toBe(0);
@@ -453,5 +468,143 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     expect(await w.exited).toBe(0);
     expect(existsSync(marker)).toBe(true);
     expect(tickets(dir)).toEqual([]);
+  });
+});
+
+describe("R952 (R953) admission by memory", () => {
+  const GIB = 2 ** 30;
+  const sample = (usedGiB: number, maxGiB?: number) => ({
+    usedBytes: usedGiB * GIB,
+    ...(maxGiB !== undefined ? { maxBytes: maxGiB * GIB } : {}),
+    source: "/fake/memory.max",
+  });
+  test("admitted when used + peak + reserve and held peaks + peak + reserve both fit", () => {
+    expect(memoryVerdict(sample(10, 32), [2], 16).refuse).toBe(false); // 10+16+4=30, 2+16+4=22
+    expect(memoryVerdict(sample(12, 32), [], 16).refuse).toBe(false); // 12+16+4 = 32 exactly
+  });
+  test("refused when what is used now leaves no room for the peak", () => {
+    const v = memoryVerdict(sample(13, 32), [], 16); // 13+16+4 = 33
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain("used + peak + reserve = 33.0");
+  });
+  test("refused when the held slots' declared peaks leave no room, though little is used yet", () => {
+    const v = memoryVerdict(sample(3, 32), [16], 16); // 3+16+4 fits now; 16+16+4 = 36 does not
+    expect(v.refuse).toBe(true);
+    expect(v.message).toContain("held peaks + peak + reserve = 36.0");
+    expect(memoryVerdict(sample(3, 32), [16], 2).refuse).toBe(false); // a gate still fits beside a serve run
+  });
+  test("no cgroup, or a cgroup with no limit: admitted, and the message says the rule is off", () => {
+    expect(memoryVerdict(undefined, [16, 16], 16)).toEqual({
+      refuse: false,
+      message: "memory rule off: no cgroup v2 memory.current can be read",
+    });
+    const v = memoryVerdict(sample(31), [16, 16], 16);
+    expect(v.refuse).toBe(false);
+    expect(v.message).toBe("memory rule off: /fake/memory.max names no limit");
+  });
+  test("parsePeak: the four names, a positive number, nothing else", () => {
+    expect(["serve", "baseline", "gate", "build", "2.5"].map(parsePeak)).toEqual([
+      16, 12, 2, 1, 2.5,
+    ]);
+    expect(["0", "-1", "x", "", "toString", "1e3"].map(parsePeak)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+  test("readSlot: a declared peak, the class default for a file without one, nothing for a dead pid", () => {
+    const dir = fresh();
+    writeFileSync(join(dir, "heavy.1.class"), `other ${process.pid} 2\n`);
+    writeFileSync(join(dir, "heavy.2.class"), `baseapp ${process.pid}\n`);
+    const dead = Bun.spawnSync(["true"]).pid;
+    writeFileSync(join(dir, "heavy.3.class"), `other ${dead} 2\n`);
+    expect(readSlot(dir, 1)).toEqual({ cls: "other", peakGiB: 2 });
+    expect(readSlot(dir, 2)).toEqual({ cls: "baseapp", peakGiB: 12 });
+    expect(readSlot(dir, 3)).toBeUndefined();
+  });
+
+  describe("scripts/heavy-slot.sh with injected cgroup readings", () => {
+    const script = join(import.meta.dir, "heavy-slot.sh");
+    const cgroup = (usedGiB: number, maxGiB: number): string => {
+      const d = fresh();
+      writeFileSync(join(d, "memory.current"), `${usedGiB * GIB}\n`);
+      writeFileSync(join(d, "memory.max"), `${maxGiB * GIB}\n`);
+      writeFileSync(join(d, "memory.stat"), "inactive_file 0\n");
+      return d;
+    };
+    const run = (dir: string, cg: string, ...args: string[]) => {
+      const psFile = join(dir, "ps.txt");
+      writeFileSync(psFile, "PID PPID PGID COMMAND\n1 0 1 init\n");
+      return Bun.spawnSync(["bash", script, ...args], {
+        env: {
+          ...process.env,
+          LETHAL_HEAVY_LOCK_DIR: dir,
+          BUN: process.execPath,
+          LETHAL_HEAVY_PS_FILE: psFile,
+          LETHAL_HEAVY_CGROUP_DIR: cg,
+        },
+      });
+    };
+    test("a job whose default peak does not fit exits 75 and does not run; --peak gate fits and runs", () => {
+      const dir = fresh();
+      const cg = cgroup(14, 32); // 14 + 16 + 4 = 34 > 32; 14 + 2 + 4 = 20
+      const ran = join(dir, "ran");
+      const r = run(dir, cg, "other", "touch", ran);
+      expect(r.exitCode).toBe(75);
+      expect(existsSync(ran)).toBe(false);
+      expect(r.stderr.toString()).toContain("REFUSED (used + peak + reserve = 34.0 > 32.0)");
+      const g = run(dir, cg, "--peak", "gate", "other", "sh", "-c", `cat "${dir}/heavy.1.class"`);
+      expect(g.exitCode).toBe(0);
+      expect(g.stdout.toString()).toMatch(/^other \d+ 2\n$/);
+    });
+    test("a held slot's declared peak counts: a second serve run is refused while the first is young", async () => {
+      const dir = fresh();
+      await hold(dir, 1, "other"); // writes "other <pid>": no peak, so other's default, 16
+      const cg = cgroup(3, 32);
+      expect(run(dir, cg, "--peak", "serve", "other", "true").exitCode).toBe(75);
+      expect(run(dir, cg, "--peak", "build", "other", "true").exitCode).toBe(0);
+    });
+    test("a bad or misplaced --peak is exit 2, and nothing runs", () => {
+      const dir = fresh();
+      const cg = cgroup(1, 32);
+      const ran = join(dir, "ran");
+      for (const args of [
+        ["--peak", "huge", "other", "touch", ran],
+        ["--peak", "0", "other", "touch", ran],
+        ["other", "--peak", "gate", "touch", ran],
+      ])
+        expect(run(dir, cg, ...args).exitCode).toBe(2);
+      expect(existsSync(ran)).toBe(false);
+    });
+  });
+
+  test("guardInSlot applies the memory rule too", () => {
+    const dir = fresh();
+    const cg = fresh();
+    writeFileSync(join(cg, "memory.current"), `${20 * GIB}\n`);
+    writeFileSync(join(cg, "memory.max"), `${32 * GIB}\n`);
+    const old = {
+      lock: process.env.LETHAL_HEAVY_LOCK_DIR,
+      cg: process.env.LETHAL_HEAVY_CGROUP_DIR,
+    };
+    process.env.LETHAL_HEAVY_LOCK_DIR = dir;
+    process.env.LETHAL_HEAVY_CGROUP_DIR = cg;
+    try {
+      const ps = () => "PID PPID PGID COMMAND\n1 0 1 init";
+      // baseapp's peak 12: 20 + 12 + 4 = 36 > 32
+      expect(() => guardInSlot(1, true, () => {}, ps)).toThrow(RefusedError);
+      writeFileSync(join(cg, "memory.current"), `${10 * GIB}\n`);
+      expect(() => guardInSlot(1, true, () => {}, ps)).not.toThrow();
+    } finally {
+      for (const [k, v] of [
+        ["LETHAL_HEAVY_LOCK_DIR", old.lock],
+        ["LETHAL_HEAVY_CGROUP_DIR", old.cg],
+      ] as const)
+        if (v === undefined) Reflect.deleteProperty(process.env, k);
+        else process.env[k] = v;
+    }
   });
 });

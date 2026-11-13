@@ -924,8 +924,10 @@ export function argv0FromCmdline(cmdline: string): string | undefined {
  * process group, a `--worker` is part of its itest, and a held `heavy.<n>` lock is a job even if its
  * process names nothing heavy. The higher of the two counts, because a job under a lock is in both.
  */
-/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] <class> ...`). */
-const HEAVY_SLOT_WRAPPER = /(^|\s)(\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(baseapp|other)\s/;
+/** R934: the `scripts/heavy-slot.sh` wrapper's own process (`bash .../heavy-slot.sh [--wait] [--peak <p>] <class> ...`). */
+// R952: anchored at the command's start (heavy-slot.sh, or bash/sh running it), as corpus-snapshot's is.
+const HEAVY_SLOT_WRAPPER =
+  /^(?:(?:\S*\/)?(?:ba)?sh\s+)?(?:\S*\/)?heavy-slot\.sh\s+(--wait\s+)?(--peak\s+\S+\s+)?(baseapp|other)\s/;
 
 export function countHeavyJobs(
   procs: readonly Proc[],

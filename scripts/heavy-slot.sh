@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # R905: run a command in the first free heavy slot and record the slot's class.
 #
-#   scripts/heavy-slot.sh [--wait] <baseapp|other> <cmd...>
+#   scripts/heavy-slot.sh [--wait] [--peak serve|baseline|gate|build|<GiB>] <baseapp|other> <cmd...>
+#
+# R952 (R953) `--peak`: the job's expected memory peak (serve 16, baseline 12, gate 2, build 1 GiB, or
+# a number); none = the class default (other 16, baseapp 12). It goes into the class file
+# ("<class> <pid> <peak>") and the guard admits the job only when the container's cgroup has room for
+# it: used + peak + reserve and the held slots' peaks + peak + reserve both fit under memory.max
+# (scripts/heavy-slot-class.ts, memoryVerdict). A memory refusal is a guard refusal like any other.
 #
 # Use `baseapp` for a job over BC.History or any copy of it (even under /coord/handoff), `other`
 # for everything else (al-runner v3 gates, campaigns, measurements). It takes the first free
@@ -33,6 +39,25 @@ if [ "${1:-}" = "--wait" ]; then
   wait=1
   shift
 fi
+peak=""
+if [ "${1:-}" = "--peak" ]; then
+  case "${2:-}" in
+  serve) peak=16 ;;
+  baseline) peak=12 ;;
+  gate) peak=2 ;;
+  build) peak=1 ;;
+  *)
+    # a zero peak passes here and is refused by the guard (exit 2, the command never runs)
+    if [[ "${2:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      peak="$2"
+    else
+      echo "heavy-slot: --peak takes serve, baseline, gate, build or a number of GiB above 0" >&2
+      exit 2
+    fi
+    ;;
+  esac
+  shift 2
+fi
 cls="${1:-}"
 case "$cls" in baseapp | other) ;; *)
   echo "heavy-slot: first argument must be baseapp or other" >&2
@@ -40,8 +65,13 @@ case "$cls" in baseapp | other) ;; *)
   ;;
 esac
 shift
+[ -n "$peak" ] || { [ "$cls" = baseapp ] && peak=12 || peak=16; }
 [ $# -gt 0 ] || { echo "heavy-slot: no command" >&2; exit 2; }
-[ "$1" != "--wait" ] || { echo "heavy-slot: --wait goes before the class" >&2; exit 2; }
+case "$1" in --wait | --peak)
+  echo "heavy-slot: $1 goes before the class (order: --wait, --peak, class)" >&2
+  exit 2
+  ;;
+esac
 dir="${LETHAL_HEAVY_LOCK_DIR:-/coord/locks}"
 mkdir -p "$dir" || exit 2
 qdir="$dir/heavy-queue"
@@ -88,8 +118,8 @@ try_once() {
     [ "$rc" -eq 0 ] || exit 2
     class="$dir/heavy.$n.class"
     echo "$$" >"$dir/heavy.$n" # the guard trusts a holder it can name by pid
-    echo "$cls $$" >"$class"
-    "${BUN:-bun}" "$(dirname "$0")/heavy-slot-guard.ts" "$dir" "$n" "$cls"
+    echo "$cls $$ $peak" >"$class"
+    "${BUN:-bun}" "$(dirname "$0")/heavy-slot-guard.ts" "$dir" "$n" "$cls" "$peak"
     g=$?
     if [ "$g" -eq 0 ]; then
       [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
