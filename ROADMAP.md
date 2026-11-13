@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 942 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 943 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -987,6 +987,7 @@ that ordering is the priority.
 - **R974** · heavy-slot-class.test.ts 'the order is kept: the older waiter runs first' flaked after R960 raised the slot files to six: it held only three, so a waiter could run at once · [R974.md](docs/roadmap/R974.md) · done (65787092)
 - **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · open
 - **R980** · BC.History inventory and batch 10 on al-runner v3 edge-c8fe56e05: 54 small projects left outside BaseApp; one wrong result (forwarded .NET code ends lines with LF) and new refusals filed upstream · [R980.md](docs/roadmap/R980.md) · closed 2026-11-13 — measured and filed upstream…
+- **R982** · Continia Document Output's al-runner baseline refusals reduced, and the dependency-install question answered: al-runner does run a dependency app's install codeunit; DO's 32 'not activated' failures are Continia's online activation · [R982.md](docs/roadmap/R982.md) · closed 2026-11-14 — measured; filed upstream (#8004) and counted (#7775); the install question answered by…
 
 ---
 
