@@ -533,6 +533,40 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R948: the baseline-daemon tag keeps the other-environment refusal naming the other run, with and without license and isolation-auto", async () => {
+    for (const [daemon, license, auto] of [
+      [false, false, false],
+      [true, false, false],
+      [true, true, false],
+      [true, true, true],
+      [true, false, true],
+    ] as const) {
+      await inProject(async (root) => {
+        const store = new ResultsStore(":memory:");
+        const mk = (value: "saas" | "onprem") =>
+          Object.assign(withProbe(new V3KindStub([]), []), {
+            environmentChoice: { value, source: "config" as const },
+            ...(daemon ? { baselineDaemon: true } : {}),
+            ...(license ? { license: { path: "/l/x", sha256: "a".repeat(64) } } : {}),
+            ...(auto ? { isolationAuto: true } : {}),
+          });
+        await v3Session(root, store, mk("onprem"));
+        const build = store.getRun(1)?.runnerBuild ?? "";
+        expect(build.includes(" baseline-daemon")).toBe(daemon);
+        // The tag is before the environment tag; isolation-auto stays last.
+        if (daemon) {
+          expect(build.indexOf(" baseline-daemon")).toBeLessThan(build.indexOf(" environment-"));
+        }
+        if (auto) expect(build.endsWith(" isolation-auto")).toBe(true);
+        store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+        const other = await v3Session(root, store, mk("saas"), { resume: "last" }).catch(
+          (e: unknown) => e,
+        );
+        expect(String(other)).toContain("recorded under environment onprem");
+      });
+    }
+  });
+
   test("R890: isolation method goes in the lending build and the fingerprint, apart from --isolate-tests", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

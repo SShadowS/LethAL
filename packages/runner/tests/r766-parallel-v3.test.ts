@@ -71,6 +71,12 @@ const TEST_APP_JSON = JSON.stringify({
 const procOfLine = (line: number): "P1" | "P2" | "P3" =>
   line <= 6 ? "P1" : line <= 11 ? "P2" : "P3";
 
+const GUARD_INFO = {
+  usedBytes: 30 * 2 ** 30,
+  boundBytes: 28 * 2 ** 30,
+  source: "/sys/fs/cgroup/memory.max",
+};
+
 const ticks = async (n: number) => {
   for (let i = 0; i < n; i++) await new Promise<void>((r) => setImmediate(r));
 };
@@ -165,6 +171,22 @@ class ParStub implements ExecutionBackend {
   latched(): { mutantId: string; why: string } | undefined {
     return this.latch;
   }
+  /** R948: the guard refuses every group ask from this one on (and stops the session once). */
+  refuseFromAsk: number | undefined;
+  private asks = 0;
+  private guardStopped = false;
+  private handle: Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0] | undefined;
+  useStopHandle(h: Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0]): void {
+    this.handle = h;
+  }
+  async mayStartGroup(): Promise<boolean> {
+    this.asks += 1;
+    if (this.refuseFromAsk !== undefined && this.asks >= this.refuseFromAsk && !this.guardStopped) {
+      this.guardStopped = true;
+      this.handle?.stopForMemory(GUARD_INFO);
+    }
+    return !this.guardStopped;
+  }
   // N = 1: the stub is its own (only) lane.
   activate = (id: string | null) => this.root.activate(id);
   run = (ref: TestMethodRef) => this.root.run(ref);
@@ -240,6 +262,9 @@ class ParView implements ExecutionBackend {
   }
   latched() {
     return this.b.latched();
+  }
+  mayStartGroup(): Promise<boolean> {
+    return this.b.mayStartGroup();
   }
   async activate(id: string | null): Promise<void> {
     this.active = id;
@@ -560,5 +585,42 @@ describe("R766 (b): the stop rule, through a session", () => {
     const events: RunEvent[] = [];
     await session(root, stub, { workers: 3 }, events);
     expect(scoredCodes(events)).toEqual(one.mutants.map((m) => m.mutantCode));
+  });
+});
+
+describe("R948: the memory guard refusing a group", () => {
+  test("sequential: the refused group is not activated, and unscheduledCount is everything not run", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const total = one.mutants.length;
+    const stub = new ParStub({ procOf });
+    stub.refuseFromAsk = 3; // groups 1 and 2 start, the 3rd is refused
+    const r = await session(root, stub, { workers: 1 });
+    // (a kill is activated again to confirm it, so count distinct mutants)
+    expect(new Set(stub.activations.map((a) => a.mutant)).size).toBe(2);
+    expect(r.mutants).toHaveLength(2);
+    expect(r.timeBudget?.stoppedByMemory).toEqual(GUARD_INFO);
+    expect(r.timeBudget?.unscheduledCount).toBe(total - 2);
+  });
+
+  test("--workers 2: a refusal in a lane ends the session as the memory stop, never R766's never-finished throw; what was not recorded is counted", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const total = one.mutants.length;
+    const stub = new ParStub({ procOf, delay: () => 3 });
+    stub.refuseFromAsk = 3;
+    const r = await session(root, stub, { workers: 2 });
+    expect(r.timeBudget?.stoppedByMemory).toEqual(GUARD_INFO);
+    expect(r.mutants.length).toBeLessThan(total);
+    expect(r.timeBudget?.unscheduledCount).toBeGreaterThan(0);
+    // Every covered mutant is either in the report or counted as left out: nothing vanishes.
+    expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+  });
+
+  test("with no refusal the same parallel run has no memory field (the other direction)", async () => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    const r = await session(root, new ParStub({ procOf }), { workers: 2 });
+    expect(r.timeBudget).toBeUndefined();
   });
 });

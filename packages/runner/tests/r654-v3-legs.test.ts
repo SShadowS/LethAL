@@ -87,6 +87,8 @@ describe("R654 S2: the leg sets", () => {
       "C",
       "S1",
       "S1E", // R761: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
+      "DB", // R948: S1E with the daemon baseline and the memory guard; not in V3_GATE_LEGS
+      "DBI", // R948: ISO's session with the daemon baseline (per-test requests); likewise
       "S3",
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
@@ -107,6 +109,8 @@ describe("R654 S2: the leg sets", () => {
       "C",
       "S1",
       "S1E",
+      "DB",
+      "DBI",
       "S3",
       "N1",
       "N1E",
@@ -174,6 +178,8 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
   const candidateLegs = (k: string | undefined) => ({
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
     ISO: "pass", // R857: a default leg outside V3_GATE_LEGS
+    DB: "pass", // R948: so is DB
+    DBI: "pass", // and DBI
     ...(k !== undefined ? { K: k } : {}),
   });
 
@@ -332,7 +338,7 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     coverage: "al-runner",
     // R761: K takes the serve-entries default (pre-commitment master a86927e1).
     inRunStopIsBudget: false,
-    serveSpawns: 1,
+    serveSpawns: 2,
     oneShotTestCalls: 1,
     warned: true,
     noCoverageFiles: [
@@ -351,8 +357,8 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
   test("each fact that moves is named", () => {
     expect(judgeLegK({ ...good, coverage: "none" })).toHaveLength(1);
     expect(judgeLegK({ ...good, inRunStopIsBudget: true })).toHaveLength(1);
-    expect(judgeLegK({ ...good, serveSpawns: 0 })).toHaveLength(1);
-    expect(judgeLegK({ ...good, serveSpawns: 2 })).toHaveLength(1);
+    expect(judgeLegK({ ...good, serveSpawns: 1 })).toHaveLength(1);
+    expect(judgeLegK({ ...good, serveSpawns: 3 })).toHaveLength(1);
     expect(judgeLegK({ ...good, oneShotTestCalls: 0 })).toHaveLength(1);
     expect(judgeLegK({ ...good, oneShotTestCalls: 12 })).toHaveLength(1);
     expect(judgeLegK({ ...good, warned: false })).toHaveLength(1);
