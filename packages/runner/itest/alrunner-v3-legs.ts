@@ -913,13 +913,17 @@ export function judgeLegK(f: LegKFacts): string[] {
   if (f.coverage !== "al-runner")
     out.push(`K: coverage ${JSON.stringify(f.coverage)} by default, pre-committed "al-runner"`);
   // R761 (pre-commitment master a86927e1): the default is serve-entries where proven, and K's
-  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves: one daemon, and
-  // one one-shot call (the baseline, which serve-entries keeps one-shot).
+  // sandbox-app is proven (plain names, no MO/WR shapes, no resume), so K serves. R948 (pre-commitment
+  // amendment 3, master bf8a68cf): cli.ts runs the baseline through its own daemon, so two daemons
+  // (the baseline's and the mutant phase's), and the one one-shot call is now the cross-check sample of
+  // K's single test codeunit, no longer the baseline.
   if (f.inRunStopIsBudget !== false)
     out.push("K: the default transport is not serve-entries (inRunStopIsBudget is not false)");
-  if (f.serveSpawns !== 1) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 1`);
+  if (f.serveSpawns !== 2) out.push(`K: ${f.serveSpawns} serve daemon(s) spawned, pre-committed 2`);
   if (f.oneShotTestCalls !== 1)
-    out.push(`K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the baseline)`);
+    out.push(
+      `K: ${f.oneShotTestCalls} one-shot test call(s), pre-committed 1 (the daemon baseline's cross-check sample)`,
+    );
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
   if (f.noCoverageFiles.length !== 5 || off.length > 0)

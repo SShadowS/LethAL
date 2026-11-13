@@ -349,7 +349,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // R918: MO and WR on serve-entries, expected to warn exactly as their one-shot legs do.
   "al-runner-v3/MOE": [],
   "al-runner-v3/WRE": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
-  "al-runner-v3/K": [],
+  // R948 amendment 3 (master bf8a68cf): K builds through cli.ts, which turns the memory guard on.
+  "al-runner-v3/K": ["al-runner-v3-memory-guard"],
   // R866: leg ISO's own session runs under --isolate-tests, which says so.
   "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],
   "al-runner-v3/S1E": [],
