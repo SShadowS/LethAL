@@ -1944,6 +1944,12 @@ export interface SessionReport {
     };
     /** R955: `true` when a SIGTERM or SIGINT spent the budget (`budgetSeconds` is 0 when none was given). */
     readonly stoppedBySignal?: true;
+    /** R948: the memory guard stopped the run: the container's bytes in use, the bound (its cgroup limit less the headroom), and the cgroup file the limit came from. */
+    readonly stoppedByMemory?: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    };
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -4050,6 +4056,13 @@ export function renderConsole(r: SessionReport): string {
     if (r.timeBudget.stoppedBySignal === true) {
       lines.push(
         "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955).",
+      );
+    }
+    const mem = r.timeBudget.stoppedByMemory;
+    if (mem !== undefined) {
+      const gib = (n: number) => (n / 2 ** 30).toFixed(1);
+      lines.push(
+        `STOPPED BY THE MEMORY GUARD: the container used ${gib(mem.usedBytes)} GiB, over the ${gib(mem.boundBytes)} GiB bound (its limit in ${mem.source} less the headroom), and stayed there, so no new test call was started (R948). Free memory or raise the limit, or lower "alRunnerV3.memoryHeadroomGb", then continue with --resume.`,
       );
     }
     lines.push(

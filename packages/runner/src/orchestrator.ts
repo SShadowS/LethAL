@@ -5884,7 +5884,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       );
     }
   } finally {
-    backend.baselinePhase?.(false);
+    await backend.baselinePhase?.(false); // R948: closes the baseline's own daemon
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -7101,6 +7101,13 @@ async function runSessionBody(
   // R517: before the first run; every worker gets the same pair below. al-runner --server starts
   // its daemon with the larger of the two as its one in-run stop.
   cfg.backend.useMutantBudgetFloor?.(minMutantBudgetMs, baselineTimeoutMs);
+  // R948: a backend that runs calls ahead of the loop below checks the same stop state, and its
+  // memory guard stops the session through the budget (R955's path).
+  cfg.backend.useStopHandle?.({
+    spent: () => timeBudget.exhausted,
+    signalled: () => timeBudget.signalled,
+    stopForMemory: (info) => timeBudget.stopForMemory(info),
+  });
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
   const groupRuns = resolveGroupRuns({
     groupRuns: cfg.groupRuns,
@@ -8898,7 +8905,10 @@ async function runSessionBody(
     emit({
       type: "time-budget-reached",
       budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
-      ...(timeBudget.signalled ? { stoppedBySignal: true as const } : {}),
+      ...(timeBudget.signalled && timeBudget.memory === undefined
+        ? { stoppedBySignal: true as const }
+        : {}),
+      ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined

@@ -3190,6 +3190,8 @@ async function buildAlRunnerV3Backend(
       ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
       downloadDemoData: c.downloadDemoData,
       noClient: c.noClient, // R907
+      memoryHeadroomGb: c.memoryHeadroomGb, // R948
+      daemonBaseline: c.transport === "serve-entries", // R948: the baseline through one daemon
       environmentChoice, // R938
       ...(license !== undefined ? { license } : {}), // R956
       isolation: c.isolation, // R890, R896

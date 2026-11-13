@@ -743,7 +743,24 @@ export interface ExecutionBackend {
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
-  baselinePhase?(on: boolean): void;
+  baselinePhase?(on: boolean): void | Promise<void>;
+
+  /**
+   * R948, OPTIONAL (al-runner v3): the session's stop state, given once with the budget floor. The
+   * backend asks `spent()` before each request of a baseline it runs ahead of the orchestrator's
+   * own loop (R955: no new call once the budget is out or a stop signal came), `signalled()` after
+   * each (a call a signal ended is dropped), and calls `stopForMemory` when the container stays over
+   * its memory bound: the session then stops through R955's path, and the report names memory.
+   */
+  useStopHandle?(handle: {
+    spent(): boolean;
+    signalled(): boolean;
+    stopForMemory(info: {
+      readonly usedBytes: number;
+      readonly boundBytes: number;
+      readonly source: string;
+    }): void;
+  }): void;
 
   /**
    * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that
