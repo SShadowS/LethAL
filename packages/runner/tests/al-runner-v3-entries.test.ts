@@ -7703,6 +7703,33 @@ describe("R937: a one-shot codeunit inside a serve session", () => {
     }
   });
 
+  test("R937 review: one echo per mutant serves every one-shot codeunit under it, a mismatch included, and the stats count it", async () => {
+    for (const said of ["M0001", "NONE"]) {
+      const r = await rig({
+        suite: SUITE3,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2, CU3);
+      await baseline(r.b, SUITE3);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE3));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const c = await r.b.run(C, OPTS);
+      const d = await r.b.run(ref("D", CU3), OPTS);
+      const ok = said === "M0001";
+      // the echo once, then each codeunit's own call when the echo named the mutant
+      expect([said, r.one.calls.length - before]).toEqual([said, ok ? 3 : 1]);
+      expect([said, c.outcome, d.outcome]).toEqual([
+        said,
+        ok ? "fail" : "error",
+        ok ? "fail" : "error",
+      ]);
+      const s = r.b.entriesStats();
+      expect([said, s.echoRequests, s.echoMismatches]).toEqual([said, 1, ok ? 0 : 1]);
+    }
+  });
+
   test("the daemon baseline never asks serve for it; it runs one-shot like a one-shot session's", async () => {
     const r = await dbRig();
     markOneShot(r.b, CU2);

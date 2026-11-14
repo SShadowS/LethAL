@@ -680,11 +680,14 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * R937 (coord R-957): an invented app with 15 test codeunits, one method shape each, ran explicit
  * serve-entries and one-shot on edge c8fe56e05, per mutant equal (97 mutants, 0 differences;
  * killingTest equal to the declared name; `/coord/handoff/R-957/shapes/result.md`). Exactly what
- * ran, and so what is admitted: a FIRST character `Ø`, `Æ` or `Å` (`ØCheck`); a first `-`, `+` or
- * `_` followed by a letter or digit (`-Check`, `+Check`, `_Check`); `:`, `'` or `#` between two
- * letters or digits (`A:Check`, `A'Check`, `A#Check`). Never run, so still unproven: `Ø`, `Æ`, `Å`
- * or `+` after the first character, a trailing or doubled `:`, `'`, `#`, a sign alone or before a
- * space, lower-case `ø`, `"`, `\`, `*`, `%`, `,`, a leading or trailing space, a first `)`. The
+ * ran, and so what is admitted: a FIRST character `Ø`, `Æ` or `Å` followed by an ASCII letter or
+ * digit (`ØCheck`); a first `-`, `+` or `_` followed by one (`-Check`, `+Check`, `_Check`); `:`,
+ * `'` or `#` between two letters or digits (`A:Check`, `A'Check`, `A#Check`). These parts compose:
+ * `A:B:C` or `-A'B` is admitted though only each part ran alone (R937 review). Never run, so still
+ * unproven: `Ø`, `Æ`, `Å` alone or before anything but an ASCII letter or digit (`Ø Step`, `Øå`,
+ * `Æ-`), `Ø`, `Æ`, `Å` or `+` after the first character, a trailing or doubled `:`, `'`, `#`, a
+ * sign alone or before a space, lower-case `ø`, `"`, `\`, `*`, `%`, `,`, a leading or trailing
+ * space, a first `)`. The
  * inner dot is not in this pattern: it depends on the build (#5798) and is read through
  * `serveRowFields` in `pickTransport`.
  * A METHOD name outside the shape makes ITS codeunit run one-shot inside the serve session
@@ -692,7 +695,7 @@ function isNamedRefusalRow(r: V3Row): boolean {
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method:
-    /^(?:[A-Za-z0-9ØÆÅ]|[-+_](?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
+    /^(?:[A-Za-z0-9]|[ØÆÅ+_-](?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
 } as const;
 
 /**
@@ -1750,6 +1753,11 @@ class Lane {
   pair: KillPair | undefined;
   /** R653: the confirm's verdict from the pair, for ONE `run`. */
   pairVerdict: TestVerdict | undefined;
+  /**
+   * R937 review: the last one-shot echo's answer (`why` undefined: it named the mutant). The echo
+   * does not depend on the codeunit, so one per mutant serves every one-shot call under it.
+   */
+  oneShotEcho: { readonly mutant: string; readonly why: string | undefined } | undefined;
   /** F5: per mutant, the budgets the covering loop will send each ref (`useCoveringBudgets`). */
   plan: { readonly mutantId: string; readonly budgets: ReadonlyMap<string, number> } | undefined;
   /** The `active/` dir this lane's daemon reads, once deployed and proved. */
@@ -1860,6 +1868,7 @@ class Lane {
   /** C2 and R349: every field derived from the deployed layout or the active mutant. */
   resetLayout(): void {
     this.rowsByCodeunit = new Map();
+    this.oneShotEcho = undefined;
     this.deployedDir = undefined;
     this.lastActivated = null;
     this.lastMutant = undefined;
@@ -5440,7 +5449,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ? lane.lastActivated
           : undefined;
       if (mutantInFile !== undefined) {
-        // R937: serve checks the mutant with an echo row; so does this call, in its own process.
+        // R937: serve checks the mutant with an echo row; this call checks it by a proxy, an echo in a
+        // separate process on the same lane before the call (`runOneShotEcho`).
         const why = await this.oneShotEcho(lane, mutantInFile, stopSeconds);
         if (why !== undefined) {
           return {
@@ -5568,11 +5578,32 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
+   * R937 review: `runOneShotEcho` once per (lane, mutant), its answer (a mismatch or a failure too)
+   * reused by every one-shot call under that mutant; counted in the serve stats as an echo request.
+   */
+  private async oneShotEcho(
+    lane: Lane,
+    m: string,
+    stopSeconds: number,
+  ): Promise<string | undefined> {
+    const had = lane.oneShotEcho;
+    if (had !== undefined && had.mutant === m) return had.why;
+    this.stats.echoRequests += 1;
+    const why = await this.runOneShotEcho(lane, m, stopSeconds);
+    if (why !== undefined) this.stats.echoMismatches += 1;
+    lane.oneShotEcho = { mutant: m, why };
+    return why;
+  }
+
+  /**
    * R937: the echo for a one-shot codeunit's mutant call: with the resource file saying `m`, one
    * process runs the selector's echo codeunit, whose single failing row must name `m`
    * (`echoMismatch`, as serve's). NONE is restored after it. Returns why not, or `undefined`.
+   * It is a PROXY: a separate process on the same lane, resource path, `activeDir` and `testDir`
+   * shows that a fresh process there reads the mutant, not that the codeunit's own process does
+   * (serve's window echoes inside the same daemon, before and after).
    */
-  private async oneShotEcho(
+  private async runOneShotEcho(
     lane: Lane,
     m: string,
     stopSeconds: number,
