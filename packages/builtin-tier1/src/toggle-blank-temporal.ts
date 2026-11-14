@@ -32,7 +32,8 @@ const OPERATOR_VERSION = "2.0.0";
  * ("Cannot write the value 01/01/1753 ...", measured on BC 28 by GitHub #28's reporter), and a mutant
  * whose value reaches a table write died on the write whatever the tests asserted. 1753-01-03, not
  * -02: a DateTime is stored in UTC, and `CREATEDATETIME` reads the user's time zone, so a date two
- * days clear stays storable at any offset (at most 14 hours). Measured on al-runner: both store by
+ * days clear stays storable at any offset (today's zones reach +14 hours, 1753-era local mean time in
+ * IANA's tables about +15:13; all under a day). Measured on al-runner: both store by
  * Insert and Modify, 1753-01-01 does not (`/coord/handoff/R-971/p/`).
  */
 const NON_BLANK: Readonly<Record<string, string>> = {
