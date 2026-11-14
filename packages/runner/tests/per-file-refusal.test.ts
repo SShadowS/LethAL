@@ -260,7 +260,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
       // R855: swap-call-arguments 1.1.0 plus 12 new delete-* entries (was cf442b39...3d4).
       // R926: every statement-grain entry gains `reachLine`, the only change (was bc2c6465...83bc).
-      "8005622862897bdb2f5fbafdf2c04f7a6f7b5d5de7a5f02ff4c6b9eed52ed41c",
+      // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c,
+      // which the same manifest with that key removed still gives).
+      "5dd124ade8b16cef2593b8a4fc0002cf3a005eaa1da897c8e91ba4460ad9a9fb",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -291,7 +293,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     expect(all.digest("hex")).toBe(
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
-      "12e54fd3e5437ddcba10460e702d8463d3fbf094171233f49f80aac86d041065",
+      // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
+      "0d911257f1197150dfddb72c9fc7c7c3fe5b022953d992fc8abadbb7fe7de702",
     );
   }, 60_000);
 });
