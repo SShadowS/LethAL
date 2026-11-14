@@ -156,8 +156,8 @@ export type EquivalenceRisk =
   /** The operator bounds a LOOP. Where the covering test drives exactly one iteration, truncating to
    *  one iteration changes nothing. */
   | "loop-truncation"
-  /** R983 (GitHub #51): a blank toggle whose literal is an OPERAND of a comparison (`X <> 0D`,
-   *  `X = ''`). For `=`/`<>` the branch changes only for a value equal to the original literal or
+  /** R983 (GitHub #51): a blank toggle (and, R984, a `shift-integer`) whose literal is an OPERAND
+   *  of a comparison (`X <> 0D`, `X = ''`, `N = 5`). For `=`/`<>` the branch changes only for a value equal to the original literal or
    *  the substitute; for an ordered comparison, for any value between the two. Where no such value
    *  reaches the comparison, a survivor is equivalent.
    *  Set per site, never per operator: the same operator's ASSIGNED literals stay `value-rewrite`. */

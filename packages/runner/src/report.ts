@@ -2661,9 +2661,9 @@ const EQUIVALENCE_RISK_EXPLANATIONS: Readonly<Record<string, string>> = {
     "to one iteration changes nothing and the mutant is equivalent. A survivor here may mean the " +
     "test drives one row, which is itself the finding.",
   "compared-value":
-    "This blank toggle changes one side of a COMPARISON (`X = ''`, `X <> 0D`), so the comparison " +
-    "itself reads the value. For `=` and `<>` the branch changes only where the other side equals " +
-    "the original literal or the substitute ('x', 17530101D, ...); for `<`, `>`, `<=` and `>=`, " +
+    "This mutant changes a literal on one side of a COMPARISON (`X = ''`, `X <> 0D`, `N = 5`), so " +
+    "the comparison itself reads the value. For `=` and `<>` the branch changes only where the " +
+    "other side equals the original literal or its substitute; for `<`, `>`, `<=` and `>=`, " +
     "for any value between the two. The mutant is equivalent only if no such value can reach this " +
     "comparison. Check whether a test drives the other side to one of those values before reading " +
     "a survivor here as equivalent.",

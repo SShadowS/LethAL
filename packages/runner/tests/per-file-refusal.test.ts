@@ -262,7 +262,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R926: every statement-grain entry gains `reachLine`, the only change (was bc2c6465...83bc).
       // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c,
       // which the same manifest with that key removed still gives).
-      "5dd124ade8b16cef2593b8a4fc0002cf3a005eaa1da897c8e91ba4460ad9a9fb",
+      // R984/R985: shift-integer comparison operands gain `equivalenceRisk`, toggle-blank-temporal
+      // is 2.0.0 with stand-in 17530103D, nothing else (was 5dd124ad...a9fb; /coord/handoff/R-971/classify.out).
+      "62a32c66936d6b82b4c8857345e1f8194b58c1351ed7fb13394267d22e7c18e4",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -294,7 +296,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
-      "0d911257f1197150dfddb72c9fc7c7c3fe5b022953d992fc8abadbb7fe7de702",
+      // R984/R985: the manifest as above, plus DataTemporalOps' stand-ins 17530103D (was 0d911257...e702).
+      "c6211a8c5be255833981f4340427b6ecfb069ddbaecbd71ed0c58b028a59b483",
     );
   }, 60_000);
 });

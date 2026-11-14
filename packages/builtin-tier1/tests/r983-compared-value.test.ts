@@ -48,14 +48,14 @@ describe("R983: blank toggles inside a comparison get their own equivalence risk
 
   it("temporal: a comparison operand, both directions, is compared-value", () => {
     expect(risks(toggleBlankTemporal, "if D <> 0D then exit; if T = 120000T then exit;")).toEqual([
-      "0D -> 17530101D: compared-value",
+      "0D -> 17530103D: compared-value",
       "120000T -> 0T: compared-value",
     ]);
   });
 
   it("temporal: an assigned literal carries no site risk", () => {
     expect(risks(toggleBlankTemporal, "D := 0D; T := 120000T;")).toEqual([
-      "0D -> 17530101D: none",
+      "0D -> 17530103D: none",
       "120000T -> 0T: none",
     ]);
   });

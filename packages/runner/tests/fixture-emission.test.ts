@@ -107,7 +107,8 @@ const PINNED: Record<
         "81b6685fc63799431742bc4b4958b9a0b733695816339e9ae7f700a5882bfeb7",
       "SandboxPricing.Codeunit.al":
         "60b12340761b9a80841a842bfc2d1a3c5964be3997275895f469f2b7973671a5",
-      "mutant-manifest.json": "6edb3f7e8ab606ee6659fced3e050dc24cf923c86e1d8f5e04ff42863194370e",
+      // R984: shift-integer comparison operands gain `equivalenceRisk` (was 6edb3f7e...370e).
+      "mutant-manifest.json": "6408068d3dcdf3196ece6d1f683cec2f6b44d1ec8fac3c07da0ab22c713248ff",
     },
   },
   "sandbox-data": {
@@ -148,8 +149,9 @@ const PINNED: Record<
       "DataShiftOps.Codeunit.al":
         "37761b180d9ce890d680e69f6dd130bcd35d428c573a2e30eeb69664147245f4",
       "DataSwapOps.Codeunit.al": "557893e879496f058906ee9edad3627e995c56f15412f22c7b71e419840566f9",
+      // R985: the Date and DateTime stand-ins 17530101D -> 17530103D, the only change (was f40de380...e742).
       "DataTemporalOps.Codeunit.al":
-        "f40de380202746543a9def3467d77f0e8ed0929277b473283ba80546bee6e742",
+        "3b668a7d067e3bfb58321d0f2570601def1359c380f0d1668efd0f88857112dd",
       "DataTriggerProbe.Table.al":
         "f722703a696d9c7341e35f4d89dd8d2b0d680f3fad61aaabb046b6917bb27cfc",
       "DataValidateOps.Codeunit.al":
@@ -166,7 +168,9 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 71d0df78...eaa3).
-      "mutant-manifest.json": "93541eea75ce60d73a6c791e51591f6411ca8bc78a1a14a94b7ddccf8b547a67",
+      // R984/R985: shift-integer comparison operands gain it; toggle-blank-temporal 2.0.0 and its
+      // Date/DateTime stand-in 17530103D (was 93541eea...7a67).
+      "mutant-manifest.json": "e4f5b67ac05e708be5fc4034a36f023a6d4850ffb64372b414adc53d521db2e6",
     },
   },
   "sandbox-hang": {
@@ -211,7 +215,8 @@ const PINNED: Record<
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 5693e720...c6af).
-      "mutant-manifest.json": "86338b483189d0d7918923278ce0655b2ce3f7d00f9b3a5b26523df2027bde4c",
+      // R984: shift-integer comparison operands gain it (was 86338b48...de4c).
+      "mutant-manifest.json": "93e9f276cf3736b4cc455c9b52ccffca1d4f2fb06cc4f4481652e7435fc64e38",
     },
   },
 };
