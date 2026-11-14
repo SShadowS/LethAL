@@ -102,7 +102,7 @@ import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
   type EntryGroup,
-  entriesChunkCapFor,
+  entriesChunkCap,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
   type SentCut,
@@ -223,6 +223,9 @@ export { V3_TIMEOUT_MESSAGE };
  */
 const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
+/** R987: how often a request's daemon RSS is read while it runs (Contoso grew about 0.6 GB a second). */
+const RSS_SAMPLE_MS = 200;
 
 /**
  * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
@@ -1920,8 +1923,37 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R912: the batch a windowed prefetch belongs to: its group count, and the chunk its requests fill. */
   private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
 
-  /** R987: this batch's entries cap, set by `deploy` from its deployed mutant count. */
-  private chunkCap = ENTRIES_CHUNK_CAP;
+  /**
+   * R987: the highest cost per entry measured so far (bytes a daemon grew during one request, over
+   * its entries), for the whole session: it never falls, and a reading of 0 or less is no information.
+   */
+  private entryCostBytes = 0;
+  /** R987: the most entries a measured request carried (0: none measured yet); the slow start's base. */
+  private largestMeasured = 0;
+  /** R987: set once a lowered cap was announced. */
+  private capLoweredSaid = false;
+
+  /** R987: the entries cap for the next request (`entriesChunkCap`). */
+  private chunkCap(): number {
+    return entriesChunkCap(this.largestMeasured, this.entryCostBytes);
+  }
+
+  /** R987: one request's reading: its daemon's RSS when it was sent and the highest seen while it ran. */
+  private noteEntryCost(startRss: number | undefined, peakRss: number | undefined, entries: number) {
+    if (startRss === undefined || peakRss === undefined || entries <= 0) return;
+    this.largestMeasured = Math.max(this.largestMeasured, entries);
+    const cost = (peakRss - startRss) / entries;
+    if (!(cost > this.entryCostBytes)) return;
+    this.entryCostBytes = cost;
+    const fit = entriesChunkCap(ENTRIES_CHUNK_CAP, cost);
+    if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredSaid) {
+      this.capLoweredSaid = true;
+      this.notify(
+        "al-runner-v3-entries-cap-lowered",
+        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per entry, so requests carry at most ${fit} entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
+      );
+    }
+  }
 
   /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
   private prefetchRemainingMs: (() => number) | undefined;
@@ -2119,10 +2151,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     memoryReader?: () => MemorySample | undefined;
     /** R952: replaces the daemon RSS reader of the recycle bound (tests never read `/proc`). */
     rssReader?: (pid: number) => number | undefined;
+    /** R987: replaces the daemon RSS reader that measures a request's entries (tests never read `/proc`). */
+    requestRssReader?: (pid: number) => number | undefined;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
-    /** R987: replaces `entriesChunkCapFor` (a test batch has a handful of guards, not thousands). */
-    entriesChunkCapFor?: (guards: number) => number;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
     memoryWaitPolls?: number;
     /** R948: bytes one started process or request is counted at by the guard. Absent: `MEMORY_CALL_ESTIMATE_BYTES`. */
@@ -3052,15 +3084,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const artifactId = await this.stage(instrumentedDir, active);
     if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
-    // R987: a serve daemon holds every entry of a request until it ends, at a cost that grows with the
-    // batch's guards; a large batch sends fewer entries per request so the daemon stays inside its peak.
-    this.chunkCap = (this.seams.entriesChunkCapFor ?? entriesChunkCapFor)(ids.size);
-    if (this.entries && this.chunkCap < ENTRIES_CHUNK_CAP) {
-      this.notify(
-        "al-runner-v3-entries-cap-lowered",
-        `[lethal] al-runner-v3: ${ids.size} deployed mutants, so at most ${this.chunkCap} entries per serve request (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
-      );
-    }
     // R790 (A1): while alc proves the batch, its one-shot baseline calls run on the same bytes. Their
     // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
     // served (once each) only if every byte they read is a byte the proof below records.
@@ -5891,7 +5914,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // batch refusal, as the chunk holding both would not have been. Chunk boundaries fall where
     // `chunkGroups` puts them.
     const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
-    if (batch !== undefined && batch.size + sent.length > this.chunkCap) {
+    if (batch !== undefined && batch.size + sent.length > this.chunkCap()) {
       batch.size = 0;
       batch.ran = false;
     }
@@ -5981,21 +6004,36 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<RequestOut> {
     const seq = ++this.requestSeq;
     const daemon = await this.ensureDaemon(lane, mode);
+    // R987: the daemon's RSS while the request runs (it holds every entry's state until the end).
+    const pid = daemon.server.pid;
+    const readRss = (): number | undefined =>
+      pid === undefined ? undefined : (this.seams.requestRssReader ?? readProcessRssBytes)(pid);
+    const startRss = readRss();
+    let peakRss = startRss;
+    const sampleRss = () => {
+      const r = readRss();
+      if (r !== undefined && (peakRss === undefined || r > peakRss)) peakRss = r;
+    };
+    const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
-    const {
-      sent,
-      rows,
-      cut: partial,
-    } = await lane.timed(phase, () =>
-      this.send(
-        lane,
-        groups,
-        phase === "prefetchMs" ? "prefetch" : "live",
-        mode,
-        groupCount,
-        alone,
-      ),
-    );
+    let answer: Awaited<ReturnType<AlRunnerV3Backend["send"]>>;
+    try {
+      answer = await lane.timed(phase, () =>
+        this.send(
+          lane,
+          groups,
+          phase === "prefetchMs" ? "prefetch" : "live",
+          mode,
+          groupCount,
+          alone,
+        ),
+      );
+    } finally {
+      clearInterval(sampler);
+    }
+    sampleRss();
+    const { sent, rows, cut: partial } = answer;
+    this.noteEntryCost(startRss, peakRss, sent.length);
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
@@ -6144,9 +6182,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ),
     }));
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
-    const queue = chunkGroups(groups, this.chunkCap);
+    // R987: each chunk is cut when it is sent, at the cap the cost measured so far allows. Resent
+    // groups form their own segment after the window's, as their own chunks did before.
+    const segments: EntryGroup[][] = groups.length > 0 ? [[...groups]] : [];
+    const nextChunk = (): EntryGroup[] | undefined => {
+      const seg = segments[0];
+      if (seg === undefined) return undefined;
+      const [chunk = []] = chunkGroups(seg, this.chunkCap());
+      seg.splice(0, chunk.length);
+      if (seg.length === 0) segments.shift();
+      return chunk;
+    };
     const resent = new Set<string>();
-    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+    for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
       // R948: a prefetch request starts no group while the container is over its memory bound; the
       // session stops by the guard (R955's path), so the rest is never scored.
       if (!(await this.memoryGate())) break;
@@ -6173,7 +6221,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       const again = out.resend.filter((g) => !resent.has(g.mutantId));
       for (const g of again) resent.add(g.mutantId);
-      queue.push(...chunkGroups(again, this.chunkCap));
+      if (again.length > 0) segments.push([...again]);
     }
     await this.batchKillPairs(plans);
   }
@@ -6220,15 +6268,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const tagOf = (k: Kill) => this.pairTag(k.mutantId, k.cu);
     // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
-    const perChunk = Math.max(1, Math.floor(this.chunkCap / 4));
-    const chunksOf = (ks: readonly Kill[]): Kill[][] => {
-      const out: Kill[][] = [];
-      for (let i = 0; i < ks.length; i += perChunk) out.push(ks.slice(i, i + perChunk));
-      return out;
+    // R987: each chunk is cut when it is sent, at the cap the cost measured so far allows.
+    const segments: Kill[][] = kills.length > 0 ? [[...kills]] : [];
+    const nextChunk = (): Kill[] | undefined => {
+      const seg = segments[0];
+      if (seg === undefined) return undefined;
+      const chunk = seg.splice(0, Math.max(1, Math.floor(this.chunkCap() / 4)));
+      if (seg.length === 0) segments.shift();
+      return chunk;
     };
-    const queue = chunksOf(kills);
     const resent = new Set<string>();
-    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+    for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
       const groups: EntryGroup[] = chunk.flatMap((k) => [
         {
           mutantId: SELECTOR_RESOURCE_NONE,
@@ -6275,7 +6325,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           after.push(k);
         }
       }
-      queue.push(...chunksOf(after));
+      if (after.length > 0) segments.push(after);
     }
   }
 

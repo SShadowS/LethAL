@@ -57,7 +57,8 @@ import {
   decodeEntriesAnswer,
   emitSelectorEcho,
   encodeGroups,
-  entriesChunkCapFor,
+  ENTRIES_PROBE_CAP,
+  entriesChunkCap,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
@@ -603,7 +604,12 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
   // R952: the recycle bound's RSS read is unreadable unless a test says otherwise (tests never read /proc).
-  Object.assign(b.seams, { rssReader: () => undefined }, opts.seams ?? {});
+  // R987: so is the per-request reading; with none, requests stay at the 16-entry probe.
+  Object.assign(
+    b.seams,
+    { rssReader: () => undefined, requestRssReader: () => undefined },
+    opts.seams ?? {},
+  );
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
@@ -2867,45 +2873,86 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
   });
 });
 
-describe("R987: entries per serve request follow the batch's guard count", () => {
-  test("the cap function: unchanged below about 4,400 guards, lowered above, never below 1", () => {
-    expect(entriesChunkCapFor(0)).toBe(ENTRIES_CHUNK_CAP);
-    expect(entriesChunkCapFor(2_000)).toBe(ENTRIES_CHUNK_CAP);
-    // Contoso Coffee Demo, measured at 21.2 GB with 256 entries per request (R987).
-    expect(entriesChunkCapFor(20_790)).toBe(54);
-    expect(entriesChunkCapFor(10_000_000)).toBe(1);
-    expect(() => entriesChunkCapFor(-1)).toThrow(/whole number/);
-    expect(() => entriesChunkCapFor(1.5)).toThrow(/whole number/);
+describe("R987: entries per serve request follow the daemon growth measured per entry", () => {
+  const GiB = 2 ** 30;
+  test("the cap function: a 16-entry probe, then at most twice the largest measured, within 4 GiB", () => {
+    expect(entriesChunkCap(0, 0)).toBe(ENTRIES_PROBE_CAP);
+    expect(ENTRIES_PROBE_CAP).toBe(16);
+    expect(entriesChunkCap(16, 0)).toBe(32);
+    expect(entriesChunkCap(16, 2 ** 20)).toBe(32); // 1 MiB an entry: 4,096 would fit
+    expect(entriesChunkCap(200, 2 ** 20)).toBe(ENTRIES_CHUNK_CAP);
+    // Contoso Coffee Demo: about 77 MB an entry (R987).
+    expect(entriesChunkCap(16, 77e6)).toBe(32);
+    expect(entriesChunkCap(32, 77e6)).toBe(55);
+    expect(entriesChunkCap(256, 77e6)).toBe(55);
+    expect(entriesChunkCap(256, 8 * GiB)).toBe(1);
+    expect(() => entriesChunkCap(-1, 0)).toThrow(/whole number/);
+    expect(() => entriesChunkCap(1.5, 0)).toThrow(/whole number/);
+    expect(() => entriesChunkCap(16, -1)).toThrow(/finite number/);
+    expect(() => entriesChunkCap(16, Number.NaN)).toThrow(/finite number/);
   });
 
-  const prefetchWith = async (cap: number) => {
-    const asked: number[] = [];
+  /**
+   * A daemon that does not shrink back: while a request runs its RSS is the floor plus `perEntry`
+   * for each of the request's entries, or its old size if that is larger (the fake serve's answer
+   * hook sets it; `requestRssReader` injects it). The prefetch is 30 mutants of SUITE1: 30 groups of
+   * two entries (echo + the one codeunit), 60 entries in all; every request's size is recorded.
+   */
+  const prefetch30 = async (perEntry: number, rows?: RowsFn) => {
+    const mem = { level: 0.5 * GiB };
+    const sizes: number[] = [];
     const notes: string[] = [];
-    const r = await readyRig({
-      seams: {
-        entriesChunkCapFor: (g) => {
-          asked.push(g);
-          return cap;
+    const ids = Array.from({ length: 30 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+    const warm = new Set<number>();
+    const r = await rig({
+      ...(rows !== undefined ? { oneShotRows: rows, pairBatch: true } : {}),
+      serve: {
+        ...(rows !== undefined ? { rows } : {}),
+        answer: (q) => {
+          // A daemon's first request is its warm-up: neither counted nor grown.
+          if (!warm.has(q.daemon)) {
+            warm.add(q.daemon);
+            return undefined;
+          }
+          sizes.push(q.ids.length);
+          mem.level = Math.max(mem.level, 0.5 * GiB + perEntry * q.ids.length);
+          return undefined;
         },
       },
+      seams: { requestRssReader: () => mem.level },
       notify: (code) => notes.push(code),
     });
-    return { s: r.b.entriesStats(), asked, notes };
+    await baseline(r.b, SUITE1);
+    sizes.length = 0; // the prefetch's requests only
+    await r.b.prefetchMutants(plans(ids));
+    return { sizes, notes, s: r.b.entriesStats() };
   };
 
-  test("a lowered cap splits the prefetch into more requests, and says so", async () => {
-    const low = await prefetchWith(1);
-    // Two mutant groups of at least two entries each (echo + a codeunit): each goes alone.
-    expect(low.s.prefetchRequests).toBe(2);
-    expect(low.asked.length).toBe(1);
-    expect(low.asked[0]).toBeGreaterThan(0);
-    expect(low.notes).toContain("al-runner-v3-entries-cap-lowered");
+  test("a high reading caps every later request at what fits 4 GiB, and says so once", async () => {
+    // 0.25 GiB an entry: 16 fit. A probe of 16, then 16 each (not 32, 64): the later requests read
+    // no growth (the daemon does not shrink back), and the highest cost seen still holds.
+    const high = await prefetch30(0.25 * GiB);
+    expect(high.sizes).toEqual([16, 16, 16, 12]);
+    expect(high.notes.filter((c) => c === "al-runner-v3-entries-cap-lowered")).toEqual([
+      "al-runner-v3-entries-cap-lowered",
+    ]);
   });
 
-  test("the full cap keeps one prefetch request and no note", async () => {
-    const full = await prefetchWith(ENTRIES_CHUNK_CAP);
-    expect(full.s.prefetchRequests).toBe(1);
-    expect(full.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+  test("a low reading grows the requests: a probe of 16, then twice the largest measured", async () => {
+    // 1 MiB an entry: thousands would fit, so only the slow start limits it: 16, 32, the 12 left.
+    const low = await prefetch30(2 ** 20);
+    expect(low.sizes).toEqual([16, 32, 12]);
+    expect(low.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+  });
+
+  test("the kill-pair batches follow the cap: a pair is 4 entries, so 4 pairs a request at 16", async () => {
+    const killsAll: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((r) =>
+        r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
+      );
+    const high = await prefetch30(0.25 * GiB, killsAll);
+    expect(high.s.pairBatchStored).toBe(30);
+    expect(high.s.pairBatchRequests).toBe(8); // 30 kills, 4 a request (64 a request at 256)
   });
 });
 

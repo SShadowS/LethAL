@@ -43,30 +43,35 @@ export const echoMessage = (m: string): string => `LETHAL-ECHO:${m}:true`;
 export const ENTRIES_CHUNK_CAP = 256;
 
 /**
- * R987: what one entry costs the serve daemon, per deployed mutant (guard) of the batch, while a
- * request runs: the daemon holds every entry's state until the request ends. Measured on Contoso
- * Coffee Demo (20,790 guards, edge-c8fe56e05, `/coord/handoff/R-972/`): 256 entries per request
- * peaked at 21.2 GB, 64 at 6.3 GB, so about 77 MB per entry over a 1.35 GB floor, 3.7 KB per entry
- * per guard. Rounded up.
+ * R987: the memory one request's entries may take. A serve daemon holds every entry's state until
+ * the request ends: Contoso Coffee Demo's tests cost about 77 MB an entry, so 256 entries took the
+ * daemon to 21 GB (`/coord/handoff/R-972/`). 4 GiB keeps it inside `--peak serve` (8 GiB) with its
+ * own floor and LethAL's process beside it.
  */
-export const ENTRY_BYTES_PER_GUARD = 3800;
-
-/** R987: the memory one request's entries may take, so the daemon stays inside `--peak serve`
- *  (8 GiB) with its floor and LethAL's own process beside it. */
 export const ENTRIES_REQUEST_BUDGET_BYTES = 4 * 1024 ** 3;
 
+/** R987: the first request's entries, before any request was measured. */
+export const ENTRIES_PROBE_CAP = 16;
+
 /**
- * R987: the entries cap for a batch of `guards` deployed mutants: `ENTRIES_CHUNK_CAP`, lowered so
- * one request's entries fit `ENTRIES_REQUEST_BUDGET_BYTES` (Contoso: 54). At least 1; a group larger
- * than the cap still goes alone (`chunkGroups`). Below about 4,400 guards nothing changes.
+ * R987: the entries cap for the next request. `largestMeasured` is the most entries any measured
+ * request carried (0: none measured yet), `bytesPerEntry` the highest cost per entry seen (bytes the
+ * daemon grew during a request, over its entries; 0 when no request grew it). A slow start: before
+ * any reading `ENTRIES_PROBE_CAP`, then at most twice the largest measured request, and at most what
+ * fits `ENTRIES_REQUEST_BUDGET_BYTES` at that cost. Always 1 to `ENTRIES_CHUNK_CAP` (a larger group
+ * still goes alone, `chunkGroups`).
  */
-export function entriesChunkCapFor(guards: number): number {
-  if (!Number.isInteger(guards) || guards < 0) {
-    throw new Error(`entriesChunkCapFor: guards must be a whole number >= 0, got ${guards}`);
+export function entriesChunkCap(largestMeasured: number, bytesPerEntry: number): number {
+  if (!Number.isInteger(largestMeasured) || largestMeasured < 0) {
+    throw new Error(`entriesChunkCap: largestMeasured must be a whole number >= 0, got ${largestMeasured}`);
   }
-  // 0 guards: the division gives Infinity, so the cap stays ENTRIES_CHUNK_CAP.
-  const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / (guards * ENTRY_BYTES_PER_GUARD));
-  return Math.max(1, Math.min(ENTRIES_CHUNK_CAP, fit));
+  if (!Number.isFinite(bytesPerEntry) || bytesPerEntry < 0) {
+    throw new Error(`entriesChunkCap: a cost must be a finite number >= 0, got ${bytesPerEntry}`);
+  }
+  const growth = largestMeasured === 0 ? ENTRIES_PROBE_CAP : 2 * largestMeasured;
+  const fit =
+    bytesPerEntry === 0 ? ENTRIES_CHUNK_CAP : Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / bytesPerEntry);
+  return Math.max(1, Math.min(ENTRIES_CHUNK_CAP, growth, fit));
 }
 
 /** One mutant (or `NONE`) and the covering codeunits it needs, in one request. */
