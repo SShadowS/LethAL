@@ -1,0 +1,1620 @@
+[
+  {
+    "key": "al-runner-vN transport failure: vN exited N: al-runner N.N.N-alpha.N+edge.N (NafNdN)",
+    "state": "fixed",
+    "issue": "#7853",
+    "note": "R-983: fixed upstream, project not re-run; (Guided Experience compile; R946)"
+  },
+  {
+    "key": "Microsoft Dynamics N Business Central Server attempted to issue a client callback to show a confirmation dialog box: <text>",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: [Native] procedure <x> is implemented by the platform and has no AL body (what it answers is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a .NET result of kind Integer stored into Char: BC's conversion is not pinned (ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a [ReportHandler] for report <x>, which is not a processing-only report with a request page (not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control Caption over its source field's CaptionClass (which one BC shows is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Baseline for CHN whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Current Value for CHN whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Default CHN Emission whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Default CON Emission whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Emission CHN whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Emission CN whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Emission CON whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Energy Consumption whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Fuel/Electricity whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field G/L Account (Total CONe) whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Recyclability Percentage whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a control over table field Total CONe whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a DateTime before N-N-N in a database table, other than the pinned ones (not pinned)",
+    "state": "open",
+    "issue": "#7834",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a drill-down that changed the row without storing it on a list whose ModifyAllowed is false (the save BC tries later is not built)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a file name, got Guid",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a page opened without a record whose OnOpenPage left Rec where its view has no row (not pinned)",
+    "state": "open",
+    "issue": "#8036 §6",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (delete permission on object type N id N) whose error is not pinned yet (on a system table; probe PN pins Tenant Media only); the test is not run",
+    "state": "open",
+    "issue": "#7854",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (modify permission on object type N id N) whose error is not pinned yet (made by the runtime for a page, report, xmlport or validation; ADR-N probes PN-PN); the test is not run",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (modify permission on object type N id N) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) under assigned permission sets that are not fully composed, so BC may allow it: the sets were assigned on top of the test runner's permiss",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+    "state": "open",
+    "note": "R-985: Guided Experience, reduced and filed",
+    "issue": "#8038 (R997)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a read of an empty table of a dependency app, which BC's database may fill with demo rows); the test is not",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (made by the runtime for a page, report, xmlport or validation; ADR-N probes PN-PN); the test is not run",
+    "state": "open",
+    "issue": "#7854",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (on a system table; probe PN pins Tenant Media only); the test is not run",
+    "state": "open",
+    "issue": "#7854",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a request to a relative path with no base address reaches a [HttpClientHandler] under the default policy or AllowAllOutboundRequests: not measured",
+    "state": "open",
+    "issue": "#8036 §3",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a request to a relative path with no base address, or with no uri, reaches a [HttpClientHandler]: what the handler sees is not measured",
+    "state": "open",
+    "issue": "#8036 §3",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a SaveAsXml data file of a report whose nested data item read rows and wrote none (Skip, Break or PrintOnlyIfDetail; not pinned)",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/recheck",
+    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run"
+  },
+  {
+    "key": "NotRun: out-of-scope: a stale Audit File Export Line buffer from its own write, after a failed guarded Codeunit.Run other than a static Codeunit.Run(Id, Rec) whose run did Rec.Modify(), Commit and Error with a literal te",
+    "state": "open",
+    "issue": "#7964",
+    "note": "R-983: filed, still met (27 in the re-run part)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a stale Audit File Export Line buffer from its own write, after a rollback other than an asserterror of an Error statement (not pinned)",
+    "state": "open",
+    "issue": "#7964",
+    "note": "R-983: filed, still met (27 in the re-run part)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are no",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>)) and could draw random numbers, and this test draws random numbers: the shared sequence is not BC's; this failure is n",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are n",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: a tree over a page variable whose view is longer than the rows its open reads (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a lin",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an AL InStream assigned to a DotNet System.IO.MemoryStream (netstandard): only System.IO.Stream (mscorlib, netstandard) is pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC's; thi",
+    "state": "open",
+    "issue": "#7854",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>N<x>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>The",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change the bound event subscribers, so the state it would have left is not BC's; this failure is no",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change the session language, so the state it would have left is not BC's; this failure is not trust",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): part of its reach is not known (<reach>), so it may change anything, so the state it would have left is no",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/recheck",
+    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it can change session state the analysis does not follow, so the state it would have left is not BC<x>Opt",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it can change the session language, so the state it would have left is not BC's; this failure is not trus",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): part of its reach is not known (<reach>), so it may change anything, so the state it would have left is n",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/recheck",
+    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (onl",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed number sequence <x> that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.In",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): Index out of bounds.",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): The given key was not present in the dictionary.",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/recheck",
+    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error while an open TestPage closes at the end of the test (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an Insert into Tenant Media other than the measured Insert(false) (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an InStream that was read from given to a DotNet Stream (only one at its start is pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an InStream was expected, got an untouched handle",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an outbound HTTP request that a test handler does not answer: the runtime never opens a connection (ADR-N). To run the test, bind an [HttpClientHandler] that answers the request, or set TestHttpRequ",
+    "state": "by-design",
+    "note": "R-983: by design; unanswered outbound HTTP"
+  },
+  {
+    "key": "NotRun: out-of-scope: an OutStream was expected, got an untouched handle",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: AsDecimal of a Text control whose text has digits but is no number (not pinned)",
+    "state": "open",
+    "issue": "#8036 §5",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: BaseN conversion with code page N and TextEncoding::UTFN (only N, N, N and N are pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Blob.Length before CalcFields of a stored blob of N bytes (the stored size is not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: CalcDate result outside N-N (error text not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: Clear of a XmlWriteOptions value",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: closing a new host row while a part that shows no row declares OnNewRecord or OnAfterGetCurrRecord (BC runs neither, the relink does; not implemented)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.Init writes the database in the test session before the first test, and this test can read table User Environment Login: what the te",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.Init writes the database in the test session before the first test, and this test can read table User Login: what the test runner do",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.InitCompany before the first test: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: comparison of an empty loaded Blob with a Blob that is not loaded (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: comparison of Byte N and Text <x>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control ApprovedMembers shows an expression computed when it is read, after TestField.DrillDown, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control Calculation Base % shows an expression computed when it is read, after TestField.AssistEdit, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control Calculation Base Amount shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control LanguageName shows an expression computed when it is read, after TestField.AssistEdit, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control Service Object Quantity shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: control Service Start Date shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Blob to Integer",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Cryptography Management Impl..GetEncryptionKeyAsStream: builtin System.ExportEncryptionKey#N is not implemented",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: CurrPage.Close() in an action that left another row in Rec, on this page (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: CurrPage.Update on a list whose filters left the row it stands on, outside an action (which row it shows then is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Database.SID without a user name (whose SID it answers is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: date formula <x>: this form is not pinned by the corpus",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DeleteAll on virtual table <x>: its rows are computed, not stored",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>options'",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet AzureKeyVaultAppSecretProvider.InitializeFromCallingAppExceptSystemApplication on a variable never constructed (not pinned; only TryGetAzureKeyVaultSecret is)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet GraphQuery constructor takes no arguments here; the call has N",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.Codabar: IDAutomation.Linear.FontEncoder.Codabar has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeN: IDAutomation.Linear.FontEncoder.CodeN has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeNa: IDAutomation.Linear.FontEncoder.CodeNa has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeNb: IDAutomation.Linear.FontEncoder.CodeNb has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeNc: IDAutomation.Linear.FontEncoder.CodeNc has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeNModN: IDAutomation.Linear.FontEncoder.CodeNModN has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.MSI: IDAutomation.Linear.FontEncoder.MSI has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.Postnet: IDAutomation.Linear.FontEncoder.Postnet has no overload taking N argument(s) of the given types (String)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.NetStandard.DataMatrix.FontEncoder.DataMatrix.EncodeDM: IDAutomation.NetStandard.DataMatrix.FontEncoder.DataMatrix.EncodeDM has no overload taking N argument(s) of the given type",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.NetStandard.MaxiCode.FontEncoder.MaxiCode.EncodeMaxiCode: Requested value <x> was not found.",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.NetStandard.QRCode.FontEncoder.QRCode.EncodeQR: IDAutomation.NetStandard.QRCode.FontEncoder.QRCode.EncodeQR has no overload taking N argument(s) of the given types (String, Boole",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfAttachmentManager.GetInvoiceAttachment: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfConverter.ConvertPage raised the .NET exception System.TypeInitializationException: The type initializer for <x> threw an exception. <- System.P",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.AzureKeyVaultClient.AzureKeyVaultClientHelper member on something the runtime did not make",
+    "state": "open",
+    "issue": "#7934",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.AzureMLWrapper.AzureMLHelper.ValidateUri: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Client.Capabilities.LocationProvider.IsAvailable: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.DocumentReport.WordReportManager.NewWordDocumentLayout: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception Microsoft.Dynamics.QRCode.QRCodeException: Cannot accommodate input length.; the text AL w",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception System.TypeInitializationException: The type initializer for <x> threw an exception. <- Sy",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.NavUserAccount.NavUserAccountHelper.GetAllowedCompanies: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.AL.ALActivityLogEntry.Create: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.Debugger.SamplingProfiler.StartProfiling: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.Designer.NavDesignerALFunctions.ClearCRMDesigner: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.NavPageActionALFunctions.GetActions: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GetConfigurationSetting: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GetPPACTenantSettings: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.UseTreatmentAllocation: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.Excel.Export.DataEntityExportInfo.DocumentId: cannot assign String to Microsoft.Dynamics.Platform.Integration.Office.Excel.Export.DataEntityExpo",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new MailKit.Net.Smtp.SmtpClient: refused by policy: assembly <x> (mail needs the network); MailKit.Net.Smtp.SmtpClient",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AppHTMLSanitizer.AppHtmlSanitizer: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.Client.Capabilities.CameraOptions: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.Client.Capabilities.Location: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.LicensingService.Model.UserInfo: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.Runtime.ALAzureAdCodeGrantFlow: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new MimeKit.MimeMessage: refused by policy: assembly <x> (mail needs the network); MimeKit.MimeMessage",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Newtonsoft.Json.Linq.JObject: assembly <x> could not be loaded: FileNotFoundException: Could not load file or assembly <x>. The system cannot find the file specified. Besides the .NET run",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Drawing.Bitmap takes (Integer, Integer) here (ADR-N)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Drawing.ImageFormatConverter: refused by policy: type <x> (needs the Windows drawing stack (AL Runner refuses it for the same reason))",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Globalization.CultureInfo raised the .NET exception System.Globalization.CultureNotFoundException: Culture is not supported. (Parameter <x>)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.IO.BinaryReader: an AL library value (an untouched handle) passed to .NET",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.IO.BinaryWriter: an AL library value (an untouched handle) passed to .NET",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. <- System.IO.IOException: An attempt was made to move the position be",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.XNCertificates.XNCertificateN raised the .NET exception System.Security.Cryptography.CryptographicException: ASNN corrupted data. <- System.Formats.AsnN.AsnCo",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Text.RegularExpressions.Regex: new System.Text.RegularExpressions.Regex has no overload taking N argument(s) of the given types (String, null, TimeSpan)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Text.UTFNEncoding: protocol mismatch: the sidecar speaks version N, the host version N",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: The hostname could not be parsed.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JArray.ToString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.ToString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.Dictionary`N.Count: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.SortedDictionary`N[[System.Object, System.Private.CoreLib, Version=N.N.N.N, Culture=neutral, PublicKeyToken=NcecNdNbeaNe],[System.Object, System.Private.CoreLib, Ve",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.SortedDictionary<x>N.Add' is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Hashtable.Add: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: Cannot find column N.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataRow.Item raised the .NET exception System.ArgumentException: Column <x> does not belong to table DataTable.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position -N.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position N.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataTable.Columns: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToUnixTimeMilliseconds: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToUnixTimeSeconds: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Drawing.Image.FromStream: refused by policy: type <x> (needs the Windows drawing stack (AL Runner refuses it for the same reason))",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Drawing.Image.Height: refused by policy: type <x> (needs the Windows drawing stack (AL Runner refuses it for the same reason))",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Drawing.Image.RawFormat: refused by policy: type <x> (needs the Windows drawing stack (AL Runner refuses it for the same reason))",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Drawing.Image.Width: refused by policy: type <x> (needs the Windows drawing stack (AL Runner refuses it for the same reason))",
+    "state": "by-design",
+    "note": "R-983: by design; DotNet refused by policy"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.BinaryReader.BaseStream: member <x> not found on <x>",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.BinaryWriter.Write: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.Entries: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "note": "R-995: the #8036 §1 text family (R-983 ruling), reworded since R-983 (was: property, field or method not found)",
+    "issue": "#8036 §1"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.Entries: member <x> not found on <x>",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.MemoryStream.CopyTo: an AL library value (an untouched handle) passed to .NET",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Net.Mail.MailAddress.Address: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::oaep decoding error; the text AL wo",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::padding check failed; the text AL w",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::oaep decoding error; the text AL would see is not",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::padding check failed; the text AL would see is no",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.UniversalCryptoDecryptor.TransformFinalBlock raised the .NET exception System.Security.Cryptography.CryptographicException: The input data is not a complete block",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Text.Encoding.GetBytes: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Text.RegularExpressions.Regex.IsMatch: System.Text.RegularExpressions.Regex.IsMatch has no overload taking N argument(s) of the given types (String, IntN)",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Text.RegularExpressions.Regex.Matches: System.Text.RegularExpressions.Regex.Matches has no overload taking N argument(s) of the given types (String)",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.GetUtcOffset: <x> is an instance member and the variable holds no object",
+    "state": "by-design",
+    "note": "R-983: by design; now a policy refusal (zone data)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.IsDaylightSavingTime: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.Local: refused by policy: member <x> (time zone that bypasses the host)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.TimeZoneInfo.SupportsDaylightSavingTime: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "note": "R-995: the #8036 §1 text family (R-983 ruling), reworded since R-983 (was: property, field or method not found)",
+    "issue": "#8036 §1"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Uri.Host: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "note": "R-995: the #8036 §1 text family (R-983 ruling), reworded since R-983 (was: property, field or method not found)",
+    "issue": "#8036 §1"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Uri.Host: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Uri.Segments: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Host: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Path: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value (<x>) must be greater than or equal to <x>. (Parameter <x>)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Query: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: Invalid URI: The URI scheme is not valid. (Parameter <x>); the text AL would see is not pinned (ADR-N section N)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Uri: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlAttribute.InnerText: property, field or method <x> not found on <x>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Schemas: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "note": "R-995: the #8036 §1 text family (R-983 ruling), reworded since R-983 (was: property, field or method not found)",
+    "issue": "#8036 §1"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Schemas: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Validate raised the .NET exception System.Xml.Schema.XmlSchemaValidationException: The element <x> in namespace <x> has invalid child element <x>. List of possible elem",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlElement.SelectNodes: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlNode.InnerXml: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "R-983: filed (same text family, not each reproduced)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception System.ArgumentException: Document does not have a root element.; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: Evaluate of <x> into Date (form not pinned by the corpus)",
+    "state": "open",
+    "issue": "#8036 §2",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: Evaluate of <x> into DateTime with format N (form not pinned)",
+    "state": "open",
+    "issue": "#8036 §2",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: Evaluate of <x> into Time (form not pinned by the corpus)",
+    "state": "open",
+    "issue": "#8036 §2",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: Evaluate with format number N (not pinned by the corpus)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: File.CreateOutStream on a file that is not open (error text not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
+    "state": "by-design",
+    "note": "R-983: by design; client round trip"
+  },
+  {
+    "key": "NotRun: out-of-scope: File.UploadIntoStream needs a client (a browser round trip), which a headless run has not",
+    "state": "by-design",
+    "note": "R-983: by design; client round trip"
+  },
+  {
+    "key": "NotRun: out-of-scope: Find on an empty set of table <x> without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-N decision Na)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: First() off the new-row line New() started, on a list with OnAfterGetRecord or OnAfterGetCurrRecord, in a shape the corpus does not pin (page type, row count, mode or the row New() started below; wh",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetDotNetType of an unassigned DotNet variable declared as Microsoft.Dynamics.Nav.Runtime.Debugger.VNProfileContract.CpuProfile (not pinned; docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetEffectivePermission under assigned permission sets that are not fully composed, so BC may grant more: the sets were assigned on top of the test runner's permission sets, which are not composed (A",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText of an error whose text is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetResourceAsText of <x> without a text encoding: one character per byte is pinned, which characters the bytes from N up become is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetUrl(ClientType::OData; the call had N arguments): this object type or argument list (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetUrl(ClientType::ODataVN; the call had N arguments): this object type or argument list (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: handler AddToolsByAPIGroupOKHandler: MCP Config Implementation.GetAPIQueryPublishers: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Insert on a TableType = CRM table through a table connection: whether the database trigger runs is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: a raw control character inside a JSON string where it was not measured (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: AutoUpdate with triggers that assign fields (which values win is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: ReadFromYaml of a carriage return or a blank line in a nested, list or flow form (not pinned)",
+    "state": "unexamined",
+    "note": "R-995: met in 2026-11-14's BC.History stores (R-975, R-982, R-985, R-993), not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: ReadFromYaml of a line that is not <x> (the YAML form is not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: InStream method on an unassigned Variant",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: InStream.Read with a length that is not an Integer (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: IsolatedStorage.Get of a missing Guid key as a statement (the Key of the error text is not pinned)",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: MCP Config Implementation.GetAPIQueryPublishers: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: MCP Config Implementation.LookupAPIQueryTools: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: MCP Config Implementation.ValidateAPIQueryTool: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media.ExportStream of a media the session does not hold",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesInvoice.docx of layout <x> is not held by its app (a Microsoft app read from a compiled pack",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Media.ExportStream of the Layout of a Report Layout List row: the layout file src/Reports/StandardESGSalesQuote.docx of layout <x> is not held by its app (a Microsoft app read from a compiled packag",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Modify on virtual table <x>: its rows are computed, not stored",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Next() on a page without a source table (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: NormalDate of an undefined Date",
+    "state": "open",
+    "issue": "#8036 §7",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: OK of the lookup page of Page.RunModal(Id, Rec) whose row left its view while it was open (not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: OnFindRecord finds no row for the record handed to the page (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: OnRegisterAssistedSetup raised to the login subscribers of the apps under test before the first test: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Open on a query that is already open and was read from (not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: OutStream method on an unassigned Variant",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: page event onaftervalidateevent of control Invoice Disc. Pct.: a subscriber listens, and the test client does not raise it yet",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.Activate on a page the test client shows (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.SetSelectionFilter of a page on no row of a table that has rows (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Permission Impl..GetObjectCaptionAndName: column N of platform table <x> (N) is not pinned: no corpus test fixes its value (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: platform table <x> (N) has no provider",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: ReadFrom with an argument that is not text",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: reading a JSON null as Boolean (conversion not pinned yet)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: reading a JSON null as Decimal (conversion not pinned yet)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: ReadPermission on a system table under sets that do not grant it is not pinned (ADR-N probe PN)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.CopyLinks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.FindSet on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.GetTable of a RecordRef that is not open",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.GetTable of Text <x>",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.ReadPermission on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8036 §4",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: relation target <x> is not declared in the workspace",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: report <x> renders output, which the runtime does not produce: report property defaultlayout (a layout) is not supported yet",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report <x>: report property excellayoutmultipledatasheets is not supported yet",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs as Html of report <x>: not measured on BC. Never measured: layout selection = a design-time selection (measured: a Report Layout Selection or Tenant Report Layout Selection row of a bu",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs of <x> as Html: only the Xml dataset is produced (a rendered format needs a layout renderer, and the Linux tier the corpus was measured on does not render them either)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SendNotification raised from inside a handler function (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: <x> is not a Decimal",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: <x> is not an Integer",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: empty filter term",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro); BC error now"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <guid>",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetValue of a blank value on a NotBlank control of a list or of a page without a row (the client's text is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetValue of a blank-captioned Enum value on a control of a list or of a page without a row (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetValue on a control whose type is not known",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetValue on a page variable control of a row set to the values it holds (whether the row is saved first is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error Field: field <x> of table <x>: the related table <x> is not compiled",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error Language Selection: the rows in session language N are not pinned (only those in N are)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error License Permission: whether object type N number N is a row is not pinned (ADR-N: with no license file loaded, only the rows the corpus pins are served)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+    "state": "unexamined",
+    "note": "R-995: met in 2026-11-14's BC.History stores (R-975, R-982, R-985, R-993), not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error Metadata Permission: permission set <x>: <x> grants a whole object type (not listed row by row)",
+    "state": "open",
+    "issue": "#8032 (R994)",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error platform table <x> (N) has no provider",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: store error the Permission rows of tenant sets (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinn",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: TestField.DrillDown right after a GoToKey moved a list without OnAfterGetCurrRecord (whether the row is read again is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: TestField.Lookup on a control that is not bound to a table field",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: TestPage.Expand right after a GoToKey moved a list without OnAfterGetCurrRecord (whether the row is read again is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the caption of a page whose DataCaptionExpression a page extension sets (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the CaptionClass expression of field Dimension N Filter of table Acc. Schedule Line calls Dialog.Message, and how many times BC runs it with an empty record during a page open is not pinned (al-runn",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the delete of a Tenant Permission Set with App ID zero that Tenant Permission or Tenant Permission Set Rel. rows name (BC deletes them with the set: corpus probe TenantSetDeleteCascade.al; not imple",
+    "state": "open",
+    "note": "R-982: commented on #7854 (tenant set delete)",
+    "issue": "#7854"
+  },
+  {
+    "key": "NotRun: out-of-scope: the filters of the record after OK fails on a lookup with no row, for Page.RunModal(N, Rec) without a filter in another filter group or a page id with one (not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: the open read of a list on the row its OnOpenPage left Rec on, in a key other than the primary key, with one row or more rows than a window holds (not pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: the request page of report <x> with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the SaveAsXml data file column Amount, a type with no pinned .NET type",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the SaveAsXml data file column STRSUBSTNO_TextN__Posted_Bank_Deposit_Line___Document_Type___Posted_Bank_Deposit_Line___Document_No___, a type with no pinned .NET type",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: The test result of an error whose text is not pinned (probe wanted: dotnet-exception-other-class, docs/probes-needed.md)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: TransferFields across fields of different types (error text not pinned): field Code of MS - PayPal Standard Template and field Primary Key of MS - PayPal Standard Account",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: use of an InStream that was never created",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: use of an OutStream that was never created",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: use of an unassigned XmlElement",
+    "state": "fixed",
+    "repro": "/coord/handoff/R-983/repro",
+    "note": "R-983: fixed on current (repro)"
+  },
+  {
+    "key": "NotRun: out-of-scope: variable <x> has the attribute RunOnClient, which is not supported",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: variable <x> has the attribute WithEvents: its event triggers are not supported",
+    "state": "open",
+    "issue": "#7832",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: view field <x>",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: WritePermission on a system table under sets that do not grant it is not pinned (ADR-N probe PN)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XML name <x> (only plain names without a prefix are pinned)",
+    "state": "open",
+    "issue": "#7964",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlElement as XML content (only XML nodes and text are pinned)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort import into a VariableText port with TextEncoding = WINDOWS (not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort import of a table element with AutoUpdate or AutoSave = false after its linked child rows (whether it is stored again is not pinned)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort import without SetSource (a file dialog is not supported)",
+    "state": "unexamined",
+    "note": "R-983: not examined"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort import: the row of table element PermissionSet stored before its child rows is gone after them (not pinned)",
+    "state": "open",
+    "issue": "#8032 (R994)",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlPort import: the row of table element TenantPermissionSet stored before its child rows is gone after them (not pinned)",
+    "state": "open",
+    "issue": "#8032 (R994)",
+    "note": "R-983: filed"
+  },
+  {
+    "key": "NotRun: out-of-scope: XNCertificateN Impl..CreateCertificatePropertyJson: <x> is a DotNet value used as an operand of <x>: only a variable is lowered (a member would run once per element)",
+    "state": "unexamined",
+    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+  }
+]
