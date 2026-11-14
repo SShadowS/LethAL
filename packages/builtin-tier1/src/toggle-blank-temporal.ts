@@ -9,7 +9,7 @@ import {
 import { synthesizeAfter } from "./mutate-helpers";
 
 const OPERATOR_NAME = "lethal.toggle-blank-temporal";
-/** R985: 2.0.0, MAJOR. The Date and DateTime stand-ins moved from 1753-01-01 to 1753-01-03, so those
+/** R985: 2.0.0, MAJOR. The Date and DateTime stand-ins moved from 1753-01-01 to 1754-01-02, so those
  *  mutants are different mutations: history's rule 2 carries by tuple, which holds the major, and a
  *  minor bump would carry a verdict measured on the old text (a kill by BC refusing the write) onto
  *  the new one. */
@@ -28,18 +28,19 @@ const OPERATOR_VERSION = "2.0.0";
  * 44 datetime literals in the corpus are `0DT`. `alc` 18.0.40.47373 compiles this form clean in both
  * positions this operator emits into, assignment and `=` comparison operand.
  *
- * R985: NOT 1753-01-01. SQL keeps `0D` as 1753-01-01, so BC refuses to WRITE that date to a table
- * ("Cannot write the value 01/01/1753 ...", measured on BC 28 by GitHub #28's reporter), and a mutant
- * whose value reaches a table write died on the write whatever the tests asserted. 1753-01-03, not
- * -02: a DateTime is stored in UTC, and `CREATEDATETIME` reads the user's time zone, so a date two
- * days clear stays storable at any offset (today's zones reach +14 hours, 1753-era local mean time in
- * IANA's tables about +15:13; all under a day). Measured on al-runner: both store by
- * Insert and Modify, 1753-01-01 does not (`/coord/handoff/R-971/p/`).
+ * R985: NOT in 1753. BC refuses to WRITE any non-blank date of 1753 to a table ("Cannot write the
+ * value 01/01/1753 ... the content is invalid"): measured on BC 28.4, Date and DateTime, Insert and
+ * Modify, 1753-01-01 to 1753-12-31 23:59:59 all refused, 1754-01-01 the first date stored
+ * (`/coord/handoff/R-971/bc-probe-result.md`). So a mutant whose value reached a table write died on
+ * the write whatever the tests asserted. 1754-01-02, not -01: a DateTime is stored in UTC, and
+ * `CREATEDATETIME` reads the user's time zone, so a date one day clear stays storable at any offset
+ * (today's zones reach +14 hours, 1753-era local mean time in IANA's tables about +15:13; all under a
+ * day). al-runner stores 1753 dates BC refuses (upstream #8006), so only BC measured the bound.
  */
 const NON_BLANK: Readonly<Record<string, string>> = {
-  [ALNodeKind.date_literal]: "17530103D",
+  [ALNodeKind.date_literal]: "17540102D",
   [ALNodeKind.time_literal]: "000001T",
-  [ALNodeKind.datetime_literal]: "CREATEDATETIME(17530103D, 000001T)",
+  [ALNodeKind.datetime_literal]: "CREATEDATETIME(17540102D, 000001T)",
 };
 
 /** The blank form of each temporal type, which is what 92 of the 96 claimable sites already are. */
@@ -142,7 +143,7 @@ export const toggleBlankTemporal: MutationOperator = {
       name: "UN-blanks a blank date comparison operand: 92 of 96 claimable sites are this shape",
       sourceAL: `codeunit 51910 "S" { procedure P(D: Date): Integer begin if D = 0D then exit(1); exit(0); end; }`,
       expectedSpecs: [
-        { parentContext: "statement-position", beforeText: "0D", afterText: "17530103D" },
+        { parentContext: "statement-position", beforeText: "0D", afterText: "17540102D" },
       ],
     },
     {
@@ -166,7 +167,7 @@ export const toggleBlankTemporal: MutationOperator = {
         {
           parentContext: "statement-position",
           beforeText: "0DT",
-          afterText: "CREATEDATETIME(17530103D, 000001T)",
+          afterText: "CREATEDATETIME(17540102D, 000001T)",
         },
       ],
     },

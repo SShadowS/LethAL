@@ -65,7 +65,7 @@
       "mutants": 12
     },
     "fixtures/sandbox-data-tests/src/DataTests.Codeunit.al": {
-      "sha256": "14994f101509e99f7d5f889baf88203b58b4e21c91dc130d647291562df783c3",
+      "sha256": "38f8f69a782c13d39df26909be16c519f384d79f862ee0bd3046b1e5ec2a8f76",
       "mutants": 559
     },
     "fixtures/sandbox-data/src/DataAssertOps.Codeunit.al": {
@@ -165,7 +165,7 @@
       "mutants": 45
     },
     "fixtures/sandbox-data/src/DataTemporalOps.Codeunit.al": {
-      "sha256": "9467cdec62a7b8e691706c292a5b91669d48ee7eed6920923eb57c898c88d9ef",
+      "sha256": "d5b1c7422bc38d57e565b4526c31bd0f6e2f6bb8611b4d52c11e11a283c10203",
       "mutants": 19
     },
     "fixtures/sandbox-data/src/DataTriggerProbe.Table.al": {
@@ -201,7 +201,7 @@
       "mutants": 3
     },
     "fixtures/sandbox-dates/src/DatesLogic.Codeunit.al": {
-      "sha256": "2068686ed572be54866978e88f87fc29e19f0607e221c46043fe46941936c850",
+      "sha256": "2dc6b6697c810d3a79ebfcda003241ea067c78880ba9091afc0ed42b9bf89078",
       "mutants": 6
     },
     "fixtures/sandbox-hang-tests/src/HangBaselineTests.Codeunit.al": {
