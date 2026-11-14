@@ -10,17 +10,15 @@ test: `flipped` (now matches BC: re-run what it names), `regressed` (matched BC 
 `still-matches`, or `error` (the repro did not run). The daily update (`al-runner-v3-update.ts`, `gateOne`) runs it for every new
 candidate and logs the report; it never decides the gate.
 
-Adding a repro: a folder `u<issue>-<topic>` with `app.json` (its own app id, ids in the 50100-50399 range) and `src/`, an entry in
-`manifest.json`, then `bun scripts/upstream-repros.ts --candidate /work/tools/al-runner-v3/current/al-runner` to see it run. A
-repro must run with `al-runner test --bc-version 28 <folder>` alone (no package cache), as these do.
+Adding a repro: a folder `u<issue>-<topic>` with `app.json` (its own app id) and `src/`, an entry in `manifest.json`, then
+`bun scripts/upstream-repros.ts --candidate /work/tools/al-runner-v3/current/al-runner` to see it run. A repro must run with
+`al-runner test --bc-version 28 <folder>` alone (no package cache), as these do. A repro of several apps (an install order) keeps
+each app in a subfolder and lists them, in the order `al-runner test` takes them, in the entry's `apps` (R-997: `u8056-install-order`).
 
-## Not yet in the set (open upstream issues an open roadmap item cites)
+## Coverage (R-997)
 
-| issue | roadmap | repro source | why not yet |
-|---|---|---|---|
-| #7853 | R946 | `/coord/handoff/R-981/i7853` | a compile-time difference (alc AL0161 on the System package); needs the platform System package |
-| #7922 | R946 | `/coord/handoff/R-981/o7922` | needs Base Application from a package cache |
-| #8032 | R994 | `/coord/handoff/R-982/repro-wildcard`, `repro-xmlskip`, `repro-tenantset` | to curate: BC's result per test from the issue |
-| #8036 | R995 | `/coord/handoff/R-983/repro` | to curate |
-| #8038 | R997 | `/coord/handoff/R-985/repro`, `repro2` | needs Published Application rows and a permission set |
-| #8056 | R942 | `/coord/handoff/R-942/` (install order of 4+ apps) | several apps installed in order |
+Every upstream issue an open roadmap item cites is in the set (13 repros, 60 tests, about 50 s for both builds): #7811, #7812,
+#7818, #7819, #7853, #7854, #7922, #8006, #8027, #8032 (two apps), #8036, #8038, #8056. BC's result is measured only for #8006's
+values; every other expectation is inferred from its issue, and `bcEvidence` says so. #7853 is closed and passes now: it stays as a
+guard. Not in the set, on purpose: `/coord/handoff/R-982/repro-tenantset` (no open issue) and `/coord/handoff/R-985/repro2` (#7760,
+which no open roadmap item cites).

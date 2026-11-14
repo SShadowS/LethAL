@@ -33,6 +33,16 @@ export interface Repro {
   readonly rerun: readonly string[];
   /** `Codeunit<id>.<method>` -> BC's result. */
   readonly tests: Readonly<Record<string, BcResult>>;
+  /**
+   * R-997: several apps run together (an install order, a dependency): their subfolders, in the order `al-runner test` takes
+   * them. Absent: the repro's folder is the one app.
+   */
+  readonly apps?: readonly string[];
+}
+
+/** The app folders of a repro, relative to the set's root, in the order `al-runner test` gets them. */
+export function appsOf(r: Repro): string[] {
+  return r.apps === undefined ? [r.id] : r.apps.map((a) => join(r.id, a));
 }
 
 export interface Manifest {
@@ -151,8 +161,11 @@ export function readManifest(root = REPRO_ROOT): Manifest {
   if (!Array.isArray(m.repros) || m.repros.length === 0)
     throw new Error("upstream-repros: the manifest lists no repro");
   for (const r of m.repros) {
-    if (!existsSync(join(root, r.id, "app.json")))
-      throw new Error(`upstream-repros: ${r.id} has no app.json`);
+    if (r.apps !== undefined && r.apps.length === 0)
+      throw new Error(`upstream-repros: ${r.id} lists an empty apps`);
+    for (const a of appsOf(r))
+      if (!existsSync(join(root, a, "app.json")))
+        throw new Error(`upstream-repros: ${a} has no app.json`);
     if (Object.keys(r.tests).length === 0)
       throw new Error(`upstream-repros: ${r.id} names no test`);
   }
@@ -167,7 +180,7 @@ export async function runAll(
 ): Promise<BuildRows> {
   const out = new Map<string, ReadonlyMap<string, Row> | { readonly error: string }>();
   for (const r of manifest.repros) {
-    const p = Bun.spawn([bin, "test", "--bc-version", "28", "--output-json", r.id], {
+    const p = Bun.spawn([bin, "test", "--bc-version", "28", "--output-json", ...appsOf(r)], {
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",

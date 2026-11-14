@@ -85,6 +85,96 @@
         "Codeunit50300.BlockMappingTwoKeys": { "status": "pass" },
         "Codeunit50300.FlowMappingTwoNumbersReadsValues": { "status": "pass" }
       }
+    },
+    {
+      "id": "u7853-system-grant",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7853",
+      "bcEvidence": "inferred, not measured on BC: alc compiles the granted app (the platform System package's InternalsVisibleTo), as Microsoft's Guided Experience module does (issue body); the issue is closed and this passes now: a guard against it coming back",
+      "rerun": ["R946: the Guided Experience module and others the System package grants to"],
+      "tests": {
+        "Codeunit50294.CompilesAndRuns": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7922-part-visibility",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7922",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's test passes on BC, and Base Application's journal pages use the same part and call (issue body)",
+      "rerun": ["R942: the DO/DC tests that set a part's visibility from a part page call"],
+      "tests": {
+        "Codeunit50107.SendMakesStatusVisible": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-wildcard",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: BC lists Metadata Permission rows for a 'table * = X' grant (issue body; whether one row with Object ID 0 or one per object is not measured, and the repro's tests do not depend on it)",
+      "rerun": ["R994: Permission Sets (BC.History) under mutation"],
+      "tests": {
+        "Codeunit50411.ReadOwnWildcardSet": { "status": "pass" },
+        "Codeunit50411.ReadAllRows": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-xmlskip",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: the XMLport import finishes as on BC (issue body; whether BC keeps the skipped header's lines is not measured)",
+      "rerun": ["R994: Permission Sets (BC.History) under mutation"],
+      "tests": {
+        "Codeunit50424.SkipHeaderWithLines": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8036-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+      "bcEvidence": "inferred, not measured on BC (issue body: where a test uses asserterror only that BC raises an error is expected; NormalDate(0D) = 0D is our expectation)",
+      "rerun": ["R995: the BC.History apps whose mutants met these refusals (R-983)"],
+      "tests": {
+        "Codeunit50510.OutStreamNeverCreated": { "status": "pass" },
+        "Codeunit50510.XmlElementEmptyName": { "status": "pass" },
+        "Codeunit50510.UnassignedXmlElement": { "status": "pass" },
+        "Codeunit50510.EvaluateDateRangeText": { "status": "pass" },
+        "Codeunit50510.EvaluateTimeRangeText": { "status": "pass" },
+        "Codeunit50510.IsolatedStorageGetMissingGuidKeyStatement": { "status": "pass" },
+        "Codeunit50510.RecordRefReadPermissionNotOpen": { "status": "pass" },
+        "Codeunit50510.SetFilterEmptyTerm": { "status": "pass" },
+        "Codeunit50510.DateTimeBefore1753InTable": { "status": "pass" },
+        "Codeunit50510.NormalDateOfUndefinedDate": { "status": "pass" },
+        "Codeunit50510.InStreamUntouchedHandle": { "status": "pass" },
+        "Codeunit50520.UriAbsoluteUriNoObject": { "status": "pass" },
+        "Codeunit50520.UriBuilderQueryNoObject": { "status": "pass" },
+        "Codeunit50520.TimeZoneGetUtcOffsetNoObject": { "status": "pass" },
+        "Codeunit50520.RegexIsMatchStartAt": { "status": "pass" },
+        "Codeunit50520.RegexMatchesInstance": { "status": "pass" },
+        "Codeunit50530.UriAbsoluteUriConstructed": { "status": "pass" },
+        "Codeunit50530.CultureInfoUnknownName": { "status": "pass" },
+        "Codeunit50531.ZipArchiveEntriesNoObject": { "status": "pass" },
+        "Codeunit50531.ZipArchiveOnTextStream": { "status": "pass" },
+        "Codeunit50531.DataTableMissingRow": { "status": "pass" },
+        "Codeunit50531.JArrayToStringNoObject": { "status": "pass" },
+        "Codeunit50540.AsDecimalOfTextWithDigits": { "status": "pass" },
+        "Codeunit50540.OnOpenPageLeavesRecOffTheView": { "status": "pass" },
+        "Codeunit50541.RelativePathNoBaseAddress": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8038-published-app",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8038",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's Guided Experience tests pass on BC with such a permission set (issue body)",
+      "rerun": ["R997: Guided Experience (84 of 104 tests)"],
+      "tests": {
+        "Codeunit50602.CalcFlowFieldOfAPublishedAppUnderOwnSet": { "status": "pass" },
+        "Codeunit50602.CalcFlowFieldOfNoAppUnderOwnSet": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8056-install-order",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8056",
+      "bcEvidence": "inferred, not measured on BC: no install order changes what a test can read (the subscribers touch only SingleInstance state of the install session), as with three of the apps (issue body)",
+      "rerun": ["R1003: the projects whose install routines meet each other's code (DC)"],
+      "apps": ["P", "A", "A2", "B", "B2", "T"],
+      "tests": {
+        "Codeunit50930.FeatureRowExists": { "status": "pass" }
+      }
     }
   ]
 }

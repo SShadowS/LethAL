@@ -1,14 +1,61 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   type BuildRows,
   type Manifest,
   type Row,
+  appsOf,
   compare,
   matchesBc,
   readManifest,
   reportLines,
   rowsOf,
 } from "./upstream-repros";
+
+// R-997: several apps run together, in the manifest's order.
+describe("R-997: a repro of several apps", () => {
+  const TMP = mkdtempSync(join(tmpdir(), "upstream-repros-test-"));
+  afterAll(() => rmSync(TMP, { recursive: true, force: true }));
+  const repro = (apps?: string[]) => ({
+    id: "u1",
+    issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/1",
+    bcEvidence: "invented",
+    rerun: [],
+    tests: { "Codeunit1.T": { status: "pass" as const } },
+    ...(apps !== undefined ? { apps } : {}),
+  });
+  const write = (dir: string, m: object, folders: string[]) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+    for (const f of folders) {
+      mkdirSync(join(dir, f), { recursive: true });
+      writeFileSync(join(dir, f, "app.json"), "{}");
+    }
+  };
+
+  test("no apps: the repro's own folder; apps: each subfolder, in the manifest's order", () => {
+    expect(appsOf(repro())).toEqual(["u1"]);
+    expect(appsOf(repro(["P", "A", "T"]))).toEqual([
+      join("u1", "P"),
+      join("u1", "A"),
+      join("u1", "T"),
+    ]);
+  });
+
+  test("the manifest is refused for an empty apps list or an app folder without app.json", () => {
+    const empty = join(TMP, "empty");
+    write(empty, { repros: [repro([])] }, ["u1"]);
+    expect(() => readManifest(empty)).toThrow(/empty apps/);
+    const missing = join(TMP, "missing");
+    write(missing, { repros: [repro(["P", "A"])] }, ["u1/P"]);
+    expect(() => readManifest(missing)).toThrow(/u1\/A has no app\.json/);
+    const ok = join(TMP, "ok");
+    write(ok, { repros: [repro(["P", "A"])] }, ["u1/P", "u1/A"]);
+    expect(readManifest(ok).repros).toHaveLength(1);
+  });
+});
 
 // R-996: the flip detection. Every case is an injected reading; no al-runner runs here.
 const M: Manifest = {

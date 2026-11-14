@@ -1,0 +1,11 @@
+{
+  "id": "98300000-0000-4000-8000-000000000983",
+  "name": "Mutant Refusal Repros",
+  "publisher": "Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "target": "OnPrem",
+  "idRanges": [{ "from": 50500, "to": 50599 }],
+  "features": ["NoImplicitWith"]
+}
