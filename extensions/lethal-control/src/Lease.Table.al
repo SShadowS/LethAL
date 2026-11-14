@@ -54,6 +54,11 @@ table 91006 "LC Lease"
         /// TryForceResetLease with the other op fields.</summary>
         field(14; "Stopped Op Attempt Id"; Text[64]) { }
         field(15; "Stopped Op Seq"; BigInteger) { }
+        /// <summary>R969: identifies this database, as "Server Generation" no longer can on its own.
+        /// Minted with the row (EnsureLeaseSeeded), or on install/upgrade when blank; never touched by
+        /// TryForceResetLease, which re-mints the generation. A client resuming a run across a
+        /// generation change carries its verdicts only when this is unchanged.</summary>
+        field(16; "Database Id"; Text[32]) { }
     }
 
     keys
