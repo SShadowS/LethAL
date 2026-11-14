@@ -295,7 +295,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
-      "0d911257f1197150dfddb72c9fc7c7c3fe5b022953d992fc8abadbb7fe7de702",
+      // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
+      "d4e6ba3998547aa906e60c42c33840cd26f10f3dde1d8de7ae37804d8aa13bba",
     );
   }, 60_000);
 });
