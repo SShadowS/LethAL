@@ -299,9 +299,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
       // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
       // R984: only the manifest moved it, by `equivalenceRisk` on 2 `shift-integer` entries (was d4e6ba39...3bba).
-      // R985: the manifest (toggle-blank-temporal 2.0.0, 17540102D) and DataTemporalOps.Codeunit.al's stand-in
-      // lines moved it, nothing else (/coord/handoff/R-971/classify.ts; was 0cc77b2a...07a0).
-      "d430c1bb71c5c9a9f1e7ea736438f3c591df968581557b7136841913e1d13902",
+      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 0cc77b2a...07a0;
+      // fixture-emission's per-file pins show the selector as the one file that changed).
+      // R985: then the manifest (toggle-blank-temporal 2.0.0, 17540102D) and DataTemporalOps.Codeunit.al's stand-in
+      // lines moved it, nothing else (/coord/handoff/R-971/classify.ts; was f5e003d8...68b9).
+      "14328edc4789324e7a7ab6cb94981bda590a897fb0ba799cef94f0dbfa6e7631",
     );
   }, 60_000);
 });

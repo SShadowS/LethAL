@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 961 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**29 of 962 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -369,9 +369,10 @@ that ordering is the priority.
 - **R975** · On al-runner v3, trigger mutants take R29's object-level fallback although v3's per-test LINE coverage could decide them: on Continia DO all 215 scored mutants were object-attributed, and at least 94 never-executed trigger statements were reported survived · [R975.md](docs/roadmap/R975.md) · done (a7d35069) — a statement-grain trigger mutant is placed by the lines its tests' baselines hit when every…
 - **R976** · R975's line rule skips block-grain trigger mutants (no reachLine): on Continia DO 46 of 204 survivors still rest on the object fallback, and an `empty-block` of a trigger no test runs still scores survived · [R976.md](docs/roadmap/R976.md) · done (5b8ce87d) — a block-grain mutant carries the reachLine of its block's first statement…
 - **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
-- **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
+- **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · done (5a221837)
 - **R985** · toggle-blank-temporal's Date substitute 17530101D is a value BC refuses to store (BC refuses every non-zero date in 1753, as Date or DateTime): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · open
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
+- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · open
 
 ## Product gaps a real project hits
 
@@ -1005,7 +1006,7 @@ that ordering is the priority.
 - **R995** · BC.History's `error` mutants, mined across every v3 store (3,459 in 166 projects): seven unfiled al-runner refusals met only under mutation, filed as upstream #8036; most of the rest is fixed on current, by design, or already filed · [R995.md](docs/roadmap/R995.md) · open
 - **R996** · BC.History re-swept on current al-runner (edge-736fc7677, re-checked on 847b1fa5a): 4 projects gained tests, one lost kill and a no-client refusal filed upstream; the three stopped runs finished · [R996.md](docs/roadmap/R996.md) · closed 2026-11-14 — measured and filed upstream (#8024, #8028; comments on #8013, #8002)
 - **R997** · On al-runner v3, a FlowField over Published Application filtered on Tenant Visible is refused as a permission denial on NAV App Extra (2000000157) under a set that grants Published Application: 84 of Guided Experience's 104 tests (upstream #8038) · [R997.md](docs/roadmap/R997.md) · open
-- **R1000** · edge-847b1fa5a reworded the cascade-existing-state refusal ("changed number sequence 'X' that existed before it ... (only a new NumberSequence.Insert is)"), so the serve keep-list no longer matches it: DO's serve run fell back to one-shot at the warm-up, about one covered mutant a minute · [R1000.md](docs/roadmap/R1000.md) · open
+- **R1000** · edge-847b1fa5a reworded the cascade-existing-state refusal ("changed number sequence 'X' that existed before it ... (only a new NumberSequence.Insert is)"), so the serve keep-list no longer matches it: DO's serve run fell back to one-shot at the warm-up, about one covered mutant a minute · [R1000.md](docs/roadmap/R1000.md) · done (200ed4e5)
 
 ---
 
