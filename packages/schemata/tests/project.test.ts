@@ -266,7 +266,7 @@ describe("writeInstrumentedProject", () => {
     }
   });
 
-  it("manifest entries carry hangCapable verbatim, and its absence is a missing key, not undefined", async () => {
+  it("manifest entries carry hangCapable and equivalenceRisk verbatim, and absence is a missing key, not undefined", async () => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-"));
     try {
       // Two mutants: one at a site an operator tagged hang-capable, one at an ordinary site.
@@ -297,6 +297,8 @@ describe("writeInstrumentedProject", () => {
           after: { ...taggedAssign, text: "X := 10;" } as never,
           parentContext: "statement-position",
           hangCapable: "loop-condition-target",
+          // R983: the site risk rides the same path.
+          equivalenceRisk: "compared-value",
         },
         {
           operatorName: "op.flip",
@@ -318,10 +320,14 @@ describe("writeInstrumentedProject", () => {
         }),
       );
       const manifest = JSON.parse(await readFile(join(dir, "mutant-manifest.json"), "utf8"));
-      const byProc = new Map<string, { hangCapable?: string }>(
-        (manifest.mutants as ReadonlyArray<{ procedureName: string; hangCapable?: string }>).map(
-          (m) => [m.procedureName, m],
-        ),
+      const byProc = new Map<string, { hangCapable?: string; equivalenceRisk?: string }>(
+        (
+          manifest.mutants as ReadonlyArray<{
+            procedureName: string;
+            hangCapable?: string;
+            equivalenceRisk?: string;
+          }>
+        ).map((m) => [m.procedureName, m]),
       );
       const tagged = byProc.get("Tagged");
       const untagged = byProc.get("Untagged");
@@ -330,6 +336,8 @@ describe("writeInstrumentedProject", () => {
       }
       expect(tagged.hangCapable).toBe("loop-condition-target");
       expect("hangCapable" in untagged).toBe(false);
+      expect(tagged.equivalenceRisk).toBe("compared-value");
+      expect("equivalenceRisk" in untagged).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

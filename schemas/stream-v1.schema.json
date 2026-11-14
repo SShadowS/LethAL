@@ -1199,6 +1199,9 @@
             },
             "hangCapable": {
               "type": "string"
+            },
+            "equivalenceRisk": {
+              "type": "string"
             }
           }
         },
@@ -1453,6 +1456,9 @@
             },
             "hangCapable": {
               "type": "string"
+            },
+            "equivalenceRisk": {
+              "type": "string"
             }
           }
         },
@@ -1659,6 +1665,9 @@
               "type": "string"
             },
             "hangCapable": {
+              "type": "string"
+            },
+            "equivalenceRisk": {
               "type": "string"
             }
           }

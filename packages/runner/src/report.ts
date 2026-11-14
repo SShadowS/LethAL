@@ -2197,8 +2197,9 @@ export interface MutantOutcome {
    */
   readonly blockStartLine?: number;
   readonly blockEndLine?: number;
-  /** C02-01. The equivalence risk this row's OPERATOR declared (R172), on a `survived` row only:
-   *  the same registry lookup `likelyEquivalentSurvivors` is built from, but per row, because
+  /** C02-01. The equivalence risk this row's OPERATOR declared (R172), or its SITE's where the
+   *  manifest entry carries one (R983), on a `survived` row only: the value
+   *  `likelyEquivalentSurvivors` is grouped by, but per row, because
    *  mutant ids restart per batch and that list held bare `mutantCode`s until R231 (v3).
    *  Absent: not recorded, which never means "not equivalent". */
   readonly equivalenceRisk?: string;
@@ -2662,6 +2663,13 @@ const EQUIVALENCE_RISK_EXPLANATIONS: Readonly<Record<string, string>> = {
     "This operator bounds a LOOP. Where the covering test drives exactly one iteration, truncating " +
     "to one iteration changes nothing and the mutant is equivalent. A survivor here may mean the " +
     "test drives one row, which is itself the finding.",
+  "compared-value":
+    "This blank toggle changes one side of a COMPARISON (`X = ''`, `X <> 0D`), so the comparison " +
+    "itself reads the value. For `=` and `<>` the branch changes only where the other side equals " +
+    "the original literal or the substitute ('x', 17530101D, ...); for `<`, `>`, `<=` and `>=`, " +
+    "for any value between the two. The mutant is equivalent only if no such value can reach this " +
+    "comparison. Check whether a test drives the other side to one of those values before reading " +
+    "a survivor here as equivalent.",
 };
 
 /**
@@ -2856,8 +2864,11 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     // C02-01: decided per ROW, by this row's operator, because mutant ids restart per batch (the
     // run-level lists below were keyed by bare `mutantCode` until R231). Same rule as that list:
     // risk on `survived` only. The row's `readerMark` is added below, from the run-level result.
+    // R983: a SITE's risk (a blank toggle inside a comparison) before its operator's.
     const risk =
-      row.verdict === "survived" ? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName) : undefined;
+      row.verdict === "survived"
+        ? (o.mutant.equivalenceRisk ?? EQUIVALENCE_RISK_BY_OPERATOR.get(row.operatorName))
+        : undefined;
     mutants.push({ ...row, ...(risk !== undefined ? { equivalenceRisk: risk } : {}) });
   }
 
@@ -3141,13 +3152,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     else list.push(m);
   }
   if (platformKillsByMechanism.size > 0) caveats.push("platform-artifact-kills");
-  // R172: survivors whose OPERATOR declares an elevated equivalence risk. Looked up by operator NAME
-  // against the registry rather than carried per mutant, because the risk is a property of the
-  // operator and duplicating it into every manifest entry would let the two drift.
+  // R172: survivors whose OPERATOR declares an elevated equivalence risk, looked up by operator NAME
+  // against the registry. R983: or whose SITE carries its own (manifest), already resolved on the
+  // row above, so the row and this list cannot disagree.
   const equivalentByRisk = new Map<string, MutantOutcome[]>();
   for (const m of mutants) {
     if (m.verdict !== "survived") continue;
-    const risk = EQUIVALENCE_RISK_BY_OPERATOR.get(m.operatorName);
+    const risk = m.equivalenceRisk;
     if (risk === undefined) continue;
     const list = equivalentByRisk.get(risk);
     if (list === undefined) equivalentByRisk.set(risk, [m]);
@@ -3789,7 +3800,7 @@ export function renderConsole(r: SessionReport): string {
   if (r.likelyEquivalentSurvivors !== undefined) {
     const e = r.likelyEquivalentSurvivors;
     lines.push(
-      `LIKELY-EQUIVALENT SURVIVORS: ${e.count} survivor(s) come from operators whose survivors are ` +
+      `LIKELY-EQUIVALENT SURVIVORS: ${e.count} survivor(s) come from operators (or sites) whose survivors are ` +
         "likelier than average to be EQUIVALENT — mutants no test could ever kill, because the " +
         "mutated program behaves identically. Nothing here is subtracted from the score and no " +
         "verdict moved; this only says which survivors to read with that possibility in mind, so a " +

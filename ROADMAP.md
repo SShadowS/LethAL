@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**31 of 941 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 948 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -368,7 +368,9 @@ that ordering is the priority.
 - **R970** · The v3 memory guard checks only at call boundaries, so the per-test re-baseline's parallel processes outgrew it: DO's window reached a 20 GB tree with the container at 2 GiB headroom · [R970.md](docs/roadmap/R970.md) · open
 - **R975** · On al-runner v3, trigger mutants take R29's object-level fallback although v3's per-test LINE coverage could decide them: on Continia DO all 215 scored mutants were object-attributed, and at least 94 never-executed trigger statements were reported survived · [R975.md](docs/roadmap/R975.md) · done (a7d35069) — a statement-grain trigger mutant is placed by the lines its tests' baselines hit when every…
 - **R976** · R975's line rule skips block-grain trigger mutants (no reachLine): on Continia DO 46 of 204 survivors still rest on the object fallback, and an `empty-block` of a trigger no test runs still scores survived · [R976.md](docs/roadmap/R976.md) · open
-- **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · open
+- **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
+- **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
+- **R985** · toggle-blank-temporal's Date substitute 17530101D is the one value BC refuses to store (SQL keeps 0D as 1753-01-01): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · open
 
 ## Product gaps a real project hits
 
@@ -563,6 +565,8 @@ that ordering is the priority.
 - **R912** · A v3 serve run on an app whose tests sit in one large codeunit runs that whole codeunit per mutant, with no estimate, no progress inside a prefetch request and an outer bound of days, so a time cap loses every result: Intrastat Core gave no report after 6.3 h · [R912.md](docs/roadmap/R912.md) · done (6d73834fafd5e5d18c2f06a9de6b04d6abcb8777)
 - **R923** · An app.json path whose letter case differs from the file on disk stops the Linux alc (AL1001) before a line compiles: a Windows-authored project fails in 2 s · [R923.md](docs/roadmap/R923.md) · done (637c9053; review fixes cd9672df): measured on Audit File Export, 1,084 of 1,084
 - **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
+- **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
+- **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · open
 
 ## Backends and tooling
 
@@ -985,7 +989,10 @@ that ordering is the priority.
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
 - **R973** · BC.History batch 9 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (ToBase64 of an InStream drops its line breaks) and six new refusal causes filed upstream · [R973.md](docs/roadmap/R973.md) · closed 2026-11-13 — measured and filed upstream…
 - **R974** · heavy-slot-class.test.ts 'the order is kept: the older waiter runs first' flaked after R960 raised the slot files to six: it held only three, so a waiter could run at once · [R974.md](docs/roadmap/R974.md) · done (65787092)
-- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · open
+- **R977** · A v3 run whose baseline is almost all red or refused (APIV1: 454 of 467) still restarts a daemon per codeunit and writes every mutant no-coverage: it could stop after the baseline and say so · [R977.md](docs/roadmap/R977.md) · closed 2026-11-13 — the mutant phase already skips when nothing is covered; the cost was daemon restarts in…
+- **R981** · A v3 refusal 'store error platform table ... has no provider' closed the serve daemon: APIV1 restarted it 100 times in its baseline; measured clean, it now keeps the daemon · [R981.md](docs/roadmap/R981.md) · done (37404d12)
+- **R980** · BC.History inventory and batch 10 on al-runner v3 edge-c8fe56e05: 54 small projects left outside BaseApp; one wrong result (forwarded .NET code ends lines with LF) and new refusals filed upstream · [R980.md](docs/roadmap/R980.md) · closed 2026-11-13 — measured and filed upstream…
+- **R982** · Continia Document Output's al-runner baseline refusals reduced, and the dependency-install question answered: al-runner does run a dependency app's install codeunit; DO's 32 'not activated' failures are Continia's online activation · [R982.md](docs/roadmap/R982.md) · closed 2026-11-14 — measured; filed upstream (#8004) and counted (#7775); the install question answered by…
 
 ---
 
