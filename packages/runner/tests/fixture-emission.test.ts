@@ -30,6 +30,10 @@ import { removeScratchDir } from "./helpers/scratch";
  * first statement (was 6edb3f7e, 93541eea, 46c8966f, 12bcdc9d, 86338b48). Measured over all 16
  * fixtures: only `reachLine` added, only on `empty-block` entries; every `.al` pin unchanged.
  *
+ * R984: re-recorded for `equivalenceRisk: compared-value` on comparison `shift-integer` entries (was
+ * da2820b4, c147809e, 5bf7610a). Measured over all 16 fixtures: only that key added, only on those
+ * entries (15); every `.al` pin unchanged.
+ *
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
  * the same commit, and says so. R196: sandbox-hang's `HangLogic.Codeunit.al` and manifest were
  * re-pinned because its line-104 `remove-assignment` and `shift-integer` sites are now refused as
@@ -111,7 +115,7 @@ const PINNED: Record<
         "81b6685fc63799431742bc4b4958b9a0b733695816339e9ae7f700a5882bfeb7",
       "SandboxPricing.Codeunit.al":
         "60b12340761b9a80841a842bfc2d1a3c5964be3997275895f469f2b7973671a5",
-      "mutant-manifest.json": "da2820b48c85d91fe1ef6fb256a88c33eb0069535c5e2f51ddea3a5ab1f0938f",
+      "mutant-manifest.json": "e4e6ba1e52dee84412f69ada51e2fc6ef37e20436c15dc9aea52756a2465ef2c",
     },
   },
   "sandbox-data": {
@@ -170,7 +174,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 71d0df78...eaa3).
-      "mutant-manifest.json": "c147809e7f524360e9235b35bbff0411fd1cf9b161618c560675bd461a76be31",
+      "mutant-manifest.json": "7348aff755d3938d4d3494d3a2b624966635f45bfd60cf3ef40f96a2ca814db8",
     },
   },
   "sandbox-hang": {
@@ -215,7 +219,7 @@ const PINNED: Record<
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 5693e720...c6af).
-      "mutant-manifest.json": "5bf7610a9f254106300da110a5bc9b40e138f4fb326a3705b6ad2b6e97e19a64",
+      "mutant-manifest.json": "3852938b8a028d67d7957c82ee2e680e915420d618396b93a004da31ae034cf0",
     },
   },
 };
