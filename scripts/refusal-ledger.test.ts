@@ -78,9 +78,41 @@ describe("normaliseRefusal", () => {
     );
     expect(normaliseRefusal(`${NR}view field 'Acme Corp has no`)).toBe(`${NR}view field <x>`);
     expect(normaliseRefusal(`${NR}view field "Acme Corp has no`)).toBe(`${NR}view field <x>`);
+    // no wording of al-runner's after it: masked to the end
     expect(normaliseRefusal(`${NR}x failed  (Customer Acme is blocked)`)).toBe(
-      `${NR}x failed (<failure>)`,
+      `${NR}x failed (<failure>`,
     );
+  });
+  // second review (R-995): each of these still leaked after the first round of fixes
+  test("no app text: a parenthesis inside a failure or a quoted value, an unquoted filter value", () => {
+    const left = ") and left a manual event subscription bound";
+    for (const msg of ["Expected:<ab)c> Actual:<x>", "1) Pick SECRET customer", "a (b) c"])
+      expect(
+        normaliseRefusal(`${NR}a test before this one did not pass (T1: failed (${msg}))${left}`),
+      ).toBe(`${NR}a test before this one did not pass (<test>: failed (<failure>)${left}`);
+    expect(
+      normaliseRefusal(`${NR}x did not run (Evaluate of \`a) SECRET\` into Date)): it can`),
+    ).toBe(`${NR}x did not run (<refusal>)): it can`);
+    expect(
+      normaliseRefusal(`${NR}SetFilter: filter value not evaluated: Integer\tACME-SECRET`),
+    ).toBe(`${NR}SetFilter: filter value not evaluated: Integer <value>`);
+  });
+  test("no app text: an apostrophe or a backtick inside a value, an unclosed backtick", () => {
+    expect(normaliseRefusal(`${NR}view field 'It's SECRET' here`)).toBe(`${NR}view field <x> here`);
+    expect(normaliseRefusal(`${NR}view field 'O'Brien SECRET' here`)).toBe(
+      `${NR}view field <x> here`,
+    );
+    expect(normaliseRefusal(`${NR}Evaluate of \`a\`b SECRET\` into Date`)).toBe(
+      `${NR}Evaluate of <x> into Date`,
+    );
+    expect(normaliseRefusal(`${NR}Evaluate of \`SECRET1\nline2\``)).toBe(`${NR}Evaluate of <x>`);
+  });
+  test("a GUID is masked only in its own shape", () => {
+    expect(normaliseRefusal(`${NR}key {01234567-89AB-cdef-0123-456789abcdef} gone`)).toBe(
+      `${NR}key <guid> gone`,
+    );
+    const dashes = "-".repeat(40);
+    expect(normaliseRefusal(`${NR}rule ${dashes} end`)).toBe(`${NR}rule ${dashes} end`);
   });
   test("no app text: a SaveAsXml error, a .NET exception's message, a text that is no refusal", () => {
     const xml = `${NR}an error in a SaveAsXml run (what the handler sees is not pinned): Customer Acme is blocked`;
@@ -128,7 +160,7 @@ describe("the ledger", () => {
   // (a lone apostrophe, as in "BC's", is al-runner's own English)
   test("the committed ledger loads, and every key is one of the known shapes", () => {
     const ledger = loadLedger(DEFAULT_LEDGER);
-    expect(ledger.size).toBeGreaterThan(300);
+    expect(ledger.size).toBeGreaterThan(250);
     for (const k of ledger.keys()) {
       // no source text: an al-runner refusal, or one of the two platform shapes, app text masked
       const known =
@@ -204,7 +236,12 @@ describe("inputs", () => {
       { mutantCode: "M1", verdict: "error", failureNote: `${NR}x` },
       { mutantCode: "M2", verdict: "survived" },
     ];
-    writeFileSync(p, JSON.stringify({ mutants }));
-    expect(readReport(p).map((x) => [x.text, x.where.endsWith("M1")])).toEqual([[`${NR}x`, true]]);
+    writeFileSync(p, JSON.stringify({ backend: "al-runner-v3", mutants }));
+    expect(readReport(p).map((x) => [x.text, x.where.endsWith("0/M1")])).toEqual([
+      [`${NR}x`, true],
+    ]);
+    const bc = join(dir, "bc.json");
+    writeFileSync(bc, JSON.stringify({ backend: "bcdev", mutants }));
+    expect(() => readReport(bc)).toThrow(/not an al-runner-v3 report \(backend bcdev\)/);
   });
 });

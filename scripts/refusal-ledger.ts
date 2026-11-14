@@ -99,9 +99,28 @@ function maskParen(s: string, open: string, mask: string): string {
     } else return out;
   }
 }
+/**
+ * `failed (<message>)`: the message is app or test text and may hold any parenthesis, so the mask
+ * runs to the LAST place al-runner's own wording goes on (`)) and left `, `) and could `, `): `), or
+ * to the end when there is none (a cut text).
+ */
+const FAILED_GOES_ON = /\)+ and (?:left|could) |\)+: /g;
+function maskFailed(s: string): string {
+  const at = s.indexOf("failed (");
+  if (at < 0) return s;
+  const rest = s.slice(at + "failed (".length);
+  let last = -1;
+  for (const m of rest.matchAll(FAILED_GOES_ON)) last = m.index;
+  // a cascade's failure closes two parentheses, its own and `(<test>: `; the message's own `)`s run
+  // into them, so the run is written as two
+  const after = last < 0 ? "" : rest.slice(last).replace(/^\)+/, "))");
+  return `${s.slice(0, at)}failed (<failure>${after}`;
+}
+// The refusal and the reach a cascade quotes are al-runner's text, whose quoted values are masked
+// before this runs, so a parenthesis inside a value cannot end the mask early.
 function maskFailures(s: string): string {
   return maskParen(
-    maskParen(maskParen(s, "failed (", "<failure>"), "did not run (", "<refusal>"),
+    maskParen(maskFailed(s), "did not run (", "<refusal>"),
     "part of its reach is not known (",
     "<reach>",
   );
@@ -153,7 +172,10 @@ function normaliseOnce(text: string): string {
   else if (TRANSPORT.test(s)) k = s.replace(TRANSPORT, "$1: <stderr>");
   else if (s.startsWith("NotRun: ")) k = s;
   else return WITHHELD;
-  return maskTestNames(maskFailures(k))
+  // 1. the tails that are app text or data to the end; 2. quoted values (a quote closes only where no
+  // letter or digit follows, so `'It's x'` is one value; an unclosed one masks to the end); 3. the
+  // cascade's parentheses and test names, which now hold no quoted value
+  const tails = k
     .replace(/(this failure is not trusted): .*$/, "$1: <failure>")
     .replace(
       /(an error in a SaveAsXml run \(what the handler sees is not pinned\)): .*$/,
@@ -163,11 +185,15 @@ function normaliseOnce(text: string): string {
       /(raised the \.NET exception [\w.+`]+): .*?(?=; the text AL would see|$)/,
       "$1: <message>",
     )
-    .replace(/`[^`]*`/g, "<x>")
-    .replace(/(?<![A-Za-z0-9])'[^']*'/g, "<x>")
-    .replace(/"[^"]*"/g, "<x>")
+    .replace(/(filter value not evaluated: [A-Za-z]+) .*$/, "$1 <value>");
+  const quoted = tails
+    .replace(/`.*?`(?![A-Za-z0-9])/g, "<x>")
+    .replace(/(?<![A-Za-z0-9])'.*?'(?![A-Za-z0-9])/g, "<x>")
+    .replace(/".*?"(?![A-Za-z0-9])/g, "<x>")
+    .replace(/`[^`]*$/, "<x>")
     .replace(/(?<![A-Za-z0-9])'[^']*$/, "<x>")
-    .replace(/"[^"]*$/, "<x>")
+    .replace(/"[^"]*$/, "<x>");
+  return maskTestNames(maskFailures(quoted))
     .replace(
       /\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?/g,
       "<guid>",
@@ -265,8 +291,13 @@ export function readStore(path: string, runId?: number): Sighting[] {
 
 export function readReport(path: string): Sighting[] {
   const r = JSON.parse(readFileSync(path, "utf8")) as {
+    backend?: string;
     mutants?: { mutantCode: string; verdict: string; failureNote?: string; batchIndex?: number }[];
   };
+  if (r.backend !== "al-runner-v3")
+    throw new RefusalLedgerError(
+      `refusal-ledger: ${path} is not an al-runner-v3 report (backend ${String(r.backend)})`,
+    );
   if (!Array.isArray(r.mutants))
     throw new RefusalLedgerError(`refusal-ledger: ${path} has no mutants array`);
   return r.mutants

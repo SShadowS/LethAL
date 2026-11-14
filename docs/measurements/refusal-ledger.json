@@ -192,16 +192,6 @@
     "note": "R-983: filed, still met (27 in the re-run part)"
   },
   {
-    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
-  },
-  {
-    "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are no",
-    "state": "unexamined",
-    "note": "R-983: not examined"
-  },
-  {
     "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>)) and could draw random numbers, and this test draws random numbers: the shared sequence is not BC's; this failure is n",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
@@ -734,17 +724,12 @@
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.Dictionary`N.Count: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.Dictionary<x>",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.SortedDictionary`N[[System.Object, System.Private.CoreLib, Version=N.N.N.N, Culture=neutral, PublicKeyToken=NcecNdNbeaNe],[System.Object, System.Private.CoreLib, Ve",
-    "state": "unexamined",
-    "note": "R-983: not examined"
-  },
-  {
-    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.SortedDictionary<x>N.Add' is an instance member and the variable holds no object",
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.SortedDictionary<x>",
     "state": "open",
     "issue": "#8036 §1",
     "note": "R-983: filed (same text family, not each reproduced)"
@@ -1363,7 +1348,7 @@
     "note": "R-983: fixed on current (repro); BC error now"
   },
   {
-    "key": "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <guid>",
+    "key": "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <value>",
     "state": "unexamined",
     "note": "R-983: not examined"
   },
