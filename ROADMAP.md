@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 955 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 956 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -952,7 +952,7 @@ that ordering is the priority.
 - **R936** · Seven System Application modules on v3: Page Metadata.APIVersion keeps only the first version (upstream #7818), and 15 refusal causes cost tests (upstream #7819) · [R936.md](docs/roadmap/R936.md) · open
 - **R937** · One test METHOD whose name serve-entries is not proven for still drops the whole v3 session to one-shot; a per-codeunit fallback would help one measured app (DC, 13 of 1,906 tests) · [R937.md](docs/roadmap/R937.md) · done (a8b0dba2)
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
-- **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert: an upsert of two existing rows through one buffer, on its second pass (upstream #7798) · [R929.md](docs/roadmap/R929.md) · open
+- **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert: an upsert of two existing rows through one buffer, on its second pass (upstream #7798) · [R929.md](docs/roadmap/R929.md) · closed 2026-11-14 — fixed upstream (#7798): the repro and both Subcontracting tests pass on edge-736fc7677…
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
 - **R931** · On Windows BC 28.4 the dev/packages read stamps a fresh package id into the .app header on every download, so the test-app drift guard refuses a run that nothing republished · [R931.md](docs/roadmap/R931.md) · done (7a2773b7)
 - **R932** · Windows BC rebuilds the served test-app package on every dev/packages read (entry times = download time, no source, NUL-padded SymbolReference.json), so R931's id-zeroing is not enough: the drift guard still refuses, and R843 cannot read the symbols · [R932.md](docs/roadmap/R932.md) · done (36118a9a)
@@ -1000,6 +1000,7 @@ that ordering is the priority.
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
 - **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · done (b4b09cb8) — a refused waiter is passed only for LETHAL_HEAVY_STARVE_S (default 900 s) after its first…
 - **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · open
+- **R993** · On al-runner v3, JsonObject.ReadFromYaml raises 'not valid YAML' for a flow mapping with two entries ({"a": 1, "b": 2}), even when its return value is tested (upstream #8027) · [R993.md](docs/roadmap/R993.md) · open
 
 ---
 
