@@ -207,7 +207,14 @@ const TIMER_FIRED: unique symbol = Symbol("LineReader timer fired");
 
 /** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
 export class LineReader {
+  /** Text read but not yet scanned for a line end. */
   private buf = "";
+  /**
+   * R988: the earlier pieces of a line still being read, none with a line end. Joined once, when the
+   * line ends: appending every chunk to one string and searching it again after each chunk copied a
+   * 67 MB answer line over and over (each search flattens the whole string).
+   */
+  private head: string[] = [];
   private readonly it: AsyncIterator<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private done = false;
@@ -229,10 +236,17 @@ export class LineReader {
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
-        const line = this.buf.slice(0, nl).trim();
+        const tail = this.buf.slice(0, nl);
+        const line = (this.head.length > 0 ? this.head.join("") + tail : tail).trim();
+        this.head = [];
         this.buf = this.buf.slice(nl + 1);
         if (line !== "") return { kind: "line", line };
         continue;
+      }
+      // No line end in what is left: it is part of a line still being read, scanned once.
+      if (this.buf !== "") {
+        this.head.push(this.buf);
+        this.buf = "";
       }
       if (this.done) return { kind: "eof" };
       const remaining = deadline - Date.now();

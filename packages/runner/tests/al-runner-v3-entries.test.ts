@@ -6832,6 +6832,85 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.daemons[1]?.join(" ")).toContain("--test-timeout 5");
   });
 
+  /**
+   * R988: the baseline keeps each call's coverage without its unhit statements (v3 lists every
+   * statement of the called codeunit's reach, nearly all unhit: DO, 67 MB a request), and the verdicts
+   * do not move. `daemonBaseline`: through the daemon fill, or one-shot (`callCodeunit`).
+   */
+  const r988KeptCoverage = async (daemonBaseline: boolean) => {
+    type Doc = {
+      coverage: { file: string; statements: { line: number; hits: number }[] }[];
+      perTestCoverage: { test: string; coverage: Doc["coverage"] }[];
+    };
+    const padded: CoverageFn = (m, cu, active, testDir) => {
+      const d = plainCoverage(m, cu, active, testDir) as Doc;
+      const pad = (fs: Doc["coverage"]) =>
+        fs.map((f) => ({
+          file: f.file,
+          statements: [
+            ...f.statements,
+            ...Array.from({ length: 50 }, (_, i) => ({ line: 100 + i, hits: 0 })),
+          ],
+        }));
+      return {
+        coverage: pad(d.coverage),
+        perTestCoverage: d.perTestCoverage.map((e) => ({
+          test: e.test,
+          coverage: pad(e.coverage),
+        })),
+      };
+    };
+    const plain = await dbRig({ extra: { coverage: "al-runner", daemonBaseline } });
+    const vPlain = await baseline(plain.b, SUITE3);
+    const r = await dbRig({
+      serve: { coverage: padded },
+      oneShotCoverage: padded,
+      extra: { coverage: "al-runner", daemonBaseline },
+    });
+    // Every document a baseline verdict's coverage is read from, as the fill handed it on.
+    type Read = { kind: string } & Partial<Doc>;
+    const handed: Read[] = [];
+    const proto = AlRunnerV3Backend.prototype as unknown as {
+      coverageOf: (lane: unknown, row: string, doc: Read) => unknown;
+    };
+    const original = proto.coverageOf;
+    const spy = spyOn(proto, "coverageOf").mockImplementation(function (
+      this: unknown,
+      lane: unknown,
+      row: string,
+      doc: Read,
+    ) {
+      handed.push(doc);
+      return original.call(this, lane, row, doc);
+    });
+    let v: Awaited<ReturnType<typeof baseline>>;
+    try {
+      v = await baseline(r.b, SUITE3);
+    } finally {
+      spy.mockRestore();
+    }
+    // Outcome and coverage per verdict (durations and call ids differ run to run).
+    const seen = (xs: typeof v) => xs.map((x) => ({ outcome: x.outcome, coverage: x.coverage }));
+    expect(seen(v)).toEqual(seen(vPlain));
+    expect(vPlain.some((x) => x.coverage !== undefined)).toBe(true);
+    const docs = handed.filter((d) => d.kind === "doc");
+    expect(docs.length).toBe(SUITE3.length);
+    for (const d of docs) {
+      const all = [
+        ...(d.coverage ?? []),
+        ...(d.perTestCoverage ?? []).flatMap((e) => e.coverage),
+      ].flatMap((f) => f.statements);
+      expect(all.length).toBeGreaterThan(0);
+      expect(all.filter((s) => s.hits <= 0)).toEqual([]);
+    }
+  };
+
+  test("R988: the daemon fill keeps each answer's coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(true));
+
+  test("R988: a one-shot baseline call keeps its coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(false));
+
   const leakCu2: RowsFn = (m, cu, d, n) =>
     allPass(m, cu, d, n).map((x) =>
       cu === CU2 && d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
