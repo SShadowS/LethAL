@@ -1288,7 +1288,19 @@ describe("R885: demo data, on the one-shot path", () => {
     // The config wins over the row; false switches it off.
     const other = join(dir, "other.dll");
     await writeFile(other, "o");
-    expect(await resolveDotnetSidecar(other, bin, row)).toEqual({ path: other });
+    const named = await resolveDotnetSidecar(other, bin, row);
+    expect(named.path).toBe(other);
+    // R998: a named file that is not this build's own sidecar is said by name, both files and both hashes.
+    expect(named.warning).toContain(`names ${other}`);
+    expect(named.warning).toContain(`not this al-runner build's own sidecar ${dll}`);
+    expect(named.warning).toContain(sha256);
+    expect(named.warning).toContain("protocol mismatch");
+    // ...and a named copy of the build's own sidecar is not.
+    const copy = join(dir, "copy.dll");
+    await writeFile(copy, "built");
+    expect(await resolveDotnetSidecar(copy, bin, row)).toEqual({ path: copy });
+    // ...nor a named file when the build ships no sidecar.
+    expect(await resolveDotnetSidecar(other, bin, gated)).toEqual({ path: other });
     expect(await resolveDotnetSidecar(false, bin, row)).toEqual({});
     // No sidecar in the row: nothing.
     expect(await resolveDotnetSidecar(undefined, bin, gated)).toEqual({});
@@ -1299,6 +1311,11 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(changed.warning).toContain("not used");
     await rm(dll);
     expect((await resolveDotnetSidecar(undefined, bin, row)).warning).toContain("missing");
+    // R998: with the build's own file gone, a named file is still compared with the hash `.gated` recorded.
+    const gone = await resolveDotnetSidecar(other, bin, row);
+    expect(gone.path).toBe(other);
+    expect(gone.warning).toContain("not this al-runner build's own sidecar");
+    expect(await resolveDotnetSidecar(copy, bin, row)).toEqual({ path: copy });
   });
 
   const notices = async (stderr: string | undefined, extra: Partial<AlRunnerV3Config> = {}) => {
