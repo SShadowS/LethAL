@@ -32,3 +32,10 @@ No baseline file changes. A difference beyond this table is a BLOCK.
 
 Edit the three pin objects in `packages/runner/itest/al-runner-v3.itest.ts` to the table above (with a comment naming this file), run
 the full v3 gate on the final head (CDO and tables legs), CI.
+
+## Amendment 1 (2026-11-14, before the gate on the final head)
+
+The branch was merged with master 2c0976bc after the observe run. Master's R975 (R-965 amendment 4) had already moved WRE's
+`entriesSent` from 448 to 436 (6 twin `OnOpenPage` mutants read no-coverage and are not sent); the observe run predates it. So WRE's pin
+on the final head is `entriesSent` 436 (master's value, untouched by R987) with `boundChecks` 4; the table above is otherwise unchanged.
+The gate on the merged head decides; any other difference is a BLOCK.
