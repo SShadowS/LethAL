@@ -101,19 +101,19 @@ import {
 import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
+  ENTRIES_REQUEST_BUDGET_BYTES,
   type EntryGroup,
-  entriesChunkCap,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
   type SentCut,
   type SentEntry,
   batchRefusalReason,
   callOf,
-  chunkGroups,
   decodeEntriesAnswer,
   echoMismatch,
   emitSelectorEcho,
   encodeGroups,
+  groupsThatFit,
   isolatedSelection,
   serveRow,
 } from "./al-runner-v3-entries";
@@ -1924,33 +1924,40 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
 
   /**
-   * R987: the highest cost per entry measured so far (bytes a daemon grew during one request, over
-   * its entries), for the whole session: it never falls, and a reading of 0 or less is no information.
+   * R987: per call (codeunit, or one test under isolation), the highest cost per entry measured in any
+   * request that ran it (bytes the daemon grew during the request, over its entries), for the whole
+   * session: it never falls.
    */
-  private entryCostBytes = 0;
-  /** R987: the most entries a measured request carried (0: none measured yet); the slow start's base. */
-  private largestMeasured = 0;
+  private readonly costByCall = new Map<number, number>();
   /** R987: set once a lowered cap was announced. */
   private capLoweredSaid = false;
 
-  /** R987: the entries cap for the next request (`entriesChunkCap`). */
-  private chunkCap(): number {
-    return entriesChunkCap(this.largestMeasured, this.entryCostBytes);
-  }
+  /** R987: a call's measured cost per entry (`groupsThatFit`), `undefined` until a request ran it. */
+  private readonly costOf = (call: number): number | undefined => this.costByCall.get(call);
 
-  /** R987: one request's reading: its daemon's RSS when it was sent and the highest seen while it ran. */
-  private noteEntryCost(startRss: number | undefined, peakRss: number | undefined, entries: number) {
-    if (startRss === undefined || peakRss === undefined || entries <= 0) return;
-    this.largestMeasured = Math.max(this.largestMeasured, entries);
-    const cost = (peakRss - startRss) / entries;
-    if (!(cost > this.entryCostBytes)) return;
-    this.entryCostBytes = cost;
-    const fit = entriesChunkCap(ENTRIES_CHUNK_CAP, cost);
+  /**
+   * R987: one request's reading: its daemon's RSS when it was sent and the highest seen while it ran.
+   * The cost per entry is charged to every call the request ran, keeping each call's highest: never
+   * an average, never falling. A reading of 0 or less marks the calls measured at no cost.
+   */
+  private noteEntryCost(
+    startRss: number | undefined,
+    peakRss: number | undefined,
+    sent: readonly SentEntry[],
+  ) {
+    if (startRss === undefined || peakRss === undefined || sent.length === 0) return;
+    const cost = Math.max(0, (peakRss - startRss) / sent.length);
+    for (const e of sent) {
+      if (e.echo) continue;
+      const call = callOf(e);
+      if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
+    }
+    const fit = cost > 0 ? Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / cost) : ENTRIES_CHUNK_CAP;
     if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredSaid) {
       this.capLoweredSaid = true;
       this.notify(
         "al-runner-v3-entries-cap-lowered",
-        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per entry, so requests carry at most ${fit} entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
+        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per entry, so requests of its tests carry about ${Math.max(1, fit)} entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
       );
     }
   }
@@ -5909,12 +5916,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
     // R912: a prefetch speaks for the BATCH, not for its window. The group count is the batch's, and
-    // the request is placed in the chunk (of `chunkCap` entries, R987) a whole-batch prefetch would
-    // have put it in: if an earlier window of that chunk had an entry that ran, this one cannot be a
-    // batch refusal, as the chunk holding both would not have been. Chunk boundaries fall where
-    // `chunkGroups` puts them.
+    // the request is placed in the 256-entry chunk a whole-batch prefetch would have put it in: if
+    // an earlier window of that chunk had an entry that ran, this one cannot be a batch refusal, as the
+    // chunk holding both would not have been. Chunk boundaries fall where `chunkGroups` puts them.
+    // R987: always 256 here, whatever size the memory readings made the requests: a smaller request
+    // is a part of its 256-entry chunk, so the judgement never depends on a reading.
     const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
-    if (batch !== undefined && batch.size + sent.length > this.chunkCap()) {
+    if (batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
       batch.size = 0;
       batch.ran = false;
     }
@@ -6033,7 +6041,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     sampleRss();
     const { sent, rows, cut: partial } = answer;
-    this.noteEntryCost(startRss, peakRss, sent.length);
+    this.noteEntryCost(startRss, peakRss, sent);
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
@@ -6182,14 +6190,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ),
     }));
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
-    // R987: each chunk is cut when it is sent, at the cap the cost measured so far allows. Resent
-    // groups form their own segment after the window's, as their own chunks did before.
+    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`).
+    // Resent groups form their own segment after the window's, as their own chunks did before.
     const segments: EntryGroup[][] = groups.length > 0 ? [[...groups]] : [];
     const nextChunk = (): EntryGroup[] | undefined => {
       const seg = segments[0];
       if (seg === undefined) return undefined;
-      const [chunk = []] = chunkGroups(seg, this.chunkCap());
-      seg.splice(0, chunk.length);
+      const chunk = seg.splice(0, groupsThatFit(seg, this.costOf));
       if (seg.length === 0) segments.shift();
       return chunk;
     };
@@ -6268,12 +6275,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const tagOf = (k: Kill) => this.pairTag(k.mutantId, k.cu);
     // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
-    // R987: each chunk is cut when it is sent, at the cap the cost measured so far allows.
+    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`). A
+    // kill is sized as one group of 4 entries charged three of its codeunit's cost (one more than its
+    // two codeunit entries: on the safe side).
     const segments: Kill[][] = kills.length > 0 ? [[...kills]] : [];
     const nextChunk = (): Kill[] | undefined => {
       const seg = segments[0];
       if (seg === undefined) return undefined;
-      const chunk = seg.splice(0, Math.max(1, Math.floor(this.chunkCap() / 4)));
+      const sized = seg.map((k) => ({ mutantId: k.mutantId, codeunits: [k.cu, k.cu, k.cu] }));
+      const chunk = seg.splice(0, groupsThatFit(sized, this.costOf));
       if (seg.length === 0) segments.shift();
       return chunk;
     };

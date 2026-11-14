@@ -51,14 +51,15 @@ import {
   AlRunnerV3EntriesEncodeError,
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
+  ENTRIES_UNMEASURED_CAP,
+  type EntryGroup,
   SELECTOR_ECHO_FILENAME,
   batchRefusalReason,
   chunkGroups,
   decodeEntriesAnswer,
   emitSelectorEcho,
   encodeGroups,
-  ENTRIES_PROBE_CAP,
-  entriesChunkCap,
+  groupsThatFit,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
@@ -391,6 +392,8 @@ interface ServeScript {
   coverage?: CoverageFn;
   /** R590: a line the daemon writes to stderr as the request arrives. */
   stderr?: (req: Req, n: number) => string | undefined;
+  /** R987: real milliseconds a request waits, after `stderr`, before it answers. */
+  delayMs?: (req: Req, n: number) => number;
 }
 const goodEcho: Echo = (m) => ({
   method: "Echo",
@@ -453,6 +456,9 @@ function fakeServe(script: ServeScript = {}) {
           requests.push(req);
           const errLine = script.stderr?.(req, n);
           if (errLine !== undefined) err.push(errLine);
+          // R987: a request that takes this long (real time) before it answers.
+          const delay = script.delayMs?.(req, n) ?? 0;
+          if (delay > 0) await Bun.sleep(delay);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
           // R857: as measured on edge 6bb821b98: `test` selects by text, so `Codeunit1.Alpha` also
           // picks `AlphaTwo`; `excludeTests` takes names out. `Codeunit1.` picks every test.
@@ -569,6 +575,11 @@ interface RigOpts {
   stopHandle?: Parameters<AlRunnerV3Backend["useStopHandle"]>[0];
 }
 
+/** R952, R987: a backend built outside `rig` reads no daemon's RSS (the fakes' pids are made up). */
+function noProcReads(b: AlRunnerV3Backend): void {
+  Object.assign(b.seams, { rssReader: () => undefined, requestRssReader: () => undefined });
+}
+
 async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
   const l = await layout(opts.targetAl ?? TARGET_AL, suite);
@@ -664,6 +675,7 @@ describe("1, 2, 3: the option, its default, the version line", () => {
       fakeAlc(),
       serve.spawn,
     );
+    noProcReads(b);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(1000, 1000);
     await b.deploy(l.batch);
@@ -2873,86 +2885,163 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
   });
 });
 
-describe("R987: entries per serve request follow the daemon growth measured per entry", () => {
+describe("R987: entries per serve request follow the daemon growth measured per codeunit", () => {
   const GiB = 2 ** 30;
-  test("the cap function: a 16-entry probe, then at most twice the largest measured, within 4 GiB", () => {
-    expect(entriesChunkCap(0, 0)).toBe(ENTRIES_PROBE_CAP);
-    expect(ENTRIES_PROBE_CAP).toBe(16);
-    expect(entriesChunkCap(16, 0)).toBe(32);
-    expect(entriesChunkCap(16, 2 ** 20)).toBe(32); // 1 MiB an entry: 4,096 would fit
-    expect(entriesChunkCap(200, 2 ** 20)).toBe(ENTRIES_CHUNK_CAP);
-    // Contoso Coffee Demo: about 77 MB an entry (R987).
-    expect(entriesChunkCap(16, 77e6)).toBe(32);
-    expect(entriesChunkCap(32, 77e6)).toBe(55);
-    expect(entriesChunkCap(256, 77e6)).toBe(55);
-    expect(entriesChunkCap(256, 8 * GiB)).toBe(1);
-    expect(() => entriesChunkCap(-1, 0)).toThrow(/whole number/);
-    expect(() => entriesChunkCap(1.5, 0)).toThrow(/whole number/);
-    expect(() => entriesChunkCap(16, -1)).toThrow(/finite number/);
-    expect(() => entriesChunkCap(16, Number.NaN)).toThrow(/finite number/);
+  const g = (mutantId: string, ...codeunits: number[]): EntryGroup => ({ mutantId, codeunits });
+
+  test("groupsThatFit: 16 unmeasured codeunit entries, 4 GiB of measured cost, 256 entries, never 0", () => {
+    const none = () => undefined;
+    expect(ENTRIES_UNMEASURED_CAP).toBe(16);
+    // Unmeasured: 8 groups of two codeunits fill the 16; the 9th waits.
+    expect(
+      groupsThatFit(
+        Array.from({ length: 12 }, (_, i) => g(`M${i}`, 1, 2)),
+        none,
+      ),
+    ).toBe(8);
+    // Measured at 1 GiB an entry: 4 codeunit entries fit 4 GiB (the echo costs nothing).
+    expect(
+      groupsThatFit(
+        Array.from({ length: 9 }, (_, i) => g(`M${i}`, 1)),
+        () => GiB,
+      ),
+    ).toBe(4);
+    // Measured at no cost: only the 256 entries bound it (128 groups of two entries).
+    expect(
+      groupsThatFit(
+        Array.from({ length: 300 }, (_, i) => g(`M${i}`, 1)),
+        () => 0,
+      ),
+    ).toBe(128);
+    // A first group over every bound still goes alone.
+    expect(groupsThatFit([g("M0", 1, 2, 3), g("M1", 1)], () => 8 * GiB)).toBe(1);
+    expect(groupsThatFit([], none)).toBe(0);
   });
 
   /**
-   * A daemon that does not shrink back: while a request runs its RSS is the floor plus `perEntry`
-   * for each of the request's entries, or its old size if that is larger (the fake serve's answer
-   * hook sets it; `requestRssReader` injects it). The prefetch is 30 mutants of SUITE1: 30 groups of
-   * two entries (echo + the one codeunit), 60 entries in all; every request's size is recorded.
+   * The fake daemon's RSS is the floor plus, per entry, its codeunit's cost (`perCu`, echo free).
+   * `shrink`: it rises when the request arrives and falls back to the floor before the answer, the
+   * request lasting 450 ms, so only the 200 ms sampler sees the peak. Otherwise it is set when the
+   * request answers and never falls (a daemon that does not shrink back). Every request's size is
+   * recorded; a daemon's first request is its warm-up, neither counted nor grown.
    */
-  const prefetch30 = async (perEntry: number, rows?: RowsFn) => {
-    const mem = { level: 0.5 * GiB };
+  const prefetchOf = async (
+    perCu: ReadonlyMap<number, number>,
+    planned: { mutantId: string; refs: readonly TestMethodRef[] }[],
+    o: { rows?: RowsFn; shrink?: boolean } = {},
+  ) => {
+    const floor = 0.5 * GiB;
+    const mem = { level: floor };
     const sizes: number[] = [];
     const notes: string[] = [];
-    const ids = Array.from({ length: 30 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
     const warm = new Set<number>();
+    const grown = (q: Req) => {
+      const entries = (q.body.entries ?? []) as { test?: unknown }[];
+      let b = floor;
+      for (const e of entries) {
+        const cu = Number(/^Codeunit(\d+)\./.exec(String(e.test))?.[1]);
+        b += perCu.get(cu) ?? 0;
+      }
+      return b;
+    };
+    const counted = (q: Req) => {
+      if (warm.has(q.daemon)) return true;
+      warm.add(q.daemon);
+      return false;
+    };
     const r = await rig({
-      ...(rows !== undefined ? { oneShotRows: rows, pairBatch: true } : {}),
+      suite: SUITE2,
+      ...(o.rows !== undefined ? { oneShotRows: o.rows, pairBatch: true } : {}),
       serve: {
-        ...(rows !== undefined ? { rows } : {}),
-        answer: (q) => {
-          // A daemon's first request is its warm-up: neither counted nor grown.
-          if (!warm.has(q.daemon)) {
-            warm.add(q.daemon);
-            return undefined;
-          }
-          sizes.push(q.ids.length);
-          mem.level = Math.max(mem.level, 0.5 * GiB + perEntry * q.ids.length);
-          return undefined;
-        },
+        ...(o.rows !== undefined ? { rows: o.rows } : {}),
+        ...(o.shrink === true
+          ? {
+              stderr: (q) => {
+                if (counted(q)) {
+                  sizes.push(q.ids.length);
+                  mem.level = grown(q);
+                }
+                return undefined;
+              },
+              delayMs: (q) => (warm.has(q.daemon) && q.ids.length > 1 ? 450 : 0),
+              answer: () => {
+                mem.level = floor;
+                return undefined;
+              },
+            }
+          : {
+              answer: (q) => {
+                if (counted(q)) {
+                  sizes.push(q.ids.length);
+                  mem.level = Math.max(mem.level, grown(q));
+                }
+                return undefined;
+              },
+            }),
       },
       seams: { requestRssReader: () => mem.level },
       notify: (code) => notes.push(code),
     });
-    await baseline(r.b, SUITE1);
+    await baseline(r.b, SUITE2);
     sizes.length = 0; // the prefetch's requests only
-    await r.b.prefetchMutants(plans(ids));
+    await r.b.prefetchMutants(planned);
     return { sizes, notes, s: r.b.entriesStats() };
   };
+  const mids = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => `M${String(from + i).padStart(4, "0")}`);
+  const onCu = (ids: string[]) => ids.map((mutantId) => ({ mutantId, refs: SUITE1 }));
+  const onCu2 = (ids: string[]) => ids.map((mutantId) => ({ mutantId, refs: [ref("C", CU2)] }));
 
   test("a high reading caps every later request at what fits 4 GiB, and says so once", async () => {
-    // 0.25 GiB an entry: 16 fit. A probe of 16, then 16 each (not 32, 64): the later requests read
-    // no growth (the daemon does not shrink back), and the highest cost seen still holds.
-    const high = await prefetch30(0.25 * GiB);
-    expect(high.sizes).toEqual([16, 16, 16, 12]);
+    // 60 groups of two entries. 16 unmeasured, then 0.25 GiB an entry (charged as 8 GiB over the 32
+    // entries of the first request): 16 groups a request. The later requests read no growth (the
+    // daemon does not shrink back); the highest cost seen still holds.
+    const high = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)));
+    expect(high.sizes).toEqual([32, 32, 32, 24]);
     expect(high.notes.filter((c) => c === "al-runner-v3-entries-cap-lowered")).toEqual([
       "al-runner-v3-entries-cap-lowered",
     ]);
   });
 
-  test("a low reading grows the requests: a probe of 16, then twice the largest measured", async () => {
-    // 1 MiB an entry: thousands would fit, so only the slow start limits it: 16, 32, the 12 left.
-    const low = await prefetch30(2 ** 20);
-    expect(low.sizes).toEqual([16, 32, 12]);
+  test("a low reading lets the requests grow to 256 entries", async () => {
+    const low = await prefetchOf(new Map([[CU, 2 ** 20]]), onCu(mids(1, 60)));
+    expect(low.sizes).toEqual([32, 88]);
     expect(low.notes).not.toContain("al-runner-v3-entries-cap-lowered");
   });
 
-  test("the kill-pair batches follow the cap: a pair is 4 entries, so 4 pairs a request at 16", async () => {
+  test("a codeunit no request has measured goes 16 at a time, even after cheap ones", async () => {
+    // 30 cheap groups on CU, then 30 on CU2, which no request has run (and which is heavy).
+    const late = await prefetchOf(
+      new Map([
+        [CU, 2 ** 20],
+        [CU2, 0.25 * GiB],
+      ]),
+      [...onCu(mids(1, 30)), ...onCu2(mids(31, 30))],
+    );
+    // 16 CU groups (unmeasured), then the 14 cheap ones left and 16 of CU2, then CU2 by its cost.
+    expect(late.sizes[0]).toBe(32);
+    expect(late.sizes[1]).toBe(60);
+    expect(late.sizes.reduce((a, b) => a + b, 0)).toBe(120);
+  });
+
+  test("the sampler sees a peak the daemon gives back before the request ends", async () => {
+    const shrinking = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)), {
+      shrink: true,
+    });
+    expect(shrinking.sizes).toEqual([32, 32, 32, 24]);
+  });
+
+  test("the kill-pair batches follow the measured cost: 5 pairs a request", async () => {
     const killsAll: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((r) =>
         r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
       );
-    const high = await prefetch30(0.25 * GiB, killsAll);
-    expect(high.s.pairBatchStored).toBe(30);
-    expect(high.s.pairBatchRequests).toBe(8); // 30 kills, 4 a request (64 a request at 256)
+    const high = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)), {
+      rows: killsAll,
+    });
+    expect(high.s.pairBatchStored).toBe(60);
+    // A pair is charged three codeunit entries at 0.25 GiB: 5 fit 4 GiB, so 12 requests (1 at 256).
+    expect(high.s.pairBatchRequests).toBe(12);
   });
 });
 
@@ -5088,6 +5177,7 @@ describe("R790: the speculative baseline", () => {
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(...(o.floor ?? [1000, 1000]));
+    noProcReads(b);
     Object.assign(b.seams, o.seams?.(l) ?? {});
     const err = await b.deploy(l.batch).then(
       () => undefined,
@@ -5240,6 +5330,7 @@ describe("R790: the speculative baseline", () => {
       b.useDiscoveredTests(SUITE1);
       b.useSessionTests(SUITE1);
       b.useMutantBudgetFloor(1000, 1000);
+      noProcReads(b);
       b.useStopHandle({ spent: () => spent, signalled: () => false, stopForMemory: () => {} });
       await b.deploy(l.batch);
       expect(one.calls).toHaveLength(spent ? 0 : 1);
@@ -5271,6 +5362,7 @@ describe("R790: the speculative baseline", () => {
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(1000, 1000);
+    noProcReads(b);
     // The test dir changes after the speculative calls read it (and before the proof reads it).
     b.seams.afterSpeculation = async () => {
       await writeFile(join(l.testDir, "Late.Codeunit.al"), 'codeunit 79999 "Late" { }');

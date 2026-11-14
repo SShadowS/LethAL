@@ -50,28 +50,48 @@ export const ENTRIES_CHUNK_CAP = 256;
  */
 export const ENTRIES_REQUEST_BUDGET_BYTES = 4 * 1024 ** 3;
 
-/** R987: the first request's entries, before any request was measured. */
-export const ENTRIES_PROBE_CAP = 16;
+/** R987: at most this many entries of codeunits no request has measured yet go in one request. */
+export const ENTRIES_UNMEASURED_CAP = 16;
 
 /**
- * R987: the entries cap for the next request. `largestMeasured` is the most entries any measured
- * request carried (0: none measured yet), `bytesPerEntry` the highest cost per entry seen (bytes the
- * daemon grew during a request, over its entries; 0 when no request grew it). A slow start: before
- * any reading `ENTRIES_PROBE_CAP`, then at most twice the largest measured request, and at most what
- * fits `ENTRIES_REQUEST_BUDGET_BYTES` at that cost. Always 1 to `ENTRIES_CHUNK_CAP` (a larger group
- * still goes alone, `chunkGroups`).
+ * R987: how many of `groups`, from the front, the next request takes. `costOf(call)` is the highest
+ * cost per entry measured for a call (bytes its daemon grew during a request, over the request's
+ * entries), `undefined` if no request has measured it. Groups are taken whole, in order, while the
+ * request stays within `ENTRIES_CHUNK_CAP` entries, `ENTRIES_UNMEASURED_CAP` entries of unmeasured
+ * calls, and `ENTRIES_REQUEST_BUDGET_BYTES` of measured cost; the first group is always taken (a
+ * larger one goes alone, as in `chunkGroups`). An echo entry is LethAL's own codeunit: counted as an
+ * entry, never as a cost.
  */
-export function entriesChunkCap(largestMeasured: number, bytesPerEntry: number): number {
-  if (!Number.isInteger(largestMeasured) || largestMeasured < 0) {
-    throw new Error(`entriesChunkCap: largestMeasured must be a whole number >= 0, got ${largestMeasured}`);
+export function groupsThatFit(
+  groups: readonly EntryGroup[],
+  costOf: (call: number) => number | undefined,
+): number {
+  let entries = 0;
+  let unmeasured = 0;
+  let bytes = 0;
+  let n = 0;
+  for (const g of groups) {
+    let gUnmeasured = 0;
+    let gBytes = 0;
+    for (const cu of g.codeunits) {
+      const c = costOf(cu);
+      if (c === undefined) gUnmeasured += 1;
+      else gBytes += c;
+    }
+    const gEntries = g.codeunits.length + 1;
+    if (
+      n > 0 &&
+      (entries + gEntries > ENTRIES_CHUNK_CAP ||
+        unmeasured + gUnmeasured > ENTRIES_UNMEASURED_CAP ||
+        bytes + gBytes > ENTRIES_REQUEST_BUDGET_BYTES)
+    )
+      break;
+    entries += gEntries;
+    unmeasured += gUnmeasured;
+    bytes += gBytes;
+    n += 1;
   }
-  if (!Number.isFinite(bytesPerEntry) || bytesPerEntry < 0) {
-    throw new Error(`entriesChunkCap: a cost must be a finite number >= 0, got ${bytesPerEntry}`);
-  }
-  const growth = largestMeasured === 0 ? ENTRIES_PROBE_CAP : 2 * largestMeasured;
-  const fit =
-    bytesPerEntry === 0 ? ENTRIES_CHUNK_CAP : Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / bytesPerEntry);
-  return Math.max(1, Math.min(ENTRIES_CHUNK_CAP, growth, fit));
+  return n;
 }
 
 /** One mutant (or `NONE`) and the covering codeunits it needs, in one request. */
