@@ -100,6 +100,10 @@ export const shiftInteger: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
+        // R984: a comparison operand is READ by the comparison; R983's risk, not value-rewrite's.
+        ...(node.parent?.rawKind === ALNodeKind.comparison_expression
+          ? { equivalenceRisk: "compared-value" as const }
+          : {}),
       },
     ];
   },

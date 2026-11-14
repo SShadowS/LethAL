@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**27 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -567,7 +567,7 @@ that ordering is the priority.
 - **R923** · An app.json path whose letter case differs from the file on disk stops the Linux alc (AL1001) before a line compiles: a Windows-authored project fails in 2 s · [R923.md](docs/roadmap/R923.md) · done (637c9053; review fixes cd9672df): measured on Audit File Export, 1,084 of 1,084
 - **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
 - **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
-- **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · open
+- **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · done (6ba7c956) — shift-integer sets compared-value on a comparison operand (by parse); 208 of 448 distinct…
 
 ## Backends and tooling
 
