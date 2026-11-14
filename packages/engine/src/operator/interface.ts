@@ -108,6 +108,11 @@ export interface MutationSpec {
    * lists shapes that are unclassified rather than cleared. See section 3.3.
    */
   readonly hangCapable?: HangCapableReason;
+  /**
+   * R983: this SITE's equivalence risk, where it differs from the operator's `equivalenceRisk`.
+   * Decided by parse; the report groups a survivor by this, else by its operator's risk.
+   */
+  readonly equivalenceRisk?: EquivalenceRisk;
 }
 
 export interface ConformanceCase {
@@ -150,7 +155,12 @@ export type EquivalenceRisk =
   | "value-rewrite"
   /** The operator bounds a LOOP. Where the covering test drives exactly one iteration, truncating to
    *  one iteration changes nothing. */
-  | "loop-truncation";
+  | "loop-truncation"
+  /** R983 (GitHub #51): a blank toggle whose literal is an OPERAND of a comparison (`X <> 0D`,
+   *  `X = ''`). The branch changes only for a value equal to the original literal or to the
+   *  substitute; where the substitute can never reach the comparison, a survivor is equivalent.
+   *  Set per site, never per operator: the same operator's ASSIGNED literals stay `value-rewrite`. */
+  | "compared-value";
 
 export interface MutationOperator {
   readonly name: string;
