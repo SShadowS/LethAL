@@ -42,6 +42,58 @@ export const echoMessage = (m: string): string => `LETHAL-ECHO:${m}:true`;
 /** 256 is LethAL's cap per request, not upstream's. */
 export const ENTRIES_CHUNK_CAP = 256;
 
+/**
+ * R987: the memory one request's entries may take. A serve daemon holds every entry's state until
+ * the request ends: Contoso Coffee Demo's tests cost about 77 MB an entry, so 256 entries took the
+ * daemon to 21 GB (`/coord/handoff/R-972/`). 4 GiB keeps it inside `--peak serve` (8 GiB) with its
+ * own floor and LethAL's process beside it.
+ */
+export const ENTRIES_REQUEST_BUDGET_BYTES = 4 * 1024 ** 3;
+
+/** R987: at most this many entries of codeunits no request has measured yet go in one request. */
+export const ENTRIES_UNMEASURED_CAP = 16;
+
+/**
+ * R987: how many of `groups`, from the front, the next request takes. `costOf(call)` is the highest
+ * cost per entry measured for a call (bytes its daemon grew during a request, over the request's
+ * entries), `undefined` if no request has measured it. Groups are taken whole, in order, while the
+ * request stays within `ENTRIES_CHUNK_CAP` entries, `ENTRIES_UNMEASURED_CAP` entries of unmeasured
+ * calls, and `ENTRIES_REQUEST_BUDGET_BYTES` of measured cost; the first group is always taken (a
+ * larger one goes alone, as in `chunkGroups`). An echo entry is LethAL's own codeunit: counted as an
+ * entry, never as a cost.
+ */
+export function groupsThatFit(
+  groups: readonly EntryGroup[],
+  costOf: (call: number) => number | undefined,
+): number {
+  let entries = 0;
+  let unmeasured = 0;
+  let bytes = 0;
+  let n = 0;
+  for (const g of groups) {
+    let gUnmeasured = 0;
+    let gBytes = 0;
+    for (const cu of g.codeunits) {
+      const c = costOf(cu);
+      if (c === undefined) gUnmeasured += 1;
+      else gBytes += c;
+    }
+    const gEntries = g.codeunits.length + 1;
+    if (
+      n > 0 &&
+      (entries + gEntries > ENTRIES_CHUNK_CAP ||
+        unmeasured + gUnmeasured > ENTRIES_UNMEASURED_CAP ||
+        bytes + gBytes > ENTRIES_REQUEST_BUDGET_BYTES)
+    )
+      break;
+    entries += gEntries;
+    unmeasured += gUnmeasured;
+    bytes += gBytes;
+    n += 1;
+  }
+  return n;
+}
+
 /** One mutant (or `NONE`) and the covering codeunits it needs, in one request. */
 export interface EntryGroup {
   /** The override text: `NONE` or a mutant id. */

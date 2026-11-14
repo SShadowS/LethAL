@@ -37,6 +37,50 @@ function mutantFixture(mutantId: string): MutantManifestEntry {
   };
 }
 
+describe("R966: the stop line names its cause", () => {
+  const stop = (extra: Partial<Extract<RunEventInput, { type: "time-budget-reached" }>>) => {
+    const { out, write } = lines();
+    createProgressRenderer(write, { heartbeatMs: 30_000 })(
+      ev({
+        type: "time-budget-reached",
+        budgetSeconds: 3600,
+        unscheduledCount: 43,
+        batchesNotStarted: 0,
+        baselineStopped: { testsRun: 8, testsTotal: 1979 },
+        ...extra,
+      }),
+    );
+    return out.join("\n");
+  };
+  test("a spent budget says TIME BUDGET REACHED and the budget", () => {
+    const t = stop({});
+    expect(t).toContain("TIME BUDGET REACHED IN THE BASELINE: 8 of 1979 test(s) ran.");
+    expect(t).toContain("TIME BUDGET REACHED: --time-budget 3600 s used up; 43 mutant(s)");
+  });
+  test("a signal says STOPPED BY SIGNAL, never a spent budget", () => {
+    const t = stop({ stoppedBySignal: true });
+    expect(t).toContain(
+      "STOPPED BY SIGNAL (SIGTERM or SIGINT) IN THE BASELINE: 8 of 1979 test(s) ran.",
+    );
+    expect(t).toContain("STOPPED BY SIGNAL (SIGTERM or SIGINT): 43 mutant(s) left out");
+    expect(t).not.toContain("TIME BUDGET");
+    expect(t).not.toContain("used up");
+  });
+  test("the memory guard says so, never a spent budget", () => {
+    const t = stop({
+      budgetSeconds: 0,
+      stoppedByMemory: {
+        usedBytes: 30 * 2 ** 30,
+        boundBytes: 28 * 2 ** 30,
+        source: "/sys/fs/cgroup/memory.max",
+      },
+    });
+    expect(t).toContain("STOPPED BY THE MEMORY GUARD IN THE BASELINE: 8 of 1979 test(s) ran.");
+    expect(t).not.toContain("TIME BUDGET");
+    expect(t).not.toContain("--time-budget 0 s");
+  });
+});
+
 describe("progress renderer", () => {
   test("names the phase on entry", () => {
     const { out, write } = lines();

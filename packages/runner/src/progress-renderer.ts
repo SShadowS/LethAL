@@ -153,16 +153,27 @@ export function createProgressRenderer(
       case "quarantined":
         write(`QUARANTINED: ${event.reason}`);
         break;
-      case "time-budget-reached":
+      case "time-budget-reached": {
+        // R966: say what stopped the run. A signal or the memory guard spends the budget to stop
+        // through R955's path, but the budget itself was not used up.
+        const head =
+          event.stoppedByMemory !== undefined
+            ? "STOPPED BY THE MEMORY GUARD"
+            : event.stoppedBySignal === true
+              ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
+              : "TIME BUDGET REACHED";
         if (event.baselineStopped !== undefined) {
           write(
-            `TIME BUDGET REACHED IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
+            `${head} IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,
           );
         }
+        const why =
+          head === "TIME BUDGET REACHED" ? `--time-budget ${event.budgetSeconds} s used up; ` : "";
         write(
-          `TIME BUDGET REACHED: --time-budget ${event.budgetSeconds} s used up; ${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
+          `${head}: ${why}${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
         );
         break;
+      }
       case "session-finished":
         write(`session finished in ${formatSeconds(event.elapsedMs)}`);
         break;

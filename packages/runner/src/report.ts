@@ -4083,6 +4083,19 @@ export function renderConsole(r: SessionReport): string {
       lines.push(
         `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
       );
+    } else if (r.timeBudget.stoppedBySignal === true) {
+      // R966: a signal spends the budget to stop through R955's path; the budget did not run out.
+      lines.push(
+        "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955); the --time-budget did not run out.",
+      );
+      if (bs !== undefined) {
+        lines.push(
+          `The signal stopped ${bs.inAutoRebaseline === true ? "the auto isolation re-baseline" : "the baseline"} after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score.`,
+        );
+      }
+      lines.push(
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
+      );
     } else if (bs?.inAutoRebaseline === true) {
       lines.push(
         `TIME BUDGET REACHED IN THE AUTO ISOLATION RE-BASELINE: every one of the ${bs.testsTotal} baseline test(s) ran once, then the budget ran out while isolation "auto" re-ran codeunits one test at a time. Every codeunit stayed on test, no isolation choice was made, and no mutant of that batch was scored.`,
@@ -4092,12 +4105,7 @@ export function renderConsole(r: SessionReport): string {
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );
     }
-    if (r.timeBudget.stoppedBySignal === true) {
-      lines.push(
-        "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955).",
-      );
-    }
-    if (mem === undefined) {
+    if (mem === undefined && r.timeBudget.stoppedBySignal !== true) {
       lines.push(
         `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
       );
