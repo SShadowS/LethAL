@@ -157,8 +157,9 @@ export type EquivalenceRisk =
    *  one iteration changes nothing. */
   | "loop-truncation"
   /** R983 (GitHub #51): a blank toggle whose literal is an OPERAND of a comparison (`X <> 0D`,
-   *  `X = ''`). The branch changes only for a value equal to the original literal or to the
-   *  substitute; where the substitute can never reach the comparison, a survivor is equivalent.
+   *  `X = ''`). For `=`/`<>` the branch changes only for a value equal to the original literal or
+   *  the substitute; for an ordered comparison, for any value between the two. Where no such value
+   *  reaches the comparison, a survivor is equivalent.
    *  Set per site, never per operator: the same operator's ASSIGNED literals stay `value-rewrite`. */
   | "compared-value";
 

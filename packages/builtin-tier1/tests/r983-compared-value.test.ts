@@ -32,6 +32,13 @@ describe("R983: blank toggles inside a comparison get their own equivalence risk
     ]);
   });
 
+  it("an ordered comparison operand is compared-value too (the explanation covers its range)", () => {
+    expect(risks(toggleBlankString, "if S > '' then exit;")).toEqual(["'' -> 'x': compared-value"]);
+    expect(risks(toggleBlankTemporal, "if T >= 120000T then exit;")).toEqual([
+      "120000T -> 0T: compared-value",
+    ]);
+  });
+
   it("string: an assigned literal carries no site risk", () => {
     expect(risks(toggleBlankString, "S := ''; S := 'FOO';")).toEqual([
       "'' -> 'x': none",

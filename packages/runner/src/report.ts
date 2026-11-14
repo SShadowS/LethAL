@@ -2662,9 +2662,10 @@ const EQUIVALENCE_RISK_EXPLANATIONS: Readonly<Record<string, string>> = {
     "test drives one row, which is itself the finding.",
   "compared-value":
     "This blank toggle changes one side of a COMPARISON (`X = ''`, `X <> 0D`), so the comparison " +
-    "itself reads the value. The branch changes only where the other side equals the original " +
-    "literal or the substitute ('x', 17530101D, ...): the mutant is equivalent only if no such " +
-    "value can reach this comparison. Check whether a test drives the blank case before reading " +
+    "itself reads the value. For `=` and `<>` the branch changes only where the other side equals " +
+    "the original literal or the substitute ('x', 17530101D, ...); for `<`, `>`, `<=` and `>=`, " +
+    "for any value between the two. The mutant is equivalent only if no such value can reach this " +
+    "comparison. Check whether a test drives the other side to one of those values before reading " +
     "a survivor here as equivalent.",
 };
 
@@ -3796,7 +3797,7 @@ export function renderConsole(r: SessionReport): string {
   if (r.likelyEquivalentSurvivors !== undefined) {
     const e = r.likelyEquivalentSurvivors;
     lines.push(
-      `LIKELY-EQUIVALENT SURVIVORS: ${e.count} survivor(s) come from operators whose survivors are ` +
+      `LIKELY-EQUIVALENT SURVIVORS: ${e.count} survivor(s) come from operators (or sites) whose survivors are ` +
         "likelier than average to be EQUIVALENT — mutants no test could ever kill, because the " +
         "mutated program behaves identically. Nothing here is subtracted from the score and no " +
         "verdict moved; this only says which survivors to read with that possibility in mind, so a " +
