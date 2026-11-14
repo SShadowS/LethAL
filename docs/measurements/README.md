@@ -3,6 +3,18 @@
 Probe sources kept so a claim can be re-checked rather than re-argued. A measurement nobody can
 re-run is barely better than a guess.
 
+## `refusal-ledger.json` — every al-runner v3 refusal cause met, and what is known of it (R-995)
+
+One entry per cause: the normalised text (`scripts/refusal-ledger.ts`'s `normaliseRefusal`: quoted
+names and literals, digits, GUIDs, a cascade's earlier test and its quoted failure masked, so no
+source text), its `state` (`open`, `fixed`, `by-design`, `unexamined`), the upstream `issue`, a
+`repro` path where one exists, and a `note`. Seeded on 2026-11-14 from R-983's 131 causes (all
+3,459 error mutants of 166 BC.History stores match), those stores' refused baseline tests, the
+2026-11-14 BC.History stores (R-975, R-982, R-985, R-993) and the issues filed that day; the
+seeding scripts are in `/coord/handoff/R-995/`. End every v3 corpus run with
+`bun scripts/refusal-ledger.ts <stores>`: only the NEW causes need reducing, and each one reduced
+is added here.
+
 ## Corpora on this machine — identified by hash, not by path (R187)
 
 Read this before choosing a corpus for a cross-check. Two of the paths below are ONE corpus.
