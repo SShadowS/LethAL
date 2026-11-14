@@ -413,11 +413,19 @@ describe("R761: the default transport", () => {
       "/ Check",
       "// ",
       "//  Check",
-      "Check Reg.No",
-      "Check.",
-      "Check. ",
     ]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+    // red when the dot replace is too loose: a dot not between a letter or digit and a space before
+    // one stays one-shot even where the row fields carry the method
+    for (const name of ["Check.", "Check. ", "Check .A", "Check.  A", "Check. -A", "A.B.C"]) {
+      const fixed = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(name)],
+        version: FIXED_VERSION,
+        sha: FIXED_SHA,
+      });
+      await fixed.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(fixed.b)]).toEqual([name, [50100]]);
     }
   });
 

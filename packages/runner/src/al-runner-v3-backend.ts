@@ -671,6 +671,9 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * (R-983's 166 BC.History projects, DO, DC; `/coord/handoff/R-991/choose-n.py`), each in fill order:
  * a run of 3 such codeunits was once followed by green tests (a false stop), 5 or more never was; only
  * DC's baseline (0 of 1,839 tests ran, 4,656 s, 117 daemons) is uniform throughout. 10 keeps a margin.
+ * One-shot answers in the orchestrator's order, not id order: in the order each store's run really answered,
+ * the longest such run was 4 (`any-order.py`). In SOME order three stores could reach 11 to 50, so the
+ * margin rests on the real orders, not on every order.
  */
 export const V3_UNIFORM_REFUSAL_CODEUNITS = 10;
 
@@ -689,7 +692,7 @@ export class AlRunnerV3BaselineUniformlyRefusedError extends Error {
 
 /**
  * R1001: watches baseline answers codeunit by codeunit. Any row that is not a named refusal (a pass, a
- * fail, a timeout), or a second refusal text, disarms it for the session; a codeunit is counted once.
+ * fail, a timeout), or a second refusal text, disarms it until the next deploy; a codeunit is counted once.
  * `observe` returns the shared text once `n` codeunits have been counted, else `undefined`.
  */
 export class UniformRefusalWatch {
@@ -3963,6 +3966,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const answers = new Map<number, BaselineAnswer>();
     const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
     const comparedBefore = this.baselineStats.compared;
+    // R1001: the fill's own watch, so answers a dropped fill never kept cannot count toward a later stop.
+    const uniformWatch = new UniformRefusalWatch();
     type Step = "ok" | "stop" | "dropped";
     const check = async (id: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
       const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
@@ -4043,7 +4048,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // R1001: a uniformly refused baseline stops by name, but only once a cross-check sample (the
         // second codeunit is one, `baselineSampleIds`) has shown the daemon answers as a fresh process does.
         if (got !== undefined) {
-          const uniform = this.uniformWatch.observe(id, got.rows);
+          const uniform = uniformWatch.observe(id, got.rows);
           if (uniform !== undefined && this.baselineStats.compared - comparedBefore >= 1)
             throw new AlRunnerV3BaselineUniformlyRefusedError(
               V3_UNIFORM_REFUSAL_CODEUNITS,
@@ -5880,8 +5885,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
   private noteBaselineRows(lane: Lane, key: number, rows: readonly V3Row[]): void {
     if (!this.isBaselineCall(lane)) return;
-    // R1001: one-shot (and served) baseline answers; the daemon fill watches its own, guarded.
-    const uniform = this.uniformWatch.observe(key, rows);
+    // R1001: one-shot (and served) baseline answers; the daemon fill watches its own, guarded. A
+    // per-test key (negative, `--isolate-tests` or R896) is not a codeunit, and N was measured per
+    // codeunit, so per-test answers are not watched (a missed stop, never a false one).
+    const uniform = key < 0 ? undefined : this.uniformWatch.observe(key, rows);
     if (uniform !== undefined)
       throw new AlRunnerV3BaselineUniformlyRefusedError(V3_UNIFORM_REFUSAL_CODEUNITS, uniform);
     if (this.entries) this.baselineRows.set(key, rows);

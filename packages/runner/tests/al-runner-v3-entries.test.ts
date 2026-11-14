@@ -8358,4 +8358,36 @@ describe("R1001: a uniformly refused baseline stops by name", () => {
     expect(v).toHaveLength(R1001_SUITE.length);
     expect(r.b.daemonBaselineReport().dropped).toBeDefined();
   });
+  test("daemon baseline: with every sample skipped (none compared) the fill never stops, and after the drop the fresh green answers decide", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    // every one-shot call while the fill holds (its samples) gives no answer, so each sample is skipped
+    const holder = r.b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(r.b);
+    holder.spawnCodeunit = async (...a) =>
+      r.b.daemonBaselineReport().dropped === undefined
+        ? { spawnError: "boom", wallMs: 0 }
+        : real(...a);
+    // red without the `compared >= 1` guard (the fill stops on unchecked answers), and red with a
+    // watch shared with the one-shot path (the dropped fill's refusals stop the fresh green run)
+    const v = await baseline(r.b, R1001_SUITE);
+    expect(v.map((x) => x.outcome)).toEqual(R1001_SUITE.map(() => "pass"));
+    expect(r.b.daemonBaselineReport().dropped).toBeDefined();
+  });
+  test("per-test keys (--isolate-tests) are not codeunits: a uniformly refused codeunit's tests never stop the run", async () => {
+    const cus = R1001_CUS.slice(0, 2);
+    for (const cu of cus) SUITE_METHODS[cu] = Array.from({ length: 6 }, (_, i) => `T${i + 1}`);
+    try {
+      const suite = cus.flatMap((cu) => (SUITE_METHODS[cu] ?? []).map((m) => ref(m, cu)));
+      const r = await rig({ suite, oneShotRows: refusedAll, extra: { isolateTests: true } });
+      const v = await baseline(r.b, suite); // red without the per-test skip: the 10th test would stop it
+      expect(v).toHaveLength(12);
+    } finally {
+      for (const cu of cus) SUITE_METHODS[cu] = ["T1", "T2"];
+    }
+  });
 });
