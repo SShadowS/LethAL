@@ -103,7 +103,13 @@ export function compare(
         });
         continue;
       }
-      const before = matchesBc(bc, (cur as ReadonlyMap<string, Row>).get(test));
+      const curRow = (cur as ReadonlyMap<string, Row>).get(test);
+      // Review: a test neither build reported (a manifest typo, renamed naming) is never "still differs".
+      if (row === undefined && curRow === undefined) {
+        out.push({ ...base, change: "error", why: "neither build reported this test" });
+        continue;
+      }
+      const before = matchesBc(bc, curRow);
       const change: Change = now
         ? before
           ? "still-matches"
@@ -167,22 +173,46 @@ export async function runAll(
       stderr: "pipe",
       env: { ...process.env, ALRUNNER_SEED: "1" },
     });
-    const timer = setTimeout(() => p.kill(), 300_000);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      p.kill("SIGKILL");
+    }, 300_000);
     const [stdout, stderr] = await Promise.all([
       new Response(p.stdout).text(),
       new Response(p.stderr).text(),
     ]);
     await p.exited;
     clearTimeout(timer);
-    try {
-      const j = JSON.parse(stdout) as { tests?: Row[] };
-      if (!Array.isArray(j.tests)) throw new Error("no tests[]");
-      out.set(r.id, new Map(j.tests.map((t) => [t.name, t])));
-    } catch (err) {
-      out.set(r.id, { error: `exit ${p.exitCode}: ${String(err)}; ${stderr.slice(-200).trim()}` });
-    }
+    out.set(r.id, rowsOf(stdout, stderr, p.exitCode, timedOut));
   }
   return out;
+}
+
+/**
+ * One run's rows. Review: a run that compiled nothing (`compilationErrors`, or no test row at all) or was stopped is an error,
+ * never a map whose every test is merely missing (empty against empty would read as "still differs" forever).
+ */
+export function rowsOf(
+  stdout: string,
+  stderr: string,
+  exitCode: number | null,
+  timedOut = false,
+): ReadonlyMap<string, Row> | { readonly error: string } {
+  if (timedOut) return { error: "stopped after 300 s (timed out)" };
+  const tail = stderr.slice(-200).trim();
+  try {
+    const j = JSON.parse(stdout) as { tests?: Row[]; compilationErrors?: unknown[] };
+    if (Array.isArray(j.compilationErrors) && j.compilationErrors.length > 0)
+      return {
+        error: `exit ${exitCode}: ${j.compilationErrors.length} compilation error(s); ${tail}`,
+      };
+    if (!Array.isArray(j.tests) || j.tests.length === 0)
+      return { error: `exit ${exitCode}: no test rows; ${tail}` };
+    return new Map(j.tests.map((t) => [t.name, t]));
+  } catch (err) {
+    return { error: `exit ${exitCode}: ${String(err)}; ${tail}` };
+  }
 }
 
 /** The whole check, for the daily update: run on both builds, compare, report. */

@@ -7,6 +7,7 @@ import {
   matchesBc,
   readManifest,
   reportLines,
+  rowsOf,
 } from "./upstream-repros";
 
 // R-996: the flip detection. Every case is an injected reading; no al-runner runs here.
@@ -60,6 +61,33 @@ describe("R-996: a repro's change between current and the candidate", () => {
     const c = compare(M, STORES_1753, STORES_1753);
     expect(of(c, "Codeunit1.Refused")).toBe("still-differs");
     expect(reportLines(c).some((l) => /FLIPPED|REGRESSED/.test(l))).toBe(false);
+  });
+
+  test("review: a run that compiled nothing, gave no rows, gave no JSON or timed out is an error, never empty rows", () => {
+    const err = (r: ReturnType<typeof rowsOf>) => "error" in r;
+    expect(err(rowsOf('{"tests": [], "compilationErrors": ["AL0118"]}', "", 3))).toBe(true);
+    expect(
+      err(
+        rowsOf('{"tests": [{"name": "C.T", "status": "pass"}], "compilationErrors": ["x"]}', "", 3),
+      ),
+    ).toBe(true);
+    expect(err(rowsOf('{"tests": []}', "", 0))).toBe(true);
+    expect(err(rowsOf("not json", "", 1))).toBe(true);
+    expect(rowsOf('{"tests": [{"name": "C.T", "status": "pass"}]}', "", 0, true)).toEqual({
+      error: "stopped after 300 s (timed out)",
+    });
+    expect(
+      err(rowsOf('{"tests": [{"name": "C.T", "status": "pass"}], "compilationErrors": []}', "", 0)),
+    ).toBe(false);
+  });
+
+  test("review: a manifest test neither build reported is an error, not still-differs", () => {
+    const only = build([row("Codeunit1.Stored", "fail", "stored 1754-01-01")]);
+    const c = compare(M, only, only);
+    expect(of(c, "Codeunit1.Refused")).toBe("error");
+    expect(of(c, "Codeunit1.Stored")).toBe("still-matches");
+    // Reported by one build only: a real change, not an error.
+    expect(of(compare(M, BC_LIKE, only), "Codeunit1.Refused")).toBe("flipped");
   });
 
   test("a repro that did not run on either build is an error, never a match or a flip", () => {

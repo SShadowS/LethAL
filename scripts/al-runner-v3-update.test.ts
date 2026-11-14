@@ -2073,6 +2073,24 @@ linuxOnly("R859: refreshRows", () => {
     expect(await current()).toBe(join(root, ALPHA2_DIR));
   };
 
+  test("R-996 (review): a refresh runs no upstream repros", async () => {
+    const p = await world({ warnFacts: { "serve-keep-reasons": "differs" } });
+    const { deps } = mk(p, {
+      ancestor: () => false,
+      warnFacts: { "serve-keep-reasons": "matches" },
+    });
+    const calls: string[][] = [];
+    const withRepros = {
+      ...deps,
+      upstreamRepros: async (candidate: string, cur: string) => {
+        calls.push([candidate, cur]);
+        return [];
+      },
+    };
+    expect(await refreshRows(withRepros, ["edge-aaaaaaaaa"])).toEqual(["pass"]);
+    expect(calls).toEqual([]);
+  });
+
   test("a pass replaces that row's digest and commit, and nothing else; the receipt names it", async () => {
     const p = await world({ warnFacts: { "serve-keep-reasons": "differs" } });
     const before = await readFile(p, "utf8");

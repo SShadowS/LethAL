@@ -662,8 +662,9 @@ export async function gateOne(
     await deps.log(
       `${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}${lines.length > 0 ? `; lines: ${lines.join(" | ")}` : ""}`,
     );
-    // R-996: a new candidate's repro report, against `current`, whatever the gate said (a flip to BC
-    // matters even on a gate-fail). Never on a re-gate or refresh (no new build), never a verdict.
+    // R-996: a candidate's repro report, against `current`, whatever the gate said (a flip to BC
+    // matters even on a gate-fail): a new build, and a kept one rejudged (`--edge-rejudge`). Never on a
+    // re-gate of current or a refresh (nothing new to compare), never a verdict.
     if (candidate && !refresh && outcome !== "infra-fail" && deps.upstreamRepros !== undefined) {
       try {
         const cur = join(await readlink(join(root, "current")), "al-runner");

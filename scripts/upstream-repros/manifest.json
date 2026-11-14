@@ -3,20 +3,20 @@
     {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
-      "bcEvidence": "BC 28.4 W1 on bc2, 2026-11-14: /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3); issue comments 6876327816, 6876525776",
+      "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",
       "rerun": [
         "R985: nothing (LethAL's stand-in moved to 17540102D); re-check that toggle-blank-temporal's history needs no change",
         "every project whose tests write a 1753 date: their al-runner verdicts were wrong there"
       ],
       "tests": {
         "Codeunit50102.Measure": { "status": "fail", "message": "stored date" },
-        "Codeunit50103.Measure": { "status": "fail", "message": "stored date 2000-01-01" },
+        "Codeunit50103.Measure": { "status": "fail", "messageIncludes": "stored date 2000-01-01" },
         "Codeunit50104.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
         "Codeunit50105.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
-        "Codeunit50106.Measure": { "status": "fail", "message": "stored date 1754-01-01" },
-        "Codeunit50107.Measure": { "status": "fail", "message": "stored date 1754-01-02" },
+        "Codeunit50106.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-01" },
+        "Codeunit50107.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-02" },
         "Codeunit50108.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
-        "Codeunit50109.Measure": { "status": "fail", "message": "stored datetime 1754-01-01T00:00:01Z" }
+        "Codeunit50109.Measure": { "status": "fail", "messageIncludes": "stored datetime 1754-01-01" }
       }
     },
     {
