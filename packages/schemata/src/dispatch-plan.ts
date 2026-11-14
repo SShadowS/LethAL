@@ -252,7 +252,7 @@ export function planMember(root: ALSyntaxNode, m: ComponentMember, source: strin
   const reachNode =
     grain !== "statement"
       ? undefined
-      : place.kind === "block" || m.statement.kind === ALNodeKind.block
+      : m.statement.kind === ALNodeKind.block
         ? firstStatementOf(m.statement)
         : m.statement;
   const reachSite = reachNode !== undefined ? reachSiteOf(reachNode) : undefined;

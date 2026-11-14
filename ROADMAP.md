@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 949 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 951 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -371,6 +371,7 @@ that ordering is the priority.
 - **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
 - **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
 - **R985** · toggle-blank-temporal's Date substitute 17530101D is the one value BC refuses to store (SQL keeps 0D as 1753-01-01): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · open
+- **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · open
 
 ## Product gaps a real project hits
 
@@ -994,6 +995,7 @@ that ordering is the priority.
 - **R980** · BC.History inventory and batch 10 on al-runner v3 edge-c8fe56e05: 54 small projects left outside BaseApp; one wrong result (forwarded .NET code ends lines with LF) and new refusals filed upstream · [R980.md](docs/roadmap/R980.md) · closed 2026-11-13 — measured and filed upstream…
 - **R982** · Continia Document Output's al-runner baseline refusals reduced, and the dependency-install question answered: al-runner does run a dependency app's install codeunit; DO's 32 'not activated' failures are Continia's online activation · [R982.md](docs/roadmap/R982.md) · closed 2026-11-14 — measured; filed upstream (#8004) and counted (#7775); the install question answered by…
 - **R986** · probe-r58-differential.ts derives its OData root with `odataBaseUrl` (port 7048), so on bc2 or bc3 its harness and control-app calls reach bc1 while it deploys to the configured server · [R986.md](docs/roadmap/R986.md) · done (51633007) — the probe takes its OData and API roots from the config (odataCfgFor), as the bcdev itests…
+- **R988** · LethAL's own process, not the serve daemon, reaches 20 GB in DO's daemon baseline: its memory spikes once a request and the spikes grow (5.8 to 20.6 GB over 30 min) · [R988.md](docs/roadmap/R988.md) · open
 
 ---
 
