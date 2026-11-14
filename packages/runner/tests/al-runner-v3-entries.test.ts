@@ -287,6 +287,7 @@ function fakeOneShot(
   rows: RowsFn,
   coverage?: CoverageFn,
   answer?: { readonly exitCode: number; readonly stderr: string },
+  echo?: (mutant: string) => string,
 ) {
   const calls: string[][] = [];
   // R866: how many processes ran at one time, by call counters, never by the clock.
@@ -318,7 +319,18 @@ function fakeOneShot(
     if (cov !== undefined) {
       await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(cov));
     }
-    const asked = rows(m, cu, -1, -1).filter((r) => only === null || r.method === only[2]);
+    // R937: the selector's echo codeunit, run one-shot, reports the mutant it read from the file
+    const source: FakeRow[] =
+      cu === ECHO
+        ? [
+            {
+              method: "Echo",
+              status: "fail",
+              message: (echo ?? ((x) => `LETHAL-ECHO:${x}:true`))(m),
+            },
+          ]
+        : rows(m, cu, -1, -1);
+    const asked = source.filter((r) => only === null || r.method === only[2]);
     const tests = asked.map((r) => ({
       codeunit: cu,
       method: r.method,
@@ -550,6 +562,8 @@ interface RigOpts {
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
   oneShotAnswer?: { readonly exitCode: number; readonly stderr: string };
+  /** R937: the message of the echo row a one-shot echo process reports for the mutant it read. */
+  oneShotEcho?: (mutant: string) => string;
   extra?: Partial<AlRunnerV3Config>;
   targetAl?: string;
   suite?: readonly TestMethodRef[];
@@ -574,6 +588,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
     opts.oneShotRows ?? opts.serve?.rows ?? allPass,
     opts.oneShotCoverage,
     opts.oneShotAnswer,
+    opts.oneShotEcho,
   );
   const b = new AlRunnerV3Backend(
     {
@@ -7616,5 +7631,135 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
     expect(d).toMatchObject({ replaced: 0, replacements: {} });
     // The first sum holds for what was reached: 1 sample, skipped by name, nothing replaced.
     expect(judgeDaemonBaseline("DB", d, 0, 1).fail ?? "").not.toContain("in all plus");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R937 (coord R-957): a test codeunit holding a method name serve is not proven for runs one-shot
+// INSIDE the serve session; every serve phase leaves it out. `pickTransport` picks the set
+// (r761-serve-default.test.ts); here the set is given and the routing is read off the fakes.
+// ---------------------------------------------------------------------------------------------
+describe("R937: a one-shot codeunit inside a serve session", () => {
+  const markOneShot = (b: AlRunnerV3Backend, ...cus: number[]) => {
+    (b as unknown as { oneShotCodeunits: ReadonlySet<number> }).oneShotCodeunits = new Set(cus);
+  };
+  /** Every test fails under M0001, so each codeunit's kill shows. */
+  const killsAllM1: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((r) =>
+      m === "M0001" ? { ...r, status: "fail" as const, message: "boom" } : r,
+    );
+  const entryIds = (r: Rig) => r.serve.requests.flatMap((q) => q.ids);
+  const C = ref("C", CU2);
+
+  test("the prefetch, the warm-up and the kill pair leave it out; its live call is one-shot under the mutant file, NONE restored after", async () => {
+    const r = await rig({ suite: SUITE2, serve: { rows: killsAllM1 }, pairBatch: true });
+    markOneShot(r.b, CU2);
+    await baseline(r.b, SUITE2);
+    const baselineCalls = r.one.calls.length;
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    // serve saw CU and the echo only; the warm-up union never held CU2
+    expect(entryIds(r).some((id) => id.includes(String(CU2)))).toBe(false);
+    expect(entryIds(r).some((id) => id === `M0001|${CU}`)).toBe(true);
+    expect(r.one.calls.length).toBe(baselineCalls);
+    await r.b.activate("M0001");
+    // CU2 is not prefetched: its call is one-shot, and v3 read M0001 from the resource file
+    const one = r.one.calls.length;
+    const sent = r.serve.requests.length;
+    expect((await r.b.run(C, OPTS)).outcome).toBe("fail");
+    expect(r.one.calls.length).toBe(one + 2); // the echo process, then the call
+    expect(r.one.calls.at(-2)?.join(" ")).toContain(`--codeunit ${ECHO}`);
+    expect(r.one.calls.at(-1)?.join(" ")).toContain(`--codeunit ${CU2}`);
+    expect(r.serve.requests.length).toBe(sent);
+    expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
+    // CU's kill is the prefetched one: no new process, no new request
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.one.calls.length).toBe(one + 2);
+    // the kill pair of the one-shot codeunit sends nothing; the confirm runs one-shot, unmutated
+    await r.b.sendKillPair("M0001", C);
+    expect(r.serve.requests.length).toBe(sent);
+    await r.b.activate(null);
+    expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
+    expect(r.one.calls.length).toBe(one + 3); // unmutated: no echo
+    expect(r.serve.requests.length).toBe(sent);
+  });
+
+  test("a mutant call whose echo does not name the mutant is refused by name, never scored, and its call is not made", async () => {
+    for (const said of ["NONE", "M0002"]) {
+      const r = await rig({
+        suite: SUITE2,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2);
+      await baseline(r.b, SUITE2);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const v = await r.b.run(C, OPTS);
+      expect([said, v.outcome]).toEqual([said, "error"]);
+      expect(v.failureMessage).toContain("entries-echo-mismatch");
+      expect(r.one.calls.length).toBe(before + 1); // the echo only
+      expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
+    }
+  });
+
+  test("R937 review: one echo per mutant serves every one-shot codeunit under it, a mismatch included, and the stats count it", async () => {
+    for (const said of ["M0001", "NONE"]) {
+      const r = await rig({
+        suite: SUITE3,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2, CU3);
+      await baseline(r.b, SUITE3);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE3));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const c = await r.b.run(C, OPTS);
+      const d = await r.b.run(ref("D", CU3), OPTS);
+      const ok = said === "M0001";
+      // the echo once, then each codeunit's own call when the echo named the mutant
+      expect([said, r.one.calls.length - before]).toEqual([said, ok ? 3 : 1]);
+      expect([said, c.outcome, d.outcome]).toEqual([
+        said,
+        ok ? "fail" : "error",
+        ok ? "fail" : "error",
+      ]);
+      const s = r.b.entriesStats();
+      expect([said, s.echoRequests, s.echoMismatches]).toEqual([said, 1, ok ? 0 : 1]);
+    }
+  });
+
+  test("the daemon baseline never asks serve for it; it runs one-shot like a one-shot session's", async () => {
+    const r = await dbRig();
+    markOneShot(r.b, CU2);
+    const v = await baseline(r.b, SUITE3);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(r.serve.requests.map((q) => q.ids[0])).not.toContain(`plain:Codeunit${CU2}.`);
+    expect(r.serve.requests.map((q) => q.ids[0])).toContain(`plain:Codeunit${CU}.`);
+    expect(oneShotCodeunits(r)).toContain(String(CU2));
+  });
+
+  test("under isolation auto, a one-shot codeunit moved to `method` (per-test call ids) is still left out of the prefetch", async () => {
+    const r = await rig({
+      suite: SUITE2,
+      serve: { rows: killsAllM1 },
+      extra: { isolation: "auto" },
+    });
+    markOneShot(r.b, CU2);
+    await baseline(r.b, SUITE2);
+    r.b.chooseIsolation(CU2, "method");
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    expect(entryIds(r).filter((id) => id.startsWith("M0001|"))).toEqual([
+      "M0001|echo",
+      `M0001|${CU}`,
+    ]);
+  });
+
+  test("with nothing marked, the same codeunit goes to serve (the routing is the mark's doing)", async () => {
+    const r = await rig({ suite: SUITE2, serve: { rows: killsAllM1 } });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    expect(entryIds(r).some((id) => id === `M0001|${CU2}`)).toBe(true);
   });
 });
