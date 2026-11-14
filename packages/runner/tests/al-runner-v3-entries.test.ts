@@ -27,6 +27,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3AutoMethodOneShotRefusedError,
   AlRunnerV3Backend,
+  AlRunnerV3BaselineUniformlyRefusedError,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
@@ -40,8 +41,10 @@ import {
   ISOLATED_BASELINE_PROCESSES,
   MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
+  UniformRefusalWatch,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
+  V3_UNIFORM_REFUSAL_CODEUNITS,
   WINDOW_BOUND_CAVEAT,
   unkeptRowReason,
   v3CallDeadlineMs,
@@ -4539,11 +4542,30 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
     return r;
   };
   const prefetch = (r: Rig) => r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+  /**
+   * R1004: the warm-up leaves out a test whose baseline row is a refusal the daemon cannot keep, so
+   * R786 now applies to a refused test the warm-up has to keep: one whose name starts another test's
+   * name (v3 matches `excludeTests` by prefix, so leaving out `B` would also drop the green `BB`).
+   */
+  const SUITE_BB = [ref("A"), ref("B"), ref("BB")];
+  const bbRows =
+    (message: string): RowsFn =>
+    (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "BB"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message }
+          : x,
+      );
+  const prefetchBB = (r: Rig) =>
+    r.b.prefetchMutants(plans(["M0001"], SUITE_BB)).catch((e: unknown) => e);
 
   test("default + a named refusal at the warm-up: the typed fallback signal, the daemon closed, no mutant entry sent", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
-    await baseline(r.b, SUITE1);
-    const err = await prefetch(r);
+    const r = asDefault(await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }));
+    await baseline(r.b, SUITE_BB);
+    const err = await prefetchBB(r);
     expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
     expect(String(err)).toContain(`Codeunit${CU}.B`);
     expect(String(err)).toContain(COMPANY);
@@ -4553,9 +4575,12 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
   });
 
   test("explicit serve-entries + the same row: refuses warmup-dirty as before", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }), "explicit");
-    await baseline(r.b, SUITE1);
-    const err = await prefetch(r);
+    const r = asDefault(
+      await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }),
+      "explicit",
+    );
+    await baseline(r.b, SUITE_BB);
+    const err = await prefetchBB(r);
     expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
     // R927: and names the way out, since the default would have re-run one-shot.
@@ -4644,8 +4669,8 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
   });
 
   test("a fallback while a kill pair starts the daemon is not swallowed as pair-skipped", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
-    await baseline(r.b, SUITE1);
+    const r = asDefault(await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }));
+    await baseline(r.b, SUITE_BB);
     // The pair needs an activated mutant outside the baseline and no prefetch (so the daemon starts here).
     await r.b.activate("M0001");
     const seen: string[] = [];
@@ -4653,6 +4678,108 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
     const err = await r.b.sendKillPair("M0001", ref("A")).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
     expect(seen).toEqual([]);
+  });
+});
+
+// R1004 (coord R-992): a test the baseline refused by name (both transports refuse it, and it decides
+// no verdict) is left out of the warm-up request, so it neither dirties the warm-up daemon nor sends
+// the default transport back to one-shot (R786). DO: R982's ZipArchive tests.
+describe("R1004: the warm-up leaves out the tests the baseline refused by name", () => {
+  const REFUSAL = "NotRun: out-of-scope: InStream method on an unassigned Variant";
+  const bRefused: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((x) =>
+      m === "NONE" && x.method === "B"
+        ? { ...x, status: "error" as const, notRun: true, message: REFUSAL }
+        : x,
+    );
+  const asSource = (r: Rig, source: "default" | "explicit") => {
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
+    return r;
+  };
+  const warmupEntry = (r: Rig) => {
+    const q = r.serve.requests[0];
+    const entries = (q?.body.entries as Record<string, unknown>[] | undefined) ?? [];
+    return entries.find((e) => String(e.test) === `Codeunit${CU}.`);
+  };
+
+  for (const source of ["default", "explicit"] as const) {
+    test(`${source}: a baseline-refused test is excluded, the warm-up is clean, and the prefetch goes on on serve`, async () => {
+      const r = asSource(await rig({ serve: { rows: bRefused } }), source);
+      await baseline(r.b, SUITE1);
+      const out = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+      expect(out).not.toBeInstanceOf(Error);
+      expect(warmupEntry(r)?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+      // The warm-up daemon was reused for the mutant entries: no close after the warm-up.
+      expect(r.serve.daemons).toHaveLength(1);
+      expect(r.serve.requests.length).toBeGreaterThan(1);
+      expect(r.serve.closes).toEqual([]);
+    });
+  }
+
+  test("only the warm-up leaves it out: the mutant entries still send the whole codeunit", async () => {
+    const r = asSource(await rig({ serve: { rows: bRefused } }), "default");
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    const later = r.serve.requests
+      .slice(1)
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? []);
+    expect(later.length).toBeGreaterThan(0);
+    expect(later.every((e) => e.excludeTests === undefined)).toBe(true);
+  });
+
+  test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
+    const KEPT =
+      "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
+    const keptB: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: KEPT }
+          : x,
+      );
+    const r = asSource(await rig({ serve: { rows: keptB } }), "default");
+    await baseline(r.b, SUITE1);
+    const out = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(out).not.toBeInstanceOf(Error);
+    expect(warmupEntry(r)).toBeDefined();
+    expect(warmupEntry(r)?.excludeTests).toBeUndefined();
+  });
+
+  test("a refused test whose name starts another test's name stays in (v3 excludes by prefix)", async () => {
+    const SUITE_BB = [ref("A"), ref("B"), ref("BB")];
+    const bb: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "BB"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: REFUSAL }
+          : x,
+      );
+    const r = asSource(await rig({ suite: SUITE_BB, serve: { rows: bb } }), "explicit");
+    await baseline(r.b, SUITE_BB);
+    const err = await r.b.prefetchMutants(plans(["M0001"], SUITE_BB)).catch((e: unknown) => e);
+    expect(warmupEntry(r)?.excludeTests).toBeUndefined();
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
+  });
+
+  test("a clean baseline sends no excludeTests at the warm-up", async () => {
+    const r = asSource(await rig({}), "default");
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001"]));
+    expect(warmupEntry(r)).toBeDefined();
+    expect(warmupEntry(r)?.excludeTests).toBeUndefined();
+  });
+
+  test("a left-out test whose row comes back anyway is a disagreement, never a silent pass", async () => {
+    // A daemon that ignores excludeTests: B's refused row returns, and the baseline (without B) disagrees.
+    const r = asSource(await rig({ serve: { rows: bRefused } }), "default");
+    await baseline(r.b, SUITE1);
+    const realSend = (r.b as unknown as { send: (...a: unknown[]) => unknown }).send.bind(r.b);
+    (r.b as unknown as { send: (...a: unknown[]) => unknown }).send = (...a: unknown[]) =>
+      realSend(...a.slice(0, 6));
+    const err = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-disagrees");
   });
 });
 
@@ -8222,5 +8349,169 @@ describe("R937: a one-shot codeunit inside a serve session", () => {
     await baseline(r.b, SUITE2);
     await r.b.prefetchMutants(plans(["M0001"], SUITE2));
     expect(entryIds(r).some((id) => id === `M0001|${CU2}`)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R1001 (coord R-991): a baseline whose first codeunits are all refused, every row with one text,
+// stops by name instead of running the rest (DC: 0 of 1,839, 4,656 s, 117 daemons). Call counters.
+// ---------------------------------------------------------------------------------------------
+const UNIFORM =
+  'NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit "X".InitCompany before the first test: Y row not found';
+const R1001_CUS = Array.from({ length: 12 }, (_, i) => 79300 + i);
+for (const cu of R1001_CUS) SUITE_METHODS[cu] = ["T1", "T2"];
+const R1001_SUITE = R1001_CUS.flatMap((cu) => [ref("T1", cu), ref("T2", cu)]);
+const refusedAll: RowsFn = (_m, cu) =>
+  (SUITE_METHODS[cu] ?? []).map((method) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: UNIFORM,
+  }));
+const wrow = (cu: number, o: Partial<V3RowLike> = {}): V3RowLike => ({
+  codeunit: cu,
+  method: "T1",
+  name: `Codeunit${cu}.T1`,
+  status: "error",
+  notRun: true,
+  message: UNIFORM,
+  ...o,
+});
+type V3RowLike = {
+  codeunit: number;
+  method: string;
+  name: string;
+  status: "pass" | "fail" | "error";
+  notRun: boolean;
+  message?: string;
+};
+
+describe("R1001: the uniform-refusal watch", () => {
+  test("returns the text once N codeunits are refused with one text, not before", () => {
+    const w = new UniformRefusalWatch(3);
+    expect(w.observe(1, [wrow(1), wrow(1, { method: "T2" })])).toBeUndefined();
+    expect(w.observe(2, [wrow(2)])).toBeUndefined();
+    expect(w.observe(3, [wrow(3)])).toBe(UNIFORM);
+    expect(V3_UNIFORM_REFUSAL_CODEUNITS).toBe(10);
+  });
+  test("one passing or failing row, a timeout, or a second text disarms it for good", () => {
+    const pass: V3RowLike = {
+      codeunit: 2,
+      method: "T1",
+      name: "Codeunit2.T1",
+      status: "pass",
+      notRun: false,
+    };
+    for (const odd of [
+      pass,
+      wrow(2, { status: "fail", notRun: false, message: "boom" }),
+      // a plain fail whose text equals the refusals': only the refusal check stops it, not the text check
+      wrow(2, { status: "fail", notRun: false }),
+      wrow(2, { status: "pass", notRun: false }),
+      wrow(2, { message: "Test exceeded 5s timeout." }),
+      wrow(2, { message: `${UNIFORM} but another` }),
+    ]) {
+      const w = new UniformRefusalWatch(3);
+      w.observe(1, [wrow(1)]);
+      expect(w.observe(2, [odd])).toBeUndefined();
+      expect(w.observe(3, [wrow(3)])).toBeUndefined();
+      expect(w.observe(4, [wrow(4)])).toBeUndefined();
+    }
+  });
+  test("a codeunit is counted once; an empty answer counts nothing", () => {
+    const w = new UniformRefusalWatch(2);
+    expect(w.observe(1, [wrow(1)])).toBeUndefined();
+    expect(w.observe(1, [wrow(1)])).toBeUndefined();
+    expect(w.observe(2, [])).toBeUndefined();
+    expect(w.observe(2, [wrow(2)])).toBe(UNIFORM);
+  });
+});
+
+describe("R1001: a uniformly refused baseline stops by name", () => {
+  test("one-shot: the 10th codeunit's answer stops the baseline with the text; no 11th codeunit runs", async () => {
+    const r = await rig({ suite: R1001_SUITE, oneShotRows: refusedAll });
+    const err = await baseline(r.b, R1001_SUITE).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AlRunnerV3BaselineUniformlyRefusedError);
+    expect(String((err as Error).message)).toContain(UNIFORM);
+    expect(String((err as Error).message)).toContain("the first 10 test codeunits");
+    expect(new Set(r.one.calls.map((c) => c[c.indexOf("--codeunit") + 1]))).toEqual(
+      new Set(R1001_CUS.slice(0, 10).map(String)),
+    );
+  });
+  test("one-shot: a codeunit refused with another text, or one passing test, and every codeunit runs", async () => {
+    for (const odd of [
+      (cu: number) => (cu === 79304 ? `${UNIFORM} (other)` : UNIFORM),
+      (cu: number) => (cu === 79301 ? "pass" : UNIFORM),
+    ]) {
+      const rows: RowsFn = (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) =>
+          odd(cu) === "pass"
+            ? { method, status: "pass" as const }
+            : { method, status: "error" as const, notRun: true, message: odd(cu) },
+        );
+      const r = await rig({ suite: R1001_SUITE, oneShotRows: rows });
+      const v = await baseline(r.b, R1001_SUITE);
+      expect(v).toHaveLength(R1001_SUITE.length);
+      expect(new Set(r.one.calls.map((c) => c[c.indexOf("--codeunit") + 1])).size).toBe(12);
+    }
+  });
+  test("daemon baseline: the fill stops by name once a sample compared clean, before the 11th request", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: refusedAll,
+    });
+    const err = await baseline(r.b, R1001_SUITE).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AlRunnerV3BaselineUniformlyRefusedError);
+    expect(r.serve.requests.length).toBe(10);
+  });
+  test("daemon baseline: when the sample shows the daemon disagrees with a fresh process, no stop: the daemon baseline drops and every codeunit runs one-shot", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    const v = await baseline(r.b, R1001_SUITE);
+    expect(v).toHaveLength(R1001_SUITE.length);
+    expect(r.b.daemonBaselineReport().dropped).toBeDefined();
+  });
+  test("daemon baseline: with every sample skipped (none compared) the fill never stops, and after the drop the fresh green answers decide", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    // every one-shot call while the fill holds (its samples) gives no answer, so each sample is skipped
+    const holder = r.b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(r.b);
+    holder.spawnCodeunit = async (...a) =>
+      r.b.daemonBaselineReport().dropped === undefined
+        ? { spawnError: "boom", wallMs: 0 }
+        : real(...a);
+    // red without the `compared >= 1` guard (the fill stops on unchecked answers), and red with a
+    // watch shared with the one-shot path (the dropped fill's refusals stop the fresh green run)
+    const v = await baseline(r.b, R1001_SUITE);
+    expect(v.map((x) => x.outcome)).toEqual(R1001_SUITE.map(() => "pass"));
+    expect(r.b.daemonBaselineReport().dropped).toBeDefined();
+  });
+  test("per-test keys (--isolate-tests) are not codeunits: a uniformly refused codeunit's tests never stop the run", async () => {
+    const cus = R1001_CUS.slice(0, 2);
+    for (const cu of cus) SUITE_METHODS[cu] = Array.from({ length: 6 }, (_, i) => `T${i + 1}`);
+    try {
+      const suite = cus.flatMap((cu) => (SUITE_METHODS[cu] ?? []).map((m) => ref(m, cu)));
+      const r = await rig({ suite, oneShotRows: refusedAll, extra: { isolateTests: true } });
+      const v = await baseline(r.b, suite); // red without the per-test skip: the 10th test would stop it
+      expect(v).toHaveLength(12);
+    } finally {
+      for (const cu of cus) SUITE_METHODS[cu] = ["T1", "T2"];
+    }
   });
 });

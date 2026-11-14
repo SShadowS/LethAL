@@ -4942,9 +4942,10 @@ export async function buildDoctorDeps(
               // R886: a named sidecar that is missing is a fault (resolve throws); a pinned one
               // that is missing or changed, or none at all, is a warning in the details.
               const sc = await resolveDotnetSidecar(c.dotnetSidecar, c.path, gated);
+              // R998: a named sidecar that is not the build's own comes back with both a path and a warning; show both.
               const scText =
                 sc.path !== undefined
-                  ? `; .NET sidecar ${sc.path}`
+                  ? `; .NET sidecar ${sc.path}${sc.warning !== undefined ? `; WARNING: ${sc.warning}` : ""}`
                   : sc.warning !== undefined
                     ? `; WARNING: ${sc.warning}`
                     : c.dotnetSidecar === false

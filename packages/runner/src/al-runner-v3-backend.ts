@@ -666,6 +666,59 @@ function isNamedRefusalRow(r: V3Row): boolean {
 }
 
 /**
+ * R1001 (coord R-991): how many baseline codeunits in a row must come back refused, every row with one
+ * and the same text, before the session stops by name. Measured over the baselines of 169 v3 stores
+ * (R-983's 166 BC.History projects, DO, DC; `/coord/handoff/R-991/choose-n.py`), each in fill order:
+ * a run of 3 such codeunits was once followed by green tests (a false stop), 5 or more never was; only
+ * DC's baseline (0 of 1,839 tests ran, 4,656 s, 117 daemons) is uniform throughout. 10 keeps a margin.
+ * One-shot answers in the orchestrator's order, not id order: in the order each store's run really answered,
+ * the longest such run was 4 (`any-order.py`). In SOME order three stores could reach 11 to 50, so the
+ * margin rests on the real orders, not on every order.
+ */
+export const V3_UNIFORM_REFUSAL_CODEUNITS = 10;
+
+/** R1001: every baseline row of the first codeunits refused with one text: the run stops by name. */
+export class AlRunnerV3BaselineUniformlyRefusedError extends Error {
+  constructor(
+    readonly codeunits: number,
+    readonly text: string,
+  ) {
+    super(
+      `al-runner-v3-baseline-uniformly-refused: the first ${codeunits} test codeunits of the baseline came back with every test refused, all with one text, so no mutant could be scored; the run stops instead of spending its window on the rest (R1001). The text: ${text}`,
+    );
+    this.name = "AlRunnerV3BaselineUniformlyRefusedError";
+  }
+}
+
+/**
+ * R1001: watches baseline answers codeunit by codeunit. Any row that is not a named refusal (a pass, a
+ * fail, a timeout), or a second refusal text, disarms it until the next deploy; a codeunit is counted once.
+ * `observe` returns the shared text once `n` codeunits have been counted, else `undefined`.
+ */
+export class UniformRefusalWatch {
+  private readonly seen = new Set<number>();
+  private text: string | undefined;
+  private off = false;
+  constructor(private readonly n: number = V3_UNIFORM_REFUSAL_CODEUNITS) {}
+
+  observe(codeunit: number, rows: readonly V3Row[]): string | undefined {
+    if (this.off || rows.length === 0) return undefined;
+    if (!this.seen.has(codeunit)) {
+      for (const r of rows) {
+        const t = (r.message ?? "").split("\n")[0] ?? "";
+        if (!isNamedRefusalRow(r) || (this.text !== undefined && t !== this.text)) {
+          this.off = true;
+          return undefined;
+        }
+        this.text = t;
+      }
+      this.seen.add(codeunit);
+    }
+    return this.seen.size >= this.n ? this.text : undefined;
+  }
+}
+
+/**
  * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
  * and the gift card: plain method names, and codeunit names of letters, digits, `_`, space and `.`
  * (D1's "CDO Recipient Mgt. Tests", 21 tests).
@@ -698,12 +751,18 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * space, a first `)`. The
  * inner dot is not in this pattern: it depends on the build (#5798) and is read through
  * `serveRowFields` in `pickTransport`.
+ * R1002 (coord R-991): DC's three shapes ran the same way on edge-847b1fa5a, per mutant equal (97
+ * mutants, 0 differences; killingTest equal to the declared name; `/coord/handoff/R-991/shapes/`):
+ * a FIRST `(` whose name later holds `) ` and a letter or digit (`(Test Case) W1 - Check 1 - Some
+ * Name`), a FIRST `// ` before a letter or digit (`// New Check feature`), and (through
+ * `serveRowFields`) a `.` between a letter or digit and a space (`Check Reg. No. Change`). Still
+ * unproven: `(Step)`, `()`, `//Check`, `/ Check`, a dot before anything but a space.
  * A METHOD name outside the shape makes ITS codeunit run one-shot inside the serve session
  * (`oneShotCodeunits`), or the whole default session one-shot where that cannot be done.
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method:
-    /^(?:[A-Za-z0-9]|[ØÆÅ+_-](?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
+    /^(?:[A-Za-z0-9]|[ØÆÅ+_-](?=[A-Za-z0-9])|\((?=[A-Za-z0-9][^)\n]*\) [A-Za-z0-9])|\/\/ (?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
 } as const;
 
 /**
@@ -1126,7 +1185,8 @@ export function namedSidecar(configured: string): string {
 
 /**
  * R886: the sidecar for this session. `configured`: `alRunnerV3.dotnetSidecar`. A named file that
- * is missing throws (the caller named it). With none named, the pinned build's own sidecar is used
+ * is missing throws (the caller named it); a named file other than the build's own is used with a
+ * `warning` that names both (R998). With none named, the pinned build's own sidecar is used
  * when the file exists with the sha256 `.gated` recorded; otherwise `warning` says why and none is
  * passed (a missing or changed file must not run silently).
  */
@@ -1136,8 +1196,22 @@ export async function resolveDotnetSidecar(
   gated: GatedBuild,
 ): Promise<{ readonly path?: string; readonly warning?: string }> {
   if (configured === false) return {};
-  if (configured !== undefined) return { path: namedSidecar(configured) };
   const pinned = pinnedSidecar(alRunnerPath, gated);
+  if (configured !== undefined) {
+    // The config wins (R886), but a named file that is not this build's own sidecar is said by name (R998): a sidecar built for
+    // another al-runner build can speak another protocol, and every .NET call then fails as "protocol mismatch" while the run
+    // looks normal (R-975: 13 Bank Deposits tests lost that way to a config pinned two builds earlier).
+    const path = namedSidecar(configured);
+    // Compared with the hash `.gated` recorded, so a build whose own sidecar file is gone still says it.
+    if (pinned === undefined) return { path };
+    const sha = await sha256OfFile(path);
+    return sha === pinned.sha256
+      ? { path }
+      : {
+          path,
+          warning: `"alRunnerV3.dotnetSidecar" names ${path} (sha256 ${sha}), not this al-runner build's own sidecar ${pinned.path} (sha256 ${pinned.sha256}, .gated); a sidecar built for another build can speak another protocol, and every .NET call then fails with "protocol mismatch" (R998). Remove the setting to use the build's own, or rebuild the named file for this build`,
+        };
+  }
   if (pinned === undefined) return {};
   if (!existsSync(pinned.path))
     return { warning: `the pinned sidecar ${pinned.path} is missing; .NET types are refused` };
@@ -2180,6 +2254,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly testAppCache = { hits: 0, misses: 0 };
   /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
   private baselineRows = new Map<number, readonly V3Row[]>();
+  /** R1001: the baseline's uniform-refusal watch, new per deploy. */
+  private uniformWatch = new UniformRefusalWatch();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
   private prefetched = new Map<string, Map<number, CallRows>>();
   /**
@@ -2604,8 +2680,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ).catch((e: unknown) => e as Error);
       if (sidecar instanceof Error) return { ok: false, details: sidecar.message };
       this.sidecarPath = sidecar.path;
+      // R998: a named sidecar that is not the build's own is used, and says so under a code of its own.
       if (sidecar.warning !== undefined)
-        this.notify("al-runner-v3-dotnet-sidecar-unusable", `[lethal] ${sidecar.warning} (R886)`);
+        this.notify(
+          sidecar.path !== undefined
+            ? "al-runner-v3-dotnet-sidecar-not-the-builds"
+            : "al-runner-v3-dotnet-sidecar-unusable",
+          sidecar.path !== undefined
+            ? `[lethal] ${sidecar.warning}`
+            : `[lethal] ${sidecar.warning} (R886)`,
+        );
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true
@@ -2904,9 +2988,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
     // own fields carry the method). Only the measured shape: exactly ONE "." with an ASCII letter or
     // digit on both sides (`Dot.Step`); any other dot shape stays unproven.
+    // R1002 (coord R-991): also every "." between a letter or digit and a space before a letter or
+    // digit (`Check Reg. No. Change`), measured equal to one-shot on edge-847b1fa5a.
     const methodShape = (m: string): boolean =>
       V3_SERVE_PROVEN_NAME_SHAPES.method.test(
-        this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
+        this.serveRowFields
+          ? m
+              .replace(/(?<=[A-Za-z0-9])\.(?= [A-Za-z0-9])/g, "_")
+              .replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2")
+          : m,
       );
     // R922 item 3 (R-929): the method only; a codeunit's name never reaches serve's addressing.
     const odd = this.discovered.filter((t) => !methodShape(t.method));
@@ -3121,6 +3211,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.prefetched = new Map();
     this.pairStore.clear();
     this.baselineRows = new Map();
+    this.uniformWatch = new UniformRefusalWatch();
     this.union = new Set();
     this.echoId = undefined;
     this.speculative = undefined; // R790: never served across deploys
@@ -3898,6 +3989,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const answers = new Map<number, BaselineAnswer>();
     const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
     const comparedBefore = this.baselineStats.compared;
+    // R1001: the fill's own watch, so answers a dropped fill never kept cannot count toward a later stop.
+    const uniformWatch = new UniformRefusalWatch();
     type Step = "ok" | "stop" | "dropped";
     const check = async (id: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
       const r = await this.crossCheckSample(lane, stopSeconds, coverage, {
@@ -3974,6 +4067,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
           got = undefined;
+        }
+        // R1001: a uniformly refused baseline stops by name, but only once a cross-check sample (the
+        // second codeunit is one, `baselineSampleIds`) has shown the daemon answers as a fresh process does.
+        if (got !== undefined) {
+          const uniform = uniformWatch.observe(id, got.rows);
+          if (uniform !== undefined && this.baselineStats.compared - comparedBefore >= 1)
+            throw new AlRunnerV3BaselineUniformlyRefusedError(
+              V3_UNIFORM_REFUSAL_CODEUNITS,
+              uniform,
+            );
         }
         const isSample = plan.has(id);
         reached(id);
@@ -5805,6 +5908,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
   private noteBaselineRows(lane: Lane, key: number, rows: readonly V3Row[]): void {
     if (!this.isBaselineCall(lane)) return;
+    // R1001: one-shot (and served) baseline answers; the daemon fill watches its own, guarded. A
+    // per-test key (negative, `--isolate-tests` or R896) is not a codeunit, and N was measured per
+    // codeunit, so per-test answers are not watched (a missed stop, never a false one).
+    const uniform = key < 0 ? undefined : this.uniformWatch.observe(key, rows);
+    if (uniform !== undefined)
+      throw new AlRunnerV3BaselineUniformlyRefusedError(V3_UNIFORM_REFUSAL_CODEUNITS, uniform);
     if (this.entries) this.baselineRows.set(key, rows);
     for (const r of rows) {
       // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
@@ -5992,14 +6101,52 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
+    // R1004: the warm-up leaves out a test whose row in THIS batch's baseline is a named refusal the
+    // daemon cannot keep (R612/R945: `serveDaemonReusable` false, the shape that dirtied the warm-up).
+    // Such a test is refused on both transports, decides no verdict (a mutant runs against its green
+    // covering tests), and would only leave a daemon R612 cannot reuse; on the default transport R786
+    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). A refusal the daemon keeps
+    // stays in, so the warm-up still compares the whole run of its codeunit (state carries from test to
+    // test there). An isolated call whose one test is such a refusal leaves the warm-up; a codeunit
+    // leaves those tests out (`excludeTests`) and its rows are compared with the baseline's rows
+    // without them. v3 matches `excludeTests` by PREFIX (measured, `/coord/handoff/R-992/excl.ts`:
+    // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
+    // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
+    // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
+    const leftOutRows = (id: number): readonly V3Row[] => {
+      const rows = (this.baselineRows.get(id) ?? []).filter(
+        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+      );
+      if (this.isolatedRefs.has(id)) return rows;
+      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+      return rows.filter((r) => {
+        const m = r.method.toLowerCase();
+        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+      });
+    };
+    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
+    const leftOut = (cu: number): readonly string[] | undefined => {
+      if (this.isolatedRefs.has(cu)) return undefined;
+      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+      return names.length === 0 ? undefined : names;
+    };
+    const expected = (e: SentEntry): readonly V3Row[] => {
+      const rows = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) return rows;
+      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
+      return rows.filter((r) => !out.has(r.method.toLowerCase()));
+    };
     const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
-        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
         "warmup",
         mode,
+        undefined,
+        undefined,
+        leftOut,
       ).catch((err: unknown) => {
         // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
         // named row does (R786). An explicit transport keeps failing by name. Only at the
@@ -6025,7 +6172,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
       for (const e of sent.slice(1)) {
         const got = rowsClass(rows.get(e.id) ?? []);
-        const want = rowsClass(this.baselineRows.get(callOf(e)) ?? []);
+        const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
         if (got !== want)
           disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
       }
@@ -6112,6 +6259,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
      *  in this request's body (on the daemon of the call's own mode). */
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    /** R1004: the warm-up only: the tests each plain codeunit entry leaves out. */
+    excluded?: (codeunit: number) => readonly string[] | undefined,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -6123,8 +6272,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
     daemon.requests += 1;
-    const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
-      alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
+    const sent = encodeGroups(
+      groups,
+      this.requireEchoId(),
+      (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+      excluded,
     );
     const tests = sent.reduce(
       (n, e) =>

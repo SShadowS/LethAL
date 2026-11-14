@@ -128,7 +128,7 @@ describe("R886: the session takes the pinned build's sidecar from its .gated", (
   afterEach(async () => {
     for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
   });
-  const sidecarAfterStatus = async (extra: { dotnetSidecar?: false }) => {
+  const sidecarAfterStatus = async (extra: { dotnetSidecar?: false | "other" }) => {
     const dir = await mkdtemp(join(tmpdir(), "lethal-r886-session-"));
     dirs.push(dir);
     const bin = join(dir, "al-runner");
@@ -152,6 +152,8 @@ describe("R886: the session takes the pinned build's sidecar from its .gated", (
         "NavxManifest.xml": `<?xml version="1.0"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
       }),
     );
+    const other = join(dir, "other.dll");
+    await writeFile(other, "old build's sidecar");
     const spawn: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
     const b = new AlRunnerV3Backend(
       {
@@ -164,15 +166,25 @@ describe("R886: the session takes the pinned build's sidecar from its .gated", (
         selectorObjectId: 50000,
         alcPath: "/fake/alc",
         coverage: "none",
-        ...extra,
+        ...(extra.dotnetSidecar === "other" ? { dotnetSidecar: other } : extra),
       },
       spawn,
       {} as ArtifactIo,
     );
+    const notices: string[] = [];
+    b.setNotify((code) => notices.push(code));
     // The contract probe after the pin check cannot run on this fake; the sidecar is set before it.
     await b.status().catch(() => undefined);
-    return { got: (b as unknown as { sidecarPath?: string }).sidecarPath, dll };
+    return { got: (b as unknown as { sidecarPath?: string }).sidecarPath, dll, other, notices };
   };
+  test("R998: a named sidecar that is not the build's own is used, under a notice of its own", async () => {
+    const r = await sidecarAfterStatus({ dotnetSidecar: "other" });
+    expect(r.got).toBe(r.other);
+    expect(r.notices).toContain("al-runner-v3-dotnet-sidecar-not-the-builds");
+    expect((await sidecarAfterStatus({})).notices).not.toContain(
+      "al-runner-v3-dotnet-sidecar-not-the-builds",
+    );
+  });
   test("the default is the row's file; false turns it off", async () => {
     const on = await sidecarAfterStatus({});
     expect(on.got).toBe(on.dll);
@@ -234,6 +246,17 @@ describe("R886: doctor", () => {
       expect(c?.ok).toBe(true);
       expect(c?.detail).toContain("WARNING");
     }
+  });
+  test("R998: a named sidecar that is not the build's own shows its path AND the warning", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r998-doctor-"));
+    dirs.push(dir);
+    const named = join(dir, "old-sidecar.dll");
+    await writeFile(named, "old build's sidecar");
+    const c = await check("ok", { dotnetSidecar: named });
+    expect(c?.ok).toBe(true);
+    expect(c?.detail).toContain(`.NET sidecar ${named}`);
+    expect(c?.detail).toContain("WARNING");
+    expect(c?.detail).toContain("not this al-runner build's own sidecar");
   });
   test("a named sidecar that does not exist is a fault", async () => {
     const c = await check("ok", { dotnetSidecar: "/nope/a.dll" });
