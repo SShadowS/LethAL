@@ -109,3 +109,23 @@ scored by the remaining tests only (a refused test is never a killing test). Rea
 3d with `--resume`, `--time-budget 14400` each, master at the run (now carrying R-952's memory-aware `heavy-slot.sh --peak baseline`),
 the external watchdog and the same build, license, environment, scope and selector ids. Expected: the baseline (about 1.8 h, as 1c's)
 then the mutant phase.
+
+## Amendment 4 (2026-11-14, before the serve windows): serve-entries on edge 736fc7677, a fresh store
+
+**Why.** Windows 1d and 2d (one-shot) scored 215 mutants in about 8 h: every one-shot call recompiles DO. Serve recompiled per
+codeunit filter too ([[R968]], upstream #7978). Edge 736fc7677 (`current` since 2026-11-14) holds #7978's fix, measured on R-955's
+invented app: per-codeunit requests on one daemon answer `cached: true` after the first, with coverage on and off
+(`/coord/handoff/R-955/result.md`, last section).
+
+**Change.** Config `v3.do-serve.json`: the default transport (serve-entries; no `transport` key), `isolation: "test"` (amendment 3,
+R970), the same license, packages, environment and selector ids, al-runner `edge-736fc7677`, and `assemblyProbingPaths` naming the
+BC service folder (R-966: Newtonsoft.Json loads from it). A **fresh store** (`dos.sqlite`): transport and build differ from 1d/2d,
+so their run is not resumed. Windows of `--time-budget 14400`, the first fresh, later ones `--resume`; master at the run; heavy slot
+`--peak 20` (orchestrator, interim until R-972: a v3 run over 10,000 deployed mutants); the external watchdog on the LethAL pid.
+
+**Measured and reported, not predicted as figures:** the baseline's wall time, its `cached: false` count (expected: about one per
+daemon start, not one per codeunit), daemon restarts and their reasons, dropped or refused rows by family, peak memory, mutants
+scored per window. **Predicted:** (1) the baseline completes inside the first window; (2) the 23 Newtonsoft.Json refusals of 1d are
+gone (the probing path), the other refusal families as in 1d (cascade, Company FindSet, activation, HTTP, ZipArchive, GoToKey);
+(3) for every mutant 1d/2d scored, the serve verdict and killing test equal 1d/2d's (one-shot is serve's reference), compared per
+mutant on a verified join; any difference is a BLOCK, read before anything else.
