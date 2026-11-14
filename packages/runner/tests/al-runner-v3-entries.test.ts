@@ -2958,7 +2958,8 @@ describe("R987: entries per serve request follow the daemon growth measured per 
   const prefetchOf = async (
     perCu: ReadonlyMap<number, number>,
     planned: { mutantId: string; refs: readonly TestMethodRef[] }[],
-    o: { rows?: RowsFn; shrink?: boolean } = {},
+    /** `stack`: each request grows the daemon on top of what earlier ones left (it keeps it all). */
+    o: { rows?: RowsFn; shrink?: boolean; stack?: boolean } = {},
   ) => {
     const floor = 0.5 * GiB;
     const mem = { level: floor };
@@ -3003,7 +3004,8 @@ describe("R987: entries per serve request follow the daemon growth measured per 
               answer: (q) => {
                 if (counted(q)) {
                   sizes.push(q.ids.length);
-                  mem.level = Math.max(mem.level, grown(q));
+                  mem.level =
+                    o.stack === true ? mem.level + grown(q) - floor : Math.max(mem.level, grown(q));
                 }
                 return undefined;
               },
@@ -3037,6 +3039,36 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     const low = await prefetchOf(new Map([[CU, 2 ** 20]]), onCu(mids(1, 60)));
     expect(low.sizes).toEqual([32, 88]);
     expect(low.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+  });
+
+  test("a request that reuses memory an earlier one left is no reading: a heavy codeunit after another stays unmeasured", async () => {
+    // 16 groups on CU (0.25 GiB an entry) leave the daemon at 8.5 GiB. CU2 is as heavy, but its first
+    // request reuses that memory, so its peak is 8.5 GiB again: read as growth from its start it would
+    // cost 0, and the rest of CU2 would go in one request. It is no reading: CU2 stays unmeasured, 16 at a time.
+    const reused = await prefetchOf(
+      new Map([
+        [CU, 0.5 * GiB],
+        [CU2, 0.5 * GiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 48))],
+    );
+    expect(reused.sizes).toEqual([32, 32, 32, 32]);
+  });
+
+  test("growth is read from the daemon's floor, not from a request's higher start", async () => {
+    // A daemon that keeps what each request grew it by. 16 groups on CU at 0.125 GiB a codeunit entry:
+    // +2 GiB, to 2.5 GiB. Then 16 groups on CU2 at 0.25: +4 GiB on top, to 6.5 GiB. From its 2.5 GiB
+    // start CU2 would read 0.125 GiB an entry (4 / 32) and the next request take 32 groups; from the
+    // 0.5 GiB floor it reads 0.1875 (6 / 32), so 21 groups (4 GiB), 42 entries.
+    const mem = await prefetchOf(
+      new Map([
+        [CU, 0.125 * GiB],
+        [CU2, 0.25 * GiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 60))],
+      { stack: true },
+    );
+    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 42]);
   });
 
   test("a codeunit no request has measured goes 16 at a time, even after cheap ones", async () => {

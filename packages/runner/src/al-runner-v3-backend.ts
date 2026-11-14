@@ -1457,6 +1457,8 @@ interface Daemon {
   baselineStop?: number;
   /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
   requests: number;
+  /** R987: the lowest RSS read when one of its requests started: the base its requests' growth is read from. */
+  floorRss?: number;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -1965,17 +1967,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly costOf = (call: number): number | undefined => this.costByCall.get(call);
 
   /**
-   * R987: one request's reading: its daemon's RSS when it was sent and the highest seen while it ran.
-   * The cost per entry is charged to every call the request ran, keeping each call's highest: never
-   * an average, never falling. A reading of 0 or less marks the calls measured at no cost.
+   * R987: one request's reading: its daemon's RSS when it was sent, the daemon's floor (the lowest
+   * start seen) and the highest RSS seen while it ran. Only a request that grew the daemon (peak over
+   * its own start) is a reading; one that did not (it reused memory an earlier request left) says
+   * nothing, and its calls keep their state (an unmeasured one stays unmeasured). The growth is read
+   * from the floor, not the start: a daemon that keeps some memory starts each request higher, and
+   * from the start a request reads low (Contoso: 65 MiB an entry, about 77 real). The cost per entry
+   * is charged to every call the request ran, each keeping its highest: never an average, never falling.
    */
   private noteEntryCost(
     startRss: number | undefined,
+    floorRss: number | undefined,
     peakRss: number | undefined,
     sent: readonly SentEntry[],
   ) {
-    if (startRss === undefined || peakRss === undefined || sent.length === 0) return;
-    const cost = Math.max(0, (peakRss - startRss) / sent.length);
+    if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
+    if (sent.length === 0 || !(peakRss > startRss)) return;
+    const cost = (peakRss - floorRss) / sent.length;
     // An echo is charged too; harmless, as `groupsThatFit` never looks an echo up.
     for (const e of sent) {
       const call = callOf(e);
@@ -6165,7 +6173,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const pid = daemon.server.pid;
     const readRss = (): number | undefined =>
       pid === undefined ? undefined : (this.seams.requestRssReader ?? readProcessRssBytes)(pid);
+    // Its start, and its floor (the lowest start seen): see `noteEntryCost`.
     const startRss = readRss();
+    if (startRss !== undefined && (daemon.floorRss === undefined || startRss < daemon.floorRss))
+      daemon.floorRss = startRss;
     let peakRss = startRss;
     const sampleRss = () => {
       const r = readRss();
@@ -6190,7 +6201,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     sampleRss();
     const { sent, rows, cut: partial } = answer;
-    this.noteEntryCost(startRss, peakRss, sent);
+    this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent);
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
