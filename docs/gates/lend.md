@@ -220,7 +220,7 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   place).
 - 2026-11-14, PR-04 (R969): every session wires the database id (one `HarnessInfo` read with the generation, as the CLI), L0
   asserts run A records one, and leg RL is added (pre-commitment `docs/superpowers/specs/2026-11-14-r969-lend-leg-precommitment.md`,
-  d51bef44). **PASS on bc1** (LethAL Control 1.0.0.26), every leg as pre-committed:
+  d51bef44). **PASS on bc1** (the control app at `extensions/lethal-control/app.json`'s version), every leg as pre-committed:
   - RL's reset went from A's generation to a new one;
   - RL carried 17 by key across it (the 5 no-coverage re-derived), with no snapshot reuse and one deploy;
   - RL is frozen 3 / 14 / 5 per mutant, and every earlier leg is unchanged.
