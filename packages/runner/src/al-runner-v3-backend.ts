@@ -1202,7 +1202,8 @@ export async function resolveDotnetSidecar(
     // another al-runner build can speak another protocol, and every .NET call then fails as "protocol mismatch" while the run
     // looks normal (R-975: 13 Bank Deposits tests lost that way to a config pinned two builds earlier).
     const path = namedSidecar(configured);
-    if (pinned === undefined || !existsSync(pinned.path)) return { path };
+    // Compared with the hash `.gated` recorded, so a build whose own sidecar file is gone still says it.
+    if (pinned === undefined) return { path };
     const sha = await sha256OfFile(path);
     return sha === pinned.sha256
       ? { path }
@@ -2679,8 +2680,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ).catch((e: unknown) => e as Error);
       if (sidecar instanceof Error) return { ok: false, details: sidecar.message };
       this.sidecarPath = sidecar.path;
+      // R998: a named sidecar that is not the build's own is used, and says so under a code of its own.
       if (sidecar.warning !== undefined)
-        this.notify("al-runner-v3-dotnet-sidecar-unusable", `[lethal] ${sidecar.warning} (R886)`);
+        this.notify(
+          sidecar.path !== undefined
+            ? "al-runner-v3-dotnet-sidecar-not-the-builds"
+            : "al-runner-v3-dotnet-sidecar-unusable",
+          sidecar.path !== undefined
+            ? `[lethal] ${sidecar.warning}`
+            : `[lethal] ${sidecar.warning} (R886)`,
+        );
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true

@@ -1311,6 +1311,11 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(changed.warning).toContain("not used");
     await rm(dll);
     expect((await resolveDotnetSidecar(undefined, bin, row)).warning).toContain("missing");
+    // R998: with the build's own file gone, a named file is still compared with the hash `.gated` recorded.
+    const gone = await resolveDotnetSidecar(other, bin, row);
+    expect(gone.path).toBe(other);
+    expect(gone.warning).toContain("not this al-runner build's own sidecar");
+    expect(await resolveDotnetSidecar(copy, bin, row)).toEqual({ path: copy });
   });
 
   const notices = async (stderr: string | undefined, extra: Partial<AlRunnerV3Config> = {}) => {
