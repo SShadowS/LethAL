@@ -77,6 +77,9 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.26 (R969, R999) adds `databaseId` to `HarnessInfo`, which every session records and a resume
+ * across a lease reset compares; `verify()` refuses its absence, so there is no fallback. (It also
+ * gives "LC Control State" `InherentPermissions = X`, which the client does not read.)
  * 1.0.0.25 (R847) adds the read actions `ObjectOwners` and `FieldOwners`; the clash check's
  * non-dependent step uses them, and there is no fallback for an older control app.
  * 1.0.0.24 (R689, R733) adds `InstalledDependents` and the found-0 `discoveryError` fields; R727's
@@ -85,7 +88,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.25";
+export const MIN_CONTROL_VERSION = "1.0.0.26";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -364,6 +367,8 @@ interface HarnessInfo {
   readonly semver?: unknown;
   readonly protocolVersion?: unknown;
   readonly serverGeneration?: unknown;
+  /** R969: the lease row's database id (1.0.0.26). */
+  readonly databaseId?: unknown;
   readonly tenantCountReachable?: unknown;
   readonly tenantCount?: unknown;
   readonly isolationModes?: unknown;
@@ -418,6 +423,9 @@ export interface LeaseSnapshot {
 export interface HarnessDetails {
   readonly protocolVersion: number;
   readonly serverGeneration: string;
+  /** R969: minted with the lease row and never by `ForceResetLease`, so an unchanged id across a
+   *  generation change means the database survived (the lease was reset by hand). Never empty. */
+  readonly databaseId: string;
   readonly tenantGate: "enforced" | "unenforced";
 }
 
@@ -1019,9 +1027,17 @@ export class HarnessVerifier {
         `HarnessInfo serverGeneration ${JSON.stringify(info.serverGeneration)} is missing or empty — protocol v2 must report it (design §4/§7); AcquireLease cannot be fenced without it`,
       );
     }
+    // R969: required for the same reason. An empty id would let two databases with no id compare
+    // equal, carrying verdicts across a lost database (empty-vs-empty).
+    if (typeof info.databaseId !== "string" || info.databaseId === "") {
+      throw new HarnessVerificationError(
+        `HarnessInfo databaseId ${JSON.stringify(info.databaseId)} is missing or empty — LethAL Control ${MIN_CONTROL_VERSION} or newer reports it (R969); upgrade the control app on this server`,
+      );
+    }
     return {
       protocolVersion: info.protocolVersion,
       serverGeneration: info.serverGeneration,
+      databaseId: info.databaseId,
       tenantGate: this.checkSingleTenant(info),
     };
   }

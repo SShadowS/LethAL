@@ -92,6 +92,7 @@ function info(over: Record<string, unknown> = {}): Record<string, unknown> {
     semver: MIN_CONTROL_VERSION,
     protocolVersion: 2,
     serverGeneration: "b".repeat(32),
+    databaseId: "f".repeat(32),
     tenantCountReachable: false,
     isolationModes: ["Codeunit"],
     testTypes: ["codeunit"],

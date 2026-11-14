@@ -9,10 +9,18 @@ namespace LethAL.Control;
 /// this extension's permission set (proven by the 5C-A live spike: a guard read failed with "the
 /// current permissions prevented the action"). Declaring the permissions inherently lets this
 /// codeunit access its own tables regardless of the caller's assigned permission sets.
+///
+/// R999: `InherentPermissions = X` on the codeunit itself. A target's injected Mutation Selector
+/// (R979: itself `InherentPermissions = X`) calls this codeunit's `IsActive` and `NoteReached`; a
+/// codeunit with the property calling one without it is still denied under an exact permission set
+/// (`Permissions Mock.SetExactPermissionSet`), measured on bc1 (`/coord/handoff/R-968/state.md`,
+/// case C). Without it, a test that narrows to an exact set fails at the first guard, for LethAL's
+/// sake, not the code under test.
 /// </summary>
 codeunit 91002 "LC Control State"
 {
     SingleInstance = true;
+    InherentPermissions = X;
 
     var
         CachedTargetAppId: Text;
@@ -275,11 +283,20 @@ codeunit 91002 "LC Control State"
     var
         Lease: Record "LC Lease";
     begin
-        if Lease.Get('') then
+        if Lease.Get('') then begin
+            // R969: a row seeded before 1.0.0.26 has no Database Id; mint it once, on this
+            // install/upgrade. Nothing else writes it.
+            if Lease."Database Id" = '' then begin
+                Lease."Database Id" := NewToken();
+                Lease.Modify();
+                Commit();
+            end;
             exit;
+        end;
         Lease.Init();
         Lease."Primary Key" := '';
         Lease."Server Generation" := NewToken();
+        Lease."Database Id" := NewToken();
         Lease."Op Kind" := Lease."Op Kind"::none;
         Lease.Insert();
         Commit();
@@ -307,6 +324,21 @@ codeunit 91002 "LC Control State"
         if not Lease.Get('') then
             Error(LeaseRowMissingErr());
         exit(Lease."Server Generation");
+    end;
+
+    /// <summary>R969: the lease row's "Database Id", for HarnessInfo. Minted only when the row is
+    /// created (a database that is new, or was lost, as an in-memory one is on a restart) or on
+    /// install/upgrade when blank, and never by ForceResetLease. So, unlike "Server Generation", it
+    /// separates "the database is gone" from "the lease was reset by hand". Same Get('') + fail-loud,
+    /// no-LockTable read as CurrentServerGeneration(). An empty value is returned as is: the client
+    /// refuses it.</summary>
+    procedure CurrentDatabaseId(): Text
+    var
+        Lease: Record "LC Lease";
+    begin
+        if not Lease.Get('') then
+            Error(LeaseRowMissingErr());
+        exit(Lease."Database Id");
     end;
 
     /// <summary>R110: a READ-ONLY peek at who holds the lease, so nothing has to take it in order to

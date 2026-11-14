@@ -139,6 +139,8 @@ export function seedRunFrom(store: ResultsStore, fromRunId: number, o: SeedOverr
     ...(src.resourceKey !== null ? { resourceKey: src.resourceKey } : {}),
     // R680: a resume refuses a run on another server generation, or one with none recorded.
     ...(src.serverGeneration !== null ? { serverGeneration: src.serverGeneration } : {}),
+    // R969: and the database id, or a clone could never resume across a lease reset (R680's trap).
+    ...(src.databaseId !== null ? { databaseId: src.databaseId } : {}),
   });
   if (o.rows !== false) {
     const rows = storedMutants(store, fromRunId).filter(
