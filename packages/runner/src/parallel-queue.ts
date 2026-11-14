@@ -240,12 +240,9 @@ export class OrderedCommit {
   private finish(code: string, commit: () => void, stop: Error | undefined): void {
     const i = this.idx(code);
     // R962: after the memory guard's stop a lane's in-flight mutant still finishes; its result is
-    // complete, so it is recorded (unless the session latched unsafe meanwhile), not discarded.
-    if (this.stoppedByGuard && this.latch() === undefined) {
-      if (!this.committed.has(i)) {
-        commit();
-        this.committed.add(i);
-      }
+    // complete, so it waits with the others and `conclude()` records it, by the latch rule then.
+    if (this.stoppedByGuard) {
+      this.pending.set(i, commit);
       return;
     }
     if (this.stopInfo === undefined) {
@@ -288,23 +285,34 @@ export class OrderedCommit {
       return;
     }
     this.stoppedByGuard = true;
-    // R962: the guard stops new work only; every mutant that already finished is a complete
-    // result, so it is recorded in manifest order, not only those before the refused one. Done
-    // BEFORE the close, which drops whatever is still pending.
+    // R962: the guard stops new work only. What already finished, and what finishes while the
+    // lanes drain, are complete results: they stay pending (not dropped, as `closeWith` would) and
+    // `conclude()` records them once every lane has settled.
+    this.stopInfo = {
+      selfIdx: this.idx(code),
+      selfKept: false,
+      cause: "the memory guard stopped the session",
+      benign: true,
+    };
+  }
+
+  /**
+   * R962: a guard stop's records, at the end of the drain, in manifest order. A latch set by then
+   * (the session went unsafe) applies its own rule, as N = 1 would have stopped there: only the
+   * mutants up to the latching one (itself included) are kept, and the latch is named.
+   */
+  private drainGuardStop(): void {
+    const l = this.latch();
+    const li = l === undefined ? Number.POSITIVE_INFINITY : (this.index.get(l.mutantId) ?? -1);
+    if (l !== undefined) this.also.push(`the batch latched on ${l.mutantId}: ${l.why}`);
     for (const i of [...this.pending.keys()].sort((a, b) => a - b)) {
       const c = this.pending.get(i);
-      if (c) {
+      if (c && i <= li) {
         c();
         this.committed.add(i);
       }
       this.pending.delete(i);
     }
-    this.closeWith({
-      selfIdx: this.idx(code),
-      selfKept: false,
-      cause: "the memory guard stopped the session",
-      benign: true,
-    });
   }
 
   /** The `codes` of this window that were not recorded (by the guard's stop): left out of the report. */
@@ -347,6 +355,10 @@ export class OrderedCommit {
 
   /** After every lane ended: nothing, or the stop as an error. */
   conclude(): void {
+    if (this.stoppedByGuard) {
+      this.drainGuardStop();
+      return;
+    }
     const s = this.stopInfo;
     if (s === undefined) {
       this.flush();

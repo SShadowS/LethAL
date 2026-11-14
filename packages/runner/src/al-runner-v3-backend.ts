@@ -850,6 +850,12 @@ export const MEMORY_WAIT_POLLS = 150;
  * which a check at each process's start does not see.
  */
 export const MEMORY_WATCH_MS = 5000;
+/**
+ * R970: how many watch readings in a row must be over the bound before it stops the session (15 s),
+ * so a short spike (another job's, say) does not end the run; growth that stays over does. Unlike the
+ * gate, the watch never closes a daemon: a request may be in flight on it.
+ */
+export const MEMORY_WATCH_OVER_TICKS = 3;
 /** R948: what the guard counts one started al-runner process or request at (measured 2-3.3 GB, R961). */
 export const MEMORY_CALL_ESTIMATE_BYTES = 3 * 2 ** 30;
 
@@ -3527,16 +3533,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R970: the processes (or daemon requests) below run side by side and can grow after their start
     // was admitted: the memory watch reads the container while they run.
     const unwatch = this.watchMemory();
+    let watched: AlRunnerV3MemoryBoundError | undefined;
     try {
       await this.fillIsolatedRun(lane, stopSeconds, coverage, f.floorMs);
     } finally {
       unwatch();
-    }
-    const watched = this.memoryWatchError;
-    if (watched !== undefined) {
+      // Taken on every exit, so a later fill (after a deploy) never meets an old one.
+      watched = this.memoryWatchError;
       this.memoryWatchError = undefined;
-      throw watched;
     }
+    // With no stop handle the watch's stop is an error, thrown once, here.
+    if (watched !== undefined) throw watched;
   }
 
   /** R866: `fillIsolatedBaseline`'s work, under its memory watch. */
@@ -4376,6 +4383,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let used = 0;
     let closed = false;
     for (let i = 0; ; i += 1) {
+      // R970: the memory watch may stop the session while this gate waits: it then answers no.
+      // R970: the memory watch may stop the session while this gate waits: it then answers no.
+      if (this.memoryStopped) return false;
       const s = g.read();
       if (s === undefined) return true; // unreadable now: the first read decided the guard is on, so this is not a stop
       used = s.usedBytes + this.memoryHeld * this.memoryEstimate();
@@ -4408,24 +4418,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private memoryWatchError: AlRunnerV3MemoryBoundError | undefined;
 
   /**
-   * R970: reads the container's memory every `MEMORY_WATCH_MS` while the caller's processes run; the
-   * first reading over the bound stops the session through R955's path, as the gate does, so no new
-   * process starts (the gate answers `false` from then on) and the ones in flight end at their stop.
-   * Returns the function that ends the watch. No guard (off, or no limit): nothing to watch.
+   * R970: reads the container's memory every `MEMORY_WATCH_MS` while the caller's processes run. When
+   * `MEMORY_WATCH_OVER_TICKS` readings in a row are over the bound, it stops the session through R955's path,
+   * as the gate does, so no new process starts (the gate, waiting or not, answers `false` from then
+   * on) and the ones in flight end at their stop. Returns the function that ends the watch. No guard
+   * (off, or no limit): nothing to watch.
    */
   private watchMemory(): () => void {
     this.announceMemoryGuard();
     const g = this.memoryGuard;
     if (g === undefined || g === "off") return () => {};
+    let over = 0;
     const tick = () => {
       if (this.memoryStopped) return;
       const s = g.read();
-      if (s === undefined || s.usedBytes <= g.boundBytes) return;
+      if (s === undefined || s.usedBytes <= g.boundBytes) {
+        over = 0;
+        return;
+      }
+      over += 1;
+      if (over < MEMORY_WATCH_OVER_TICKS) return;
       this.memoryStopped = true;
       const info = { usedBytes: s.usedBytes, boundBytes: g.boundBytes, source: g.source };
       this.notify(
         "al-runner-v3-memory-bound",
-        `[lethal] al-runner-v3-memory-bound: the container uses ${(info.usedBytes / 2 ** 30).toFixed(1)} GiB while the per-test baseline's processes run, over the ${(g.boundBytes / 2 ** 30).toFixed(1)} GiB bound; no new process starts and the run stops with its report (R970).`,
+        `[lethal] al-runner-v3-memory-bound: the container uses ${(info.usedBytes / 2 ** 30).toFixed(1)} GiB while the per-test baseline's processes run, over the ${(g.boundBytes / 2 ** 30).toFixed(1)} GiB bound for ${over} readings in a row; no new process starts and the run stops with its report (R970).`,
       );
       if (this.stopHandle === undefined) {
         this.memoryWatchError = new AlRunnerV3MemoryBoundError(

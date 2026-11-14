@@ -38,6 +38,7 @@ import {
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
   ISOLATED_BASELINE_PROCESSES,
+  MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
@@ -7262,7 +7263,8 @@ describe("R948 C: the memory guard", () => {
   // R970: the per-test fill's processes can grow after their start was admitted; the watch reads
   // the container while they run. The fake raises memory inside the second process and fires the
   // watch there, so the reading comes from a process in flight, never at a start.
-  const growingFill = async (overInFlight: boolean) => {
+  // `overTicks`: how many watch readings in a row the second process's spike lasts.
+  const growingFill = async (overTicks: number) => {
     const methods = ["A", "B", "C", "D"];
     const suite = methods.map((m) => ref(m));
     let used = GIB;
@@ -7280,9 +7282,10 @@ describe("R948 C: the memory guard", () => {
         if (calls === 2) {
           // A spike only while this process runs: the gate at the next start reads GIB again, so
           // only the watch can see it.
-          if (overInFlight) used = 30 * GIB;
-          clock.tick?.();
+          used = 30 * GIB;
+          for (let t = 0; t < overTicks; t++) clock.tick?.();
           used = GIB;
+          clock.tick?.(); // and one reading back under it
         }
         return methods.map((method) => ({ method, status: "pass" as const }));
       },
@@ -7303,8 +7306,8 @@ describe("R948 C: the memory guard", () => {
     return { r, clock };
   };
 
-  test("R970: memory that grows while a fill process runs stops the session once; no further process starts", async () => {
-    const { r, clock } = await growingFill(true);
+  test("R970: memory that stays over the bound while a fill process runs stops the session once; no further process starts", async () => {
+    const { r, clock } = await growingFill(MEMORY_WATCH_OVER_TICKS);
     expect(r.stops).toEqual([
       { usedBytes: 30 * GIB, boundBytes: 28 * GIB, source: "/sys/fs/cgroup/memory.max" },
     ]);
@@ -7314,11 +7317,89 @@ describe("R948 C: the memory guard", () => {
     expect(clock.stopped).toBe(1); // the watch ends with the fill
   });
 
-  test("R970: a watch reading under the bound is no stop: every test's process runs", async () => {
-    const { r, clock } = await growingFill(false);
+  test("R970: a spike shorter than the watch's readings in a row is no stop: every test's process runs", async () => {
+    expect(MEMORY_WATCH_OVER_TICKS).toBe(3);
+    const { r, clock } = await growingFill(MEMORY_WATCH_OVER_TICKS - 1);
     expect(r.stops).toHaveLength(0);
     expect(r.one.calls).toHaveLength(4);
     expect(clock.stopped).toBe(1);
+  });
+
+  test("R970: a gate already waiting when the watch stops the session answers no, even once memory clears; one stop", async () => {
+    const methods = ["A", "B", "C"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick: (() => void) | undefined } = { tick: undefined };
+    const r = await guarded(() => used, {
+      suite,
+      polls: 5,
+      extra: { isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 1) used = 30 * GIB; // the next start's gate finds the bound passed and waits
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.tick = undefined;
+          };
+        },
+        memorySleep: async () => {
+          // While the gate waits, the watch's readings stay over and stop the session; then memory clears.
+          for (let t = 0; t < MEMORY_WATCH_OVER_TICKS; t++) clock.tick?.();
+          used = GIB;
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    r.b.baselinePhase(false);
+    expect(r.one.calls).toHaveLength(1);
+    expect(r.stops).toHaveLength(1);
+  });
+
+  test("R970: with no stop handle the watch's stop is thrown by name, once, after the fill", async () => {
+    const methods = ["A", "B", "C"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick: (() => void) | undefined } = { tick: undefined };
+    const r = await rig({
+      suite,
+      extra: { memoryHeadroomGb: 4, isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 1) {
+          used = 30 * GIB;
+          for (let t = 0; t < MEMORY_WATCH_OVER_TICKS; t++) clock.tick?.();
+          used = GIB;
+        }
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryReader: () => ({
+          usedBytes: used,
+          maxBytes: 32 * GIB,
+          source: "/sys/fs/cgroup/memory.max",
+        }),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.tick = undefined;
+          };
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(/al-runner-v3-memory-bound/);
+    expect(r.one.calls).toHaveLength(1);
   });
 });
 

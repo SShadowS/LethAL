@@ -209,8 +209,9 @@ describe("R962: a memory-guard stop keeps every finished mutant", () => {
     c.begin("M2");
     c.finish("M2", rec("M2")); // waits for M1
     b.memoryStop("M1"); // the guard refuses M1's group
-    expect(log).toEqual(["M0", "M2"]);
     expect(commit.stoppedByGuard).toBe(true);
+    commit.conclude(); // the lanes settled: the drain records what finished
+    expect(log).toEqual(["M0", "M2"]);
     expect(commit.unrecorded(CODES)).toEqual(["M1", "M3", "M4", "M5"]);
   });
 
@@ -221,18 +222,29 @@ describe("R962: a memory-guard stop keeps every finished mutant", () => {
     b.memoryStop("M1");
     expect(commit.closed).toBe(true); // no lane takes new work
     a.finish("M0", rec("M0"));
+    commit.conclude();
     expect(log).toEqual(["M0"]);
     expect(commit.unrecorded(CODES)).toEqual(["M1", "M2", "M3", "M4", "M5"]);
   });
 
-  test("after a latch, a mutant that finishes is still discarded", () => {
+  test("a latch set during the drain applies its own rule: up to the latching mutant, not after it", () => {
     const { commit, latch, log, rec } = setup();
-    const [a, b] = [commit.laneSink().sink, commit.laneSink().sink];
+    const [a, b, c, d] = [
+      commit.laneSink().sink,
+      commit.laneSink().sink,
+      commit.laneSink().sink,
+      commit.laneSink().sink,
+    ];
     a.begin("M0");
+    c.begin("M2");
+    d.begin("M3");
+    d.finish("M3", rec("M3")); // finished before the latch, but after the latching mutant
     b.memoryStop("M1");
-    latch.value = { mutantId: "M0", why: "unsafe" };
-    a.finish("M0", rec("M0"));
-    expect(log).toEqual([]);
+    latch.value = { mutantId: "M2", why: "unsafe" };
+    c.finish("M2", rec("M2")); // the latching mutant itself is kept, as `latchStop` keeps it
+    a.finish("M0", rec("M0")); // before it in order, finished after the latch: kept
+    commit.conclude();
+    expect(log).toEqual(["M0", "M2"]);
   });
 
   test("a guard stop after an unsafe break leaves the break's accounting alone", () => {
