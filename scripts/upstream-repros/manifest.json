@@ -74,6 +74,17 @@
       }
     },
     {
+      "id": "u7850-autoformat",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7850",
+      "bcEvidence": "inferred, not measured on BC: BC runs a field's AutoFormatExpression when the row is fetched (the refusal says so), and the expression here is plain AL that returns a format, so opening the card passes; the issue's invented repro (R-925), unchanged but for the app's name and id. Added by PR-05 (refusal ledger)",
+      "rerun": [
+        "the BC.History projects whose TestPage controls sit over such fields (the refusal ledger's AutoFormatExpression causes under #7850)"
+      ],
+      "tests": {
+        "Codeunit50102.OpenCard": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
       "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",
