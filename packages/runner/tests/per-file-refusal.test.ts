@@ -263,7 +263,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c,
       // which the same manifest with that key removed still gives).
       // R976: the 106 `empty-block` entries gain `reachLine`, the only change (was 5dd124ad...a9fb).
-      "5cadd234312a6a8e8b612b23711996195d82bed905e283e691bff4b3faf0f28a",
+      // R984: 2 comparison `shift-integer` entries gain `equivalenceRisk`, the only change (was 5cadd234...f28a).
+      "0f9af9e9c482ba8d1b71247cb557f4168c8996ccc72b418f56f7160748c67242",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -296,7 +297,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
       // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
-      "d4e6ba3998547aa906e60c42c33840cd26f10f3dde1d8de7ae37804d8aa13bba",
+      // R984: only the manifest moved it, by `equivalenceRisk` on 2 `shift-integer` entries (was d4e6ba39...3bba).
+      "0cc77b2ab4c7625606c3938d2afb9c9bcdc907cedacb295d90b0f5b077a207a0",
     );
   }, 60_000);
 });
