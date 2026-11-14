@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 968 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**29 of 969 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1013,6 +1013,7 @@ that ordering is the priority.
 - **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · done (470533c9)
 - **R1005** · R-983's unexamined tail of BC.History error mutants re-run on current: 25 of 73 now killed; the rest filed (#8084 new) or counted; Avalara finished · [R1005.md](docs/roadmap/R1005.md) · closed 2026-11-14 — measured and filed upstream (#8084; comments on #6896, #7764, #7827)
 - **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · done (354783d9)
+- **R1006** · Corpus windows started without a cheap check and ran for hours measuring nothing (DO's no-license window, Avalara's warm-up fallback): `scripts/triage-baseline.ts` now runs the baseline plus a few small codeunits first and stops by name · [R1006.md](docs/roadmap/R1006.md) · done (4bad0acc)
 
 ---
 
