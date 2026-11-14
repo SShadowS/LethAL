@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 956 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 957 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1001,6 +1001,7 @@ that ordering is the priority.
 - **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · done (b4b09cb8) — a refused waiter is passed only for LETHAL_HEAVY_STARVE_S (default 900 s) after its first…
 - **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · open
 - **R993** · On al-runner v3, JsonObject.ReadFromYaml raises 'not valid YAML' for a flow mapping with two entries ({"a": 1, "b": 2}), even when its return value is tested (upstream #8027) · [R993.md](docs/roadmap/R993.md) · open
+- **R994** · On al-runner v3, two refusals met only under Permission Sets' mutants: Metadata Permission rows of a 'table * = X' grant (any unfiltered read, the platform's BaseSystemPermissionSet has one), and an XMLport table element skipped after its child rows (upstream #8032) · [R994.md](docs/roadmap/R994.md) · open
 
 ---
 
