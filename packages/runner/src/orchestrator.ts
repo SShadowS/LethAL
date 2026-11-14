@@ -4693,6 +4693,24 @@ function resolveResume(
             `--resume found an unfinished run for this project and backend, run ${otherEnv.runId}, but it was recorded under ${otherEnv.environment === null ? "no environment (before al-runner-v3 recorded one)" : `environment ${otherEnv.environment}`}, and this session's is ${mine}. A verdict is never carried across environments. Drop --resume to run from scratch.`,
           );
         }
+        // R1008 (build review): a serve session no longer falls back to one-shot on a resume, so a run
+        // recorded one-shot (a warm-up fallback, R786, or before R1008) lacks this session's
+        // ` baseline-daemon` tag (R948). Name it, and the way to resume it.
+        const tag = baselineSourceTag({ baselineDaemon: true });
+        if (lendingSession.runnerBuild.includes(tag)) {
+          const oneShot = cfg.store.findResumableRun({
+            projectPath: cfg.projectDir,
+            backend: backendName,
+            configFingerprint,
+            carryableVerdicts: [...CARRYABLE_VERDICTS],
+            runnerBuild: lendingSession.runnerBuild.replace(tag, ""),
+          });
+          if (oneShot !== null) {
+            throw new Error(
+              `--resume found an unfinished run for this project and backend, run ${oneShot}, but its baseline ran one-shot (no serve daemon: a warm-up fallback, R786, or a resume before R1008), and this session runs on serve-entries. A verdict is not carried between the two baseline sources (R948). To resume it, set "alRunnerV3.transport": "one-shot" in the config; or drop --resume to run from scratch.`,
+            );
+          }
+        }
       }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
@@ -8950,6 +8968,7 @@ async function runSessionBody(
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.isolationAuto !== true && // R896 (review 1)
+            cfg.backend.resumeRunsBaseline !== true && // R1008: serve-entries' warm-up, as R857
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),

@@ -811,6 +811,13 @@ export interface ExecutionBackend {
   readonly baselineDaemon?: boolean;
 
   /**
+   * R1008, OPTIONAL: true when a `--resume` of this session must run its baseline again rather than
+   * reuse a stored snapshot (al-runner-v3 on serve-entries: the warm-up needs this session's rows).
+   * Read after `decideTransport`. Absent counts as false.
+   */
+  readonly resumeRunsBaseline?: boolean;
+
+  /**
    * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that
    * shard with its covering refs. al-runner v3's serve-entries transport sends them as entries
    * and keeps each fully valid answer for that mutant's first activation.

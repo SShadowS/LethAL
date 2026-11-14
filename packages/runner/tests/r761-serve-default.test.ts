@@ -116,25 +116,28 @@ describe("R761: the default transport", () => {
     expect(r.spawns).toEqual([]);
   });
 
-  test("reason resume: one-shot plus the warning naming it", async () => {
+  test("R1008: a resume is no fallback reason: it stays on serve-entries and runs its baseline again", async () => {
     const r = await rig(DEFAULT);
     await r.b.decideTransport({ resume: true });
-    expect(r.b.inRunStopIsBudget).toBe(true);
-    expect(r.warnings).toHaveLength(1);
-    expect(r.warnings[0]?.code).toBe(FALLBACK);
-    expect(r.warnings[0]?.message).toContain("resume:");
+    expect(r.b.inRunStopIsBudget).toBe(false);
+    expect(r.warnings).toEqual([]);
+    // ...so the orchestrator reuses no baseline snapshot (`allowReuse`): the warm-up needs this session's rows.
+    expect(r.b.resumeRunsBaseline).toBe(true);
+    // A session that falls back for another reason runs one-shot and may reuse a snapshot as before.
+    const oneShot = await rig(DEFAULT, { version: V3_NO_SERVE_ENTRIES[0] ?? "" });
+    await oneShot.b.decideTransport({ resume: true });
+    expect(oneShot.b.inRunStopIsBudget).toBe(true);
+    expect(oneShot.b.resumeRunsBaseline).toBe(false);
+    expect(oneShot.warnings[0]?.message).not.toContain("resume:");
   });
 
-  test("R896 (build review 2): an auto resume keeps serve-entries; a forced-test resume still falls back", async () => {
-    const auto = await rig({ ...DEFAULT, isolation: "auto" });
-    await auto.b.decideTransport({ resume: true });
-    expect(auto.b.inRunStopIsBudget).toBe(false);
-    expect(auto.warnings).toEqual([]);
-    const forced = await rig({ ...DEFAULT, isolation: "test" });
-    await forced.b.decideTransport({ resume: true });
-    expect(forced.b.inRunStopIsBudget).toBe(true);
-    expect(forced.warnings.map((w) => w.code)).toEqual([FALLBACK]);
-    expect(forced.warnings[0]?.message).toContain("resume:");
+  test("R896 (build review 2), R1008: an auto resume and a forced-test resume both keep serve-entries", async () => {
+    for (const isolation of ["auto", "test"] as const) {
+      const r = await rig({ ...DEFAULT, isolation });
+      await r.b.decideTransport({ resume: true });
+      expect(r.b.inRunStopIsBudget).toBe(false);
+      expect(r.warnings).toEqual([]);
+    }
   });
 
   test("R918: a multi-object file and a wrapped file no longer fall back (legs MOE and WRE)", async () => {
@@ -149,8 +152,12 @@ describe("R761: the default transport", () => {
   test("reason unproven-test-name-shape (method): with another reason, or an isolation mode, the whole session falls back", async () => {
     // R763: "1st" and "has space" are proven since leg N1S; the dot and `ø` are not.
     for (const method of ["Dot.Step", "AØ Step", "Pct%Step"]) {
-      const r = await rig(DEFAULT, { tests: [...PLAIN, ref(method)] });
-      await r.b.decideTransport({ resume: true });
+      // R1008: the other reason is a build with no serve path (a resume is no reason any more).
+      const r = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(method)],
+        version: V3_NO_SERVE_ENTRIES[0] ?? "",
+      });
+      await r.b.decideTransport({ resume: false });
       expect(r.b.inRunStopIsBudget).toBe(true);
       expect(r.warnings).toHaveLength(1);
       expect(r.warnings[0]?.message).toContain("unproven-test-name-shape");
@@ -251,8 +258,12 @@ describe("R761: the default transport", () => {
   });
 
   test("R922: an unproven METHOD is named as the method, with its character, not the codeunit", async () => {
-    const r = await rig(DEFAULT, { tests: [...PLAIN, ref("Pct%Step")] });
-    await r.b.decideTransport({ resume: true }); // the whole-session text; R937's per-codeunit text names the codeunit
+    // The whole-session text (a no-serve build is the other reason); R937's per-codeunit text names the codeunit.
+    const r = await rig(DEFAULT, {
+      tests: [...PLAIN, ref("Pct%Step")],
+      version: V3_NO_SERVE_ENTRIES[0] ?? "",
+    });
+    await r.b.decideTransport({ resume: false });
     const message = r.warnings[0]?.message ?? "";
     expect(message).toContain('method "Pct%Step" ("%")');
     expect(message).not.toContain("codeunit");
@@ -445,9 +456,11 @@ describe("R761: the default transport", () => {
     });
     await r.b.decideTransport({ resume: true });
     expect(r.warnings).toHaveLength(1);
-    for (const name of ["resume:", "unproven-test-name-shape", "no-serve-build"]) {
+    for (const name of ["unproven-test-name-shape", "no-serve-build"]) {
       expect(r.warnings[0]?.message).toContain(name);
     }
+    // R1008: a resume is not among them.
+    expect(r.warnings[0]?.message).not.toContain("resume:");
   });
 
   test("the src copy of the no-serve builds equals the itest's", () => {
@@ -547,14 +560,15 @@ describe("R857: --isolate-tests needs serve-entries", () => {
     }
   });
 
-  test("a resume stays on serve-entries; the same resume without the flag falls back", async () => {
+  test("a resume stays on serve-entries, with the flag and (R1008) without it", async () => {
     const on = await rig(ON);
     await on.b.decideTransport({ resume: true });
     expect(on.b.inRunStopIsBudget).toBe(false);
     expect(on.warnings.map((w) => w.code)).toEqual([ISOLATE_NOTE]);
     const off = await rig(DEFAULT);
     await off.b.decideTransport({ resume: true });
-    expect(off.b.inRunStopIsBudget).toBe(true);
+    expect(off.b.inRunStopIsBudget).toBe(false);
+    expect(off.warnings).toEqual([]);
   });
 
   test("a run with the flag says so once; a run without it says nothing", async () => {

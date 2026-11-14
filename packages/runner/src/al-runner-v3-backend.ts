@@ -2973,13 +2973,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.transportFrozen)
       throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
     const reasons: string[] = [];
-    // R857: a resume under --isolate-tests runs its baseline again (`reusesBaselineSnapshot`).
-    // R896 (build review 2): so does `isolation: "auto"`, which never reuses a snapshot.
-    if (facts.resume && !this.isolatesTests && !this.isolationAuto) {
-      reasons.push(
-        "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
-      );
-    }
+    // R1008: a resume is no fallback reason any more. Forcing one-shot left a serve run with no way to
+    // continue: the one-shot session lacks the run's ` baseline-daemon` tag (R948), so no run matched.
+    // A serve session's resume runs its baseline again instead (`resumeRunsBaseline`), as R857's
+    // --isolate-tests and R896's isolation "auto" already did, so the warm-up has its rows.
     // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
     // WRE measured them equal to one-shot per mutant (pre-commitment e1ca5d11). Coverage placement,
     // the shape-specific part, is built from the deployed text the same way under both transports.
@@ -4438,6 +4435,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.cfg.daemonBaseline === true && this.entries;
   }
 
+  /** R1008: serve-entries needs this session's own baseline rows for its warm-up (see `ExecutionBackend.resumeRunsBaseline`). */
+  get resumeRunsBaseline(): boolean {
+    return this.entries;
+  }
+
   /** R948: what the daemon baseline did, for the gate and the tests. */
   daemonBaselineReport(): {
     readonly dropped: string | undefined;
@@ -4853,7 +4855,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   parallelRefusal(): string | undefined {
     if (this.resumeSession) {
-      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a reused baseline has no rows for the lanes' serve warm-up (R766)";
+      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a resumed session's lanes were never measured on a re-run baseline (R766; a resume with --workers 1 runs on serve, R1008)";
     }
     if (!this.entries) {
       return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
