@@ -158,8 +158,9 @@ const PINNED: Record<
       "DataShiftOps.Codeunit.al":
         "37761b180d9ce890d680e69f6dd130bcd35d428c573a2e30eeb69664147245f4",
       "DataSwapOps.Codeunit.al": "557893e879496f058906ee9edad3627e995c56f15412f22c7b71e419840566f9",
+      // R985: the Date/DateTime stand-in 17530101D -> 17540102D (was f40de380...e742).
       "DataTemporalOps.Codeunit.al":
-        "f40de380202746543a9def3467d77f0e8ed0929277b473283ba80546bee6e742",
+        "d1ab937bbde85a813e13ebeffb7e4580fd6160ff50d3d64ecd75220f46c76b45",
       "DataTriggerProbe.Table.al":
         "f722703a696d9c7341e35f4d89dd8d2b0d680f3fad61aaabb046b6917bb27cfc",
       "DataValidateOps.Codeunit.al":
@@ -176,7 +177,8 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 71d0df78...eaa3).
-      "mutant-manifest.json": "7348aff755d3938d4d3494d3a2b624966635f45bfd60cf3ef40f96a2ca814db8",
+      // R985: toggle-blank-temporal 2.0.0 and its 17540102D texts, the only change (was 7348aff7...4db8).
+      "mutant-manifest.json": "55878a209d8a3d14cb20c5e5e540b926b48de328d8dcf374a1715cf774532d39",
     },
   },
   "sandbox-hang": {
