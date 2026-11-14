@@ -67,8 +67,9 @@ The legs:
   (coord R-989) the daemon also runs three codeunits for the families added later (`cascade-existing-state`, both
   kinds, and `company-findset`; eight codeunits, eleven tests in all), each also accepted as a plain pass, and a row
   REFUSED with a text no keep-list entry accepts reads `unkept`, which is gate-fail in leg C: at a serve warm-up such
-  a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Any
-  other move still only warns. no-callee
+  a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Every
+  row of the request is checked, with or without a message; a request with no row at all, or a daemon that does not
+  start, reads `unmeasurable`, now infra-fail. Any other move still only warns. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
@@ -747,5 +748,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 - 2026-11-14: [[R1000]] (coord R-989). edge-847b1fa5a reworded the `cascade-existing-state` refusal per kind; the keep
   list matched only the old text, so R-984's DO serve run fell back to one-shot at its warm-up. The entry now accepts
   the old text and both new ones (each re-measured clean on a kept daemon), and leg C's `serve-keep-reasons` runs
-  the later families too, reading `unkept` (gate-fail) for a refused row no entry accepts. Leg C keeps its 28 facts;
-  no pinned figure moves (pre-commitment in `docs/superpowers/specs/2026-11-14-r1000-serve-keep-texts-precommitment.md`).
+  the later families too, reading `unkept` (gate-fail) for a refused row no entry accepts, and `unmeasurable` (now
+  infra-fail) for a request that returns no row. The new cases read as kept refusals on all 15 gated builds. Leg C
+  keeps its 28 facts; no pinned figure moves (pre-commitment and addendum in
+  `docs/superpowers/specs/2026-11-14-r1000-serve-keep-texts-precommitment.md`).

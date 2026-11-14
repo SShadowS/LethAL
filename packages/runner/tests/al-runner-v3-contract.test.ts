@@ -634,6 +634,43 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect((p?.measured.match(/: plain pass/g) ?? []).length).toBe(4); // commit (pinned) + the three
   });
 
+  // R1000 review: the daemon rule's own condition, on every row of the request.
+  test("R1000: a refused UNJUDGED row (an earlier test of a case codeunit) no entry accepts is unkept too", async () => {
+    const rows = {
+      ...SERVE_ROWS,
+      "Codeunit50675.B_ChangesSeq": {
+        status: "error",
+        notRun: true,
+        message: "NotRun: out-of-scope: NumberSequence.Next reworded",
+      },
+    };
+    const r = await probe({}, fakeServe(rows).spawn);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("(unjudged): UNKEPT Codeunit50675.B_ChangesSeq");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  test("R1000: a refused row with NO message is unkept (the daemon rule closes on it)", async () => {
+    const rows = {
+      ...SERVE_ROWS,
+      "Codeunit50677.FindSetCompanies": { status: "error", notRun: true },
+    };
+    const f = (await probe({}, fakeServe(rows).spawn)).facts.find(
+      (x) => x.fact === "serve-keep-reasons",
+    );
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("UNKEPT Codeunit50677.FindSetCompanies: (no message)");
+  });
+
+  test("R1000 review (R705): a request that returns no row at all is unmeasurable (infra-fail), never a warning", async () => {
+    const r = await probe({}, fakeServe({}).spawn);
+    const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("no test row at all");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("infra-fail");
+  });
+
   const serveFact = async (rows: Record<string, ServeRow>) =>
     (await probe({}, fakeServe(rows).spawn)).facts.find((x) => x.fact === "serve-keep-reasons");
 
@@ -771,10 +808,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   });
 
   test("R705: no row is never OK for the tolerated cases", async () => {
+    // R1000 review: no row at ALL is unmeasurable (the whole request ran nothing); one case's row
+    // missing is that case MOVED.
     const none = await serveFact({});
-    expect(none?.verdict).toBe("diverged");
-    for (const e of ["http", "commit", "cascade", "onrun-failed"])
-      expect(none?.measured).toContain(`${e}: MOVED no row`);
+    expect(none?.verdict).toBe("unmeasurable");
     const { "Codeunit50670.HttpGet": _gone, ...noHttp } = FIXED_ROWS;
     const f = await serveFact(noHttp);
     expect(f?.verdict).toBe("diverged");
@@ -797,15 +834,13 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ).toBe("diverged");
   });
 
-  test("serve does not start: unmeasurable, which only warns (leg C passes)", async () => {
+  test("serve does not start: unmeasurable; never refuses a session, and since R1000 leg C is infra-fail (an unmeasured fact could hide an unkept refusal)", async () => {
     const r = await probe({}, fakeServe(SERVE_ROWS, { ready: false }).spawn);
     expect(r.facts.find((x) => x.fact === "serve-keep-reasons")?.verdict).toBe("unmeasurable");
     expect(v3ContractRefusals(r)).toEqual([]);
     const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
-    expect(c.outcome).toBe("pass");
-    expect(c.lines.join("\n")).toMatch(
-      /al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: unmeasurable/,
-    );
+    expect(c.outcome).toBe("infra-fail");
+    expect(c.lines.join("\n")).toMatch(/infra-fail: serve-keep-reasons: unmeasurable/);
   });
 
   test("V3_WARN_FACTS is exactly serve-keep-reasons, and the same divergence on a CONTRACT fact list would gate-fail", async () => {

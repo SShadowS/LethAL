@@ -12,8 +12,9 @@
  *   re-measures and pre-commits (plan §6, §7). R639 (r9) adds `refused` (v3 declines a case BC
  *   fails: held, only warns) and `unlike-bc` (`refusal-row-shape` only: refuses a normal session,
  *   warns in the update gate's candidate legs, gate-fail in leg C).
- * - `warn` (R612, plan r3 §2): `serve-keep-reasons`. Never refuses and never fails the gate; a
- *   non-`matches` reading prints `al-runner-v3-serve-keep-reason-moved` (`V3_WARN_FACTS`).
+ * - `warn` (R612, plan r3 §2): `serve-keep-reasons`. Never refuses a session; a non-`matches` reading
+ *   prints `al-runner-v3-serve-keep-reason-moved` (`V3_WARN_FACTS`), except `unkept` (R1000: a refusal
+ *   no keep-list entry accepts), which fails the gate.
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -817,14 +818,18 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
  * R1000: a row the runtime REFUSED (notRun, error) with a text no `V3_SERVE_SAFE_REFUSALS` entry
  * accepts. On serve such a row closes the daemon, and at the warm-up it sends the whole run to
  * one-shot (R786): R-984's DO window scored 35 covered mutants in an hour. So this, unlike any other
- * move, fails the update gate (`unkept`, `classifyLegC`).
+ * move, fails the update gate (`unkept`, `classifyLegC`). Review: the same condition as the daemon
+ * rule's, so a refused row with NO message is unkept too, and every row of the request is checked,
+ * not only the judged ones (an unjudged refused row closes a real warm-up just the same).
  */
 const unkeptRefusal = (r: ServerTestLine | undefined): boolean =>
   r !== undefined &&
   r.notRun === true &&
   r.status === "error" &&
-  r.message !== undefined &&
-  !Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(r.message ?? ""));
+  !(
+    r.message !== undefined &&
+    Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(r.message ?? ""))
+  );
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;
@@ -871,14 +876,29 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   } finally {
     await server.close();
   }
+  // Review (R705): a request whose apps do not compile runs nothing; every case would read "no row",
+  // a mere warning, and the unkept check would be blind on that build. No row at all is unmeasurable.
+  if (rows.length === 0)
+    return fact(
+      "serve-keep-reasons",
+      "warn",
+      "unmeasurable",
+      expected,
+      "the serve request returned no test row at all (the probe's apps may not compile on this build, R705)",
+    );
   const moved: string[] = [];
   const how: string[] = [];
   const unkept: string[] = [];
+  // R1000 (review): every refused row the keep rule rejects, judged or not.
+  const judged = new Set(SERVE_CASES.map(([, n]) => n));
+  for (const t of rows)
+    if (!judged.has(t.name) && unkeptRefusal(t))
+      unkept.push(`(unjudged): UNKEPT ${t.name}: ${t.message ?? "(no message)"}`);
   for (const [entry, name, plainFailOk, plainPassOk] of SERVE_CASES) {
     const r = rows.find((t) => t.name === name);
     if (unkeptRefusal(r)) {
       // R1000: before the pinned and the normal judgement, so no branch can let it through.
-      unkept.push(`${entry}: UNKEPT ${name}: ${r?.message ?? ""}`);
+      unkept.push(`${entry}: UNKEPT ${name}: ${r?.message ?? "(no message)"}`);
       continue;
     }
     if (pinned && (entry === "commit" || entry === "onrun-failed")) {
