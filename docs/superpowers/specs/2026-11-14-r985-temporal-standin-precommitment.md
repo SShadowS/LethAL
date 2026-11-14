@@ -56,3 +56,40 @@ A per-mutant difference beyond the table above is a BLOCK.
 Delete both baseline files; run `itest:tables` on `bc2` with `LETHAL_ITEST_RECORD_BASELINE=tables.baseline.json`, and the full v3 gate
 with `LETHAL_ITEST_RECORD_BASELINE=al-runner-v3.tables.baseline.json`; re-run each without the variable to confirm PASS; diff each
 new file against the old one and check it against the table above; update `docs/gates/tables.md` and `alrunner-v3.md`; commit.
+
+## Amendment 1 (2026-11-14, before any gate run): the stand-in is 17540102D; R984 left; the v3 record goes by R849
+
+**BC measured, and refused 17530103D**, as this file's "BC measurement" section allowed: three owner-approved probe runs on `bc2`
+(`/coord/handoff/R-971/bc-probe-result.md`; each unpublished after its run, `lethal doctor` ok, lease released). BC 28.4 refuses to
+write EVERY non-zero date in 1753, as a Date or a DateTime, by Insert and by Modify (1753-01-01 ... 1753-12-31 23:59:59, 17 values);
+it stores 1754-01-01 (Date, and DateTime at 00:00:01), 1754-01-02, 1800-01-01, 1900-01-01, 2000-01-01, `0D` and `0DT`. al-runner
+stores all the 1753 values BC refuses (upstream #8006).
+
+**So the stand-ins are now:** Date `17530101D` -> `17540102D`; DateTime `CREATEDATETIME(17530101D, 000001T)` ->
+`CREATEDATETIME(17540102D, 000001T)`; Time `000001T` unchanged. 1754-01-02 rather than -01 for the reason this file gave for -03: a
+DateTime is stored in UTC and `CREATEDATETIME` reads the user's time zone, and a date one day clear of the bound stays storable at any
+offset under a day. Operator MAJOR 2.0.0 and `IDENTITY_SCHEME` unchanged, as above.
+
+**R984 is no longer part of R-971.** It landed from coord task R-978 (master 4dde9306); the branch takes master's R984 code as is.
+
+**Offline proof, redone** on the branch (master 2ec65b05 merged): every fixture emitted from master and from the branch and diffed
+(`/coord/handoff/R-971/classify.ts`): 8 temporal entries at 2.0.0, 4 of them with the new text, and 4 AL lines that differ by the date
+alone; NO OTHER DIFFERENCE. The emit goldens move for the same three files only.
+
+**Predicted gate figures, replacing the table above** (both baselines; verdicts, killing tests and every other row unchanged; the
+aggregate figures do not move):
+
+| Procedure | key suffix | mutatedTextSha256 | verdict, killingTest |
+|---|---|---|---|
+| IsDueDateSet | `\|1` -> `\|2` | `b32c785e...55c4` -> `f9a73ea9...54cd` (`17540102D`) | unchanged |
+| IsTimestampSet | `\|1` -> `\|2` | `9fb81652...5db5` -> `bae33c5e...b2cc` (`CREATEDATETIME(17540102D, 000001T)`) | unchanged |
+| StampFixedDate | `\|1` -> `\|2` | unchanged (`0D`) | unchanged |
+| IsCutoffSet | `\|1` -> `\|2` | unchanged (`000001T`) | unchanged |
+
+The key's leading hash does not move (no site's text before the mutation changes), so the rows keep their order.
+
+**The v3 record goes by R849's route.** `al-runner-v3.tables.baseline.json` is a pinned build's baseline, and R810 lets a record write
+only committed rows; the four keys change. So the expected file `packages/runner/itest/expected/al-runner-v3.tables.baseline.json`,
+the committed baseline with exactly the four rows above changed, is committed to master before the record, and the record must equal
+it. `tables.baseline.json` (BC, `itest:tables` on `bc2`) is deleted and recorded by R332, then checked against the same table. Merge
+master into the branch before either run (the lethal-control R-988 bump may land first).

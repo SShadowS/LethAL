@@ -89,11 +89,39 @@ poll="${LETHAL_HEAVY_POLL_S:-5}"
 starve="${LETHAL_HEAVY_STARVE_S:-900}"
 ticket=""
 class=""
+# R992: the admitted job, for its line in <lock dir>/heavy-peaks.tsv (written by `cleanup`, so a job this
+# shell ends by a signal gets its line too): when it started, its slot, the sampler and its peak file.
+job_started=""
+job_slot=""
+job_cmd=""
+sampler=""
+peakfile=""
 cleanup() {
+  local rc=$?
+  # Only this shell: a forked copy of it (the sampler's, signalled before it becomes bun) must neither
+  # write a line nor remove this job's class file and ticket.
+  [ "$BASHPID" = "$$" ] || return 0
+  if [ -n "$job_started" ]; then
+    # SIGKILL, never SIGTERM: a SIGTERM that reaches bun while it starts can be lost (the sampler, which
+    # ends only when this shell does, and this shell, waiting for it, would wait for each other). It
+    # holds nothing: a cut sample reads `?`.
+    kill -KILL "$sampler" 2>/dev/null
+    wait "$sampler" 2>/dev/null
+    # start, end, slot, class, declared GiB, measured GiB (`?`: no sample yet), exit code, the class file
+    # (its ` small` mark), the command (tabs and line ends made spaces, so one job is one line).
+    printf '%s\t%s\theavy.%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$job_started" "$(date -u +%FT%TZ)" "$job_slot" "$cls" \
+      "$peak" "$([ -s "$peakfile" ] && awk '{printf "%.2f", $1 / 1048576}' "$peakfile" || echo '?')" "$rc" \
+      "$(cat "$class" 2>/dev/null)" "$job_cmd" >>"$dir/heavy-peaks.tsv"
+    rm -f "$peakfile"
+  fi
   [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
   [ -n "$class" ] && rm -f "$class"
 }
 trap cleanup EXIT
+# A signal's exit code, not the last command's (`$?` in an EXIT trap run by a signal is the latter).
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The oldest live ticket that the guard has not refused, or (R991) has refused for `starve` seconds
 # or more; dead tickets (and their markers) are removed on the way. Live = the pid exists AND is a
@@ -134,11 +162,21 @@ try_once() {
     class="$dir/heavy.$n.class"
     echo "$$" >"$dir/heavy.$n" # the guard trusts a holder it can name by pid
     echo "$cls $$ $peak" >"$class"
-    "${BUN:-bun}" "$(dirname "$0")/heavy-slot-guard.ts" "$dir" "$n" "$cls" "$peak"
+    # R992: one guard at a time (a lock beside the slots): two small jobs deciding together would each
+    # see the other's class file before it carries ` small`, and both be admitted past the limit.
+    flock "$dir/heavy-guard.lock" "${BUN:-bun}" "$(dirname "$0")/heavy-slot-guard.ts" "$dir" "$n" "$cls" "$peak"
     g=$?
     if [ "$g" -eq 0 ]; then
       [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
       ticket=""
+      # R992: the job's measured peak (its process tree, sampled beside it) against its declared one;
+      # `cleanup` writes the line when this shell exits.
+      job_slot="$n"
+      job_cmd="$(printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-160)"
+      peakfile="$dir/heavy.$n.peak"
+      "${BUN:-bun}" "$(dirname "$0")/heavy-slot-peak.ts" "$$" "$peakfile" "${LETHAL_HEAVY_SAMPLE_S:-5}" &
+      sampler=$!
+      job_started=$(date -u +%FT%TZ)
       "$@"
       exit $?
     fi
@@ -176,7 +214,10 @@ ticket="$(printf '%012d' "$seq").$$"
 exec 8>&-
 echo "heavy-slot: queued as ticket $seq ($qdir)" >&2
 while :; do
-  if [ -e "$qdir/$ticket.refused" ] || [ "$(head_ticket)" = "$ticket" ]; then
+  h="$(head_ticket)"
+  # A refused waiter retries out of turn, except past a STARVED head (R991): that head waits for the held
+  # slots to drain, and a refused small job admitted by the R992 allowance would keep them from draining.
+  if [ "$h" = "$ticket" ] || { [ -e "$qdir/$ticket.refused" ] && ! [ -e "$qdir/$h.refused" ]; }; then
     try_once "$@"
     # R991: the marker keeps the FIRST refusal's time (its age is how long this ticket was passed over).
     [ $? -eq 76 ] && { [ -e "$qdir/$ticket.refused" ] || : >"$qdir/$ticket.refused"; }

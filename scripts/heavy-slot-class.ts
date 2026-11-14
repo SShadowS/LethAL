@@ -36,19 +36,31 @@ export function readSlotClass(lockDir: string, slot: number): SlotClass | undefi
 export function readSlot(
   lockDir: string,
   slot: number,
-): { readonly cls: SlotClass; readonly peakGiB: number } | undefined {
+): { readonly cls: SlotClass; readonly peakGiB: number; readonly small: boolean } | undefined {
   let text: string;
   try {
     text = readFileSync(classFile(lockDir, slot), "utf8");
   } catch {
     return undefined;
   }
-  const m = /^(baseapp|other) (\d+)(?: (\d+(?:\.\d+)?))?\s*$/.exec(text);
+  // R992: a trailing ` small` marks a job admitted by the small-job allowance.
+  const m = /^(baseapp|other) (\d+)(?: (\d+(?:\.\d+)?))?( small)?\s*$/.exec(text);
   if (m === null) return undefined;
   const pid = Number(m[2]);
   if (!(pid > 0 && alive(pid))) return undefined;
   const cls = m[1] as SlotClass;
-  return { cls, peakGiB: m[3] !== undefined ? Number(m[3]) : DEFAULT_PEAK_GIB[cls] };
+  return {
+    cls,
+    peakGiB: m[3] !== undefined ? Number(m[3]) : DEFAULT_PEAK_GIB[cls],
+    small: m[4] !== undefined,
+  };
+}
+
+/** R992: mark a held slot's class file as admitted by the small-job allowance (` small` appended). */
+export function markSlotSmall(lockDir: string, slot: number): void {
+  const file = classFile(lockDir, slot);
+  const text = readFileSync(file, "utf8").trimEnd();
+  if (!text.endsWith(" small")) writeFileSync(file, `${text} small\n`);
 }
 
 /** Write our class (and peak) for the slot (pid = this process) and remove it when this process exits. */
@@ -80,6 +92,20 @@ export const DEFAULT_PEAK_GIB: Readonly<Record<SlotClass, number>> = { baseapp: 
 /** GiB kept free below `memory.max` for the sessions, caches and non-heavy work the cgroup also counts. */
 export const MEMORY_RESERVE_GIB = 4;
 
+/**
+ * R992 (ruling q-20261114T100041-36371d53, kraken for the owner): a job of at most this many GiB is
+ * admitted when the container's USED memory + its peak + the reserve fits, even if the declared-sum
+ * check says no (a 1 GiB build waited 36 min at 16.9 of 32 GiB used), while fewer than
+ * `SMALL_JOBS_MAX` jobs admitted this way are held.
+ */
+export const SMALL_JOB_MAX_GIB = 2;
+export const SMALL_JOBS_MAX = 2;
+/** R992: the ledger (in the lock folder) of admissions that passed only by the small-job allowance:
+ *  time, slot, class, peak GiB, used GiB, held declared peaks GiB, max GiB, the heavy-slot.sh pid. */
+export const SMALL_ADMITS_LEDGER = "heavy-small-admits.tsv";
+/** R992: the ledger (in the lock folder) of every admitted heavy job's declared and measured peak. */
+export const PEAKS_LEDGER = "heavy-peaks.tsv";
+
 /** `serve`, `baseline`, `gate`, `build` or a number of GiB; undefined when it is none of these. */
 export function parsePeak(arg: string): number | undefined {
   if (Object.hasOwn(PEAK_GIB, arg)) return PEAK_GIB[arg as keyof typeof PEAK_GIB];
@@ -106,6 +132,10 @@ export function readContainerMemory(): ReturnType<typeof readCgroupMemory> {
  * nothing to bound against: the job is admitted and the message says the memory rule is off.
  * R991: a job whose peak plus the reserve is over `memory.max` itself can NEVER be admitted, however
  * the queue drains: `never` says so, and the guard fails it by name instead of letting it wait.
+ * R992: `smallHeld` is how many held jobs were admitted by the small-job allowance, or undefined when
+ * that could not be read (then no allowance: fail closed). A job of at most `SMALL_JOB_MAX_GIB` that
+ * fails only the declared-sum check is admitted with `small` set while fewer than `SMALL_JOBS_MAX`
+ * such jobs are held.
  */
 export function memoryVerdict(
   sample:
@@ -114,11 +144,13 @@ export function memoryVerdict(
   heldPeaksGiB: readonly number[],
   peakGiB: number,
   reserveGiB: number = MEMORY_RESERVE_GIB,
+  smallHeld?: number,
 ): {
   readonly refuse: boolean;
   readonly message: string;
   readonly off?: true;
   readonly never?: true;
+  readonly small?: true;
 } {
   if (sample?.maxBytes === undefined)
     return {
@@ -143,7 +175,22 @@ export function memoryVerdict(
   const why = !nowFits
     ? `used + peak + reserve = ${f(used + peakGiB + reserveGiB)}`
     : `held peaks + peak + reserve = ${f(held + peakGiB + reserveGiB)}`;
-  const outcome = nowFits && peaksFit ? "admitted" : `REFUSED (${why} > ${f(max)})`;
-  const message = `memory: max ${f(max)} GiB, used ${f(used)}, held slots' peaks ${f(held)} (${heldPeaksGiB.length}), this job's peak ${f(peakGiB)}, reserve ${f(reserveGiB)} -> ${outcome}`;
-  return { refuse: !(nowFits && peaksFit), message };
+  const head = `memory: max ${f(max)} GiB, used ${f(used)}, held slots' peaks ${f(held)} (${heldPeaksGiB.length}), this job's peak ${f(peakGiB)}, reserve ${f(reserveGiB)} ->`;
+  if (nowFits && peaksFit) return { refuse: false, message: `${head} admitted` };
+  // R992: the small-job allowance (used memory decides; the declared sum does not), fail closed.
+  if (
+    nowFits &&
+    peakGiB <= SMALL_JOB_MAX_GIB &&
+    smallHeld !== undefined &&
+    smallHeld < SMALL_JOBS_MAX &&
+    Number.isFinite(used) &&
+    used >= 0
+  ) {
+    return {
+      refuse: false,
+      small: true,
+      message: `${head} admitted as a small job (R992: used + peak + reserve = ${f(used + peakGiB + reserveGiB)} fits; held peaks + peak + reserve = ${f(held + peakGiB + reserveGiB)} does not; small jobs held ${smallHeld} of ${SMALL_JOBS_MAX})`,
+    };
+  }
+  return { refuse: true, message: `${head} REFUSED (${why} > ${f(max)})` };
 }
