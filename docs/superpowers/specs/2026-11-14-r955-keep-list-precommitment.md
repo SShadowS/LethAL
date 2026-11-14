@@ -25,3 +25,18 @@ With #7978's compile cache on `current`, DO's daemon baseline still restarted 7 
 - Unit: `al-runner-serve-rule.test.ts` keeps on the measured texts and closes on a sibling, a tail, a prefix and a missing test name;
   red both ways.
 - DO's re-measure (fewer restarts) waits for R-974, as R-942's serve windows do.
+
+## Amendment 1 (2026-11-14, Opus review, before any gate run)
+
+- **Two more behaviours move with the keep list, by design (as for R945's families).** (a) The warm-up's batch-refusal stop
+  (`al-runner-v3-entries-batch-refused`, every entry refused with one identical safe-listed text) reads the same list: a warm-up whose
+  every entry is refused with `FindSet on the Company table` no longer stops the run by name; it carries on, and each such test is an
+  unscored notRun error, as a .NET family already is. The cascade text carries the test name, so "every entry identical" does not
+  occur for it. (b) R786's warm-up-dirty fallback no longer fires on a Company FindSet row; the two unit tests that used that text as
+  their closing example now use `InStream method on an unassigned Variant`, which still closes.
+- **The measurement's reach, said plainly.** The reader never saw the key or the sequence in any request (Module scope, isolation
+  "test", coverage off); the basis for keeping the daemon is R-937's finding that nothing crosses requests under any isolation, and
+  the cascade's firing shows the state existed inside its run. Company or User scope, `codeunit` isolation and coverage on were not
+  re-measured here (R-937 covered `codeunit` isolation).
+- **The cascade regex takes a test name with no comma** (DO's 792 rows hold none), so two causes joined into one message close.
+- Predictions unchanged: no gate figure moves.
