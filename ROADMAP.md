@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**31 of 965 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 966 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1010,6 +1010,7 @@ that ordering is the priority.
 - **R1001** · A v3 serve baseline in which every test is refused with one and the same text runs to its end (DC: 1,839 of 1,839 tests, 4,656 s, 117 daemons) instead of stopping early by name · [R1001.md](docs/roadmap/R1001.md) · open
 - **R1002** · Three DC test codeunits still run one-shot inside a serve session: their method names use shapes serve-entries is not proven for (a lone ".", a name starting with "//", a name starting with "(") · [R1002.md](docs/roadmap/R1002.md) · open
 - **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open
+- **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · open
 
 ---
 
