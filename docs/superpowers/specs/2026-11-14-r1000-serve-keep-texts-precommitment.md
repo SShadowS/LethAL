@@ -41,3 +41,15 @@ Measured since the prediction above, so the prediction now rests on all 15 gated
 cases, copied verbatim, run one-shot with isolation test on every build of `al-runner-v3-gated-builds.json`, alpha.12
 to edge-847b1fa5a (`/coord/handoff/R-989/probe-cases/`): on each, all three rows are refusals their keep entry accepts,
 and no row is unkept. So a `--refresh-rows` re-gate of any manifest row is expected to stay mechanical.
+
+## Addendum 2 (2026-11-14, after the first gate run, before the next): the Company FindSet case is dropped
+
+The first `itest:alrunner-v3` run on the built head (63de4564, edge-847b1fa5a) passed every leg except C, which read
+`serve-keep-reasons = unkept` on exactly one row, the new `company-findset` case: `NotRun: out-of-scope: ... \`C\`: table
+\`Company\` is outside the workspace`. The fact's serve daemon starts with no package cache, so a System record is outside
+its workspace; the one-shot measurement above had the packages. Not a keep-list text: a probe-environment refusal (the new
+check did its job on it). Change: the `company-findset` case (codeunit 50677) is removed; leg C's serve probe keeps the two
+`cascade-existing-state` cases (seven codeunits, ten tests); `company-findset`'s text stays checked one-shot with packages on
+all 15 builds (`/coord/handoff/R-989/probe-cases/`). Every other leg of that run passed, both cascade cases read as kept
+refusals. Prediction for the next run: as above, without the `company-findset` line: every leg passes, leg C's
+`serve-keep-reasons` reads `matches` with `cascade-existing-state: refusal` twice.
