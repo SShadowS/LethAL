@@ -224,7 +224,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R855 re-pinned (was cf442b39...3d4): swap-call-arguments operatorVersion 1.1.0, plus new delete-* mutants.
   // R926: every statement-grain entry gains `reachLine` (was bc2c6465...83bc).
   // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c).
-  const pinned = "5dd124ade8b16cef2593b8a4fc0002cf3a005eaa1da897c8e91ba4460ad9a9fb";
+  // R976: the 106 `empty-block` entries gain `reachLine`, the only change (was 5dd124ad...a9fb).
+  const pinned = "5cadd234312a6a8e8b612b23711996195d82bed905e283e691bff4b3faf0f28a";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

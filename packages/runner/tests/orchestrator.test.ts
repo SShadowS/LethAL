@@ -9,7 +9,8 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { swapAdditive } from "@lethal/builtin-tier1";
@@ -123,6 +124,7 @@ import {
   NO_GREEN_BASELINE,
   activateOnce,
   generateMutationSet,
+  identityOrdinalsOf,
   narrowFilesToSubset,
   noGreenBaselineNote,
   operatorTiers,
@@ -2069,6 +2071,71 @@ ${TRIGGER_TABLE_AL}#endif
       for (const m of lineDecided) expect(m.verdict).toBe("no-coverage");
       expect(warned).toBe(false);
       expect(report.untargetedTriggerCount).toBe(0);
+    });
+
+    // R976. Before it the body's `empty-block` had no reach line and kept FALLBACK 1 (survived,
+    // attribution `object`) whether or not any test ran the trigger. One test per direction; each
+    // hits exactly the body's first statement's line (the `if`), or every line but it, so a block
+    // line off by one (the `trigger` or `begin` line) goes red too.
+    const verdictOfBodyBlock = async (tableLines: (ifLine: number) => number[]) => {
+      const dirs = await makeProject(TWO_TEST_AL);
+      await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      // The `if` statement's reach line, from the manifest the same code emits.
+      const set = await generateMutationSet(dirs.projectDir, { emit: () => {} });
+      const scratch = await mkdtemp(join(tmpdir(), "r976-"));
+      let ifLine: number | undefined;
+      try {
+        await writeInstrumentedProject({
+          targetDir: scratch,
+          files: set.files,
+          identityOrdinals: identityOrdinalsOf(set),
+          selectorIds,
+          artifactId: "0123456789abcdef0123456789abcdef",
+          targetAppId: "00000000-0000-0000-0000-000000000000",
+          operatorTiers,
+        });
+        const manifest = JSON.parse(
+          await readFile(join(scratch, "mutant-manifest.json"), "utf8"),
+        ) as { mutants: { file: string; operatorName: string; reachLine?: number }[] };
+        const table = manifest.mutants.filter((m) => m.file.includes("SandboxTable"));
+        const stmts = table.filter((m) => m.operatorName !== "lethal.empty-block");
+        const [block] = table.filter((m) => m.operatorName === "lethal.empty-block");
+        // The statement mutants that carry a line sit on the `if` (the first statement); one inside
+        // its then-slot is `enclosing` grain and carries none.
+        const lines = stmts.flatMap((m) => (m.reachLine !== undefined ? [m.reachLine] : []));
+        expect(lines.length).toBeGreaterThan(0);
+        ifLine = Math.min(...lines);
+        expect(block?.reachLine).toBe(ifLine);
+      } finally {
+        await rm(scratch, { recursive: true, force: true });
+      }
+      const backend = new StubBackend(CAPS_NST, () => "pass");
+      backend.lineCoverageFor = () => [4];
+      backend.tableLinesFor = () => tableLines(ifLine ?? -1);
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({ backend, store, ...dirs, selectorIds });
+        const blocks = report.mutants.filter(
+          (m) => m.file.includes("SandboxTable") && m.operatorName === "lethal.empty-block",
+        );
+        expect(blocks.length).toBe(1);
+        const [b] = blocks;
+        return [b?.verdict, b?.coverageAttribution ?? null];
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    };
+
+    test("R976: a baseline that ran the trigger body's first statement covers its empty-block by line", async () => {
+      expect(await verdictOfBodyBlock((ifLine) => [ifLine])).toEqual(["survived", "line"]);
+    });
+
+    test("R976: a baseline that hit every table line but the body's first statement leaves its empty-block no-coverage", async () => {
+      const allBut = (ifLine: number) =>
+        Array.from({ length: 40 }, (_, i) => i + 1).filter((l) => l !== ifLine);
+      expect(await verdictOfBodyBlock(allBut)).toEqual(["no-coverage", null]);
     });
 
     test("R975 review: a reused (--resume) baseline does not decide by line; its triggers keep FALLBACK 1", async () => {
@@ -19463,8 +19530,9 @@ describe("GH-24: per-mutant reach", () => {
     row: ReturnType<typeof reportRow> | Scored,
   ): ReturnType<typeof survivorReachOf> =>
     survivorReachOf("exact", "not-measured", row.guardReached, "statement", false);
-  // The empty-body mutant's reach statement is the procedure body (a compound block): it carries
-  // no `reachLine`, so v3 leaves it undecided. The rest are the mutants these tests are about.
+  // The empty-body mutant's reach statement is the procedure body (a compound block). Since R976 it
+  // carries its first statement's line, `exit(...)`'s (13), so it is decided like the rest; a mutant
+  // with no `reachLine` would still be left undecided, which this helper checks.
   const decidedOf = (scored: Scored[]): Scored[] => {
     for (const e of scored.filter((s) => s.mutant.reachLine === undefined)) {
       expect(reachOf(e)).toEqual({});
@@ -19584,8 +19652,8 @@ describe("GH-24: per-mutant reach", () => {
   });
 
   // R926 review: ATest answered and its baseline HIT the line; BTest timed out. A hit is a hit, so
-  // the timed-out mutant still reads reached by ATest. Only M0002 times out (M0001 is the
-  // empty-body mutant, with no reach line), and it runs ATest first as no kill is in the ledger yet.
+  // the timed-out mutant still reads reached by ATest. Only M0002 times out (the script names it;
+  // M0001 is the empty-body mutant), and it runs ATest first as no kill is in the ledger yet.
   test("R926: a hit is kept when another covering test ended unanswered", async () => {
     const lines = (ref: TestMethodRef) => (ref.method === "ATest" ? [REACH_LINE] : [4]);
     const timeoutB = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
