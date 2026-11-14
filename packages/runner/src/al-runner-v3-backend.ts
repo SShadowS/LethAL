@@ -1185,7 +1185,8 @@ export function namedSidecar(configured: string): string {
 
 /**
  * R886: the sidecar for this session. `configured`: `alRunnerV3.dotnetSidecar`. A named file that
- * is missing throws (the caller named it). With none named, the pinned build's own sidecar is used
+ * is missing throws (the caller named it); a named file other than the build's own is used with a
+ * `warning` that names both (R998). With none named, the pinned build's own sidecar is used
  * when the file exists with the sha256 `.gated` recorded; otherwise `warning` says why and none is
  * passed (a missing or changed file must not run silently).
  */
@@ -1195,8 +1196,22 @@ export async function resolveDotnetSidecar(
   gated: GatedBuild,
 ): Promise<{ readonly path?: string; readonly warning?: string }> {
   if (configured === false) return {};
-  if (configured !== undefined) return { path: namedSidecar(configured) };
   const pinned = pinnedSidecar(alRunnerPath, gated);
+  if (configured !== undefined) {
+    // The config wins (R886), but a named file that is not this build's own sidecar is said by name (R998): a sidecar built for
+    // another al-runner build can speak another protocol, and every .NET call then fails as "protocol mismatch" while the run
+    // looks normal (R-975: 13 Bank Deposits tests lost that way to a config pinned two builds earlier).
+    const path = namedSidecar(configured);
+    // Compared with the hash `.gated` recorded, so a build whose own sidecar file is gone still says it.
+    if (pinned === undefined) return { path };
+    const sha = await sha256OfFile(path);
+    return sha === pinned.sha256
+      ? { path }
+      : {
+          path,
+          warning: `"alRunnerV3.dotnetSidecar" names ${path} (sha256 ${sha}), not this al-runner build's own sidecar ${pinned.path} (sha256 ${pinned.sha256}, .gated); a sidecar built for another build can speak another protocol, and every .NET call then fails with "protocol mismatch" (R998). Remove the setting to use the build's own, or rebuild the named file for this build`,
+        };
+  }
   if (pinned === undefined) return {};
   if (!existsSync(pinned.path))
     return { warning: `the pinned sidecar ${pinned.path} is missing; .NET types are refused` };
@@ -2665,8 +2680,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ).catch((e: unknown) => e as Error);
       if (sidecar instanceof Error) return { ok: false, details: sidecar.message };
       this.sidecarPath = sidecar.path;
+      // R998: a named sidecar that is not the build's own is used, and says so under a code of its own.
       if (sidecar.warning !== undefined)
-        this.notify("al-runner-v3-dotnet-sidecar-unusable", `[lethal] ${sidecar.warning} (R886)`);
+        this.notify(
+          sidecar.path !== undefined
+            ? "al-runner-v3-dotnet-sidecar-not-the-builds"
+            : "al-runner-v3-dotnet-sidecar-unusable",
+          sidecar.path !== undefined
+            ? `[lethal] ${sidecar.warning}`
+            : `[lethal] ${sidecar.warning} (R886)`,
+        );
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true
