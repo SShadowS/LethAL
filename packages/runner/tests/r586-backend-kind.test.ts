@@ -507,6 +507,30 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("R1008 (build review): a serve resume of a run whose baseline ran one-shot names it and the way to resume it", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const serve = () =>
+        Object.assign(withProbe(new V3KindStub([]), []), { baselineDaemon: true });
+      await v3Session(root, store, serve());
+      expect(store.getRun(1)?.runnerBuild).toContain(" baseline-daemon");
+      // Run 1 as a warm-up fallback (R786) records it: one-shot, so no tag, and unfinished.
+      store.db.run(
+        "UPDATE runs SET runner_build = REPLACE(runner_build, ' baseline-daemon', ''), finished_at = NULL WHERE id = 1",
+      );
+      const err = await v3Session(root, store, serve(), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(err)).toContain("run 1, but its baseline ran one-shot");
+      expect(String(err)).toContain('"alRunnerV3.transport": "one-shot"');
+      // ...and a one-shot session (the way it names) resumes it.
+      const oneShot = await v3Session(root, store, withProbe(new V3KindStub([]), []), {
+        resume: "last",
+      });
+      expect(oneShot.validity.caveats).toContain("resumed");
+    });
+  });
+
   test("R956: the other-environment refusal still names the environment when a license is set", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

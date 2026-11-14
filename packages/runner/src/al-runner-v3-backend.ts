@@ -2976,7 +2976,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R1008: a resume is no fallback reason any more. Forcing one-shot left a serve run with no way to
     // continue: the one-shot session lacks the run's ` baseline-daemon` tag (R948), so no run matched.
     // A serve session's resume runs its baseline again instead (`resumeRunsBaseline`), as R857's
-    // --isolate-tests and R896's isolation "auto" already did, so the warm-up has its rows.    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
+    // --isolate-tests and R896's isolation "auto" already did, so the warm-up has its rows.
+    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
     // WRE measured them equal to one-shot per mutant (pre-commitment e1ca5d11). Coverage placement,
     // the shape-specific part, is built from the deployed text the same way under both transports.
     const { version, binarySha256 } = await this.runnerBuild();
@@ -4854,7 +4855,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   parallelRefusal(): string | undefined {
     if (this.resumeSession) {
-      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a reused baseline has no rows for the lanes' serve warm-up (R766)";
+      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a resumed session's lanes were never measured on a re-run baseline (R766; a resume with --workers 1 runs on serve, R1008)";
     }
     if (!this.entries) {
       return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
