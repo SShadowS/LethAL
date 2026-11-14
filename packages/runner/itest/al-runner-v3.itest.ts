@@ -585,7 +585,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
 const S1E_PINS = {
   pairRequests: 3,
   liveRequests: 1,
-  boundChecks: 3,
+  // R987: 3 -> 4, the prefetch's first request carries at most 16 unmeasured codeunit entries
+  // (docs/superpowers/specs/2026-11-14-r987-request-sizing-precommitment.md, master 2c0976bc).
+  boundChecks: 4,
   warmups: 1,
   entriesSent: 48,
   pairBatchRequests: 1,
@@ -1334,7 +1336,7 @@ const N1S_PINS = {
   // entriesSent is read from a run (R855's addendum), not derived.
   pairRequests: 44,
   liveRequests: 1,
-  boundChecks: 3,
+  boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
   warmups: 1,
   entriesSent: 266,
   pairBatchRequests: 1,
@@ -1518,7 +1520,7 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
   WRE: {
     warmups: 1,
     liveRequests: 1,
-    boundChecks: 3,
+    boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
     entriesSent: 448,
     pairRequests: 62,
     echoMismatches: 0,
