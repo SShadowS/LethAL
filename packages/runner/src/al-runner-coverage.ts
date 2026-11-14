@@ -20,7 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { evaluateArms, initParser, parseAL } from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
-import type { CoverageEntry, CoverageMap } from "./backend";
+import type { CoverageEntry, CoverageMap, NamingGap } from "./backend";
 import {
   LineMap,
   type LineMapEntry,
@@ -595,6 +595,9 @@ export function alRunnerCoverageFromServer(
 ): CoverageMap {
   const entries: CoverageEntry[] = [];
   const seen = new Set<string>();
+  // R975 review: a hit statement that cannot be placed. Its object is unknown, so every object of
+  // its file loses the line rule (and keeps FALLBACK 1) instead of reading a lost hit as no-coverage.
+  const gaps = new Map<string, NamingGap>();
   const skipped = new Set(index.skippedFiles);
   // `lookup` scans an object's spans, so it is memoised per object line: a large object reports the
   // same few lines many times.
@@ -615,7 +618,14 @@ export function alRunnerCoverageFromServer(
       // reached it. Treating it as coverage is [[R63]]'s manufactured coverage.
       if ((st.hits ?? 0) <= 0) continue;
       const at = placeStatement(objects, st.line);
-      if (at === undefined) continue;
+      if (at === undefined) {
+        for (const o of objects)
+          gaps.set(`${o.objectType}:${o.objectId}`, {
+            objectType: o.objectType,
+            objectId: o.objectId,
+          });
+        continue;
+      }
       let procedure = st.scope;
       if (at.objectLine !== undefined) {
         const { objectType, objectId, objectLine } = at;
@@ -668,7 +678,11 @@ export function alRunnerCoverageFromServer(
       });
     }
   }
-  return { granularity: "line", entries };
+  return {
+    granularity: "line",
+    entries,
+    ...(gaps.size > 0 ? { namingGaps: [...gaps.values()] } : {}),
+  };
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   type Git,
   HEAVY_GUARD_EXIT,
   RefusedError,
+  SLOTS,
   SLOT_BUSY,
   corpusHeadOf,
   diffDumps,
@@ -933,16 +934,15 @@ describe("B5 the heavy-job guard", () => {
     } catch {}
   };
   const posix = test.skipIf(process.platform === "win32");
-  posix("slots are tried 1, 2, 3; all three held by live holders -> null (busy)", async () => {
+  // R960: six slot files (a ceiling that does not bind; admission is by memory).
+  posix("slots are tried 1 to 6; all six held by live holders -> null", async () => {
     const dir = fresh("locks");
     const held: number[] = [];
     try {
-      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 1, code: 0 });
-      held.push((await hold(join(dir, "heavy.1"))).pid);
-      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 2, code: 0 });
-      held.push((await hold(join(dir, "heavy.2"))).pid);
-      expect(trySlots(dir, () => ["true"])).toEqual({ slot: 3, code: 0 });
-      held.push((await hold(join(dir, "heavy.3"))).pid);
+      for (const n of SLOTS) {
+        expect(trySlots(dir, () => ["true"])).toEqual({ slot: n, code: 0 });
+        held.push((await hold(join(dir, `heavy.${n}`))).pid);
+      }
       expect(trySlots(dir, () => ["true"])).toBeNull();
     } finally {
       for (const pid of held) kill(pid);
@@ -974,16 +974,16 @@ describe("B5 the heavy-job guard", () => {
     }
     throw new Error("expected a RefusedError");
   };
-  posix("R724 (a): all three slots held -> the refusal exits 75", async () => {
+  posix("R724 (a): all slots held -> the refusal exits 75", async () => {
     const dir = fresh("locks");
     const held: number[] = [];
     try {
-      for (const n of [1, 2, 3]) held.push((await hold(join(dir, `heavy.${n}`))).pid);
+      for (const n of SLOTS) held.push((await hold(join(dir, `heavy.${n}`))).pid);
       await withLockDir(dir, () => {
         const e = refusal(() =>
           slotted("cdo", ["snapshot", "cdo", "--master"], undefined, () => {}),
         );
-        expect(e.message).toContain("all three heavy slots held");
+        expect(e.message).toContain("all 6 heavy slots held");
         expect(exitCodeOf(e)).toBe(75);
       });
     } finally {

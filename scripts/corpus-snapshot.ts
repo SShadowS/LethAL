@@ -33,10 +33,10 @@
  * origin/master); the branch side is dumped from the worktree as it is, into a temp dir that is
  * deleted afterwards. Projects are joined by path RELATIVE to the set's corpus root.
  *
- * Heavy-job guard (owner rule R642: three heavy jobs container-wide, of which at most two BaseApp
- * (BC.History, set `bch`) corpus jobs; a BaseApp job counts against both caps), for every set but
- * `fixtures`, before a dump: the tool re-execs itself under `flock -n -E 111 <locks>/heavy.<n>`
- * (slot 1, then 2, then 3;
+ * Heavy-job guard (R960, owner ruling 2026-11-13: by cgroup memory only where the cgroup names a
+ * limit, see `guardInSlot`; the R642 count rule, three heavy jobs of which at most two BaseApp
+ * (BC.History, set `bch`) corpus jobs, only on a host without one), for every set but `fixtures`,
+ * before a dump: the tool re-execs itself under `flock -n -E 111 <locks>/heavy.<n>` (slot 1 to 6;
  * `LETHAL_HEAVY_LOCK_DIR`, default /coord/locks). The kernel holds the lock for as long as any
  * process holds the fd, project children included, so SIGKILL needs no cleanup. Inside the slot, a
  * `ps` scan counts OTHER heavy jobs that take no slot (one per itest:alrunner root, else one per
@@ -671,8 +671,9 @@ function ancestors(procs: readonly Proc[], pid: number): Set<number> {
   return out;
 }
 
-/** The heavy slots, tried in this order (owner rule R642: three heavy jobs container-wide). */
-export const SLOTS = [1, 2, 3] as const;
+/** The heavy slots, tried in this order (R960: admission is by memory; R642's count is the no-cgroup fallback). */
+// R960: six slot files, a ceiling (it binds only when six small jobs run): admission is by memory (R953).
+export const SLOTS = [1, 2, 3, 4, 5, 6] as const;
 /** Heavy jobs container-wide, and of those, BaseApp (BC.History) corpus jobs (R642). */
 const TOTAL_CAP = 3;
 const BASEAPP_CAP = 2;
@@ -701,7 +702,7 @@ function holderIsBaseApp(args: string): boolean {
  * for a BaseApp job (`selfBaseApp`), when the other BaseApp jobs reach 2 (the BaseApp cap): held
  * slots whose live holder dumps `bch`, plus unslotted jobs with a process naming BC.History.
  */
-const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [123]\b/;
+const SLOT_HOLDER_RE = /(^|\/)corpus-snapshot\.ts\b.*--in-slot [1-6]\b/;
 /**
  * R905: a `scripts/heavy-slot.sh [--wait] [--peak <p>] <class> <cmd>` holder writes its own pid in the
  * lock; its class is in its argv. R952: `--peak`, and anchored at the command's start (heavy-slot.sh,
@@ -803,12 +804,30 @@ export function heavyVerdict(
   return { refuse, foreign, message };
 }
 
+/**
+ * R960 review: the default peak (GiB) of every heavy job the `ps` scan finds that holds no slot. The
+ * memory rule counts them with the held slots' declared peaks: `memory.current` holds only what such a
+ * job uses NOW, not the peak it grows to. A job naming BC.History counts at the BaseApp default, any
+ * other at `other`'s.
+ */
+export function unslottedPeaks(
+  procs: readonly Proc[],
+  self: number,
+  slotPids: readonly number[],
+  slotClasses: readonly (SlotClass | undefined)[],
+): number[] {
+  const v = heavyVerdict(procs, self, slotPids, slotPids.length, false, slotClasses);
+  return v.foreign.map((p) =>
+    BASEAPP_ROOT_RE.test(p.args) ? DEFAULT_PEAK_GIB.baseapp : DEFAULT_PEAK_GIB.other,
+  );
+}
+
 /** flock's "slot busy" code. Private to the slot probe: it must never equal 0, 1, 2 or
  *  HEAVY_GUARD_EXIT (75), or a child's own exit would read as a busy slot (R724). */
 export const SLOT_BUSY = 111;
 
 /**
- * N3: run `cmd(n)` under `flock -n -E 111 <lockDir>/heavy.<n>`, slot 1, then 2, then 3. Returns the
+ * N3: run `cmd(n)` under `flock -n -E 111 <lockDir>/heavy.<n>`, slot 1 to 6 in order. Returns the
  * slot and the command's exit code, or null when every slot is held (each returned 111).
  */
 export function trySlots(
@@ -855,12 +874,35 @@ export function guardInSlot(
   writeFileSync(join(dir, `heavy.${mine}`), `${process.pid}\n`);
   writeSlotClass(dir, mine, baseApp ? "baseapp" : "other");
   const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
+  const slots = held.map((s) => readSlot(dir, s));
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const slots = held.map((s) => readSlot(dir, s));
+  const procs = parsePs(readPs());
+  // R960 (owner ruling 2026-11-13): where the cgroup names a limit, memory alone decides, as
+  // heavy-slot.sh's guard does (an unclassed slot at the larger default; a heavy job in no slot at its
+  // class default, review r1); no job count or class cap.
+  const m = memoryVerdict(
+    readContainerMemory(),
+    [
+      ...slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
+      ...unslottedPeaks(
+        procs,
+        process.pid,
+        pids,
+        slots.map((s) => s?.cls),
+      ),
+    ],
+    DEFAULT_PEAK_GIB[baseApp ? "baseapp" : "other"],
+  );
+  print(m.message);
+  if (m.off !== true) {
+    if (m.refuse) throw new RefusedError(m.message, true);
+    return;
+  }
+  // No cgroup limit to read: the count verdict, as before R953.
   const v = heavyVerdict(
-    parsePs(readPs()),
+    procs,
     process.pid,
     pids,
     held.length,
@@ -869,14 +911,6 @@ export function guardInSlot(
   );
   print(v.message);
   if (v.refuse) throw new RefusedError(v.message, true);
-  // R952 (R953): the memory rule, as heavy-slot.sh's guard applies it (an unclassed slot at the larger default).
-  const m = memoryVerdict(
-    readContainerMemory(),
-    slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
-    DEFAULT_PEAK_GIB[baseApp ? "baseapp" : "other"],
-  );
-  print(m.message);
-  if (m.refuse) throw new RefusedError(m.message, true);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1011,7 +1045,7 @@ export function slotted(
   );
   if (r === null)
     throw new RefusedError(
-      `heavy-job guard: all three heavy slots held (${lockDir()}/heavy.1, heavy.2, heavy.3)`,
+      `heavy-job guard: all ${SLOTS.length} heavy slots held (${lockDir()}/heavy.1 .. heavy.${SLOTS.length})`,
       true,
     );
   return r.code;

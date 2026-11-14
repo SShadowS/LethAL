@@ -304,6 +304,21 @@ describe("serveDaemonReusable, the rule alone", () => {
       ],
     },
   };
+  // R981 (coord R-967): the no-provider family, measured clean on two platform tables.
+  R945["platform-no-provider"] = {
+    keeps: [
+      `${P}store error platform table 'Api Web Service' (2000000193) has no provider`,
+      `${P}store error platform table 'Tenant Media Set' (2000000183) has no provider`,
+      // an Insert's wording (no "store error"), measured clean too
+      `${P}platform table 'Api Web Service' (2000000193) has no provider`,
+    ],
+    closes: [
+      // a tail after the measured wording, and a write that is not the measured read
+      `${P}store error platform table 'Api Web Service' (2000000193) has no provider for writes`,
+      `${P}store error platform table 'Api Web Service' has no provider`,
+      `${P}Insert on virtual table 'Tenant Media': its rows are computed, not stored`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);

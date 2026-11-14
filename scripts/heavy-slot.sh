@@ -8,23 +8,27 @@
 # ("<class> <pid> <peak>") and the guard admits the job only when the container's cgroup has room for
 # it: used + peak + reserve and the held slots' peaks + peak + reserve both fit under memory.max
 # (scripts/heavy-slot-class.ts, memoryVerdict). A memory refusal is a guard refusal like any other.
+# R960 (owner ruling 2026-11-13): where the cgroup names a limit, memory is the ONLY rule: no job
+# count, no BaseApp-class cap; a heavy job in no slot counts at its class default peak. The six slot
+# files are a ceiling that binds only when six small jobs run at once. On a
+# host with no cgroup limit, the old count rule (two jobs while a BaseApp-class job runs, else
+# three) still decides.
 #
 # Use `baseapp` for a job over BC.History or any copy of it (even under /coord/handoff), `other`
 # for everything else (al-runner v3 gates, campaigns, measurements). It takes the first free
-# /coord/locks/heavy.<n> (n = 1, 2, 3; LETHAL_HEAVY_LOCK_DIR overrides the folder) with flock,
-# writes its own pid into the lock file and heavy.<n>.class ("<class> <pid>"), then runs the same
-# guard as corpus-snapshot (scripts/heavy-slot-guard.ts): while a BaseApp-class job runs, or a slot
-# has no class, at most two heavy jobs run container-wide, else three. If the guard refuses, the
-# slot is released and the command does not run. The class file is removed on exit.
+# /coord/locks/heavy.<n> (n = 1..6; LETHAL_HEAVY_LOCK_DIR overrides the folder) with flock,
+# writes its own pid into the lock file and heavy.<n>.class ("<class> <pid> <peak>"), then runs the
+# guard (scripts/heavy-slot-guard.ts). If the guard refuses, the slot is released and the command
+# does not run. The class file is removed on exit.
 #
 # R934 `--wait`: instead of exit 75, take a numbered ticket in <lock dir>/heavy-queue/ and wait in
 # FIFO order. Only the oldest LIVE ticket tries for a slot, every LETHAL_HEAVY_POLL_S seconds
 # (default 5); a ticket whose pid is gone, or is no longer a heavy-slot.sh, is dropped, so a dead
-# waiter never blocks the queue. The caps are the guard's, unchanged, and a waiter holding no slot
-# is no job to either guard. A caller WITHOUT --wait exits 75 while any live ticket waits, so it
+# waiter never blocks the queue. Admission is the guard's, and a waiter holding no slot is no job
+# to it. A caller WITHOUT --wait exits 75 while any live ticket waits, so it
 # cannot overtake the queue.
-# A waiter the GUARD refused (a free slot, but over the cap for its class: a baseapp waiter while
-# two jobs run) marks its ticket `.refused`. It then retries every poll out of turn, and no longer
+# A waiter the GUARD refused (a free slot, but no room: its peak does not fit the memory left) marks
+# its ticket `.refused`. It then retries every poll out of turn, and no longer
 # blocks the waiters behind it or plain callers, so a slot it may not take is not left empty. The
 # price: a refused waiter can be overtaken while it stays refused. corpus-snapshot.ts and
 # v3-timing.ts take their slots without looking at the queue.
@@ -106,7 +110,7 @@ head_ticket() {
 # 76 (the guard refused).
 try_once() {
   local n rc g
-  for n in 1 2 3; do
+  for n in 1 2 3 4 5 6; do # R960: SLOTS in corpus-snapshot.ts
     # >> not >: > would wipe the pid a corpus-snapshot holder keeps in the lock file.
     exec 9>>"$dir/heavy.$n" || exit 2
     flock -n 9
@@ -142,7 +146,11 @@ if [ "$wait" -eq 0 ]; then
     exit 75
   fi
   try_once "$@"
-  echo "heavy-slot: all three heavy slots held or the guard refused ($dir/heavy.1, heavy.2, heavy.3)" >&2
+  if [ $? -eq 76 ]; then
+    echo "heavy-slot: the guard refused (its verdict is above)" >&2
+  else
+    echo "heavy-slot: all heavy slots held ($dir/heavy.1 .. heavy.6)" >&2
+  fi
   exit 75
 fi
 

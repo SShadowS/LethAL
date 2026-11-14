@@ -718,6 +718,51 @@ describe("buildReport: hangCapable travels the site property path (R196)", () =>
       expect(row(1)?.readerMark).toEqual({ key: KEY_B1, reason: "R-b1" });
     });
 
+    test("R983: a site's own risk outranks its operator's, on the row and in the list", () => {
+      // Two toggle-blank-string survivors (operator risk `value-rewrite`): one whose manifest
+      // entry carries the site risk `compared-value`, one without. A killed site-tagged row gets none.
+      const CMP = mutant("M0001", {
+        astHash: "hash-cmp",
+        operatorName: "lethal.toggle-blank-string",
+        equivalenceRisk: "compared-value",
+      });
+      const ASSIGN = mutant("M0002", {
+        astHash: "hash-asg",
+        operatorName: "lethal.toggle-blank-string",
+      });
+      const CMP_KILLED = mutant("M0003", {
+        astHash: "hash-cmpk",
+        operatorName: "lethal.toggle-blank-string",
+        equivalenceRisk: "compared-value",
+      });
+      const report = buildReport(
+        STATICS,
+        seq([
+          setGenerated(3),
+          { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+          scored(CMP, 0, "survived"),
+          scored(ASSIGN, 0, "survived"),
+          scored(CMP_KILLED, 0, "killed"),
+          { type: "session-finished", elapsedMs: 1_000 },
+        ]),
+      );
+      const row = (c: string) => report.mutants.find((m) => m.mutantCode === c);
+      expect(row("M0001")?.equivalenceRisk).toBe("compared-value");
+      expect(row("M0002")?.equivalenceRisk).toBe("value-rewrite");
+      expect("equivalenceRisk" in (row("M0003") ?? {})).toBe(false);
+      expect(
+        report.likelyEquivalentSurvivors?.byRisk.map((g) => [
+          g.risk,
+          g.mutants,
+          g.meaning.length > 0,
+        ]),
+      ).toEqual([
+        ["compared-value", ["0/M0001"], true],
+        ["value-rewrite", ["0/M0002"], true],
+      ]);
+      expect(report.likelyEquivalentSurvivors?.byRisk[0]?.meaning).toContain("COMPARISON");
+    });
+
     test("a killed row whose identity is marked carries no readerMark, and a killed risk row no risk (C02-01)", () => {
       const survivor = mutant("M0002", { astHash: "hash-ks" });
       const KEY_KS = serializeKey(identityKeyOf(survivor));

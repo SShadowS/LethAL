@@ -73,27 +73,28 @@ next free id right before writing).
   move touches mutant generation. Say in your report which cache entry you used. A cache entry is
   never edited, only replaced whole. The tool is `bun scripts/corpus-snapshot.ts snapshot <set>
   --master` and `diff <set> --branch <worktree> [--projects ...]` (R593); it keys each entry by its
-  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of three heavy slots, `/coord/locks/heavy.1`,
-  `heavy.2` and `heavy.3`, with `flock`. It refuses a fourth heavy job, and a third BaseApp
-  (BC.History) corpus job (R642). Known limit: two corpus jobs started from ONE shell (`a & b`) share a
-  process group and count as one, and a job on a corpus COPY is invisible to its `ps` scan; such
-  jobs take a slot themselves with `scripts/heavy-slot.sh [--wait] [--peak <p>] <baseapp|other> <cmd...>`
+  dumper (`<sha>/<set>/<dumperKey>/`) and takes one of the heavy slots, `/coord/locks/heavy.1` to
+  `heavy.6`, with `flock`. **Admission is by memory only (owner ruling 2026-11-13, R960):** where the
+  cgroup names a limit, no job count and no BaseApp-class cap applies (a heavy job found in no slot
+  counts at its class default peak); six slot files are only a ceiling, which binds only when six
+  small jobs run at once. The old count rule (R642: two jobs while a BaseApp corpus job
+  runs, else three) decides only on a host with no cgroup limit, where its `ps` scan applies (two corpus
+  jobs started from ONE shell (`a & b`) share a process group and count as one, and a job on a corpus
+  COPY is invisible to it). Jobs that are not `corpus-snapshot.ts` take a slot themselves with `scripts/heavy-slot.sh [--wait] [--peak <p>] <baseapp|other> <cmd...>`
   (R905, R934, R952). It takes the first free slot, writes its pid into the lock and
   `/coord/locks/heavy.<n>.class` (`<class> <pid> <peak GiB>`), runs the same guard as `corpus-snapshot.ts`
   (exit 75 and no command when it refuses), and removes the class on exit. `--wait` queues in FIFO
   order instead of exit 75. `--peak` declares the job's expected memory peak: `serve` 8 (a serve run with
   the default 6 GiB daemon cap, R948), `baseline` 12, `gate` 2, `build` 1 GiB, or a number; none means the
-  class default (`other` 8, `baseapp` 12). The guard also applies the memory rule (R953): the container's
-  cgroup (`memory.max`, 32 GiB) must hold what is used now plus the job's peak plus a 4 GiB reserve, and
-  the held slots' declared peaks plus the job's peak plus the reserve. Declare the smallest honest peak;
+  class default (`other` 8, `baseapp` 12). The guard's rule (R953, the only one under a cgroup limit): the
+  container's cgroup (`memory.max`, 32 GiB) must hold what is used now plus the job's peak plus a 4 GiB
+  reserve, and the held slots' declared peaks plus the job's peak plus the reserve. Declare the smallest honest peak;
   a serve run with `daemonMaxRssGb: 0`, or a baseline known to grow (R-942's DO reached 30.8 GB), declares
   its own larger number. Do not wrap `corpus-snapshot.ts` or `v3-timing.ts` in it:
   they take their own slot, so the job would hold two. Say `baseapp` for any job over BC.History or a COPY of it, `other` for the
-  rest. The guard reads the class: while a BaseApp-class job runs, or any held slot has `baseapp` or
-  NO readable class (a dead pid reads as none), at most two heavy jobs run in all; with none, three.
-  A slot taken by a bare `flock -n /coord/locks/heavy.<n> <cmd>` has no class, so it counts as
-  BaseApp: do not use it. Such a slot also writes no pid, so the tool counts it twice: once as a
-  held slot and once as a running job. That errs on the safe side.
+  rest (the class sets the default peak, and the fallback count rule reads it). A slot taken by a bare
+  `flock -n /coord/locks/heavy.<n> <cmd>` has no class and no peak, so it counts at the larger default
+  peak (12): do not use it.
 - **A lane commits its own pre-commitment to `master` (owner, 2026-10-08).** Once a pre-commitment
   is written (and plan-reviewed), commit it yourself, specs-only, as
   `docs/superpowers/specs/<date>-<id>-...-precommitment.md` with `[skip ci]`, BEFORE any live run.
@@ -127,17 +128,13 @@ next free id right before writing).
     in the repo under `scripts/` (committed with `[skip ci]`); outputs, logs and evidence go in
     `/coord/handoff/<task>/` or `/coord/cache/`. A gate's log that is evidence for a submit is
     written to `/coord/handoff/<task>/` as it runs.
-  - **Wait for at most one OTHER heavy job, not zero.** A driver that waits for an empty container
-    can starve for hours. The limit is two heavy jobs container-wide, with one exception: **v3 jobs
-    (owner, 2026-10-25)**. al-runner-v3 gates, campaigns and measurements may run three at once,
-    one per heavy slot (`heavy.1`-`heavy.3`), because they fit (measured 2026-10-25: about 0.1-0.2 GB per bun
-    process; a serve-entries daemon on D1 peaks near 2.2 GB, R766; 5 of 39 GB in use with two
-    running). A run with `--workers N` is one heavy job, but it holds N daemons: count about 2.3 GB
-    each against the 10 GB floor. Not while a BaseApp (BC.History) corpus job runs:
-    then the limit stays two in all. The slot class file (`heavy.<n>.class`, written by
-    `scripts/heavy-slot.sh`, R905) is how the guard knows: a slot with no class counts as BaseApp. Memory
-    is the cgroup's, not what `free -g` shows (that is the host's): `heavy-slot.sh` checks it itself
-    (R952); for a job outside it, check `memory.max` less `memory.current` in `/sys/fs/cgroup`. A
+  - **Never wait for an empty container; queue instead.** A driver that waits for an empty container
+    can starve for hours. Heavy jobs are admitted by memory only (owner ruling 2026-11-13, R960):
+    `scripts/heavy-slot.sh --wait --peak <p>` queues in FIFO order and starts the job when its declared
+    peak fits (see the slot rules above); there is no job-count cap under a cgroup limit. A run with
+    `--workers N` holds N daemons: declare its peak as N times a daemon's. Memory is the cgroup's,
+    not what `free -g` shows (that is the host's): `heavy-slot.sh` checks it itself (R952); for a job
+    outside it, check `memory.max` less `memory.current` in `/sys/fs/cgroup`. A
     timing run whose figures will be quoted runs on a quiet machine, or reports the load beside its
     figures (R760: load inflated times 1.4-2.3x).
   - **Check before any status line (owner, 2026-10-21).** Before you report the state of background
