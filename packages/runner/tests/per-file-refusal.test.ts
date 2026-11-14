@@ -298,7 +298,9 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
       // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
       // R984: only the manifest moved it, by `equivalenceRisk` on 2 `shift-integer` entries (was d4e6ba39...3bba).
-      "0cc77b2ab4c7625606c3938d2afb9c9bcdc907cedacb295d90b0f5b077a207a0",
+      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 0cc77b2a...07a0;
+      // fixture-emission's per-file pins show the selector as the one file that changed).
+      "f5e003d87c1ad85d6c5cb52b226d4974a77832985daa35c3f116ed09166068b9",
     );
   }, 60_000);
 });

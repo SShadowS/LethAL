@@ -27,3 +27,17 @@ Committed before any gate run, 2026-11-14. Evidence: `/coord/handoff/R-989/`. In
 - With the old keep-list entry (before change 1), the same leg C would read `unkept` on 847b1fa5a and gate-fail: the
   check this adds would have stopped edge-847b1fa5a at the update gate.
 - DO's serve warm-up on 847b1fa5a (R-984's config, a short window) no longer falls back to one-shot.
+
+## Addendum (2026-11-14, after the build review, before any gate run)
+
+The review asked for three changes, made before the gate runs:
+- `unkept` uses the daemon rule's own condition: a refused row (notRun, error) that no entry accepts, **with or without a
+  message**, and it is checked on **every row** of the request, not only the eight judged ones.
+- A request that returns **no row at all** (the probe's apps do not compile on that build, R705) reads `unmeasurable`,
+  and an `unmeasurable` `serve-keep-reasons` is now **infra-fail** in leg C (a retry, never a block), as any other
+  unmeasurable fact; before, it only warned, which would hide an unkept refusal.
+
+Measured since the prediction above, so the prediction now rests on all 15 gated builds rather than two: the three new
+cases, copied verbatim, run one-shot with isolation test on every build of `al-runner-v3-gated-builds.json`, alpha.12
+to edge-847b1fa5a (`/coord/handoff/R-989/probe-cases/`): on each, all three rows are refusals their keep entry accepts,
+and no row is unkept. So a `--refresh-rows` re-gate of any manifest row is expected to stay mechanical.
