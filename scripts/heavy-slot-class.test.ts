@@ -375,7 +375,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   const startIn = (dir: string, cg: string | undefined, poll: string, ...args: string[]) => {
     const psFile = join(dir, "ps.txt");
     writeFileSync(psFile, EMPTY_PS);
-    return Bun.spawn(["bash", script, ...args], {
+    // afterAll kills every holder, so a test that fails or times out before its own kill leaves no waiter
+    const w = Bun.spawn(["bash", script, ...args], {
       env: {
         ...process.env,
         LETHAL_HEAVY_LOCK_DIR: dir,
@@ -387,6 +388,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
       stdout: "ignore",
       stderr: "ignore",
     });
+    holders.push(w.pid);
+    return w;
   };
   /** A real holder of slot `n`, killable by pid. */
   const holdSlot = async (dir: string, n: number, cls: "baseapp" | "other"): Promise<number> => {
