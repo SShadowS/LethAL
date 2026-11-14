@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 955 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -999,6 +999,7 @@ that ordering is the priority.
 - **R988** · LethAL's own process, not the serve daemon, reaches 20 GB in DO's daemon baseline: its memory spikes once a request and the spikes grow (5.8 to 20.6 GB over 30 min) · [R988.md](docs/roadmap/R988.md) · open
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
 - **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · open
+- **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · open
 
 ---
 
