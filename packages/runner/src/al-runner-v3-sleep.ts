@@ -228,9 +228,11 @@ export function decodeV3Coverage(text: string | undefined): V3CoverageRead {
  * daemon baseline holds one per codeunit until the baseline ends; DO's are 67 MB of JSON each, nearly
  * all unhit statements, and LethAL grew to 20 GB holding them). Every file entry is kept (the join and
  * label checks read the file list, unhit files included); a statement is kept when it was hit, and in
- * the top-level `coverage` also when it sits on a line `index` lists (§6 case 2 asks whether such a line
- * is LISTED, hit or not). Without an index the top-level statements are kept whole. Readers that read
- * only hits (attribution, the cross-check's hit set, `hitSites`) see the same document.
+ * the top-level `coverage` also when it sits on a line `index` lists (§6 case 2, on a mutant call's
+ * one-shot coverage, asks whether such a line is LISTED, hit or not). Without an index the top-level
+ * statements are kept whole. Readers that read only hits (attribution, the cross-check's hit set,
+ * `hitSites`) see the same document. A comparison may meet a kept document on one side and a full one
+ * on the other (the R951 replacement); it reads hits and per-test keys only, which both keep.
  */
 export function keptCoverage(doc: V3CoverageRead, index: SleepIndex | undefined): V3CoverageRead {
   if (doc.kind === "unavailable") return doc;

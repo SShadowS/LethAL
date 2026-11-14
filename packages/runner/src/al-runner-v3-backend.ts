@@ -3577,6 +3577,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return d;
   }
 
+  /** R988: a baseline answer as the fill keeps it: its coverage cut to what a reader uses (`keptCoverage`). */
+  private keptAnswer(a: BaselineAnswer): BaselineAnswer {
+    return { ...a, coverage: keptCoverage(a.coverage, this.sleepIndex) };
+  }
+
   /**
    * R948: one `plain()` request on the baseline daemon: `call` (a codeunit, or one test's id under
    * `mode`) with coverage. A daemon that kept a row R612 does not keep is closed and the NEXT request
@@ -3584,11 +3589,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * (a suite test without exactly one row, or no coverage), so that call runs one-shot.
    * A request error propagates as `AlRunnerServerRequestError` (the daemon is already closed).
    */
-  /** R988: a baseline answer as the fill keeps it: its coverage cut to what a reader uses (`keptCoverage`). */
-  private keptAnswer(a: BaselineAnswer): BaselineAnswer {
-    return { ...a, coverage: keptCoverage(a.coverage, this.sleepIndex) };
-  }
-
   private async baselineRequest(
     lane: Lane,
     mode: RequestMode,
@@ -5577,7 +5577,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       stopSeconds,
       wallMs,
       callId: randomUUID(),
-      coverage: decodeV3Coverage(covText),
+      // R988: kept until the next activation (the whole baseline, one call per codeunit): only what a
+      // reader uses (`keptCoverage`). The §6 Sleep checks read these on a mutant call.
+      coverage: keptCoverage(decodeV3Coverage(covText), this.sleepIndex),
       ...(noCoverage ? { noCoverage: true } : {}),
     };
     if (aloneTest !== undefined) return { call };

@@ -6593,8 +6593,12 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.daemons[1]?.join(" ")).toContain("--test-timeout 5");
   });
 
-  test("R988: the fill keeps each answer's coverage without its unhit statements, and the verdicts do not move", async () => {
-    // v3 lists every statement of the called codeunit's reach, nearly all unhit (DO: 67 MB a request).
+  /**
+   * R988: the baseline keeps each call's coverage without its unhit statements (v3 lists every
+   * statement of the called codeunit's reach, nearly all unhit: DO, 67 MB a request), and the verdicts
+   * do not move. `daemonBaseline`: through the daemon fill, or one-shot (`callCodeunit`).
+   */
+  const r988KeptCoverage = async (daemonBaseline: boolean) => {
     type Doc = {
       coverage: { file: string; statements: { line: number; hits: number }[] }[];
       perTestCoverage: { test: string; coverage: Doc["coverage"] }[];
@@ -6617,12 +6621,12 @@ describe("R948 A: the baseline through one daemon", () => {
         })),
       };
     };
-    const plain = await dbRig({ extra: { coverage: "al-runner" } });
+    const plain = await dbRig({ extra: { coverage: "al-runner", daemonBaseline } });
     const vPlain = await baseline(plain.b, SUITE3);
     const r = await dbRig({
       serve: { coverage: padded },
       oneShotCoverage: padded,
-      extra: { coverage: "al-runner" },
+      extra: { coverage: "al-runner", daemonBaseline },
     });
     // Every document a baseline verdict's coverage is read from, as the fill handed it on.
     type Read = { kind: string } & Partial<Doc>;
@@ -6660,7 +6664,13 @@ describe("R948 A: the baseline through one daemon", () => {
       expect(all.length).toBeGreaterThan(0);
       expect(all.filter((s) => s.hits <= 0)).toEqual([]);
     }
-  });
+  };
+
+  test("R988: the daemon fill keeps each answer's coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(true));
+
+  test("R988: a one-shot baseline call keeps its coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(false));
 
   const leakCu2: RowsFn = (m, cu, d, n) =>
     allPass(m, cu, d, n).map((x) =>
