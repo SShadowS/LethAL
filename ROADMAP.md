@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -984,7 +984,7 @@ that ordering is the priority.
 - **R964** · al-runner edge-c8fe56e05 (279 upstream commits): six refusal-heavy apps re-run per mutant against their old-build runs: no regression; #7924's fix decides 110 more mutants · [R964.md](docs/roadmap/R964.md) · closed 2026-11-13 — measured (coord R-950); no regression, #7924 commented
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · done (9b01a6fc) — the progress line says STOPPED BY SIGNAL or STOPPED BY THE MEMORY GUARD, and the report…
 - **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' flaked (exit 75): the refused waiter's own 0.05 s out-of-turn retry held the free slot while the plain caller tried · [R967.md](docs/roadmap/R967.md) · done (fce3b9fb)
-- **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · open
+- **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · done (a5904798) — the compile cache is upstream's #7978…
 - **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · open
 - **R971** · BC.History batch 8 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (a var Option parameter loses the caller's members) and three new refusal causes filed upstream · [R971.md](docs/roadmap/R971.md) · closed 2026-11-13 — measured and filed upstream…
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
