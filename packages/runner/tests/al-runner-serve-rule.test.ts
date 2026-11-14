@@ -340,6 +340,8 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}an earlier test of this codeunit, B_Changes, changed a table that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
       `${P}an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are) panic`,
       `${P}an earlier test of this codeunit, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+      // review: a "name" holding a comma could be two causes joined; DO's 792 rows hold none
+      `${P}an earlier test of this codeunit, X, changed a table, then B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
     ],
   };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {

@@ -4520,7 +4520,7 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
 });
 
 describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refuses by name", () => {
-  // A named refusal R612 still closes on (R945 left it off the keep list: never produced). Until R968
+  // A named refusal R612 still closes on (R945 left it off the keep list: never measured). Until R968
   // this was `FindSet on the Company table`, which is now kept (`company-findset`).
   const COMPANY = "NotRun: out-of-scope: InStream method on an unassigned Variant";
   const PLAIN_REFUSAL = "NotRun: out-of-scope: runtime panic (bug): x";
