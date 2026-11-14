@@ -169,12 +169,15 @@ describe("R905 scripts/heavy-slot.sh", () => {
   const run = (dir: string, cls: string, ...cmd: string[]) => {
     const psFile = join(dir, "ps.txt"); // the guard's ps seam: no live process decides these tests
     writeFileSync(psFile, EMPTY_PS);
+    const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam; a test's command may write it
+    if (!existsSync(peakPs)) writeFileSync(peakPs, "");
     return Bun.spawnSync(["bash", script, cls, ...cmd], {
       env: {
         ...process.env,
         LETHAL_HEAVY_LOCK_DIR: dir,
         BUN: process.execPath,
         LETHAL_HEAVY_PS_FILE: psFile,
+        LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
       },
     });
   };
@@ -376,6 +379,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   const startIn = (dir: string, cg: string | undefined, poll: string, ...args: string[]) => {
     const psFile = join(dir, "ps.txt");
     writeFileSync(psFile, EMPTY_PS);
+    const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam: empty, so it never runs ps
+    writeFileSync(peakPs, "");
     // afterAll kills every holder, so a test that fails or times out before its own kill leaves no waiter
     const w = Bun.spawn(["bash", script, ...args], {
       env: {
@@ -383,6 +388,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
         LETHAL_HEAVY_LOCK_DIR: dir,
         BUN: process.execPath,
         LETHAL_HEAVY_PS_FILE: psFile,
+        LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
         LETHAL_HEAVY_POLL_S: poll,
         ...(cg !== undefined ? { LETHAL_HEAVY_CGROUP_DIR: cg } : {}),
       },
@@ -729,12 +735,15 @@ describe("R952 (R953) admission by memory", () => {
     const run = (dir: string, cg: string, ...args: string[]) => {
       const psFile = join(dir, "ps.txt");
       writeFileSync(psFile, "PID PPID PGID COMMAND\n1 0 1 init\n");
+      const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam: empty, so it never runs ps
+      writeFileSync(peakPs, "");
       return Bun.spawnSync(["bash", script, ...args], {
         env: {
           ...process.env,
           LETHAL_HEAVY_LOCK_DIR: dir,
           BUN: process.execPath,
           LETHAL_HEAVY_PS_FILE: psFile,
+          LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
           LETHAL_HEAVY_CGROUP_DIR: cg,
         },
       });
@@ -906,6 +915,49 @@ describe("R952 (R953) admission by memory", () => {
           expect(f[7]).toMatch(/^other \d+ 2$/);
           expect(f[5]).toMatch(/^(\d+\.\d\d|\?)$/);
         }
+      });
+
+      test("the measured peak is the job's tree as the sampler reads it", () => {
+        // The command names its parent (heavy-slot.sh, the sampler's root) at 1 GiB in the ps seam.
+        const dir = fresh();
+        const peakPs = join(dir, "peak-ps.txt");
+        process.env.LETHAL_HEAVY_SAMPLE_S = "1";
+        try {
+          const r = run(
+            dir,
+            cgroup(3, 32),
+            "--peak",
+            "gate",
+            "other",
+            "sh",
+            "-c",
+            `echo "$PPID 1 1048576" > "${peakPs}"; sleep 2`,
+          );
+          expect(r.exitCode).toBe(0);
+        } finally {
+          Reflect.deleteProperty(process.env, "LETHAL_HEAVY_SAMPLE_S");
+        }
+        const f = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\t");
+        expect(f[4]).toBe("2");
+        expect(f[5]).toBe("1.00");
+      });
+
+      test("a job ended by a signal still leaves its line, with the signal's exit code", () => {
+        const dir = fresh();
+        const r = run(
+          dir,
+          cgroup(3, 32),
+          "--peak",
+          "gate",
+          "other",
+          "sh",
+          "-c",
+          "kill -TERM $PPID",
+        );
+        expect(r.exitCode).toBe(143);
+        const f = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\t");
+        expect(f[6]).toBe("143");
+        expect(existsSync(join(dir, "heavy.1.class"))).toBe(false);
       });
     });
     test("R960: with no slot held at all, a job whose peak does not fit is still refused", () => {

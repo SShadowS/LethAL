@@ -7,7 +7,13 @@
  * `scripts/heavy-slot.sh` starts it beside the admitted command. Every `sample` seconds (default 5) it
  * sums the resident memory of `root`'s process tree (this sampler and its own children left out) and
  * writes the highest sum so far, in KiB, to `out`; it ends when `root` is gone. Test seam:
- * LETHAL_HEAVY_PS_FILE names a file holding `ps -eo pid=,ppid=,rss=` output (read once per sample).
+ * LETHAL_HEAVY_PEAK_PS_FILE names a file holding `ps -eo pid=,ppid=,rss=` output (read once per sample;
+ * not the guard's LETHAL_HEAVY_PS_FILE, whose format differs). The period is at least 1 s.
+ *
+ * What the figure is: a LOWER bound on the job's real peak (a spike between two samples is missed;
+ * resident memory only, so tmpfs and unmapped shared memory, which `memory.current` counts, are not in
+ * it; a process that leaves the tree, a double-forked daemon, is not counted) and, for jobs of many
+ * processes, an over-count of pages they share.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -51,8 +57,9 @@ if (import.meta.main) {
   const root = Number(rootArg);
   if (!(root > 0) || out === undefined)
     throw new Error("usage: heavy-slot-peak.ts <root pid> <out file> [sample seconds]");
-  const every = everyArg === undefined ? 5 : Number(everyArg);
-  const psFile = process.env.LETHAL_HEAVY_PS_FILE;
+  const asked = everyArg === undefined ? 5 : Number(everyArg);
+  const every = Number.isFinite(asked) && asked >= 1 ? asked : 1;
+  const psFile = process.env.LETHAL_HEAVY_PEAK_PS_FILE;
   let max = 0;
   writeFileSync(out, "0\n");
   while (alive(root)) {

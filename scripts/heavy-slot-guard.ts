@@ -35,6 +35,15 @@ import {
   readSlot,
 } from "./heavy-slot-class.ts";
 
+/** The pid the slot's lock file names (heavy-slot.sh writes its own; the guard runs under `flock`). */
+function holderPid(dir: string, slot: number): string {
+  try {
+    return readFileSync(join(dir, `heavy.${slot}`), "utf8").trim();
+  } catch {
+    return "?";
+  }
+}
+
 if (import.meta.main) {
   const [dir, slotArg, cls, peakArg] = process.argv.slice(2);
   const mine = Number(slotArg);
@@ -77,7 +86,7 @@ if (import.meta.main) {
     const gib = (b: number | undefined) => (b === undefined ? "?" : (b / 2 ** 30).toFixed(2));
     appendFileSync(
       join(dir, SMALL_ADMITS_LEDGER),
-      `${[new Date().toISOString(), `heavy.${mine}`, cls, peak, gib(sample?.usedBytes), heldPeaks.reduce((s, p) => s + p, 0), gib(sample?.maxBytes), process.ppid].join("\t")}\n`,
+      `${[new Date().toISOString(), `heavy.${mine}`, cls, peak, gib(sample?.usedBytes), heldPeaks.reduce((s, p) => s + p, 0), gib(sample?.maxBytes), holderPid(dir, mine)].join("\t")}\n`,
     );
   }
   // R991: a job that can never fit fails by name (exit 2: retrying never helps), so a --wait ticket
