@@ -469,6 +469,57 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(seen.logs.some((l) => l.includes("HELD"))).toBe(true);
   });
 
+  // R-996: the upstream repro report, for a new candidate only, against the current pin, never a verdict.
+  describe("R-996: the upstream repros run on each new candidate", () => {
+    const withRepros = <D extends UpdateDeps>(
+      deps: D,
+      calls: string[][],
+      lines: string[] | Error,
+    ): D => ({
+      ...deps,
+      upstreamRepros: async (candidate: string, cur: string) => {
+        calls.push([candidate, cur]);
+        if (lines instanceof Error) throw lines;
+        return lines;
+      },
+    });
+    for (const outcome of ["pass", "gate-fail"] as const) {
+      test(`an edge candidate (${outcome}): run on the candidate binary against current's, and every line logged`, async () => {
+        await setup();
+        const cur = join(await current(), "al-runner");
+        const calls: string[][] = [];
+        const { deps, seen } = edgeOf({ outcome });
+        const r = await edgeOnce(
+          withRepros(deps, calls, ["FLIPPED to BC: r1 T: re-run DO", "upstream repros: 1 test(s)"]),
+        );
+        expect(r).toBe(outcome);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.[1]).toBe(cur);
+        expect(calls[0]?.[0]).not.toBe(cur);
+        expect(seen.logs.some((l) => l.endsWith("FLIPPED to BC: r1 T: re-run DO"))).toBe(true);
+      });
+    }
+    test("a failing repro run is logged and changes no verdict", async () => {
+      await setup();
+      const calls: string[][] = [];
+      const { deps, seen } = edgeOf({ outcome: "pass" });
+      expect(await edgeOnce(withRepros(deps, calls, new Error("boom")))).toBe("pass");
+      expect(seen.logs.some((l) => l.includes("upstream repros not run: Error: boom"))).toBe(true);
+    });
+    test("not on --regate (no new build) and not on an infra-fail", async () => {
+      await setup();
+      const calls: string[][] = [];
+      const re = fake({ outcome: "pass", receiptSha: sha("alpha2") });
+      re.deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+      await updateOnce(withRepros(re.deps, calls, []), { regateAt: REGATE_COMMIT });
+      expect(calls).toEqual([]);
+      await setup();
+      const inf = edgeOf({ outcome: "infra-fail" });
+      await edgeOnce(withRepros(inf.deps, calls, []));
+      expect(calls).toEqual([]);
+    });
+  });
+
   test("--regate gates the CURRENT build at the new commit; on pass .gated takes that commit", async () => {
     await setup();
     const { deps, seen } = fake({ outcome: "pass", receiptSha: sha("alpha2") });
@@ -543,7 +594,12 @@ linuxOnly("T19: the v3 update gate", () => {
   test("R952: where the cgroup names a limit, the memory rule decides, not the job count", async () => {
     await setup();
     // 3 heavy jobs and 2 GB by free: skipped before; memory admits the gate, so it runs
-    const busy = fake({ outcome: "pass", heavy: 3, free: 2, mem: { refuse: false, message: "admitted" } });
+    const busy = fake({
+      outcome: "pass",
+      heavy: 3,
+      free: 2,
+      mem: { refuse: false, message: "admitted" },
+    });
     expect(await updateOnce(busy.deps)).toEqual(["pass"]);
     // no heavy job at all, but memory refuses: skipped, and the log names the memory reading
     const full = fake({

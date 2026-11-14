@@ -103,6 +103,7 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
+import { checkBuild } from "./upstream-repros";
 import {
   DEFAULT_PEAK_GIB,
   PEAK_GIB,
@@ -162,6 +163,11 @@ export interface UpdateDeps {
    * and `freeGb` decide, as before.
    */
   gateMemory?(): Promise<{ readonly refuse: boolean; readonly message: string } | undefined>;
+  /**
+   * R-996: our invented upstream repros on `candidate` and on `current` (`scripts/upstream-repros.ts`); returns the report's
+   * lines. Optional: absent (test rigs), nothing is run. It never decides the gate.
+   */
+  upstreamRepros?(candidate: string, current: string): Promise<readonly string[]>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -656,6 +662,19 @@ export async function gateOne(
     await deps.log(
       `${deps.now()} ${tag} (${version}, ${sha}) at ${commit}: ${outcome}: ${why}${lines.length > 0 ? `; lines: ${lines.join(" | ")}` : ""}`,
     );
+    // R-996: a new candidate's repro report, against `current`, whatever the gate said (a flip to BC
+    // matters even on a gate-fail). Never on a re-gate or refresh (no new build), never a verdict.
+    if (candidate && !refresh && outcome !== "infra-fail" && deps.upstreamRepros !== undefined) {
+      try {
+        const cur = join(await readlink(join(root, "current")), "al-runner");
+        for (const l of await deps.upstreamRepros(binary, cur))
+          await deps.log(`${deps.now()} ${tag}: ${l}`);
+      } catch (err) {
+        await deps.log(
+          `${deps.now()} ${tag}: upstream repros not run: ${String(err).slice(0, 300)}`,
+        );
+      }
+    }
     // R632 C, R633 I1: the receipt and the gate's own output (`gate.log`) outlive `work`, beside the
     // outcome they gave, each when it exists. R633 M2: a failed copy is logged and never blocks the
     // verdict, `.gated` or the count.
@@ -1469,6 +1488,8 @@ export function realDeps(root = ROOT): UpdateDeps {
       throw new Error(`no al-runner binary in ${tarball}`);
     },
     versionOf: async (b) => (await run([b, "--version"])).trim(),
+    // R-996: the repros of this checkout, run in-process.
+    upstreamRepros: async (candidate, current) => (await checkBuild(candidate, current)).lines,
     runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([

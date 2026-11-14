@@ -1,0 +1,90 @@
+{
+  "repros": [
+    {
+      "id": "u8006-date-1753",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
+      "bcEvidence": "BC 28.4 W1 on bc2, 2026-11-14: /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3); issue comments 6876327816, 6876525776",
+      "rerun": [
+        "R985: nothing (LethAL's stand-in moved to 17540102D); re-check that toggle-blank-temporal's history needs no change",
+        "every project whose tests write a 1753 date: their al-runner verdicts were wrong there"
+      ],
+      "tests": {
+        "Codeunit50102.Measure": { "status": "fail", "message": "stored date" },
+        "Codeunit50103.Measure": { "status": "fail", "message": "stored date 2000-01-01" },
+        "Codeunit50104.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
+        "Codeunit50105.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
+        "Codeunit50106.Measure": { "status": "fail", "message": "stored date 1754-01-01" },
+        "Codeunit50107.Measure": { "status": "fail", "message": "stored date 1754-01-02" },
+        "Codeunit50108.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
+        "Codeunit50109.Measure": { "status": "fail", "message": "stored datetime 1754-01-01T00:00:01Z" }
+      }
+    },
+    {
+      "id": "u7811-temp-page",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7811",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's SMTP Account Auth Tests wizard tests rely on it and ship as passing (issue body)",
+      "rerun": ["R933: the BC.History apps sampled there (temporary-source page)"],
+      "tests": {
+        "Codeunit50272.OpenNewThenSetValue": { "status": "pass" },
+        "Codeunit50272.OpenNewWithoutSetValue": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7812-json-tab",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7812",
+      "bcEvidence": "inferred, not measured on BC: BC reads JSON through Newtonsoft.Json, which accepts a raw TAB in a string, and Microsoft ships the dataset with a test app that installs on BC (issue body)",
+      "rerun": ["R933: the BC.History apps sampled there (raw TAB in JSON)"],
+      "tests": {
+        "Codeunit50280.TokenReadFromRawTab": { "status": "pass" },
+        "Codeunit50280.ObjectReadFromRawTab": { "status": "pass" },
+        "Codeunit50280.TokenReadFromEscapedTab": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7818-api-version",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7818",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's MCP module splits Page Metadata.APIVersion on commas and its tests ship as passing; the exact separator is inferred from that code (issue body)",
+      "rerun": ["R936: the System Application MCP module (MCP Config Test)"],
+      "tests": {
+        "Codeunit50285.ApiVersionHoldsEveryVersion": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7819-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7819",
+      "bcEvidence": "inferred, not measured on BC: each call is one a Microsoft System Application module test makes, and those tests ship as passing (issue body)",
+      "rerun": ["R936: the seven System Application modules (refused tests)"],
+      "tests": {
+        "Codeunit50282.ClearXmlWriteOptions": { "status": "pass" },
+        "Codeunit50282.RemoveLastCookie": { "status": "pass" },
+        "Codeunit50282.ErrorWithBlankErrorInfo": { "status": "pass" },
+        "Codeunit50282.FilterGroupOnUnopenedRecordRef": { "status": "pass" },
+        "Codeunit50282.ReadPlatformTableWithoutProvider": { "status": "pass" },
+        "Codeunit50282.ReadQueryMetadataColumn13": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7854-xmlport-guid",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
+      "bcEvidence": "inferred, not measured on BC: a Microsoft System Application module test imports a Guid through an XmlPort and ships as passing (issue body)",
+      "rerun": ["R946: the eight System Application modules of batch 6"],
+      "tests": {
+        "Codeunit50322.XmlPortImportIntoGuidField": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8027-yaml-flow",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8027",
+      "bcEvidence": "inferred, not measured on BC: BC reads YAML flow mappings (issue body: all pass, and O holds a and b)",
+      "rerun": ["R993: the BC.History app that reads YAML flow mappings"],
+      "tests": {
+        "Codeunit50300.FlowMappingTwoNumbers": { "status": "pass" },
+        "Codeunit50300.FlowMappingTwoTexts": { "status": "pass" },
+        "Codeunit50300.FlowMappingUnquotedKeys": { "status": "pass" },
+        "Codeunit50300.FlowMappingOneKey": { "status": "pass" },
+        "Codeunit50300.BlockMappingTwoKeys": { "status": "pass" },
+        "Codeunit50300.FlowMappingTwoNumbersReadsValues": { "status": "pass" }
+      }
+    }
+  ]
+}
