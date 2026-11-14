@@ -334,6 +334,9 @@ export interface RunRow {
    *  `null` on a run with no lease (al-runner) or recorded before R680: no resume carries from it
    *  into a session that has a generation. */
   readonly serverGeneration: string | null;
+  /** R969: `runs.database_id`, LethAL Control's `databaseId` read with `serverGeneration`. `null` on
+   *  a run with no lease, or recorded before R969: a resume across a generation change refuses. */
+  readonly databaseId: string | null;
   /** R586: `runs.runner_build` (an al-runner-v3 run's build), `null` on every other run. */
   readonly runnerBuild: string | null;
   /** R585: the sorted keys (`testKeyOf`) of the tests the run's baseline was given. `null` on a
@@ -873,6 +876,8 @@ export class ResultsStore {
       ["runs", "resource_key TEXT", runCols],
       // R680: the server's generation when the session started; NULL with no lease, or before R680.
       ["runs", "server_generation TEXT", runCols],
+      // R969: the database id read with the generation; NULL with no lease, or before R969.
+      ["runs", "database_id TEXT", runCols],
       // R442: NULL on an older row, read as untrusted: no history or resume carries from it.
       ["runs", "carry_hidden TEXT", runCols],
       // R391: NULL on an older row, read as "not recorded": no rule-1 carry from it.
@@ -929,6 +934,8 @@ export class ResultsStore {
     /** R680: LethAL Control's `serverGeneration` when the session started. Absent (no lease) writes
      *  NULL. */
     serverGeneration?: string;
+    /** R969: LethAL Control's `databaseId`, read with the generation. Absent writes NULL. */
+    databaseId?: string;
     /** R247: the test app this run measures against. Absent is recorded NULL, "unknown", which
      *  no resume or history read ever matches. */
     testAppHash?: string;
@@ -979,8 +986,8 @@ export class ResultsStore {
       info.testAppDeps !== undefined;
     const r = this.db
       .query(
-        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope, test_narrowing, resume_inputs) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO runs (project_path, backend, app_version, config_fingerprint, identity_scheme, build_symbols, coverage_mode, resource_key, server_generation, database_id, test_app_hash, test_app_proven, test_app_deps, test_digests, test_digest_parts, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, test_scope, test_narrowing, resume_inputs) " +
+          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
       )
       .get(
         info.projectPath,
@@ -992,6 +999,7 @@ export class ResultsStore {
         info.coverageMode,
         info.resourceKey ?? null,
         info.serverGeneration ?? null,
+        info.databaseId ?? null,
         info.testAppHash ?? null,
         proven ? 1 : null,
         proven ? (info.testAppDeps ?? null) : null,
@@ -1434,7 +1442,7 @@ export class ResultsStore {
   getRun(runId: number): RunRow | null {
     const row = this.db
       .query(
-        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, test_scope, test_narrowing, resume_inputs FROM runs WHERE id = ?",
+        "SELECT id, project_path, backend, config_fingerprint, finished_at, COALESCE(identity_scheme, 1) AS identity_scheme, build_symbols, coverage_mode, test_app_hash, test_app_proven, test_app_deps, carry_hidden, generation_source_sha256, twin_tuples, numbering_digest, dependency_source_sha256, runner_build, resource_key, server_generation, database_id, test_scope, test_narrowing, resume_inputs FROM runs WHERE id = ?",
       )
       .get(runId) as {
       resume_inputs: string | null;
@@ -1442,6 +1450,7 @@ export class ResultsStore {
       test_narrowing: string | null;
       resource_key: string | null;
       server_generation: string | null;
+      database_id: string | null;
       dependency_source_sha256: string | null;
       runner_build: string | null;
       test_app_proven: number | null;
@@ -1481,6 +1490,7 @@ export class ResultsStore {
       runnerBuild: row.runner_build,
       resourceKey: row.resource_key,
       serverGeneration: row.server_generation,
+      databaseId: row.database_id,
       testScope: parseTestScope(row.test_scope, row.id),
       testNarrowing: parseTestNarrowing(row.test_narrowing, row.id),
       resumeInputs: parseResumeInputs(row.resume_inputs, row.id),

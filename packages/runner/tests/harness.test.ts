@@ -59,12 +59,16 @@ function info(over: Record<string, unknown> = {}): Record<string, unknown> {
     semver: MIN_CONTROL_VERSION,
     protocolVersion: 2,
     serverGeneration: SERVER_GENERATION,
+    databaseId: DATABASE_ID,
     tenantCountReachable: false,
     isolationModes: ["Codeunit"],
     testTypes: ["codeunit"],
     ...over,
   };
 }
+
+/** R969: the lease row's database id, as LethAL Control 1.0.0.26 reports it. */
+const DATABASE_ID = "d".repeat(32);
 
 function okFetch(inner: Record<string, unknown>): typeof fetch {
   return (async (_url: unknown, _init?: RequestInit) =>
@@ -308,17 +312,35 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.25");
+    expect(message).toContain("1.0.0.26");
   });
 
   test("R-689b: refuses 1.0.0.23, the build before the discovery error and InstalledDependents", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.23" }));
-    expect(message).toContain("reports version 1.0.0.23, older than the 1.0.0.25");
+    expect(message).toContain("reports version 1.0.0.23, older than the 1.0.0.26");
   });
 
   test("R847: refuses 1.0.0.24, the build before ObjectOwners and FieldOwners", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.24" }));
-    expect(message).toContain("reports version 1.0.0.24, older than the 1.0.0.25");
+    expect(message).toContain("reports version 1.0.0.24, older than the 1.0.0.26");
+  });
+
+  test("R969: refuses 1.0.0.25, the build before databaseId", async () => {
+    const message = await messageFrom(info({ semver: "1.0.0.25" }));
+    expect(message).toContain("reports version 1.0.0.25, older than the 1.0.0.26");
+  });
+
+  test("R969: refuses a payload with no databaseId, and an empty one, rather than recording none", async () => {
+    for (const databaseId of [undefined, ""]) {
+      const message = await messageFrom(info({ databaseId }));
+      expect(message).toMatch(/HarnessInfo databaseId .* is missing or empty/);
+      expect(message).toContain("R969");
+    }
+  });
+
+  test("R969: returns the database id it read", async () => {
+    const { details } = await verifyQuiet(verifier(okFetch(info())));
+    expect(details.databaseId).toBe(DATABASE_ID);
   });
 
   test("refuses a payload with no semver at all rather than assuming it is current", async () => {

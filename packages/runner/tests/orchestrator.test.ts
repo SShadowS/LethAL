@@ -10485,6 +10485,8 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
       readonly post: Uint8Array | null;
       /** R680: the server's `serverGeneration` (HarnessInfo); default `FAKE_GENERATION`. */
       readonly generation?: string;
+      /** R969: the server's `databaseId` (HarnessInfo); absent wires no reader (none recorded). */
+      readonly databaseId?: string;
       /** R680: the lease client's acquire answers, in order; default one grant. */
       readonly acquireQueue?: AcquireOutcome[];
       /**
@@ -10621,6 +10623,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           generationReads++;
           return g;
         },
+        ...(o.databaseId !== undefined ? { databaseId: async () => o.databaseId ?? "" } : {}),
       });
       const backend = leaseBackend({
         fetchPublishedAppPackage: fetch,
@@ -10694,6 +10697,7 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         reuseWarning: warningsOf("resume-baseline-reused"),
         depsWarning: warningsOf("test-app-dependencies-unproven"),
         identityWarning: warningsOf("test-app-identity-unproven"),
+        leaseResetWarning: warningsOf("resume-across-lease-reset"),
         knownSurvivors: (
           store.db
             .query(
@@ -11062,6 +11066,96 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
         expect((r.outcome as SessionReport).resumedFrom?.runId).toBe(first.runId);
         expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G1);
         r.store.close();
+      });
+
+      // R969: a generation change with the SAME database id is a lease reset by hand on a database
+      // that survived: the resume carries, with a warning naming both generations and the id. Any
+      // other database id, or none on either side, refuses as R680 does.
+      describe("R969: the database id decides a resume across a changed generation", () => {
+        const D1 = "a".repeat(32);
+        const D2 = "b".repeat(32);
+        const priorWithId = async (databaseId: string | undefined) => {
+          const first = await envRun({
+            post: P2,
+            generation: G1,
+            ...(databaseId !== undefined ? { databaseId } : {}),
+          });
+          expect(first.outcome).not.toBeInstanceOf(Error);
+          expect(first.store.getRun(first.runId)?.databaseId).toBe(databaseId ?? null);
+          return first;
+        };
+
+        test("the same database id across a changed generation resumes, carries and warns", async () => {
+          const first = await priorWithId(D1);
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D1,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+          });
+          expect(r.outcome).not.toBeInstanceOf(Error);
+          expect((r.outcome as SessionReport).resumedFrom?.runId).toBe(first.runId);
+          expect(r.leaseResetWarning).toHaveLength(1);
+          expect(r.leaseResetWarning[0]).toContain(`database id ${D1} unchanged`);
+          expect(r.leaseResetWarning[0]).toContain(`${G1} -> ${G2}`);
+          // The lease is still asked at the LIVE generation, and the new run records both.
+          expect(r.client.acquireArgs[0]?.expectedGeneration).toBe(G2);
+          expect(r.store.getRun(r.runId)?.serverGeneration).toBe(G2);
+          expect(r.store.getRun(r.runId)?.databaseId).toBe(D1);
+          r.store.close();
+        });
+
+        test("another database id across a changed generation refuses, as a lost database", async () => {
+          const first = await priorWithId(D1);
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D2,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+          });
+          refused(r, G1, G2);
+          expect(r.leaseResetWarning).toEqual([]);
+          expect(maxRunId(r.store)).toBe(first.runId);
+          r.store.close();
+        });
+
+        test("a resumed run that recorded no database id refuses across a changed generation", async () => {
+          const first = await priorWithId(undefined);
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            databaseId: D1,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+          });
+          refused(r, G1, G2);
+          r.store.close();
+        });
+
+        test("a session that read no database id refuses across a changed generation", async () => {
+          const first = await priorWithId(D1);
+          const r = await envRun({
+            ...proven,
+            generation: G2,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+          });
+          refused(r, G1, G2);
+          r.store.close();
+        });
+
+        test("an empty database id from the harness stops the session before anything runs", async () => {
+          const r = await envRun({ post: P2, generation: G1, databaseId: "" });
+          expect(r.outcome).toBeInstanceOf(LeaseUnavailableError);
+          expect((r.outcome as Error).message).toContain("empty databaseId");
+          r.store.close();
+        });
       });
 
       test("the lease is asked at the generation read first, and that read is the only one", async () => {

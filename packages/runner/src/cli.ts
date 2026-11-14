@@ -3453,6 +3453,8 @@ export function leaseSessionFor(
     lease: {
       client: new LeaseClient(odataCfg),
       serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+      // R969: `verify()` refuses an empty or missing id, so a session on a bcdev server always records one.
+      databaseId: async () => (await harnessVerifier.verify()).databaseId,
     },
   };
 }

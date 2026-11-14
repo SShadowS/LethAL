@@ -2744,6 +2744,12 @@ export interface LeaseSessionConfig {
    * BEFORE this session can acquire, let alone publish.
    */
   readonly serverGeneration: () => Promise<string>;
+  /**
+   * R969: reads the container's `databaseId` (HarnessInfo, LethAL Control 1.0.0.26). The CLI always
+   * wires it (`HarnessVerifier.verify()`, which refuses an empty one). Absent (unit callers), the
+   * session records none, and a resume across a generation change refuses as before R969.
+   */
+  readonly databaseId?: () => Promise<string>;
   /** Default (and maximum) `MAX_TTL_SECONDS` = 15s — see lease.ts: the server's `RenewPeriodMs()`
    *  is 5000ms and `local`, and design §6's ttl/3 heartbeat on a longer ttl would renew less
    *  often than that period requires. */
@@ -4471,16 +4477,38 @@ interface PendingResumeCheck {
   readonly openWorldWhy: string | undefined;
   /** R680: this session's `serverGeneration`, `undefined` when it has no lease (no server). */
   readonly serverGeneration?: string | undefined;
+  /** R969: this session's `databaseId`, `undefined` when it has no lease or none was read. */
+  readonly databaseId?: string | undefined;
 }
 
 /**
  * R680: a session with a server generation resumes only a run that recorded the same one. A run that
  * recorded none (before R680) refuses too: no back-compat before the release. A session with no
  * generation has no lease and no server; its prior has none either (the backend is in the key).
+ *
+ * R969: a generation change with the SAME database id (both recorded, both non-empty) is a lease
+ * reset by hand (`force-reset-lease`) on a database that survived, so the resume goes on, with a
+ * warning, and every other resume check still applies. A missing id on either side refuses as before
+ * (runs recorded before 1.0.0.26 included). The lease is still asked at the live generation.
  */
-function assertSameServerGeneration(row: RunRow, flag: string, current: string | undefined): void {
-  if (current === undefined || row.serverGeneration === current) return;
-  throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, current);
+function assertSameServerGeneration(
+  row: RunRow,
+  flag: string,
+  current: PendingResumeCheck,
+  emit: RunEmitter,
+): void {
+  const generation = current.serverGeneration;
+  if (generation === undefined || row.serverGeneration === generation) return;
+  const id = current.databaseId;
+  if (id !== undefined && id !== "" && row.databaseId === id) {
+    emit({
+      type: "warning",
+      code: "resume-across-lease-reset",
+      message: `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against; every other resume check still applies.`,
+    });
+    return;
+  }
+  throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, generation);
 }
 
 /** R601: why a pending prior is not resumed by this session, in one or two sentences. */
@@ -4561,7 +4589,7 @@ function resolveResume(
   if (cfg.resume === undefined) return undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
     // R680: first, and for a hook session too: the server's generation is fixed before any hook.
-    assertSameServerGeneration(row, flag, pending.serverGeneration);
+    assertSameServerGeneration(row, flag, pending, emit);
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -6672,6 +6700,15 @@ async function runSessionBody(
       "the harness reported an empty serverGeneration, so this session cannot record which server generation it runs on, nor ask the lease at one (R680)",
     );
   }
+  // R969: the database id, read right after the generation. Recorded on the run row; a resume
+  // across a generation change carries verdicts only when it is unchanged.
+  const sessionDatabaseId =
+    cfg.lease?.databaseId !== undefined ? await cfg.lease.databaseId() : undefined;
+  if (sessionDatabaseId === "") {
+    throw new LeaseUnavailableError(
+      "the harness reported an empty databaseId, so this session cannot record which database it runs on (R969)",
+    );
+  }
   // R-372: the digests come from the same read, so they describe the body the server RUNS.
   const {
     testAppHash,
@@ -6833,7 +6870,12 @@ async function runSessionBody(
     testPageRefusedNames,
     envPublishes !== undefined,
     lendingSession,
-    { resourceKey, openWorldWhy, serverGeneration: sessionGeneration },
+    {
+      resourceKey,
+      openWorldWhy,
+      serverGeneration: sessionGeneration,
+      ...(sessionDatabaseId !== undefined ? { databaseId: sessionDatabaseId } : {}),
+    },
     resumeInputs,
   );
 
@@ -6858,6 +6900,8 @@ async function runSessionBody(
     ...(resourceKey !== undefined ? { resourceKey } : {}),
     // R680: the generation this session runs on (read before the guard ask, the lease asked at it).
     ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
+    // R969: and the database id, from the same moment.
+    ...(sessionDatabaseId !== undefined ? { databaseId: sessionDatabaseId } : {}),
     // R492: an env-tool session records its test app only once the read-back after the hook is
     // proven installed (below), never the pre-lease read, which can hold the OUTGOING one.
     // R495: any other session records it only when proven, and the flag with it.
