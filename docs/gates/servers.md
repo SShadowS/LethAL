@@ -279,7 +279,21 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The current proof is R-847's, on 2026-11-06, under LethAL Control 1.0.0.25 (the table right below).** `bc1` was reset to a fresh CRONUS at 07:49Z that day, so R-813's
+**The current proof is R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below).** Head c13e4d0d (branch
+lethal/r-990, whose client requires 1.0.0.26), one server at a time under one coord lease each (`bc-linux-setup.ts --held-lease`),
+released after a clean `lethal doctor`. Setup upgraded each server from 1.0.0.25. Every gate's first line named its server, and each
+passed its own comparison with its baseline; `verify-scale` is measurement mode. The tests fixtures' `.alpackages` were filled from
+each server first (`bc-republish.ts alpackages`). Driver: `/coord/handoff/R-990/prove.sh`.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.26 | `/coord/handoff/R-990/bc1/<gate>.log`, `run.log`, `setup.log` beside them (the run resumed at `verify` and `verify-scale` after two infra fixes, see `run.log`) |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.26 | `/coord/handoff/R-990/bc2/<gate>.log`, `run.log`, `setup.log` beside them |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.26 | `/coord/handoff/R-990/bc3/<gate>.log`, `run.log`, `setup.log` beside them |
+
+R-847's proof, under 1.0.0.25, follows as history.
+
+**R-847's proof, on 2026-11-06, under LethAL Control 1.0.0.25 (the table right below).** `bc1` was reset to a fresh CRONUS at 07:49Z that day, so R-813's
 `bc1` row further down does not stand. Its build differs from the others: Base Application, System Application, Library Assert and Test Runner are 28.4.53241.56590 on `bc1`, against
 .56646 on `bc2` and `bc3`; System is 28.0.54946.56477. All 13 gates reproduced at that build; a figure difference there is still a BLOCK, not explained by the build.
 

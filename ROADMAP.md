@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 968 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 968 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -372,7 +372,7 @@ that ordering is the priority.
 - **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · done (5a221837)
 - **R985** · toggle-blank-temporal's Date substitute 17530101D is a value BC refuses to store (BC refuses every non-zero date in 1753, as Date or DateTime): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · done (85b1ba64)
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
-- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · open
+- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 
 ## Product gaps a real project hits
 
