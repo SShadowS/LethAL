@@ -2071,6 +2071,39 @@ ${TRIGGER_TABLE_AL}#endif
       expect(report.untargetedTriggerCount).toBe(0);
     });
 
+    // R976. Before it the body's `empty-block` had no reach line and kept FALLBACK 1 (survived,
+    // attribution `object`) whether or not any test ran the trigger. One test per direction.
+    const verdictOfBodyBlock = async (tableLines: number[]) => {
+        const dirs = await makeProject(TWO_TEST_AL);
+        await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+        const backend = new StubBackend(CAPS_NST, () => "pass");
+        backend.lineCoverageFor = () => [4];
+        backend.tableLinesFor = () => tableLines;
+        const store = new ResultsStore(":memory:");
+        const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const report = await runSession({ backend, store, ...dirs, selectorIds });
+          const blocks = report.mutants.filter(
+            (m) => m.file.includes("SandboxTable") && m.operatorName === "lethal.empty-block",
+          );
+          expect(blocks.length).toBe(1);
+          const [b] = blocks;
+          return [b?.verdict, b?.coverageAttribution ?? null];
+        } finally {
+          warnSpy.mockRestore();
+          store.close();
+        }
+      };
+
+    test("R976: a baseline that ran the trigger body covers its empty-block by line", async () => {
+      const all = Array.from({ length: 40 }, (_, i) => i + 1);
+      expect(await verdictOfBodyBlock(all)).toEqual(["survived", "line"]);
+    });
+
+    test("R976: a baseline that touched the table but never ran the trigger leaves its empty-block no-coverage", async () => {
+      expect(await verdictOfBodyBlock([1])).toEqual(["no-coverage", null]);
+    });
+
     test("R975 review: a reused (--resume) baseline does not decide by line; its triggers keep FALLBACK 1", async () => {
       // R926's condition, wired in the orchestrator (`lineTrusted`): a row that did not run in this
       // session cannot place a trigger by line. Red if the wiring trusts every row.
@@ -19463,8 +19496,9 @@ describe("GH-24: per-mutant reach", () => {
     row: ReturnType<typeof reportRow> | Scored,
   ): ReturnType<typeof survivorReachOf> =>
     survivorReachOf("exact", "not-measured", row.guardReached, "statement", false);
-  // The empty-body mutant's reach statement is the procedure body (a compound block): it carries
-  // no `reachLine`, so v3 leaves it undecided. The rest are the mutants these tests are about.
+  // The empty-body mutant's reach statement is the procedure body (a compound block). Since R976 it
+  // carries its first statement's line, `exit(...)`'s (13), so it is decided like the rest; a mutant
+  // with no `reachLine` would still be left undecided, which this helper checks.
   const decidedOf = (scored: Scored[]): Scored[] => {
     for (const e of scored.filter((s) => s.mutant.reachLine === undefined)) {
       expect(reachOf(e)).toEqual({});
@@ -19584,8 +19618,8 @@ describe("GH-24: per-mutant reach", () => {
   });
 
   // R926 review: ATest answered and its baseline HIT the line; BTest timed out. A hit is a hit, so
-  // the timed-out mutant still reads reached by ATest. Only M0002 times out (M0001 is the
-  // empty-body mutant, with no reach line), and it runs ATest first as no kill is in the ledger yet.
+  // the timed-out mutant still reads reached by ATest. Only M0002 times out (the script names it;
+  // M0001 is the empty-body mutant), and it runs ATest first as no kill is in the ledger yet.
   test("R926: a hit is kept when another covering test ended unanswered", async () => {
     const lines = (ref: TestMethodRef) => (ref.method === "ATest" ? [REACH_LINE] : [4]);
     const timeoutB = (mutant: string | null, ref: TestMethodRef): TestVerdict["outcome"] =>
