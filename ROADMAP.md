@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 957 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**28 of 958 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1002,6 +1002,7 @@ that ordering is the priority.
 - **R992** · heavy-slot's declared-peaks check refuses a 1 GiB build while the container uses 17 of 32 GiB: three held slots that declared 28 GiB block every small job until one ends · [R992.md](docs/roadmap/R992.md) · open
 - **R993** · On al-runner v3, JsonObject.ReadFromYaml raises 'not valid YAML' for a flow mapping with two entries ({"a": 1, "b": 2}), even when its return value is tested (upstream #8027) · [R993.md](docs/roadmap/R993.md) · open
 - **R994** · On al-runner v3, two refusals met only under Permission Sets' mutants: Metadata Permission rows of a 'table * = X' grant (any unfiltered read, the platform's BaseSystemPermissionSet has one), and an XMLport table element skipped after its child rows (upstream #8032) · [R994.md](docs/roadmap/R994.md) · open
+- **R995** · BC.History's `error` mutants, mined across every v3 store (3,459 in 166 projects): seven unfiled al-runner refusals met only under mutation, filed as upstream #8036; most of the rest is fixed on current, by design, or already filed · [R995.md](docs/roadmap/R995.md) · open
 
 ---
 
