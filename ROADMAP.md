@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 971 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**29 of 971 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1015,7 +1015,7 @@ that ordering is the priority.
 - **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · done (354783d9)
 - **R1006** · Corpus windows started without a cheap check and ran for hours measuring nothing (DO's no-license window, Avalara's warm-up fallback): `scripts/triage-baseline.ts` now runs the baseline plus a few small codeunits first and stops by name · [R1006.md](docs/roadmap/R1006.md) · done (2e598e35)
 - **R1007** · The per-test daemon baseline skips a cross-check sample whose daemon row al-runner refused (daemon-odd-row) instead of comparing it, so a project whose samples land on refused tests loses its daemon baseline and runs the whole baseline one-shot · [R1007.md](docs/roadmap/R1007.md) · open
-- **R1008** · A run on al-runner v3's serve default can never be resumed: --resume forces one-shot (R761), and the one-shot session's runner_build lacks the run's ` baseline-daemon` tag (R948), so no run matches; DO's 15,563 remaining covered mutants cannot be split across windows · [R1008.md](docs/roadmap/R1008.md) · open
+- **R1008** · A run on al-runner v3's serve default can never be resumed: --resume forces one-shot (R761), and the one-shot session's runner_build lacks the run's ` baseline-daemon` tag (R948), so no run matches; DO's 15,563 remaining covered mutants cannot be split across windows · [R1008.md](docs/roadmap/R1008.md) · done (12d8a503)
 
 ---
 
