@@ -579,6 +579,9 @@ export interface MutantManifestEntry {
    * manifest is read by code that should not have to track the union's members.
    */
   readonly hangCapable?: string;
+  /** R983: carried verbatim from `MutationSpec.equivalenceRisk`, the SITE's risk where it differs
+   *  from its operator's. A `string` for the same reason as `platformKillMechanism`. */
+  readonly equivalenceRisk?: string;
 }
 
 /**
@@ -963,6 +966,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
+        ...(spec.equivalenceRisk !== undefined ? { equivalenceRisk: spec.equivalenceRisk } : {}),
         memberHash: memberHashOf(member),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
         identityOrdinal,

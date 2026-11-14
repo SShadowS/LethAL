@@ -1545,11 +1545,13 @@ export class ResultsStore {
     value: string,
     row: { ast_hash: string; codeunit_name: string; operator_name: string },
   ): CoverageAttribution {
-    if (value === "exact" || value === "object" || value === "all-green") return value;
+    if (value === "exact" || value === "object" || value === "all-green" || value === "line") {
+      return value;
+    }
     throw new Error(
       `store.ts: mutant row (astHash=${row.ast_hash}, codeunitName=${row.codeunit_name}, ` +
         `operatorName=${row.operator_name}) has a corrupt "coverage_attribution" column value ` +
-        `${JSON.stringify(value)} — expected "exact", "object", "all-green", or NULL`,
+        `${JSON.stringify(value)} — expected "exact", "object", "all-green", "line", or NULL`,
     );
   }
 

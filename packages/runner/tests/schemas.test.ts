@@ -1561,6 +1561,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v27.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v26.schema.json": [
         "caveats",
         "contract",
@@ -1797,6 +1809,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "exact",
         "object",
         "all-green",
+        "line",
         "not-measured",
       ],
       "#/properties/survivors/items/properties/guardEvidence": [
@@ -1869,7 +1882,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "not-decided",
       ],
       "#/properties/suggestions/properties/gaps/items/properties/members/items/properties/attribution":
-        ["exact", "object", "all-green", "not-measured"],
+        ["exact", "object", "all-green", "line", "not-measured"],
     });
     // C02-09: the one new enum path reuses the survivor's domain exactly, which is why it did not
     // bump the version.
@@ -1927,6 +1940,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v25.schema.json")).toEqual(required("explain-v24.schema.json"));
     // R922's v26 added a caveat value, not a required field.
     expect(required("explain-v26.schema.json")).toEqual(required("explain-v25.schema.json"));
+    // R975's v27 added an attribution value (`line`), not a required field.
+    expect(required("explain-v27.schema.json")).toEqual(required("explain-v26.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

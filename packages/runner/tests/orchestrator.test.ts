@@ -392,6 +392,8 @@ class StubBackend implements ExecutionBackend {
    * naming gap (a partial map) to the same row.
    */
   lineCoverageFor?: (ref: TestMethodRef) => number[] | undefined;
+  /** R975: extra line entries of `Sandbox Table` (table 79001) on a row that has line coverage. */
+  tableLinesFor?: (ref: TestMethodRef) => number[] | undefined;
   coverageGapsFor?: (ref: TestMethodRef) => boolean;
   /** R926: the mode a test codeunit runs under now (v3's `isolationOf`). */
   isolationOf?: (codeunitId: number) => "test" | "method";
@@ -479,12 +481,19 @@ class StubBackend implements ExecutionBackend {
         ? {
             coverage: {
               granularity: "line" as const,
-              entries: (this.lineCoverageFor?.(ref) ?? []).map((line) => ({
-                objectType: "Codeunit",
-                objectId: 79000,
-                procedure: "IsOverBudget",
-                line,
-              })),
+              entries: [
+                ...(this.lineCoverageFor?.(ref) ?? []).map((line) => ({
+                  objectType: "Codeunit",
+                  objectId: 79000,
+                  procedure: "IsOverBudget",
+                  line,
+                })),
+                ...(this.tableLinesFor?.(ref) ?? []).map((line) => ({
+                  objectType: "Table",
+                  objectId: 79001,
+                  line,
+                })),
+              ],
               ...(this.coverageGapsFor?.(ref) === true
                 ? { namingGaps: [{ objectType: "Codeunit", objectId: 79000 }] }
                 : {}),
@@ -1966,6 +1975,157 @@ ${TRIGGER_TABLE_AL}#endif
       // Covered by the GREEN test at member level, mutant runs pass: ordinary survivors, and they
       // must stay ordinary survivors.
       expect(logic.every((m) => m.verdict === "survived")).toBe(true);
+    });
+  });
+
+  // R975. A table trigger the LINE rule finds unhit goes through the second coverageFilter call,
+  // against the non-green tests. It must reach that call's FALLBACK 1 (a failing test touched the
+  // table: `error`, R140's note) or nowhere (`no-coverage`), never its FALLBACK 2, which would hand
+  // it every failing test and print a false `coverage-triggers-unmatched`.
+  describe("R975: a line-decided table trigger and the failing-test call", () => {
+    const RED = "RedAtBaseline";
+    const TWO_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+
+    [Test]
+    procedure ${RED}()
+    begin
+    end;
+}
+`;
+    // Line 1 of the table is hit by the green test, so the object is "touched" and the line rule
+    // applies; no trigger mutant's statement is on line 1, so the line rule finds no hit.
+    async function runIt(redTouchesTable: boolean | "none") {
+      const dirs = await makeProject(TWO_TEST_AL);
+      await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      const backend = new StubBackend(CAPS_NST, (mutant, ref) =>
+        mutant === null && ref.method === RED && redTouchesTable !== "none" ? "fail" : "pass",
+      );
+      backend.lineCoverageFor = () => [4];
+      backend.tableLinesFor = (ref) =>
+        ref.method === RED ? (redTouchesTable === true ? [1] : []) : [1];
+      const events: RunEvent[] = [];
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const report = await runSession({
+          backend,
+          store,
+          ...dirs,
+          selectorIds,
+          emit: [(e) => events.push(e)],
+        });
+        const warned = events.some(
+          (e) => e.type === "warning" && e.code === "coverage-triggers-unmatched",
+        );
+        const consoleWarned = warnSpy.mock.calls.some((c) =>
+          String(c[0]).includes("could not be coverage-matched"),
+        );
+        return {
+          report,
+          warned: warned || consoleWarned,
+          lineDecided: report.mutants.filter(
+            (m) => m.file.includes("SandboxTable") && m.coverageAttribution === undefined,
+          ),
+        };
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
+    }
+
+    test("a failing test that touched the table: error with R140's note", async () => {
+      const { report, warned, lineDecided } = await runIt(true);
+      expect(lineDecided.length).toBeGreaterThan(0);
+      for (const m of lineDecided) {
+        expect(m.verdict).toBe("error");
+        expect(m.failureNote).toContain("did not pass at baseline");
+        expect(m.failureNote).toContain(`Sandbox Tests.${RED}`);
+      }
+      expect(warned).toBe(false);
+      expect(report.untargetedTriggerCount).toBe(0);
+    });
+
+    test("a failing test that did not touch the table: no-coverage, no unmatched warning", async () => {
+      const { report, warned, lineDecided } = await runIt(false);
+      expect(lineDecided.length).toBeGreaterThan(0);
+      for (const m of lineDecided) {
+        expect(m.verdict).toBe("no-coverage");
+        expect(m.failureNote ?? "").not.toContain("did not pass at baseline");
+      }
+      expect(warned).toBe(false);
+      expect(report.untargetedTriggerCount).toBe(0);
+    });
+
+    test("no failing test at all: no-coverage, no unmatched warning", async () => {
+      const { report, warned, lineDecided } = await runIt("none");
+      expect(lineDecided.length).toBeGreaterThan(0);
+      for (const m of lineDecided) expect(m.verdict).toBe("no-coverage");
+      expect(warned).toBe(false);
+      expect(report.untargetedTriggerCount).toBe(0);
+    });
+
+    test("R975 review: a reused (--resume) baseline does not decide by line; its triggers keep FALLBACK 1", async () => {
+      // R926's condition, wired in the orchestrator (`lineTrusted`): a row that did not run in this
+      // session cannot place a trigger by line. Red if the wiring trusts every row.
+      const dirs = await makeProject(TWO_TEST_AL);
+      await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
+      // R495: a served, installed test app, so run 1's identity is proven and run 2 can resume.
+      await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
+      const make = () => {
+        const b = new StubBackend(CAPS_NST, () => "pass");
+        Object.assign(b, servesTestApp());
+        b.lineCoverageFor = () => [4];
+        b.tableLinesFor = () => [1];
+        return b;
+      };
+      const store = new ResultsStore(":memory:");
+      const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const first = await runSession({ backend: make(), store, ...dirs, selectorIds });
+        const tableCodes = first.mutants
+          .filter((m) => m.file.includes("SandboxTable"))
+          .map((m) => m.mutantCode);
+        const lineNoCoverage = first.mutants.filter(
+          (m) => m.file.includes("SandboxTable") && m.verdict === "no-coverage",
+        );
+        expect(lineNoCoverage.length).toBeGreaterThan(0);
+        // Leave every mutant to score again, so the batch reuses run 1's baseline snapshot.
+        store.db.run("DELETE FROM test_results WHERE mutant_row_id IS NOT NULL");
+        store.db.run("DELETE FROM mutants");
+        store.db.run("UPDATE runs SET finished_at = NULL");
+        const events: RunEvent[] = [];
+        const second = await runSession({
+          backend: make(),
+          store,
+          ...dirs,
+          selectorIds,
+          resume: 1,
+          emit: [(e) => events.push(e)],
+        });
+        expect(
+          events.some((e) => e.type === "warning" && e.code === "resume-baseline-reused"),
+        ).toBe(true);
+        const again = second.mutants.filter((m) => tableCodes.includes(m.mutantCode));
+        expect(again.length).toBe(tableCodes.length);
+        for (const m of lineNoCoverage) {
+          const now = again.find((x) => x.mutantCode === m.mutantCode);
+          expect([m.mutantCode, now?.verdict, now?.coverageAttribution]).toEqual([
+            m.mutantCode,
+            "survived",
+            "object",
+          ]);
+        }
+      } finally {
+        warnSpy.mockRestore();
+        store.close();
+      }
     });
   });
 
@@ -19467,6 +19627,8 @@ describe("GH-24: per-mutant reach", () => {
   // R926 review C: FALLBACK 2 ("all-green") ran every test BECAUSE coverage saw nothing of the
   // object, so that same coverage cannot say the site was not hit. Coverage names only the
   // codeunit; the table's trigger mutants take the fallback and survive.
+  // R975: the line rule leaves a table whose object NO green test touched on FALLBACK 2, so this
+  // stays reachable with complete line coverage; only the guard decides here.
   test("R926: an all-green-attributed survivor is never called unreached", async () => {
     const dirs = await makeProjectWithTriggerTable();
     const backend = v3Backend(() => [4]);
@@ -19489,7 +19651,9 @@ describe("GH-24: per-mutant reach", () => {
       const code = events.filter(
         (e): e is Scored => e.type === "mutant-scored" && e.mutant.file.includes("SandboxLogic"),
       );
-      for (const e of decidedOf(code)) {
+      const decided = decidedOf(code);
+      expect(decided.length).toBeGreaterThan(0);
+      for (const e of decided) {
         expect(reachOf(e)).toEqual({ guardReached: false, reachedBy: [] });
       }
     } finally {

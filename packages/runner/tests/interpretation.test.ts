@@ -28,7 +28,12 @@ function realDeps(): BasisResolutionDeps {
 
 test("adding an attribution variant fails to COMPILE until its interpretation exists", () => {
   // The Record<> type is the real assertion — this test documents it and pins the count.
-  expect(Object.keys(ATTRIBUTION_INTERPRETATIONS).sort()).toEqual(["all-green", "exact", "object"]);
+  expect(Object.keys(ATTRIBUTION_INTERPRETATIONS).sort()).toEqual([
+    "all-green",
+    "exact",
+    "line",
+    "object",
+  ]);
 });
 
 test("every reach state has an interpretation (GH-24 added reached-unnoticed)", () => {

@@ -223,7 +223,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
   // R855 re-pinned (was cf442b39...3d4): swap-call-arguments operatorVersion 1.1.0, plus new delete-* mutants.
   // R926: every statement-grain entry gains `reachLine` (was bc2c6465...83bc).
-  const pinned = "8005622862897bdb2f5fbafdf2c04f7a6f7b5d5de7a5f02ff4c6b9eed52ed41c";
+  // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c).
+  const pinned = "5dd124ade8b16cef2593b8a4fc0002cf3a005eaa1da897c8e91ba4460ad9a9fb";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

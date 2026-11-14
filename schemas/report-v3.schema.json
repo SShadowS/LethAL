@@ -560,7 +560,8 @@
             "enum": [
               "exact",
               "object",
-              "all-green"
+              "all-green",
+              "line"
             ]
           },
           "guardObserved": {

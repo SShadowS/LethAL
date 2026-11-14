@@ -1,9 +1,11 @@
 /**
- * R586 leg T (review M5): the 52 known differences between v3 alpha.2's own tables baseline and
- * BC's `tables.baseline.json`, pinned by KEY and by TRANSITION (BC verdict and killing test -> v3
- * verdict and killing test), as pre-committed in `/coord/handoff/R-586/precommitment-tables-52.txt`
- * (r2; dcdd1489 cites it): 41 Commit (#5607), 7 duplicate key (#5603), 4 TestPage.
- * Keys and test names only, no source text. A count of 52 that is not THESE 52 is a gate-fail.
+ * R586 leg T (review M5): the 58 known differences between v3's own tables baseline and BC's
+ * `tables.baseline.json`, pinned by KEY and by TRANSITION (BC verdict and killing test -> v3
+ * verdict and killing test). 52 as pre-committed in `/coord/handoff/R-586/precommitment-tables-52.txt`
+ * (r2; dcdd1489 cites it): 41 Commit (#5607), 7 duplicate key (#5603), 4 TestPage; plus 6 from R975
+ * (coord R-965; pre-commitment master 73de620e, amendment 7f352773): Data Main OnValidate trigger
+ * mutants v3 decides by line coverage as no-coverage where BC says survived.
+ * Keys and test names only, no source text. A count of 58 that is not THESE 58 is a gate-fail.
  */
 
 /** [key, BC verdict, v3 verdict, BC killing test, v3 killing test]. */
@@ -218,6 +220,51 @@ export const TABLES_KNOWN_DIFFERENCES: readonly KnownDifference[] = [
     "killed",
     "no-coverage",
     "CommitBeforeCodeunitRunSucceeds",
+    null,
+  ],
+  // R975 (coord R-965, pre-commitment master 73de620e + amendment 1 7f352773): v3 decides these trigger mutants by per-test
+  // LINE coverage; no test reaches `Touched := Touched + 1` (the covering tests' asserterror raises first), so v3 says
+  // no-coverage where BC's object-grain coverage says survived.
+  [
+    "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1",
+    "survived",
+    "no-coverage",
+    null,
+    null,
+  ],
+  [
+    "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1|1",
+    "survived",
+    "no-coverage",
+    null,
+    null,
+  ],
+  [
+    "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
+    "survived",
+    "no-coverage",
+    null,
+    null,
+  ],
+  [
+    "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1|1",
+    "survived",
+    "no-coverage",
+    null,
+    null,
+  ],
+  [
+    "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1",
+    "survived",
+    "no-coverage",
+    null,
+    null,
+  ],
+  [
+    "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1|1",
+    "survived",
+    "no-coverage",
+    null,
     null,
   ],
   [

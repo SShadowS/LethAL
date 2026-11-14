@@ -165,7 +165,8 @@ const PINNED: Record<
         "10f84b6c16637b24e3ab5ce39dad281d9ceeaef74f9033d9ec5872a34e135842",
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
-      "mutant-manifest.json": "71d0df781e280c4397e3c6da36e37a60290a64a0dd7ab9430d129695fe6aeaa3",
+      // R983: comparison blank toggles gain `equivalenceRisk` (was 71d0df78...eaa3).
+      "mutant-manifest.json": "93541eea75ce60d73a6c791e51591f6411ca8bc78a1a14a94b7ddccf8b547a67",
     },
   },
   "sandbox-hang": {
@@ -209,7 +210,8 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",
-      "mutant-manifest.json": "5693e7200986f2b6bcaa5f26274c9df8a776389dba01f28ec35d2d242c49c6af",
+      // R983: comparison blank toggles gain `equivalenceRisk` (was 5693e720...c6af).
+      "mutant-manifest.json": "86338b483189d0d7918923278ce0655b2ce3f7d00f9b3a5b26523df2027bde4c",
     },
   },
 };
