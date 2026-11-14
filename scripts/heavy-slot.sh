@@ -32,6 +32,11 @@
 # blocks the waiters behind it or plain callers, so a slot it may not take is not left empty. The
 # price: a refused waiter can be overtaken while it stays refused. corpus-snapshot.ts and
 # v3-timing.ts take their slots without looking at the queue.
+# R991 (starvation): only for a while. The marker keeps the time of the FIRST refusal; once a ticket
+# has been refused for LETHAL_HEAVY_STARVE_S seconds (default 900) it is the queue's head again, so
+# no later waiter and no plain caller is admitted before it: the held slots drain until it fits. A job
+# that can never fit (its peak plus the reserve over memory.max) is failed by the guard (exit 2), so
+# it never holds the head.
 #
 # Exit code: the command's; 75 when all slots are held, the guard refused or a waiter queues (retry
 # later); 2 for a bad class, a bad lock folder or a flock failure (retrying never helps).
@@ -81,6 +86,7 @@ mkdir -p "$dir" || exit 2
 qdir="$dir/heavy-queue"
 mkdir -p "$qdir" || exit 2
 poll="${LETHAL_HEAVY_POLL_S:-5}"
+starve="${LETHAL_HEAVY_STARVE_S:-900}"
 ticket=""
 class=""
 cleanup() {
@@ -89,10 +95,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The oldest live ticket that the guard has not refused; dead tickets (and their markers) are
-# removed on the way. Live = the pid exists AND is a heavy-slot.sh, so a reused pid is not a waiter.
+# The oldest live ticket that the guard has not refused, or (R991) has refused for `starve` seconds
+# or more; dead tickets (and their markers) are removed on the way. Live = the pid exists AND is a
+# heavy-slot.sh, so a reused pid is not a waiter.
 head_ticket() {
-  local f pid
+  local f pid now
+  now=$(date +%s)
   for f in $(ls "$qdir" 2>/dev/null | sort); do
     case "$f" in *.refused) continue ;; esac
     pid="${f#*.}"
@@ -100,7 +108,10 @@ head_ticket() {
       rm -f "$qdir/$f" "$qdir/$f.refused"
       continue
     fi
-    [ -e "$qdir/$f.refused" ] && continue
+    if [ -e "$qdir/$f.refused" ]; then
+      # a young refusal lets later work pass; an old one holds the head (R991)
+      [ $((now - $(stat -c %Y "$qdir/$f.refused" 2>/dev/null || echo "$now"))) -ge "$starve" ] || continue
+    fi
     echo "$f"
     return
   done
@@ -167,7 +178,8 @@ echo "heavy-slot: queued as ticket $seq ($qdir)" >&2
 while :; do
   if [ -e "$qdir/$ticket.refused" ] || [ "$(head_ticket)" = "$ticket" ]; then
     try_once "$@"
-    [ $? -eq 76 ] && : >"$qdir/$ticket.refused"
+    # R991: the marker keeps the FIRST refusal's time (its age is how long this ticket was passed over).
+    [ $? -eq 76 ] && { [ -e "$qdir/$ticket.refused" ] || : >"$qdir/$ticket.refused"; }
   fi
   sleep "$poll"
 done
