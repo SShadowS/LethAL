@@ -2071,6 +2071,21 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
       await r.b.prefetchMutants(plans(["M0001"]));
     });
 
+    test("R987: a request the memory bound made small is judged in its 256-entry chunk", async () => {
+      // 20 mutants, 40 entries: nothing measured, so 16 groups (32 entries) go first and the last 4
+      // (8 entries) alone. Those 4 are refused; the first request ran, and both lie in one 256-entry
+      // chunk, so it is no batch stop (it would be if the chunk were the request).
+      const twenty = plans(
+        Array.from({ length: 20 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`),
+      );
+      const last4 = twenty.slice(16).map((p) => p.mutantId);
+      const r = await rig({ serve: refuseOnly(last4), oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(twenty, { batchPlans: twenty }); // no AlRunnerV3EntriesRefusedError
+      // Split as said (the refused tail is then re-sent once, on a fresh daemon).
+      expect(r.b.entriesStats().prefetchRequests).toBeGreaterThanOrEqual(2);
+    });
+
     test("a later window refused after an earlier window ran is no batch stop, as in one chunk", async () => {
       const later = ["M0003", "M0004"];
       expect(await run([four], later)).toBeUndefined();

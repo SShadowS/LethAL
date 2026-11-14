@@ -1947,8 +1947,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ) {
     if (startRss === undefined || peakRss === undefined || sent.length === 0) return;
     const cost = Math.max(0, (peakRss - startRss) / sent.length);
+    // An echo is charged too; harmless, as `groupsThatFit` never looks an echo up.
     for (const e of sent) {
-      if (e.echo) continue;
       const call = callOf(e);
       if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
     }
