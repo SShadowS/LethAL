@@ -45,8 +45,8 @@ objects survives a clean dry run and fails later, live.
 **Every al-runner-v3 corpus window starts with `scripts/triage-baseline.ts`** (R1006), with the
 window's own project, tests and config. It runs the whole baseline and a few small codeunits'
 mutants (minutes), and stops by name, with its own exit code, on what voided whole windows before:
-a serve fallback, a missing license, every test refused for one cause, no green test, or no mutant
-reaching a test (so the fallback check proved nothing). Start the window only on `TRIAGE GO`
+a serve fallback, a missing license, every test refused for one cause, no green test, a failed run,
+or no mutant reaching a test (so the fallback check proved nothing). Start the window only on `TRIAGE GO`
 (exit 0); otherwise fix the named cause first. The DO license window (4 h 40 min) and Avalara's
 warm-up fallback (4 h) each show in the triage within minutes.
 
