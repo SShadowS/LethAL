@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 944 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 945 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -369,6 +369,7 @@ that ordering is the priority.
 - **R975** · On al-runner v3, trigger mutants take R29's object-level fallback although v3's per-test LINE coverage could decide them: on Continia DO all 215 scored mutants were object-attributed, and at least 94 never-executed trigger statements were reported survived · [R975.md](docs/roadmap/R975.md) · open
 - **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
 - **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
+- **R985** · toggle-blank-temporal's Date substitute 17530101D is the one value BC refuses to store (SQL keeps 0D as 1753-01-01): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · open
 
 ## Product gaps a real project hits
 
