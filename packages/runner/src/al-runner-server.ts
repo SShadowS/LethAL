@@ -799,6 +799,19 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    */
   "cascade-existing-state":
     /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed (?:an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)|number sequence '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new NumberSequence\.Insert is\)|isolated storage key '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set is\))$/,
+  /**
+   * R998 (coord R-998): the families behind 19 of DO's 35 daemon closes in R-984's window t1. Each
+   * text measured clean with R-967's kit on edge-a184cfc79 (`/coord/handoff/R-998/probe/`): one
+   * invented refuser per text after R-937's standard writes, one-shot text equal to DO's; on one kept
+   * daemon 27 readers equal to the control, 20 fresh daemons one answer equal to it, the pid unchanged,
+   * no panic text. Only the measured RecordRef methods, and only FieldRef.Class.
+   */
+  "recordref-not-open":
+    /^NotRun: out-of-scope: RecordRef\.(?:FieldCount|FindSet|SetRecFilter|SetLoadFields) on a RecordRef that is not open: BC's error text, and whether Get\(RecordId\) opens the table of the RecordId, are not pinned \(docs\/probes-needed\.md\)$/,
+  "fieldref-never-assigned":
+    /^NotRun: out-of-scope: FieldRef\.Class on a FieldRef that was never assigned: what BC does \(an error, or a no-op\) is not pinned \(docs\/probes-needed\.md\)$/,
+  "gettable-unassigned-variant":
+    /^NotRun: out-of-scope: RecordRef\.GetTable of an unassigned Variant$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

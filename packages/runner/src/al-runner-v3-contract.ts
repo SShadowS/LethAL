@@ -728,6 +728,87 @@ codeunit 50676 "Serve Cascade Key"
         IsolatedStorage.Get('R1000KEY', DataScope::Module, V);
     end;
 }
+
+codeunit 50677 "Serve RecRef FieldCount"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        RecRef: RecordRef;
+        N: Integer;
+    begin
+        N := RecRef.FieldCount();
+    end;
+}
+
+codeunit 50678 "Serve RecRef FindSet"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        RecRef: RecordRef;
+    begin
+        if RecRef.FindSet() then;
+    end;
+}
+
+codeunit 50679 "Serve RecRef SetRecFilter"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.SetRecFilter();
+    end;
+}
+
+codeunit 50680 "Serve RecRef SetLoadFields"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.SetLoadFields(1);
+    end;
+}
+
+codeunit 50681 "Serve FieldRef Class"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        FldRef: FieldRef;
+        C: FieldClass;
+    begin
+        C := FldRef.Class();
+    end;
+}
+
+codeunit 50682 "Serve GetTable Variant"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        RecRef: RecordRef;
+        V: Variant;
+    begin
+        RecRef.GetTable(V);
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -801,6 +882,13 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   // Not `company-findset`: this daemon runs with no package cache, so `Record Company` is "outside the
   // workspace" here (measured on the gate, R-989); its text is checked one-shot with packages instead
   // (`/coord/handoff/R-989/probe-cases/`, all 15 gated builds).
+  // R998 (coord R-998): the three families kept for DO's mutant phase, each measured text once.
+  ["recordref-not-open", "Codeunit50677.Refuses", false, false],
+  ["recordref-not-open", "Codeunit50678.Refuses", false, false],
+  ["recordref-not-open", "Codeunit50679.Refuses", false, false],
+  ["recordref-not-open", "Codeunit50680.Refuses", false, false],
+  ["fieldref-never-assigned", "Codeunit50681.Refuses", false, false],
+  ["gettable-unassigned-variant", "Codeunit50682.Refuses", false, false],
 ];
 
 /**
@@ -848,7 +936,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): seven codeunits (ten tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): thirteen codeunits (sixteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(

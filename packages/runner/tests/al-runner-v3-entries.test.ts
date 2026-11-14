@@ -4716,15 +4716,31 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     });
   }
 
-  test("only the warm-up leaves it out: the mutant entries still send the whole codeunit", async () => {
-    const r = asSource(await rig({ serve: { rows: bRefused } }), "default");
+  // R998 (coord R-998): the mutant entries leave the same tests out (DO t1: 35 daemon closes, 3,625 s
+  // of warm-ups, R-984). Red without the R998 change: every mutant request meets B's refusal and
+  // closes its daemon, and with the exclusion but without suiteMissing's allowance, A reads row-missing.
+  test("R998: the mutant entries leave it out too: no daemon closes on it, and the covering test's verdict reads as ever", async () => {
+    const bAlways: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(await rig({ serve: { rows: bAlways } }), "default");
     await baseline(r.b, SUITE1);
-    await r.b.prefetchMutants(plans(["M0001"]));
-    const later = r.serve.requests
+    const covering = [ref("A")]; // B is refused at baseline, so it covers no mutant
+    await r.b.prefetchMutants(plans(["M0001", "M0002"], covering));
+    const mutantEntries = r.serve.requests
       .slice(1)
-      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? []);
-    expect(later.length).toBeGreaterThan(0);
-    expect(later.every((e) => e.excludeTests === undefined)).toBe(true);
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.`);
+    expect(mutantEntries.length).toBeGreaterThan(0);
+    expect(mutantEntries.map((e) => e.excludeTests)).toEqual(
+      mutantEntries.map(() => [`Codeunit${CU}.B`]),
+    );
+    expect(r.serve.closes).toEqual([]);
+    expect(r.serve.daemons).toHaveLength(1);
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("pass");
   });
 
   test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
