@@ -1771,33 +1771,33 @@
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "7f672050a6cbefc3ff5759cffdf3fe659d64f0d0fea621772db52b6991d065bc"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.delete-additive-right|1|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "7f672050a6cbefc3ff5759cffdf3fe659d64f0d0fea621772db52b6991d065bc"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "801798307d845670d2d38cc6a2de4bb6c540a1e67b35d26516d2dd73427644ca"
     },
     {
       "key": "7b5887f1e890752bf8945f1c1173b9d1f3eba13794951eafea141f3006c040a1|Data Main|OnValidate|lethal.swap-additive|1|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "801798307d845670d2d38cc6a2de4bb6c540a1e67b35d26516d2dd73427644ca"
     },
@@ -1891,17 +1891,17 @@
     },
     {
       "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
       "key": "8037f4fe0779cc1f3fea01b2c23fc93c6270188c71e99326f772d656a0f32981|Data Main|OnValidate|lethal.remove-assignment|1|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },

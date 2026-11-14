@@ -13,7 +13,12 @@ import {
   suggest,
   suggestionKindOf,
 } from "../src/explain-suggest";
-import { type MutantOutcome, REPORT_SCHEMA_VERSION, type SessionReport } from "../src/report";
+import {
+  type MutantOutcome,
+  REPORT_SCHEMA_VERSION,
+  type SessionReport,
+  survivorReachOf,
+} from "../src/report";
 import type { CoverageAttribution } from "../src/selection";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
@@ -159,6 +164,22 @@ describe("R273: the kind per survivor, from reach and attribution only", () => {
     expect(suggestionKindOf("unreached-and-uncovered", "all-green")).toBe("cover-the-statement");
     for (const a of ["exact", "object", "all-green", "not-measured"] as const) {
       expect(suggestionKindOf("not-decided", a)).toBe("undecided");
+    }
+  });
+
+  test("R975 review: every reach survivorReachOf gives an unreached survivor has a kind, line included", () => {
+    for (const a of ["exact", "line", "object", "all-green"] as const) {
+      for (const [reached, evidence] of [
+        [false, "not-measured"],
+        [undefined, "not-observed"],
+      ] as const) {
+        const reach = survivorReachOf(a, evidence, reached, undefined, false);
+        expect([a, reach, suggestionKindOf(reach, a)]).toEqual([
+          a,
+          a === "exact" || a === "line" ? "covered-but-unreached" : "unreached-and-uncovered",
+          a === "exact" || a === "line" ? "cover-the-branch" : "cover-the-statement",
+        ]);
+      }
     }
   });
 

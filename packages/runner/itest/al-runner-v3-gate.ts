@@ -6,7 +6,8 @@
  * Leg T's `held` (r4 I-3): with no live BC oracle for the tables fixture, "a move toward BC" is read
  * from the known differences alone: the rows where v3's own baseline differs from BC's
  * `tables.baseline.json` (pre-committed as the 52 of `precommitment-tables-52.txt`: 41 Commit #5607,
- * 7 duplicate key #5603, 4 TestPage). A leg-T difference is `held` only when its row is one of those
+ * 7 duplicate key #5603, 4 TestPage; 58 since R975 added 6 Data Main rows that read no-coverage by
+ * line attribution, `TABLES_KNOWN_DIFFERENCES`). A leg-T difference is `held` only when its row is one of those
  * AND it now equals the BC row (verdict and killing test). r9 §7 (R639) adds one narrow case: a
  * known row whose verdict disagreed with BC's, now `error` through a named refusal
  * (`runner-refused`, no killing test). Anything else is `gate-fail`.
@@ -216,7 +217,7 @@ export function knownDifferenceKeys(
 export interface LegTRow {
   readonly key: string;
   readonly kind: "held-bc" | "held-refusal" | "gate-fail";
-  /** One of the pinned 52 (a known BC-vs-own difference): picks the gate-fail reason text. */
+  /** One of the known BC-vs-own differences (58 since R975): picks the gate-fail reason text. */
   readonly known: boolean;
   readonly own: NormalizedMutant | undefined;
   readonly now: NormalizedMutant | undefined;
@@ -297,9 +298,15 @@ function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined
  * difference that is not a row become `lines`, one receipt line each. Then, first failure wins:
  * 1. Sleep index 0 + 0; 2. `unsupportedTests` 3; 3. the pinned 52 (`knownRefusal`); 4. the
  * classification: `gate-fail`; `held` only past R556's bare-hash refusal (R650) and when the compare's differing keys EQUAL the held keys
- * (no count check, I2); `pass` only with 0 compare differences, then 298 / 60 / 60 over 418. The
+ * (no count check, I2); `pass` only with 0 compare differences, then `LEG_T_OWN_COUNTS`. The
  * caller's `assertGateBaseline` compare follows a `pass`.
  */
+
+/**
+ * Leg T's committed own baseline, unpinned: 298 / 54 / 66 over 418 (R975 moved 6 Data Main rows to
+ * no-coverage; 298 / 60 / 60 before). A build pin replaces it with its own counts.
+ */
+export const LEG_T_OWN_COUNTS = { killed: 298, survived: 54, noCoverage: 66, total: 418 } as const;
 type LegTJudgement = {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: readonly string[];
@@ -327,7 +334,7 @@ const WORSENESS = { pass: 0, held: 1, "gate-fail": 2 } as const;
  * (all seven `survived`) is never a pass on a pinned build.
  */
 function judgeLegTPinned(i: LegTInput, pin: LegTPinInput): LegTJudgement {
-  const today = judgeLegTCore(i, { killed: 298, survived: 60, noCoverage: 60, total: 418 });
+  const today = judgeLegTCore(i, LEG_T_OWN_COUNTS);
   // The headline names the pin miss; today's (unpinned) failure is context only, because on a build whose
   // pin moves a figure (edge-8078bcf49's 0 refused tests) today's judgement always fails on that figure.
   const mismatch = (reason: string): LegTJudgement => ({
@@ -412,7 +419,7 @@ function judgeLegTCore(
     readonly total: number;
     /** The refused tests (`unsupportedTests`): 3 unless a build pin says otherwise (edge-8078bcf49). */
     readonly refusedTests?: number;
-  } = { killed: 298, survived: 60, noCoverage: 60, total: 418 },
+  } = LEG_T_OWN_COUNTS,
 ): LegTJudgement {
   const { rows } = i.classification;
   const lines = rows.map((r) => formatLegTRow(r, i.codes.get(r.key)));

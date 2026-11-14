@@ -2222,6 +2222,8 @@ export interface MutantOutcome {
    * they reached the mutated member is unknown. Acting on one of these can mean strengthening a
    * test that never ran the code.
    * `all-green` — coverage placed it nowhere, so every green test ran. Least informative.
+   * `line` (R975) — a trigger mutant placed by LINE coverage: these tests' baselines ran its own
+   * statement's line. As trustworthy as `exact`.
    * Absent when nothing ran (`no-coverage`).
    *
    * Reporting all three as one undifferentiated list is approximate attribution wearing the
@@ -2432,11 +2434,12 @@ export function survivorReachOf(
   // this arm a carried row with no grain looks archived and the batch-wide signal decides it.
   if (carried) return "not-decided";
   if (guardReached === true) return "reached-unnoticed";
-  if (guardReached === false)
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  // R975 review: `line` is execution evidence like `exact` (the baseline ran the statement's line).
+  const proven = attribution === "exact" || attribution === "line";
+  if (guardReached === false) return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   if (reachGrain !== undefined) return "not-decided";
   if (guardEvidence === "not-observed")
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+    return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   return "not-decided";
 }
 
