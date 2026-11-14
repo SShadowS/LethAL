@@ -5992,14 +5992,40 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
+    // R1004: the warm-up leaves out every test the baseline refused by name (`baselineRefused`, I3).
+    // Such a test is refused on both transports, decides no verdict (a mutant runs against its green
+    // covering tests), and would only leave a daemon R612 cannot reuse; on the default transport R786
+    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). An isolated call whose one
+    // test was refused leaves the warm-up; a codeunit leaves out those tests (`excludeTests`), and its
+    // rows are compared with the baseline's rows without them. A refused row the baseline did not
+    // note (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
+    const refusedOf = (cu: number): ReadonlySet<string> =>
+      this.baselineRefused.get(cu) ?? new Set();
+    const warm = union.filter((id) => {
+      const one = this.isolatedRefs.get(id);
+      return one === undefined || !refusedOf(one.codeunitId).has(one.method);
+    });
+    const leftOut = (cu: number): readonly string[] | undefined =>
+      this.isolatedRefs.has(cu) || refusedOf(cu).size === 0
+        ? undefined
+        : [...refusedOf(cu)].sort().map((m) => `Codeunit${cu}.${m}`);
+    const expected = (e: SentEntry): readonly V3Row[] => {
+      const rows = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) return rows;
+      const out = new Set([...refusedOf(e.codeunit)].map((m) => m.toLowerCase()));
+      return rows.filter((r) => !out.has(r.method.toLowerCase()));
+    };
     const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
-        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
         "warmup",
         mode,
+        undefined,
+        undefined,
+        leftOut,
       ).catch((err: unknown) => {
         // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
         // named row does (R786). An explicit transport keeps failing by name. Only at the
@@ -6025,7 +6051,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
       for (const e of sent.slice(1)) {
         const got = rowsClass(rows.get(e.id) ?? []);
-        const want = rowsClass(this.baselineRows.get(callOf(e)) ?? []);
+        const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
         if (got !== want)
           disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
       }
@@ -6112,6 +6138,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
      *  in this request's body (on the daemon of the call's own mode). */
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    /** R1004: the warm-up only: the tests each plain codeunit entry leaves out. */
+    excluded?: (codeunit: number) => readonly string[] | undefined,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -6123,8 +6151,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
     daemon.requests += 1;
-    const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
-      alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
+    const sent = encodeGroups(
+      groups,
+      this.requireEchoId(),
+      (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+      excluded,
     );
     const tests = sent.reduce(
       (n, e) =>
