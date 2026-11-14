@@ -7258,6 +7258,65 @@ describe("R948 C: the memory guard", () => {
     // CU's request ran on daemon 0; the gate for CU2 found the bound passed and closed it first.
     expect(closesAtFirstSleep).toBeGreaterThanOrEqual(1);
   });
+
+  // R970: the per-test fill's processes can grow after their start was admitted; the watch reads
+  // the container while they run. The fake raises memory inside the second process and fires the
+  // watch there, so the reading comes from a process in flight, never at a start.
+  const growingFill = async (overInFlight: boolean) => {
+    const methods = ["A", "B", "C", "D"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick?: () => void; stopped: number } = { stopped: 0 };
+    const r = await guarded(() => used, {
+      suite,
+      polls: 1,
+      extra: { isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 2) {
+          // A spike only while this process runs: the gate at the next start reads GIB again, so
+          // only the watch can see it.
+          if (overInFlight) used = 30 * GIB;
+          clock.tick?.();
+          used = GIB;
+        }
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.stopped += 1;
+            clock.tick = undefined;
+          };
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS); // takes the fill
+    r.b.baselinePhase(false);
+    return { r, clock };
+  };
+
+  test("R970: memory that grows while a fill process runs stops the session once; no further process starts", async () => {
+    const { r, clock } = await growingFill(true);
+    expect(r.stops).toEqual([
+      { usedBytes: 30 * GIB, boundBytes: 28 * GIB, source: "/sys/fs/cgroup/memory.max" },
+    ]);
+    expect(r.one.calls).toHaveLength(2);
+    const line = r.seen.find(([c]) => c === "al-runner-v3-memory-bound")?.[1] ?? "";
+    expect(line).toContain("while the per-test baseline's processes run");
+    expect(clock.stopped).toBe(1); // the watch ends with the fill
+  });
+
+  test("R970: a watch reading under the bound is no stop: every test's process runs", async () => {
+    const { r, clock } = await growingFill(false);
+    expect(r.stops).toHaveLength(0);
+    expect(r.one.calls).toHaveLength(4);
+    expect(clock.stopped).toBe(1);
+  });
 });
 
 describe("R948 ordering and the per-test cross-check", () => {
