@@ -666,6 +666,56 @@ function isNamedRefusalRow(r: V3Row): boolean {
 }
 
 /**
+ * R1001 (coord R-991): how many baseline codeunits in a row must come back refused, every row with one
+ * and the same text, before the session stops by name. Measured over the baselines of 169 v3 stores
+ * (R-983's 166 BC.History projects, DO, DC; `/coord/handoff/R-991/choose-n.py`), each in fill order:
+ * a run of 3 such codeunits was once followed by green tests (a false stop), 5 or more never was; only
+ * DC's baseline (0 of 1,839 tests ran, 4,656 s, 117 daemons) is uniform throughout. 10 keeps a margin.
+ */
+export const V3_UNIFORM_REFUSAL_CODEUNITS = 10;
+
+/** R1001: every baseline row of the first codeunits refused with one text: the run stops by name. */
+export class AlRunnerV3BaselineUniformlyRefusedError extends Error {
+  constructor(
+    readonly codeunits: number,
+    readonly text: string,
+  ) {
+    super(
+      `al-runner-v3-baseline-uniformly-refused: the first ${codeunits} test codeunits of the baseline came back with every test refused, all with one text, so no mutant could be scored; the run stops instead of spending its window on the rest (R1001). The text: ${text}`,
+    );
+    this.name = "AlRunnerV3BaselineUniformlyRefusedError";
+  }
+}
+
+/**
+ * R1001: watches baseline answers codeunit by codeunit. Any row that is not a named refusal (a pass, a
+ * fail, a timeout), or a second refusal text, disarms it for the session; a codeunit is counted once.
+ * `observe` returns the shared text once `n` codeunits have been counted, else `undefined`.
+ */
+export class UniformRefusalWatch {
+  private readonly seen = new Set<number>();
+  private text: string | undefined;
+  private off = false;
+  constructor(private readonly n: number = V3_UNIFORM_REFUSAL_CODEUNITS) {}
+
+  observe(codeunit: number, rows: readonly V3Row[]): string | undefined {
+    if (this.off || rows.length === 0) return undefined;
+    if (!this.seen.has(codeunit)) {
+      for (const r of rows) {
+        const t = (r.message ?? "").split("\n")[0] ?? "";
+        if (!isNamedRefusalRow(r) || (this.text !== undefined && t !== this.text)) {
+          this.off = true;
+          return undefined;
+        }
+        this.text = t;
+      }
+      this.seen.add(codeunit);
+    }
+    return this.seen.size >= this.n ? this.text : undefined;
+  }
+}
+
+/**
  * R761: the test-name shapes proven under serve-entries. Inventoried with `discoverTests` on D1, S1
  * and the gift card: plain method names, and codeunit names of letters, digits, `_`, space and `.`
  * (D1's "CDO Recipient Mgt. Tests", 21 tests).
@@ -698,12 +748,18 @@ function isNamedRefusalRow(r: V3Row): boolean {
  * space, a first `)`. The
  * inner dot is not in this pattern: it depends on the build (#5798) and is read through
  * `serveRowFields` in `pickTransport`.
+ * R1002 (coord R-991): DC's three shapes ran the same way on edge-847b1fa5a, per mutant equal (97
+ * mutants, 0 differences; killingTest equal to the declared name; `/coord/handoff/R-991/shapes/`):
+ * a FIRST `(` whose name later holds `) ` and a letter or digit (`(Test Case) W1 - Check 1 - Some
+ * Name`), a FIRST `// ` before a letter or digit (`// New Check feature`), and (through
+ * `serveRowFields`) a `.` between a letter or digit and a space (`Check Reg. No. Change`). Still
+ * unproven: `(Step)`, `()`, `//Check`, `/ Check`, a dot before anything but a space.
  * A METHOD name outside the shape makes ITS codeunit run one-shot inside the serve session
  * (`oneShotCodeunits`), or the whole default session one-shot where that cannot be done.
  */
 export const V3_SERVE_PROVEN_NAME_SHAPES = {
   method:
-    /^(?:[A-Za-z0-9]|[ØÆÅ+_-](?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
+    /^(?:[A-Za-z0-9]|[ØÆÅ+_-](?=[A-Za-z0-9])|\((?=[A-Za-z0-9][^)\n]*\) [A-Za-z0-9])|\/\/ (?=[A-Za-z0-9]))(?:[A-Za-z0-9_()/&åæ-]| (?=[^ ])|(?<=[A-Za-z0-9])[:'#](?=[A-Za-z0-9]))*$/,
 } as const;
 
 /**
@@ -2180,6 +2236,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly testAppCache = { hits: 0, misses: 0 };
   /** §3 (N1): the one-shot baseline's rows per codeunit, recorded inside the bracket. */
   private baselineRows = new Map<number, readonly V3Row[]>();
+  /** R1001: the baseline's uniform-refusal watch, new per deploy. */
+  private uniformWatch = new UniformRefusalWatch();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
   private prefetched = new Map<string, Map<number, CallRows>>();
   /**
@@ -2904,9 +2962,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R782: where #5798 is fixed, an inner "." is read like any proven inner character (the row's
     // own fields carry the method). Only the measured shape: exactly ONE "." with an ASCII letter or
     // digit on both sides (`Dot.Step`); any other dot shape stays unproven.
+    // R1002 (coord R-991): also every "." between a letter or digit and a space before a letter or
+    // digit (`Check Reg. No. Change`), measured equal to one-shot on edge-847b1fa5a.
     const methodShape = (m: string): boolean =>
       V3_SERVE_PROVEN_NAME_SHAPES.method.test(
-        this.serveRowFields ? m.replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2") : m,
+        this.serveRowFields
+          ? m
+              .replace(/(?<=[A-Za-z0-9])\.(?= [A-Za-z0-9])/g, "_")
+              .replace(/^([^.]*[A-Za-z0-9])\.([A-Za-z0-9][^.]*)$/, "$1_$2")
+          : m,
       );
     // R922 item 3 (R-929): the method only; a codeunit's name never reaches serve's addressing.
     const odd = this.discovered.filter((t) => !methodShape(t.method));
@@ -3121,6 +3185,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.prefetched = new Map();
     this.pairStore.clear();
     this.baselineRows = new Map();
+    this.uniformWatch = new UniformRefusalWatch();
     this.union = new Set();
     this.echoId = undefined;
     this.speculative = undefined; // R790: never served across deploys
@@ -3974,6 +4039,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
           got = undefined;
+        }
+        // R1001: a uniformly refused baseline stops by name, but only once a cross-check sample (the
+        // second codeunit is one, `baselineSampleIds`) has shown the daemon answers as a fresh process does.
+        if (got !== undefined) {
+          const uniform = this.uniformWatch.observe(id, got.rows);
+          if (uniform !== undefined && this.baselineStats.compared - comparedBefore >= 1)
+            throw new AlRunnerV3BaselineUniformlyRefusedError(
+              V3_UNIFORM_REFUSAL_CODEUNITS,
+              uniform,
+            );
         }
         const isSample = plan.has(id);
         reached(id);
@@ -5805,6 +5880,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** I3, and R635 §3 (N1): a baseline call's refusals, and in serve-entries its rows. */
   private noteBaselineRows(lane: Lane, key: number, rows: readonly V3Row[]): void {
     if (!this.isBaselineCall(lane)) return;
+    // R1001: one-shot (and served) baseline answers; the daemon fill watches its own, guarded.
+    const uniform = this.uniformWatch.observe(key, rows);
+    if (uniform !== undefined)
+      throw new AlRunnerV3BaselineUniformlyRefusedError(V3_UNIFORM_REFUSAL_CODEUNITS, uniform);
     if (this.entries) this.baselineRows.set(key, rows);
     for (const r of rows) {
       // R678: exactly `v3RowVerdict`'s refusal branch (a notRun with another status is a contract
