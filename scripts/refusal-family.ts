@@ -38,6 +38,8 @@ export interface Family {
   /** The handle's declaration, per type. */
   readonly handles: Readonly<Record<string, string>>;
   readonly cells: readonly Cell[];
+  /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
+  readonly target?: "OnPrem";
 }
 
 const untouched = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
@@ -143,8 +145,96 @@ export const UNTOUCHED_HANDLE: Family = {
   ],
 };
 
+const noObject = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
+  type,
+  method,
+  state: "no object",
+  vars,
+  call,
+});
+
+/**
+ * PR-02, #8036's family: a member of a DotNet variable that holds no object (declared, never constructed or assigned; a mutant
+ * that removes the line making the object leaves exactly this), over .NET types BC apps use. Properties and methods; each
+ * statement only makes the one access.
+ */
+export const DOTNET_NO_OBJECT: Family = {
+  name: "dotnet-no-object",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+  target: "OnPrem",
+  known: [
+    // #8036 item 1, as worded upstream now (still a refusal): a member of a DotNet variable that holds no object (Uri.AbsoluteUri, UriBuilder.Query).
+    "DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object",
+  ],
+  support: `dotnet
+{
+    assembly(System)
+    {
+        type(System.Uri; GenUri) { }
+        type(System.UriBuilder; GenUriBuilder) { }
+        type(System.Text.RegularExpressions.Regex; GenRegex) { }
+    }
+    assembly(mscorlib)
+    {
+        type(System.Text.StringBuilder; GenStringBuilder) { }
+        type(System.TimeZoneInfo; GenTimeZoneInfo) { }
+        type(System.Globalization.CultureInfo; GenCultureInfo) { }
+        type(System.IO.MemoryStream; GenMemoryStream) { }
+        type(System.Text.Encoding; GenEncoding) { }
+    }
+    assembly(System.Xml)
+    {
+        type(System.Xml.XmlDocument; GenXmlDocument) { }
+    }
+}
+`,
+  handles: {
+    Uri: "U: DotNet GenUri;",
+    UriBuilder: "UB: DotNet GenUriBuilder;",
+    Regex: "RX: DotNet GenRegex;",
+    StringBuilder: "SB: DotNet GenStringBuilder;",
+    TimeZoneInfo: "Z: DotNet GenTimeZoneInfo;",
+    CultureInfo: "CI: DotNet GenCultureInfo;",
+    MemoryStream: "MS: DotNet GenMemoryStream;",
+    Encoding: "EN: DotNet GenEncoding;",
+    XmlDocument: "XD: DotNet GenXmlDocument;",
+  },
+  cells: [
+    noObject("Uri", "AbsoluteUri", "T := U.AbsoluteUri;", ["T: Text;"]),
+    noObject("Uri", "Host", "T := U.Host;", ["T: Text;"]),
+    noObject("Uri", "Port", "I := U.Port;", ["I: Integer;"]),
+    noObject("Uri", "IsAbsoluteUri", "B := U.IsAbsoluteUri;", ["B: Boolean;"]),
+    noObject("Uri", "ToString", "T := U.ToString();", ["T: Text;"]),
+    noObject("UriBuilder", "Query", "T := UB.Query;", ["T: Text;"]),
+    noObject("UriBuilder", "Host", "T := UB.Host;", ["T: Text;"]),
+    noObject("UriBuilder", "ToString", "T := UB.ToString();", ["T: Text;"]),
+    noObject("Regex", "IsMatch", "B := RX.IsMatch('a');", ["B: Boolean;"]),
+    noObject("Regex", "Replace", "T := RX.Replace('a', 'b');", ["T: Text;"]),
+    noObject("Regex", "ToString", "T := RX.ToString();", ["T: Text;"]),
+    noObject("StringBuilder", "Append", "SB.Append('x');"),
+    noObject("StringBuilder", "ToString", "T := SB.ToString();", ["T: Text;"]),
+    noObject("StringBuilder", "Length", "I := SB.Length;", ["I: Integer;"]),
+    noObject("StringBuilder", "Clear", "SB.Clear();"),
+    noObject("TimeZoneInfo", "Id", "T := Z.Id;", ["T: Text;"]),
+    noObject("TimeZoneInfo", "DisplayName", "T := Z.DisplayName;", ["T: Text;"]),
+    noObject("TimeZoneInfo", "GetUtcOffset", "Z.GetUtcOffset(CurrentDateTime());"),
+    noObject("CultureInfo", "Name", "T := CI.Name;", ["T: Text;"]),
+    noObject("CultureInfo", "DisplayName", "T := CI.DisplayName;", ["T: Text;"]),
+    noObject("CultureInfo", "ToString", "T := CI.ToString();", ["T: Text;"]),
+    noObject("MemoryStream", "Length", "L := MS.Length;", ["L: BigInteger;"]),
+    noObject("MemoryStream", "Position", "L := MS.Position;", ["L: BigInteger;"]),
+    noObject("MemoryStream", "Close", "MS.Close();"),
+    noObject("Encoding", "WebName", "T := EN.WebName;", ["T: Text;"]),
+    noObject("Encoding", "EncodingName", "T := EN.EncodingName;", ["T: Text;"]),
+    noObject("XmlDocument", "OuterXml", "T := XD.OuterXml;", ["T: Text;"]),
+    noObject("XmlDocument", "InnerText", "T := XD.InnerText;", ["T: Text;"]),
+    noObject("XmlDocument", "LoadXml", "XD.LoadXml('<a/>');"),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
+  [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -185,6 +275,7 @@ ${body}
         version: "1.0.0.0",
         platform: "28.0.0.0",
         runtime: "17.0",
+        ...(f.target !== undefined ? { target: f.target } : {}),
         idRanges: [{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length }],
         features: ["NoImplicitWith"],
       },
@@ -241,6 +332,9 @@ export function classify(
  * "RecordRef.FieldCount on a RecordRef that is not open" are one class).
  */
 export function classOf(text: string): string {
+  // PR-02: a DotNet member's text names the member twice and the cause after it; the cause is the class.
+  const dotnet = /^DotNet [\w.]+: '[\w.]+' (.*)$/.exec(text);
+  if (dotnet) return `DotNet *: ${dotnet[1]}`;
   const head = text.split(": ")[0] ?? text;
   return head.replace(/^([A-Za-z]+)\.[A-Za-z]+ on /, "$1.* on ").trim();
 }

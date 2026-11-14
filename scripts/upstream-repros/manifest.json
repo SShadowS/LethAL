@@ -171,6 +171,19 @@
         "Codeunit51103.Cell": { "status": "fail" },
         "Codeunit51104.Cell": { "status": "fail" }
       }
+    },
+    {
+      "id": "u8036-dotnet-no-object",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+      "bcEvidence": "inferred, not measured on BC: a member of a DotNet variable that holds no object raises an error on BC (a .NET null reference; issue item 1 refuses only because the text is not measured), so under asserterror the test passes, as u8036-refusals expects for Uri.AbsoluteUri. Types beyond the issue's, and Regex.IsMatch, whose refusal text wrongly says no overload (it passes on a constructed Regex), found by scripts/refusal-family.ts family dotnet-no-object (PR-02)",
+      "rerun": ["the corpus mutants met by the DotNet no-object refusals (R-983)"],
+      "tests": {
+        "Codeunit51201.Cell": { "status": "pass" },
+        "Codeunit51202.Cell": { "status": "pass" },
+        "Codeunit51203.Cell": { "status": "pass" },
+        "Codeunit51204.Cell": { "status": "pass" },
+        "Codeunit51205.Cell": { "status": "pass" }
+      }
     }
   ]
 }
