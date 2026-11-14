@@ -12,11 +12,11 @@
  *   baseline rows that are refusals (`error` with a `NotRun` text);
  * - a report: the `failureNote` of each `error` mutant.
  *
- * The key is `normaliseRefusal(text)`: the first line, a cascade or no-green-baseline wrapper
- * unwrapped to the refusal inside it, the "[al-runner v3 did not run ...]" suffix dropped, quoted
- * names and literals made `<x>`, GUIDs `<guid>`, digits `N`, capped at 220 characters. So the
- * ledger holds no quoted name or literal and no source text, and a changed wording is a new key.
- * The store is opened readonly; nothing is written.
+ * The key is `normaliseRefusal(text)` (its comment has the rules): only an al-runner refusal and two
+ * platform shapes keep their text, and every place in them that can quote the app's or a test's
+ * own text is masked. THIS REPO IS PUBLIC: the ledger must hold no source text, and a text that is
+ * none of those shapes is `WITHHELD`. A changed wording is a new key. The store is opened readonly;
+ * nothing is written.
  */
 
 import { Database } from "bun:sqlite";
@@ -46,23 +46,26 @@ export interface Sighting {
   readonly where: string;
 }
 
-const CASCADE =
-  /^NotRun: out-of-scope: (an earlier test of this codeunit was refused while it ran|a test before this one in the codeunit did not pass) \([^:]*: (.*)\)\s*(\[al-runner.*)?$/;
 const NO_GREEN =
   /^no green baseline tests — (?:all \S+ failed with the same message|\S+ failed with \S+ distinct messages; the first was): (.*)$/;
+/** A cascade: a test refused because of what an earlier test of its codeunit did. */
+const CASCADE_HEADS = [
+  "NotRun: out-of-scope: an earlier test of this codeunit",
+  "NotRun: out-of-scope: a test before this one in the codeunit did not pass",
+];
 
-/** The refusal a wrapper carries, and which wrapper it was. */
+/**
+ * The refusal a no-green-baseline note carries, and which kind of sighting it is. Whitespace is
+ * collapsed first, so every mask below sees one space where the text had several.
+ */
 function unwrap(text: string): { inner: string; kind: Kind } {
-  const line = text.split("\n")[0] ?? "";
+  const line = (text.split("\n")[0] ?? "").replace(/\s+/g, " ").trim();
   const g = NO_GREEN.exec(line);
   if (g?.[1] !== undefined) return { inner: unwrap(g[1]).inner, kind: "baseline" };
-  const c = CASCADE.exec(line);
-  if (c?.[1] !== undefined && c[2] !== undefined) {
-    const inner = c[2].replace(/^did not run \((.*)\)$/, "$1"); // a `failed (...)` stays, for maskFailures
-    const head = c[1].startsWith("an earlier") ? "NotRun: out-of-scope: " : "FAILED-BEFORE: ";
-    return { inner: head + inner, kind: "cascade" };
-  }
-  return { inner: line, kind: "mutant" };
+  return {
+    inner: line,
+    kind: CASCADE_HEADS.some((h) => line.startsWith(h)) ? "cascade" : "mutant",
+  };
 }
 
 export function refusalKind(text: string): Kind {
@@ -111,19 +114,65 @@ function maskTestNames(s: string): string {
     .replace(/(an earlier test of this codeunit), [A-Za-z0-9_]+, /g, "$1, <test>, ");
 }
 
+/**
+ * The key of a text that is not one of the shapes below: a BC or app error message can quote the
+ * app's own text unquoted ("Customer ACME is blocked"), so it never becomes a key. Its sightings
+ * still count, and the tool's output names where the first one is.
+ */
+export const WITHHELD = "<not a refusal: the text is withheld; read it in the store>";
+const CALLBACK = /^(.* attempted to issue a client callback to show an? [A-Za-z ]+?): .*$/;
+// `N` too: a key (digits already `N`) must read as the same shape on the next pass
+const TRANSPORT = /^(al-runner-v(?:\d+|N) transport failure: v(?:\d+|N) exited (?:\d+|N)): .*$/;
+
+/**
+ * The cause key. Only three shapes keep their text: an al-runner refusal (`NotRun: ...`), al-runner's
+ * transport failure, and BC's client-callback error; anything else is `WITHHELD`. Inside them, every
+ * place that can quote the app's or a test's own text is masked: a quoted string (an apostrophe
+ * inside a word, as in "BC's", opens none; an unclosed quote masks to the end), a cascade's earlier
+ * test, its failure (`failed (...)`, `this failure is not trusted: ...`), its refusal and reach,
+ * a SaveAsXml run's error, a .NET exception's message, the callback's question and the transport's
+ * stderr. Then GUIDs, digits, and a 220-character cut; trimming after the cut keeps the key a fixed
+ * point, which `loadLedger` checks.
+ */
 export function normaliseRefusal(text: string): string {
-  // BC's client-callback error quotes the app's own question or message after the colon; a cut
-  // can end on a space, and trimming after it keeps the key a fixed point
-  return maskTestNames(maskFailures(unwrap(text).inner))
-    .replace(/(attempted to issue a client callback to show an? [A-Za-z ]+?): .*$/, "$1: <text>")
-    .replace(/\s*\[al-runner v\d+ did not run.*$/, "")
+  // a cut can land inside a mask (`did not run (<refu`); one more pass then gives the same text, so
+  // the key is the first fixed point (two passes in every measured case)
+  let k = normaliseOnce(text);
+  for (let i = 0; i < 4; i++) {
+    const next = normaliseOnce(k);
+    if (next === k) return k;
+    k = next;
+  }
+  throw new RefusalLedgerError(`refusal-ledger: no fixed point for the key of: ${k}`);
+}
+
+function normaliseOnce(text: string): string {
+  const s = unwrap(text).inner.replace(/\s*\[al-runner v\d+ did not run.*$/, "");
+  let k: string;
+  if (CALLBACK.test(s)) k = s.replace(CALLBACK, "$1: <text>");
+  else if (TRANSPORT.test(s)) k = s.replace(TRANSPORT, "$1: <stderr>");
+  else if (s.startsWith("NotRun: ")) k = s;
+  else return WITHHELD;
+  return maskTestNames(maskFailures(k))
+    .replace(/(this failure is not trusted): .*$/, "$1: <failure>")
+    .replace(
+      /(an error in a SaveAsXml run \(what the handler sees is not pinned\)): .*$/,
+      "$1: <error>",
+    )
+    .replace(
+      /(raised the \.NET exception [\w.+`]+): .*?(?=; the text AL would see|$)/,
+      "$1: <message>",
+    )
     .replace(/`[^`]*`/g, "<x>")
-    .replace(/'[^']*'/g, "<x>")
+    .replace(/(?<![A-Za-z0-9])'[^']*'/g, "<x>")
     .replace(/"[^"]*"/g, "<x>")
-    .replace(/\{[0-9A-Fa-f-]{36}\}|[0-9A-Fa-f-]{36}/g, "<guid>")
+    .replace(/(?<![A-Za-z0-9])'[^']*$/, "<x>")
+    .replace(/"[^"]*$/, "<x>")
+    .replace(
+      /\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?/g,
+      "<guid>",
+    )
     .replace(/\d+/g, "N")
-    .replace(/\s+/g, " ")
-    .trim()
     .slice(0, 220)
     .trimEnd();
 }
@@ -175,6 +224,14 @@ export function readStore(path: string, runId?: number): Sighting[] {
       throw new RefusalLedgerError(
         `refusal-ledger: ${path} has no finished al-runner-v3 run; pass --run <id>`,
       );
+    // an explicit run must exist and be a v3 run: a wrong id must not read as "no refusals"
+    const named = db.query("select backend from runs where id=?").get(run) as {
+      backend: string;
+    } | null;
+    if (named?.backend !== "al-runner-v3")
+      throw new RefusalLedgerError(
+        `refusal-ledger: ${path} has no al-runner-v3 run ${run} (${named === null ? "no such run" : `backend ${named.backend}`})`,
+      );
     const out: Sighting[] = [];
     const errs = db
       .query(
@@ -208,7 +265,7 @@ export function readStore(path: string, runId?: number): Sighting[] {
 
 export function readReport(path: string): Sighting[] {
   const r = JSON.parse(readFileSync(path, "utf8")) as {
-    mutants?: { mutantCode: string; verdict: string; failureNote?: string }[];
+    mutants?: { mutantCode: string; verdict: string; failureNote?: string; batchIndex?: number }[];
   };
   if (!Array.isArray(r.mutants))
     throw new RefusalLedgerError(`refusal-ledger: ${path} has no mutants array`);
@@ -217,7 +274,12 @@ export function readReport(path: string): Sighting[] {
     .map((m) => {
       const text =
         m.failureNote !== undefined && m.failureNote !== "" ? m.failureNote : "(no message)";
-      return { text, kind: refusalKind(text), where: `${path} ${m.mutantCode}` };
+      // R231: a mutant code repeats across batches, so the batch names it too
+      return {
+        text,
+        kind: refusalKind(text),
+        where: `${path} ${m.batchIndex ?? 0}/${m.mutantCode}`,
+      };
     });
 }
 

@@ -1,6 +1,6 @@
 [
   {
-    "key": "al-runner-vN transport failure: vN exited N: al-runner N.N.N-alpha.N+edge.N (NafNdN)",
+    "key": "al-runner-vN transport failure: vN exited N: <stderr>",
     "state": "fixed",
     "issue": "#7853",
     "note": "R-983: fixed upstream, project not re-run; (Guided Experience compile; R946)"
@@ -239,18 +239,8 @@
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC's; thi",
     "state": "open",
-    "issue": "#7854",
-    "note": "R-983: filed"
-  },
-  {
-    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>N<x>",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
-  },
-  {
-    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>The",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
+    "issue": "#7924 #7854",
+    "note": "R-983: filed; one key for causes filed apart"
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>): it can change the bound event subscribers, so the state it would have left is not BC's; this failure is no",
@@ -269,7 +259,7 @@
     "note": "R-983: fixed on current (re-run); Bank Deposits files re-run: cascade gone"
   },
   {
-    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it can change session state the analysis does not follow, so the state it would have left is not BC<x>Opt",
+    "key": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it can change session state the analysis does not follow, so the state it would have left is not BC's; th",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -295,15 +285,9 @@
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): Index out of bounds.",
+    "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): <error>",
     "state": "unexamined",
     "note": "R-983: not examined"
-  },
-  {
-    "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): The given key was not present in the dictionary.",
-    "state": "fixed",
-    "repro": "/coord/handoff/R-983/recheck",
-    "note": "R-983: fixed on current (re-run); Bank Deposits files re-run"
   },
   {
     "key": "NotRun: out-of-scope: an error while an open TestPage closes at the end of the test (not pinned)",
@@ -463,12 +447,6 @@
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: did not run (<refusal>): it can change session state the analysis does not follow, so the state it would have left is not BC<x>options'",
-    "state": "open",
-    "issue": "#7924",
-    "note": "R-983: filed"
-  },
-  {
     "key": "NotRun: out-of-scope: DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments (not pinned)",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
@@ -545,7 +523,7 @@
     "note": "R-983: filed (same text family, not each reproduced)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfConverter.ConvertPage raised the .NET exception System.TypeInitializationException: The type initializer for <x> threw an exception. <- System.P",
+    "key": "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfConverter.ConvertPage raised the .NET exception System.TypeInitializationException: <message>; the text AL would see is not pinned (ADR-N sectio",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -571,12 +549,12 @@
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception Microsoft.Dynamics.QRCode.QRCodeException: Cannot accommodate input length.; the text AL w",
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception Microsoft.Dynamics.QRCode.QRCodeException: <message>; the text AL would see is not pinned",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception System.TypeInitializationException: The type initializer for <x> threw an exception. <- Sy",
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.MX.BarcodeProviders.QRCodeProvider.GetBarcodeStream raised the .NET exception System.TypeInitializationException: <message>; the text AL would see is not pinned (ADR-N",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -701,7 +679,7 @@
     "note": "R-983: by design; DotNet refused by policy"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet new System.Globalization.CultureInfo raised the .NET exception System.Globalization.CultureNotFoundException: Culture is not supported. (Parameter <x>)",
+    "key": "NotRun: out-of-scope: DotNet new System.Globalization.CultureInfo raised the .NET exception System.Globalization.CultureNotFoundException: <message>",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
@@ -717,13 +695,13 @@
     "note": "R-983: not examined"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. <- System.IO.IOException: An attempt was made to move the position be",
+    "key": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.XNCertificates.XNCertificateN raised the .NET exception System.Security.Cryptography.CryptographicException: ASNN corrupted data. <- System.Formats.AsnN.AsnCo",
+    "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.XNCertificates.XNCertificateN raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (A",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -738,7 +716,7 @@
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: The hostname could not be parsed.; the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
@@ -778,24 +756,19 @@
     "note": "R-983: filed (same text family, not each reproduced)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: Cannot find column N.; the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Data.DataRow.Item raised the .NET exception System.ArgumentException: Column <x> does not belong to table DataTable.; the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataRow.Item raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position -N.; the text AL would see is not pinned (ADR-N section N)",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
-  },
-  {
-    "key": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position N.; the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"
@@ -879,27 +852,17 @@
     "note": "R-983: filed (same text family, not each reproduced)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::oaep decoding error; the text AL wo",
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: <message>; the text AL would see is not pinned (ADR-N sec",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::padding check failed; the text AL w",
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::oaep decoding error; the text AL would see is not",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
-  },
-  {
-    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:N:rsa routines::padding check failed; the text AL would see is no",
-    "state": "unexamined",
-    "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
-  },
-  {
-    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.UniversalCryptoDecryptor.TransformFinalBlock raised the .NET exception System.Security.Cryptography.CryptographicException: The input data is not a complete block",
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.UniversalCryptoDecryptor.TransformFinalBlock raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is no",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -986,7 +949,7 @@
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value (<x>) must be greater than or equal to <x>. (Parameter <x>)",
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: <message>",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -997,7 +960,7 @@
     "note": "R-983: filed"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: Invalid URI: The URI scheme is not valid. (Parameter <x>); the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -1025,7 +988,7 @@
     "note": "R-983: filed (same text family, not each reproduced)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Validate raised the .NET exception System.Xml.Schema.XmlSchemaValidationException: The element <x> in namespace <x> has invalid child element <x>. List of possible elem",
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Validate raised the .NET exception System.Xml.Schema.XmlSchemaValidationException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "unexamined",
     "note": "R-983's stores, a baseline refusal row (R-983 mined error mutants only)"
   },
@@ -1042,7 +1005,7 @@
     "note": "R-983: filed (same text family, not each reproduced)"
   },
   {
-    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception System.ArgumentException: Document does not have a root element.; the text AL would see is not pinned (ADR-N section N)",
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
     "state": "open",
     "issue": "#7924",
     "note": "R-983: filed"

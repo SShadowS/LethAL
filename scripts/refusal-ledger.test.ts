@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   DEFAULT_LEDGER,
   RefusalLedgerError,
+  WITHHELD,
   loadLedger,
   normaliseRefusal,
   readReport,
@@ -35,13 +36,17 @@ describe("normaliseRefusal", () => {
       ),
     ).toBe(`${NR}SetFilter: <x> is not an Integer in <x> N <guid>`);
   });
-  test("a cascade and a no-green-baseline note are unwrapped to the refusal inside", () => {
+  test("a no-green-baseline note is unwrapped; a cascade is named a cascade, whatever ends it", () => {
     const inner = `${NR}SetFilter: empty filter term`;
-    const cascade = `${NR}an earlier test of this codeunit was refused while it ran (TestA: did not run (SetFilter: empty filter term))${SUFFIX}`;
-    expect([normaliseRefusal(cascade), refusalKind(cascade)]).toEqual([inner, "cascade"]);
     const note = `no green baseline tests — all 7 failed with the same message: ${inner}`;
     expect([normaliseRefusal(note), refusalKind(note)]).toEqual([inner, "baseline"]);
     expect(refusalKind(inner)).toBe("mutant");
+    const head = `${NR}an earlier test of this codeunit was refused while it ran (TestA: did not run (SetFilter: empty filter term))`;
+    for (const tail of [
+      SUFFIX,
+      ": it can change session state; this failure is not trusted: x (y)",
+    ])
+      expect(refusalKind(head + tail)).toBe("cascade");
   });
   test("a cascade's quoted failure (app text), its earlier test's name and its quoted refusal are masked", () => {
     const failed = `${NR}a test before this one in the codeunit did not pass (TestB: failed (Document service is not configured (setup))) and left a manual event subscription bound`;
@@ -61,6 +66,37 @@ describe("normaliseRefusal", () => {
     const text =
       "Microsoft Dynamics 365 Business Central Server attempted to issue a client callback to show a confirmation dialog box: Do you want to post? (CodeUnit 1)";
     expect(normaliseRefusal(text)).toBe(`Microsoft Dynamics N Business Central Server ${CALLBACK}`);
+  });
+  // THE REPO IS PUBLIC: each shape below once let app text into a key (R-995 review)
+  test("no app text: BC's apostrophe, a not-trusted failure tail, an unclosed quote, a doubled space", () => {
+    const trusted = `${NR}an earlier test of this codeunit was refused while it ran (T: did not run (R)): it is not BC's; this failure is not trusted: Customer 'Acme' has no credit limit`;
+    expect(normaliseRefusal(trusted)).toBe(
+      `${NR}an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>)): it is not BC's; this failure is not trusted: <failure>`,
+    );
+    expect(normaliseRefusal(`${NR}not BC's view of 'Acme Corp' here`)).toBe(
+      `${NR}not BC's view of <x> here`,
+    );
+    expect(normaliseRefusal(`${NR}view field 'Acme Corp has no`)).toBe(`${NR}view field <x>`);
+    expect(normaliseRefusal(`${NR}view field "Acme Corp has no`)).toBe(`${NR}view field <x>`);
+    expect(normaliseRefusal(`${NR}x failed  (Customer Acme is blocked)`)).toBe(
+      `${NR}x failed (<failure>)`,
+    );
+  });
+  test("no app text: a SaveAsXml error, a .NET exception's message, a text that is no refusal", () => {
+    const xml = `${NR}an error in a SaveAsXml run (what the handler sees is not pinned): Customer Acme is blocked`;
+    expect(normaliseRefusal(xml)).toBe(
+      `${NR}an error in a SaveAsXml run (what the handler sees is not pinned): <error>`,
+    );
+    const net = `${NR}DotNet System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI Acme; the text AL would see is not pinned`;
+    expect(normaliseRefusal(net)).toBe(
+      `${NR}DotNet System.UriBuilder raised the .NET exception System.UriFormatException: <message>; the text AL would see is not pinned`,
+    );
+    for (const t of ["Customer ACME is blocked.", "(no message)", "Assert.AreEqual failed. 5 <> 6"])
+      expect(normaliseRefusal(t)).toBe(WITHHELD);
+    const transport = "al-runner-v3 transport failure: v3 exited 3: anything at all";
+    expect(normaliseRefusal(transport)).toBe(
+      "al-runner-vN transport failure: vN exited N: <stderr>",
+    );
   });
   test("a key is a fixed point, also when the 220-character cut ends on a space", () => {
     const k = normaliseRefusal(`${NR}${"word ".repeat(80)}`);
@@ -121,15 +157,20 @@ describe("inputs", () => {
     "create table runs (id integer primary key, backend text, finished_at text)",
     "create table mutants (id integer primary key, run_id int, mutant_code text, verdict text, failure_note text)",
     "create table test_results (id integer primary key, run_id int, mutant_row_id int, codeunit_id int, codeunit_name text, method text, outcome text, failure_message text)",
-    // run 1 (older) is not read by default; run 3 is not finished
-    "insert into runs values (1, 'al-runner-v3', 'x'), (2, 'al-runner-v3', 'y'), (3, 'al-runner-v3', null)",
+    // run 1 (older) is not read by default; run 3 is not finished; run 4 is newer but not v3
+    "insert into runs values (1, 'al-runner-v3', 'x'), (2, 'al-runner-v3', 'y'), (3, 'al-runner-v3', null), (4, 'bcdev', 'z')",
+    `insert into mutants values (5, 4, 'M0001', 'error', '${NR}a bcdev run')`,
     `insert into mutants values (1, 1, 'M0001', 'error', '${NR}old')`,
     `insert into mutants values (2, 2, 'M0001', 'error', '${NR}from the note')`,
     `insert into mutants values (3, 2, 'M0002', 'error', '${NR}the note loses')`,
     "insert into mutants values (4, 2, 'M0003', 'killed', null)",
-    `insert into test_results values (1, 2, 3, 5, 'C', 'T', 'error', '${NR}from the test')`,
+    // M0002: an empty first message is skipped, the next one is the text
+    "insert into test_results values (1, 2, 3, 5, 'C', 'S', 'error', '')",
+    `insert into test_results values (4, 2, 3, 5, 'C', 'T', 'error', '${NR}from the test')`,
     `insert into test_results values (2, 2, null, 5, 'C', 'T', 'error', '${NR}a baseline refusal')`,
     "insert into test_results values (3, 2, null, 5, 'C', 'U', 'fail', 'Assert failed')",
+    // a baseline error that is not a refusal is not a sighting
+    "insert into test_results values (5, 2, null, 5, 'C', 'V', 'error', 'Customer ACME is blocked')",
   ];
   const store = () => {
     const p = join(dir, `s${Math.random().toString(36).slice(2)}.sqlite`);
@@ -145,6 +186,10 @@ describe("inputs", () => {
       [`${NR}a baseline refusal`, "test"],
     ]);
     expect(readStore(store(), 1).map((x) => x.text)).toEqual([`${NR}old`]);
+  });
+  test("--run naming a run the store has not, or a run that is not v3, is refused by name", () => {
+    expect(() => readStore(store(), 9)).toThrow(/no al-runner-v3 run 9 \(no such run\)/);
+    expect(() => readStore(store(), 4)).toThrow(/no al-runner-v3 run 4 \(backend bcdev\)/);
   });
   test("a store with no finished v3 run is refused by name", () => {
     const p = join(dir, "empty.sqlite");
