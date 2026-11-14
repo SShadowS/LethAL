@@ -21,6 +21,7 @@ import {
   slotHeld,
 } from "./corpus-snapshot.ts";
 import { memoryVerdict, parsePeak, readSlot, readSlotClass } from "./heavy-slot-class.ts";
+import { treeRssKb } from "./heavy-slot-peak.ts";
 
 // R905. Every lock dir here is a temp dir; nothing touches /coord.
 // Not `lethal-*`: the R358 preload check would read a leftover as this file's leak.
@@ -168,12 +169,15 @@ describe("R905 scripts/heavy-slot.sh", () => {
   const run = (dir: string, cls: string, ...cmd: string[]) => {
     const psFile = join(dir, "ps.txt"); // the guard's ps seam: no live process decides these tests
     writeFileSync(psFile, EMPTY_PS);
+    const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam; a test's command may write it
+    if (!existsSync(peakPs)) writeFileSync(peakPs, "");
     return Bun.spawnSync(["bash", script, cls, ...cmd], {
       env: {
         ...process.env,
         LETHAL_HEAVY_LOCK_DIR: dir,
         BUN: process.execPath,
         LETHAL_HEAVY_PS_FILE: psFile,
+        LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
       },
     });
   };
@@ -375,6 +379,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   const startIn = (dir: string, cg: string | undefined, poll: string, ...args: string[]) => {
     const psFile = join(dir, "ps.txt");
     writeFileSync(psFile, EMPTY_PS);
+    const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam: empty, so it never runs ps
+    writeFileSync(peakPs, "");
     // afterAll kills every holder, so a test that fails or times out before its own kill leaves no waiter
     const w = Bun.spawn(["bash", script, ...args], {
       env: {
@@ -382,6 +388,7 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
         LETHAL_HEAVY_LOCK_DIR: dir,
         BUN: process.execPath,
         LETHAL_HEAVY_PS_FILE: psFile,
+        LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
         LETHAL_HEAVY_POLL_S: poll,
         ...(cg !== undefined ? { LETHAL_HEAVY_CGROUP_DIR: cg } : {}),
       },
@@ -629,6 +636,37 @@ describe("R952 (R953) admission by memory", () => {
     expect(memoryVerdict(sample(10, 32), [2], 16).refuse).toBe(false); // 10+16+4=30, 2+16+4=22
     expect(memoryVerdict(sample(12, 32), [], 16).refuse).toBe(false); // 12+16+4 = 32 exactly
   });
+  test("R992: the small-job allowance, each condition both ways", () => {
+    const held = [27]; // 27 + 2 + 4 = 33 > 32: the declared-sum check alone says no
+    const admit = (v: ReturnType<typeof memoryVerdict>) => [v.refuse, v.small];
+    // used + peak + reserve fits (3 + 2 + 4 = 9) and fewer than two small jobs are held: admitted as small
+    expect(admit(memoryVerdict(sample(3, 32), held, 2, 4, 0))).toEqual([false, true]);
+    expect(admit(memoryVerdict(sample(3, 32), held, 2, 4, 1))).toEqual([false, true]);
+    // used does not fit (27 + 2 + 4 = 33): refused
+    expect(admit(memoryVerdict(sample(27, 32), held, 2, 4, 0))).toEqual([true, undefined]);
+    // the small count could not be read (undefined): fail closed
+    expect(admit(memoryVerdict(sample(3, 32), held, 2, 4, undefined))).toEqual([true, undefined]);
+    // two small jobs already held: the third is refused
+    expect(admit(memoryVerdict(sample(3, 32), held, 2, 4, 2))).toEqual([true, undefined]);
+    // over 2 GiB: no allowance (26 held: 26 + 3 + 4 = 33)
+    expect(admit(memoryVerdict(sample(3, 32), [26], 3, 4, 0))).toEqual([true, undefined]);
+    // the sum fits anyway: an ordinary admission, not a small one
+    expect(admit(memoryVerdict(sample(3, 32), [20], 2, 4, 0))).toEqual([false, undefined]);
+  });
+  test("R992 treeRssKb: the root's tree, the sampler's own subtree left out", () => {
+    const ps = [
+      "1 0 100",
+      "10 1 1000",
+      "11 10 200",
+      "12 10 300",
+      "20 1 5000",
+      "21 20 50",
+      "30 0 9999",
+    ].join("\n");
+    expect(treeRssKb(ps, 10)).toBe(1500);
+    expect(treeRssKb(ps, 1, 20)).toBe(1600); // 1 + 10 + 11 + 12, without 20 and 21
+    expect(treeRssKb(ps, 99)).toBe(0); // gone
+  });
   test("R991: a peak that can never fit (peak + reserve over max) is `never`; one that fits only later is not", () => {
     const never = memoryVerdict(sample(0, 32), [], 29); // 29 + 4 = 33 > 32, even in an empty container
     expect([never.refuse, never.never]).toEqual([true, true]);
@@ -677,9 +715,12 @@ describe("R952 (R953) admission by memory", () => {
     writeFileSync(join(dir, "heavy.2.class"), `baseapp ${process.pid}\n`);
     const dead = Bun.spawnSync(["true"]).pid;
     writeFileSync(join(dir, "heavy.3.class"), `other ${dead} 2\n`);
-    expect(readSlot(dir, 1)).toEqual({ cls: "other", peakGiB: 2 });
-    expect(readSlot(dir, 2)).toEqual({ cls: "baseapp", peakGiB: 12 });
+    expect(readSlot(dir, 1)).toEqual({ cls: "other", peakGiB: 2, small: false });
+    expect(readSlot(dir, 2)).toEqual({ cls: "baseapp", peakGiB: 12, small: false });
     expect(readSlot(dir, 3)).toBeUndefined();
+    // R992: the small-job mark.
+    writeFileSync(join(dir, "heavy.4.class"), `other ${process.pid} 1 small\n`);
+    expect(readSlot(dir, 4)).toEqual({ cls: "other", peakGiB: 1, small: true });
   });
 
   describe("scripts/heavy-slot.sh with injected cgroup readings", () => {
@@ -694,12 +735,15 @@ describe("R952 (R953) admission by memory", () => {
     const run = (dir: string, cg: string, ...args: string[]) => {
       const psFile = join(dir, "ps.txt");
       writeFileSync(psFile, "PID PPID PGID COMMAND\n1 0 1 init\n");
+      const peakPs = join(dir, "peak-ps.txt"); // the sampler's ps seam: empty, so it never runs ps
+      writeFileSync(peakPs, "");
       return Bun.spawnSync(["bash", script, ...args], {
         env: {
           ...process.env,
           LETHAL_HEAVY_LOCK_DIR: dir,
           BUN: process.execPath,
           LETHAL_HEAVY_PS_FILE: psFile,
+          LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
           LETHAL_HEAVY_CGROUP_DIR: cg,
         },
       });
@@ -760,6 +804,161 @@ describe("R952 (R953) admission by memory", () => {
       const host = run(dir, join(dir, "no-cgroup"), "--peak", "gate", "baseapp", "true");
       expect(host.exitCode).toBe(75);
       expect(host.stderr.toString()).toContain("memory rule off");
+    });
+
+    // R992 (ruling q-20261114T100041-36371d53): a job of <= 2 GiB is admitted when USED memory + its
+    // peak + the reserve fits, even if the declared sum does not; at most two at a time; fail closed.
+    describe("R992: the small-job allowance", () => {
+      const holdDeclared = async (dir: string, n: number, peak: number, small = false) => {
+        await hold(dir, n, "other");
+        const pid = holders.at(-1);
+        if (pid === undefined) throw new Error("no holder");
+        writeFileSync(
+          join(dir, `heavy.${n}.class`),
+          `other ${pid} ${peak}${small ? " small" : ""}\n`,
+        );
+      };
+      const ledger = (dir: string) =>
+        existsSync(join(dir, "heavy-small-admits.tsv"))
+          ? readFileSync(join(dir, "heavy-small-admits.tsv"), "utf8").trim().split("\n")
+          : [];
+
+      test("fits by used memory, not by declared peaks: admitted, marked small, one ledger line", async () => {
+        const dir = fresh();
+        await holdDeclared(dir, 1, 27); // 27 + 2 + 4 = 33 > 32, but used 3 + 2 + 4 = 9 fits
+        const g = run(
+          dir,
+          cgroup(3, 32),
+          "--peak",
+          "gate",
+          "other",
+          "sh",
+          "-c",
+          `cat "${dir}/heavy.2.class"`,
+        );
+        expect(g.exitCode).toBe(0);
+        expect(g.stdout.toString()).toMatch(/^other \d+ 2 small\n$/);
+        expect(g.stderr.toString()).toContain("admitted as a small job (R992");
+        const lines = ledger(dir);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]?.split("\t").slice(1, 7)).toEqual([
+          "heavy.2",
+          "other",
+          "2",
+          "3.00",
+          "27",
+          "32.00",
+        ]);
+      });
+
+      test("used memory does not fit: refused, no ledger line", async () => {
+        const dir = fresh();
+        await holdDeclared(dir, 1, 27);
+        const g = run(dir, cgroup(27, 32), "--peak", "gate", "other", "true"); // 27 + 2 + 4 = 33
+        expect(g.exitCode).toBe(75);
+        expect(ledger(dir)).toEqual([]);
+      });
+
+      test("a held slot whose class cannot be read: no allowance (fail closed)", async () => {
+        const dir = fresh();
+        await holdDeclared(dir, 1, 20);
+        await hold(dir, 2, "none"); // counted at the larger default, 12: 20 + 12 + 2 + 4 = 38
+        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(75);
+        expect(ledger(dir)).toEqual([]);
+      });
+
+      test("two small jobs held: a third is refused; with one held it is admitted", async () => {
+        const dir = fresh();
+        await holdDeclared(dir, 1, 1, true);
+        await holdDeclared(dir, 2, 1, true);
+        await holdDeclared(dir, 3, 27); // 27 + 1 + 1 + 2 + 4 = 35 > 32; used 3 + 2 + 4 fits
+        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(75);
+        const pid2 = holders.at(-2);
+        writeFileSync(join(dir, "heavy.2.class"), `other ${pid2} 1\n`); // now only one small job held
+        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(0);
+        expect(ledger(dir)).toHaveLength(1);
+      });
+
+      test("a job over 2 GiB gets no allowance; at 2 GiB it does", async () => {
+        const dir = fresh();
+        await holdDeclared(dir, 1, 26); // 26 + 3 + 4 = 33 and 26 + 2 + 4 = 32 (fits the sum anyway)
+        expect(run(dir, cgroup(3, 32), "--peak", "3", "other", "true").exitCode).toBe(75);
+        await holdDeclared(dir, 2, 1); // 27 + 2 + 4 = 33: now only the allowance admits a 2
+        expect(run(dir, cgroup(3, 32), "--peak", "2", "other", "true").exitCode).toBe(0);
+        expect(run(dir, cgroup(3, 32), "--peak", "2.5", "other", "true").exitCode).toBe(75);
+      });
+
+      test("every admitted job leaves a declared-vs-measured line in heavy-peaks.tsv", () => {
+        const dir = fresh();
+        expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "sleep", "0.5").exitCode).toBe(0);
+        const lines = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\n");
+        expect(lines).toHaveLength(1);
+        const f = lines[0]?.split("\t") ?? [];
+        expect(f.slice(2, 5)).toEqual(["heavy.1", "other", "2"]);
+        expect(f[5]).toMatch(/^\d+\.\d\d$/); // measured GiB (0.00 here: the ps seam holds no such tree)
+        expect(f[6]).toBe("0"); // the command's exit code
+        expect(f[7]).toMatch(/^other \d+ 2$/); // the class file, read while the job still held it
+        expect(f[8]).toBe("sleep 0.5");
+        expect(existsSync(join(dir, "heavy.1.peak"))).toBe(false);
+      });
+
+      test("a command that ends at once: the class file is still there when the line is written", () => {
+        // The sampler's subshell must not run heavy-slot.sh's EXIT trap when it is killed before it
+        // becomes bun (it removed the class file and the ticket).
+        const dir = fresh();
+        for (let i = 0; i < 4; i++)
+          expect(run(dir, cgroup(3, 32), "--peak", "gate", "other", "true").exitCode).toBe(0);
+        const lines = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\n");
+        expect(lines).toHaveLength(4);
+        for (const l of lines) {
+          const f = l.split("\t");
+          expect(f[7]).toMatch(/^other \d+ 2$/);
+          expect(f[5]).toMatch(/^(\d+\.\d\d|\?)$/);
+        }
+      });
+
+      test("the measured peak is the job's tree as the sampler reads it", () => {
+        // The command names its parent (heavy-slot.sh, the sampler's root) at 1 GiB in the ps seam.
+        const dir = fresh();
+        const peakPs = join(dir, "peak-ps.txt");
+        process.env.LETHAL_HEAVY_SAMPLE_S = "1";
+        try {
+          const r = run(
+            dir,
+            cgroup(3, 32),
+            "--peak",
+            "gate",
+            "other",
+            "sh",
+            "-c",
+            `echo "$PPID 1 1048576" > "${peakPs}"; sleep 2`,
+          );
+          expect(r.exitCode).toBe(0);
+        } finally {
+          Reflect.deleteProperty(process.env, "LETHAL_HEAVY_SAMPLE_S");
+        }
+        const f = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\t");
+        expect(f[4]).toBe("2");
+        expect(f[5]).toBe("1.00");
+      });
+
+      test("a job ended by a signal still leaves its line, with the signal's exit code", () => {
+        const dir = fresh();
+        const r = run(
+          dir,
+          cgroup(3, 32),
+          "--peak",
+          "gate",
+          "other",
+          "sh",
+          "-c",
+          "kill -TERM $PPID",
+        );
+        expect(r.exitCode).toBe(143);
+        const f = readFileSync(join(dir, "heavy-peaks.tsv"), "utf8").trim().split("\t");
+        expect(f[6]).toBe("143");
+        expect(existsSync(join(dir, "heavy.1.class"))).toBe(false);
+      });
     });
     test("R960: with no slot held at all, a job whose peak does not fit is still refused", () => {
       const dir = fresh();
