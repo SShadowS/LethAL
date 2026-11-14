@@ -131,6 +131,7 @@ export function checkAnchors(
       (m) =>
         COVERED_VERDICTS.has(m.verdict) &&
         m.coverageAttribution !== "object" &&
+        m.coverageAttribution !== "line" &&
         !inAnyRange(m.line, cfg.coveredProcedureRanges),
     );
     coverageLocationPassed = offenders.length === 0;

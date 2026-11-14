@@ -5028,7 +5028,11 @@ interface ScoreBatchInput {
     readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
-  readonly select: (baseline: readonly BaselineRow[]) => CoveringPlan | undefined;
+  /** `ranHere`: the baseline refs whose row ran in THIS session (a reused snapshot's did not). */
+  readonly select: (
+    baseline: readonly BaselineRow[],
+    ranHere: ReadonlySet<TestMethodRef>,
+  ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
 interface ReusedBaseline {
@@ -6145,7 +6149,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
-  const plan = input.select(baseline);
+  const plan = input.select(baseline, ranHere);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -8363,7 +8367,10 @@ async function runSessionBody(
           .filter(([p]) => p.toLowerCase().endsWith(".al"))
           .map(([, b]) => b.toString("utf8")),
       ]);
-      const select = (baseline: readonly BaselineRow[]): CoveringPlan | undefined => {
+      const select = (
+        baseline: readonly BaselineRow[],
+        ranHere: ReadonlySet<TestMethodRef>,
+      ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
         if (greenTests.length === 0) {
@@ -8509,6 +8516,8 @@ async function runSessionBody(
         let unplaceableIds: ReadonlySet<string> = new Set();
         // R298: which of `uncovered` are refused (wrapped objects), with the sentence naming why.
         let refusedIds: ReadonlyMap<string, string> = new Map();
+        // R975: which of `uncovered` the LINE rule decided (no test hit the statement).
+        let lineUncoveredIds: ReadonlySet<string> = new Set();
         // R197: how narrow each test is, for the covering-test order. Empty under "none", where
         // there is no attribution to be narrow about and the order falls through to duration.
         let memberCounts: ReadonlyMap<string, number> = new Map();
@@ -8520,6 +8529,11 @@ async function runSessionBody(
               ref: b.ref,
               ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
             })),
+            // R975: trigger mutants are placed by line where every test has line coverage. R926's
+            // condition: only rows that ran this session count (a reused snapshot's do not). The
+            // isolation mode is the one `baseline` ended under: `select` runs right after any
+            // `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
+            { lines: true, lineTrusted: (ref) => ranHere.has(ref) },
           );
           const split = coverageFilter(
             execute.filter((m) => !candidates.has(m.mutantId)),
@@ -8543,6 +8557,7 @@ async function runSessionBody(
           coverageAttribution = split.attribution;
           uncovered = split.uncovered;
           unplaceableIds = split.unplaceable;
+          lineUncoveredIds = split.lineUncovered;
           memberCounts = memberCountsByTest(index.byMember);
           // R644 (minor 3): the history candidates' covering tests, in a SECOND call that emits
           // nothing, so `coverage-split` (and `untargetedTriggerCount`) count only what the first
@@ -8563,6 +8578,7 @@ async function runSessionBody(
             coverageAttribution = new Map([...coverageAttribution, ...forCandidates.attribution]);
             uncovered = [...uncovered, ...forCandidates.uncovered];
             unplaceableIds = new Set([...unplaceableIds, ...forCandidates.unplaceable]);
+            lineUncoveredIds = new Set([...lineUncoveredIds, ...forCandidates.lineUncovered]);
           }
           // coverage-split: accumulated per batch AT SPLIT TIME, and folded into
           // `SessionReport.untargetedTriggerCount` by report-fold.ts rather than a session-level
@@ -8585,10 +8601,13 @@ async function runSessionBody(
         // second index; empty for coverage:"none" (uncovered is empty there too).
         //
         // Its `untargetedTriggerCount` is deliberately NOT folded into the session tally, and stays
-        // structurally 0 after R140. A table trigger reaches `uncovered` by exactly one route now:
-        // fallback 2 DECLINED because `unsupportedIndex.byObject` holds its object key — the same
-        // key FALLBACK 1 looks up in this call, on this same index, so it resolves here at object
-        // level and can never reach this call's own fallback 2. Were that ever to change, counting
+        // structurally 0 after R140. A table trigger reaches `uncovered` by two routes: (a) fallback 2
+        // DECLINED because `unsupportedIndex.byObject` holds its object key — the same key FALLBACK 1
+        // looks up in this call, on this same index, so it resolves here at object level and can never
+        // reach this call's own fallback 2; (b) R975's LINE rule found no test that hit its statement
+        // (`lineUncoveredIds`). Route (b) did not consult this index, so it is passed here ONLY when
+        // `unsupportedIndex.byObject` holds its object (R140's naming of the failing test); otherwise
+        // it would take fallback 2 and be handed every failing test. Were that ever to change, counting
         // it would double-count mutants the SESSION already ran against every green test. The
         // number on the report means "took the all-green-tests fallback in the run that decided the
         // verdict", and this call decides no verdict.
@@ -8598,7 +8617,14 @@ async function runSessionBody(
             : coverageFilter(
                 // R298: a refused mutant was decided by the green split; it is left out here so
                 // its refusal is not warned a second time. `batchRefused` stays as the guard.
-                uncovered.filter((m) => !refusedIds.has(m.mutantId)),
+                uncovered.filter(
+                  (m) =>
+                    !refusedIds.has(m.mutantId) &&
+                    (!lineUncoveredIds.has(m.mutantId) ||
+                      unsupportedIndex.byObject.has(
+                        objectKeyOf(m.objectType, m.codeunitId, `mutant ${m.mutantId}`),
+                      )),
+                ),
                 unsupportedIndex,
                 unsupportedBaseline.map((b) => b.ref),
                 undefined,

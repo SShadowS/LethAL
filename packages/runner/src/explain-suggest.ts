@@ -140,7 +140,7 @@ export function suggestionKindOf(
     case "not-decided":
       return "undecided";
     case "covered-but-unreached":
-      if (attribution === "exact") return "cover-the-branch";
+      if (attribution === "exact" || attribution === "line") return "cover-the-branch";
       break;
     case "unreached-and-uncovered":
       if (attribution === "object" || attribution === "all-green") return "cover-the-statement";
