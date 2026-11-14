@@ -2433,11 +2433,12 @@ export function survivorReachOf(
   // this arm a carried row with no grain looks archived and the batch-wide signal decides it.
   if (carried) return "not-decided";
   if (guardReached === true) return "reached-unnoticed";
-  if (guardReached === false)
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  // R975 review: `line` is execution evidence like `exact` (the baseline ran the statement's line).
+  const proven = attribution === "exact" || attribution === "line";
+  if (guardReached === false) return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   if (reachGrain !== undefined) return "not-decided";
   if (guardEvidence === "not-observed")
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+    return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   return "not-decided";
 }
 
