@@ -27,6 +27,7 @@ import {
   AL_RUNNER_V3_VERSION,
   AlRunnerV3AutoMethodOneShotRefusedError,
   AlRunnerV3Backend,
+  AlRunnerV3BaselineUniformlyRefusedError,
   type AlRunnerV3Config,
   AlRunnerV3DependencyMissingError,
   AlRunnerV3DependencySkippedError,
@@ -40,8 +41,10 @@ import {
   ISOLATED_BASELINE_PROCESSES,
   MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
+  UniformRefusalWatch,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
+  V3_UNIFORM_REFUSAL_CODEUNITS,
   WINDOW_BOUND_CAVEAT,
   unkeptRowReason,
   v3CallDeadlineMs,
@@ -1080,6 +1083,7 @@ describe("7: selector parity: v2's staged resource selector bytes, and the echo"
       `codeunit 50000 "Mutation Selector"
 {
     SingleInstance = true;
+    InherentPermissions = X;
 
     var
         Loaded: Boolean;
@@ -6832,6 +6836,85 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.daemons[1]?.join(" ")).toContain("--test-timeout 5");
   });
 
+  /**
+   * R988: the baseline keeps each call's coverage without its unhit statements (v3 lists every
+   * statement of the called codeunit's reach, nearly all unhit: DO, 67 MB a request), and the verdicts
+   * do not move. `daemonBaseline`: through the daemon fill, or one-shot (`callCodeunit`).
+   */
+  const r988KeptCoverage = async (daemonBaseline: boolean) => {
+    type Doc = {
+      coverage: { file: string; statements: { line: number; hits: number }[] }[];
+      perTestCoverage: { test: string; coverage: Doc["coverage"] }[];
+    };
+    const padded: CoverageFn = (m, cu, active, testDir) => {
+      const d = plainCoverage(m, cu, active, testDir) as Doc;
+      const pad = (fs: Doc["coverage"]) =>
+        fs.map((f) => ({
+          file: f.file,
+          statements: [
+            ...f.statements,
+            ...Array.from({ length: 50 }, (_, i) => ({ line: 100 + i, hits: 0 })),
+          ],
+        }));
+      return {
+        coverage: pad(d.coverage),
+        perTestCoverage: d.perTestCoverage.map((e) => ({
+          test: e.test,
+          coverage: pad(e.coverage),
+        })),
+      };
+    };
+    const plain = await dbRig({ extra: { coverage: "al-runner", daemonBaseline } });
+    const vPlain = await baseline(plain.b, SUITE3);
+    const r = await dbRig({
+      serve: { coverage: padded },
+      oneShotCoverage: padded,
+      extra: { coverage: "al-runner", daemonBaseline },
+    });
+    // Every document a baseline verdict's coverage is read from, as the fill handed it on.
+    type Read = { kind: string } & Partial<Doc>;
+    const handed: Read[] = [];
+    const proto = AlRunnerV3Backend.prototype as unknown as {
+      coverageOf: (lane: unknown, row: string, doc: Read) => unknown;
+    };
+    const original = proto.coverageOf;
+    const spy = spyOn(proto, "coverageOf").mockImplementation(function (
+      this: unknown,
+      lane: unknown,
+      row: string,
+      doc: Read,
+    ) {
+      handed.push(doc);
+      return original.call(this, lane, row, doc);
+    });
+    let v: Awaited<ReturnType<typeof baseline>>;
+    try {
+      v = await baseline(r.b, SUITE3);
+    } finally {
+      spy.mockRestore();
+    }
+    // Outcome and coverage per verdict (durations and call ids differ run to run).
+    const seen = (xs: typeof v) => xs.map((x) => ({ outcome: x.outcome, coverage: x.coverage }));
+    expect(seen(v)).toEqual(seen(vPlain));
+    expect(vPlain.some((x) => x.coverage !== undefined)).toBe(true);
+    const docs = handed.filter((d) => d.kind === "doc");
+    expect(docs.length).toBe(SUITE3.length);
+    for (const d of docs) {
+      const all = [
+        ...(d.coverage ?? []),
+        ...(d.perTestCoverage ?? []).flatMap((e) => e.coverage),
+      ].flatMap((f) => f.statements);
+      expect(all.length).toBeGreaterThan(0);
+      expect(all.filter((s) => s.hits <= 0)).toEqual([]);
+    }
+  };
+
+  test("R988: the daemon fill keeps each answer's coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(true));
+
+  test("R988: a one-shot baseline call keeps its coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(false));
+
   const leakCu2: RowsFn = (m, cu, d, n) =>
     allPass(m, cu, d, n).map((x) =>
       cu === CU2 && d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
@@ -8142,5 +8225,169 @@ describe("R937: a one-shot codeunit inside a serve session", () => {
     await baseline(r.b, SUITE2);
     await r.b.prefetchMutants(plans(["M0001"], SUITE2));
     expect(entryIds(r).some((id) => id === `M0001|${CU2}`)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R1001 (coord R-991): a baseline whose first codeunits are all refused, every row with one text,
+// stops by name instead of running the rest (DC: 0 of 1,839, 4,656 s, 117 daemons). Call counters.
+// ---------------------------------------------------------------------------------------------
+const UNIFORM =
+  'NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit "X".InitCompany before the first test: Y row not found';
+const R1001_CUS = Array.from({ length: 12 }, (_, i) => 79300 + i);
+for (const cu of R1001_CUS) SUITE_METHODS[cu] = ["T1", "T2"];
+const R1001_SUITE = R1001_CUS.flatMap((cu) => [ref("T1", cu), ref("T2", cu)]);
+const refusedAll: RowsFn = (_m, cu) =>
+  (SUITE_METHODS[cu] ?? []).map((method) => ({
+    method,
+    status: "error" as const,
+    notRun: true,
+    message: UNIFORM,
+  }));
+const wrow = (cu: number, o: Partial<V3RowLike> = {}): V3RowLike => ({
+  codeunit: cu,
+  method: "T1",
+  name: `Codeunit${cu}.T1`,
+  status: "error",
+  notRun: true,
+  message: UNIFORM,
+  ...o,
+});
+type V3RowLike = {
+  codeunit: number;
+  method: string;
+  name: string;
+  status: "pass" | "fail" | "error";
+  notRun: boolean;
+  message?: string;
+};
+
+describe("R1001: the uniform-refusal watch", () => {
+  test("returns the text once N codeunits are refused with one text, not before", () => {
+    const w = new UniformRefusalWatch(3);
+    expect(w.observe(1, [wrow(1), wrow(1, { method: "T2" })])).toBeUndefined();
+    expect(w.observe(2, [wrow(2)])).toBeUndefined();
+    expect(w.observe(3, [wrow(3)])).toBe(UNIFORM);
+    expect(V3_UNIFORM_REFUSAL_CODEUNITS).toBe(10);
+  });
+  test("one passing or failing row, a timeout, or a second text disarms it for good", () => {
+    const pass: V3RowLike = {
+      codeunit: 2,
+      method: "T1",
+      name: "Codeunit2.T1",
+      status: "pass",
+      notRun: false,
+    };
+    for (const odd of [
+      pass,
+      wrow(2, { status: "fail", notRun: false, message: "boom" }),
+      // a plain fail whose text equals the refusals': only the refusal check stops it, not the text check
+      wrow(2, { status: "fail", notRun: false }),
+      wrow(2, { status: "pass", notRun: false }),
+      wrow(2, { message: "Test exceeded 5s timeout." }),
+      wrow(2, { message: `${UNIFORM} but another` }),
+    ]) {
+      const w = new UniformRefusalWatch(3);
+      w.observe(1, [wrow(1)]);
+      expect(w.observe(2, [odd])).toBeUndefined();
+      expect(w.observe(3, [wrow(3)])).toBeUndefined();
+      expect(w.observe(4, [wrow(4)])).toBeUndefined();
+    }
+  });
+  test("a codeunit is counted once; an empty answer counts nothing", () => {
+    const w = new UniformRefusalWatch(2);
+    expect(w.observe(1, [wrow(1)])).toBeUndefined();
+    expect(w.observe(1, [wrow(1)])).toBeUndefined();
+    expect(w.observe(2, [])).toBeUndefined();
+    expect(w.observe(2, [wrow(2)])).toBe(UNIFORM);
+  });
+});
+
+describe("R1001: a uniformly refused baseline stops by name", () => {
+  test("one-shot: the 10th codeunit's answer stops the baseline with the text; no 11th codeunit runs", async () => {
+    const r = await rig({ suite: R1001_SUITE, oneShotRows: refusedAll });
+    const err = await baseline(r.b, R1001_SUITE).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AlRunnerV3BaselineUniformlyRefusedError);
+    expect(String((err as Error).message)).toContain(UNIFORM);
+    expect(String((err as Error).message)).toContain("the first 10 test codeunits");
+    expect(new Set(r.one.calls.map((c) => c[c.indexOf("--codeunit") + 1]))).toEqual(
+      new Set(R1001_CUS.slice(0, 10).map(String)),
+    );
+  });
+  test("one-shot: a codeunit refused with another text, or one passing test, and every codeunit runs", async () => {
+    for (const odd of [
+      (cu: number) => (cu === 79304 ? `${UNIFORM} (other)` : UNIFORM),
+      (cu: number) => (cu === 79301 ? "pass" : UNIFORM),
+    ]) {
+      const rows: RowsFn = (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) =>
+          odd(cu) === "pass"
+            ? { method, status: "pass" as const }
+            : { method, status: "error" as const, notRun: true, message: odd(cu) },
+        );
+      const r = await rig({ suite: R1001_SUITE, oneShotRows: rows });
+      const v = await baseline(r.b, R1001_SUITE);
+      expect(v).toHaveLength(R1001_SUITE.length);
+      expect(new Set(r.one.calls.map((c) => c[c.indexOf("--codeunit") + 1])).size).toBe(12);
+    }
+  });
+  test("daemon baseline: the fill stops by name once a sample compared clean, before the 11th request", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: refusedAll,
+    });
+    const err = await baseline(r.b, R1001_SUITE).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AlRunnerV3BaselineUniformlyRefusedError);
+    expect(r.serve.requests.length).toBe(10);
+  });
+  test("daemon baseline: when the sample shows the daemon disagrees with a fresh process, no stop: the daemon baseline drops and every codeunit runs one-shot", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    const v = await baseline(r.b, R1001_SUITE);
+    expect(v).toHaveLength(R1001_SUITE.length);
+    expect(r.b.daemonBaselineReport().dropped).toBeDefined();
+  });
+  test("daemon baseline: with every sample skipped (none compared) the fill never stops, and after the drop the fresh green answers decide", async () => {
+    const r = await dbRig({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll, coverage: plainCoverage },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    // every one-shot call while the fill holds (its samples) gives no answer, so each sample is skipped
+    const holder = r.b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(r.b);
+    holder.spawnCodeunit = async (...a) =>
+      r.b.daemonBaselineReport().dropped === undefined
+        ? { spawnError: "boom", wallMs: 0 }
+        : real(...a);
+    // red without the `compared >= 1` guard (the fill stops on unchecked answers), and red with a
+    // watch shared with the one-shot path (the dropped fill's refusals stop the fresh green run)
+    const v = await baseline(r.b, R1001_SUITE);
+    expect(v.map((x) => x.outcome)).toEqual(R1001_SUITE.map(() => "pass"));
+    expect(r.b.daemonBaselineReport().dropped).toBeDefined();
+  });
+  test("per-test keys (--isolate-tests) are not codeunits: a uniformly refused codeunit's tests never stop the run", async () => {
+    const cus = R1001_CUS.slice(0, 2);
+    for (const cu of cus) SUITE_METHODS[cu] = Array.from({ length: 6 }, (_, i) => `T${i + 1}`);
+    try {
+      const suite = cus.flatMap((cu) => (SUITE_METHODS[cu] ?? []).map((m) => ref(m, cu)));
+      const r = await rig({ suite, oneShotRows: refusedAll, extra: { isolateTests: true } });
+      const v = await baseline(r.b, suite); // red without the per-test skip: the 10th test would stop it
+      expect(v).toHaveLength(12);
+    } finally {
+      for (const cu of cus) SUITE_METHODS[cu] = ["T1", "T2"];
+    }
   });
 });

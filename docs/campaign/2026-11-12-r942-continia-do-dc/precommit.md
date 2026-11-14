@@ -129,3 +129,69 @@ scored per window. **Predicted:** (1) the baseline completes inside the first wi
 gone (the probing path), the other refusal families as in 1d (cascade, Company FindSet, activation, HTTP, ZipArchive, GoToKey);
 (3) for every mutant 1d/2d scored, the serve verdict and killing test equal 1d/2d's (one-shot is serve's reference), compared per
 mutant on a verified join; any difference is a BLOCK, read before anything else.
+
+## Amendment 5 (2026-11-14, before the serve run of coord task R-984): current build, LethAL's memory fixes, --peak 12
+
+**Why.** Amendment 4's first serve window was stopped by the watchdog at a 17 GB tree in the daemon baseline: LethAL's own process
+held every codeunit's coverage answer ([[R988]]). Since then master holds R988 (R-974: DO's daemon baseline ran to its end with LethAL
+at 3.9 GiB, tree 9.55 GiB, `/coord/handoff/R-974/fix12.*`), R987 (R-972: serve requests sized by measured cost), R968 (R-955: Company
+FindSet and the cascade refusal keep the daemon) and R970 (R-977: the memory watch during fills). `current` moved to edge-847b1fa5a
+(2026-11-14, gated: all 23 legs).
+
+**Change** (run by bugs under coord task R-984; code folds the result into R-942). Master at the run (88c86ec6 or later), al-runner
+edge-847b1fa5a (`/coord/handoff/R-984/v3.do-serve.json`: amendment 4's config with only `path` changed), a **fresh store**
+(`/coord/handoff/R-984/dos.sqlite`; build and LethAL differ from amendment 4's window), windows of `--time-budget 14400` (the first
+fresh, later ones `--resume`), heavy slot **`--peak 12`** (R988's measured tree 9.55 GiB), the external watchdog on the LethAL pid.
+
+**Measured and reported:** as amendment 4, plus daemon restarts and reasons (expected far fewer than window 1's 7 after R968),
+`cached: false` per daemon start, LethAL's and the tree's peak (R988), whether R970's watch fired. **Predicted:** amendment 4's
+(1)-(3) unchanged. On 736fc7677 R-974's run already read (2) for the baseline: its rows equal 1d's except the 23 Newtonsoft.Json
+refusals, which pass. A build difference between 736fc7677 and 847b1fa5a that moves a verdict is read by name before it is accepted.
+
+## Amendment 6 (2026-11-14, before the first DC window): Part 2, DC on BC 29 packages
+
+**Why BC 29.** DC Test depends on Continia Core SMTP Connector 30.0.0.35783, which requires `Email - SMTP API` 29.0 or later; no BC 28
+build of the connector exists (owner, answer to `q-20261113T042816-e5a1e587`), and the manifest is not patched. So DC runs on **BC 29**:
+the Microsoft packages are bc4's (BC 29 W1, build 29.0.54011.57673, System 29.0.57585.0), downloaded read-only over its dev endpoint
+under one coord lease and sealed in the shared cache `/coord/cache/bc-symbols/bc4/29.0.57585.0-cf5e3098/` (15 packages: System, System
+Application, Base Application, Business Foundation, Application, Email - SMTP API, Any, Library Assert, Library Variable Storage,
+Permissions Mock, Test Runner, System Application Test Library, Application Test Library, Business Foundation Test Libraries,
+Tests-TestLibraries). **Stated limit: DC is not measured on BC 28**, the platform its `app.json` names (`application` 28.0.0.0).
+
+**Packages:** `/coord/handoff/R-942/pkgs-dc29/` = the 23 Continia packages of `pkgs-dc/` (as supplied, including the owner's two) plus
+those 15. Smoke (plain alc, no LethAL): DC Cloud, then DC Test against it, both 0 errors (`smoke-dc29/`).
+
+**Config** `v3.dc29.json`: al-runner `edge-847b1fa5a` by explicit path; `bcVersion` 29.0.54011.57673 (al-runner downloads that build's
+W1 demo data once; checked with an invented app); environment `saas` (DC Cloud's `target` is Cloud, R938); `isolation: "test"`
+(amendment 3); the CRONUS license and `assemblyProbingPaths` `/coord/cache/bc28-service-windows` as DO's (no BC 29 service folder is
+held: a .NET type that BC 29 moved would show as a refusal or difference, read by name); selector ids 6225750 / 6225749 / 6225748, the
+top of DC Cloud's highest idRange, above every codeunit and table id in DC Cloud and DC Test. Default transport (serve-entries).
+
+**Scope** (`lethal run --dry-run`, master cf914df2, `dry-dc29.txt`): DC Cloud whole app, all of DC Test.
+
+| scope | files with mutants | sites | deployed |
+|---|---|---|---|
+| DC Cloud, whole app | 955 | 122,267 | 116,416 |
+
+**Command:** master at the run (each report names its sha), `lethal run --backend al-runner-v3 --allow-large-run`, windows of
+`--time-budget 14400`, the first fresh (store `dcs.sqlite`), later ones `--resume`, **at most three windows (12 h)**; heavy slot
+`--peak 12` baseapp (as amendment 5), retried only on exit 75; the external watchdog (`watchdog-dc.sh`: amendment 1's thresholds, summed
+over the run's own process tree only, so another run on R-942's paths is never counted).
+
+**Expected (a hunt; nothing predicted about verdicts):** the run is on serve (a fallback is a finding); the baseline completes in window
+1; per window: baseline green / red / refused by cause, decided and executed mutants per hour, daemon restarts and closes by reason,
+LethAL's and the tree's peak. Every al-runner refusal or difference: an invented repro with no Continia source text and an upstream issue.
+Every LethAL gap: a roadmap item. A refusal or failure that BC 28 would not show (a BC 29 platform change) is named as such, not filed.
+
+## Amendment 7 (2026-11-14, coord R-984, before the restarted DO window): window 1 voided, a fresh serve window 1
+
+- **Window 1 (9ddb2044, store `/coord/handoff/R-984/dos.sqlite`) is VOID as amendment 5's measurement.** It never ran on serve:
+  edge-847b1fa5a reworded the cascade refusal per kind, the serve keep-list did not accept the warm-up row's new text, and `lethal run`
+  re-ran the session one-shot (R1000). It was stopped by SIGTERM after the one-shot baseline (4,871 s) and 35 covered mutants
+  (`/coord/handoff/R-984/result.md`). Its figures are kept as the R1000 evidence and compared with nothing.
+- **Serve window 1 restarts FRESH** in a new store, `/coord/handoff/R-984/dos2.sqlite`, on a master head that contains R-989 (the R1000
+  fix; the head is named in the run log's first line), not by `--resume` of the old store (that would continue the one-shot run). Later
+  windows `--resume` the new store, as amendment 5 says.
+- **Everything else as amendment 5:** the same config `/coord/handoff/R-984/v3.do-serve.json`, `current` edge-847b1fa5a, `--peak 12`, the
+  watchdog (stop by exact pid when the tree is over 15 GiB or headroom under 4 GiB), and the same comparison with the 1d/2d rows.
+  A serve warm-up fallback in this window is again a finding, and stops the window.

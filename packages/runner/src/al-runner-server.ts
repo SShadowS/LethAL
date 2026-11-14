@@ -207,7 +207,14 @@ const TIMER_FIRED: unique symbol = Symbol("LineReader timer fired");
 
 /** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
 export class LineReader {
+  /** Text read but not yet scanned for a line end. */
   private buf = "";
+  /**
+   * R988: the earlier pieces of a line still being read, none with a line end. Joined once, when the
+   * line ends: appending every chunk to one string and searching it again after each chunk copied a
+   * 67 MB answer line over and over (each search flattens the whole string).
+   */
+  private head: string[] = [];
   private readonly it: AsyncIterator<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private done = false;
@@ -229,10 +236,17 @@ export class LineReader {
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
-        const line = this.buf.slice(0, nl).trim();
+        const tail = this.buf.slice(0, nl);
+        const line = (this.head.length > 0 ? this.head.join("") + tail : tail).trim();
+        this.head = [];
         this.buf = this.buf.slice(nl + 1);
         if (line !== "") return { kind: "line", line };
         continue;
+      }
+      // No line end in what is left: it is part of a line still being read, scanned once.
+      if (this.buf !== "") {
+        this.head.push(this.buf);
+        this.buf = "";
       }
       if (this.done) return { kind: "eof" };
       const remaining = deadline - Date.now();
@@ -771,8 +785,20 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    */
   "company-findset":
     /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+  /**
+   * R1000 (coord R-989): edge-847b1fa5a split the text by kind and names the object: "changed number
+   * sequence '<name>' ... (only a new NumberSequence.Insert is)" and "changed isolated storage key
+   * '<key>' ... (only a new key's IsolatedStorage.Set is)", each with its own tail; the combined form
+   * is kept for the builds before it. Measured with invented AL on both builds
+   * (`/coord/handoff/R-989/probe/`): the same shapes give the old text on 736fc7677 and the new one on
+   * 847b1fa5a (there only when a later test uses the changed object). The object name is the new
+   * variable part, quoted, no quote or line break inside (DO: 'TableSeq32' and GUID-named sequences).
+   * Both new texts re-measured clean on 847b1fa5a with R-955's kit (`/coord/handoff/R-989/restart/`):
+   * per kind 20 refusals on one kept daemon, 27 readers equal to the control, 20 fresh daemons one
+   * answer equal to it, the pid unchanged, no panic text.
+   */
   "cascade-existing-state":
-    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)$/,
+    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed (?:an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)|number sequence '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new NumberSequence\.Insert is\)|isolated storage key '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set is\))$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

@@ -206,7 +206,7 @@ describe("R761: the default transport", () => {
       "Pct%Step",
       "A.B.C",
       "A .B",
-      "A. B",
+      // "A. B" moved to proven with R1002 (a dot between a letter and a space, measured by R-991)
       "Ab.(C)",
     ]) {
       // R937: still unproven, so its codeunit (and only it) runs one-shot, named in the warning
@@ -377,6 +377,55 @@ describe("R761: the default transport", () => {
       ".Check",
     ]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+  });
+
+  // R1002 (coord R-991): DC's three shapes, /coord/handoff/R-991/shapes/, 97 mutants equal on edge-847b1fa5a.
+  test("R1002: DC's three measured shapes stay on serve (the dot one where the row fields carry the method); their unmeasured neighbours do not", async () => {
+    // red when the widening is missing
+    for (const name of ["(Test Case) W1 - Check 1 - Some Name", "// New Check feature"]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
+      const r = await rig(DEFAULT, { tests: [...PLAIN, ref(name)] });
+      await r.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(r.b), r.warnings]).toEqual([name, [], []]);
+    }
+    const dotted = "Check Reg. No. Change";
+    for (const name of [dotted, "A. B"]) {
+      const fixed = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(name)],
+        version: FIXED_VERSION,
+        sha: FIXED_SHA,
+      });
+      await fixed.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(fixed.b)]).toEqual([name, []]);
+    }
+    // the dot needs the row fields (#5798): on a build without them it stays one-shot
+    const old = await rig(DEFAULT, { tests: [...PLAIN, ref(dotted)] });
+    await old.b.decideTransport({ resume: false });
+    expect(oneShotOf(old.b)).not.toEqual([]);
+    // red when the widening is too loose: none of these ran
+    for (const name of [
+      "(Step)",
+      "()",
+      "( Check) W1",
+      "(Check)W1",
+      "//Check",
+      "/ Check",
+      "// ",
+      "//  Check",
+    ]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+    // red when the dot replace is too loose: a dot not between a letter or digit and a space before
+    // one stays one-shot even where the row fields carry the method
+    for (const name of ["Check.", "Check. ", "Check .A", "Check.  A", "Check. -A", "A.B.C"]) {
+      const fixed = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(name)],
+        version: FIXED_VERSION,
+        sha: FIXED_SHA,
+      });
+      await fixed.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(fixed.b)]).toEqual([name, [50100]]);
     }
   });
 

@@ -549,19 +549,33 @@ describe("RC-2 (I-2): leg C, a fixed defect is held, never a blacklisting", () =
   test("everything as pre-committed is a pass", () => {
     expect(classifyLegC(asMeasured, DEFECTS, 3).outcome).toBe("pass");
   });
-  test("R612 (r3 §2): a warn fact diverged or unmeasurable is a pass plus the moved line; never gate-fail or held", () => {
-    for (const verdict of ["diverged", "unmeasurable"]) {
-      const r = classifyLegC(
-        [...asMeasured, { fact: "w", verdict, measured: "commit: MOVED x" }],
-        DEFECTS,
-        4,
-        ["w"],
-      );
-      expect(r.outcome).toBe("pass");
-      expect(r.lines).toEqual([
-        `al-runner-v3-serve-keep-reason-moved: w: ${verdict} (measured commit: MOVED x)`,
-      ]);
-    }
+  test("R612 (r3 §2): a warn fact diverged is a pass plus the moved line; R1000: unkept is gate-fail, unmeasurable infra-fail", () => {
+    const r = classifyLegC(
+      [...asMeasured, { fact: "w", verdict: "diverged", measured: "commit: MOVED x" }],
+      DEFECTS,
+      4,
+      ["w"],
+    );
+    expect(r.outcome).toBe("pass");
+    expect(r.lines).toEqual([
+      "al-runner-v3-serve-keep-reason-moved: w: diverged (measured commit: MOVED x)",
+    ]);
+    const u = classifyLegC(
+      [...asMeasured, { fact: "w", verdict: "unkept", measured: "commit: UNKEPT x" }],
+      DEFECTS,
+      4,
+      ["w"],
+    );
+    expect(u.outcome).toBe("gate-fail");
+    expect(u.lines.join("\n")).toMatch(/^gate-fail: w: unkept .*R1000.*UNKEPT x/);
+    const m = classifyLegC(
+      [...asMeasured, { fact: "w", verdict: "unmeasurable", measured: "no row" }],
+      DEFECTS,
+      4,
+      ["w"],
+    );
+    expect(m.outcome).toBe("infra-fail");
+    expect(m.lines).toEqual(["infra-fail: w: unmeasurable (measured no row)"]);
     expect(
       classifyLegC([...asMeasured, { fact: "w", verdict: "matches" }], DEFECTS, 4, ["w"]),
     ).toEqual({ outcome: "pass", lines: [] });

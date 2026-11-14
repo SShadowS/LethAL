@@ -655,10 +655,19 @@ export function classifyLegC(
         fail = true;
         lines.push(`gate-fail: ${f.fact}: refused, pre-committed ${want}${m}`);
       }
-    } else if (warns.includes(f.fact)) {
+    } else if (warns.includes(f.fact) && f.verdict === "unkept") {
+      // R1000 (coord R-989): a refusal no keep-list entry accepts sends a serve run to one-shot at its
+      // warm-up (R786); a build that rewords a kept text must not become `current`.
+      fail = true;
+      lines.push(
+        `gate-fail: ${f.fact}: unkept (a refusal no V3_SERVE_SAFE_REFUSALS entry accepts: a serve run would fall back to one-shot; R1000)${m}`,
+      );
+    } else if (warns.includes(f.fact) && f.verdict !== "unmeasurable") {
       // R612 (plan r3 §2): costs only speed (the rule then closes), so it never blocks.
       lines.push(`al-runner-v3-serve-keep-reason-moved: ${f.fact}: ${f.verdict}${m}`);
     } else if (f.verdict === "unmeasurable") {
+      // R1000 review: a warn fact too, since an unmeasured serve-keep-reasons would let an unkept
+      // refusal through unseen (a retry, never a block).
       infra = true;
       lines.push(`infra-fail: ${f.fact}: unmeasurable${m}`);
     } else if (want === "defect-present" && f.verdict === "gone") {

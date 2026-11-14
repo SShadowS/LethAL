@@ -226,7 +226,8 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c).
   // R976: the 106 `empty-block` entries gain `reachLine`, the only change (was 5dd124ad...a9fb).
   // R984: 2 comparison `shift-integer` entries gain `equivalenceRisk`, the only change (was 5cadd234...f28a).
-  const pinned = "0f9af9e9c482ba8d1b71247cb557f4168c8996ccc72b418f56f7160748c67242";
+  // R985: toggle-blank-temporal 2.0.0 and its 17540102D texts, the only change (was 0f9af9e9...7242).
+  const pinned = "c6df40c476282fd73a5b791940b63edf7cd9c6584c9bd01361f07e72ad9bb7ca";
   expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
   expect(
     await hashOf(

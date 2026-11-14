@@ -199,6 +199,7 @@
     "heavy-slot-class.test.ts",
     "heavy-slot-class.ts",
     "heavy-slot-guard.ts",
+    "heavy-slot-peak.ts",
     "importable-scripts.test.ts",
     "itest-timeline.test.ts",
     "itest-timeline.ts",

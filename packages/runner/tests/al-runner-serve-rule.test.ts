@@ -334,8 +334,19 @@ describe("serveDaemonReusable, the rule alone", () => {
     keeps: [
       `${P}an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
       `${P}an earlier test of this codeunit, Post_WhenX_ThenY, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+      // R1000 (coord R-989): edge-847b1fa5a's per-kind texts, as R-984 (DO) and the R-989 probe measured them
+      `${P}an earlier test of this codeunit, MultipleSalesInvoiceXML_WhenSendingThreeInvoices_ShouldCreateThreeFiles, changed number sequence 'TableSeq32' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_NextTwice, changed number sequence 'CA3B3700-E56F-4BD6-A070-4F1AE1D97E85' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_ChangesKey, changed isolated storage key 'R989KEY20' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set is)`,
     ],
     closes: [
+      // R1000: a kind with the other kind's tail, an unquoted or empty name, a quote inside the name, another kind
+      `${P}an earlier test of this codeunit, A_NextTwice, changed number sequence 'TableSeq32' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set is)`,
+      `${P}an earlier test of this codeunit, A_ChangesKey, changed isolated storage key 'R989KEY20' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_NextTwice, changed number sequence TableSeq32 that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_NextTwice, changed number sequence '' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_NextTwice, changed number sequence 'a'b' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
+      `${P}an earlier test of this codeunit, A_NextTwice, changed a report that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`,
       // another cascade cause, or the measured one with a tail, or no test name
       `${P}an earlier test of this codeunit, B_Changes, changed a table that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
       `${P}an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are) panic`,

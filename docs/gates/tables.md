@@ -71,6 +71,11 @@ What the figures mean:
 
 ## History
 
+2026-11-14 (R985, coord task R-971): `tables.baseline.json` re-recorded on `bc2` by R332's procedure for `toggle-blank-temporal` 2.0.0 (stand-in
+`17540102D`): the 4 temporal rows re-keyed (`|2`), two `mutatedTextSha256` values moved to the new texts; no verdict or killing test moved; 322 / 73 / 23
+unchanged; the confirm run passed. Pre-commitment `docs/superpowers/specs/2026-11-14-r985-temporal-standin-precommitment.md`, amendment 1. Logs:
+`/coord/handoff/R-971/`.
+
 2026-11-06 (R836, coord task R-848): `tables.baseline.json` moved from identity scheme 44 to 45, on `bc2`, by R332's procedure. One line changed, the scheme,
 and the confirm run passed. Logs: `/coord/handoff/R-848/bc2/`.
 

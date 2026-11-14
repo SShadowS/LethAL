@@ -264,7 +264,8 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // which the same manifest with that key removed still gives).
       // R976: the 106 `empty-block` entries gain `reachLine`, the only change (was 5dd124ad...a9fb).
       // R984: 2 comparison `shift-integer` entries gain `equivalenceRisk`, the only change (was 5cadd234...f28a).
-      "0f9af9e9c482ba8d1b71247cb557f4168c8996ccc72b418f56f7160748c67242",
+      // R985: toggle-blank-temporal 2.0.0 and its 17540102D texts, the only change (was 0f9af9e9...7242).
+      "c6df40c476282fd73a5b791940b63edf7cd9c6584c9bd01361f07e72ad9bb7ca",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -298,7 +299,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
       // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
       // R984: only the manifest moved it, by `equivalenceRisk` on 2 `shift-integer` entries (was d4e6ba39...3bba).
-      "0cc77b2ab4c7625606c3938d2afb9c9bcdc907cedacb295d90b0f5b077a207a0",
+      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 0cc77b2a...07a0;
+      // fixture-emission's per-file pins show the selector as the one file that changed).
+      // R985: then the manifest (toggle-blank-temporal 2.0.0, 17540102D) and DataTemporalOps.Codeunit.al's stand-in
+      // lines moved it, nothing else (/coord/handoff/R-971/classify.ts; was f5e003d8...68b9).
+      "14328edc4789324e7a7ab6cb94981bda590a897fb0ba799cef94f0dbfa6e7631",
     );
   }, 60_000);
 });
