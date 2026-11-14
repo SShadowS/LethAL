@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 949 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 949 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -949,7 +949,7 @@ that ordering is the priority.
 - **R933** · BC.History apps the DotNet errors used to block, sampled on v3: a temporary-source page and a raw TAB in JSON give wrong answers (upstream #7811, #7812) · [R933.md](docs/roadmap/R933.md) · open
 - **R934** · On al-runner a mutant's reported `durationMs` sums the whole call's time once per covering test: 174 s for a mutant in a 158 s session, and the TIMING line blames overlap · [R934.md](docs/roadmap/R934.md) · done (4bd146b3; kills 5845f9e0; wording a533e424)
 - **R936** · Seven System Application modules on v3: Page Metadata.APIVersion keeps only the first version (upstream #7818), and 15 refusal causes cost tests (upstream #7819) · [R936.md](docs/roadmap/R936.md) · open
-- **R937** · One test METHOD whose name serve-entries is not proven for still drops the whole v3 session to one-shot; a per-codeunit fallback would help one measured app (DC, 13 of 1,906 tests) · [R937.md](docs/roadmap/R937.md) · open
+- **R937** · One test METHOD whose name serve-entries is not proven for still drops the whole v3 session to one-shot; a per-codeunit fallback would help one measured app (DC, 13 of 1,906 tests) · [R937.md](docs/roadmap/R937.md) · done (a8b0dba2)
 - **R927** · An explicit serve-entries v3 run fails only after the whole baseline when a warm-up row is refused, so the user waits 20-30 minutes for an answer the first warm-up request already had · [R927.md](docs/roadmap/R927.md) · done (97505da3): an explicit serve-entries run probes for a batch refusal before the baseline…
 - **R929** · On al-runner v3, two Subcontracting baseline tests fail with BC's "Warehouse Request ... not up-to-date" on a Modify after a failed Insert: an upsert of two existing rows through one buffer, on its second pass (upstream #7798) · [R929.md](docs/roadmap/R929.md) · open
 - **R930** · The update script's heavy-job count read one job as two when a shell (or `timeout`) put the real job in another process group, and counted a `grep` as a job · [R930.md](docs/roadmap/R930.md) · done (afa1c296): readers never count; a shell above a job's own process adds no job
