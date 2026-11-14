@@ -101,6 +101,7 @@ import {
 import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
+  ENTRIES_REQUEST_BUDGET_BYTES,
   type EntryGroup,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
@@ -108,11 +109,11 @@ import {
   type SentEntry,
   batchRefusalReason,
   callOf,
-  chunkGroups,
   decodeEntriesAnswer,
   echoMismatch,
   emitSelectorEcho,
   encodeGroups,
+  groupsThatFit,
   isolatedSelection,
   serveRow,
 } from "./al-runner-v3-entries";
@@ -223,6 +224,12 @@ export { V3_TIMEOUT_MESSAGE };
  */
 const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
+
+/** R987: how often a request's daemon RSS is read while it runs (Contoso grew about 0.6 GB a second). */
+const RSS_SAMPLE_MS = 200;
+
+/** R987: a daemon this far over its floor holds memory, so a request that did not grow it says nothing. */
+const RETAINED_SLACK_BYTES = 512 * 2 ** 20;
 
 /**
  * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
@@ -838,6 +845,18 @@ export const ISOLATED_BASELINE_PROCESSES = 4;
 /** R948: the memory guard reads again every `MEMORY_POLL_MS` while over the bound, at most `MEMORY_WAIT_POLLS` times (5 minutes). */
 export const MEMORY_POLL_MS = 2000;
 export const MEMORY_WAIT_POLLS = 150;
+/**
+ * R970: while the per-test baseline fill runs its processes side by side, the guard also reads the
+ * container's memory every `MEMORY_WATCH_MS`: processes already running can grow past the bound,
+ * which a check at each process's start does not see.
+ */
+export const MEMORY_WATCH_MS = 5000;
+/**
+ * R970: how many watch readings in a row must be over the bound before it stops the session (15 s),
+ * so a short spike (another job's, say) does not end the run; growth that stays over does. Unlike the
+ * gate, the watch never closes a daemon: a request may be in flight on it.
+ */
+export const MEMORY_WATCH_OVER_TICKS = 3;
 /** R948: what the guard counts one started al-runner process or request at (measured 2-3.3 GB, R961). */
 export const MEMORY_CALL_ESTIMATE_BYTES = 3 * 2 ** 30;
 
@@ -1454,6 +1473,8 @@ interface Daemon {
   baselineStop?: number;
   /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
   requests: number;
+  /** R987: the lowest RSS read when one of its requests started: the base its requests' growth is read from. */
+  floorRss?: number;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -1949,6 +1970,57 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R912: the batch a windowed prefetch belongs to: its group count, and the chunk its requests fill. */
   private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
 
+  /**
+   * R987: per call (codeunit, or one test under isolation), the highest cost per entry measured in any
+   * request that ran it (bytes the daemon grew during the request, over its entries), for the whole
+   * session: it never falls.
+   */
+  private readonly costByCall = new Map<number, number>();
+  /** R987: set once a lowered cap was announced. */
+  private capLoweredSaid = false;
+
+  /** R987: a call's measured cost per entry (`groupsThatFit`), `undefined` until a request ran it. */
+  private readonly costOf = (call: number): number | undefined => this.costByCall.get(call);
+
+  /**
+   * R987: one request's reading: its daemon's RSS when it was sent, the daemon's floor (the lowest
+   * start seen) and the highest RSS seen while it ran. A request that did not grow the daemon while it
+   * HOLDS memory (its start `RETAINED_SLACK_BYTES` or more over the floor) may have reused what an
+   * earlier request left: it says nothing, and its calls keep their state (an unmeasured one stays
+   * unmeasured). Every other request is a reading (a daemon near its floor that did not grow: a cost of
+   * about 0). The growth is read
+   * from the floor, not the start: a daemon that keeps some memory starts each request higher, and
+   * from the start a request reads low. The growth is divided over the request's TEST entries only
+   * (an echo is LethAL's own tiny codeunit, and `groupsThatFit` charges costs to test entries only:
+   * dividing over every entry halved the cost of one-codeunit groups, so Contoso read 64 MiB where a
+   * test entry costs about twice that). It is charged to every call the request ran, each keeping its
+   * highest: never an average, never falling.
+   */
+  private noteEntryCost(
+    startRss: number | undefined,
+    floorRss: number | undefined,
+    peakRss: number | undefined,
+    sent: readonly SentEntry[],
+  ) {
+    if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
+    const tests = sent.filter((e) => !e.echo);
+    if (tests.length === 0) return;
+    if (!(peakRss > startRss) && startRss - floorRss >= RETAINED_SLACK_BYTES) return;
+    const cost = (peakRss - floorRss) / tests.length;
+    for (const e of tests) {
+      const call = callOf(e);
+      if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
+    }
+    const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / cost);
+    if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredSaid) {
+      this.capLoweredSaid = true;
+      this.notify(
+        "al-runner-v3-entries-cap-lowered",
+        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per test entry, so requests of its tests carry about ${Math.max(1, fit)} test entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
+      );
+    }
+  }
+
   /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
   private prefetchRemainingMs: (() => number) | undefined;
 
@@ -2151,12 +2223,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     memoryReader?: () => MemorySample | undefined;
     /** R952: replaces the daemon RSS reader of the recycle bound (tests never read `/proc`). */
     rssReader?: (pid: number) => number | undefined;
+    /** R987: replaces the daemon RSS reader that measures a request's entries (tests never read `/proc`). */
+    requestRssReader?: (pid: number) => number | undefined;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
     memoryWaitPolls?: number;
     /** R948: bytes one started process or request is counted at by the guard. Absent: `MEMORY_CALL_ESTIMATE_BYTES`. */
     memoryEstimateBytes?: number;
+    /**
+     * R970: starts the memory watch's clock: `tick` is called every `MEMORY_WATCH_MS` until the
+     * returned function is called. Tests drive the ticks by hand.
+     */
+    memoryWatchClock?: (tick: () => void) => () => void;
     /** R948: runs the daemon baseline's codeunits last to first (the order proof's second order). */
     reverseBaselineOrder?: true;
   } = {};
@@ -3452,6 +3531,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const f = this.budgetFloor;
     if (this.isolatedFilled || f === undefined) return;
     this.isolatedFilled = true;
+    // R970: the processes (or daemon requests) below run side by side and can grow after their start
+    // was admitted: the memory watch reads the container while they run.
+    const unwatch = this.watchMemory();
+    let watched: AlRunnerV3MemoryBoundError | undefined;
+    try {
+      await this.fillIsolatedRun(lane, stopSeconds, coverage, f.floorMs);
+    } finally {
+      unwatch();
+      // Taken on every exit, so a later fill (after a deploy) never meets an old one.
+      watched = this.memoryWatchError;
+      this.memoryWatchError = undefined;
+    }
+    // With no stop handle the watch's stop is an error, thrown once, here.
+    if (watched !== undefined) throw watched;
+  }
+
+  /** R866: `fillIsolatedBaseline`'s work, under its memory watch. */
+  private async fillIsolatedRun(
+    lane: Lane,
+    stopSeconds: number,
+    coverage: boolean,
+    floorMs: number,
+  ): Promise<void> {
     const queue = [...this.suitePerCodeunit.values()].flat();
     // R948: one codeunit-isolation daemon answers every test, one request each; a test it cannot
     // answer cleanly is left for its own call, which runs it alone one-shot as before.
@@ -3492,7 +3594,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : undefined;
         await rm(covPath, { force: true }).catch(() => {});
         if ("spawnError" in made) continue;
-        if (!this.aloneAnswer(made, ref, f.floorMs)) continue;
+        if (!this.aloneAnswer(made, ref, floorMs)) continue;
         this.isolatedBaseline.set(key, {
           ...made,
           ...(covText !== undefined ? { covText } : {}),
@@ -4290,6 +4392,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let used = 0;
     let closed = false;
     for (let i = 0; ; i += 1) {
+      // R970: the memory watch may stop the session while this gate waits: it then answers no.
+      // R970: the memory watch may stop the session while this gate waits: it then answers no.
+      if (this.memoryStopped) return false;
       const s = g.read();
       if (s === undefined) return true; // unreadable now: the first read decided the guard is on, so this is not a stop
       used = s.usedBytes + this.memoryHeld * this.memoryEstimate();
@@ -4316,6 +4421,55 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     this.stopHandle.stopForMemory(info);
     return false;
+  }
+
+  /** R970: set by the memory watch when it stopped a session that has no stop handle; the fill throws it. */
+  private memoryWatchError: AlRunnerV3MemoryBoundError | undefined;
+
+  /**
+   * R970: reads the container's memory every `MEMORY_WATCH_MS` while the caller's processes run. When
+   * `MEMORY_WATCH_OVER_TICKS` readings in a row are over the bound, it stops the session through R955's path,
+   * as the gate does, so no new process starts (the gate, waiting or not, answers `false` from then
+   * on) and the ones in flight end at their stop. Returns the function that ends the watch. No guard
+   * (off, or no limit): nothing to watch.
+   */
+  private watchMemory(): () => void {
+    this.announceMemoryGuard();
+    const g = this.memoryGuard;
+    if (g === undefined || g === "off") return () => {};
+    let over = 0;
+    const tick = () => {
+      if (this.memoryStopped) return;
+      const s = g.read();
+      if (s === undefined || s.usedBytes <= g.boundBytes) {
+        over = 0;
+        return;
+      }
+      over += 1;
+      if (over < MEMORY_WATCH_OVER_TICKS) return;
+      this.memoryStopped = true;
+      const info = { usedBytes: s.usedBytes, boundBytes: g.boundBytes, source: g.source };
+      this.notify(
+        "al-runner-v3-memory-bound",
+        `[lethal] al-runner-v3-memory-bound: the container uses ${(info.usedBytes / 2 ** 30).toFixed(1)} GiB while the per-test baseline's processes run, over the ${(g.boundBytes / 2 ** 30).toFixed(1)} GiB bound for ${over} readings in a row; no new process starts and the run stops with its report (R970).`,
+      );
+      if (this.stopHandle === undefined) {
+        this.memoryWatchError = new AlRunnerV3MemoryBoundError(
+          info.usedBytes,
+          info.boundBytes,
+          info.source,
+        );
+        return;
+      }
+      this.stopHandle.stopForMemory(info);
+    };
+    const clock =
+      this.seams.memoryWatchClock ??
+      ((t: () => void) => {
+        const h = setInterval(t, MEMORY_WATCH_MS);
+        return () => clearInterval(h);
+      });
+    return clock(tick);
   }
 
   /** R866: the answer `fillIsolatedBaseline` holds for this baseline call, taken once, if it matches. */
@@ -6034,6 +6188,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // the request is placed in the 256-entry chunk a whole-batch prefetch would have put it in: if
     // an earlier window of that chunk had an entry that ran, this one cannot be a batch refusal, as the
     // chunk holding both would not have been. Chunk boundaries fall where `chunkGroups` puts them.
+    // R987: always 256 here, whatever size the memory readings made the requests: a smaller request
+    // is a part of its 256-entry chunk, so the judgement never depends on a reading.
     const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
     if (batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
       batch.size = 0;
@@ -6125,21 +6281,39 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<RequestOut> {
     const seq = ++this.requestSeq;
     const daemon = await this.ensureDaemon(lane, mode);
+    // R987: the daemon's RSS while the request runs (it holds every entry's state until the end).
+    const pid = daemon.server.pid;
+    const readRss = (): number | undefined =>
+      pid === undefined ? undefined : (this.seams.requestRssReader ?? readProcessRssBytes)(pid);
+    // Its start, and its floor (the lowest start seen): see `noteEntryCost`.
+    const startRss = readRss();
+    if (startRss !== undefined && (daemon.floorRss === undefined || startRss < daemon.floorRss))
+      daemon.floorRss = startRss;
+    let peakRss = startRss;
+    const sampleRss = () => {
+      const r = readRss();
+      if (r !== undefined && (peakRss === undefined || r > peakRss)) peakRss = r;
+    };
+    const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
-    const {
-      sent,
-      rows,
-      cut: partial,
-    } = await lane.timed(phase, () =>
-      this.send(
-        lane,
-        groups,
-        phase === "prefetchMs" ? "prefetch" : "live",
-        mode,
-        groupCount,
-        alone,
-      ),
-    );
+    let answer: Awaited<ReturnType<AlRunnerV3Backend["send"]>>;
+    try {
+      answer = await lane.timed(phase, () =>
+        this.send(
+          lane,
+          groups,
+          phase === "prefetchMs" ? "prefetch" : "live",
+          mode,
+          groupCount,
+          alone,
+        ),
+      );
+    } finally {
+      clearInterval(sampler);
+    }
+    sampleRss();
+    const { sent, rows, cut: partial } = answer;
+    this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent);
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
@@ -6292,9 +6466,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }))
       .filter((g) => g.codeunits.length > 0); // R937: a mutant only one-shot codeunits cover sends no group
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
-    const queue = chunkGroups(groups);
+    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`).
+    // Resent groups form their own segment after the window's, as their own chunks did before.
+    const segments: EntryGroup[][] = groups.length > 0 ? [[...groups]] : [];
+    const nextChunk = (): EntryGroup[] | undefined => {
+      const seg = segments[0];
+      if (seg === undefined) return undefined;
+      const chunk = seg.splice(0, groupsThatFit(seg, this.costOf));
+      if (seg.length === 0) segments.shift();
+      return chunk;
+    };
     const resent = new Set<string>();
-    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+    for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
       // R948: a prefetch request starts no group while the container is over its memory bound; the
       // session stops by the guard (R955's path), so the rest is never scored.
       if (!(await this.memoryGate())) break;
@@ -6321,7 +6504,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       const again = out.resend.filter((g) => !resent.has(g.mutantId));
       for (const g of again) resent.add(g.mutantId);
-      queue.push(...chunkGroups(again));
+      if (again.length > 0) segments.push([...again]);
     }
     await this.batchKillPairs(plans);
   }
@@ -6368,15 +6551,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const tagOf = (k: Kill) => this.pairTag(k.mutantId, k.cu);
     // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
-    const perChunk = Math.max(1, Math.floor(ENTRIES_CHUNK_CAP / 4));
-    const chunksOf = (ks: readonly Kill[]): Kill[][] => {
-      const out: Kill[][] = [];
-      for (let i = 0; i < ks.length; i += perChunk) out.push(ks.slice(i, i + perChunk));
-      return out;
+    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`), over
+    // the kills' real groups (NONE and M, one test entry each); whole kills only, at least one.
+    const segments: Kill[][] = kills.length > 0 ? [[...kills]] : [];
+    const nextChunk = (): Kill[] | undefined => {
+      const seg = segments[0];
+      if (seg === undefined) return undefined;
+      const sized = seg.flatMap((k) => [
+        { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [k.cu] },
+        { mutantId: k.mutantId, codeunits: [k.cu] },
+      ]);
+      const chunk = seg.splice(0, Math.max(1, Math.floor(groupsThatFit(sized, this.costOf) / 2)));
+      if (seg.length === 0) segments.shift();
+      return chunk;
     };
-    const queue = chunksOf(kills);
     const resent = new Set<string>();
-    for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
+    for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
       const groups: EntryGroup[] = chunk.flatMap((k) => [
         {
           mutantId: SELECTOR_RESOURCE_NONE,
@@ -6423,7 +6613,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           after.push(k);
         }
       }
-      queue.push(...chunksOf(after));
+      if (after.length > 0) segments.push(after);
     }
   }
 
