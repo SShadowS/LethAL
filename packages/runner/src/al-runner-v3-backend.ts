@@ -6078,14 +6078,52 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
+    // R1004: the warm-up leaves out a test whose row in THIS batch's baseline is a named refusal the
+    // daemon cannot keep (R612/R945: `serveDaemonReusable` false, the shape that dirtied the warm-up).
+    // Such a test is refused on both transports, decides no verdict (a mutant runs against its green
+    // covering tests), and would only leave a daemon R612 cannot reuse; on the default transport R786
+    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). A refusal the daemon keeps
+    // stays in, so the warm-up still compares the whole run of its codeunit (state carries from test to
+    // test there). An isolated call whose one test is such a refusal leaves the warm-up; a codeunit
+    // leaves those tests out (`excludeTests`) and its rows are compared with the baseline's rows
+    // without them. v3 matches `excludeTests` by PREFIX (measured, `/coord/handoff/R-992/excl.ts`:
+    // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
+    // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
+    // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
+    const leftOutRows = (id: number): readonly V3Row[] => {
+      const rows = (this.baselineRows.get(id) ?? []).filter(
+        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+      );
+      if (this.isolatedRefs.has(id)) return rows;
+      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+      return rows.filter((r) => {
+        const m = r.method.toLowerCase();
+        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+      });
+    };
+    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
+    const leftOut = (cu: number): readonly string[] | undefined => {
+      if (this.isolatedRefs.has(cu)) return undefined;
+      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+      return names.length === 0 ? undefined : names;
+    };
+    const expected = (e: SentEntry): readonly V3Row[] => {
+      const rows = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) return rows;
+      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
+      return rows.filter((r) => !out.has(r.method.toLowerCase()));
+    };
     const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
-        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
         "warmup",
         mode,
+        undefined,
+        undefined,
+        leftOut,
       ).catch((err: unknown) => {
         // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
         // named row does (R786). An explicit transport keeps failing by name. Only at the
@@ -6111,7 +6149,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
       for (const e of sent.slice(1)) {
         const got = rowsClass(rows.get(e.id) ?? []);
-        const want = rowsClass(this.baselineRows.get(callOf(e)) ?? []);
+        const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
         if (got !== want)
           disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
       }
@@ -6198,6 +6236,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
      *  in this request's body (on the daemon of the call's own mode). */
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    /** R1004: the warm-up only: the tests each plain codeunit entry leaves out. */
+    excluded?: (codeunit: number) => readonly string[] | undefined,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -6209,8 +6249,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
     daemon.requests += 1;
-    const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
-      alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
+    const sent = encodeGroups(
+      groups,
+      this.requireEchoId(),
+      (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+      excluded,
     );
     const tests = sent.reduce(
       (n, e) =>
