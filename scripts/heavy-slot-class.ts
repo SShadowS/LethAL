@@ -104,6 +104,8 @@ export function readContainerMemory(): ReturnType<typeof readCgroupMemory> {
  * the reserve, fit too: jobs that are small now still grow to their peak, so (1) alone would let two
  * young serve runs start together and outgrow the limit. With no cgroup limit to read there is
  * nothing to bound against: the job is admitted and the message says the memory rule is off.
+ * R991: a job whose peak plus the reserve is over `memory.max` itself can NEVER be admitted, however
+ * the queue drains: `never` says so, and the guard fails it by name instead of letting it wait.
  */
 export function memoryVerdict(
   sample:
@@ -112,7 +114,12 @@ export function memoryVerdict(
   heldPeaksGiB: readonly number[],
   peakGiB: number,
   reserveGiB: number = MEMORY_RESERVE_GIB,
-): { readonly refuse: boolean; readonly message: string; readonly off?: true } {
+): {
+  readonly refuse: boolean;
+  readonly message: string;
+  readonly off?: true;
+  readonly never?: true;
+} {
   if (sample?.maxBytes === undefined)
     return {
       refuse: false,
@@ -122,6 +129,14 @@ export function memoryVerdict(
   const max = sample.maxBytes / GIB;
   const used = sample.usedBytes / GIB;
   const held = heldPeaksGiB.reduce((s, p) => s + p, 0);
+  if (peakGiB + reserveGiB > max) {
+    const f = (n: number) => n.toFixed(1);
+    return {
+      refuse: true,
+      never: true,
+      message: `memory: this job's peak ${f(peakGiB)} GiB + reserve ${f(reserveGiB)} = ${f(peakGiB + reserveGiB)} > max ${f(max)} GiB -> NEVER FITS, whatever else runs: lower --peak or raise the limit (R991)`,
+    };
+  }
   const nowFits = used + peakGiB + reserveGiB <= max;
   const peaksFit = held + peakGiB + reserveGiB <= max;
   const f = (n: number) => n.toFixed(1);

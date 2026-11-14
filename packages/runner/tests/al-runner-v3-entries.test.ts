@@ -38,6 +38,7 @@ import {
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
   ISOLATED_BASELINE_PROCESSES,
+  MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
@@ -50,12 +51,16 @@ import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
   AlRunnerV3EntriesEncodeError,
   AlRunnerV3EntriesRefusedError,
+  ENTRIES_CHUNK_CAP,
+  ENTRIES_UNMEASURED_CAP,
+  type EntryGroup,
   SELECTOR_ECHO_FILENAME,
   batchRefusalReason,
   chunkGroups,
   decodeEntriesAnswer,
   emitSelectorEcho,
   encodeGroups,
+  groupsThatFit,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
@@ -287,6 +292,7 @@ function fakeOneShot(
   rows: RowsFn,
   coverage?: CoverageFn,
   answer?: { readonly exitCode: number; readonly stderr: string },
+  echo?: (mutant: string) => string,
 ) {
   const calls: string[][] = [];
   // R866: how many processes ran at one time, by call counters, never by the clock.
@@ -318,7 +324,18 @@ function fakeOneShot(
     if (cov !== undefined) {
       await writeFile(argv[argv.indexOf("--coverage-json") + 1] ?? "", JSON.stringify(cov));
     }
-    const asked = rows(m, cu, -1, -1).filter((r) => only === null || r.method === only[2]);
+    // R937: the selector's echo codeunit, run one-shot, reports the mutant it read from the file
+    const source: FakeRow[] =
+      cu === ECHO
+        ? [
+            {
+              method: "Echo",
+              status: "fail",
+              message: (echo ?? ((x) => `LETHAL-ECHO:${x}:true`))(m),
+            },
+          ]
+        : rows(m, cu, -1, -1);
+    const asked = source.filter((r) => only === null || r.method === only[2]);
     const tests = asked.map((r) => ({
       codeunit: cu,
       method: r.method,
@@ -388,6 +405,8 @@ interface ServeScript {
   coverage?: CoverageFn;
   /** R590: a line the daemon writes to stderr as the request arrives. */
   stderr?: (req: Req, n: number) => string | undefined;
+  /** R987: real milliseconds a request waits, after `stderr`, before it answers. */
+  delayMs?: (req: Req, n: number) => number;
 }
 const goodEcho: Echo = (m) => ({
   method: "Echo",
@@ -450,6 +469,9 @@ function fakeServe(script: ServeScript = {}) {
           requests.push(req);
           const errLine = script.stderr?.(req, n);
           if (errLine !== undefined) err.push(errLine);
+          // R987: a request that takes this long (real time) before it answers.
+          const delay = script.delayMs?.(req, n) ?? 0;
+          if (delay > 0) await Bun.sleep(delay);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
           // R857: as measured on edge 6bb821b98: `test` selects by text, so `Codeunit1.Alpha` also
           // picks `AlphaTwo`; `excludeTests` takes names out. `Codeunit1.` picks every test.
@@ -550,6 +572,8 @@ interface RigOpts {
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
   oneShotAnswer?: { readonly exitCode: number; readonly stderr: string };
+  /** R937: the message of the echo row a one-shot echo process reports for the mutant it read. */
+  oneShotEcho?: (mutant: string) => string;
   extra?: Partial<AlRunnerV3Config>;
   targetAl?: string;
   suite?: readonly TestMethodRef[];
@@ -566,6 +590,11 @@ interface RigOpts {
   stopHandle?: Parameters<AlRunnerV3Backend["useStopHandle"]>[0];
 }
 
+/** R952, R987: a backend built outside `rig` reads no daemon's RSS (the fakes' pids are made up). */
+function noProcReads(b: AlRunnerV3Backend): void {
+  Object.assign(b.seams, { rssReader: () => undefined, requestRssReader: () => undefined });
+}
+
 async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
   const l = await layout(opts.targetAl ?? TARGET_AL, suite);
@@ -574,6 +603,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
     opts.oneShotRows ?? opts.serve?.rows ?? allPass,
     opts.oneShotCoverage,
     opts.oneShotAnswer,
+    opts.oneShotEcho,
   );
   const b = new AlRunnerV3Backend(
     {
@@ -601,7 +631,12 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   b.useSessionTests(suite);
   if (opts.floor !== false) b.useMutantBudgetFloor(...(opts.floor ?? [1000, 1000]));
   // R952: the recycle bound's RSS read is unreadable unless a test says otherwise (tests never read /proc).
-  Object.assign(b.seams, { rssReader: () => undefined }, opts.seams ?? {});
+  // R987: so is the per-request reading; with none, requests stay at the 16-entry probe.
+  Object.assign(
+    b.seams,
+    { rssReader: () => undefined, requestRssReader: () => undefined },
+    opts.seams ?? {},
+  );
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
   await b.deploy(l.batch);
@@ -656,6 +691,7 @@ describe("1, 2, 3: the option, its default, the version line", () => {
       fakeAlc(),
       serve.spawn,
     );
+    noProcReads(b);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(1000, 1000);
     await b.deploy(l.batch);
@@ -2051,6 +2087,21 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
       await r.b.prefetchMutants(plans(["M0001"]));
     });
 
+    test("R987: a request the memory bound made small is judged in its 256-entry chunk", async () => {
+      // 20 mutants, 40 entries: nothing measured, so 16 groups (32 entries) go first and the last 4
+      // (8 entries) alone. Those 4 are refused; the first request ran, and both lie in one 256-entry
+      // chunk, so it is no batch stop (it would be if the chunk were the request).
+      const twenty = plans(
+        Array.from({ length: 20 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`),
+      );
+      const last4 = twenty.slice(16).map((p) => p.mutantId);
+      const r = await rig({ serve: refuseOnly(last4), oneShotRows: allPass });
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(twenty, { batchPlans: twenty }); // no AlRunnerV3EntriesRefusedError
+      // Split as said (the refused tail is then re-sent once, on a fresh daemon).
+      expect(r.b.entriesStats().prefetchRequests).toBeGreaterThanOrEqual(2);
+    });
+
     test("a later window refused after an earlier window ran is no batch stop, as in one chunk", async () => {
       const later = ["M0003", "M0004"];
       expect(await run([four], later)).toBeUndefined();
@@ -2862,6 +2913,205 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
     expect(() => v3ItestLegTransport("D1", { LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
       /SECOND_ECHO is set without/,
     );
+  });
+});
+
+describe("R987: entries per serve request follow the daemon growth measured per codeunit", () => {
+  const GiB = 2 ** 30;
+  const g = (mutantId: string, ...codeunits: number[]): EntryGroup => ({ mutantId, codeunits });
+
+  test("groupsThatFit: 16 unmeasured codeunit entries, 4 GiB of measured cost, 256 entries, never 0", () => {
+    const none = () => undefined;
+    expect(ENTRIES_UNMEASURED_CAP).toBe(16);
+    // Unmeasured: 8 groups of two codeunits fill the 16; the 9th waits.
+    expect(
+      groupsThatFit(
+        Array.from({ length: 12 }, (_, i) => g(`M${i}`, 1, 2)),
+        none,
+      ),
+    ).toBe(8);
+    // Measured at 1 GiB an entry: 4 codeunit entries fit 4 GiB (the echo costs nothing).
+    expect(
+      groupsThatFit(
+        Array.from({ length: 9 }, (_, i) => g(`M${i}`, 1)),
+        () => GiB,
+      ),
+    ).toBe(4);
+    // Measured at no cost: only the 256 entries bound it (128 groups of two entries).
+    expect(
+      groupsThatFit(
+        Array.from({ length: 300 }, (_, i) => g(`M${i}`, 1)),
+        () => 0,
+      ),
+    ).toBe(128);
+    // A first group over every bound still goes alone.
+    expect(groupsThatFit([g("M0", 1, 2, 3), g("M1", 1)], () => 8 * GiB)).toBe(1);
+    expect(groupsThatFit([], none)).toBe(0);
+  });
+
+  /**
+   * The fake daemon's RSS is the floor plus, per entry, its codeunit's cost (`perCu`, echo free).
+   * `shrink`: it rises when the request arrives and falls back to the floor before the answer, the
+   * request lasting 450 ms, so only the 200 ms sampler sees the peak. Otherwise it is set when the
+   * request answers and never falls (a daemon that does not shrink back). Every request's size is
+   * recorded; a daemon's first request is its warm-up, neither counted nor grown.
+   */
+  const prefetchOf = async (
+    perCu: ReadonlyMap<number, number>,
+    planned: { mutantId: string; refs: readonly TestMethodRef[] }[],
+    /** `stack`: each request grows the daemon on top of what earlier ones left (it keeps it all). */
+    o: { rows?: RowsFn; shrink?: boolean; stack?: boolean } = {},
+  ) => {
+    const floor = 0.5 * GiB;
+    const mem = { level: floor };
+    const sizes: number[] = [];
+    const notes: string[] = [];
+    const warm = new Set<number>();
+    const grown = (q: Req) => {
+      const entries = (q.body.entries ?? []) as { test?: unknown }[];
+      let b = floor;
+      for (const e of entries) {
+        const cu = Number(/^Codeunit(\d+)\./.exec(String(e.test))?.[1]);
+        b += perCu.get(cu) ?? 0;
+      }
+      return b;
+    };
+    const counted = (q: Req) => {
+      if (warm.has(q.daemon)) return true;
+      warm.add(q.daemon);
+      return false;
+    };
+    const r = await rig({
+      suite: SUITE2,
+      ...(o.rows !== undefined ? { oneShotRows: o.rows, pairBatch: true } : {}),
+      serve: {
+        ...(o.rows !== undefined ? { rows: o.rows } : {}),
+        ...(o.shrink === true
+          ? {
+              stderr: (q) => {
+                if (counted(q)) {
+                  sizes.push(q.ids.length);
+                  mem.level = grown(q);
+                }
+                return undefined;
+              },
+              delayMs: (q) => (warm.has(q.daemon) && q.ids.length > 1 ? 450 : 0),
+              answer: () => {
+                mem.level = floor;
+                return undefined;
+              },
+            }
+          : {
+              answer: (q) => {
+                if (counted(q)) {
+                  sizes.push(q.ids.length);
+                  mem.level =
+                    o.stack === true ? mem.level + grown(q) - floor : Math.max(mem.level, grown(q));
+                }
+                return undefined;
+              },
+            }),
+      },
+      seams: { requestRssReader: () => mem.level },
+      notify: (code) => notes.push(code),
+    });
+    await baseline(r.b, SUITE2);
+    sizes.length = 0; // the prefetch's requests only
+    await r.b.prefetchMutants(planned);
+    return { sizes, notes, s: r.b.entriesStats() };
+  };
+  const mids = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => `M${String(from + i).padStart(4, "0")}`);
+  const onCu = (ids: string[]) => ids.map((mutantId) => ({ mutantId, refs: SUITE1 }));
+  const onCu2 = (ids: string[]) => ids.map((mutantId) => ({ mutantId, refs: [ref("C", CU2)] }));
+
+  test("a high reading caps every later request at what fits 4 GiB, and says so once", async () => {
+    // 60 groups of two entries (echo + one test entry). 16 unmeasured, which grow the daemon 8 GiB:
+    // 0.5 GiB a test entry (the echoes are not counted), so 8 groups a request. The later requests read
+    // no growth (the daemon does not shrink back); the highest cost seen still holds.
+    const high = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)));
+    expect(high.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
+    expect(high.notes.filter((c) => c === "al-runner-v3-entries-cap-lowered")).toEqual([
+      "al-runner-v3-entries-cap-lowered",
+    ]);
+  });
+
+  test("a low reading lets the requests grow to 256 entries", async () => {
+    const low = await prefetchOf(new Map([[CU, 2 ** 20]]), onCu(mids(1, 60)));
+    expect(low.sizes).toEqual([32, 88]);
+    expect(low.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+  });
+
+  test("a request that grew the daemon by nothing, near its floor, is a reading of no cost", async () => {
+    // The gate fixtures: a request often grows the daemon by 0 bytes. Near the floor that is cheap,
+    // not unknown: the next request is not held to 16 unmeasured test entries.
+    const none = await prefetchOf(new Map([[CU, 0]]), onCu(mids(1, 60)));
+    expect(none.sizes).toEqual([32, 88]);
+  });
+
+  test("a request that reuses memory an earlier one left is no reading: a heavy codeunit after another stays unmeasured", async () => {
+    // 16 groups on CU (0.5 GiB a test entry) leave the daemon at 8.5 GiB. CU2 is as heavy, but its first
+    // request reuses that memory, so its peak is 8.5 GiB again: read as growth from its start it would
+    // cost 0, and the rest of CU2 would go in one request. It is no reading: CU2 stays unmeasured, 16 at a time.
+    const reused = await prefetchOf(
+      new Map([
+        [CU, 0.5 * GiB],
+        [CU2, 0.5 * GiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 48))],
+    );
+    expect(reused.sizes).toEqual([32, 32, 32, 32]);
+  });
+
+  test("growth is read from the daemon's floor, not from a request's higher start", async () => {
+    // A daemon that keeps what each request grew it by. 16 groups on CU at 0.125 GiB a test entry:
+    // +2 GiB, to 2.5 GiB. Then 16 groups on CU2 at 0.25: +4 GiB on top, to 6.5 GiB. From its 2.5 GiB
+    // start CU2 would read 0.25 GiB a test entry (4 / 16) and the next request take 16 groups; from the
+    // 0.5 GiB floor it reads 0.375 (6 / 16), so 10 groups (3.75 GiB), 20 entries.
+    const mem = await prefetchOf(
+      new Map([
+        [CU, 0.125 * GiB],
+        [CU2, 0.25 * GiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 60))],
+      { stack: true },
+    );
+    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 20]);
+  });
+
+  test("a codeunit no request has measured goes 16 at a time, even after cheap ones", async () => {
+    // 30 cheap groups on CU, then 30 on CU2, which no request has run (and which is heavy).
+    const late = await prefetchOf(
+      new Map([
+        [CU, 2 ** 20],
+        [CU2, 0.25 * GiB],
+      ]),
+      [...onCu(mids(1, 30)), ...onCu2(mids(31, 30))],
+    );
+    // 16 CU groups (unmeasured), then the 14 cheap ones left and 16 of CU2, then CU2 by its cost.
+    expect(late.sizes[0]).toBe(32);
+    expect(late.sizes[1]).toBe(60);
+    expect(late.sizes.reduce((a, b) => a + b, 0)).toBe(120);
+  });
+
+  test("the sampler sees a peak the daemon gives back before the request ends", async () => {
+    const shrinking = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)), {
+      shrink: true,
+    });
+    expect(shrinking.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
+  });
+
+  test("the kill-pair batches follow the measured cost: 4 pairs a request", async () => {
+    const killsAll: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((r) =>
+        r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
+      );
+    const high = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)), {
+      rows: killsAll,
+    });
+    expect(high.s.pairBatchStored).toBe(60);
+    // A pair is its two test entries (NONE and M) at 0.5 GiB: 4 fit 4 GiB, so 15 requests (1 at 256).
+    expect(high.s.pairBatchRequests).toBe(15);
   });
 });
 
@@ -4270,8 +4520,9 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
 });
 
 describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refuses by name", () => {
-  const COMPANY =
-    "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
+  // A named refusal R612 still closes on (R945 left it off the keep list: never measured). Until R968
+  // this was `FindSet on the Company table`, which is now kept (`company-findset`).
+  const COMPANY = "NotRun: out-of-scope: InStream method on an unassigned Variant";
   const PLAIN_REFUSAL = "NotRun: out-of-scope: runtime panic (bug): x";
   const underNone =
     (message: string, status: "error" | "fail" = "error"): RowsFn =>
@@ -4997,6 +5248,7 @@ describe("R790: the speculative baseline", () => {
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(...(o.floor ?? [1000, 1000]));
+    noProcReads(b);
     Object.assign(b.seams, o.seams?.(l) ?? {});
     const err = await b.deploy(l.batch).then(
       () => undefined,
@@ -5149,6 +5401,7 @@ describe("R790: the speculative baseline", () => {
       b.useDiscoveredTests(SUITE1);
       b.useSessionTests(SUITE1);
       b.useMutantBudgetFloor(1000, 1000);
+      noProcReads(b);
       b.useStopHandle({ spent: () => spent, signalled: () => false, stopForMemory: () => {} });
       await b.deploy(l.batch);
       expect(one.calls).toHaveLength(spent ? 0 : 1);
@@ -5180,6 +5433,7 @@ describe("R790: the speculative baseline", () => {
     b.useDiscoveredTests(SUITE1);
     b.useSessionTests(SUITE1);
     b.useMutantBudgetFloor(1000, 1000);
+    noProcReads(b);
     // The test dir changes after the speculative calls read it (and before the proof reads it).
     b.seams.afterSpeculation = async () => {
       await writeFile(join(l.testDir, "Late.Codeunit.al"), 'codeunit 79999 "Late" { }');
@@ -6578,6 +6832,85 @@ describe("R948 A: the baseline through one daemon", () => {
     expect(r.serve.daemons[1]?.join(" ")).toContain("--test-timeout 5");
   });
 
+  /**
+   * R988: the baseline keeps each call's coverage without its unhit statements (v3 lists every
+   * statement of the called codeunit's reach, nearly all unhit: DO, 67 MB a request), and the verdicts
+   * do not move. `daemonBaseline`: through the daemon fill, or one-shot (`callCodeunit`).
+   */
+  const r988KeptCoverage = async (daemonBaseline: boolean) => {
+    type Doc = {
+      coverage: { file: string; statements: { line: number; hits: number }[] }[];
+      perTestCoverage: { test: string; coverage: Doc["coverage"] }[];
+    };
+    const padded: CoverageFn = (m, cu, active, testDir) => {
+      const d = plainCoverage(m, cu, active, testDir) as Doc;
+      const pad = (fs: Doc["coverage"]) =>
+        fs.map((f) => ({
+          file: f.file,
+          statements: [
+            ...f.statements,
+            ...Array.from({ length: 50 }, (_, i) => ({ line: 100 + i, hits: 0 })),
+          ],
+        }));
+      return {
+        coverage: pad(d.coverage),
+        perTestCoverage: d.perTestCoverage.map((e) => ({
+          test: e.test,
+          coverage: pad(e.coverage),
+        })),
+      };
+    };
+    const plain = await dbRig({ extra: { coverage: "al-runner", daemonBaseline } });
+    const vPlain = await baseline(plain.b, SUITE3);
+    const r = await dbRig({
+      serve: { coverage: padded },
+      oneShotCoverage: padded,
+      extra: { coverage: "al-runner", daemonBaseline },
+    });
+    // Every document a baseline verdict's coverage is read from, as the fill handed it on.
+    type Read = { kind: string } & Partial<Doc>;
+    const handed: Read[] = [];
+    const proto = AlRunnerV3Backend.prototype as unknown as {
+      coverageOf: (lane: unknown, row: string, doc: Read) => unknown;
+    };
+    const original = proto.coverageOf;
+    const spy = spyOn(proto, "coverageOf").mockImplementation(function (
+      this: unknown,
+      lane: unknown,
+      row: string,
+      doc: Read,
+    ) {
+      handed.push(doc);
+      return original.call(this, lane, row, doc);
+    });
+    let v: Awaited<ReturnType<typeof baseline>>;
+    try {
+      v = await baseline(r.b, SUITE3);
+    } finally {
+      spy.mockRestore();
+    }
+    // Outcome and coverage per verdict (durations and call ids differ run to run).
+    const seen = (xs: typeof v) => xs.map((x) => ({ outcome: x.outcome, coverage: x.coverage }));
+    expect(seen(v)).toEqual(seen(vPlain));
+    expect(vPlain.some((x) => x.coverage !== undefined)).toBe(true);
+    const docs = handed.filter((d) => d.kind === "doc");
+    expect(docs.length).toBe(SUITE3.length);
+    for (const d of docs) {
+      const all = [
+        ...(d.coverage ?? []),
+        ...(d.perTestCoverage ?? []).flatMap((e) => e.coverage),
+      ].flatMap((f) => f.statements);
+      expect(all.length).toBeGreaterThan(0);
+      expect(all.filter((s) => s.hits <= 0)).toEqual([]);
+    }
+  };
+
+  test("R988: the daemon fill keeps each answer's coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(true));
+
+  test("R988: a one-shot baseline call keeps its coverage without its unhit statements; verdicts do not move", () =>
+    r988KeptCoverage(false));
+
   const leakCu2: RowsFn = (m, cu, d, n) =>
     allPass(m, cu, d, n).map((x) =>
       cu === CU2 && d >= 0 && n > 0 ? { ...x, status: "fail" as const, message: "leaked" } : x,
@@ -7005,6 +7338,148 @@ describe("R948 C: the memory guard", () => {
     await baselineOne(r.b, ref("A"));
     // CU's request ran on daemon 0; the gate for CU2 found the bound passed and closed it first.
     expect(closesAtFirstSleep).toBeGreaterThanOrEqual(1);
+  });
+
+  // R970: the per-test fill's processes can grow after their start was admitted; the watch reads
+  // the container while they run. The fake raises memory inside the second process and fires the
+  // watch there, so the reading comes from a process in flight, never at a start.
+  // `overTicks`: how many watch readings in a row the second process's spike lasts.
+  const growingFill = async (overTicks: number) => {
+    const methods = ["A", "B", "C", "D"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick: (() => void) | undefined; stopped: number } = {
+      tick: undefined,
+      stopped: 0,
+    };
+    const r = await guarded(() => used, {
+      suite,
+      polls: 1,
+      extra: { isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 2) {
+          // A spike only while this process runs: the gate at the next start reads GIB again, so
+          // only the watch can see it.
+          used = 30 * GIB;
+          for (let t = 0; t < overTicks; t++) clock.tick?.();
+          used = GIB;
+          clock.tick?.(); // and one reading back under it
+        }
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.stopped += 1;
+            clock.tick = undefined;
+          };
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS); // takes the fill
+    r.b.baselinePhase(false);
+    return { r, clock };
+  };
+
+  test("R970: memory that stays over the bound while a fill process runs stops the session once; no further process starts", async () => {
+    const { r, clock } = await growingFill(MEMORY_WATCH_OVER_TICKS);
+    expect(r.stops).toEqual([
+      { usedBytes: 30 * GIB, boundBytes: 28 * GIB, source: "/sys/fs/cgroup/memory.max" },
+    ]);
+    expect(r.one.calls).toHaveLength(2);
+    const line = r.seen.find(([c]) => c === "al-runner-v3-memory-bound")?.[1] ?? "";
+    expect(line).toContain("while the per-test baseline's processes run");
+    expect(clock.stopped).toBe(1); // the watch ends with the fill
+  });
+
+  test("R970: a spike shorter than the watch's readings in a row is no stop: every test's process runs", async () => {
+    expect(MEMORY_WATCH_OVER_TICKS).toBe(3);
+    const { r, clock } = await growingFill(MEMORY_WATCH_OVER_TICKS - 1);
+    expect(r.stops).toHaveLength(0);
+    expect(r.one.calls).toHaveLength(4);
+    expect(clock.stopped).toBe(1);
+  });
+
+  test("R970: a gate already waiting when the watch stops the session answers no, even once memory clears; one stop", async () => {
+    const methods = ["A", "B", "C"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick: (() => void) | undefined } = { tick: undefined };
+    const r = await guarded(() => used, {
+      suite,
+      polls: 5,
+      extra: { isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 1) used = 30 * GIB; // the next start's gate finds the bound passed and waits
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.tick = undefined;
+          };
+        },
+        memorySleep: async () => {
+          // While the gate waits, the watch's readings stay over and stop the session; then memory clears.
+          for (let t = 0; t < MEMORY_WATCH_OVER_TICKS; t++) clock.tick?.();
+          used = GIB;
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await r.b.run(ref("A"), OPTS);
+    r.b.baselinePhase(false);
+    expect(r.one.calls).toHaveLength(1);
+    expect(r.stops).toHaveLength(1);
+  });
+
+  test("R970: with no stop handle the watch's stop is thrown by name, once, after the fill", async () => {
+    const methods = ["A", "B", "C"];
+    const suite = methods.map((m) => ref(m));
+    let used = GIB;
+    let calls = 0;
+    const clock: { tick: (() => void) | undefined } = { tick: undefined };
+    const r = await rig({
+      suite,
+      extra: { memoryHeadroomGb: 4, isolateTests: true, isolatedBaselineProcesses: 1 },
+      oneShotRows: () => {
+        calls += 1;
+        if (calls === 1) {
+          used = 30 * GIB;
+          for (let t = 0; t < MEMORY_WATCH_OVER_TICKS; t++) clock.tick?.();
+          used = GIB;
+        }
+        return methods.map((method) => ({ method, status: "pass" as const }));
+      },
+      seams: {
+        memoryReader: () => ({
+          usedBytes: used,
+          maxBytes: 32 * GIB,
+          source: "/sys/fs/cgroup/memory.max",
+        }),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+        memoryWatchClock: (t) => {
+          clock.tick = t;
+          return () => {
+            clock.tick = undefined;
+          };
+        },
+      },
+    });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    await expect(r.b.run(ref("A"), OPTS)).rejects.toThrow(/al-runner-v3-memory-bound/);
+    expect(r.one.calls).toHaveLength(1);
   });
 });
 
@@ -7616,5 +8091,135 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
     expect(d).toMatchObject({ replaced: 0, replacements: {} });
     // The first sum holds for what was reached: 1 sample, skipped by name, nothing replaced.
     expect(judgeDaemonBaseline("DB", d, 0, 1).fail ?? "").not.toContain("in all plus");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// R937 (coord R-957): a test codeunit holding a method name serve is not proven for runs one-shot
+// INSIDE the serve session; every serve phase leaves it out. `pickTransport` picks the set
+// (r761-serve-default.test.ts); here the set is given and the routing is read off the fakes.
+// ---------------------------------------------------------------------------------------------
+describe("R937: a one-shot codeunit inside a serve session", () => {
+  const markOneShot = (b: AlRunnerV3Backend, ...cus: number[]) => {
+    (b as unknown as { oneShotCodeunits: ReadonlySet<number> }).oneShotCodeunits = new Set(cus);
+  };
+  /** Every test fails under M0001, so each codeunit's kill shows. */
+  const killsAllM1: RowsFn = (m, cu, d, n) =>
+    allPass(m, cu, d, n).map((r) =>
+      m === "M0001" ? { ...r, status: "fail" as const, message: "boom" } : r,
+    );
+  const entryIds = (r: Rig) => r.serve.requests.flatMap((q) => q.ids);
+  const C = ref("C", CU2);
+
+  test("the prefetch, the warm-up and the kill pair leave it out; its live call is one-shot under the mutant file, NONE restored after", async () => {
+    const r = await rig({ suite: SUITE2, serve: { rows: killsAllM1 }, pairBatch: true });
+    markOneShot(r.b, CU2);
+    await baseline(r.b, SUITE2);
+    const baselineCalls = r.one.calls.length;
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    // serve saw CU and the echo only; the warm-up union never held CU2
+    expect(entryIds(r).some((id) => id.includes(String(CU2)))).toBe(false);
+    expect(entryIds(r).some((id) => id === `M0001|${CU}`)).toBe(true);
+    expect(r.one.calls.length).toBe(baselineCalls);
+    await r.b.activate("M0001");
+    // CU2 is not prefetched: its call is one-shot, and v3 read M0001 from the resource file
+    const one = r.one.calls.length;
+    const sent = r.serve.requests.length;
+    expect((await r.b.run(C, OPTS)).outcome).toBe("fail");
+    expect(r.one.calls.length).toBe(one + 2); // the echo process, then the call
+    expect(r.one.calls.at(-2)?.join(" ")).toContain(`--codeunit ${ECHO}`);
+    expect(r.one.calls.at(-1)?.join(" ")).toContain(`--codeunit ${CU2}`);
+    expect(r.serve.requests.length).toBe(sent);
+    expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
+    // CU's kill is the prefetched one: no new process, no new request
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("fail");
+    expect(r.one.calls.length).toBe(one + 2);
+    // the kill pair of the one-shot codeunit sends nothing; the confirm runs one-shot, unmutated
+    await r.b.sendKillPair("M0001", C);
+    expect(r.serve.requests.length).toBe(sent);
+    await r.b.activate(null);
+    expect((await r.b.run(C, OPTS)).outcome).toBe("pass");
+    expect(r.one.calls.length).toBe(one + 3); // unmutated: no echo
+    expect(r.serve.requests.length).toBe(sent);
+  });
+
+  test("a mutant call whose echo does not name the mutant is refused by name, never scored, and its call is not made", async () => {
+    for (const said of ["NONE", "M0002"]) {
+      const r = await rig({
+        suite: SUITE2,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2);
+      await baseline(r.b, SUITE2);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const v = await r.b.run(C, OPTS);
+      expect([said, v.outcome]).toEqual([said, "error"]);
+      expect(v.failureMessage).toContain("entries-echo-mismatch");
+      expect(r.one.calls.length).toBe(before + 1); // the echo only
+      expect(await readFile(resourceFile(join(r.l.scratch, "active")), "utf8")).toBe("NONE");
+    }
+  });
+
+  test("R937 review: one echo per mutant serves every one-shot codeunit under it, a mismatch included, and the stats count it", async () => {
+    for (const said of ["M0001", "NONE"]) {
+      const r = await rig({
+        suite: SUITE3,
+        serve: { rows: killsAllM1 },
+        oneShotEcho: () => `LETHAL-ECHO:${said}:true`,
+      });
+      markOneShot(r.b, CU2, CU3);
+      await baseline(r.b, SUITE3);
+      await r.b.prefetchMutants(plans(["M0001"], SUITE3));
+      await r.b.activate("M0001");
+      const before = r.one.calls.length;
+      const c = await r.b.run(C, OPTS);
+      const d = await r.b.run(ref("D", CU3), OPTS);
+      const ok = said === "M0001";
+      // the echo once, then each codeunit's own call when the echo named the mutant
+      expect([said, r.one.calls.length - before]).toEqual([said, ok ? 3 : 1]);
+      expect([said, c.outcome, d.outcome]).toEqual([
+        said,
+        ok ? "fail" : "error",
+        ok ? "fail" : "error",
+      ]);
+      const s = r.b.entriesStats();
+      expect([said, s.echoRequests, s.echoMismatches]).toEqual([said, 1, ok ? 0 : 1]);
+    }
+  });
+
+  test("the daemon baseline never asks serve for it; it runs one-shot like a one-shot session's", async () => {
+    const r = await dbRig();
+    markOneShot(r.b, CU2);
+    const v = await baseline(r.b, SUITE3);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(r.serve.requests.map((q) => q.ids[0])).not.toContain(`plain:Codeunit${CU2}.`);
+    expect(r.serve.requests.map((q) => q.ids[0])).toContain(`plain:Codeunit${CU}.`);
+    expect(oneShotCodeunits(r)).toContain(String(CU2));
+  });
+
+  test("under isolation auto, a one-shot codeunit moved to `method` (per-test call ids) is still left out of the prefetch", async () => {
+    const r = await rig({
+      suite: SUITE2,
+      serve: { rows: killsAllM1 },
+      extra: { isolation: "auto" },
+    });
+    markOneShot(r.b, CU2);
+    await baseline(r.b, SUITE2);
+    r.b.chooseIsolation(CU2, "method");
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    expect(entryIds(r).filter((id) => id.startsWith("M0001|"))).toEqual([
+      "M0001|echo",
+      `M0001|${CU}`,
+    ]);
+  });
+
+  test("with nothing marked, the same codeunit goes to serve (the routing is the mark's doing)", async () => {
+    const r = await rig({ suite: SUITE2, serve: { rows: killsAllM1 } });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants(plans(["M0001"], SUITE2));
+    expect(entryIds(r).some((id) => id === `M0001|${CU2}`)).toBe(true);
   });
 });

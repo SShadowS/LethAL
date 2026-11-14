@@ -6,6 +6,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -373,7 +375,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
   const startIn = (dir: string, cg: string | undefined, poll: string, ...args: string[]) => {
     const psFile = join(dir, "ps.txt");
     writeFileSync(psFile, EMPTY_PS);
-    return Bun.spawn(["bash", script, ...args], {
+    // afterAll kills every holder, so a test that fails or times out before its own kill leaves no waiter
+    const w = Bun.spawn(["bash", script, ...args], {
       env: {
         ...process.env,
         LETHAL_HEAVY_LOCK_DIR: dir,
@@ -385,6 +388,8 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
       stdout: "ignore",
       stderr: "ignore",
     });
+    holders.push(w.pid);
+    return w;
   };
   /** A real holder of slot `n`, killable by pid. */
   const holdSlot = async (dir: string, n: number, cls: "baseapp" | "other"): Promise<number> => {
@@ -525,6 +530,92 @@ describe("R934 heavy-slot.sh --wait: a FIFO queue", () => {
     expect(existsSync(marker)).toBe(true);
     expect(tickets(dir)).toEqual([]);
   });
+
+  // R991: a large waiter the memory rule refuses must not be overtaken forever. Injected readings: the
+  // container uses 4 of 32 GiB; slot 1 holds a job that declared 12 GiB, so a --peak 20 waiter is
+  // refused (12 + 20 + 4 = 36 > 32) while a --peak gate (2 GiB) caller fits on every rule.
+  describe("R991: a waiter refused for long holds the head", () => {
+    // `poll`: the big waiter's poll. Its out-of-turn retry holds a free slot (declaring 20 GiB) for the
+    // length of its guard, so where a small caller must race it, it polls every 30 s (R967's cure).
+    const setup = async (poll = "0.05") => {
+      const dir = fresh();
+      const p1 = await holdSlot(dir, 1, "other");
+      writeFileSync(join(dir, "heavy.1.class"), `other ${p1} 12\n`);
+      const cg = join(dir, "cgroup");
+      mkdirSync(cg);
+      writeFileSync(join(cg, "memory.current"), `${4 * 2 ** 30}\n`);
+      writeFileSync(join(cg, "memory.max"), `${32 * 2 ** 30}\n`);
+      const big = join(dir, "big");
+      const w = startIn(dir, cg, poll, "--wait", "--peak", "20", "other", "touch", big);
+      const refused = () => tickets(dir).find((t) => t.endsWith(".refused"));
+      expect(await until(() => refused() !== undefined)).toBe(true);
+      return { dir, cg, p1, w, big, marker: () => join(dir, "heavy-queue", refused() ?? "") };
+    };
+    const small = (dir: string, cg: string) =>
+      startIn(dir, cg, "0.05", "--peak", "gate", "other", "touch", join(dir, "small"));
+
+    test("refused for longer than the limit: a later small job that fits is NOT admitted", async () => {
+      // poll 30 s: the waiter does not retry during the small call, so only the queue can refuse it
+      const { dir, cg, w, marker } = await setup("30");
+      // its first refusal 20 minutes ago (the default limit is 15)
+      const old = new Date(Date.now() - 20 * 60 * 1000);
+      utimesSync(marker(), old, old);
+      const s = small(dir, cg);
+      expect(await s.exited).toBe(75);
+      expect(existsSync(join(dir, "small"))).toBe(false);
+      w.kill("SIGKILL");
+    });
+
+    test("an old refused head is admitted once the held slots drain", async () => {
+      const { p1, w, big, marker } = await setup();
+      const old = new Date(Date.now() - 20 * 60 * 1000);
+      utimesSync(marker(), old, old);
+      process.kill(p1, "SIGKILL"); // the held 12 GiB drains
+      expect(await w.exited).toBe(0);
+      expect(existsSync(big)).toBe(true);
+    });
+
+    test("refused only a moment ago: a later small job still passes it", async () => {
+      const { dir, cg, w } = await setup("30");
+      const s = small(dir, cg);
+      expect(await s.exited).toBe(0);
+      expect(existsSync(join(dir, "small"))).toBe(true);
+      w.kill("SIGKILL");
+    });
+
+    test("the marker keeps the FIRST refusal's time: later refusals do not make it young again", async () => {
+      const { w, marker } = await setup();
+      const old = new Date(Date.now() - 20 * 60 * 1000);
+      utimesSync(marker(), old, old);
+      await Bun.sleep(400); // several more polls, each refused
+      expect(Date.now() - statSync(marker()).mtimeMs).toBeGreaterThan(15 * 60 * 1000);
+      w.kill("SIGKILL");
+    });
+
+    test("a job that can never fit fails by name at once, with or without --wait, and leaves no ticket", async () => {
+      const dir = fresh();
+      const cg = join(dir, "cgroup");
+      mkdirSync(cg);
+      writeFileSync(join(cg, "memory.current"), `${4 * 2 ** 30}\n`);
+      writeFileSync(join(cg, "memory.max"), `${32 * 2 ** 30}\n`);
+      for (const wait of [[], ["--wait"]]) {
+        const p = startIn(
+          dir,
+          cg,
+          "0.05",
+          ...wait,
+          "--peak",
+          "30",
+          "other",
+          "touch",
+          join(dir, "x"),
+        );
+        expect(await p.exited).toBe(2);
+      }
+      expect(existsSync(join(dir, "x"))).toBe(false);
+      expect(tickets(dir)).toEqual([]);
+    });
+  });
 });
 
 describe("R952 (R953) admission by memory", () => {
@@ -537,6 +628,14 @@ describe("R952 (R953) admission by memory", () => {
   test("admitted when used + peak + reserve and held peaks + peak + reserve both fit", () => {
     expect(memoryVerdict(sample(10, 32), [2], 16).refuse).toBe(false); // 10+16+4=30, 2+16+4=22
     expect(memoryVerdict(sample(12, 32), [], 16).refuse).toBe(false); // 12+16+4 = 32 exactly
+  });
+  test("R991: a peak that can never fit (peak + reserve over max) is `never`; one that fits only later is not", () => {
+    const never = memoryVerdict(sample(0, 32), [], 29); // 29 + 4 = 33 > 32, even in an empty container
+    expect([never.refuse, never.never]).toEqual([true, true]);
+    expect(never.message).toContain("NEVER FITS");
+    const later = memoryVerdict(sample(4, 32), [12], 20); // 12+20+4 = 36 now, 0+20+4 = 24 once drained
+    expect([later.refuse, later.never]).toEqual([true, undefined]);
+    expect(memoryVerdict(sample(0, 32), [], 28).never).toBeUndefined(); // 28 + 4 = 32 exactly fits
   });
   test("refused when what is used now leaves no room for the peak", () => {
     const v = memoryVerdict(sample(13, 32), [], 16); // 13+16+4 = 33

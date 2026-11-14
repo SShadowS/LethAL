@@ -45,8 +45,8 @@ import type {
   TestVerdict,
 } from "../packages/runner/src/backend";
 import { BcDevMcpBackend } from "../packages/runner/src/bcdev-backend";
-import { odataBaseUrl, validateBcDevConfig } from "../packages/runner/src/cli";
-import type { LethalConfigFile } from "../packages/runner/src/cli";
+import { odataCfgFor, validateBcDevConfig } from "../packages/runner/src/cli";
+import type { BcDevConfigSection, LethalConfigFile } from "../packages/runner/src/cli";
 import { DeploymentVerifier } from "../packages/runner/src/deployment-verifier";
 import { HarnessVerifier } from "../packages/runner/src/harness";
 import { LeaseClient } from "../packages/runner/src/lease";
@@ -205,6 +205,15 @@ const measuringFetch = (async (url: string | URL | Request, init?: RequestInit) 
   return new Response(body, { status: res.status });
 }) as typeof fetch;
 
+/**
+ * R986: the OData root (and API root) by the config's `baseUrl`, as every bcdev itest derives it
+ * (`odataCfgFor`). `odataBaseUrl` forced port 7048, `bc1`'s, so from `bc2` or `bc3` the probe asked
+ * `bc1`'s control app for its lease, harness checks and activations.
+ */
+export function probeOdataCfg(bcdev: BcDevConfigSection): ActivationConfig {
+  return odataCfgFor(bcdev);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   // OPTIONAL, exactly as `tables.itest.ts` treats it: the sandbox-data fixture has no
@@ -223,13 +232,7 @@ async function main(): Promise<void> {
   const outputDir = join(scratchRoot, "publish");
   await mkdir(outputDir, { recursive: true });
 
-  const odataCfg: ActivationConfig = {
-    baseUrl: odataBaseUrl(bcdev.server, bcdev.serverInstance),
-    company: bcdev.company,
-    username: bcdev.username,
-    password: bcdev.password,
-    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-  };
+  const odataCfg = probeOdataCfg(bcdev);
   const harnessVerifier = new HarnessVerifier(odataCfg);
   const inner = new BcDevMcpBackend(
     {
@@ -327,4 +330,4 @@ async function main(): Promise<void> {
   );
 }
 
-await main();
+if (import.meta.main) await main();

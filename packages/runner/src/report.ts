@@ -645,12 +645,16 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "al-runner-v3-serve-default-fallback": {
     meaning:
-      "The al-runner-v3 session ran one-shot, not the serve-entries default, because a reason held " +
-      "before any process started: a --resume, a test method name whose shape serve-entries is not " +
-      "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
-      "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
-      "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
-      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
+      "Some or all of the al-runner-v3 session ran one-shot, not on the serve-entries default, for a " +
+      "reason that held before any process started. Either (a) the WHOLE session ran one-shot, because " +
+      "of a --resume, a build with no serve-entries path, a test method name whose shape serve-entries " +
+      'is not proven for together with one of those or with --isolate-tests / isolation "method": ' +
+      "every verdict it measured was measured on one-shot, which is slower per mutant; or (b) ONLY the " +
+      "test codeunits the warning names (each holds a method name serve-entries is not proven for) ran " +
+      "one-shot inside the serve session, and every other codeunit ran on serve. A verdict a --resume " +
+      "carried from an earlier run keeps the transport that run used. The " +
+      "`al-runner-v3-serve-default-fallback` warning says which case holds and names each reason, " +
+      "codeunit and method; set `alRunnerV3.transport` to choose a transport yourself (R761, R922, R937).",
     entailedNegative:
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
       "serve-entries default is proven against.",
@@ -4079,6 +4083,19 @@ export function renderConsole(r: SessionReport): string {
       lines.push(
         `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
       );
+    } else if (r.timeBudget.stoppedBySignal === true) {
+      // R966: a signal spends the budget to stop through R955's path; the budget did not run out.
+      lines.push(
+        "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955); the --time-budget did not run out.",
+      );
+      if (bs !== undefined) {
+        lines.push(
+          `The signal stopped ${bs.inAutoRebaseline === true ? "the auto isolation re-baseline" : "the baseline"} after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score.`,
+        );
+      }
+      lines.push(
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
+      );
     } else if (bs?.inAutoRebaseline === true) {
       lines.push(
         `TIME BUDGET REACHED IN THE AUTO ISOLATION RE-BASELINE: every one of the ${bs.testsTotal} baseline test(s) ran once, then the budget ran out while isolation "auto" re-ran codeunits one test at a time. Every codeunit stayed on test, no isolation choice was made, and no mutant of that batch was scored.`,
@@ -4088,12 +4105,7 @@ export function renderConsole(r: SessionReport): string {
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );
     }
-    if (r.timeBudget.stoppedBySignal === true) {
-      lines.push(
-        "STOPPED BY SIGNAL: the run received SIGTERM or SIGINT and stopped at its next check (R955).",
-      );
-    }
-    if (mem === undefined) {
+    if (mem === undefined && r.timeBudget.stoppedBySignal !== true) {
       lines.push(
         `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
       );

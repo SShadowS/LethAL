@@ -163,9 +163,9 @@
     },
     {
       "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped View Twin|OnOpenPage|lethal.empty-block|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
@@ -179,9 +179,9 @@
     },
     {
       "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped Xtra Twin|OnOpenPage|lethal.empty-block|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
@@ -195,9 +195,9 @@
     },
     {
       "key": "3afe126943d733d84261089f652d03e2b42d9729c2767b04ca266801482eb69a|Wrapped Y Band Twin|OnOpenPage|lethal.empty-block|1",
-      "verdict": "survived",
+      "verdict": "no-coverage",
       "killingTest": null,
-      "coverageFiltered": false,
+      "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },

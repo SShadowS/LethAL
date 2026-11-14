@@ -207,7 +207,14 @@ const TIMER_FIRED: unique symbol = Symbol("LineReader timer fired");
 
 /** Reading one NDJSON line at a time from a byte stream, with a deadline. Exported for tests. */
 export class LineReader {
+  /** Text read but not yet scanned for a line end. */
   private buf = "";
+  /**
+   * R988: the earlier pieces of a line still being read, none with a line end. Joined once, when the
+   * line ends: appending every chunk to one string and searching it again after each chunk copied a
+   * 67 MB answer line over and over (each search flattens the whole string).
+   */
+  private head: string[] = [];
   private readonly it: AsyncIterator<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private done = false;
@@ -229,10 +236,17 @@ export class LineReader {
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
-        const line = this.buf.slice(0, nl).trim();
+        const tail = this.buf.slice(0, nl);
+        const line = (this.head.length > 0 ? this.head.join("") + tail : tail).trim();
+        this.head = [];
         this.buf = this.buf.slice(nl + 1);
         if (line !== "") return { kind: "line", line };
         continue;
+      }
+      // No line end in what is left: it is part of a line still being read, scanned once.
+      if (this.buf !== "") {
+        this.head.push(this.buf);
+        this.buf = "";
       }
       if (this.done) return { kind: "eof" };
       const remaining = deadline - Date.now();
@@ -761,6 +775,18 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   // measured clean with the same kit), so the prefix is optional; both forms are measured.
   "platform-no-provider":
     /^NotRun: out-of-scope: (?:store error )?platform table '[^'\n]+' \(\d+\) has no provider$/,
+  /**
+   * R968 (coord R-955): the two families that restarted Continia DO's daemon baseline 7 times in 16 min
+   * on edge-736fc7677. Measured clean as R945's were (`/coord/handoff/R-955/restart/result.md`): per
+   * family 47 refused requests, 27 readers on one kept daemon all equal to the control, 20 fresh
+   * daemons equal, the pid unchanged, no panic text. The reader never saw the key or the sequence
+   * (Module scope, isolation "test", coverage off); the basis is R-937's finding that nothing crosses
+   * requests under any isolation. The cascade's test name, a name with no comma, is its only variable part.
+   */
+  "company-findset":
+    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+  "cascade-existing-state":
+    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

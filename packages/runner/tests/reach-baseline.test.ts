@@ -151,6 +151,36 @@ describe("R926: reachLine is in the coverage frame", () => {
     return b;
   }
 
+  // R989 (R-976, measured on edge-736fc7677): al-runner reports a hit on the `if` of a one-line
+  // `if c then begin X end` even when `c` is false. In the INSTRUMENTED text the chain puts X's
+  // original copy on a line of its own, so X's reach line is not the `if`'s and a false-path test
+  // does not cover X. Pinned here: an emit change that left X on the guard's line would let every
+  // such test over-cover X (R975) and read it reached (R926).
+  test("a one-line guarded block: the inner statement's reach line is not the guard's", async () => {
+    const b = await oneFile(`codeunit 79900 "One Line"
+{
+    procedure P(N: Integer): Integer
+    var
+        I: Integer;
+    begin
+        if N > 5 then begin I := 7; end;
+        exit(I);
+    end;
+}
+`);
+    const linesAt = (start: string) =>
+      new Set(
+        [...b.stmt]
+          .filter(([, s]) => b.source.startsWith(start, s))
+          .map(([id]) => b.lines.get(id)),
+      );
+    const guard = linesAt("if N > 5");
+    const inner = linesAt("I := 7");
+    expect(guard.size).toBe(1);
+    expect(inner.size).toBe(1);
+    expect([...inner][0]).not.toBe([...guard][0]);
+  });
+
   test("a statement over several lines starts where its first line is, two mutants share it", async () => {
     const b = await oneFile(`codeunit 79900 "Multi Line"
 {
