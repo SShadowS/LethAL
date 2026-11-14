@@ -7267,7 +7267,10 @@ describe("R948 C: the memory guard", () => {
     const suite = methods.map((m) => ref(m));
     let used = GIB;
     let calls = 0;
-    const clock: { tick?: () => void; stopped: number } = { stopped: 0 };
+    const clock: { tick: (() => void) | undefined; stopped: number } = {
+      tick: undefined,
+      stopped: 0,
+    };
     const r = await guarded(() => used, {
       suite,
       polls: 1,
