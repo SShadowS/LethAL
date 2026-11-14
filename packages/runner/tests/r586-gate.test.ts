@@ -223,7 +223,7 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
       compare: compareMutants(before, now, { sameScheme: true }),
       own: before,
       now,
-      counts: { killed: 298, survived: 60, noCoverage: 60 },
+      counts: { killed: 298, survived: 54, noCoverage: 66 },
       total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
@@ -233,17 +233,18 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
     });
   const heldLine =
     "T: held: M0157 K1: survived/-/- -> error/runner-refused/- (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)";
-  test("T-a1: held rows, the compare on that key only, counts 298 / 59 / 60: held (no count check)", () => {
-    const j = judge(heldNow, { counts: { killed: 298, survived: 59, noCoverage: 60 } });
+  // R975: the own baseline's counts are 298 / 54 / 66 (`LEG_T_OWN_COUNTS`; 298 / 60 / 60 before).
+  test("T-a1: held rows, the compare on that key only, counts 298 / 53 / 66: held (no count check)", () => {
+    const j = judge(heldNow, { counts: { killed: 298, survived: 53, noCoverage: 66 } });
     expect(j.outcome).toBe("held");
     expect(j.lines).toEqual([heldLine]);
   });
-  test("T-a2: pass rows, empty compare, counts 298 / 59 / 60: gate-fail", () => {
-    const j = judge(own, { counts: { killed: 298, survived: 59, noCoverage: 60 } });
+  test("T-a2: pass rows, empty compare, counts 298 / 53 / 66: gate-fail", () => {
+    const j = judge(own, { counts: { killed: 298, survived: 53, noCoverage: 66 } });
     expect(j.outcome).toBe("gate-fail");
-    expect(j.failure).toMatch(/298 \/ 59 \/ 60.*pre-committed 298 \/ 60 \/ 60 over 418/);
+    expect(j.failure).toMatch(/298 \/ 53 \/ 66.*pre-committed 298 \/ 54 \/ 66 over 418/);
   });
-  test("T-a3: pass rows, empty compare, counts 298 / 60 / 60 over 418: pass", () => {
+  test("T-a3: pass rows, empty compare, counts 298 / 54 / 66 over 418: pass", () => {
     expect(judge(own).outcome).toBe("pass");
     expect(judge(own, { total: 417 }).outcome).toBe("gate-fail");
   });
@@ -326,7 +327,7 @@ describe("R647 r10 (b): leg T's row lines, one format", () => {
       compare: compareMutants(before, now, { sameScheme: true }),
       own: before,
       now,
-      counts: { killed: 298, survived: 60, noCoverage: 60 },
+      counts: { killed: 298, survived: 54, noCoverage: 66 },
       total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
@@ -370,7 +371,7 @@ describe("R647 r10 (b): leg T's row lines, one format", () => {
       compare: compareMutants(o, n, { sameScheme: true }),
       own: o,
       now: n,
-      counts: { killed: 298, survived: 60, noCoverage: 60 },
+      counts: { killed: 298, survived: 54, noCoverage: 66 },
       total: 418,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
@@ -669,8 +670,8 @@ describe("RC-4 (M5): leg T's known set is pinned by key and transition", () => {
     const own3 = [row("K1", "no-coverage"), row("K2", "killed", "T2"), row("K3", "survived")];
     expect(knownDifferencesRefusal(bc, own3, pinned)).toMatch(/K1/);
   });
-  test("the committed table holds exactly 52 distinct keys", () => {
-    expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(52);
+  test("the committed table holds exactly 58 distinct keys (52 + R975's 6)", () => {
+    expect(new Set(TABLES_KNOWN_DIFFERENCES.map((d) => d[0])).size).toBe(58);
   });
 });
 

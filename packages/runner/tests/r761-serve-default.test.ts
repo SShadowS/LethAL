@@ -27,6 +27,10 @@ const ref = (method: string, codeunitName = "Plain Tests"): TestMethodRef => ({
   method,
 });
 const PLAIN = [ref("A"), ref("B_2")];
+/** R937: the test codeunit ids the backend runs one-shot inside its serve session. */
+const oneShotOf = (b: AlRunnerV3Backend): number[] => [
+  ...(b as unknown as { oneShotCodeunits: ReadonlySet<number> }).oneShotCodeunits,
+];
 
 const PLAIN_AL = `codeunit 50000 "Plain"\n{\n    procedure P()\n    begin\n    end;\n}\n`;
 const MULTI_AL = `${PLAIN_AL}\ncodeunit 50001 "Second"\n{\n    procedure Q()\n    begin\n    end;\n}\n`;
@@ -142,15 +146,49 @@ describe("R761: the default transport", () => {
     }
   });
 
-  test("reason unproven-test-name-shape (method): a dotted or unseen-character method name falls back", async () => {
+  test("reason unproven-test-name-shape (method): with another reason, or an isolation mode, the whole session falls back", async () => {
     // R763: "1st" and "has space" are proven since leg N1S; the dot and `ø` are not.
-    for (const method of ["Dot.Step", "Ø Step", "Colon:Step"]) {
+    for (const method of ["Dot.Step", "AØ Step", "Pct%Step"]) {
       const r = await rig(DEFAULT, { tests: [...PLAIN, ref(method)] });
-      await r.b.decideTransport({ resume: false });
+      await r.b.decideTransport({ resume: true });
       expect(r.b.inRunStopIsBudget).toBe(true);
       expect(r.warnings).toHaveLength(1);
       expect(r.warnings[0]?.message).toContain("unproven-test-name-shape");
+      expect(oneShotOf(r.b)).toEqual([]);
     }
+    // R937: an isolation mode (one entry per test) keeps the whole-session reason
+    const a = await rig({ ...DEFAULT, isolation: "auto" }, { tests: [...PLAIN, ref("Pct%Step")] });
+    await a.b.decideTransport({ resume: false });
+    // "auto" is the default isolation: it takes the per-codeunit path, never the whole fallback
+    expect(a.b.inRunStopIsBudget).toBe(false);
+    expect(oneShotOf(a.b)).toEqual([50100]);
+    const m = await rig(
+      { ...DEFAULT, isolation: "method" },
+      { tests: [...PLAIN, ref("Pct%Step")] },
+    );
+    await expect(m.b.decideTransport({ resume: false })).rejects.toThrow(
+      "unproven-test-name-shape",
+    );
+  });
+
+  test("R937: on the default transport only the codeunit holding an unproven method runs one-shot; serve stays on, the warning names it", async () => {
+    const odd = { ...ref("Pct%Step", "Odd Tests"), codeunitId: 50101 };
+    const r = await rig(DEFAULT, { tests: [...PLAIN, odd] });
+    await r.b.decideTransport({ resume: false });
+    expect(r.b.inRunStopIsBudget).toBe(false); // serve-entries
+    expect(oneShotOf(r.b)).toEqual([50101]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]?.code).toBe(FALLBACK);
+    const message = r.warnings[0]?.message ?? "";
+    expect(message).toContain('codeunit 50101 "Odd Tests"');
+    expect(message).toContain('method "Pct%Step" ("%")');
+    expect(message).not.toContain("50100");
+    expect(message).not.toContain("runs one-shot, not the serve-entries default");
+    // an explicit transport keeps today's behaviour: no check, nothing one-shot, no warning
+    const e = await rig({ transportSource: "explicit" }, { tests: [...PLAIN, odd] });
+    await e.b.decideTransport({ resume: false });
+    expect(oneShotOf(e.b)).toEqual([]);
+    expect(e.warnings).toEqual([]);
   });
 
   test("R782: on a #5798-fixed build a dotted method no longer falls back; an unproven shape still does", async () => {
@@ -165,17 +203,23 @@ describe("R761: the default transport", () => {
       "Step.",
       "A..B",
       "Ø.Step",
-      "Colon:Step",
+      "Pct%Step",
       "A.B.C",
       "A .B",
       "A. B",
       "Ab.(C)",
     ]) {
+      // R937: still unproven, so its codeunit (and only it) runs one-shot, named in the warning
       const o = await rig(DEFAULT, { tests: [...PLAIN, ref(method)], ...fixed });
       await o.b.decideTransport({ resume: false });
-      expect([method, o.b.inRunStopIsBudget]).toEqual([method, true]);
-      expect(o.warnings[0]?.message).toContain("unproven-test-name-shape");
+      expect([method, oneShotOf(o.b)]).toEqual([method, [50100]]);
+      expect(o.warnings[0]?.message).toContain("not proven for");
     }
+    // R937: proven since coord R-957; with a dot beside it still reads through the row fields
+    const colon = await rig(DEFAULT, { tests: [...PLAIN, ref("Colon:Step")], ...fixed });
+    await colon.b.decideTransport({ resume: false });
+    expect(oneShotOf(colon.b)).toEqual([]);
+    expect(colon.warnings).toEqual([]);
   });
 
   test("R763: a method name N1S proved under serve ('Slash/Step', '7Digit Step') no longer falls back", async () => {
@@ -207,10 +251,10 @@ describe("R761: the default transport", () => {
   });
 
   test("R922: an unproven METHOD is named as the method, with its character, not the codeunit", async () => {
-    const r = await rig(DEFAULT, { tests: [...PLAIN, ref("Colon:Step")] });
-    await r.b.decideTransport({ resume: false });
+    const r = await rig(DEFAULT, { tests: [...PLAIN, ref("Pct%Step")] });
+    await r.b.decideTransport({ resume: true }); // the whole-session text; R937's per-codeunit text names the codeunit
     const message = r.warnings[0]?.message ?? "";
-    expect(message).toContain('method "Colon:Step" (":")');
+    expect(message).toContain('method "Pct%Step" ("%")');
     expect(message).not.toContain("codeunit");
   });
 
@@ -256,20 +300,82 @@ describe("R761: the default transport", () => {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
     }
     // red when the widening is too loose: the dot is #5798, and characters N1S never ran stay unproven
-    for (const name of [
-      "Dot.Step",
-      "Ø Step",
-      "Å Step",
-      "Quote'Step",
-      "Colon:Step",
-      "Plus+Step",
-      "Tab\tStep",
-      "",
-    ]) {
+    for (const name of ["Dot.Step", "AØ Step", "Tab\tStep", ""]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
     }
     // red when only the character set is checked: N1S never ran these positions
-    for (const name of [" Step", "Step ", "Two  Spaces", "-Step", "(Step)", "()", "   "]) {
+    for (const name of [" Step", "Step ", "Two  Spaces", "(Step)", "()", "   "]) {
+      expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
+    }
+  });
+
+  // R937 (coord R-957): the 15 shapes of /coord/handoff/R-957/shapes/result.md, 97 mutants equal.
+  test("R937: exactly the 15 names of /coord/handoff/R-957/shapes/make.ts are proven; the unmeasured variants are not", async () => {
+    // red when the pattern is narrower than the measurement. The names, as in make.ts's SHAPES list.
+    const MEASURED = [
+      "PlainCheck",
+      "Dot.Check",
+      "-Check",
+      "+Check",
+      "_Check",
+      "7Check",
+      "A:Check",
+      "A'Check",
+      "ØCheck",
+      "ÆCheck",
+      "ÅCheck",
+      "A Check",
+      "A#Check",
+      "A&Check",
+      "A(Check",
+    ];
+    expect(MEASURED).toHaveLength(15);
+    for (const name of MEASURED) {
+      // the dot is not in the pattern: a #5798-fixed build reads it through the row fields
+      const fixed = name === "Dot.Check";
+      const r = await rig(DEFAULT, {
+        tests: [...PLAIN, ref(name)],
+        ...(fixed ? { version: FIXED_VERSION, sha: FIXED_SHA } : {}),
+      });
+      await r.b.decideTransport({ resume: false });
+      expect([name, oneShotOf(r.b), r.warnings]).toEqual([name, [], []]);
+      if (!fixed)
+        expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, true]);
+    }
+    // red when the pattern is wider than the measurement: none of these ran
+    for (const name of [
+      "AØCheck",
+      "AÆCheck",
+      "AÅCheck",
+      "A+Check",
+      "A:",
+      "Check:",
+      // R937 review: a first Ø, Æ or Å ran only before an ASCII letter or digit
+      "Ø Step",
+      "Ø",
+      "Æ-",
+      "Øå",
+      "Å_Check",
+      "Check#",
+      "Check'",
+      "A::Check",
+      "+ Check",
+      "- Check",
+      "-",
+      "+",
+      "_",
+      "AøCheck",
+      'A"Check',
+      "A\\Check",
+      "A*Check",
+      "A%Check",
+      "A,Check",
+      " Check",
+      "Check ",
+      ")Check",
+      "A.Check",
+      ".Check",
+    ]) {
       expect([name, V3_SERVE_PROVEN_NAME_SHAPES.method.test(name)]).toEqual([name, false]);
     }
   });
@@ -413,8 +519,9 @@ describe("R857: --isolate-tests needs serve-entries", () => {
 });
 
 describe("R786: the one-shot re-run after a serve warm-up fallback", () => {
+  // A family R612 still closes on (Company FindSet is kept since R968).
   const WHY =
-    "Codeunit50100.B (codeunit 50100): NotRun: out-of-scope: FindSet on the Company table";
+    "Codeunit50100.B (codeunit 50100): NotRun: out-of-scope: InStream method on an unassigned Variant";
 
   test("one-shot, ONE named warning that names the row and its reason, no process started", async () => {
     const r = await rig({ ...DEFAULT, serveFallbackWarmup: WHY });

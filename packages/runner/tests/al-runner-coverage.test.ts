@@ -408,6 +408,34 @@ describe("R298: a refused file's hits never fall through to a shorter path endin
       ],
     };
     expect(alRunnerCoverageFromServer(absServer, admittedIndex).entries).toEqual(own);
+    expect(alRunnerCoverageFromServer(absServer, admittedIndex).namingGaps).toBeUndefined();
+  });
+
+  test("R975 review: a hit statement with no line in a multi-object file marks a naming gap on every object of the file", async () => {
+    // Without the gap the hit is dropped silently, and the line rule reads its trigger as no-coverage.
+    const two = `codeunit 50151 "Foo A"\n${R298_BODY("Reached")}codeunit 50152 "Foo B"\n${R298_BODY("Other")}`;
+    const dir = await bundle({ "src/Foo.Codeunit.al": two });
+    const index = await buildAlRunnerCoverageIndex(dir, { labelBase: dir });
+    const server: ServerPerTestCoverage = {
+      test: "Codeunit50140.T",
+      coverage: [
+        {
+          file: join(dir, "src/Foo.Codeunit.al"),
+          statements: [
+            { hits: 1, scope: "Reached" },
+            { line: 6, hits: 1, scope: "Reached" },
+          ],
+        },
+      ],
+    };
+    const map = alRunnerCoverageFromServer(server, index);
+    expect(map.entries).toEqual([
+      { objectType: "Codeunit", objectId: 50151, procedure: "Reached", line: 6 },
+    ]);
+    expect(map.namingGaps).toEqual([
+      { objectType: "Codeunit", objectId: 50151 },
+      { objectType: "Codeunit", objectId: 50152 },
+    ]);
   });
 
   test("a file holding a wrapped ENUM is refused too, though an enum has no coverage identity", async () => {

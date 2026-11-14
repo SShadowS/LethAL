@@ -113,6 +113,10 @@ export const toggleBlankString: MutationOperator = {
         before: node,
         after: synthesizeAfter(node, after),
         parentContext: "statement-position",
+        // R983: a comparison operand is READ by the comparison; its own risk, not value-rewrite's.
+        ...(node.parent?.rawKind === ALNodeKind.comparison_expression
+          ? { equivalenceRisk: "compared-value" as const }
+          : {}),
       },
     ];
   },

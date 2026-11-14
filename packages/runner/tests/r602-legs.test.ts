@@ -47,16 +47,9 @@ import {
 } from "../itest/alrunner-v3-legs";
 import { ARMS_REFUSAL } from "../itest/wrapped-fixture";
 
-describe("R602 build review B1: WR pins its six state notes exactly", () => {
-  test("the constant is the measured set (pin and edge): six, all BandYRun/BandYRunTwin kills", () => {
-    expect(V3_WR_STATE_NOTES).toEqual([
-      "0/M0075",
-      "0/M0076",
-      "0/M0082",
-      "0/M0089",
-      "0/M0090",
-      "0/M0096",
-    ]);
+describe("R602 build review B1: WR pins its three state notes exactly", () => {
+  test("the constant is the measured set: three, all BandYRun kills (R975 dropped M0090, M0096; R976 M0089)", () => {
+    expect(V3_WR_STATE_NOTES).toEqual(["0/M0075", "0/M0076", "0/M0082"]);
   });
   test("the measured notes pass; none, an extra and a missing note are each named", () => {
     expect(judgeStateNotes([...V3_WR_STATE_NOTES].reverse(), V3_WR_STATE_NOTES)).toEqual([]);

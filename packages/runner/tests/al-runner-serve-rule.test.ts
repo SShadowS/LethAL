@@ -304,6 +304,46 @@ describe("serveDaemonReusable, the rule alone", () => {
       ],
     },
   };
+  // R981 (coord R-967): the no-provider family, measured clean on two platform tables.
+  R945["platform-no-provider"] = {
+    keeps: [
+      `${P}store error platform table 'Api Web Service' (2000000193) has no provider`,
+      `${P}store error platform table 'Tenant Media Set' (2000000183) has no provider`,
+      // an Insert's wording (no "store error"), measured clean too
+      `${P}platform table 'Api Web Service' (2000000193) has no provider`,
+    ],
+    closes: [
+      // a tail after the measured wording, and a write that is not the measured read
+      `${P}store error platform table 'Api Web Service' (2000000193) has no provider for writes`,
+      `${P}store error platform table 'Api Web Service' has no provider`,
+      `${P}Insert on virtual table 'Tenant Media': its rows are computed, not stored`,
+    ],
+  };
+  // R968 (coord R-955): DO's two restart families, measured clean (`/coord/handoff/R-955/restart/`).
+  R945["company-findset"] = {
+    keeps: [
+      `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+    ],
+    closes: [
+      // another Company access, or a tail: never measured
+      `${P}FindFirst on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+      `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a) after a timeout`,
+    ],
+  };
+  R945["cascade-existing-state"] = {
+    keeps: [
+      `${P}an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+      `${P}an earlier test of this codeunit, Post_WhenX_ThenY, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+    ],
+    closes: [
+      // another cascade cause, or the measured one with a tail, or no test name
+      `${P}an earlier test of this codeunit, B_Changes, changed a table that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+      `${P}an earlier test of this codeunit, B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are) panic`,
+      `${P}an earlier test of this codeunit, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+      // review: a "name" holding a comma could be two causes joined; DO's 792 rows hold none
+      `${P}an earlier test of this codeunit, X, changed a table, then B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);

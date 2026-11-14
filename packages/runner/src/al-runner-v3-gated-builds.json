@@ -6,9 +6,9 @@
     "version": "al-runner 3.0.0-alpha.12 (d4bc8d3a5)",
     "binarySha256": "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
     "readingsFrom": "alpha.12-d4bc8d3a5",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "57bacf8107236a850634cdbbb55ebc8234d59d92",
-    "gatedAt": "2026-11-07T03:09:05.341Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:04:05.121Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -20,9 +20,9 @@
     "version": "al-runner 3.0.0-alpha.13 (23e7631be)",
     "binarySha256": "d40d2778d16556b50a595759de9afbcf08425768a8fab03ce4d8667ef70e08bc",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "57bacf8107236a850634cdbbb55ebc8234d59d92",
-    "gatedAt": "2026-11-07T03:02:15.599Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-13T23:56:30.294Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -34,9 +34,9 @@
     "version": "al-runner 3.0.0-alpha.14 (ef00a6a8f)",
     "binarySha256": "d4c9ab2b029490cf2b4589195cc922953aa74ca5df92c97589308f6d4ceb3cc3",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "4f17f8c7f091493dc9fab1908bfb7ffcb8530c41",
-    "gatedAt": "2026-11-11T18:57:51.736Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-13T23:49:20.160Z",
     "dotnetSidecarSha256": "0bd4e4ef0e6956d9aa87da3e744f4d393663b4e7cd9249a3ed045f24e84ca0e8",
     "warnFacts": {
       "serve-keep-reasons": "matches"
@@ -48,9 +48,9 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261109 (05d692e5e)",
     "binarySha256": "df99fc06708fb34d00c073975bea22697edf44880637cc3d995de511704b6c89",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
-    "gatedAt": "2026-11-09T10:25:23.719Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:54:18.422Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -61,13 +61,13 @@
     "version": "al-runner 3.0.0-alpha.14+edge.20261112 (2bd87774f)",
     "binarySha256": "21c1f9227fdf1ee1ef625ba31b4cf0b56482b41136f16c6777805ccfd0253dee",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "34a5c2ecaff97f8dfe9b68a60805b5a883047330",
-    "gatedAt": "2026-11-12T13:30:58.006Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:15:09.764Z",
+    "dotnetSidecarSha256": "5399b6d863340454b86fd871f2de60b0be6e968a0daff5969f698e2dd02809d7",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "5399b6d863340454b86fd871f2de60b0be6e968a0daff5969f698e2dd02809d7"
+    }
   },
   {
     "id": "edge-3096bf68f",
@@ -75,13 +75,13 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261110 (3096bf68f)",
     "binarySha256": "4907c4a2a649e93f62d8cc0362a7658090a183386aefd529d65974141bff0b71",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
-    "gatedAt": "2026-11-10T08:00:05.049Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:44:59.653Z",
+    "dotnetSidecarSha256": "7c55d5dc84e1dfe955ee9cb4dfcbb6faaa877f0444d5dcc766626ba80533e72c",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "7c55d5dc84e1dfe955ee9cb4dfcbb6faaa877f0444d5dcc766626ba80533e72c"
+    }
   },
   {
     "id": "edge-3138effad",
@@ -89,13 +89,13 @@
     "version": "al-runner 3.0.0-alpha.14+edge.20261110 (3138effad)",
     "binarySha256": "5bd403879f155553f537e0075416831c99238144fa3df418448686f3787dec4e",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
-    "gatedAt": "2026-11-10T19:06:22.534Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:34:00.312Z",
+    "dotnetSidecarSha256": "599f7bb54af5d6b920281e9fdfcd8d73c728f7d00bfc47d846dfdc035c31992f",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "599f7bb54af5d6b920281e9fdfcd8d73c728f7d00bfc47d846dfdc035c31992f"
+    }
   },
   {
     "id": "edge-42af5d384",
@@ -103,13 +103,13 @@
     "version": "al-runner 3.0.0-alpha.14+edge.20261111 (42af5d384)",
     "binarySha256": "8d6c4a131ccea73e7d5643502ca55b2c8e30ed36ce1b75e4754b6a3f727cc10f",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "779791ae074036512e0db5d09e25cac05e4b72fc",
-    "gatedAt": "2026-11-11T17:04:04.526Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T00:24:03.913Z",
+    "dotnetSidecarSha256": "75d8141ee2e5ad32c0d8cf504f1b6456b3c5fb5b6ad6b500f318ba91b3f97268",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "75d8141ee2e5ad32c0d8cf504f1b6456b3c5fb5b6ad6b500f318ba91b3f97268"
+    }
   },
   {
     "id": "edge-6bb821b98",
@@ -117,12 +117,40 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261107 (6bb821b98)",
     "binarySha256": "afe41bb685d7effc7be2f6df600cc4a7c94424e03dddf613224e6a4c57a58a89",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
-    "gatedAt": "2026-11-07T10:17:56.708Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T01:16:15.882Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
+  },
+  {
+    "id": "edge-736fc7677",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.14+edge.20261113 (736fc7677)",
+    "binarySha256": "c08233284f974c69c4582054c87ca799ad0aecf692196cdb42de0141e983d463",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "4fcfaa92db99912083b20a59d92e344a5613ca4e",
+    "gatedAt": "2026-11-14T02:08:58.961Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    },
+    "dotnetSidecarSha256": "0a364281c84376703b7fa721253446cf36ff150515b352ba9b347f2a51e93b8e"
+  },
+  {
+    "id": "edge-847b1fa5a",
+    "track": "edge",
+    "version": "al-runner 3.0.0-alpha.14+edge.20261114 (847b1fa5a)",
+    "binarySha256": "1debc9d0a33d55ba8729e84229bc8a799bb2e2f2dc13a362f2187965e0fcf410",
+    "readingsFrom": "edge-d72d3197d",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "4fcfaa92db99912083b20a59d92e344a5613ca4e",
+    "gatedAt": "2026-11-14T07:58:16.948Z",
+    "warnFacts": {
+      "serve-keep-reasons": "matches"
+    },
+    "dotnetSidecarSha256": "6a2472c8efec1a659ab1b5d30fdbbe84c79ccd09452d438f36a7760be2cf4b11"
   },
   {
     "id": "edge-897b441eb",
@@ -130,9 +158,9 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261108 (897b441eb)",
     "binarySha256": "3560671422d5bd3b6a7eb8a38d655c031181dfcc061fde793fada316fc28f4fd",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
-    "gatedAt": "2026-11-08T07:52:03.532Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T01:09:39.675Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -143,9 +171,9 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261109 (9597b4a01)",
     "binarySha256": "15d916b36c8cbd89fbf7361f66093b50a235daed50eed0ad72b98ec69304b1be",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "14d67689a2fbe10dd9565086efbe9e73bbfee285",
-    "gatedAt": "2026-11-09T07:51:40.820Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T01:01:57.440Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -156,9 +184,9 @@
     "version": "al-runner 3.0.0-alpha.13+edge.20261106 (a0825f1d9)",
     "binarySha256": "ae3d22c20533870065b10e5b3fcb8d8b752b0aeb23becdba82c51051ca29b5df",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "57bacf8107236a850634cdbbb55ebc8234d59d92",
-    "gatedAt": "2026-11-07T02:55:05.000Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-14T01:24:29.892Z",
     "warnFacts": {
       "serve-keep-reasons": "matches"
     }
@@ -169,12 +197,12 @@
     "version": "al-runner 3.0.0-alpha.14+edge.20261113 (c8fe56e05)",
     "binarySha256": "87e5657715123167aa929499050912ae87b34a5f865a0118b246d084e085ab56",
     "readingsFrom": "edge-d72d3197d",
-    "readingsDigest": "f3d2aede5f3d8273b616237d80b7c0a72e18be71acf4f169999fb6882066872e",
-    "lethalCommit": "34a5c2ecaff97f8dfe9b68a60805b5a883047330",
-    "gatedAt": "2026-11-13T06:50:15.853Z",
+    "readingsDigest": "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac",
+    "lethalCommit": "996df7bfdf14557315f0b1c7d47058cfd8697c0c",
+    "gatedAt": "2026-11-13T23:39:23.759Z",
+    "dotnetSidecarSha256": "77563bdc35fee548c22d99a7ab3a6e8e0b0cbbd09bb366734d4f69097b05b056",
     "warnFacts": {
       "serve-keep-reasons": "matches"
-    },
-    "dotnetSidecarSha256": "77563bdc35fee548c22d99a7ab3a6e8e0b0cbbd09bb366734d4f69097b05b056"
+    }
   }
 ]

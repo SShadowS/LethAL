@@ -175,6 +175,9 @@ describe("R955: a SIGTERM or SIGINT spends the same budget", () => {
       expect(report.validity.caveats).toContain("time-budget-reached");
       expect(exitCodeForReport(report)).toBe(TIME_BUDGET_EXIT_CODE);
       expect(renderConsole(report)).toContain("STOPPED BY SIGNAL");
+      // R966: a signal stop never reads as a spent budget.
+      expect(renderConsole(report)).not.toContain("TIME BUDGET REACHED");
+      expect(renderConsole(report)).toContain("The signal stopped the baseline after 1 of 4");
       // The handlers are removed when the session ends.
       expect([r.registered, r.removed]).toEqual([1, 1]);
     });

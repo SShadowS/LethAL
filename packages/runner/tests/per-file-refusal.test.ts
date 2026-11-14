@@ -260,7 +260,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
       // R752: toggle-blank-string's operatorVersion 1.1.1 is the only change (was a7dba8bc...0835).
       // R855: swap-call-arguments 1.1.0 plus 12 new delete-* entries (was cf442b39...3d4).
       // R926: every statement-grain entry gains `reachLine`, the only change (was bc2c6465...83bc).
-      "8005622862897bdb2f5fbafdf2c04f7a6f7b5d5de7a5f02ff4c6b9eed52ed41c",
+      // R983: 6 comparison blank toggles gain `equivalenceRisk`, the only change (was 80056228...d41c,
+      // which the same manifest with that key removed still gives).
+      // R976: the 106 `empty-block` entries gain `reachLine`, the only change (was 5dd124ad...a9fb).
+      // R984: 2 comparison `shift-integer` entries gain `equivalenceRisk`, the only change (was 5cadd234...f28a).
+      "0f9af9e9c482ba8d1b71247cb557f4168c8996ccc72b418f56f7160748c67242",
     );
     const all = createHash("sha256");
     for (const f of (await readdir(dir)).sort()) {
@@ -291,9 +295,12 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
     expect(all.digest("hex")).toBe(
       // R855: re-pinned (was e632c249...74d5e): manifest as above, plus 12 delete-* guards in the `.al` files.
       // R926: only the manifest moved it, by `reachLine` (was 13203266...2fc2e15's value); no `.al` moved.
-      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 12e54fd3...1065;
+      // R983: only the manifest moved it, by `equivalenceRisk` (was 12e54fd3...1065); no `.al` moved.
+      // R976: only the manifest moved it, by `reachLine` on 106 `empty-block` entries (was 0d911257...e702).
+      // R984: only the manifest moved it, by `equivalenceRisk` on 2 `shift-integer` entries (was d4e6ba39...3bba).
+      // R979: only MutationSelector.Codeunit.al moved it, by `InherentPermissions = X;` (was 0cc77b2a...07a0;
       // fixture-emission's per-file pins show the selector as the one file that changed).
-      "470ab1e641bb5f21cb92e532e5fff3fd2e5d3b1c7b95024a32b1b483780f67cc",
+      "f5e003d87c1ad85d6c5cb52b226d4974a77832985daa35c3f116ed09166068b9",
     );
   }, 60_000);
 });

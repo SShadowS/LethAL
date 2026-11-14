@@ -777,16 +777,12 @@ export const V3_WR_KILLERS: readonly V3Killer[] = [
  * Leg WR's pre-committed `[v3-codeunit-state-possible]` notes, `<batchIndex>/<code>` sorted (#5611:
  * BandYRun and BandYRunTwin run after BandYDirect and BandYDirectTwin in one codeunit call). They are
  * kills that stay kills; the note changes no verdict. Measured on the pin and the edge build alike.
- * Every other leg, MO included, pre-commits none.
+ * Every other leg, MO included, pre-commits none. R975 (R-965 amendment 3): M0090 and M0096 lost
+ * theirs, because line attribution no longer counts BandYDirectTwin as covering their trigger lines.
+ * R976 (R-973 amendment 1): M0089, the same trigger's body `empty-block`, too, since it carries
+ * M0090's line. The three left are the `#if`-wrapped original's, which carry no line.
  */
-export const V3_WR_STATE_NOTES: readonly string[] = [
-  "0/M0075",
-  "0/M0076",
-  "0/M0082",
-  "0/M0089",
-  "0/M0090",
-  "0/M0096",
-];
+export const V3_WR_STATE_NOTES: readonly string[] = ["0/M0075", "0/M0076", "0/M0082"];
 
 /** One line when the run's state notes are not exactly `want` (both as `batch/code`); else none. */
 export function judgeStateNotes(got: readonly string[], want: readonly string[]): string[] {

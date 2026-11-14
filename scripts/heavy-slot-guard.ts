@@ -63,6 +63,9 @@ if (import.meta.main) {
   ];
   const m = memoryVerdict(readContainerMemory(), heldPeaks, peak);
   console.error(m.message);
+  // R991: a job that can never fit fails by name (exit 2: retrying never helps), so a --wait ticket
+  // never waits for it, and never holds the queue's head for it.
+  if (m.never === true) process.exit(2);
   if (m.off !== true) process.exit(m.refuse ? HEAVY_GUARD_EXIT : 0);
   // No cgroup limit: the count verdict, as before R953.
   const v = heavyVerdict(

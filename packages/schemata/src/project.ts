@@ -441,7 +441,9 @@ export interface MutantManifestEntry {
    * R926: the line where the ORIGINAL copy of the statement the `Reached` marker precedes starts,
    * in the INSTRUMENTED text, counted in the object's own frame (the frame of al-runner's line
    * coverage; see `reachLinesOf`). Not the source line. Set only on a `statement`-grain mutant whose
-   * statement is not a nested block and whose object is outside a `#if` wrapper.
+   * object is outside a `#if` wrapper. R976: when the statement is a `begin ... end` block (a body's
+   * `empty-block`), the line is its first statement's (`firstStatementOf`), and absent when the block
+   * is empty or opens with a `#if`.
    */
   readonly reachLine?: number;
   /**
@@ -579,6 +581,9 @@ export interface MutantManifestEntry {
    * manifest is read by code that should not have to track the union's members.
    */
   readonly hangCapable?: string;
+  /** R983: carried verbatim from `MutationSpec.equivalenceRisk`, the SITE's risk where it differs
+   *  from its operator's. A `string` for the same reason as `platformKillMechanism`. */
+  readonly equivalenceRisk?: string;
 }
 
 /**
@@ -963,6 +968,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
           ? { platformKillMechanism: spec.platformKillMechanism }
           : {}),
         ...(spec.hangCapable !== undefined ? { hangCapable: spec.hangCapable } : {}),
+        ...(spec.equivalenceRisk !== undefined ? { equivalenceRisk: spec.equivalenceRisk } : {}),
         memberHash: memberHashOf(member),
         // Last, where `assignIdentityOrdinals`' spread puts it, so the manifest's key order holds.
         identityOrdinal,

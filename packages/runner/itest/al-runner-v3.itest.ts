@@ -90,6 +90,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
   CDO_SLICE_FILE,
+  LEG_T_OWN_COUNTS,
   V3LegEnvironment,
   V3LegFailure,
   V3LegHeld,
@@ -585,7 +586,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
 const S1E_PINS = {
   pairRequests: 3,
   liveRequests: 1,
-  boundChecks: 3,
+  // R987: 3 -> 4, the prefetch's first request carries at most 16 unmeasured codeunit entries
+  // (docs/superpowers/specs/2026-11-14-r987-request-sizing-precommitment.md, master 2c0976bc).
+  boundChecks: 4,
   warmups: 1,
   entriesSent: 48,
   pairBatchRequests: 1,
@@ -1334,7 +1337,7 @@ const N1S_PINS = {
   // entriesSent is read from a run (R855's addendum), not derived.
   pairRequests: 44,
   liveRequests: 1,
-  boundChecks: 3,
+  boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
   warmups: 1,
   entriesSent: 266,
   pairBatchRequests: 1,
@@ -1518,8 +1521,10 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
   WRE: {
     warmups: 1,
     liveRequests: 1,
-    boundChecks: 3,
-    entriesSent: 448,
+    boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
+    // R975 (R-965 amendment 4): 448 until the 6 twin OnOpenPage mutants read no-coverage and were not sent.
+    // R976 (R-973): 436 until the 3 twin OnOpenPage empty-block mutants read no-coverage too.
+    entriesSent: 430,
     pairRequests: 62,
     echoMismatches: 0,
   },
@@ -1577,7 +1582,9 @@ async function legWR(scratch: string, serve = false): Promise<SessionReport> {
   const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
   for (const l of arms) console.log(`    - ${l}`);
   must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
-  assertCounts(r, leg, 62, 37, 3, 102);
+  // R975 (R-965 amendment 2): 6 unwrapped twin OnOpenPage mutants read no-coverage by line attribution;
+  // R976 (R-973): their 3 empty-block mutants too (62 / 31 / 9 before).
+  assertCounts(r, leg, 62, 28, 12, 102);
   assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
   if (serve) logServeCounters(b, "WRE");
   return r;
@@ -2429,7 +2436,8 @@ async function legT(
   if (recordRequested(TABLES_BASELINE_PATH)) {
     // R810: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
     if (activePin !== undefined) return { outcome: "pass", r };
-    assertCounts(r, "T", 298, 60, 60, 418);
+    const t = LEG_T_OWN_COUNTS;
+    assertCounts(r, "T", t.killed, t.survived, t.noCoverage, t.total);
     must(
       r.unsupportedTests.length === 3,
       `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,
@@ -2437,9 +2445,9 @@ async function legT(
     assertIndex(b, "T", 0, 0);
     notes();
     // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
-    // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
+    // the pinned 58, by key and transition (41 Commit, 7 duplicate key, 4 TestPage, 6 R975 line-decided).
     const why = knownDifferencesRefusal(bc, now, TABLES_KNOWN_DIFFERENCES);
-    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
+    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 58"}`);
     must(why === undefined, `T: ${why}`);
     return { outcome: "pass", r };
   }
