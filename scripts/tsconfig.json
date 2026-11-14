@@ -219,6 +219,8 @@
     "release-notes.test.ts",
     "talk-cut.ts",
     "talk-cut.test.ts",
+    "triage-baseline.ts",
+    "triage-baseline.test.ts",
     "operator-tables.test.ts",
     "own-timeout.test.ts",
     "operator-tables.ts",
