@@ -129,3 +129,21 @@ scored per window. **Predicted:** (1) the baseline completes inside the first wi
 gone (the probing path), the other refusal families as in 1d (cascade, Company FindSet, activation, HTTP, ZipArchive, GoToKey);
 (3) for every mutant 1d/2d scored, the serve verdict and killing test equal 1d/2d's (one-shot is serve's reference), compared per
 mutant on a verified join; any difference is a BLOCK, read before anything else.
+
+## Amendment 5 (2026-11-14, before the serve run of coord task R-984): current build, LethAL's memory fixes, --peak 12
+
+**Why.** Amendment 4's first serve window was stopped by the watchdog at a 17 GB tree in the daemon baseline: LethAL's own process
+held every codeunit's coverage answer ([[R988]]). Since then master holds R988 (R-974: DO's daemon baseline ran to its end with LethAL
+at 3.9 GiB, tree 9.55 GiB, `/coord/handoff/R-974/fix12.*`), R987 (R-972: serve requests sized by measured cost), R968 (R-955: Company
+FindSet and the cascade refusal keep the daemon) and R970 (R-977: the memory watch during fills). `current` moved to edge-847b1fa5a
+(2026-11-14, gated: all 23 legs).
+
+**Change** (run by bugs under coord task R-984; code folds the result into R-942). Master at the run (88c86ec6 or later), al-runner
+edge-847b1fa5a (`/coord/handoff/R-984/v3.do-serve.json`: amendment 4's config with only `path` changed), a **fresh store**
+(`/coord/handoff/R-984/dos.sqlite`; build and LethAL differ from amendment 4's window), windows of `--time-budget 14400` (the first
+fresh, later ones `--resume`), heavy slot **`--peak 12`** (R988's measured tree 9.55 GiB), the external watchdog on the LethAL pid.
+
+**Measured and reported:** as amendment 4, plus daemon restarts and reasons (expected far fewer than window 1's 7 after R968),
+`cached: false` per daemon start, LethAL's and the tree's peak (R988), whether R970's watch fired. **Predicted:** amendment 4's
+(1)-(3) unchanged. On 736fc7677 R-974's run already read (2) for the baseline: its rows equal 1d's except the 23 Newtonsoft.Json
+refusals, which pass. A build difference between 736fc7677 and 847b1fa5a that moves a verdict is read by name before it is accepted.
