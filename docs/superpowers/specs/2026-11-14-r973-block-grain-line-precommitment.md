@@ -51,3 +51,20 @@ that line; their committed verdicts give its prediction (`/coord/handoff/R-973/p
   fenced 3 / 14 / 5, the only moves the 5 `Sandbox Pricing` mutants `no-coverage` → `survived`, 0 identity mismatches.
 
 Any other difference is a BLOCK, read before anything is recorded.
+
+## Amendment 1 (2026-11-14): WR's state notes lose M0089
+
+The first record run (lethal/r-973 at bd771836, `current` edge-736fc7677; `/coord/handoff/R-973/v3record.log`) wrote nothing: WR and WRE
+failed on the pinned `[v3-codeunit-state-possible]` set (`V3_WR_STATE_NOTES`). Read: `0/M0075, 0/M0076, 0/M0082`; pinned: those plus
+`0/M0089`. Every other leg passed: C, S1, S1E, DB, DBI, S3, N1, N1E, N1S, O1, ISO, X, L1, Y-A, Y-B, MO, MOE, K, D1, D1c and T (0 moves, as
+predicted).
+
+**Cause, and why the prediction missed it.** M0089 is `WrappedYBandTwin.Report.al`'s `OnAfterGetRecord` body `empty-block`, a kill of
+`BandYRunTwin`. It now carries the line of its first statement (`Total += Band(...)`), the line of M0090, which lost its note in
+R975 (R-965 amendment 3) for this same reason: `BandYDirectTwin` calls `Band` on an un-run report, never runs that trigger line, and so
+no longer covers it, and the note marks a kill whose killer ran after another COVERING test. The prediction checked verdicts and
+killing tests only, not the notes; the cause was already on record. No verdict or killing test moves.
+
+**Prediction for the next record (same build, same head plus this pin).** WR and WRE read exactly `0/M0075, 0/M0076, 0/M0082`: the
+`#if`-wrapped original's three, which carry no line. `V3_WR_STATE_NOTES` and its unit test move to those three on lethal/r-973. Every
+other figure as above (WR 62 / 28 / 12, WRE `entriesSent` 430, T unchanged).
