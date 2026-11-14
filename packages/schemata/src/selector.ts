@@ -1,3 +1,11 @@
+/**
+ * R979: instrumented code calls the selector at every guard, and the selector is in no permission set the project declares. A
+ * test that narrows the session to an exact set (`Permissions Mock.SetExactPermissionSet`) then cannot execute it, so the test
+ * fails at baseline for LethAL's sake (35 of Microsoft's No. Series tests on v3). The property gives the codeunit Execute on
+ * itself. All three selector emitters carry it, so swapping one for another keeps the shape.
+ */
+export const SELECTOR_INHERENT_PERMISSIONS = "InherentPermissions = X;";
+
 export interface SelectorConfig {
   readonly selectorId: number;
   readonly controlId: number;
@@ -39,6 +47,8 @@ export function emitMutationSelector(
 ): string {
   return `codeunit ${cfg.selectorId} "Mutation Selector"
 {
+    ${SELECTOR_INHERENT_PERMISSIONS}
+
     procedure Active(MutantId: Text): Boolean
     var
         ControlState: Codeunit "LC Control State";
@@ -175,6 +185,7 @@ export function emitResourceSelector(cfg: {
   return `codeunit ${cfg.objectId} "Mutation Selector"
 {
     SingleInstance = true;
+    ${SELECTOR_INHERENT_PERMISSIONS}
 
     var
         Loaded: Boolean;
@@ -230,6 +241,8 @@ export function emitStaticSelector(cfg: {
   // emitMutationSelector and emitStaticSelector MUST expose the identical procedure set.
   return `codeunit ${cfg.objectId} "Mutation Selector"
 {
+    ${SELECTOR_INHERENT_PERMISSIONS}
+
     procedure Active(MutantId: Text): Boolean
     begin
 ${body}

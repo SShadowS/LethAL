@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**29 of 960 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 967 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -369,9 +369,10 @@ that ordering is the priority.
 - **R975** · On al-runner v3, trigger mutants take R29's object-level fallback although v3's per-test LINE coverage could decide them: on Continia DO all 215 scored mutants were object-attributed, and at least 94 never-executed trigger statements were reported survived · [R975.md](docs/roadmap/R975.md) · done (a7d35069) — a statement-grain trigger mutant is placed by the lines its tests' baselines hit when every…
 - **R976** · R975's line rule skips block-grain trigger mutants (no reachLine): on Continia DO 46 of 204 survivors still rest on the object fallback, and an `empty-block` of a trigger no test runs still scores survived · [R976.md](docs/roadmap/R976.md) · done (5b8ce87d) — a block-grain mutant carries the reachLine of its block's first statement…
 - **R978** · Recurrence Schedule: 76 of 280 mutants end 'error' (al-runner refuses a later test after an earlier one failed, 'the shared sequence is not BC's'), although each mutant made an earlier test of the codeunit fail; whether that earlier failure is a kill LethAL drops is not settled · [R978.md](docs/roadmap/R978.md) · done (37404d12)
-- **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · open
-- **R985** · toggle-blank-temporal's Date substitute 17530101D is the one value BC refuses to store (SQL keeps 0D as 1753-01-01): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · open
+- **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · done (5a221837)
+- **R985** · toggle-blank-temporal's Date substitute 17530101D is a value BC refuses to store (BC refuses every non-zero date in 1753, as Date or DateTime): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · done (85b1ba64)
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
+- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · open
 
 ## Product gaps a real project hits
 
@@ -1004,7 +1005,13 @@ that ordering is the priority.
 - **R994** · On al-runner v3, two refusals met only under Permission Sets' mutants: Metadata Permission rows of a 'table * = X' grant (any unfiltered read, the platform's BaseSystemPermissionSet has one), and an XMLport table element skipped after its child rows (upstream #8032) · [R994.md](docs/roadmap/R994.md) · open
 - **R995** · BC.History's `error` mutants, mined across every v3 store (3,459 in 166 projects): seven unfiled al-runner refusals met only under mutation, filed as upstream #8036; most of the rest is fixed on current, by design, or already filed · [R995.md](docs/roadmap/R995.md) · open
 - **R996** · BC.History re-swept on current al-runner (edge-736fc7677, re-checked on 847b1fa5a): 4 projects gained tests, one lost kill and a no-client refusal filed upstream; the three stopped runs finished · [R996.md](docs/roadmap/R996.md) · closed 2026-11-14 — measured and filed upstream (#8024, #8028; comments on #8013, #8002)
+- **R997** · On al-runner v3, a FlowField over Published Application filtered on Tenant Visible is refused as a permission denial on NAV App Extra (2000000157) under a set that grants Published Application: 84 of Guided Experience's 104 tests (upstream #8038) · [R997.md](docs/roadmap/R997.md) · open
 - **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · open
+- **R1000** · edge-847b1fa5a reworded the cascade-existing-state refusal ("changed number sequence 'X' that existed before it ... (only a new NumberSequence.Insert is)"), so the serve keep-list no longer matches it: DO's serve run fell back to one-shot at the warm-up, about one covered mutant a minute · [R1000.md](docs/roadmap/R1000.md) · done (200ed4e5)
+- **R1001** · A v3 serve baseline in which every test is refused with one and the same text runs to its end (DC: 1,839 of 1,839 tests, 4,656 s, 117 daemons) instead of stopping early by name · [R1001.md](docs/roadmap/R1001.md) · done (aad4e6c8)
+- **R1002** · Three DC test codeunits still run one-shot inside a serve session: their method names use shapes serve-entries is not proven for (a lone ".", a name starting with "//", a name starting with "(") · [R1002.md](docs/roadmap/R1002.md) · done (aad4e6c8)
+- **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open
+- **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · done (470533c9)
 
 ---
 

@@ -15,7 +15,7 @@
  * LETHAL_HEAVY_CGROUP_DIR names a folder holding `memory.current`, `memory.max` (and `memory.stat`)
  * in place of /sys/fs/cgroup.
  */
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   HEAVY_GUARD_EXIT,
@@ -27,10 +27,22 @@ import {
 } from "./corpus-snapshot.ts";
 import {
   DEFAULT_PEAK_GIB,
+  MEMORY_RESERVE_GIB,
+  SMALL_ADMITS_LEDGER,
+  markSlotSmall,
   memoryVerdict,
   readContainerMemory,
   readSlot,
 } from "./heavy-slot-class.ts";
+
+/** The pid the slot's lock file names (heavy-slot.sh writes its own; the guard runs under `flock`). */
+function holderPid(dir: string, slot: number): string {
+  try {
+    return readFileSync(join(dir, `heavy.${slot}`), "utf8").trim();
+  } catch {
+    return "?";
+  }
+}
 
 if (import.meta.main) {
   const [dir, slotArg, cls, peakArg] = process.argv.slice(2);
@@ -61,8 +73,22 @@ if (import.meta.main) {
       slots.map((s) => s?.cls),
     ),
   ];
-  const m = memoryVerdict(readContainerMemory(), heldPeaks, peak);
+  // R992: small jobs held, or undefined when a held slot's class cannot be read (fail closed: no allowance).
+  const smallHeld = slots.every((s) => s !== undefined)
+    ? slots.filter((s) => s?.small === true).length
+    : undefined;
+  const sample = readContainerMemory();
+  const m = memoryVerdict(sample, heldPeaks, peak, MEMORY_RESERVE_GIB, smallHeld);
   console.error(m.message);
+  if (m.small === true) {
+    markSlotSmall(dir, mine);
+    // One line per admission that passed only by the R992 allowance.
+    const gib = (b: number | undefined) => (b === undefined ? "?" : (b / 2 ** 30).toFixed(2));
+    appendFileSync(
+      join(dir, SMALL_ADMITS_LEDGER),
+      `${[new Date().toISOString(), `heavy.${mine}`, cls, peak, gib(sample?.usedBytes), heldPeaks.reduce((s, p) => s + p, 0), gib(sample?.maxBytes), holderPid(dir, mine)].join("\t")}\n`,
+    );
+  }
   // R991: a job that can never fit fails by name (exit 2: retrying never helps), so a --wait ticket
   // never waits for it, and never holds the queue's head for it.
   if (m.never === true) process.exit(2);

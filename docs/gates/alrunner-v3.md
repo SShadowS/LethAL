@@ -63,7 +63,14 @@ The legs:
   row against its entry of `V3_SERVE_SAFE_REFUSALS` (the fact pins four entries: http, commit, cascade, onrun-failed; the
   seven R945 entries are not in it, since it runs without the .NET helper, and a reworded text of theirs only closes), the reasons
   after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
-  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
+  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. Since [[R1000]]
+  (coord R-989) the daemon also runs two codeunits for `cascade-existing-state`, one per kind (seven codeunits, ten
+  tests in all; `company-findset` cannot be probed here, since the daemon has no package cache and `Record Company`
+  is then "outside the workspace"), each also accepted as a plain pass, and a row
+  REFUSED with a text no keep-list entry accepts reads `unkept`, which is gate-fail in leg C: at a serve warm-up such
+  a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Every
+  row of the request is checked, with or without a message; a request with no row at all, or a daemon that does not
+  start, reads `unmeasurable`, now infra-fail. Any other move still only warns. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
@@ -635,6 +642,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 
 ## History
 
+- 2026-11-14 (R985, coord task R-971): `toggle-blank-temporal` 2.0.0, Date/DateTime stand-in `17540102D` (BC refuses every non-zero 1753 date in a table write, measured on `bc2`). `al-runner-v3.tables` recorded by R849's route on `current`, edge 847b1fa5a, byte-identical to its expected file (master 30c707d0): the 4 temporal rows re-keyed (operator major `|2`), IsDueDateSet's and IsTimestampSet's `mutatedTextSha256` moved to the new texts; no verdict or killing test moved; 298 / 54 / 66 unchanged. Pre-commitment `docs/superpowers/specs/2026-11-14-r985-temporal-standin-precommitment.md`, amendment 1. Logs: `/coord/handoff/R-971/`.
 - 2026-11-14 (R976, coord task R-973): a block-grain trigger mutant (a body's `empty-block`) carries its first statement's `reachLine`, so R975's line rule decides it too. `al-runner-v3.wrapped` recorded by R849's route on `current`, edge 736fc7677, equal to its expected file (master ff096dd3): the 3 unwrapped twins' `OnOpenPage` `empty-block` rows moved `survived` → `no-coverage`; no kill moved; WR 62 / 28 / 12, its state notes three (M0089 dropped, amendment 1), WRE `entriesSent` 430. Leg T unchanged. Pre-commitment `docs/superpowers/specs/2026-11-14-r973-block-grain-line-precommitment.md`. Logs: `/coord/handoff/R-973/`.
 - 2026-11-13 (R975, coord task R-965): v3 table, page and report trigger mutants are decided by per-test line coverage. `al-runner-v3.tables` and `.wrapped` recorded by R849's route on `current`, edge c8fe56e05, each byte-identical to its expected file (master e93d6aea): T's 6 Data Main `OnValidate` rows and WR's 6 unwrapped twin `OnOpenPage` rows moved `survived` → `no-coverage`; no kill moved. WR's counts 62 / 31 / 9, its state notes four (M0090 and M0096 dropped), WRE `entriesSent` 436, leg T's hand-pin counts 326 / 67 / 25; the manifest rows were re-gated with `--refresh-rows`. Pre-commitment `docs/superpowers/specs/2026-11-14-r965-line-attribution-precommitment.md`, amendments 1 to 4. Logs: `/coord/handoff/R-965/`.
 
@@ -739,3 +747,10 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
   seven T rows pinned, K skipped as a candidate), and `current` moved to `edge-dcdf9e821-dcdf9e821/`. Right after,
   `itest:alrunner-v3` on the new `current` passed every leg, K 3 / 12 / 4 over 19 with 0 differences from
   `bcdev.baseline.json`. Logs: `/coord/handoff/R-756/` (`regate.out`, `edge-rejudge.out`, `k-run.log`).
+- 2026-11-14: [[R1000]] (coord R-989). edge-847b1fa5a reworded the `cascade-existing-state` refusal per kind; the keep
+  list matched only the old text, so R-984's DO serve run fell back to one-shot at its warm-up. The entry now accepts
+  the old text and both new ones (each re-measured clean on a kept daemon), and leg C's `serve-keep-reasons` runs
+  the later families too, reading `unkept` (gate-fail) for a refused row no entry accepts, and `unmeasurable` (now
+  infra-fail) for a request that returns no row. The new cases read as kept refusals on all 15 gated builds. Leg C
+  keeps its 28 facts; no pinned figure moves (pre-commitment and addendum in
+  `docs/superpowers/specs/2026-11-14-r1000-serve-keep-texts-precommitment.md`).
