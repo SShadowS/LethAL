@@ -4539,18 +4539,30 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
     return r;
   };
   const prefetch = (r: Rig) => r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
-  /** R1004: the warm-up leaves out a test the baseline noted refused, so R786 now applies only to a
-   *  refused row the baseline did NOT note. These tests forget the note after the baseline. */
-  const forgetRefusals = (r: Rig) => {
-    (r.b as unknown as { baselineRefused: Map<number, Set<string>> }).baselineRefused.clear();
-    return r;
-  };
+  /**
+   * R1004: the warm-up leaves out a test whose baseline row is a refusal the daemon cannot keep, so
+   * R786 now applies to a refused test the warm-up has to keep: one whose name starts another test's
+   * name (v3 matches `excludeTests` by prefix, so leaving out `B` would also drop the green `BB`).
+   */
+  const SUITE_BB = [ref("A"), ref("B"), ref("BB")];
+  const bbRows =
+    (message: string): RowsFn =>
+    (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "BB"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message }
+          : x,
+      );
+  const prefetchBB = (r: Rig) =>
+    r.b.prefetchMutants(plans(["M0001"], SUITE_BB)).catch((e: unknown) => e);
 
   test("default + a named refusal at the warm-up: the typed fallback signal, the daemon closed, no mutant entry sent", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
-    await baseline(r.b, SUITE1);
-    forgetRefusals(r);
-    const err = await prefetch(r);
+    const r = asDefault(await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }));
+    await baseline(r.b, SUITE_BB);
+    const err = await prefetchBB(r);
     expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
     expect(String(err)).toContain(`Codeunit${CU}.B`);
     expect(String(err)).toContain(COMPANY);
@@ -4560,10 +4572,12 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
   });
 
   test("explicit serve-entries + the same row: refuses warmup-dirty as before", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }), "explicit");
-    await baseline(r.b, SUITE1);
-    forgetRefusals(r);
-    const err = await prefetch(r);
+    const r = asDefault(
+      await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }),
+      "explicit",
+    );
+    await baseline(r.b, SUITE_BB);
+    const err = await prefetchBB(r);
     expect(err).toBeInstanceOf(AlRunnerV3EntriesRefusedError);
     expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
     // R927: and names the way out, since the default would have re-run one-shot.
@@ -4652,9 +4666,8 @@ describe("R786: the serve-entries DEFAULT falls back on a warm-up row R612 refus
   });
 
   test("a fallback while a kill pair starts the daemon is not swallowed as pair-skipped", async () => {
-    const r = asDefault(await rig({ serve: { rows: underNone(COMPANY) } }));
-    await baseline(r.b, SUITE1);
-    forgetRefusals(r);
+    const r = asDefault(await rig({ suite: SUITE_BB, serve: { rows: bbRows(COMPANY) } }));
+    await baseline(r.b, SUITE_BB);
     // The pair needs an activated mutant outside the baseline and no prefetch (so the daemon starts here).
     await r.b.activate("M0001");
     const seen: string[] = [];
@@ -4709,6 +4722,41 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? []);
     expect(later.length).toBeGreaterThan(0);
     expect(later.every((e) => e.excludeTests === undefined)).toBe(true);
+  });
+
+  test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
+    const KEPT =
+      "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
+    const keptB: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: KEPT }
+          : x,
+      );
+    const r = asSource(await rig({ serve: { rows: keptB } }), "default");
+    await baseline(r.b, SUITE1);
+    const out = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(out).not.toBeInstanceOf(Error);
+    expect(warmupEntry(r)).toBeDefined();
+    expect(warmupEntry(r)?.excludeTests).toBeUndefined();
+  });
+
+  test("a refused test whose name starts another test's name stays in (v3 excludes by prefix)", async () => {
+    const SUITE_BB = [ref("A"), ref("B"), ref("BB")];
+    const bb: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "BB"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: REFUSAL }
+          : x,
+      );
+    const r = asSource(await rig({ suite: SUITE_BB, serve: { rows: bb } }), "explicit");
+    await baseline(r.b, SUITE_BB);
+    const err = await r.b.prefetchMutants(plans(["M0001"], SUITE_BB)).catch((e: unknown) => e);
+    expect(warmupEntry(r)?.excludeTests).toBeUndefined();
+    expect(String(err)).toContain("al-runner-v3-entries-warmup-dirty");
   });
 
   test("a clean baseline sends no excludeTests at the warm-up", async () => {

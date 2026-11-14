@@ -5992,27 +5992,39 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
-    // R1004: the warm-up leaves out every test the baseline refused by name (`baselineRefused`, I3).
+    // R1004: the warm-up leaves out a test whose row in THIS batch's baseline is a named refusal the
+    // daemon cannot keep (R612/R945: `serveDaemonReusable` false, the shape that dirtied the warm-up).
     // Such a test is refused on both transports, decides no verdict (a mutant runs against its green
     // covering tests), and would only leave a daemon R612 cannot reuse; on the default transport R786
-    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). An isolated call whose one
-    // test was refused leaves the warm-up; a codeunit leaves out those tests (`excludeTests`), and its
-    // rows are compared with the baseline's rows without them. A refused row the baseline did not
-    // note (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
-    const refusedOf = (cu: number): ReadonlySet<string> =>
-      this.baselineRefused.get(cu) ?? new Set();
-    const warm = union.filter((id) => {
-      const one = this.isolatedRefs.get(id);
-      return one === undefined || !refusedOf(one.codeunitId).has(one.method);
-    });
-    const leftOut = (cu: number): readonly string[] | undefined =>
-      this.isolatedRefs.has(cu) || refusedOf(cu).size === 0
-        ? undefined
-        : [...refusedOf(cu)].sort().map((m) => `Codeunit${cu}.${m}`);
+    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). A refusal the daemon keeps
+    // stays in, so the warm-up still compares the whole run of its codeunit (state carries from test to
+    // test there). An isolated call whose one test is such a refusal leaves the warm-up; a codeunit
+    // leaves those tests out (`excludeTests`) and its rows are compared with the baseline's rows
+    // without them. v3 matches `excludeTests` by PREFIX (measured, `/coord/handoff/R-992/excl.ts`:
+    // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
+    // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
+    // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
+    const leftOutRows = (id: number): readonly V3Row[] => {
+      const rows = (this.baselineRows.get(id) ?? []).filter(
+        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+      );
+      if (this.isolatedRefs.has(id)) return rows;
+      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+      return rows.filter((r) => {
+        const m = r.method.toLowerCase();
+        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+      });
+    };
+    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
+    const leftOut = (cu: number): readonly string[] | undefined => {
+      if (this.isolatedRefs.has(cu)) return undefined;
+      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+      return names.length === 0 ? undefined : names;
+    };
     const expected = (e: SentEntry): readonly V3Row[] => {
       const rows = this.baselineRows.get(callOf(e)) ?? [];
       if (e.call !== undefined) return rows;
-      const out = new Set([...refusedOf(e.codeunit)].map((m) => m.toLowerCase()));
+      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
       return rows.filter((r) => !out.has(r.method.toLowerCase()));
     };
     const daemon = await this.spawnDaemon(lane, mode, s);
