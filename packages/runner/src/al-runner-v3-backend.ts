@@ -2212,6 +2212,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * regression": too slow for a warm duration to be trusted, a request error, or a refused/odd row.
    * R951: a sampled skip carries its reason, `Name (reason)`.
    */
+  /** R1007: the "too few clean samples" drop names the samples skipped and why (until then, only the itests saw them). */
+  private tooFewCleanWhy(clean: number, required: number): string {
+    const skipped = this.baselineStats.sampledSkipped;
+    const named =
+      skipped.length > 0
+        ? `; skipped samples: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? `, and ${skipped.length - 5} more` : ""}`
+        : "";
+    return `too few clean cross-check samples: ${clean} of ${required}${named}`;
+  }
+
   private noteSkip(
     kind: "tooSlow" | "error" | "other",
     name: string,
@@ -4132,7 +4142,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const clean = this.baselineStats.compared - comparedBefore;
       if (!stopped && clean < required) {
         this.dropDaemonBaseline(
-          `too few clean cross-check samples: ${clean} of ${required}`,
+          this.tooFewCleanWhy(clean, required),
           [`too-few-clean-samples:${clean}/${required}`],
           shots,
         );
@@ -4268,12 +4278,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const isSample = plan.has(key);
         reached(key, ref);
         // Why the daemon's answer is not kept (R5: a sample is then replaced), if it is not.
+        // R1007: a refused row is an answer too (R678). A sample's refusal is compared with a fresh
+        // process's like any row; any other test's is kept only when the daemon may keep that refusal
+        // (`serveDaemonReusable`, as the live path); else it is odd, as before.
+        const unkeptRefusal =
+          row?.notRun === true && !isSample && !serveDaemonReusable(serveLines([row]), "v3");
         const skip: { kind: "error" | "other" | "tooSlow"; reason: string } | undefined = failed
           ? { kind: "error", reason: "daemon-error" }
           : got === undefined ||
               got.rows.length !== 1 ||
               row === undefined ||
-              row.notRun ||
+              unkeptRefusal ||
               row.method.toLowerCase() !== ref.method.toLowerCase()
             ? { kind: "other", reason: "daemon-odd-row" }
             : durationCouldMoveBudget([row], got.wallMs, f.floorMs)
@@ -4307,7 +4322,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const clean = this.baselineStats.compared - comparedBefore;
       if (!stopped && clean < required) {
         this.dropDaemonBaseline(
-          `too few clean cross-check samples: ${clean} of ${required}`,
+          this.tooFewCleanWhy(clean, required),
           [`too-few-clean-samples:${clean}/${required}`],
           shots,
         );
