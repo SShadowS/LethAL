@@ -136,5 +136,9 @@ closed-world guard) exists only from 1.0.0.23. `InstalledDependents` (R733: name
 that depend on the target) and the found-0 `discoveryError` / `discoveryErrorFrame` fields (R689)
 exist only from 1.0.0.24. `ObjectOwners` and `FieldOwners` (R847: who owns an object or field,
 read by key, so the clash check can see an installed app that is not a dependent) exist only from
-1.0.0.25, and 1.0.0.25 is the minimum: no client path falls back to an older
-control app any more, so a 404 from any of these actions is a plain failure.
+1.0.0.25. `HarnessInfo`'s `databaseId` (R969: the lease row's id, minted with the row and never by
+`ForceResetLease`, so `--resume-run` can carry verdicts across a lease reset on a database that
+survived) and `InherentPermissions = X` on "LC Control State" (R999: a target's selector calls it
+under an exact permission set) exist only from 1.0.0.26, and 1.0.0.26 is the minimum: no client path
+falls back to an older control app any more, so a 404 from any of these actions, or a `HarnessInfo`
+without `databaseId`, is a plain failure.

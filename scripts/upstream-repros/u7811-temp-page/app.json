@@ -1,0 +1,11 @@
+{
+  "id": "927a0000-0000-4000-8000-000000000927",
+  "name": "R927 Temp Page Probe",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "application": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 50270, "to": 50279 }],
+  "features": ["NoImplicitWith"]
+}

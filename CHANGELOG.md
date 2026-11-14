@@ -13,6 +13,12 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **`--resume-run` keeps its verdicts across `force-reset-lease` on a database that survived** (R969). LethAL Control
+  1.0.0.26 reports a database id that a lease reset does not change; a run records it, and a resume across a changed
+  server generation carries verdicts only when the id is the same, with a `resume-across-lease-reset` warning. A lost
+  database, or a run recorded before 1.0.0.26, still refuses. The same build gives "LC Control State"
+  `InherentPermissions = X` (R999), so a test that narrows to an exact permission set no longer fails at LethAL's own
+  guard. Needs the control app 1.0.0.26: the minimum is now 1.0.0.26 (`MIN_CONTROL_VERSION`).
 - **The agent skill installs as one file or as a Claude Code plugin** (R868, GitHub #26). `skills/lethal-mutation-testing/SKILL.md`
   now runs LethAL in the safe order (doctor, dry run, scoped run, read, restore) and says what to do when a step fails. Copy
   the one file into `~/.claude/skills/lethal-mutation-testing/`, or run `/plugin marketplace add SShadowS/LethAL` and

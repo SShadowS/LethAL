@@ -228,7 +228,7 @@ A run prints one line, `[lethal] al-runner: <path> (<version>)`, naming the bina
 
 **Cost.** On `bcdev` a mutant's covering tests run in ONE call to the server (one per mutant, not
 one per test), stopping at the first failure, so a survivor with forty covering tests costs one
-round trip instead of forty. This needs LethAL Control 1.0.0.25 or newer on the server; an older
+round trip instead of forty. This needs LethAL Control 1.0.0.26 or newer on the server; an older
 one is refused before any test runs. The report's `groupedCalls` says how many such calls were
 made. Three flags touch it and you should not need them: `--max-methods-per-call <n>` caps one
 call, `--request-ceiling-ms <n>` bounds one call (keep it under the hosting gateway's idle
@@ -983,7 +983,11 @@ database, and on `ForceResetLease`.
 - **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
   `server-generation-changed`) when the run they would resume recorded another generation, or none.
   A run recorded before R680 has none, so it refuses too. The error names both values; drop the
-  flag to run from scratch.
+  flag to run from scratch. One exception (R969): each run also records the server's database id,
+  which a `force-reset-lease` does not change. When the generation changed but both runs recorded
+  the same database id, the database survived, so the resume carries, with the warning
+  `resume-across-lease-reset`, and every other resume check still applies. A different id, or a run
+  that recorded none, refuses as above.
 - **A saved baseline** is reused only from a run on the same generation.
 - **The lease** is asked at the generation the session recorded. A server that restarted since
   refuses it (`generation-changed`) before anything is deployed.

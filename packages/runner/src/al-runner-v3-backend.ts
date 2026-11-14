@@ -1185,7 +1185,8 @@ export function namedSidecar(configured: string): string {
 
 /**
  * R886: the sidecar for this session. `configured`: `alRunnerV3.dotnetSidecar`. A named file that
- * is missing throws (the caller named it). With none named, the pinned build's own sidecar is used
+ * is missing throws (the caller named it); a named file other than the build's own is used with a
+ * `warning` that names both (R998). With none named, the pinned build's own sidecar is used
  * when the file exists with the sha256 `.gated` recorded; otherwise `warning` says why and none is
  * passed (a missing or changed file must not run silently).
  */
@@ -1195,8 +1196,22 @@ export async function resolveDotnetSidecar(
   gated: GatedBuild,
 ): Promise<{ readonly path?: string; readonly warning?: string }> {
   if (configured === false) return {};
-  if (configured !== undefined) return { path: namedSidecar(configured) };
   const pinned = pinnedSidecar(alRunnerPath, gated);
+  if (configured !== undefined) {
+    // The config wins (R886), but a named file that is not this build's own sidecar is said by name (R998): a sidecar built for
+    // another al-runner build can speak another protocol, and every .NET call then fails as "protocol mismatch" while the run
+    // looks normal (R-975: 13 Bank Deposits tests lost that way to a config pinned two builds earlier).
+    const path = namedSidecar(configured);
+    // Compared with the hash `.gated` recorded, so a build whose own sidecar file is gone still says it.
+    if (pinned === undefined) return { path };
+    const sha = await sha256OfFile(path);
+    return sha === pinned.sha256
+      ? { path }
+      : {
+          path,
+          warning: `"alRunnerV3.dotnetSidecar" names ${path} (sha256 ${sha}), not this al-runner build's own sidecar ${pinned.path} (sha256 ${pinned.sha256}, .gated); a sidecar built for another build can speak another protocol, and every .NET call then fails with "protocol mismatch" (R998). Remove the setting to use the build's own, or rebuild the named file for this build`,
+        };
+  }
   if (pinned === undefined) return {};
   if (!existsSync(pinned.path))
     return { warning: `the pinned sidecar ${pinned.path} is missing; .NET types are refused` };
@@ -2665,8 +2680,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ).catch((e: unknown) => e as Error);
       if (sidecar instanceof Error) return { ok: false, details: sidecar.message };
       this.sidecarPath = sidecar.path;
+      // R998: a named sidecar that is not the build's own is used, and says so under a code of its own.
       if (sidecar.warning !== undefined)
-        this.notify("al-runner-v3-dotnet-sidecar-unusable", `[lethal] ${sidecar.warning} (R886)`);
+        this.notify(
+          sidecar.path !== undefined
+            ? "al-runner-v3-dotnet-sidecar-not-the-builds"
+            : "al-runner-v3-dotnet-sidecar-unusable",
+          sidecar.path !== undefined
+            ? `[lethal] ${sidecar.warning}`
+            : `[lethal] ${sidecar.warning} (R886)`,
+        );
       // M1: a session trusts leg C's gate-only facts from this record instead of re-measuring them.
       gateRecord =
         this.cfg.candidate === true
@@ -6078,14 +6101,52 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `codeunit(s) ${named.join(", ")} of the warm-up union have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
       );
     }
+    // R1004: the warm-up leaves out a test whose row in THIS batch's baseline is a named refusal the
+    // daemon cannot keep (R612/R945: `serveDaemonReusable` false, the shape that dirtied the warm-up).
+    // Such a test is refused on both transports, decides no verdict (a mutant runs against its green
+    // covering tests), and would only leave a daemon R612 cannot reuse; on the default transport R786
+    // then re-ran the whole session one-shot (DO: R982's ZipArchive tests). A refusal the daemon keeps
+    // stays in, so the warm-up still compares the whole run of its codeunit (state carries from test to
+    // test there). An isolated call whose one test is such a refusal leaves the warm-up; a codeunit
+    // leaves those tests out (`excludeTests`) and its rows are compared with the baseline's rows
+    // without them. v3 matches `excludeTests` by PREFIX (measured, `/coord/handoff/R-992/excl.ts`:
+    // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
+    // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
+    // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
+    const leftOutRows = (id: number): readonly V3Row[] => {
+      const rows = (this.baselineRows.get(id) ?? []).filter(
+        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+      );
+      if (this.isolatedRefs.has(id)) return rows;
+      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+      return rows.filter((r) => {
+        const m = r.method.toLowerCase();
+        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+      });
+    };
+    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
+    const leftOut = (cu: number): readonly string[] | undefined => {
+      if (this.isolatedRefs.has(cu)) return undefined;
+      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+      return names.length === 0 ? undefined : names;
+    };
+    const expected = (e: SentEntry): readonly V3Row[] => {
+      const rows = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) return rows;
+      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
+      return rows.filter((r) => !out.has(r.method.toLowerCase()));
+    };
     const daemon = await this.spawnDaemon(lane, mode, s);
     try {
       this.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
-        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: union }],
+        [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
         "warmup",
         mode,
+        undefined,
+        undefined,
+        leftOut,
       ).catch((err: unknown) => {
         // R960: on the DEFAULT transport a whole-request refusal falls back to one-shot, as a
         // named row does (R786). An explicit transport keeps failing by name. Only at the
@@ -6111,7 +6172,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
       for (const e of sent.slice(1)) {
         const got = rowsClass(rows.get(e.id) ?? []);
-        const want = rowsClass(this.baselineRows.get(callOf(e)) ?? []);
+        const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
         if (got !== want)
           disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
       }
@@ -6198,6 +6259,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
      *  in this request's body (on the daemon of the call's own mode). */
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    /** R1004: the warm-up only: the tests each plain codeunit entry leaves out. */
+    excluded?: (codeunit: number) => readonly string[] | undefined,
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
@@ -6209,8 +6272,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
     daemon.requests += 1;
-    const sent = encodeGroups(groups, this.requireEchoId(), (id) =>
-      alone !== undefined && id === alone.call ? alone.selection : this.isolated(id),
+    const sent = encodeGroups(
+      groups,
+      this.requireEchoId(),
+      (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+      excluded,
     );
     const tests = sent.reduce(
       (n, e) =>

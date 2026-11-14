@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**30 of 966 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**30 of 971 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -372,7 +372,7 @@ that ordering is the priority.
 - **R979** · LethAL's injected codeunits carry no `InherentPermissions = X`, so a test that narrows to an exact permission set cannot execute the Mutation Selector and fails at baseline (35 of Microsoft's No. Series tests on v3) · [R979.md](docs/roadmap/R979.md) · done (5a221837)
 - **R985** · toggle-blank-temporal's Date substitute 17530101D is a value BC refuses to store (BC refuses every non-zero date in 1753, as Date or DateTime): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · done (85b1ba64)
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
-- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · open
+- **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 
 ## Product gaps a real project hits
 
@@ -1010,7 +1010,12 @@ that ordering is the priority.
 - **R1001** · A v3 serve baseline in which every test is refused with one and the same text runs to its end (DC: 1,839 of 1,839 tests, 4,656 s, 117 daemons) instead of stopping early by name · [R1001.md](docs/roadmap/R1001.md) · done (aad4e6c8)
 - **R1002** · Three DC test codeunits still run one-shot inside a serve session: their method names use shapes serve-entries is not proven for (a lone ".", a name starting with "//", a name starting with "(") · [R1002.md](docs/roadmap/R1002.md) · done (aad4e6c8)
 - **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open
-- **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · open
+- **R1004** · A test al-runner refuses by name in the serve warm-up request throws away the whole serve session (R786): DO's warm-up holds one of R982's known ZipArchive refusals, so DO cannot run on serve at all · [R1004.md](docs/roadmap/R1004.md) · done (470533c9)
+- **R1005** · R-983's unexamined tail of BC.History error mutants re-run on current: 25 of 73 now killed; the rest filed (#8084 new) or counted; Avalara finished · [R1005.md](docs/roadmap/R1005.md) · closed 2026-11-14 — measured and filed upstream (#8084; comments on #6896, #7764, #7827)
+- **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · done (354783d9)
+- **R1006** · Corpus windows started without a cheap check and ran for hours measuring nothing (DO's no-license window, Avalara's warm-up fallback): `scripts/triage-baseline.ts` now runs the baseline plus a few small codeunits first and stops by name · [R1006.md](docs/roadmap/R1006.md) · done (2e598e35)
+- **R1007** · The per-test daemon baseline skips a cross-check sample whose daemon row al-runner refused (daemon-odd-row) instead of comparing it, so a project whose samples land on refused tests loses its daemon baseline and runs the whole baseline one-shot · [R1007.md](docs/roadmap/R1007.md) · open
+- **R1008** · A run on al-runner v3's serve default can never be resumed: --resume forces one-shot (R761), and the one-shot session's runner_build lacks the run's ` baseline-daemon` tag (R948), so no run matches; DO's 15,563 remaining covered mutants cannot be split across windows · [R1008.md](docs/roadmap/R1008.md) · open
 
 ---
 

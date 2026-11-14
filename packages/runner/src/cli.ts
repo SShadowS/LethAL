@@ -107,7 +107,7 @@ import { type ExplainOutput, assertExplainableReport, explain } from "./explain"
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
-import type { LeaseSnapshot } from "./harness";
+import type { HarnessDetails, LeaseSnapshot } from "./harness";
 import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
@@ -3449,10 +3449,19 @@ export function leaseSessionFor(
   const c = validateBcDevConfig(configFile.bcdev);
   const odataCfg = odataCfgFor(c);
   const harnessVerifier = new HarnessVerifier(odataCfg);
+  // R969 (review): the session reads the generation, then the database id at once; both come from
+  // the SAME HarnessInfo read, so a database lost between two reads cannot pair an old generation
+  // with a new id. Every generation read is still live; the id is the last one's.
+  let last: HarnessDetails | undefined;
   return {
     lease: {
       client: new LeaseClient(odataCfg),
-      serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+      serverGeneration: async () => {
+        last = await harnessVerifier.verify();
+        return last.serverGeneration;
+      },
+      // R969: `verify()` refuses an empty or missing id, so a session on a bcdev server always records one.
+      databaseId: async () => (last ?? (await harnessVerifier.verify())).databaseId,
     },
   };
 }
@@ -4933,9 +4942,10 @@ export async function buildDoctorDeps(
               // R886: a named sidecar that is missing is a fault (resolve throws); a pinned one
               // that is missing or changed, or none at all, is a warning in the details.
               const sc = await resolveDotnetSidecar(c.dotnetSidecar, c.path, gated);
+              // R998: a named sidecar that is not the build's own comes back with both a path and a warning; show both.
               const scText =
                 sc.path !== undefined
-                  ? `; .NET sidecar ${sc.path}`
+                  ? `; .NET sidecar ${sc.path}${sc.warning !== undefined ? `; WARNING: ${sc.warning}` : ""}`
                   : sc.warning !== undefined
                     ? `; WARNING: ${sc.warning}`
                     : c.dotnetSidecar === false

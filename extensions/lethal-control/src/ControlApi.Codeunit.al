@@ -79,6 +79,8 @@ codeunit 91003 "LC Control API"
         Obj.Add('semver', CurrentAppVersion());
         Obj.Add('protocolVersion', 2);
         Obj.Add('serverGeneration', State.CurrentServerGeneration());
+        // R969 (1.0.0.26): the database's own id; the client refuses an empty one.
+        Obj.Add('databaseId', State.CurrentDatabaseId());
         Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);

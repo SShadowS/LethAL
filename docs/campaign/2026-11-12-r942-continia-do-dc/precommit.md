@@ -195,3 +195,23 @@ Every LethAL gap: a roadmap item. A refusal or failure that BC 28 would not show
 - **Everything else as amendment 5:** the same config `/coord/handoff/R-984/v3.do-serve.json`, `current` edge-847b1fa5a, `--peak 12`, the
   watchdog (stop by exact pid when the tree is over 15 GiB or headroom under 4 GiB), and the same comparison with the 1d/2d rows.
   A serve warm-up fallback in this window is again a finding, and stops the window.
+
+## Amendment 8 (2026-11-14, coord R-984, before the next DO window): serve window 1 voided again (R1004); a fresh one
+
+- **Amendment 7's serve window 1 (f29ae093, store `dos2.sqlite`) is VOID as a serve measurement.** Its baseline ran on serve (2,224 s,
+  1,681/1,979 green, the same as one-shot), then R786's warm-up fallback fired on one of R982's known `ZipArchive.Dispose` refusals and
+  re-ran the session one-shot; it was stopped by SIGTERM (`/coord/handoff/R-984/result.md`). Filed and fixed as R1004 (coord R-992,
+  master fcaf0a7b): the warm-up leaves out a baseline refusal the daemon cannot keep.
+- **Serve window 1 restarts FRESH** in `/coord/handoff/R-984/dos3.sqlite`, on master fcaf0a7b or later (the head is named in the run
+  log's first line). Later windows `--resume` it.
+- **`current` is edge-a184cfc79** (the update gate moved it on 2026-11-14, all 23 legs; it does not contain upstream's 1753 change),
+  not 847b1fa5a. The comparison with the 1d/2d rows stays as amendment 5 says; a row that differs is read by name against the build
+  change before it is called a LethAL difference.
+- **Everything else as amendment 5:** the same config `/coord/handoff/R-984/v3.do-serve.json`, `--peak 12`, the watchdog. A serve
+  warm-up fallback is again a finding and stops the window. New to record: daemon restarts in the MUTANT phase and their reasons
+  (R1004's review: a mutant request that holds a refused test still closes its daemon), and the mutant phase's covered mutants per hour.
+- **Erratum (2026-11-14, during window t1):** the bullet on `current` above is wrong about the build this run uses. The config named
+  in the next bullet pins `alRunnerV3.path` to edge-847b1fa5a (amendment 5), so window t1 runs on 847b1fa5a, as its stderr's
+  `[lethal] al-runner:` line says; the run log's `current` field only records where `current` pointed. 847b1fa5a is a gated build and
+  the one amendment 5 pre-committed, so the comparison with the 1d/2d rows stands as amendment 5 says, with no build change to read.
+  Later windows `--resume` on the same pinned build.

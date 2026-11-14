@@ -34,7 +34,7 @@
           "username": "BCRUNNER",
           "password": "s3cret-not-printed!",
           "packageCachePath": "/cache/bc-demo/28.4-abcd1234",
-          "controlSymbolPath": "/coord/handoff/R-847/control/LethAL_LethAL Control_1.0.0.25.app",
+          "controlSymbolPath": "/coord/handoff/R-990/control/LethAL_LethAL Control_1.0.0.26.app",
           "env": {
             "BC_DEV_USER": "BCRUNNER",
             "BC_DEV_PASSWORD": "s3cret-not-printed!",
