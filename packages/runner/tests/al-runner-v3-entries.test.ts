@@ -3041,6 +3041,13 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     expect(low.notes).not.toContain("al-runner-v3-entries-cap-lowered");
   });
 
+  test("a request that grew the daemon by nothing, near its floor, is a reading of no cost", async () => {
+    // The gate fixtures: a request often grows the daemon by 0 bytes. Near the floor that is cheap,
+    // not unknown: the next request is not held to 16 unmeasured test entries.
+    const none = await prefetchOf(new Map([[CU, 0]]), onCu(mids(1, 60)));
+    expect(none.sizes).toEqual([32, 88]);
+  });
+
   test("a request that reuses memory an earlier one left is no reading: a heavy codeunit after another stays unmeasured", async () => {
     // 16 groups on CU (0.5 GiB a test entry) leave the daemon at 8.5 GiB. CU2 is as heavy, but its first
     // request reuses that memory, so its peak is 8.5 GiB again: read as growth from its start it would
@@ -3093,7 +3100,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     expect(shrinking.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
   });
 
-  test("the kill-pair batches follow the measured cost: 2 pairs a request", async () => {
+  test("the kill-pair batches follow the measured cost: 4 pairs a request", async () => {
     const killsAll: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((r) =>
         r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
@@ -3102,8 +3109,8 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       rows: killsAll,
     });
     expect(high.s.pairBatchStored).toBe(60);
-    // A pair is charged three test entries at 0.5 GiB: 2 fit 4 GiB, so 30 requests (1 at 256).
-    expect(high.s.pairBatchRequests).toBe(30);
+    // A pair is its two test entries (NONE and M) at 0.5 GiB: 4 fit 4 GiB, so 15 requests (1 at 256).
+    expect(high.s.pairBatchRequests).toBe(15);
   });
 });
 

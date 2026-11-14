@@ -227,6 +227,9 @@ const V3_NOT_RUN_SUFFIX =
 /** R987: how often a request's daemon RSS is read while it runs (Contoso grew about 0.6 GB a second). */
 const RSS_SAMPLE_MS = 200;
 
+/** R987: a daemon this far over its floor holds memory, so a request that did not grow it says nothing. */
+const RETAINED_SLACK_BYTES = 512 * 2 ** 20;
+
 /**
  * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
  * that holds it gets the pointer; every other refusal text is unchanged (so no stored text moves).
@@ -1968,9 +1971,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /**
    * R987: one request's reading: its daemon's RSS when it was sent, the daemon's floor (the lowest
-   * start seen) and the highest RSS seen while it ran. Only a request that grew the daemon (peak over
-   * its own start) is a reading; one that did not (it reused memory an earlier request left) says
-   * nothing, and its calls keep their state (an unmeasured one stays unmeasured). The growth is read
+   * start seen) and the highest RSS seen while it ran. A request that did not grow the daemon while it
+   * HOLDS memory (its start `RETAINED_SLACK_BYTES` or more over the floor) may have reused what an
+   * earlier request left: it says nothing, and its calls keep their state (an unmeasured one stays
+   * unmeasured). Every other request is a reading (a daemon near its floor that did not grow: a cost of
+   * about 0). The growth is read
    * from the floor, not the start: a daemon that keeps some memory starts each request higher, and
    * from the start a request reads low. The growth is divided over the request's TEST entries only
    * (an echo is LethAL's own tiny codeunit, and `groupsThatFit` charges costs to test entries only:
@@ -1986,7 +1991,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
     const tests = sent.filter((e) => !e.echo);
-    if (tests.length === 0 || !(peakRss > startRss)) return;
+    if (tests.length === 0) return;
+    if (!(peakRss > startRss) && startRss - floorRss >= RETAINED_SLACK_BYTES) return;
     const cost = (peakRss - floorRss) / tests.length;
     for (const e of tests) {
       const call = callOf(e);
@@ -6442,15 +6448,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const tagOf = (k: Kill) => this.pairTag(k.mutantId, k.cu);
     // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
-    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`). A
-    // kill is sized as one group of 4 entries charged three of its codeunit's cost (one more than its
-    // two codeunit entries: on the safe side).
+    // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`), over
+    // the kills' real groups (NONE and M, one test entry each); whole kills only, at least one.
     const segments: Kill[][] = kills.length > 0 ? [[...kills]] : [];
     const nextChunk = (): Kill[] | undefined => {
       const seg = segments[0];
       if (seg === undefined) return undefined;
-      const sized = seg.map((k) => ({ mutantId: k.mutantId, codeunits: [k.cu, k.cu, k.cu] }));
-      const chunk = seg.splice(0, groupsThatFit(sized, this.costOf));
+      const sized = seg.flatMap((k) => [
+        { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [k.cu] },
+        { mutantId: k.mutantId, codeunits: [k.cu] },
+      ]);
+      const chunk = seg.splice(0, Math.max(1, Math.floor(groupsThatFit(sized, this.costOf) / 2)));
       if (seg.length === 0) segments.shift();
       return chunk;
     };
