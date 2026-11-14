@@ -728,19 +728,6 @@ codeunit 50676 "Serve Cascade Key"
         IsolatedStorage.Get('R1000KEY', DataScope::Module, V);
     end;
 }
-
-codeunit 50677 "Serve Company FindSet"
-{
-    Subtype = Test;
-
-    [Test]
-    procedure FindSetCompanies()
-    var
-        C: Record Company;
-    begin
-        if C.FindSet() then;
-    end;
-}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -811,7 +798,9 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   // texts were never on the gate, so edge-847b1fa5a's reworded cascade passed it unseen.
   ["cascade-existing-state", "Codeunit50675.C_UsesSeq", false, true],
   ["cascade-existing-state", "Codeunit50676.C_UsesKey", false, true],
-  ["company-findset", "Codeunit50677.FindSetCompanies", false, true],
+  // Not `company-findset`: this daemon runs with no package cache, so `Record Company` is "outside the
+  // workspace" here (measured on the gate, R-989); its text is checked one-shot with packages instead
+  // (`/coord/handoff/R-989/probe-cases/`, all 15 gated builds).
 ];
 
 /**
@@ -859,7 +848,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): eight codeunits (eleven tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the cascade-existing-state and company-findset rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): seven codeunits (ten tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(

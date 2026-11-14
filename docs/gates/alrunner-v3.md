@@ -64,8 +64,9 @@ The legs:
   seven R945 entries are not in it, since it runs without the .NET helper, and a reworded text of theirs only closes), the reasons
   after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
   `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. Since [[R1000]]
-  (coord R-989) the daemon also runs three codeunits for the families added later (`cascade-existing-state`, both
-  kinds, and `company-findset`; eight codeunits, eleven tests in all), each also accepted as a plain pass, and a row
+  (coord R-989) the daemon also runs two codeunits for `cascade-existing-state`, one per kind (seven codeunits, ten
+  tests in all; `company-findset` cannot be probed here, since the daemon has no package cache and `Record Company`
+  is then "outside the workspace"), each also accepted as a plain pass, and a row
   REFUSED with a text no keep-list entry accepts reads `unkept`, which is gate-fail in leg C: at a serve warm-up such
   a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Every
   row of the request is checked, with or without a message; a request with no row at all, or a daemon that does not

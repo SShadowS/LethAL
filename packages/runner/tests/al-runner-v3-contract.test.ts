@@ -351,12 +351,6 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     notRun: true,
     message: CASCADE_736("B_ChangesKey"),
   },
-  "Codeunit50677.FindSetCompanies": {
-    status: "error",
-    notRun: true,
-    message:
-      "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
-  },
 };
 
 type ServeRow = { status: string; notRun?: boolean; message?: string };
@@ -545,11 +539,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 8 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 7 entries");
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
-    expect(f?.measured).toContain("company-findset: refusal");
     expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
@@ -570,7 +563,6 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["http", "Codeunit50674.HttpGetPublic"],
     ["cascade-existing-state", "Codeunit50675.C_UsesSeq"],
     ["cascade-existing-state", "Codeunit50676.C_UsesKey"],
-    ["company-findset", "Codeunit50677.FindSetCompanies"],
   ] as const) {
     test(`R1000: a reworded ${entry} refusal (${name}) is unkept, names it, never refuses a session, and FAILS leg C`, async () => {
       const rows = {
@@ -594,8 +586,8 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   for (const [entry, name, moved] of [
     ["commit", "Codeunit50671.CommitCall", { status: "fail", notRun: false, message: "x" }],
     [
-      "company-findset",
-      "Codeunit50677.FindSetCompanies",
+      "cascade-existing-state",
+      "Codeunit50676.C_UsesKey",
       { status: "fail", notRun: false, message: "x" },
     ],
   ] as const) {
@@ -625,13 +617,12 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       ...TODAY_ROWS,
       "Codeunit50675.C_UsesSeq": { status: "pass", notRun: false },
       "Codeunit50676.C_UsesKey": { status: "pass", notRun: false },
-      "Codeunit50677.FindSetCompanies": { status: "pass", notRun: false },
     };
     const p = (await probe({}, fakeServe(passing).spawn, true)).facts.find(
       (x) => x.fact === "serve-keep-reasons",
     );
     expect(p?.verdict).toBe("matches");
-    expect((p?.measured.match(/: plain pass/g) ?? []).length).toBe(4); // commit (pinned) + the three
+    expect((p?.measured.match(/: plain pass/g) ?? []).length).toBe(3); // commit (pinned) + the two
   });
 
   // R1000 review: the daemon rule's own condition, on every row of the request.
@@ -654,13 +645,13 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   test("R1000: a refused row with NO message is unkept (the daemon rule closes on it)", async () => {
     const rows = {
       ...SERVE_ROWS,
-      "Codeunit50677.FindSetCompanies": { status: "error", notRun: true },
+      "Codeunit50676.C_UsesKey": { status: "error", notRun: true },
     };
     const f = (await probe({}, fakeServe(rows).spawn)).facts.find(
       (x) => x.fact === "serve-keep-reasons",
     );
     expect(f?.verdict).toBe("unkept");
-    expect(f?.measured).toContain("UNKEPT Codeunit50677.FindSetCompanies: (no message)");
+    expect(f?.measured).toContain("UNKEPT Codeunit50676.C_UsesKey: (no message)");
   });
 
   test("R1000 review (R705): a request that returns no row at all is unmeasurable (infra-fail), never a warning", async () => {
@@ -686,7 +677,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(8);
+    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(7);
+    // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
+    expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });
 
   // R808 (d): pinned (the build's pin has serveKeepMoved), the fact expects commit a plain pass and
