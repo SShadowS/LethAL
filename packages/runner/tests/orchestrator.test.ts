@@ -11107,6 +11107,21 @@ describe("runSession — Layer 5C-B1 Task 8: publish fence + op-gated release (d
           r.store.close();
         });
 
+        test("the same database id, but a later check refuses: no lease-reset warning is emitted", async () => {
+          const first = await priorWithId(D1);
+          const r = await envRun({
+            post: P1,
+            generation: G2,
+            databaseId: D1,
+            dirs: first.dirs,
+            store: first.store,
+            extra: { resume: first.runId },
+          });
+          expect(r.outcome).toBeInstanceOf(TestAppRepublishedError);
+          expect(r.leaseResetWarning).toEqual([]);
+          r.store.close();
+        });
+
         test("another database id across a changed generation refuses, as a lost database", async () => {
           const first = await priorWithId(D1);
           const r = await envRun({

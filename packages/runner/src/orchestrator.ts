@@ -4490,23 +4490,19 @@ interface PendingResumeCheck {
  * reset by hand (`force-reset-lease`) on a database that survived, so the resume goes on, with a
  * warning, and every other resume check still applies. A missing id on either side refuses as before
  * (runs recorded before 1.0.0.26 included). The lease is still asked at the live generation.
+ * Returns the warning's text; the session emits it only once every resume check has passed (review:
+ * a later check can still refuse, and the warning must not claim a carry that did not happen).
  */
 function assertSameServerGeneration(
   row: RunRow,
   flag: string,
   current: PendingResumeCheck,
-  emit: RunEmitter,
-): void {
+): string | undefined {
   const generation = current.serverGeneration;
-  if (generation === undefined || row.serverGeneration === generation) return;
+  if (generation === undefined || row.serverGeneration === generation) return undefined;
   const id = current.databaseId;
   if (id !== undefined && id !== "" && row.databaseId === id) {
-    emit({
-      type: "warning",
-      code: "resume-across-lease-reset",
-      message: `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against; every other resume check still applies.`,
-    });
-    return;
+    return `${flag}: carrying run ${row.id}'s verdicts across a lease reset: database id ${id} unchanged, server generation ${row.serverGeneration ?? "(none)"} -> ${generation} (R969). The database survived, so its apps and data are the ones those verdicts were measured against.`;
   }
   throw new ServerGenerationChangedError(flag, row.id, row.serverGeneration, generation);
 }
@@ -4584,12 +4580,20 @@ function resolveResume(
   /** R886: the v3 settings of this session; a resumed run must have recorded the same. */
   resumeInputs?: ResumeInputs,
 ):
-  | { runId: number; index: ResumeIndex; carryHidden: CarryHidden; recorded: RecordedCarrySide }
+  | {
+      runId: number;
+      index: ResumeIndex;
+      carryHidden: CarryHidden;
+      recorded: RecordedCarrySide;
+      /** R969: the `resume-across-lease-reset` text; the session emits it after its own checks. */
+      leaseResetWarning?: string;
+    }
   | undefined {
   if (cfg.resume === undefined) return undefined;
+  let leaseResetWarning: string | undefined;
   const sameTestApp = (row: RunRow, flag: string): void => {
     // R680: first, and for a hook session too: the server's generation is fixed before any hook.
-    assertSameServerGeneration(row, flag, pending, emit);
+    leaseResetWarning = assertSameServerGeneration(row, flag, pending);
     if (!testAppAfterHook) assertSameTestApp(row, flag, testAppHash, pending);
   };
   // R619: the one lend decision (`runMayLend`), called once in each branch below: step 1 (R586,
@@ -4851,7 +4855,13 @@ function resolveResume(
     strandedKeyCount: index.strandedKeys.size,
     retryStranded: cfg.retryStranded ?? false,
   });
-  return { runId: priorRunId, index, carryHidden: priorHidden, recorded };
+  return {
+    runId: priorRunId,
+    index,
+    carryHidden: priorHidden,
+    recorded,
+    ...(leaseResetWarning !== undefined ? { leaseResetWarning } : {}),
+  };
 }
 
 /** R557 C1: up to five test names for a warning, `, ...` when there are more. */
@@ -7549,6 +7559,15 @@ async function runSessionBody(
           reason,
         );
       }
+    }
+    // R969: only now, with every resume check passed (the post-hook and R496 ones above included),
+    // does the session say it carries verdicts across a lease reset.
+    if (resolvedResume?.leaseResetWarning !== undefined) {
+      emit({
+        type: "warning",
+        code: "resume-across-lease-reset",
+        message: resolvedResume.leaseResetWarning,
+      });
     }
 
     // R26: run it EXACTLY ONCE, here — after the lease is acquired above (the canary drives the

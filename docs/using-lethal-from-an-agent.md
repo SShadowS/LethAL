@@ -983,7 +983,11 @@ database, and on `ForceResetLease`.
 - **`--resume` and `--resume-run`** refuse with `ServerGenerationChangedError` (code
   `server-generation-changed`) when the run they would resume recorded another generation, or none.
   A run recorded before R680 has none, so it refuses too. The error names both values; drop the
-  flag to run from scratch.
+  flag to run from scratch. One exception (R969): each run also records the server's database id,
+  which a `force-reset-lease` does not change. When the generation changed but both runs recorded
+  the same database id, the database survived, so the resume carries, with the warning
+  `resume-across-lease-reset`, and every other resume check still applies. A different id, or a run
+  that recorded none, refuses as above.
 - **A saved baseline** is reused only from a run on the same generation.
 - **The lease** is asked at the generation the session recorded. A server that restarted since
   refuses it (`generation-changed`) before anything is deployed.

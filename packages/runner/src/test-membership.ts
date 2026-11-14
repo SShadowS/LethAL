@@ -147,7 +147,8 @@ export class TestAppRepublishedError extends Error {
  * when the lease row is created (a BC server whose database was lost, as a restart loses an
  * in-memory one) or by `ForceResetLease`. Either way the apps and data the resumed run measured may
  * be gone, so none of its verdicts is carried. `recorded` is `null` for a run that recorded none
- * (before R680, or a session with no lease).
+ * (before R680, or a session with no lease). R969: not thrown when both runs recorded the same
+ * database id (a `ForceResetLease` on a database that survived); the resume then carries.
  */
 export class ServerGenerationChangedError extends Error {
   readonly code = "server-generation-changed" as const;
