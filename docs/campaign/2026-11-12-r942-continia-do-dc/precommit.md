@@ -182,3 +182,16 @@ over the run's own process tree only, so another run on R-942's paths is never c
 1; per window: baseline green / red / refused by cause, decided and executed mutants per hour, daemon restarts and closes by reason,
 LethAL's and the tree's peak. Every al-runner refusal or difference: an invented repro with no Continia source text and an upstream issue.
 Every LethAL gap: a roadmap item. A refusal or failure that BC 28 would not show (a BC 29 platform change) is named as such, not filed.
+
+## Amendment 7 (2026-11-14, coord R-984, before the restarted DO window): window 1 voided, a fresh serve window 1
+
+- **Window 1 (9ddb2044, store `/coord/handoff/R-984/dos.sqlite`) is VOID as amendment 5's measurement.** It never ran on serve:
+  edge-847b1fa5a reworded the cascade refusal per kind, the serve keep-list did not accept the warm-up row's new text, and `lethal run`
+  re-ran the session one-shot (R1000). It was stopped by SIGTERM after the one-shot baseline (4,871 s) and 35 covered mutants
+  (`/coord/handoff/R-984/result.md`). Its figures are kept as the R1000 evidence and compared with nothing.
+- **Serve window 1 restarts FRESH** in a new store, `/coord/handoff/R-984/dos2.sqlite`, on a master head that contains R-989 (the R1000
+  fix; the head is named in the run log's first line), not by `--resume` of the old store (that would continue the one-shot run). Later
+  windows `--resume` the new store, as amendment 5 says.
+- **Everything else as amendment 5:** the same config `/coord/handoff/R-984/v3.do-serve.json`, `current` edge-847b1fa5a, `--peak 12`, the
+  watchdog (stop by exact pid when the tree is over 15 GiB or headroom under 4 GiB), and the same comparison with the 1d/2d rows.
+  A serve warm-up fallback in this window is again a finding, and stops the window.
