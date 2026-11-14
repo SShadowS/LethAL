@@ -130,8 +130,8 @@ function keyDiff(daemon: ReadonlySet<string>, oneShot: ReadonlySet<string>): str
 }
 
 /**
- * The text compared: a refusal's first line only, as R678's verdict for a refusal keys on notRun plus the first
- * line (R1007); the rest of a refusal's text can differ by path. Any other row's whole text.
+ * The text compared (R1007): a refusal's first line only, the key R1001's uniform-refusal watch reads, since a
+ * refusal's tail can differ by path; status and notRun are still compared. Any other row's whole text.
  */
 const textOf = (r: ComparableRow): string =>
   r.notRun ? ((r.message ?? "").split("\n")[0] ?? "") : (r.message ?? "");

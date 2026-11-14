@@ -7269,12 +7269,22 @@ describe("R948 B: `method` codeunits as per-test requests", () => {
     r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1)).sort();
 
   test("R1007: a refusal the daemon may keep (V3_SERVE_SAFE_REFUSALS) is kept from the daemon, not re-run", async () => {
-    const r = await methodRig({ serve: { rows: refusedA(COMMIT) } });
+    // A fresh process refuses A alike (the rig's one-shot rows), so the kept answer is the one one-shot would give.
+    const r = await methodRig({ serve: { rows: refusedA(COMMIT) }, oneShotRows: refusedA(COMMIT) });
     const v = await baseline(r.b, SUITE2);
     expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
     expect(v[0]?.outcome).not.toBe("pass"); // A: the daemon's refusal stands
     // Only the samples B and C ran one-shot.
     expect(askedOf(r)).toEqual(["B", "C"]);
+  });
+
+  test("R1007 (build review): a cascade refusal is never kept in the per-test fill: one test per request cannot honestly give it", async () => {
+    const CASCADE =
+      "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (a refusal of an earlier test)";
+    const r = await methodRig({ serve: { rows: refusedA(CASCADE) } });
+    await baseline(r.b, SUITE2);
+    // A re-ran alone one-shot, as before R1007, besides the samples B and C.
+    expect(askedOf(r)).toEqual(["A", "B", "C"]);
   });
 
   test("R1007: a refused SAMPLE is compared like any row: the same refusal (first line) keeps the daemon baseline, another answer drops it by name", async () => {
