@@ -1,6 +1,28 @@
 {
   "repros": [
     {
+      "id": "u7775-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7775",
+      "bcEvidence": "inferred, not measured on BC: Part A's invented repro (R-915's probe, unchanged but for the app's name and id); each statement is one a Microsoft app's shipped-passing test makes (Subscription Billing, E-Document Core, Quality Management, Shopify), and items 9 and 10 expect BC's own filter error under asserterror. Added by PR-05 (refusal ledger): on edge-a184cfc79, 5 of the 12 already pass (items 1, 3, 6, 7, 8)",
+      "rerun": [
+        "R-915's four apps (Subscription Billing, E-Document Core, Quality Management, Shopify) and every BC.History project the refusal ledger names under #7775 (Api Web Service: E-Document API, APIV2, PowerBI)"
+      ],
+      "tests": {
+        "Codeunit50141.XmlPortVariableTextWindows": { "status": "pass" },
+        "Codeunit50141.FeatureKeyRollback": { "status": "pass" },
+        "Codeunit50141.LicensePermissionTableData99": { "status": "pass" },
+        "Codeunit50141.ApiWebServiceFind": { "status": "pass" },
+        "Codeunit50141.DownloadFromStream": { "status": "pass" },
+        "Codeunit50141.ReportSaveAsHtml": { "status": "pass" },
+        "Codeunit50141.JsonNullAsDecimal": { "status": "pass" },
+        "Codeunit50141.ResourceWithoutEncoding": { "status": "pass" },
+        "Codeunit50141.InStreamReadBigIntegerLength": { "status": "pass" },
+        "Codeunit50141.SetFilterNotADecimal": { "status": "pass" },
+        "Codeunit50141.SetFilterNotAnInteger": { "status": "pass" },
+        "Codeunit50141.CompanyFindSet": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
       "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",
