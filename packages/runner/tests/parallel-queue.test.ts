@@ -200,6 +200,55 @@ describe("OrderedCommit: the stop rule", () => {
   });
 });
 
+describe("R962: a memory-guard stop keeps every finished mutant", () => {
+  test("a mutant after the refused one that already finished is recorded, not left out", () => {
+    const { commit, log, rec } = setup();
+    const [a, b, c] = [commit.laneSink().sink, commit.laneSink().sink, commit.laneSink().sink];
+    a.begin("M0");
+    a.finish("M0", rec("M0"));
+    c.begin("M2");
+    c.finish("M2", rec("M2")); // waits for M1
+    b.memoryStop("M1"); // the guard refuses M1's group
+    expect(log).toEqual(["M0", "M2"]);
+    expect(commit.stoppedByGuard).toBe(true);
+    expect(commit.unrecorded(CODES)).toEqual(["M1", "M3", "M4", "M5"]);
+  });
+
+  test("a mutant in flight at the stop that finishes after it is recorded too", () => {
+    const { commit, log, rec } = setup();
+    const [a, b] = [commit.laneSink().sink, commit.laneSink().sink];
+    a.begin("M0");
+    b.memoryStop("M1");
+    expect(commit.closed).toBe(true); // no lane takes new work
+    a.finish("M0", rec("M0"));
+    expect(log).toEqual(["M0"]);
+    expect(commit.unrecorded(CODES)).toEqual(["M1", "M2", "M3", "M4", "M5"]);
+  });
+
+  test("after a latch, a mutant that finishes is still discarded", () => {
+    const { commit, latch, log, rec } = setup();
+    const [a, b] = [commit.laneSink().sink, commit.laneSink().sink];
+    a.begin("M0");
+    b.memoryStop("M1");
+    latch.value = { mutantId: "M0", why: "unsafe" };
+    a.finish("M0", rec("M0"));
+    expect(log).toEqual([]);
+  });
+
+  test("a guard stop after an unsafe break leaves the break's accounting alone", () => {
+    const { commit, log, rec } = setup();
+    const [a, b, c] = [commit.laneSink().sink, commit.laneSink().sink, commit.laneSink().sink];
+    a.begin("M0");
+    a.finish("M0", rec("M0"));
+    a.unsafeBreak("M0");
+    c.begin("M3");
+    c.finish("M3", rec("M3"));
+    b.memoryStop("M1");
+    expect(commit.stoppedByGuard).toBe(false);
+    expect(log).toEqual(["M0"]);
+  });
+});
+
 describe("OrderedCommit: a session with no stop must have recorded every mutant", () => {
   test("a mutant that never finished makes conclude() throw by name, naming it", () => {
     const { commit, rec } = setup();

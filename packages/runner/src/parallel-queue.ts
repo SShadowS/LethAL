@@ -100,7 +100,9 @@ export interface LaneSink {
   /**
    * R948: the memory guard refused to start `mutantId`'s group. The session's budget is spent (the
    * guard did it); this closes the commit without an error, so the window ends as a budget stop
-   * (`stoppedByGuard`) and never as R766's "never finished or recorded" throw.
+   * (`stoppedByGuard`) and never as R766's "never finished or recorded" throw. R962: every mutant
+   * that finished, or finishes while the lanes drain, is still recorded (none is a partial result);
+   * only those never started count as left out. A stop already in place keeps its accounting.
    */
   memoryStop(mutantId: string): void;
 }
@@ -237,6 +239,15 @@ export class OrderedCommit {
 
   private finish(code: string, commit: () => void, stop: Error | undefined): void {
     const i = this.idx(code);
+    // R962: after the memory guard's stop a lane's in-flight mutant still finishes; its result is
+    // complete, so it is recorded (unless the session latched unsafe meanwhile), not discarded.
+    if (this.stoppedByGuard && this.latch() === undefined) {
+      if (!this.committed.has(i)) {
+        commit();
+        this.committed.add(i);
+      }
+      return;
+    }
     if (this.stopInfo === undefined) {
       const l = this.latch();
       if (l !== undefined) {
@@ -271,7 +282,23 @@ export class OrderedCommit {
   stoppedByGuard = false;
 
   private memoryStop(code: string): void {
+    // R962: a stop already in place (an unsafe break, a throw) keeps its own accounting.
+    if (this.stopInfo !== undefined) {
+      this.also.push("the memory guard stopped the session");
+      return;
+    }
     this.stoppedByGuard = true;
+    // R962: the guard stops new work only; every mutant that already finished is a complete
+    // result, so it is recorded in manifest order, not only those before the refused one. Done
+    // BEFORE the close, which drops whatever is still pending.
+    for (const i of [...this.pending.keys()].sort((a, b) => a - b)) {
+      const c = this.pending.get(i);
+      if (c) {
+        c();
+        this.committed.add(i);
+      }
+      this.pending.delete(i);
+    }
     this.closeWith({
       selfIdx: this.idx(code),
       selfKept: false,
