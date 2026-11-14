@@ -645,12 +645,16 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "al-runner-v3-serve-default-fallback": {
     meaning:
-      "The al-runner-v3 session ran one-shot, not the serve-entries default, because a reason held " +
-      "before any process started: a --resume, a test method name whose shape serve-entries is not " +
-      "proven for, or a build with no serve-entries path. Every verdict this session measured was " +
-      "measured on one-shot, which is slower per mutant; a verdict a --resume carried from an earlier " +
-      "run keeps the transport that run used. The `al-runner-v3-serve-default-fallback` warning names each " +
-      "reason; set `alRunnerV3.transport` to choose a transport yourself (R761, R922).",
+      "Some or all of the al-runner-v3 session ran one-shot, not on the serve-entries default, for a " +
+      "reason that held before any process started. Either (a) the WHOLE session ran one-shot, because " +
+      "of a --resume, a build with no serve-entries path, a test method name whose shape serve-entries " +
+      'is not proven for together with one of those or with --isolate-tests / isolation "method": ' +
+      "every verdict it measured was measured on one-shot, which is slower per mutant; or (b) ONLY the " +
+      "test codeunits the warning names (each holds a method name serve-entries is not proven for) ran " +
+      "one-shot inside the serve session, and every other codeunit ran on serve. A verdict a --resume " +
+      "carried from an earlier run keeps the transport that run used. The " +
+      "`al-runner-v3-serve-default-fallback` warning says which case holds and names each reason, " +
+      "codeunit and method; set `alRunnerV3.transport` to choose a transport yourself (R761, R922, R937).",
     entailedNegative:
       "Not a statement about any mutant. Not a wrong verdict: one-shot is the transport the " +
       "serve-entries default is proven against.",
@@ -2222,6 +2226,8 @@ export interface MutantOutcome {
    * they reached the mutated member is unknown. Acting on one of these can mean strengthening a
    * test that never ran the code.
    * `all-green` — coverage placed it nowhere, so every green test ran. Least informative.
+   * `line` (R975) — a trigger mutant placed by LINE coverage: these tests' baselines ran its own
+   * statement's line. As trustworthy as `exact`.
    * Absent when nothing ran (`no-coverage`).
    *
    * Reporting all three as one undifferentiated list is approximate attribution wearing the
@@ -2432,11 +2438,12 @@ export function survivorReachOf(
   // this arm a carried row with no grain looks archived and the batch-wide signal decides it.
   if (carried) return "not-decided";
   if (guardReached === true) return "reached-unnoticed";
-  if (guardReached === false)
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+  // R975 review: `line` is execution evidence like `exact` (the baseline ran the statement's line).
+  const proven = attribution === "exact" || attribution === "line";
+  if (guardReached === false) return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   if (reachGrain !== undefined) return "not-decided";
   if (guardEvidence === "not-observed")
-    return attribution === "exact" ? "covered-but-unreached" : "unreached-and-uncovered";
+    return proven ? "covered-but-unreached" : "unreached-and-uncovered";
   return "not-decided";
 }
 

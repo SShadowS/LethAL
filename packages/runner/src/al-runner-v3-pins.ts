@@ -210,7 +210,8 @@ const ALPHA5_READINGS: Pick<V3BuildPin, "legC" | "legT" | "xb"> = {
       killingTest: null,
       issue: `${REPO}/5788`,
     })),
-    counts: { killed: 298, survived: 53, noCoverage: 60 },
+    // R975 (R-965): 6 Data Main rows survived -> no-coverage in the committed baseline (was 298/53/60).
+    counts: { killed: 298, survived: 47, noCoverage: 66 },
     total: 418,
   },
   xb: { exitCode: 3, passed: 0, notRun: 0 },
@@ -650,7 +651,8 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
   },
   legT: {
     rows: T_ROWS_8078BCF49,
-    counts: { killed: 326, survived: 73, noCoverage: 19 },
+    // R975 (R-965 amendment 2): 6 Data Main OnValidate mutants survived -> no-coverage by line attribution.
+    counts: { killed: 326, survived: 67, noCoverage: 25 },
     total: 418,
     refusedTests: 0,
   },

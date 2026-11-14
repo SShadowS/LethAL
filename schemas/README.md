@@ -5,7 +5,8 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 
 | File | Describes | Version constant |
 |---|---|---|
-| [`explain-v26.schema.json`](explain-v26.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 26 |
+| [`explain-v27.schema.json`](explain-v27.schema.json) | `lethal explain <report.json>` on stdout | `EXPLAIN_SCHEMA_VERSION` = 27 |
+| [`explain-v26.schema.json`](explain-v26.schema.json) | the same, from builds before R975; kept so a stored v26 document stays checkable (v27 added the attribution value `line`) | `EXPLAIN_SCHEMA_VERSION` = 26 |
 | [`explain-v25.schema.json`](explain-v25.schema.json) | the same, from builds before R922; kept so a stored v25 document stays checkable (v26 added the caveat `al-runner-v3-serve-default-fallback`) | `EXPLAIN_SCHEMA_VERSION` = 25 |
 | [`explain-v24.schema.json`](explain-v24.schema.json) | the same, from builds before R912; kept so a stored v24 document stays checkable (v25 added the caveat `time-budget-reached`) | `EXPLAIN_SCHEMA_VERSION` = 24 |
 | [`explain-v23.schema.json`](explain-v23.schema.json) | the same, from builds before R907; kept so a stored v23 document stays checkable (v24 added the caveat `al-runner-v3-coverage-off`) | `EXPLAIN_SCHEMA_VERSION` = 23 |
@@ -44,10 +45,10 @@ generate types rather than discover a shape change by crashing on it. Draft 2020
 | [`report-v2.schema.json`](report-v2.schema.json) | the same, from builds before R231; frozen so an archived v2 report stays checkable (v3 writes each run-level mutant list entry as `<batchIndex>/<mutantCode>` and adds `batchIndex` to reader-mark entries, because mutant codes restart per batch) | `REPORT_SCHEMA_VERSION` = 2 |
 | [`stream-v1.schema.json`](stream-v1.schema.json) | one line of the NDJSON stream written with `--progress-out` | `STREAM_SCHEMA_VERSION` = 1 |
 
-**Of the thirty-eight files, thirty-three are hand-written and five were generated, and the split is about SIZE
-rather than principle.** `explain` (a few dozen leaves; v26 and the kept v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
-`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v26, `doctor` and
-verify v8 are pinned against their declarations, and explain v25, explain v24, explain v23, explain v22, explain v21, explain v20, explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
+**Of the thirty-nine files, thirty-four are hand-written and five were generated, and the split is about SIZE
+rather than principle.** `explain` (a few dozen leaves; v27 and the kept v26, v25, v24, v23, v22, v21, v20, v19, v18, v17, v16, v15, v14, v13, v12, v11, v10, v9, v8, v7, v6, v5 and v4), `doctor` (8) and
+`verify` (small, like `doctor`; v8 and the kept v7, v6, v5, v4, v3, v2 and v1) are hand-written; explain v27, `doctor` and
+verify v8 are pinned against their declarations, and explain v26, explain v25, explain v24, explain v23, explain v22, explain v21, explain v20, explain v19, explain v18, explain v17, explain v16, explain v15, explain v14, explain v13, explain v12, explain v11, explain v10, explain v9, explain v8, explain v7, explain v6, explain v5, explain v4,
 verify v7, verify v6, verify v5, verify v4, verify v3, verify v2 and verify v1 are frozen as they were published.
 Verify v5 bumped for two ADDED fields, which this page's rule alone would not do: their absence
 means "not decided" only from v5 on, while in a v4 document it means the document predates the
@@ -82,7 +83,7 @@ worse than no schema at all — it calls a correct document invalid, at every co
    current explain schema is ALSO pinned against a literal list (R233), so a value added without a
    version bump fails.
 3. **Real data.** The projection of a committed campaign report is validated against
-   `explain-v26.schema.json`, capped and uncapped.
+   `explain-v27.schema.json`, capped and uncapped.
 
 The validator in that test is small on purpose — type, const, enum, required, properties,
 additionalProperties, items, minItems, local `$ref`. It is not a JSON Schema implementation and must

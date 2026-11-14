@@ -193,7 +193,7 @@ The legs:
     `CDO_ALPACKAGES` in `al-runner-v3-gate.ts`).
   - The oracle reports are redacted, so the per-mutant comparison checks the source text on only 24 of the 63
     mutants. Verdicts and killing tests are compared on all 63.
-- T: `fixtures/sandbox-data`, frozen in `al-runner-v3.tables.baseline.json`, with the 52 known differences
+- T: `fixtures/sandbox-data`, frozen in `al-runner-v3.tables.baseline.json`, with the 58 known differences
   from `itest:tables` asserted by key AND transition (`TABLES_KNOWN_DIFFERENCES` in
   `al-runner-v3-tables-known.ts`), in the record run and in every confirm run. r9 §7 adds one narrow `held`: a
   known row whose VERDICT disagreed with BC's, now `error` through a named refusal (`runner-refused`, no killing
@@ -203,10 +203,10 @@ The legs:
     R647), the leg first classifies its rows and compares them with its own baseline (`compareMutants`), and prints
     every differing row as one receipt line, `T: <held|gate-fail>: <mutantCode> <key>: <old> -> <new> (<reason>)`.
     Only then does `judgeLegT` (`al-runner-v3-gate.ts`) judge, in order: Sleep index 0 + 0, 3 refused tests, the
-    pinned 52, then the classification. `held` needs the compare's differing keys to equal the held keys, and has
+    pinned known differences (52 then, 58 since R975), then the classification. `held` needs the compare's differing keys to equal the held keys, and has
     no count check. Since [[R650]], `held` also meets R556's bare-hash refusal (`bareHashRows`, the predicate
     `assertGateBaseline` uses): a run with a row missing its mutated-text hash, against an own baseline that has
-    hashes, is `gate-fail`. `pass` needs 0 compare differences, then 298 / 60 / 60 over 418, then the baseline compare.
+    hashes, is `gate-fail`. `pass` needs 0 compare differences, then the pinned counts over 418 (298 / 54 / 66 since R975; 298 / 60 / 60 before), then the baseline compare.
     The record branch still checks the counts first. A build that changes the 3 refused tests (the Commit tests)
     is `gate-fail` by design.
   - X (d), since r10: right after its session, the leg prints `SleeperDoubles`'s `baseline-batch-finished`
@@ -269,7 +269,7 @@ Pre-committed on master (`docs/superpowers/specs/2026-10-24-r602-alrunner-v3-mo-
 
 Both legs are one-shot (their measurement was one-shot): `LETHAL_ITEST_V3_TRANSPORT=serve-entries` makes them fail by name, `al-runner-v3-itest-leg-transport-refused`.
 
-**Legs MOE and WRE (R918, pre-committed on master in `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md`, e1ca5d11).** The same two sessions on `transport: "serve-entries"`, judged by MO's and WR's own checks (killers, counts, the WrappedArms refusal, clean-leg notes and warnings) and compared with MO's and WR's frozen ONE-SHOT baselines per mutant. They only compare (`compareOnlyEnv()`): a record request never reaches them, and they refuse at start without MO's and WR's baselines. Their serve counters are pinned (MOE entries 46, WRE 448; one warm-up each). Both are default legs and in `V3_GATE_LEGS`. Since they measure the shapes equal to one-shot, a user project with a multi-object or `#if`-wrapped file now takes the serve-entries default; the `multi-object-or-wrapped` fallback reason R761 had is gone.
+**Legs MOE and WRE (R918, pre-committed on master in `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md`, e1ca5d11).** The same two sessions on `transport: "serve-entries"`, judged by MO's and WR's own checks (killers, counts, the WrappedArms refusal, clean-leg notes and warnings) and compared with MO's and WR's frozen ONE-SHOT baselines per mutant. They only compare (`compareOnlyEnv()`): a record request never reaches them, and they refuse at start without MO's and WR's baselines. Their serve counters are pinned (MOE entries 46, WRE 436 since R975, was 448; one warm-up each). Both are default legs and in `V3_GATE_LEGS`. Since they measure the shapes equal to one-shot, a user project with a multi-object or `#if`-wrapped file now takes the serve-entries default; the `multi-object-or-wrapped` fallback reason R761 had is gone.
 
 **Manifest rows gated before MOE and WRE (orchestrator ruling 2026-11-11).** `current` (edge-42af5d384) passed MOE and WRE; alpha.14-ef00a6a8f is re-gated with `--refresh-rows` at the R918 head. The other rows take serve for these shapes by ruling, NOT by measurement: alpha.12-d4bc8d3a5, alpha.13-23e7631be, edge-05d692e5e, edge-3096bf68f, edge-3138effad, edge-6bb821b98, edge-897b441eb, edge-9597b4a01 and edge-a0825f1d9 (R918 gives the ground). The next daily update re-gates `current` once, as R777 does whenever `V3_GATE_LEGS` gains a leg.
 
@@ -281,9 +281,9 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
   - 7 / 1 / 6 over 14, as pre-committed (`al-runner-v3.multiobject.baseline.json`): the 5 `no-coverage` are in procedures no test calls (`Never`, `Unreached`).
   - Killer constant: 6 kills.
 - **WR** (R-300b's fixture): `fixtures/sandbox-wrapped` whole, config symbol `WRAPDEF`, so the two-arm control `WrappedArms` is in it.
-  - 62 / 37 / 3 over 102, as pre-committed (`al-runner-v3.wrapped.baseline.json`). The 3 `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden.
+  - 62 / 31 / 9 over 102, as pre-committed (`al-runner-v3.wrapped.baseline.json`). 3 of the `no-coverage` are the `WrappedArms` rows, each with the refusal sentence (`ARMS_REFUSAL`); that by-name refusal costs two kills `none` finds (M0001, M0003), named, not hidden. The other 6 (R975, line attribution) are the unwrapped twins' `OnOpenPage` flip-boolean-literal and remove-assignment mutants (View, Xtra, Y Band), which no test runs; their `#if`-wrapped originals have no line to check and stay `survived`.
   - Killer constant: 58 kills (`none` kills 60, minus those two).
-  - Six `[v3-codeunit-state-possible]` notes are pre-committed (`V3_WR_STATE_NOTES`: M0071, M0072, M0078, M0085, M0086, M0092; BandYRun and BandYRunTwin after BandYDirect and BandYDirectTwin in one codeunit call, #5611). They are kills that stay kills. The leg asserts that exact set; MO and every other leg assert none.
+  - Four `[v3-codeunit-state-possible]` notes are pre-committed (`V3_WR_STATE_NOTES`: M0075, M0076, M0082, M0089; six until R975, whose line attribution no longer counts BandYDirectTwin as covering M0090 and M0096; BandYRun and BandYRunTwin after BandYDirect and BandYDirectTwin in one codeunit call, #5611). They are kills that stay kills. The leg asserts that exact set; MO and every other leg assert none.
   - As a whole the project is OFF from the CLI (the two-arm file), with the warning naming `WrappedArms`' file; the leg measures the index, which the CLI guard does not reach.
 
 **Legs ruled out:**
@@ -612,12 +612,12 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 {
   "gate": "itest:alrunner-v3",
   "baselines": {
-    "al-runner-v3.tables.baseline.json": { "killed": 298, "survived": 60, "no-coverage": 60 },
+    "al-runner-v3.tables.baseline.json": { "killed": 298, "survived": 54, "no-coverage": 66 },
     "al-runner-v3.layout.baseline.json": { "killed": 8, "survived": 3 },
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 37, "no-coverage": 3 }
+    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 31, "no-coverage": 9 }
   }
 }
 ```
@@ -627,13 +627,15 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 - Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 7 / 4 / 0 over 11, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9). All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
 
 - Leg MO, `al-runner-v3.multiobject.baseline.json`: 7 / 1 / 6 over 14, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9).
-- Leg WR, `al-runner-v3.wrapped.baseline.json`: 62 / 37 / 3 over 102, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9).
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 62 / 31 / 9 over 102, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05).
 
-- Leg T, `al-runner-v3.tables.baseline.json`: 298 / 60 / 60 over 418, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9). Its rows differ from
-  `itest:tables`' baseline on exactly the 52 keys and transitions of the pre-commitment's list (41 Commit, 7
-  duplicate key, 4 TestPage).
+- Leg T, `al-runner-v3.tables.baseline.json`: 298 / 54 / 66 over 418, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05). Its rows differ from
+  `itest:tables`' baseline on exactly the 58 keys and transitions of the pre-commitment's list (41 Commit, 7
+  duplicate key, 4 TestPage, and R975's 6 Data Main `OnValidate` rows that read `no-coverage` by line attribution).
 
 ## History
+
+- 2026-11-13 (R975, coord task R-965): v3 table, page and report trigger mutants are decided by per-test line coverage. `al-runner-v3.tables` and `.wrapped` recorded by R849's route on `current`, edge c8fe56e05, each byte-identical to its expected file (master e93d6aea): T's 6 Data Main `OnValidate` rows and WR's 6 unwrapped twin `OnOpenPage` rows moved `survived` → `no-coverage`; no kill moved. WR's counts 62 / 31 / 9, its state notes four (M0090 and M0096 dropped), WRE `entriesSent` 436, leg T's hand-pin counts 326 / 67 / 25; the manifest rows were re-gated with `--refresh-rows`. Pre-commitment `docs/superpowers/specs/2026-11-14-r965-line-attribution-precommitment.md`, amendments 1 to 4. Logs: `/coord/handoff/R-965/`.
 
 - 2026-11-06 (R827, coord task R-836): `al-runner-v3.wrapped` and `.layout` recorded by R849's route on `current`, edge a0189c004. Five `Grow|lethal.empty-block` rows re-keyed because `Grow` gained a `#pragma` line; no verdict, killing test or other row moved. X (d)'s Sleep index is 1 + 5. Logs: `/coord/handoff/R-836/`.
 - 2026-11-06 (R836, coord task R-848): the six `al-runner-v3.*` baselines moved from identity scheme 44 to 45, by R332's procedure on `current`

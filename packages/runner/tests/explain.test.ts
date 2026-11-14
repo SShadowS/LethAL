@@ -646,7 +646,7 @@ const EXPLAIN_LEAF_PATHS: readonly string[] = [
   "$.survivors[].originalText", // [verbatim]
   "$.survivors[].mutatedText", // [verbatim]
   "$.survivors[].attribution", // [enum] CoverageAttribution
-  "$.survivors[].executionProven", // [enum] derived: attribution === "exact"
+  "$.survivors[].executionProven", // [enum] derived: attribution "exact" or "line" (R975)
   "$.survivors[].coveringTests[]", // [verbatim]
   // R873, only under `--project`: the covering tests' places, from report.testMethods.
   "$.survivors[].coveringTestLocations[].name", // [verbatim] testMethods[].name
@@ -1273,13 +1273,14 @@ describe("explain — the admissibility rule, made executable", () => {
 // ————————————————————————————————————————————————————————————————————————————————————————
 
 describe("explain — survivors", () => {
-  test("executionProven is TRUE only for an exact (member-level) attribution", () => {
+  test("executionProven is TRUE only for an exact (member-level) or line (R975) attribution", () => {
     const out = explain(
       reportFixture({
         mutants: [
           survivorMutant("M0001", "exact", true),
           survivorMutant("M0002", "object", true),
           survivorMutant("M0003", "all-green", true),
+          survivorMutant("M0004", "line", true),
         ],
       }),
     );
@@ -1287,6 +1288,7 @@ describe("explain — survivors", () => {
       ["M0001", true],
       ["M0002", false],
       ["M0003", false],
+      ["M0004", true],
     ]);
   });
 

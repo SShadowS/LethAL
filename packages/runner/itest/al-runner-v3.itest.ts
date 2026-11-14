@@ -90,6 +90,7 @@ import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import {
   CDO_SLICE_FILE,
+  LEG_T_OWN_COUNTS,
   V3LegEnvironment,
   V3LegFailure,
   V3LegHeld,
@@ -1521,7 +1522,8 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
     warmups: 1,
     liveRequests: 1,
     boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
-    entriesSent: 448,
+    // R975 (R-965 amendment 4): 448 until the 6 twin OnOpenPage mutants read no-coverage and were not sent.
+    entriesSent: 436,
     pairRequests: 62,
     echoMismatches: 0,
   },
@@ -1579,7 +1581,8 @@ async function legWR(scratch: string, serve = false): Promise<SessionReport> {
   const arms = judgeWrArms(rowFacts(r), ARMS_REFUSAL);
   for (const l of arms) console.log(`    - ${l}`);
   must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
-  assertCounts(r, leg, 62, 37, 3, 102);
+  // R975 (R-965 amendment 2): 6 unwrapped twin OnOpenPage mutants read no-coverage by line attribution.
+  assertCounts(r, leg, 62, 31, 9, 102);
   assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
   if (serve) logServeCounters(b, "WRE");
   return r;
@@ -2431,7 +2434,8 @@ async function legT(
   if (recordRequested(TABLES_BASELINE_PATH)) {
     // R810: a pinned record needs no figures; `main` proves the rows (pin undone) equal the committed ones.
     if (activePin !== undefined) return { outcome: "pass", r };
-    assertCounts(r, "T", 298, 60, 60, 418);
+    const t = LEG_T_OWN_COUNTS;
+    assertCounts(r, "T", t.killed, t.survived, t.noCoverage, t.total);
     must(
       r.unsupportedTests.length === 3,
       `T: ${r.unsupportedTests.length} refused tests, pre-committed 3`,
@@ -2439,9 +2443,9 @@ async function legT(
     assertIndex(b, "T", 0, 0);
     notes();
     // I-3 and M5 before anything is written: this run's rows differ from BC's on exactly
-    // the pinned 52, by key and transition (41 Commit, 7 duplicate key, 4 TestPage).
+    // the pinned 58, by key and transition (41 Commit, 7 duplicate key, 4 TestPage, 6 R975 line-decided).
     const why = knownDifferencesRefusal(bc, now, TABLES_KNOWN_DIFFERENCES);
-    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 52"}`);
+    console.log(`  T: differences from BC's tables baseline: ${why ?? "the pinned 58"}`);
     must(why === undefined, `T: ${why}`);
     return { outcome: "pass", r };
   }
