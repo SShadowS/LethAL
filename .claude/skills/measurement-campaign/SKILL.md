@@ -42,6 +42,14 @@ item that exercises `validateSelectorIdsForProject` — `--dry-run` dispatches t
 returns before the run path that calls it, so a selector id colliding with the target app's own
 objects survives a clean dry run and fails later, live.
 
+**Every al-runner-v3 corpus window starts with `scripts/triage-baseline.ts`** (R1006), with the
+window's own project, tests and config. It runs the whole baseline and a few small codeunits'
+mutants (minutes), and stops by name, with its own exit code, on what voided whole windows before:
+a serve fallback, a missing license, every test refused for one cause, no green test, a failed run,
+or no mutant reaching a test (so the fallback check proved nothing). Start the window only on `TRIAGE GO`
+(exit 0); otherwise fix the named cause first. The DO license window (4 h 40 min) and Avalara's
+warm-up fallback (4 h) each show in the triage within minutes.
+
 **Never list all extensions; read by id.** To learn what a server has installed, read one app at a
 time (`HarnessVerifier.fetchExtensionInstalled` or `fetchInstalledVersions`, by app id). BC's full
 list of installed apps, unfiltered or filtered by publisher, hung BC 28.4 for about 166 s and took
