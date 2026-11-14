@@ -39,7 +39,7 @@ import { fileURLToPath } from "node:url";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import { ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { devPortOf, odataUrlsOf, validateBcDevConfig } from "../src/cli";
+import { devPortOf, odataUrlsOf, performForceResetLease, validateBcDevConfig } from "../src/cli";
 import type { LethalConfigFile } from "../src/cli";
 import { DeploymentVerifier } from "../src/deployment-verifier";
 import type { RunEvent } from "../src/events";
@@ -139,6 +139,24 @@ interface Leg {
   readonly runId: number;
 }
 
+/** The gate's connection: the fixture config, its paired launch entry, and the OData config. */
+async function connection() {
+  const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch file"))
+    .configurations[0];
+  if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
+  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
+  const bcdev = validateBcDevConfig(configFile.bcdev);
+  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
+  const odataCfg = {
+    ...odataUrlsOf(bcdev),
+    company: bcdev.company,
+    username: bcdev.username,
+    password: bcdev.password,
+    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
+  };
+  return { launchCfg, bcdev, odataCfg };
+}
+
 /** One session against the server, on the shared scratch store. */
 async function session(
   store: ResultsStore,
@@ -146,12 +164,7 @@ async function session(
   label: string,
   extra: Partial<Pick<SessionConfig, "resume" | "skipKnownSurvivors">> = {},
 ): Promise<Leg> {
-  const launchCfg = (await readJson<LaunchLocalConfig>(LAUNCH_LOCAL_PATH, "launch file"))
-    .configurations[0];
-  if (!launchCfg) throw new Error(`${LAUNCH_LOCAL_PATH} has no configurations[0] entry`);
-  const configFile = readFixtureConfig(CONFIG_LOCAL_PATH, itestConfigName());
-  const bcdev = validateBcDevConfig(configFile.bcdev);
-  assertLaunchMatchesConfig(launchCfg, bcdev, LAUNCH_LOCAL_PATH);
+  const { launchCfg, bcdev, odataCfg } = await connection();
   const toolPaths = await defaultAlToolPaths();
   if (!toolPaths) throw new Error("could not locate alc/altool under the AL Language extension");
   const outputDir = join(root, `publish-${label}`);
@@ -172,13 +185,6 @@ async function session(
     },
     defaultDeployerIo,
   );
-  const odataCfg = {
-    ...odataUrlsOf(bcdev),
-    company: bcdev.company,
-    username: bcdev.username,
-    password: bcdev.password,
-    ...(bcdev.tenant !== undefined ? { tenant: bcdev.tenant } : {}),
-  };
   const harnessVerifier = new HarnessVerifier(odataCfg);
   const backend = new BcDevMcpBackend(
     {
@@ -205,6 +211,8 @@ async function session(
       new RunMutantTransport(odataCfg, targetAppId, artifactId, undefined, { controlState }),
   );
   const events: RunEvent[] = [];
+  // R969 (PR-04): the generation and the database id from ONE HarnessInfo read, as the CLI wires them.
+  let last: Awaited<ReturnType<HarnessVerifier["verify"]>> | undefined;
   console.log(`  ${label}: ${JSON.stringify(extra)}`);
   try {
     const warnings = collectWarnings();
@@ -217,7 +225,11 @@ async function session(
       selectorIds: SELECTOR_IDS,
       lease: {
         client: new LeaseClient(odataCfg),
-        serverGeneration: async () => (await harnessVerifier.verify()).serverGeneration,
+        serverGeneration: async () => {
+          last = await harnessVerifier.verify();
+          return last.serverGeneration;
+        },
+        databaseId: async () => (last ?? (await harnessVerifier.verify())).databaseId,
       },
       resourceServer: bcdev.server,
       resourceServerInstance: bcdev.serverInstance,
@@ -404,6 +416,11 @@ async function main(): Promise<void> {
     const A = l0.runId;
     const aRow = store.getRun(A);
     assert.ok(aRow?.testAppProven, "L0: run A must record a proven test app");
+    // R969 (PR-04): RL carries across a lease reset only on this id.
+    const DB = aRow.databaseId ?? "";
+    assert.ok(DB !== "", "L0: run A must record a database id (LethAL Control 1.0.0.26)");
+    const G = aRow.serverGeneration ?? "";
+    assert.ok(G !== "", "L0: run A must record a server generation");
     const H = aRow.testAppHash ?? "";
     const D = aRow.testAppDeps ?? "";
     // I5: the R389 legs mean something only on a closed-world run.
@@ -725,6 +742,62 @@ async function main(): Promise<void> {
       "RP: KP itself is never rewritten",
     );
     sublegs.push("RP");
+
+    // ---- RL (R969, pre-commitment 2026-11-14-r969-lend-leg-precommitment.md): a lease reset with no
+    // restart, then --resume-run of a full clone of A. The database survived, so its id is unchanged
+    // and the clone's verdicts are carried across the new generation. LAST: the reset changes the
+    // generation every earlier leg's snapshot reuse is keyed on.
+    const LR = seedRunFrom(store, A);
+    assert.equal(store.getRun(LR)?.databaseId, DB, "RL: the seed must copy A's database id (R680)");
+    const reset = await performForceResetLease((await connection()).odataCfg);
+    console.log(`  RL: force-reset-lease: ${JSON.stringify(reset)}`);
+    assert.equal(reset.outcome, "reset", "RL: force-reset-lease must reset");
+    assert.equal(reset.oldGeneration, G, "RL: the reset's old generation must be run A's");
+    assert.ok(
+      reset.outcome === "reset" && reset.newGeneration !== G,
+      "RL: the reset must mint a new generation",
+    );
+    const NEW = reset.outcome === "reset" ? reset.newGeneration : "";
+    const rl = await session(store, root, "RL", { resume: LR });
+    printTable("RL", rl.report);
+    assertCodes("RL", rl.events, ["resume-across-lease-reset", "resume-reusing-run"]);
+    assert.ok(
+      message(rl.events, "resume-across-lease-reset").includes(
+        `carrying run ${LR}'s verdicts across a lease reset: database id ${DB} unchanged, server generation ${G} -> ${NEW}`,
+      ),
+      `RL: resume-across-lease-reset must name LR (${LR}), the database id and both generations`,
+    );
+    assert.ok(
+      message(rl.events, "resume-reusing-run").includes(
+        `reusing run ${LR} — ${LEND_FIGURES.resumeWhole.carryable} mutant verdict(s) may be carried`,
+      ),
+      "RL: resume-reusing-run must name the clone and 22 carryable",
+    );
+    assert.ok(
+      ranHere(rl.events) > 0,
+      "RL: no snapshot under the new generation: the baseline ran here",
+    );
+    assert.equal(
+      (rl.report.artifacts ?? []).length,
+      1,
+      "RL: a batch holding a stored no-coverage is deployed once (R621)",
+    );
+    assert.deepEqual(
+      carriedKeys(rl.report),
+      carriedInPartBatch(ALL),
+      "RL: every mutant but the 5 no-coverage carried, by key",
+    );
+    assertFrozen("RL", baseline, rl.report);
+    assert.deepEqual(
+      rl.report.resumedFrom,
+      { runId: LR, carriedMutants: LEND_FIGURES.resumeWhole.carried, skippedStranded: 0 },
+      "RL: resumedFrom",
+    );
+    const rlRow = store.getRun(rl.runId);
+    assert.equal(rlRow?.databaseId, DB, "RL: its run row records A's database id");
+    assert.equal(rlRow?.serverGeneration, NEW, "RL: its run row records the new generation");
+    console.log(`  RL: groupedCalls=${rl.report.groupedCalls} (printed, not predicted)`);
+    sublegs.push("RL");
   } finally {
     store.close();
     await rm(root, { recursive: true, force: true });
