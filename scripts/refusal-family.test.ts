@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BASE_ID,
+  DOTNET_NO_OBJECT,
   type Family,
   UNTOUCHED_HANDLE,
   cellName,
@@ -153,5 +154,29 @@ describe("PR-01: the refusal-family generator", () => {
     for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();
     const names = f.cells.map((c, i) => cellName(c, i));
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("PR-02: a DotNet member's refusal folds to its cause, over every type; another DotNet cause stays apart", () => {
+    const t = (m: string, cause: string) => `DotNet ${m}: '${m}' ${cause}`;
+    const none = "is an instance member and the variable holds no object";
+    expect(classOf(t("System.Uri.Host", none))).toBe(`DotNet *: ${none}`);
+    expect(classOf(t("System.Text.StringBuilder.Append", none))).toBe(`DotNet *: ${none}`);
+    expect(classOf(t("System.Uri.Host", "is not found on System.Uri"))).toBe("DotNet *: is not found on System.Uri");
+    // review: a DotNet text of another shape (no quoted member) stays its own class, so it reads NEW, never known
+    const overload =
+      "DotNet System.Text.RegularExpressions.Regex.IsMatch: System.Text.RegularExpressions.Regex.IsMatch has no overload taking 1 argument(s) of the given types (String)";
+    expect(classOf(overload)).toBe("DotNet System.Text.RegularExpressions.Regex.IsMatch");
+    const o = classify(DOTNET_NO_OBJECT, [row(0, "error", `NotRun: out-of-scope: ${overload}`, true)]);
+    expect(refusalClasses(DOTNET_NO_OBJECT, o)[0]?.known).toBe(false);
+    const f = DOTNET_NO_OBJECT;
+    const r = classify(f, [row(0, "error", `NotRun: out-of-scope: ${t("System.Regex.IsMatch", none)}`, true)]);
+    expect(refusalClasses(f, r)[0]?.known).toBe(true);
+  });
+
+  test("PR-02: the DotNet family is an OnPrem app; every handle type is declared; untouched-handle has no target", () => {
+    const f = DOTNET_NO_OBJECT;
+    for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();
+    expect(JSON.parse(emitApp(f)["app.json"] ?? "{}").target).toBe("OnPrem");
+    expect(JSON.parse(emitApp(UNTOUCHED_HANDLE)["app.json"] ?? "{}").target).toBeUndefined();
   });
 });
