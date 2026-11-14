@@ -48,3 +48,38 @@ measured: filed as R1009.
     others);
   - warm-up wall time at most 1,800 s (t1: 3,625 s);
   - every mutant both windows score has the same verdict and killing test as in t1. Any difference is a BLOCK.
+
+## Addendum 1 (2026-11-14, before any gate run or DO window): build review and t1's build
+
+Committed after the Opus build review of cebb52ff and before the gate or the window.
+
+1. **(a) is narrowed.** The review showed that leaving a refused test out where a test runs AFTER it is not
+   verdict-neutral:
+   - The refused test can change the codeunit's globals before v3 refuses it, and v3's cascades do not track that.
+   - A failure after it reads today as an untrusted cascade refusal (`error`), and without it would read as a kill,
+     while one-shot keeps the old verdict.
+   
+   So a MUTANT entry now leaves out only the run of R1004's left-out tests at the END of the codeunit's baseline order
+   (`mutantLeftOutNames`). No test that still runs follows one of them. The warm-up keeps R1004's rule: it only
+   compares, and a difference there fails loudly.
+   
+   DO: in codeunit 68978 the ten refused ZipArchive tests are positions 6-15 of 15, so they are left out. In 68922
+   (12 of 18) and 68958 (14 of 19) the refused test stays in, as before.
+2. **The §6 coverage window** (only where the Sleep rule is not retired) sends the same `excludeTests` as the entry it
+   is compared with. Without it, the window ran the left-out test, disagreed with the entry, and the pass was never
+   scored.
+3. **Kill pairs** go through the same request path, so they leave the same tests out. The text above said they were
+   unchanged.
+4. **t1 ran on edge-847b1fa5a** (lethal-bugs' erratum, master 912e7e73), not a184cfc79. The DO window runs on
+   847b1fa5a, like for like. The three families were re-measured with the same kit on 847b1fa5a
+   (`/coord/handoff/R-998/probe/out-847b1fa5a/`): the one-shot texts are the same as a184cfc79's, and all six refusers
+   are CLEAN.
+5. **The window's comparison widens.** Every mutant BOTH windows report (`error` and `no-coverage` included, not only
+   scored ones) must have t1's verdict and killing test. So a mutant that t1 refused and this window kills is a BLOCK,
+   not unseen.
+
+Predictions otherwise unchanged:
+- refusal closes in mutant requests at most 16 (13 expected plus at most the 3 ZipArchive closes outside 68978);
+- warm-up wall time at most 1,800 s;
+- `itest:alrunner-v3` on `current` passes every leg, and `serve-keep-reasons` reads `matches` with the six new cases
+  as `refusal`.
