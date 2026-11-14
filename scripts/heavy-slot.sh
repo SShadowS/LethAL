@@ -139,8 +139,28 @@ try_once() {
     if [ "$g" -eq 0 ]; then
       [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
       ticket=""
+      # R992: the job's measured peak (its process tree, sampled beside it) against its declared one,
+      # one line per admitted job in <lock dir>/heavy-peaks.tsv: start, end, slot, class, declared GiB,
+      # measured GiB, exit code, the class file (its ` small` mark), the command.
+      local started peakfile sampler rc
+      started=$(date -u +%FT%TZ)
+      peakfile="$dir/heavy.$n.peak"
+      "${BUN:-bun}" "$(dirname "$0")/heavy-slot-peak.ts" "$$" "$peakfile" "${LETHAL_HEAVY_SAMPLE_S:-5}" &
+      sampler=$!
       "$@"
-      exit $?
+      rc=$?
+      # SIGKILL, never SIGTERM: a SIGTERM that reaches the sampler before it becomes bun makes that forked
+      # copy of this shell run the EXIT trap (it removed this job's class file and ticket), and one that
+      # reaches bun while it starts can be lost (the sampler, which ends only when this shell does, and
+      # this shell, waiting for it, would wait for each other). It holds nothing: a cut sample reads `?`.
+      kill -KILL "$sampler" 2>/dev/null
+      wait "$sampler" 2>/dev/null
+      # `?`: the job ended before its first sample.
+      printf '%s\t%s\theavy.%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$(date -u +%FT%TZ)" "$n" "$cls" "$peak" \
+        "$( [ -s "$peakfile" ] && awk '{printf "%.2f", $1 / 1048576}' "$peakfile" || echo '?')" "$rc" \
+        "$(cat "$class" 2>/dev/null)" "$(echo "$*" | cut -c1-160)" >>"$dir/heavy-peaks.tsv"
+      rm -f "$peakfile"
+      exit "$rc"
     fi
     rm -f "$class" # refused: the slot is released and the command does not run
     class=""
