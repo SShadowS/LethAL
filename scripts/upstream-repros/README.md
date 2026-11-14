@@ -17,8 +17,14 @@ each app in a subfolder and lists them, in the order `al-runner test` takes them
 
 ## Coverage (R-997)
 
-Every upstream issue an open roadmap item cites is in the set (13 repros, 60 tests, about 50 s for both builds): #7811, #7812,
-#7818, #7819, #7853, #7854, #7922, #8006, #8027, #8032 (two apps), #8036, #8038, #8056. BC's result is measured only for #8006's
-values; every other expectation is inferred from its issue, and `bcEvidence` says so. #7853 is closed and passes now: it stays as a
-guard. Not in the set, on purpose: `/coord/handoff/R-982/repro-tenantset` (no open issue) and `/coord/handoff/R-985/repro2` (#7760,
-which no open roadmap item cites).
+In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
+#8032 (two apps), #8036 (its nine named tests), #8038, #8056. These are the issues the open roadmap items cite as their own finding.
+BC's result is measured only for #8006's values; every other expectation is inferred from its issue, and `bcEvidence` says so.
+#7853 is closed and passes now: it stays as a guard.
+
+Not in the set yet: issues an open item cites as related, without a repro of their own here: #7832, #7834, #7924, #7934, #7964
+(R995, R946; some of their cases are tests in `u8036-refusals` that the manifest does not compare). Not in the set on purpose:
+`/coord/handoff/R-982/repro-tenantset` (no open issue) and `/coord/handoff/R-985/repro2` (#7760, which no open item cites).
+
+`u7853-system-grant` borrows Microsoft's Guided Experience app id, name and publisher, because the System package grants its
+internals to that identity. It is a local al-runner repro only: never publish it to a BC server.

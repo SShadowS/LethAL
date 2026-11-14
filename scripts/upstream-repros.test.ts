@@ -50,7 +50,7 @@ describe("R-997: a repro of several apps", () => {
     expect(() => readManifest(empty)).toThrow(/empty apps/);
     const missing = join(TMP, "missing");
     write(missing, { repros: [repro(["P", "A"])] }, ["u1/P"]);
-    expect(() => readManifest(missing)).toThrow(/u1\/A has no app\.json/);
+    expect(() => readManifest(missing)).toThrow(/u1[\\/]A has no app\.json/); // `\` on Windows
     const ok = join(TMP, "ok");
     write(ok, { repros: [repro(["P", "A"])] }, ["u1/P", "u1/A"]);
     expect(readManifest(ok).repros).toHaveLength(1);
