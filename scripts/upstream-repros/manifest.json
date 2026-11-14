@@ -23,6 +23,19 @@
       }
     },
     {
+      "id": "u8028-no-client",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
+      "bcEvidence": "inferred, not measured on BC: a session without a client (BC's web-service and background sessions) answers CurrentClientType without an error, and never Windows; the issue's invented repro (R-975), unchanged but for the app's name and id. Added by PR-05 (refusal ledger)",
+      "rerun": [
+        "every BC.History project whose closure holds System Initialization (its OnCompanyOpenCompleted subscriber reads the client type): the refusal ledger's no-client causes"
+      ],
+      "args": ["--no-client"],
+      "tests": {
+        "Codeunit50790.ReadCurrentClientType": { "status": "pass" },
+        "Codeunit50792.Nothing": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
       "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",

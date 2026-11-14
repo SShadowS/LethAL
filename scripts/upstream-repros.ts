@@ -39,11 +39,18 @@ export interface Repro {
    * them. Absent: the repro's folder is the one app.
    */
   readonly apps?: readonly string[];
+  /** PR-05: extra `al-runner test` flags the repro needs, before its apps (e.g. `--no-client` for #8028). */
+  readonly args?: readonly string[];
 }
 
 /** The app folders of a repro, relative to the set's root, in the order `al-runner test` gets them. */
 export function appsOf(r: Repro): string[] {
   return r.apps === undefined ? [r.id] : r.apps.map((a) => join(r.id, a));
+}
+
+/** Everything after `al-runner test`: the fixed flags, the repro's own flags, then its apps. */
+export function testArgsOf(r: Repro): string[] {
+  return ["--bc-version", "28", "--output-json", ...(r.args ?? []), ...appsOf(r)];
 }
 
 export interface Manifest {
@@ -185,7 +192,7 @@ export async function runAll(
 ): Promise<BuildRows> {
   const out = new Map<string, ReadonlyMap<string, Row> | { readonly error: string }>();
   for (const r of manifest.repros) {
-    const p = Bun.spawn([bin, "test", "--bc-version", "28", "--output-json", ...appsOf(r)], {
+    const p = Bun.spawn([bin, "test", ...testArgsOf(r)], {
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",

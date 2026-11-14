@@ -12,6 +12,7 @@ import {
   readManifest,
   reportLines,
   rowsOf,
+  testArgsOf,
 } from "./upstream-repros";
 
 // R-997: several apps run together, in the manifest's order.
@@ -39,6 +40,18 @@ describe("R-997: a repro of several apps", () => {
     expect(appsOf(repro())).toEqual(["u1"]);
     expect(appsOf(repro(["P", "A", "T"]))).toEqual([
       join("u1", "P"),
+      join("u1", "A"),
+      join("u1", "T"),
+    ]);
+  });
+
+  test("PR-05: a repro's own flags go after the fixed ones and before its apps", () => {
+    expect(testArgsOf(repro())).toEqual(["--bc-version", "28", "--output-json", "u1"]);
+    expect(testArgsOf({ ...repro(["A", "T"]), args: ["--no-client"] })).toEqual([
+      "--bc-version",
+      "28",
+      "--output-json",
+      "--no-client",
       join("u1", "A"),
       join("u1", "T"),
     ]);
