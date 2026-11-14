@@ -1972,8 +1972,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * its own start) is a reading; one that did not (it reused memory an earlier request left) says
    * nothing, and its calls keep their state (an unmeasured one stays unmeasured). The growth is read
    * from the floor, not the start: a daemon that keeps some memory starts each request higher, and
-   * from the start a request reads low (Contoso: 65 MiB an entry, about 77 real). The cost per entry
-   * is charged to every call the request ran, each keeping its highest: never an average, never falling.
+   * from the start a request reads low. The growth is divided over the request's TEST entries only
+   * (an echo is LethAL's own tiny codeunit, and `groupsThatFit` charges costs to test entries only:
+   * dividing over every entry halved the cost of one-codeunit groups, so Contoso read 64 MiB where a
+   * test entry costs about twice that). It is charged to every call the request ran, each keeping its
+   * highest: never an average, never falling.
    */
   private noteEntryCost(
     startRss: number | undefined,
@@ -1982,19 +1985,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     sent: readonly SentEntry[],
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
-    if (sent.length === 0 || !(peakRss > startRss)) return;
-    const cost = (peakRss - floorRss) / sent.length;
-    // An echo is charged too; harmless, as `groupsThatFit` never looks an echo up.
-    for (const e of sent) {
+    const tests = sent.filter((e) => !e.echo);
+    if (tests.length === 0 || !(peakRss > startRss)) return;
+    const cost = (peakRss - floorRss) / tests.length;
+    for (const e of tests) {
       const call = callOf(e);
       if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
     }
-    const fit = cost > 0 ? Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / cost) : ENTRIES_CHUNK_CAP;
+    const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / cost);
     if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredSaid) {
       this.capLoweredSaid = true;
       this.notify(
         "al-runner-v3-entries-cap-lowered",
-        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per entry, so requests of its tests carry about ${Math.max(1, fit)} entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
+        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per test entry, so requests of its tests carry about ${Math.max(1, fit)} test entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
       );
     }
   }

@@ -3025,11 +3025,11 @@ describe("R987: entries per serve request follow the daemon growth measured per 
   const onCu2 = (ids: string[]) => ids.map((mutantId) => ({ mutantId, refs: [ref("C", CU2)] }));
 
   test("a high reading caps every later request at what fits 4 GiB, and says so once", async () => {
-    // 60 groups of two entries. 16 unmeasured, then 0.25 GiB an entry (charged as 8 GiB over the 32
-    // entries of the first request): 16 groups a request. The later requests read no growth (the
-    // daemon does not shrink back); the highest cost seen still holds.
+    // 60 groups of two entries (echo + one test entry). 16 unmeasured, which grow the daemon 8 GiB:
+    // 0.5 GiB a test entry (the echoes are not counted), so 8 groups a request. The later requests read
+    // no growth (the daemon does not shrink back); the highest cost seen still holds.
     const high = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)));
-    expect(high.sizes).toEqual([32, 32, 32, 24]);
+    expect(high.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
     expect(high.notes.filter((c) => c === "al-runner-v3-entries-cap-lowered")).toEqual([
       "al-runner-v3-entries-cap-lowered",
     ]);
@@ -3042,7 +3042,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
   });
 
   test("a request that reuses memory an earlier one left is no reading: a heavy codeunit after another stays unmeasured", async () => {
-    // 16 groups on CU (0.25 GiB an entry) leave the daemon at 8.5 GiB. CU2 is as heavy, but its first
+    // 16 groups on CU (0.5 GiB a test entry) leave the daemon at 8.5 GiB. CU2 is as heavy, but its first
     // request reuses that memory, so its peak is 8.5 GiB again: read as growth from its start it would
     // cost 0, and the rest of CU2 would go in one request. It is no reading: CU2 stays unmeasured, 16 at a time.
     const reused = await prefetchOf(
@@ -3056,10 +3056,10 @@ describe("R987: entries per serve request follow the daemon growth measured per 
   });
 
   test("growth is read from the daemon's floor, not from a request's higher start", async () => {
-    // A daemon that keeps what each request grew it by. 16 groups on CU at 0.125 GiB a codeunit entry:
+    // A daemon that keeps what each request grew it by. 16 groups on CU at 0.125 GiB a test entry:
     // +2 GiB, to 2.5 GiB. Then 16 groups on CU2 at 0.25: +4 GiB on top, to 6.5 GiB. From its 2.5 GiB
-    // start CU2 would read 0.125 GiB an entry (4 / 32) and the next request take 32 groups; from the
-    // 0.5 GiB floor it reads 0.1875 (6 / 32), so 21 groups (4 GiB), 42 entries.
+    // start CU2 would read 0.25 GiB a test entry (4 / 16) and the next request take 16 groups; from the
+    // 0.5 GiB floor it reads 0.375 (6 / 16), so 10 groups (3.75 GiB), 20 entries.
     const mem = await prefetchOf(
       new Map([
         [CU, 0.125 * GiB],
@@ -3068,7 +3068,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       [...onCu(mids(1, 16)), ...onCu2(mids(17, 60))],
       { stack: true },
     );
-    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 42]);
+    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 20]);
   });
 
   test("a codeunit no request has measured goes 16 at a time, even after cheap ones", async () => {
@@ -3090,10 +3090,10 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     const shrinking = await prefetchOf(new Map([[CU, 0.5 * GiB]]), onCu(mids(1, 60)), {
       shrink: true,
     });
-    expect(shrinking.sizes).toEqual([32, 32, 32, 24]);
+    expect(shrinking.sizes).toEqual([32, 16, 16, 16, 16, 16, 8]);
   });
 
-  test("the kill-pair batches follow the measured cost: 5 pairs a request", async () => {
+  test("the kill-pair batches follow the measured cost: 2 pairs a request", async () => {
     const killsAll: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((r) =>
         r.method === "A" ? { ...r, status: "fail" as const, message: "boom" } : r,
@@ -3102,8 +3102,8 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       rows: killsAll,
     });
     expect(high.s.pairBatchStored).toBe(60);
-    // A pair is charged three codeunit entries at 0.25 GiB: 5 fit 4 GiB, so 12 requests (1 at 256).
-    expect(high.s.pairBatchRequests).toBe(12);
+    // A pair is charged three test entries at 0.5 GiB: 2 fit 4 GiB, so 30 requests (1 at 256).
+    expect(high.s.pairBatchRequests).toBe(30);
   });
 });
 
