@@ -42,6 +42,33 @@ export const echoMessage = (m: string): string => `LETHAL-ECHO:${m}:true`;
 /** 256 is LethAL's cap per request, not upstream's. */
 export const ENTRIES_CHUNK_CAP = 256;
 
+/**
+ * R987: what one entry costs the serve daemon, per deployed mutant (guard) of the batch, while a
+ * request runs: the daemon holds every entry's state until the request ends. Measured on Contoso
+ * Coffee Demo (20,790 guards, edge-c8fe56e05, `/coord/handoff/R-972/`): 256 entries per request
+ * peaked at 21.2 GB, 64 at 6.3 GB, so about 77 MB per entry over a 1.35 GB floor, 3.7 KB per entry
+ * per guard. Rounded up.
+ */
+export const ENTRY_BYTES_PER_GUARD = 3800;
+
+/** R987: the memory one request's entries may take, so the daemon stays inside `--peak serve`
+ *  (8 GiB) with its floor and LethAL's own process beside it. */
+export const ENTRIES_REQUEST_BUDGET_BYTES = 4 * 1024 ** 3;
+
+/**
+ * R987: the entries cap for a batch of `guards` deployed mutants: `ENTRIES_CHUNK_CAP`, lowered so
+ * one request's entries fit `ENTRIES_REQUEST_BUDGET_BYTES` (Contoso: 54). At least 1; a group larger
+ * than the cap still goes alone (`chunkGroups`). Below about 4,400 guards nothing changes.
+ */
+export function entriesChunkCapFor(guards: number): number {
+  if (!Number.isInteger(guards) || guards < 0) {
+    throw new Error(`entriesChunkCapFor: guards must be a whole number >= 0, got ${guards}`);
+  }
+  // 0 guards: the division gives Infinity, so the cap stays ENTRIES_CHUNK_CAP.
+  const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / (guards * ENTRY_BYTES_PER_GUARD));
+  return Math.max(1, Math.min(ENTRIES_CHUNK_CAP, fit));
+}
+
 /** One mutant (or `NONE`) and the covering codeunits it needs, in one request. */
 export interface EntryGroup {
   /** The override text: `NONE` or a mutant id. */

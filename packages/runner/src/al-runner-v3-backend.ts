@@ -102,6 +102,7 @@ import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
   type EntryGroup,
+  entriesChunkCapFor,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
   type SentCut,
@@ -1919,6 +1920,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R912: the batch a windowed prefetch belongs to: its group count, and the chunk its requests fill. */
   private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
 
+  /** R987: this batch's entries cap, set by `deploy` from its deployed mutant count. */
+  private chunkCap = ENTRIES_CHUNK_CAP;
+
   /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
   private prefetchRemainingMs: (() => number) | undefined;
 
@@ -2117,6 +2121,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     rssReader?: (pid: number) => number | undefined;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
+    /** R987: replaces `entriesChunkCapFor` (a test batch has a handful of guards, not thousands). */
+    entriesChunkCapFor?: (guards: number) => number;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
     memoryWaitPolls?: number;
     /** R948: bytes one started process or request is counted at by the guard. Absent: `MEMORY_CALL_ESTIMATE_BYTES`. */
@@ -3046,6 +3052,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const artifactId = await this.stage(instrumentedDir, active);
     if (this.entries) this.echoId = await readEchoId(active);
     const { ids } = await readManifestIds(active);
+    // R987: a serve daemon holds every entry of a request until it ends, at a cost that grows with the
+    // batch's guards; a large batch sends fewer entries per request so the daemon stays inside its peak.
+    this.chunkCap = (this.seams.entriesChunkCapFor ?? entriesChunkCapFor)(ids.size);
+    if (this.entries && this.chunkCap < ENTRIES_CHUNK_CAP) {
+      this.notify(
+        "al-runner-v3-entries-cap-lowered",
+        `[lethal] al-runner-v3: ${ids.size} deployed mutants, so at most ${this.chunkCap} entries per serve request (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
+      );
+    }
     // R790 (A1): while alc proves the batch, its one-shot baseline calls run on the same bytes. Their
     // answers stay private: deploy() still waits for alc and throws exactly its error, and they are
     // served (once each) only if every byte they read is a byte the proof below records.
@@ -5871,11 +5886,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // group's refused rows are that mutant's `error` (its echo did not run), never a batch stop.
     // R653: a live kill pair (NONE and M) speaks for one kill, like a lone live group.
     // R912: a prefetch speaks for the BATCH, not for its window. The group count is the batch's, and
-    // the request is placed in the 256-entry chunk a whole-batch prefetch would have put it in: if
-    // an earlier window of that chunk had an entry that ran, this one cannot be a batch refusal, as the
-    // chunk holding both would not have been. Chunk boundaries fall where `chunkGroups` puts them.
+    // the request is placed in the chunk (of `chunkCap` entries, R987) a whole-batch prefetch would
+    // have put it in: if an earlier window of that chunk had an entry that ran, this one cannot be a
+    // batch refusal, as the chunk holding both would not have been. Chunk boundaries fall where
+    // `chunkGroups` puts them.
     const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
-    if (batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
+    if (batch !== undefined && batch.size + sent.length > this.chunkCap) {
       batch.size = 0;
       batch.ran = false;
     }
@@ -6128,7 +6144,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ),
     }));
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
-    const queue = chunkGroups(groups);
+    const queue = chunkGroups(groups, this.chunkCap);
     const resent = new Set<string>();
     for (let chunk = queue.shift(); chunk !== undefined; chunk = queue.shift()) {
       // R948: a prefetch request starts no group while the container is over its memory bound; the
@@ -6157,7 +6173,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       const again = out.resend.filter((g) => !resent.has(g.mutantId));
       for (const g of again) resent.add(g.mutantId);
-      queue.push(...chunkGroups(again));
+      queue.push(...chunkGroups(again, this.chunkCap));
     }
     await this.batchKillPairs(plans);
   }
@@ -6204,7 +6220,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const tagOf = (k: Kill) => this.pairTag(k.mutantId, k.cu);
     // A kill is 4 entries (two groups of echo + codeunit); a pair is never split across chunks.
-    const perChunk = Math.max(1, Math.floor(ENTRIES_CHUNK_CAP / 4));
+    const perChunk = Math.max(1, Math.floor(this.chunkCap / 4));
     const chunksOf = (ks: readonly Kill[]): Kill[][] => {
       const out: Kill[][] = [];
       for (let i = 0; i < ks.length; i += perChunk) out.push(ks.slice(i, i + perChunk));

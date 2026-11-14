@@ -50,12 +50,14 @@ import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
   AlRunnerV3EntriesEncodeError,
   AlRunnerV3EntriesRefusedError,
+  ENTRIES_CHUNK_CAP,
   SELECTOR_ECHO_FILENAME,
   batchRefusalReason,
   chunkGroups,
   decodeEntriesAnswer,
   emitSelectorEcho,
   encodeGroups,
+  entriesChunkCapFor,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
@@ -2862,6 +2864,48 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
     expect(() => v3ItestLegTransport("D1", { LETHAL_ITEST_V3_SECOND_ECHO: "0" })).toThrow(
       /SECOND_ECHO is set without/,
     );
+  });
+});
+
+describe("R987: entries per serve request follow the batch's guard count", () => {
+  test("the cap function: unchanged below about 4,400 guards, lowered above, never below 1", () => {
+    expect(entriesChunkCapFor(0)).toBe(ENTRIES_CHUNK_CAP);
+    expect(entriesChunkCapFor(2_000)).toBe(ENTRIES_CHUNK_CAP);
+    // Contoso Coffee Demo, measured at 21.2 GB with 256 entries per request (R987).
+    expect(entriesChunkCapFor(20_790)).toBe(54);
+    expect(entriesChunkCapFor(10_000_000)).toBe(1);
+    expect(() => entriesChunkCapFor(-1)).toThrow(/whole number/);
+    expect(() => entriesChunkCapFor(1.5)).toThrow(/whole number/);
+  });
+
+  const prefetchWith = async (cap: number) => {
+    const asked: number[] = [];
+    const notes: string[] = [];
+    const r = await readyRig({
+      seams: {
+        entriesChunkCapFor: (g) => {
+          asked.push(g);
+          return cap;
+        },
+      },
+      notify: (code) => notes.push(code),
+    });
+    return { s: r.b.entriesStats(), asked, notes };
+  };
+
+  test("a lowered cap splits the prefetch into more requests, and says so", async () => {
+    const low = await prefetchWith(1);
+    // Two mutant groups of at least two entries each (echo + a codeunit): each goes alone.
+    expect(low.s.prefetchRequests).toBe(2);
+    expect(low.asked.length).toBe(1);
+    expect(low.asked[0]).toBeGreaterThan(0);
+    expect(low.notes).toContain("al-runner-v3-entries-cap-lowered");
+  });
+
+  test("the full cap keeps one prefetch request and no note", async () => {
+    const full = await prefetchWith(ENTRIES_CHUNK_CAP);
+    expect(full.s.prefetchRequests).toBe(1);
+    expect(full.notes).not.toContain("al-runner-v3-entries-cap-lowered");
   });
 });
 
