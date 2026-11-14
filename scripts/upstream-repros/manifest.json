@@ -159,6 +159,18 @@
       "tests": {
         "Codeunit50930.FeatureRowExists": { "status": "pass" }
       }
+    },
+    {
+      "id": "u7760-untouched-handle",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7760",
+      "bcEvidence": "inferred, not measured on BC: a call on a handle nothing created raises an error on BC, as measured for a write to an OutStream never created (NavOutStream variable not initialized, issue comment) and as al-runner itself fails the sibling methods (XmlElement.Name, InnerText, Add: NavXmlElement variable not initialized); the error's text is not known, so only the failure is expected. Cells found by scripts/refusal-family.ts (PR-01)",
+      "rerun": ["the corpus mutants met by the untouched-handle refusals (R-913, R-961, R-983)"],
+      "tests": {
+        "Codeunit51101.Cell": { "status": "fail" },
+        "Codeunit51102.Cell": { "status": "fail" },
+        "Codeunit51103.Cell": { "status": "fail" },
+        "Codeunit51104.Cell": { "status": "fail" }
+      }
     }
   ]
 }
