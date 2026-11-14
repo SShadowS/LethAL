@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**28 of 962 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 965 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1007,6 +1007,9 @@ that ordering is the priority.
 - **R996** · BC.History re-swept on current al-runner (edge-736fc7677, re-checked on 847b1fa5a): 4 projects gained tests, one lost kill and a no-client refusal filed upstream; the three stopped runs finished · [R996.md](docs/roadmap/R996.md) · closed 2026-11-14 — measured and filed upstream (#8024, #8028; comments on #8013, #8002)
 - **R997** · On al-runner v3, a FlowField over Published Application filtered on Tenant Visible is refused as a permission denial on NAV App Extra (2000000157) under a set that grants Published Application: 84 of Guided Experience's 104 tests (upstream #8038) · [R997.md](docs/roadmap/R997.md) · open
 - **R1000** · edge-847b1fa5a reworded the cascade-existing-state refusal ("changed number sequence 'X' that existed before it ... (only a new NumberSequence.Insert is)"), so the serve keep-list no longer matches it: DO's serve run fell back to one-shot at the warm-up, about one covered mutant a minute · [R1000.md](docs/roadmap/R1000.md) · done (200ed4e5)
+- **R1001** · A v3 serve baseline in which every test is refused with one and the same text runs to its end (DC: 1,839 of 1,839 tests, 4,656 s, 117 daemons) instead of stopping early by name · [R1001.md](docs/roadmap/R1001.md) · open
+- **R1002** · Three DC test codeunits still run one-shot inside a serve session: their method names use shapes serve-entries is not proven for (a lone ".", a name starting with "//", a name starting with "(") · [R1002.md](docs/roadmap/R1002.md) · open
+- **R1003** · On al-runner v3, Continia DC's whole suite (1,839 tests) is refused: four apps with no dependency path meet in their install code, al-runner does not try more than 3 install orders, so an install stops and a row it would insert is missing (upstream #8056) · [R1003.md](docs/roadmap/R1003.md) · open
 
 ---
 
