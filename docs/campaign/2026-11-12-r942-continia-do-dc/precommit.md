@@ -210,3 +210,8 @@ Every LethAL gap: a roadmap item. A refusal or failure that BC 28 would not show
 - **Everything else as amendment 5:** the same config `/coord/handoff/R-984/v3.do-serve.json`, `--peak 12`, the watchdog. A serve
   warm-up fallback is again a finding and stops the window. New to record: daemon restarts in the MUTANT phase and their reasons
   (R1004's review: a mutant request that holds a refused test still closes its daemon), and the mutant phase's covered mutants per hour.
+- **Erratum (2026-11-14, during window t1):** the bullet on `current` above is wrong about the build this run uses. The config named
+  in the next bullet pins `alRunnerV3.path` to edge-847b1fa5a (amendment 5), so window t1 runs on 847b1fa5a, as its stderr's
+  `[lethal] al-runner:` line says; the run log's `current` field only records where `current` pointed. 847b1fa5a is a gated build and
+  the one amendment 5 pre-committed, so the comparison with the 1d/2d rows stands as amendment 5 says, with no build change to read.
+  Later windows `--resume` on the same pinned build.
