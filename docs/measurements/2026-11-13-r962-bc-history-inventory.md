@@ -1,4 +1,22 @@
-# BC.History on al-runner v3: what has run, what is left, what is blocked (R-962, 2026-11-13)
+# BC.History on al-runner v3: what has run, what is left, what is blocked (R-962, 2026-11-13; final tally R-969, 2026-11-14)
+
+## Final tally (R-969, 2026-11-14)
+
+| state | test projects | [Test] methods |
+|---|---:|---:|
+| run on v3 | 143 | 7,866 |
+| not run, runnable | 0 | 0 |
+| not run, blocked | 33 | 40,993 |
+
+**BC.History outside BaseApp is done.** R-969 ran the 54 projects the table "Not run, runnable" below lists (pre-commitment
+076381b1, al-runner edge-c8fe56e05), so every test project outside BaseApp has now run on v3. What is left is blocked:
+- **BaseApp's 32 `Tests-*` slices, 40,980 tests (99.97% of the tests not run):** they test Base Application itself, which al-runner
+  cannot compile today (upstream #7920 and #7914). The hunt moves there once those are fixed, or to other corpora.
+- **OnPrem Permissions (13 tests):** its app holds only permission sets; there is nothing to mutate.
+
+Three runs stopped at their hour and can be resumed: Email (1,632 of 3,934 mutants left out), E-Document Connector - Avalara (781 of
+1,785) and E-Document Connector - SignUp (107 of 710). The tables below are as R-962 measured them; the 54 "runnable" rows are the
+ones R-969 ran.
 
 Coord task R-962. Names and counts only, no source text. Regenerate with `/coord/handoff/R-962/inventory.py` (inputs in the same
 folder); batches that run later should mark their projects there.

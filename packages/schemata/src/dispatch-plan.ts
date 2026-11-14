@@ -163,8 +163,9 @@ export interface PlannedMember {
   readonly statementEnd: number;
   /**
    * R926: where the reach statement `S` starts, for the manifest's `reachLine`. Absent when the
-   * grain is not `statement`, when `S` is a nested `begin ... end` block (a hit on a compound
-   * statement's own line is not measured), or when the object sits in or after a `#if` wrapper.
+   * grain is not `statement` or when the object sits in or after a `#if` wrapper. When `S` is a
+   * nested `begin ... end` block (a hit on a compound statement's own line is not measured), the
+   * site is its first statement's (R976, `firstStatementOf`), absent when there is none.
    */
   readonly reachSite?: ReachSite;
 }
@@ -223,15 +224,38 @@ export interface PlannedComponent {
   readonly members: readonly PlannedMember[];
 }
 
+/**
+ * R976: the statement a block runs first, through nested `begin ... end` blocks: when it runs, the
+ * block was entered. `undefined` (no reach line) for an empty block, or when the first entry is a
+ * preprocessor node, whose line may be compiled out. Comments and lone `;` are skipped: neither
+ * has a coverage line of its own.
+ */
+export function firstStatementOf(block: ALSyntaxNode): ALSyntaxNode | undefined {
+  const list = block.namedChildren.find((c) => c.kind === ALNodeKind.statement_block);
+  if (list === undefined) return undefined;
+  for (const c of list.namedChildren) {
+    if (c.rawKind === "comment" || c.rawKind === "multiline_comment") continue;
+    if (c.rawKind === "empty_statement") continue;
+    if (c.kind === ALNodeKind.block) return firstStatementOf(c);
+    if (c.rawKind.startsWith("preproc")) return undefined;
+    return c;
+  }
+  return undefined;
+}
+
 /** R-307 O5. `planPlacement`, frozen: the node is read here and never again. */
 export function planMember(root: ALSyntaxNode, m: ComponentMember, source: string): PlannedMember {
   const { grain, place, splice } = planPlacement(root, m, source);
   // A nested block (any placement: a free body's `root` too) is a compound statement: whether
-  // al-runner reports a hit on its own line is not measured, so it carries no reach line.
-  const reachSite =
-    grain === "statement" && place.kind !== "block" && m.statement.kind !== ALNodeKind.block
-      ? reachSiteOf(m.statement)
-      : undefined;
+  // al-runner reports a hit on its own line is not measured, so its reach line is its first
+  // statement's (R976: the block is entered exactly when that statement runs).
+  const reachNode =
+    grain !== "statement"
+      ? undefined
+      : m.statement.kind === ALNodeKind.block
+        ? firstStatementOf(m.statement)
+        : m.statement;
+  const reachSite = reachNode !== undefined ? reachSiteOf(reachNode) : undefined;
   return {
     mutantId: m.mutantId,
     grain,

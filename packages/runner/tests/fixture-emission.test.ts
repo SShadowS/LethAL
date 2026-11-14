@@ -26,6 +26,10 @@ import { removeScratchDir } from "./helpers/scratch";
  * statement-grain entries (was 445fe1b9, 5621d39c, e0d56ec6, b1976c9f, 94d3a5fc). Every `.al` pin
  * is unchanged: the instrumented text did not move.
  *
+ * R976: re-recorded again for `reachLine` on block-grain (`lethal.empty-block`) entries, their body's
+ * first statement (was 6edb3f7e, 93541eea, 46c8966f, 12bcdc9d, 86338b48). Measured over all 16
+ * fixtures: only `reachLine` added, only on `empty-block` entries; every `.al` pin unchanged.
+ *
  * A deliberate emission change (a new operator finding a site here, say) re-pins these values in
  * the same commit, and says so. R196: sandbox-hang's `HangLogic.Codeunit.al` and manifest were
  * re-pinned because its line-104 `remove-assignment` and `shift-integer` sites are now refused as
@@ -107,7 +111,7 @@ const PINNED: Record<
         "81b6685fc63799431742bc4b4958b9a0b733695816339e9ae7f700a5882bfeb7",
       "SandboxPricing.Codeunit.al":
         "60b12340761b9a80841a842bfc2d1a3c5964be3997275895f469f2b7973671a5",
-      "mutant-manifest.json": "6edb3f7e8ab606ee6659fced3e050dc24cf923c86e1d8f5e04ff42863194370e",
+      "mutant-manifest.json": "da2820b48c85d91fe1ef6fb256a88c33eb0069535c5e2f51ddea3a5ab1f0938f",
     },
   },
   "sandbox-data": {
@@ -166,7 +170,7 @@ const PINNED: Record<
       "MutationUpgrade.Codeunit.al":
         "eb4fb1455bd9f0a1bbc15dda24fd1c61669959332c36c8861d66a56daf44ebe8",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 71d0df78...eaa3).
-      "mutant-manifest.json": "93541eea75ce60d73a6c791e51591f6411ca8bc78a1a14a94b7ddccf8b547a67",
+      "mutant-manifest.json": "c147809e7f524360e9235b35bbff0411fd1cf9b161618c560675bd461a76be31",
     },
   },
   "sandbox-hang": {
@@ -179,7 +183,7 @@ const PINNED: Record<
         "03da5adb8c426958a6549fc03d174e5bbadba7aa150538881de3adecc8f6105f",
       "MutationUpgrade.Codeunit.al":
         "ecc6b99d40ce7e6bf92be1e73c0c8609cffa268684613158cb32e8513e317f59",
-      "mutant-manifest.json": "46c8966f800d1fdbeb41a3500be81c37f5a4e10dcd2d969173d23ecc9ed327f6",
+      "mutant-manifest.json": "ec34067f6e5c37bbb1b279ec0fc23234815bff1a91e6862c3ae8c134e585622a",
     },
   },
   "sandbox-harden": {
@@ -193,7 +197,7 @@ const PINNED: Record<
         "761229a7c2c2edaa674509cd00a51e53118742a676a957645d3d33cb3f30966d",
       "MutationUpgrade.Codeunit.al":
         "4a52c84af5a27079132374f5737fb95f13d9721f616e70c2b62f83e6d90d7378",
-      "mutant-manifest.json": "12bcdc9dba86a43e763a5a78f5f77cd32b539233b15c7568abdb144a612ee65f",
+      "mutant-manifest.json": "579cc93a8d409ebd9b68976adc46d519c32e477c87d4b7b73cc38b3314f336db",
     },
   },
   "sandbox-coverage-probe": {
@@ -211,7 +215,7 @@ const PINNED: Record<
         "42b5f8d119d822359366db5b0c776be4c7c03690f9ab04ae8d5ebfa219370dd1",
       "TwoObjects.Codeunit.al": "23476d029bcd1039edc22e111202acbcad46bcd79257e5090faaf0189eedb8d0",
       // R983: comparison blank toggles gain `equivalenceRisk` (was 5693e720...c6af).
-      "mutant-manifest.json": "86338b483189d0d7918923278ce0655b2ce3f7d00f9b3a5b26523df2027bde4c",
+      "mutant-manifest.json": "5bf7610a9f254106300da110a5bc9b40e138f4fb326a3705b6ad2b6e97e19a64",
     },
   },
 };
