@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**31 of 952 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 953 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -995,6 +995,7 @@ that ordering is the priority.
 - **R980** · BC.History inventory and batch 10 on al-runner v3 edge-c8fe56e05: 54 small projects left outside BaseApp; one wrong result (forwarded .NET code ends lines with LF) and new refusals filed upstream · [R980.md](docs/roadmap/R980.md) · closed 2026-11-13 — measured and filed upstream…
 - **R982** · Continia Document Output's al-runner baseline refusals reduced, and the dependency-install question answered: al-runner does run a dependency app's install codeunit; DO's 32 'not activated' failures are Continia's online activation · [R982.md](docs/roadmap/R982.md) · closed 2026-11-14 — measured; filed upstream (#8004) and counted (#7775); the install question answered by…
 - **R986** · probe-r58-differential.ts derives its OData root with `odataBaseUrl` (port 7048), so on bc2 or bc3 its harness and control-app calls reach bc1 while it deploys to the configured server · [R986.md](docs/roadmap/R986.md) · done (51633007) — the probe takes its OData and API roots from the config (odataCfgFor), as the bcdev itests…
+- **R987** · A serve daemon holds every entry of a request until it ends: Contoso Coffee Demo's tests cost about 77 MB an entry, so 256 entries took it to 21 GB under --peak serve (8); requests are now sized from each codeunit's measured cost, 16 entries at a time for codeunits not yet measured · [R987.md](docs/roadmap/R987.md) · done (94b89dc6)
 - **R988** · LethAL's own process, not the serve daemon, reaches 20 GB in DO's daemon baseline: its memory spikes once a request and the spikes grow (5.8 to 20.6 GB over 30 min) · [R988.md](docs/roadmap/R988.md) · open
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
 
