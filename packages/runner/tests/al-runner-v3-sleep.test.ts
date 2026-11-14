@@ -6,6 +6,7 @@ import {
   type SleepIndex,
   buildSleepIndex,
   decodeV3Coverage,
+  keptCoverage,
   sleepCallLines,
   sleepCallRefusal,
   sleepFileKey,
@@ -55,6 +56,111 @@ const index: SleepIndex = {
   sizes: { target: 1, test: 0 },
   roots: { target: "/x/active/", test: "/x/tests/" },
 };
+
+describe("R988: keptCoverage keeps what every reader uses, and drops the rest", () => {
+  const TEST_FILE = "/x/tests/src/Tests.Codeunit.al";
+  const OTHER = "/x/active/Other.Codeunit.al";
+  /** A document like v3's: unhit statements everywhere, a test's own entry, one Sleep line (5). */
+  const doc = (sleepLine: { line: number; hits: number } | undefined, perTestSleepHits = 0) =>
+    decodeV3Coverage(
+      JSON.stringify({
+        coverage: [
+          {
+            file: FILE,
+            statements: [
+              { line: 1, hits: 1 },
+              { line: 2, hits: 0 },
+              ...(sleepLine !== undefined ? [sleepLine] : []),
+              { line: 9, hits: 0 },
+            ],
+          },
+          { file: OTHER, statements: [{ line: 3, hits: 0 }] },
+          {
+            file: TEST_FILE,
+            statements: [
+              { line: 7, hits: 2 },
+              { line: 8, hits: 0 },
+            ],
+          },
+        ],
+        perTestCoverage: [
+          {
+            test: "Codeunit50.T",
+            coverage: [
+              {
+                file: FILE,
+                statements: [
+                  { line: 1, hits: 1 },
+                  { line: 2, hits: 0 },
+                  { line: 5, hits: perTestSleepHits },
+                ],
+              },
+              { file: OTHER, statements: [{ line: 3, hits: 0 }] },
+            ],
+          },
+        ],
+      }),
+    );
+
+  test("unhit statements go, every file entry stays, an indexed line stays listed even unhit", () => {
+    const kept = keptCoverage(doc({ line: 5, hits: 0 }), index);
+    expect(kept).toEqual({
+      kind: "doc",
+      coverage: [
+        {
+          file: FILE,
+          statements: [
+            { line: 1, hits: 1 },
+            { line: 5, hits: 0 },
+          ],
+        },
+        { file: OTHER, statements: [] },
+        { file: TEST_FILE, statements: [{ line: 7, hits: 2 }] },
+      ],
+      perTestCoverage: [
+        {
+          test: "Codeunit50.T",
+          coverage: [
+            { file: FILE, statements: [{ line: 1, hits: 1 }] },
+            { file: OTHER, statements: [] },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("with no Sleep index the top-level statements are kept whole", () => {
+    const full = doc({ line: 5, hits: 0 });
+    const kept = keptCoverage(full, undefined);
+    expect(kept.kind === "doc" && full.kind === "doc" && kept.coverage).toEqual(
+      full.kind === "doc" ? full.coverage : [],
+    );
+  });
+
+  test("an unavailable document is kept as it is", () => {
+    const none = decodeV3Coverage(undefined);
+    expect(keptCoverage(none, index)).toBe(none);
+  });
+
+  test("every Sleep reader reads the kept document as it reads the full one", () => {
+    const cases = [
+      doc({ line: 5, hits: 0 }), // listed, unhit: no note
+      doc(undefined), // indexed line not listed: case 2's note
+      doc({ line: 5, hits: 1 }, 1), // hit, owned: case 3 for that test
+      doc({ line: 5, hits: 1 }, 0), // hit, owned by no test: case 4's note
+    ];
+    for (const full of cases) {
+      const kept = keptCoverage(full, index);
+      expect(sleepCallRefusal(kept, index)).toBe(sleepCallRefusal(full, index));
+      expect(sleepPassRefusal(kept, index, "Codeunit50.T")).toBe(
+        sleepPassRefusal(full, index, "Codeunit50.T"),
+      );
+      expect(sleepJoinRefusal(kept, index)).toBe(sleepJoinRefusal(full, index));
+    }
+    // The four cases are not all alike: the comparison above sees each outcome.
+    expect(new Set(cases.map((c) => sleepCallRefusal(c, index) ?? "none")).size).toBe(3);
+  });
+});
 
 describe("I-1: an index whose roots join no path of the document is a named refusal", () => {
   const listing = (files: string[]) =>
