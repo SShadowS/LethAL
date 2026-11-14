@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**27 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**26 of 954 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -998,7 +998,7 @@ that ordering is the priority.
 - **R987** · A serve daemon holds every entry of a request until it ends: Contoso Coffee Demo's tests cost about 77 MB an entry, so 256 entries took it to 21 GB under --peak serve (8); requests are now sized from each codeunit's measured cost, 16 entries at a time for codeunits not yet measured · [R987.md](docs/roadmap/R987.md) · done (94b89dc6)
 - **R988** · LethAL's own process, not the serve daemon, reaches 20 GB in DO's daemon baseline: its memory spikes once a request and the spikes grow (5.8 to 20.6 GB over 30 min) · [R988.md](docs/roadmap/R988.md) · open
 - **R990** · BC.History outside BaseApp is done: the last 54 test projects on al-runner v3 (edge-c8fe56e05); two more wrong results (AutoFormatTranslate ignored; Linux time-zone DST) and the final tally (143 run, 33 blocked behind #7920/#7914) · [R990.md](docs/roadmap/R990.md) · closed 2026-11-14 — measured and filed upstream…
-- **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · open
+- **R991** · heavy-slot.sh lets later, smaller jobs pass a waiting head ticket the memory check refused, so a large job can wait without end (R-974's --peak 20 ticket 211 was overtaken twice) · [R991.md](docs/roadmap/R991.md) · done (b4b09cb8) — a refused waiter is passed only for LETHAL_HEAVY_STARVE_S (default 900 s) after its first…
 
 ---
 
