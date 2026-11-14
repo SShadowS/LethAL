@@ -2973,14 +2973,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.transportFrozen)
       throw new AlRunnerV3TransportFrozenError("it was already decided or a v3 process started");
     const reasons: string[] = [];
-    // R857: a resume under --isolate-tests runs its baseline again (`reusesBaselineSnapshot`).
-    // R896 (build review 2): so does `isolation: "auto"`, which never reuses a snapshot.
-    if (facts.resume && !this.isolatesTests && !this.isolationAuto) {
-      reasons.push(
-        "resume: a --resume / --resume-run session (a reused baseline has no rows for the serve warm-up, and the transport is not in the run's fingerprint)",
-      );
-    }
-    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
+    // R1008: a resume is no fallback reason any more. Forcing one-shot left a serve run with no way to
+    // continue: the one-shot session lacks the run's ` baseline-daemon` tag (R948), so no run matched.
+    // A serve session's resume runs its baseline again instead (`resumeRunsBaseline`), as R857's
+    // --isolate-tests and R896's isolation "auto" already did, so the warm-up has its rows.    // R918: the multi-object and #if-wrapped shapes are no fallback reason any more: legs MOE and
     // WRE measured them equal to one-shot per mutant (pre-commitment e1ca5d11). Coverage placement,
     // the shape-specific part, is built from the deployed text the same way under both transports.
     const { version, binarySha256 } = await this.runnerBuild();
@@ -4436,6 +4432,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R948: true when this session's baseline comes from a serve daemon (see `ExecutionBackend.baselineDaemon`). */
   get baselineDaemon(): boolean {
     return this.cfg.daemonBaseline === true && this.entries;
+  }
+
+  /** R1008: serve-entries needs this session's own baseline rows for its warm-up (see `ExecutionBackend.resumeRunsBaseline`). */
+  get resumeRunsBaseline(): boolean {
+    return this.entries;
   }
 
   /** R948: what the daemon baseline did, for the gate and the tests. */

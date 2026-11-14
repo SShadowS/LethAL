@@ -436,10 +436,17 @@ async function snapshotCase(c: {
   readonly spy?: boolean;
   /** R857: run 1 stays default; a stopped run under `--isolate-tests` is what today resumes. */
   readonly isolate?: boolean;
+  /** R1008: today's session is on serve-entries (`resumeRunsBaseline`); run 1 stays default. */
+  readonly serve?: boolean;
 }) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
-  const mode = c.isolate === true ? { isolatesTests: true } : {};
+  const mode =
+    c.isolate === true
+      ? { isolatesTests: true }
+      : c.serve === true
+        ? { resumeRunsBaseline: true }
+        : {};
   await runSession({ ...base(store, dirs), backend: new Stub(ABORT_AFTER) });
   const runId = lastRun(store);
   const row = store.getRun(runId);
@@ -556,6 +563,21 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     expect(warned(s.events, "snapshot-backend-build-changed")).toEqual([]);
     expect(s.today.baselineRuns).toBeGreaterThan(0);
     expect(s.isolateSnapshots).toBe(0);
+  });
+  test("R1008: a serve-entries resume looks at no snapshot: it runs its baseline again", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      serve: true,
+    });
+    expect(s.error).toBeUndefined();
+    expect(s.defaultSnapshots).toBeGreaterThan(0); // one was there to find
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(warned(s.events, "snapshot-backend-build-changed")).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    // The same resume without the flag reuses it: the flag alone decides.
+    const plain = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: B1 } });
+    expect(plain.error).toBeUndefined();
+    expect(reusedOf(plain.events)).toHaveLength(1);
   });
   test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
     const s = await snapshotCase({

@@ -8950,6 +8950,7 @@ async function runSessionBody(
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.isolationAuto !== true && // R896 (review 1)
+            cfg.backend.resumeRunsBaseline !== true && // R1008: serve-entries' warm-up, as R857
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
