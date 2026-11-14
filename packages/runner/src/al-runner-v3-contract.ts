@@ -114,11 +114,17 @@ function refusalRowShape(c: {
   return isV3RefusalText(m) ? "diverged" : "unlike-bc";
 }
 
+/**
+ * R1000: `serve-keep-reasons` only: a row refused with a text no keep-list entry accepts. Never refuses
+ * a session (a warn fact); fails the update gate (`classifyLegC`).
+ */
+export type V3WarnVerdict = V3ContractVerdict | "unkept";
+
 export interface V3Fact {
   readonly fact: string;
-  /** `warn` (R612): never refuses a session or fails the gate; only prints its line. */
+  /** `warn` (R612): never refuses a session; fails the gate only on `unkept` (R1000), else only prints its line. */
   readonly kind: "contract" | "defect" | "warn";
-  readonly verdict: V3ContractVerdict | V3DefectVerdict;
+  readonly verdict: V3ContractVerdict | V3DefectVerdict | V3WarnVerdict;
   readonly expected: string;
   readonly measured: string;
 }
@@ -669,6 +675,71 @@ codeunit 50674 "Serve Http Public"
         Client.Get('http://example.com/x', Response);
     end;
 }
+
+codeunit 50675 "Serve Cascade Seq"
+{
+    Subtype = Test;
+
+    trigger OnRun()
+    begin
+        if not NumberSequence.Exists('R1000SEQ') then
+            NumberSequence.Insert('R1000SEQ');
+    end;
+
+    [Test]
+    procedure B_ChangesSeq()
+    var
+        N: BigInteger;
+    begin
+        N := NumberSequence.Next('R1000SEQ');
+        N := NumberSequence.Next('R1000SEQ');
+    end;
+
+    [Test]
+    procedure C_UsesSeq()
+    var
+        N: BigInteger;
+    begin
+        N := NumberSequence.Next('R1000SEQ');
+    end;
+}
+
+codeunit 50676 "Serve Cascade Key"
+{
+    Subtype = Test;
+
+    trigger OnRun()
+    begin
+        IsolatedStorage.Set('R1000KEY', 'v1', DataScope::Module);
+    end;
+
+    [Test]
+    procedure B_ChangesKey()
+    begin
+        IsolatedStorage.Set('R1000KEY', 'v2', DataScope::Module);
+    end;
+
+    [Test]
+    procedure C_UsesKey()
+    var
+        V: Text;
+    begin
+        IsolatedStorage.Get('R1000KEY', DataScope::Module, V);
+    end;
+}
+
+codeunit 50677 "Serve Company FindSet"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure FindSetCompanies()
+    var
+        C: Record Company;
+    begin
+        if C.FindSet() then;
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -724,17 +795,36 @@ const plainFailMessage = (
 /**
  * R612: each `V3_SERVE_SAFE_REFUSALS` entry and the serve row that must match it. R705: the third
  * element says a plain trusted fail is also accepted (a #5602-fixed build moved http and cascade
- * one-shot; commit and onrun-failed are still refusals there).
+ * one-shot; commit and onrun-failed are still refusals there). R1000: the fourth says a plain pass
+ * is accepted (a build that measures the case runs the test).
  */
-const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean]> = [
-  ["http", "Codeunit50670.HttpGet", true],
-  ["commit", "Codeunit50671.CommitCall", false],
-  ["cascade", "Codeunit50672.LaterFails", true],
-  ["onrun-failed", "Codeunit50673.Never", false],
+const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = [
+  ["http", "Codeunit50670.HttpGet", true, false],
+  ["commit", "Codeunit50671.CommitCall", false, false],
+  ["cascade", "Codeunit50672.LaterFails", true, false],
+  ["onrun-failed", "Codeunit50673.Never", false, false],
   // R808: a public host reaches the runtime's own refusal (localhost is a plain fail on alpha.7+),
   // so the `http` entry's current wording is exercised. No plain-fail fallback.
-  ["http", "Codeunit50674.HttpGetPublic", false],
+  ["http", "Codeunit50674.HttpGetPublic", false, false],
+  // R1000 (coord R-989): the families added after R612, each a refusal a serve warm-up meets. Their
+  // texts were never on the gate, so edge-847b1fa5a's reworded cascade passed it unseen.
+  ["cascade-existing-state", "Codeunit50675.C_UsesSeq", false, true],
+  ["cascade-existing-state", "Codeunit50676.C_UsesKey", false, true],
+  ["company-findset", "Codeunit50677.FindSetCompanies", false, true],
 ];
+
+/**
+ * R1000: a row the runtime REFUSED (notRun, error) with a text no `V3_SERVE_SAFE_REFUSALS` entry
+ * accepts. On serve such a row closes the daemon, and at the warm-up it sends the whole run to
+ * one-shot (R786): R-984's DO window scored 35 covered mutants in an hour. So this, unlike any other
+ * move, fails the update gate (`unkept`, `classifyLegC`).
+ */
+const unkeptRefusal = (r: ServerTestLine | undefined): boolean =>
+  r !== undefined &&
+  r.notRun === true &&
+  r.status === "error" &&
+  r.message !== undefined &&
+  !Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(r.message ?? ""));
 
 /** R612: the stop the update gate's serve daemon runs with (leg C's `timeout-classified` N). */
 const SERVE_TEST_TIMEOUT_S = 3;
@@ -764,7 +854,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): five codeunits (six tests), each row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): eight codeunits (eleven tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the cascade-existing-state and company-findset rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
@@ -783,8 +873,14 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   }
   const moved: string[] = [];
   const how: string[] = [];
-  for (const [entry, name, plainFailOk] of SERVE_CASES) {
+  const unkept: string[] = [];
+  for (const [entry, name, plainFailOk, plainPassOk] of SERVE_CASES) {
     const r = rows.find((t) => t.name === name);
+    if (unkeptRefusal(r)) {
+      // R1000: before the pinned and the normal judgement, so no branch can let it through.
+      unkept.push(`${entry}: UNKEPT ${name}: ${r?.message ?? ""}`);
+      continue;
+    }
     if (pinned && (entry === "commit" || entry === "onrun-failed")) {
       // R808: the pin says what this build gives instead of a refusal. Any other reading is a move.
       const ok =
@@ -808,8 +904,14 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     const pm = plainFailOk ? plainFailMessage(r) : undefined;
     const plainFail =
       pm !== undefined && !isV3RefusalText(pm) && (entry !== "cascade" || pm === "later");
-    if (refusal || plainFail) {
-      how.push(`${entry}: ${refusal ? "refusal" : "plain fail"}`);
+    const plainPass =
+      plainPassOk &&
+      r !== undefined &&
+      r.status === "pass" &&
+      r.notRun !== true &&
+      !isV3RefusalText(r.message);
+    if (refusal || plainFail || plainPass) {
+      how.push(`${entry}: ${refusal ? "refusal" : plainFail ? "plain fail" : "plain pass"}`);
     } else {
       moved.push(
         `${entry}: MOVED ${r === undefined ? `no row ${name}` : `${r.status} notRun=${String(r.notRun)} ${r.message ?? ""}`}`,
@@ -819,11 +921,13 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
   return fact(
     "serve-keep-reasons",
     "warn",
-    moved.length === 0 ? "matches" : "diverged",
+    unkept.length > 0 ? "unkept" : moved.length === 0 ? "matches" : "diverged",
     expected,
-    moved.length === 0
-      ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
-      : moved.join("; "),
+    unkept.length > 0
+      ? [...unkept, ...moved].join("; ")
+      : moved.length === 0
+        ? `the keep rule accepts every row of all ${SERVE_CASES.length} entries (${how.join(", ")})`
+        : moved.join("; "),
   );
 }
 

@@ -785,8 +785,20 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    */
   "company-findset":
     /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+  /**
+   * R1000 (coord R-989): edge-847b1fa5a split the text by kind and names the object: "changed number
+   * sequence '<name>' ... (only a new NumberSequence.Insert is)" and "changed isolated storage key
+   * '<key>' ... (only a new key's IsolatedStorage.Set is)", each with its own tail; the combined form
+   * is kept for the builds before it. Measured with invented AL on both builds
+   * (`/coord/handoff/R-989/probe/`): the same shapes give the old text on 736fc7677 and the new one on
+   * 847b1fa5a (there only when a later test uses the changed object). The object name is the new
+   * variable part, quoted, no quote or line break inside (DO: 'TableSeq32' and GUID-named sequences).
+   * Both new texts re-measured clean on 847b1fa5a with R-955's kit (`/coord/handoff/R-989/restart/`):
+   * per kind 20 refusals on one kept daemon, 27 readers equal to the control, 20 fresh daemons one
+   * answer equal to it, the pid unchanged, no panic text.
+   */
   "cascade-existing-state":
-    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)$/,
+    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed (?:an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)|number sequence '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new NumberSequence\.Insert is\)|isolated storage key '[^'\n]+' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set is\))$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

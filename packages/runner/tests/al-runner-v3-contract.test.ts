@@ -295,6 +295,12 @@ const fakeAlcIo: ArtifactIo = {
   },
 };
 
+/** R1000: the cascade-existing-state texts, before (736fc7677) and after (847b1fa5a) the rewording. */
+const CASCADE_736 = (t: string): string =>
+  `NotRun: out-of-scope: an earlier test of this codeunit, ${t}, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`;
+const SEQ_847 = `NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesSeq, changed number sequence 'R1000SEQ' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`;
+const KEY_847 = `NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesKey, changed isolated storage key 'R1000KEY' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set is)`;
+
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
 const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: string }> = {
   "Codeunit50670.HttpGet": {
@@ -334,6 +340,23 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     message:
       "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)",
   },
+  // R1000 (coord R-989): the families added after R612, as edge-736fc7677 words them (R-989's probe).
+  "Codeunit50675.C_UsesSeq": {
+    status: "error",
+    notRun: true,
+    message: CASCADE_736("B_ChangesSeq"),
+  },
+  "Codeunit50676.C_UsesKey": {
+    status: "error",
+    notRun: true,
+    message: CASCADE_736("B_ChangesKey"),
+  },
+  "Codeunit50677.FindSetCompanies": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+  },
 };
 
 type ServeRow = { status: string; notRun?: boolean; message?: string };
@@ -360,6 +383,9 @@ const TODAY_ROWS: Record<string, ServeRow> = {
   ...FIXED_WITHOUT_NEVER,
   "Codeunit50671.CommitCall": { status: "pass", notRun: false },
   "Codeunit50674.HttpGetPublic": { status: "error", notRun: true, message: HTTP_TODAY },
+  // R1000: edge-847b1fa5a's per-kind cascade texts
+  "Codeunit50675.C_UsesSeq": { status: "error", notRun: true, message: SEQ_847 },
+  "Codeunit50676.C_UsesKey": { status: "error", notRun: true, message: KEY_847 },
 };
 
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
@@ -519,9 +545,11 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 5 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 8 entries");
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
+    expect(f?.measured).toContain("cascade-existing-state: refusal");
+    expect(f?.measured).toContain("company-findset: refusal");
     expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
     const run = s.requests.filter((q) => q.command === "runTests");
     expect(run.length).toBe(1);
@@ -532,24 +560,51 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     });
   });
 
+  // R1000 (coord R-989): a reworded REFUSAL is unkept (no entry accepts it, so a serve warm-up falls back
+  // to one-shot): it never refuses a session, and it FAILS leg C. Every entry, the new families included.
   for (const [entry, name] of [
     ["http", "Codeunit50670.HttpGet"],
     ["commit", "Codeunit50671.CommitCall"],
     ["cascade", "Codeunit50672.LaterFails"],
     ["onrun-failed", "Codeunit50673.Never"],
     ["http", "Codeunit50674.HttpGetPublic"],
+    ["cascade-existing-state", "Codeunit50675.C_UsesSeq"],
+    ["cascade-existing-state", "Codeunit50676.C_UsesKey"],
+    ["company-findset", "Codeunit50677.FindSetCompanies"],
   ] as const) {
-    test(`a reworded ${entry} reason is diverged, names the entry, never refuses, and leg C still passes with the warning`, async () => {
+    test(`R1000: a reworded ${entry} refusal (${name}) is unkept, names it, never refuses a session, and FAILS leg C`, async () => {
       const rows = {
         ...SERVE_ROWS,
         [name]: { ...SERVE_ROWS[name], message: "NotRun: out-of-scope: reworded" },
       };
       const r = await probe({}, fakeServe(rows as typeof SERVE_ROWS).spawn);
       const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
-      expect(f?.verdict).toBe("diverged");
-      expect(f?.measured).toContain(`${entry}: MOVED`);
+      expect(f?.verdict).toBe("unkept");
+      expect(f?.measured).toContain(`${entry}: UNKEPT ${name}`);
       expect(f?.measured).toContain("reworded");
       expect(v3ContractRefusals(r)).toEqual([]);
+      const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
+      expect(c.outcome).toBe("gate-fail");
+      expect(c.lines.join("\n")).toMatch(/gate-fail: serve-keep-reasons: unkept .*R1000/);
+    });
+  }
+
+  // R612 kept: a row that moved WITHOUT a refusal the keep-list rejects (a plain fail where a refusal
+  // was expected, or no row) still only warns.
+  for (const [entry, name, moved] of [
+    ["commit", "Codeunit50671.CommitCall", { status: "fail", notRun: false, message: "x" }],
+    [
+      "company-findset",
+      "Codeunit50677.FindSetCompanies",
+      { status: "fail", notRun: false, message: "x" },
+    ],
+  ] as const) {
+    test(`a ${entry} row that moved to a plain fail is diverged, and leg C still passes with the warning`, async () => {
+      const rows = { ...SERVE_ROWS, [name]: moved };
+      const r = await probe({}, fakeServe(rows as typeof SERVE_ROWS).spawn);
+      const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
+      expect(f?.verdict).toBe("diverged");
+      expect(f?.measured).toContain(`${entry}: MOVED`);
       const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS);
       expect(c.outcome).toBe("pass");
       expect(c.lines.join("\n")).toMatch(
@@ -559,6 +614,25 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       );
     });
   }
+
+  test("R1000: edge-847b1fa5a's per-kind cascade texts are kept, and a build that runs those tests (plain pass) matches too", async () => {
+    const today = await probe({}, fakeServe(TODAY_ROWS).spawn, true);
+    const f = today.facts.find((x) => x.fact === "serve-keep-reasons");
+    expect(f?.verdict).toBe("matches");
+    expect((f?.measured.match(/cascade-existing-state: refusal/g) ?? []).length).toBe(2);
+    expect(classifyLegC(today.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+    const passing = {
+      ...TODAY_ROWS,
+      "Codeunit50675.C_UsesSeq": { status: "pass", notRun: false },
+      "Codeunit50676.C_UsesKey": { status: "pass", notRun: false },
+      "Codeunit50677.FindSetCompanies": { status: "pass", notRun: false },
+    };
+    const p = (await probe({}, fakeServe(passing).spawn, true)).facts.find(
+      (x) => x.fact === "serve-keep-reasons",
+    );
+    expect(p?.verdict).toBe("matches");
+    expect((p?.measured.match(/: plain pass/g) ?? []).length).toBe(4); // commit (pinned) + the three
+  });
 
   const serveFact = async (rows: Record<string, ServeRow>) =>
     (await probe({}, fakeServe(rows).spawn)).facts.find((x) => x.fact === "serve-keep-reasons");
@@ -575,7 +649,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(5);
+    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(8);
   });
 
   // R808 (d): pinned (the build's pin has serveKeepMoved), the fact expects commit a plain pass and

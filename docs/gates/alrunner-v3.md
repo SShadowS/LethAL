@@ -63,7 +63,12 @@ The legs:
   row against its entry of `V3_SERVE_SAFE_REFUSALS` (the fact pins four entries: http, commit, cascade, onrun-failed; the
   seven R945 entries are not in it, since it runs without the .NET helper, and a reworded text of theirs only closes), the reasons
   after which the v3 serve rule keeps the daemon. Since R705, http and cascade (cascade only for the message
-  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. no-callee
+  `later`) are also accepted as a plain trusted fail (a #5602-fixed build), and `measured` says which. Since [[R1000]]
+  (coord R-989) the daemon also runs three codeunits for the families added later (`cascade-existing-state`, both
+  kinds, and `company-findset`; eight codeunits, eleven tests in all), each also accepted as a plain pass, and a row
+  REFUSED with a text no keep-list entry accepts reads `unkept`, which is gate-fail in leg C: at a serve warm-up such
+  a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Any
+  other move still only warns. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
@@ -739,3 +744,8 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
   seven T rows pinned, K skipped as a candidate), and `current` moved to `edge-dcdf9e821-dcdf9e821/`. Right after,
   `itest:alrunner-v3` on the new `current` passed every leg, K 3 / 12 / 4 over 19 with 0 differences from
   `bcdev.baseline.json`. Logs: `/coord/handoff/R-756/` (`regate.out`, `edge-rejudge.out`, `k-run.log`).
+- 2026-11-14: [[R1000]] (coord R-989). edge-847b1fa5a reworded the `cascade-existing-state` refusal per kind; the keep
+  list matched only the old text, so R-984's DO serve run fell back to one-shot at its warm-up. The entry now accepts
+  the old text and both new ones (each re-measured clean on a kept daemon), and leg C's `serve-keep-reasons` runs
+  the later families too, reading `unkept` (gate-fail) for a refused row no entry accepts. Leg C keeps its 28 facts;
+  no pinned figure moves (pre-commitment in `docs/superpowers/specs/2026-11-14-r1000-serve-keep-texts-precommitment.md`).
