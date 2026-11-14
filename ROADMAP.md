@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 974 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**31 of 975 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -986,7 +986,7 @@ that ordering is the priority.
 - **R966** · A run stopped by SIGTERM/SIGINT prints "TIME BUDGET REACHED: --time-budget N s used up" on the console, although the budget was not spent; the report itself says stoppedBySignal · [R966.md](docs/roadmap/R966.md) · done (9b01a6fc) — the progress line says STOPPED BY SIGNAL or STOPPED BY THE MEMORY GUARD, and the report…
 - **R967** · heavy-slot-class.test.ts 'a guard-refused head waiter ... lets a plain caller take the free slot' flaked (exit 75): the refused waiter's own 0.05 s out-of-turn retry held the free slot while the plain caller tried · [R967.md](docs/roadmap/R967.md) · done (fce3b9fb)
 - **R968** · On Continia DO the daemon baseline is no faster than one process per codeunit: the daemon restarts after every refused row, and al-runner reports cached:false on most serve requests (it recompiles per request) · [R968.md](docs/roadmap/R968.md) · done (a5904798) — the compile cache is upstream's #7978…
-- **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · open
+- **R969** · A "Database Id" in LethAL Control's lease row, untouched by force-reset-lease, so `--resume-run` can keep decided verdicts across a lease reset on a database that survived (R959's real cause); needs a control-app bump · [R969.md](docs/roadmap/R969.md) · done (ff33b1f9)
 - **R971** · BC.History batch 8 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (a var Option parameter loses the caller's members) and three new refusal causes filed upstream · [R971.md](docs/roadmap/R971.md) · closed 2026-11-13 — measured and filed upstream…
 - **R972** · Heavy jobs are admitted by memory only (owner ruling 2026-11-13): no job-count or BaseApp-class cap under a cgroup limit, six slot files as a ceiling that does not bind · [R972.md](docs/roadmap/R972.md) · done (cb092b39)
 - **R973** · BC.History batch 9 on al-runner v3 edge-c8fe56e05: eight System Application modules, one wrong result (ToBase64 of an InStream drops its line breaks) and six new refusal causes filed upstream · [R973.md](docs/roadmap/R973.md) · closed 2026-11-13 — measured and filed upstream…
@@ -1014,11 +1014,12 @@ that ordering is the priority.
 - **R1005** · R-983's unexamined tail of BC.History error mutants re-run on current: 25 of 73 now killed; the rest filed (#8084 new) or counted; Avalara finished · [R1005.md](docs/roadmap/R1005.md) · closed 2026-11-14 — measured and filed upstream (#8084; comments on #6896, #7764, #7827)
 - **R998** · A config that pins `alRunnerV3.dotnetSidecar` to a file other than the build's own sidecar ran silently: after `current` moved, every .NET call failed with 'protocol mismatch' and 13 Bank Deposits tests were lost without a word · [R998.md](docs/roadmap/R998.md) · done (354783d9)
 - **R1006** · Corpus windows started without a cheap check and ran for hours measuring nothing (DO's no-license window, Avalara's warm-up fallback): `scripts/triage-baseline.ts` now runs the baseline plus a few small codeunits first and stops by name · [R1006.md](docs/roadmap/R1006.md) · done (2e598e35)
-- **R1007** · The per-test daemon baseline skips a cross-check sample whose daemon row al-runner refused (daemon-odd-row) instead of comparing it, so a project whose samples land on refused tests loses its daemon baseline and runs the whole baseline one-shot · [R1007.md](docs/roadmap/R1007.md) · open
+- **R1007** · The per-test daemon baseline skips a cross-check sample whose daemon row al-runner refused (daemon-odd-row) instead of comparing it, so a project whose samples land on refused tests loses its daemon baseline and runs the whole baseline one-shot · [R1007.md](docs/roadmap/R1007.md) · done (ff33b1f9)
 - **R1008** · A run on al-runner v3's serve default can never be resumed: --resume forces one-shot (R761), and the one-shot session's runner_build lacks the run's ` baseline-daemon` tag (R948), so no run matches; DO's 15,563 remaining covered mutants cannot be split across windows · [R1008.md](docs/roadmap/R1008.md) · done (12d8a503)
 - **R1009** · DO's serve daemons close on 'a stale <table> buffer from its own write, after a lock other tha...' (7 of 35 closes in R-984 t1), but the text is never stored whole, so it cannot be measured for the keep-list · [R1009.md](docs/roadmap/R1009.md) · open
 - **R1010** · Untouched handles on al-runner v3 (generated, 59 cells): XmlElement's InnerXml/SetAttribute/GetChildElements/Attributes/AsXmlNode and CopyStream between two uncreated streams are refused (new classes, upstream #7760); within one type some methods refuse while their siblings fail · [R1010.md](docs/roadmap/R1010.md) · open
 - **R1011** · DotNet variable that holds no object on al-runner v3 (generated, 29 cells over 9 .NET types): all refused; 25 with the no-object cause, Regex.IsMatch/Replace with a wrong 'no overload' text (they pass on a constructed Regex), TimeZoneInfo by policy (upstream #8036 item 1) · [R1011.md](docs/roadmap/R1011.md) · open
+- **R1012** · R969's live negative leg: after a real server1 restart (in-memory databases lost), a `--resume-run` must refuse because both the generation and the database id changed · [R1012.md](docs/roadmap/R1012.md) · open
 
 ---
 

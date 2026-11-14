@@ -7259,19 +7259,73 @@ describe("R948 B: `method` codeunits as per-test requests", () => {
     expect(r.serve.closes).toHaveLength(1); // closed when the baseline ended, before any mutant daemon
   });
 
-  test("an answer that is not exactly that test's row, run, falls back to the test alone one-shot", async () => {
-    const refusedA: RowsFn = (m, cu, d, n) =>
+  const refusedA =
+    (message: string): RowsFn =>
+    (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
-        x.method === "A" && d >= 0
-          ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
-          : x,
+        x.method === "A" && d >= 0 ? { ...x, status: "error" as const, notRun: true, message } : x,
       );
-    const r = await methodRig({ serve: { rows: refusedA } });
+  const askedOf = (r: Awaited<ReturnType<typeof methodRig>>) =>
+    r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1)).sort();
+
+  test("R1007: a refusal the daemon may keep (V3_SERVE_SAFE_REFUSALS) is kept from the daemon, not re-run", async () => {
+    // A fresh process refuses A alike (the rig's one-shot rows), so the kept answer is the one one-shot would give.
+    const r = await methodRig({ serve: { rows: refusedA(COMMIT) }, oneShotRows: refusedA(COMMIT) });
     const v = await baseline(r.b, SUITE2);
     expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
-    // A alone one-shot (the daemon's answer was a refusal), plus the sample's B and C.
-    const asked = r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1));
-    expect(asked.sort()).toEqual(["A", "B", "C"]);
+    expect(v[0]?.outcome).not.toBe("pass"); // A: the daemon's refusal stands
+    // Only the samples B and C ran one-shot.
+    expect(askedOf(r)).toEqual(["B", "C"]);
+  });
+
+  test("R1007 (build review): a cascade refusal is never kept in the per-test fill: one test per request cannot honestly give it", async () => {
+    const CASCADE =
+      "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (a refusal of an earlier test)";
+    const r = await methodRig({ serve: { rows: refusedA(CASCADE) } });
+    await baseline(r.b, SUITE2);
+    // A re-ran alone one-shot, as before R1007, besides the samples B and C.
+    expect(askedOf(r)).toEqual(["A", "B", "C"]);
+  });
+
+  test("R1007: a refused SAMPLE is compared like any row: the same refusal (first line) keeps the daemon baseline, another answer drops it by name", async () => {
+    // Not in V3_SERVE_SAFE_REFUSALS: before R1007 a sample like this was skipped as daemon-odd-row.
+    const REFUSED = "NotRun: out-of-scope: a refusal no serve rule names";
+    const refusedB =
+      (daemonOnly: boolean, tail: string): RowsFn =>
+      (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          x.method === "B" && (!daemonOnly || d >= 0)
+            ? { ...x, status: "error" as const, notRun: true, message: `${REFUSED}${tail}` }
+            : x,
+        );
+    // Same refusal in the fresh process; only text after the first line differs (it can, by path).
+    const same = await methodRig({
+      serve: { rows: refusedB(true, "\ndaemon path") },
+      oneShotRows: refusedB(false, "\none-shot path"),
+    });
+    const v = await baseline(same.b, SUITE2);
+    expect(same.b.daemonBaselineReport().dropped).toBeUndefined();
+    expect(same.b.daemonBaselineReport().sampledSkipped).toEqual([]);
+    expect(v[1]?.outcome).not.toBe("pass"); // B: the refusal both agreed on
+    expect(askedOf(same)).toEqual(["B", "C"]);
+    // The fresh process passes B: the daemon's refusal differs, and the daemon baseline drops by name.
+    const other = await methodRig({ serve: { rows: refusedB(true, "") } });
+    await baseline(other.b, SUITE2);
+    expect(other.b.daemonBaselineReport().dropped).toContain("differs from a fresh process's");
+    expect(other.b.daemonBaselineReport().droppedDetail.join(" ")).toContain(
+      "b: differs in status, notRun",
+    );
+  });
+
+  test("an answer that is not exactly that test's row, run, falls back to the test alone one-shot", async () => {
+    // A refusal outside V3_SERVE_SAFE_REFUSALS is not kept (R1007 keeps only the safe ones).
+    const r = await methodRig({
+      serve: { rows: refusedA("NotRun: out-of-scope: a refusal no serve rule names") },
+    });
+    const v = await baseline(r.b, SUITE2);
+    expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
+    // A alone one-shot (the daemon's answer was a refusal it may not keep), plus the sample's B and C.
+    expect(askedOf(r)).toEqual(["A", "B", "C"]);
   });
 });
 
@@ -8020,6 +8074,8 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
     stubCus(r.b, Object.fromEntries(CUS.slice(1).map((c) => [c, bad])));
     await baseline(r.b, SUITE6);
     expect(dropNotice(seen)[0]?.[1]).toContain("too few clean cross-check samples: 0 of 2");
+    // R1007: and names the skipped samples with their reasons, not only the itests' report.
+    expect(dropNotice(seen)[0]?.[1]).toMatch(/; skipped samples: \S.* \(\S+\)/);
     expect(rep(r).served).toBe(0);
   });
 

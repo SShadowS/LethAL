@@ -322,6 +322,9 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "lend/R1": RESUME_REUSED,
   "lend/R2": RESUME_REUSED,
   "lend/RP": RESUME_REUSED,
+  // R969 (PR-04, pre-commitment 2026-11-14-r969-lend-leg-precommitment.md, prediction 2): no snapshot under the new
+  // generation, so no resume-baseline-reused; the carry across the reset is said by name.
+  "lend/RL": ["resume-across-lease-reset", "resume-reusing-run"],
   "lend/R3": ["resume-reusing-run", "snapshot-backend-build-changed"],
   "lend/N1": ["history-backend-build-changed"],
   "lend/N5": ["history-test-app-changed"],

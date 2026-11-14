@@ -665,6 +665,12 @@ function isNamedRefusalRow(r: V3Row): boolean {
   );
 }
 
+/** R1007 (build review): a refusal that names an earlier test of the codeunit (`cascade`, `cascade-existing-state`). */
+function isCascadeRefusal(message: string | undefined): boolean {
+  const { cascade, "cascade-existing-state": existing } = V3_SERVE_SAFE_REFUSALS;
+  return message !== undefined && [cascade, existing].some((re) => re?.test(message) === true);
+}
+
 /**
  * R1001 (coord R-991): how many baseline codeunits in a row must come back refused, every row with one
  * and the same text, before the session stops by name. Measured over the baselines of 169 v3 stores
@@ -2207,11 +2213,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   };
 
   /**
+   * R1007: the "too few clean samples" drop names the samples THIS fill skipped (from `from` on; the
+   * stats are cumulative over the whole-codeunit and per-test fills) and why. Until then, only the itests saw them.
+   */
+  private tooFewCleanWhy(clean: number, required: number, from: number): string {
+    const skipped = this.baselineStats.sampledSkipped.slice(from);
+    const named =
+      skipped.length > 0
+        ? `; skipped samples: ${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? `, and ${skipped.length - 5} more` : ""}`
+        : "";
+    return `too few clean cross-check samples: ${clean} of ${required}${named}`;
+  }
+
+  /**
    * R948: a daemon answer the fill did not keep, named. A sampled one is counted apart (the sample's
    * own `compared` shows it); the others are the three reasons a gate may accept as "reported, not a
    * regression": too slow for a warm duration to be trusted, a request error, or a refused/odd row.
    * R951: a sampled skip carries its reason, `Name (reason)`.
    */
+
   private noteSkip(
     kind: "tooSlow" | "error" | "other",
     name: string,
@@ -3986,6 +4006,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const answers = new Map<number, BaselineAnswer>();
     const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
     const comparedBefore = this.baselineStats.compared;
+    const skippedBefore = this.baselineStats.sampledSkipped.length; // R1007: this fill's skips only
     // R1001: the fill's own watch, so answers a dropped fill never kept cannot count toward a later stop.
     const uniformWatch = new UniformRefusalWatch();
     type Step = "ok" | "stop" | "dropped";
@@ -4132,7 +4153,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const clean = this.baselineStats.compared - comparedBefore;
       if (!stopped && clean < required) {
         this.dropDaemonBaseline(
-          `too few clean cross-check samples: ${clean} of ${required}`,
+          this.tooFewCleanWhy(clean, required, skippedBefore),
           [`too-few-clean-samples:${clean}/${required}`],
           shots,
         );
@@ -4182,6 +4203,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const answers = new Map<number, BaselineAnswer>();
     const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand
     const comparedBefore = this.baselineStats.compared;
+    const skippedBefore = this.baselineStats.sampledSkipped.length; // R1007: this fill's skips only
     const nameOf = (r: TestMethodRef) => `${r.codeunitName}.${r.method}`;
     type Step = "ok" | "stop" | "dropped";
     const check = async (key: number, daemon: BaselineAnswer, pos: number): Promise<Step> => {
@@ -4268,12 +4290,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const isSample = plan.has(key);
         reached(key, ref);
         // Why the daemon's answer is not kept (R5: a sample is then replaced), if it is not.
+        // R1007: a refused row is an answer too (R678). A sample's refusal is compared with a fresh
+        // process's like any row; any other test's is kept only when the daemon may keep that refusal
+        // (`serveDaemonReusable`, as the live path); else it is odd, as before. A cascade refusal ("an
+        // earlier test of this codeunit ...") is never kept here: each request runs ONE test, so it can
+        // only mean state crossed requests, which a fresh process would not show (build review).
+        const unkeptRefusal =
+          row?.notRun === true &&
+          !isSample &&
+          (!serveDaemonReusable(serveLines([row]), "v3") || isCascadeRefusal(row.message));
         const skip: { kind: "error" | "other" | "tooSlow"; reason: string } | undefined = failed
           ? { kind: "error", reason: "daemon-error" }
           : got === undefined ||
               got.rows.length !== 1 ||
               row === undefined ||
-              row.notRun ||
+              unkeptRefusal ||
               row.method.toLowerCase() !== ref.method.toLowerCase()
             ? { kind: "other", reason: "daemon-odd-row" }
             : durationCouldMoveBudget([row], got.wallMs, f.floorMs)
@@ -4307,7 +4338,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const clean = this.baselineStats.compared - comparedBefore;
       if (!stopped && clean < required) {
         this.dropDaemonBaseline(
-          `too few clean cross-check samples: ${clean} of ${required}`,
+          this.tooFewCleanWhy(clean, required, skippedBefore),
           [`too-few-clean-samples:${clean}/${required}`],
           shots,
         );

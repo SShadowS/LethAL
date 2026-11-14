@@ -111,6 +111,7 @@ A's run row and rows, with only the named field changed.
 | RN2 | KR: unfinished clone, revoked | `--resume-run KR` | refused at the test app (`H\|closed-world:revoked`) |
 | RN4 | none | `--resume-run A` | refused: A already finished (R618 ruling 2) |
 | RP | KP: unfinished pending clone of K's shape (`H\|pending`, A's server), the newest unfinished run | `--resume` | it picked KP (R601): `resume-reusing-run` names KP, 9 carryable, 1 error row, and R601's clause; `resume-baseline-reused` names N5's run; no baseline test ran here; KEPT minus its two uncovered rows carried by key; the sentinel carried from KP; R2's figures; frozen; its own run row ends exactly H (its live re-ask confirmed it); KP still `H\|pending` |
+| RL | LR: unfinished full clone of A (database id copied), then `force-reset-lease` with no restart (R969; LAST, since the reset changes the generation) | `--resume-run` | the reset minted a new generation (the old one is A's); `resume-across-lease-reset` names LR, A's database id and both generations, and `resume-reusing-run` names LR with 22 carryable; no snapshot under the new generation, so the baseline ran here; one deploy (R621); every mutant but the 5 no-coverage carried by key; `resumedFrom` 17; frozen; its run row records A's database id and the new generation |
 
 The RN legs throw before the session creates a run row and before it takes the lease. Every leg
 also checks that its own run row records H and D, so that a republish between legs cannot make a
@@ -217,3 +218,13 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   `itest:bcdev` PASS 3 / 12 / 4 on the same head (`bcdev-bc2.log`). Both gates re-ran and PASSED, unchanged, on
   the final head 5a9d1c80 after the build review's wording fix (R1 again carried 15; the logs were overwritten in
   place).
+- 2026-11-14, PR-04 (R969): every session wires the database id (one `HarnessInfo` read with the generation, as the CLI), L0
+  asserts run A records one, and leg RL is added (pre-commitment `docs/superpowers/specs/2026-11-14-r969-lend-leg-precommitment.md`,
+  d51bef44). **PASS on bc1** (the control app at `extensions/lethal-control/app.json`'s version), every leg as pre-committed:
+  - RL's reset went from A's generation to a new one;
+  - RL carried 17 by key across it (the 5 no-coverage re-derived), with no snapshot reuse and one deploy;
+  - RL is frozen 3 / 14 / 5 per mutant, and every earlier leg is unchanged.
+
+  `GATE_WARNINGS["lend/RL"]` is the set prediction 2 names. The first attempt stopped at the gate-warnings guard before RL's
+  assertions, because that set was not yet committed. Log: `/coord/handoff/PR-04/lend-bc1.log`. The negative leg (a real
+  restart changes both ids) waits for the next server1 restart.

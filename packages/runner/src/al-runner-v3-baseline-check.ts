@@ -129,6 +129,13 @@ function keyDiff(daemon: ReadonlySet<string>, oneShot: ReadonlySet<string>): str
   return `${side("daemon", onlyD)}; ${side("one-shot", onlyO)}`;
 }
 
+/**
+ * The text compared (R1007): a refusal's first line only, the key R1001's uniform-refusal watch reads, since a
+ * refusal's tail can differ by path; status and notRun are still compared. Any other row's whole text.
+ */
+const textOf = (r: ComparableRow): string =>
+  r.notRun ? ((r.message ?? "").split("\n")[0] ?? "") : (r.message ?? "");
+
 const describeRow = (r: ComparableRow): string =>
   `${r.status}${r.notRun ? ", not run" : ""}${r.flagged === true ? ", flagged" : ""}`;
 
@@ -159,7 +166,7 @@ export function compareBaselineAnswers(
       ...(a.status !== b.status ? ["status"] : []),
       ...(a.notRun !== b.notRun ? ["notRun"] : []),
       // R949: `flagged` is never compared: serve rows cannot carry it (upstream issue 7954).
-      ...((a.message ?? "") !== (b.message ?? "") ? ["failText"] : []),
+      ...(textOf(a) !== textOf(b) ? ["failText"] : []),
     ];
     if (fields.length > 0) {
       why.push(
