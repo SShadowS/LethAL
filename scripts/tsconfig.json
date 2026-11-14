@@ -172,6 +172,8 @@
     "typecheck-coverage.test.ts",
     "al-runner-v3-update.test.ts",
     "al-runner-v3-update.ts",
+    "upstream-repros.test.ts",
+    "upstream-repros.ts",
     "automation-api-guard.test.ts",
     "build-native-parser.test.ts",
     "build-native-parser.ts",
