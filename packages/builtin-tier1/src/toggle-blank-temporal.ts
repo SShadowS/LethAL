@@ -30,7 +30,7 @@ const OPERATOR_VERSION = "2.0.0";
  *
  * R985: NOT in 1753. BC refuses to WRITE any non-blank date of 1753 to a table ("Cannot write the
  * value 01/01/1753 ... the content is invalid"): measured on BC 28.4, Date and DateTime, Insert and
- * Modify, 1753-01-01 to 1753-12-31 23:59:59 all refused, 1754-01-01 the first date stored
+ * Modify, 17 values from 1753-01-01 to 1753-12-31 23:59:59 all refused, 1754-01-01 the first date stored
  * (`/coord/handoff/R-971/bc-probe-result.md`). So a mutant whose value reached a table write died on
  * the write whatever the tests asserted. 1754-01-02, not -01: a DateTime is stored in UTC, and
  * `CREATEDATETIME` reads the user's time zone, so a date one day clear stays storable at any offset
