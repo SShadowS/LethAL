@@ -519,8 +519,9 @@ describe("R857: --isolate-tests needs serve-entries", () => {
 });
 
 describe("R786: the one-shot re-run after a serve warm-up fallback", () => {
+  // A family R612 still closes on (Company FindSet is kept since R968).
   const WHY =
-    "Codeunit50100.B (codeunit 50100): NotRun: out-of-scope: FindSet on the Company table";
+    "Codeunit50100.B (codeunit 50100): NotRun: out-of-scope: InStream method on an unassigned Variant";
 
   test("one-shot, ONE named warning that names the row and its reason, no process started", async () => {
     const r = await rig({ ...DEFAULT, serveFallbackWarmup: WHY });

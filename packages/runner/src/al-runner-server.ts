@@ -761,6 +761,18 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   // measured clean with the same kit), so the prefix is optional; both forms are measured.
   "platform-no-provider":
     /^NotRun: out-of-scope: (?:store error )?platform table '[^'\n]+' \(\d+\) has no provider$/,
+  /**
+   * R968 (coord R-955): the two families that restarted Continia DO's daemon baseline 7 times in 16 min
+   * on edge-736fc7677. Measured clean as R945's were (`/coord/handoff/R-955/restart/result.md`): per
+   * family 47 refused requests, 27 readers on one kept daemon all equal to the control, 20 fresh
+   * daemons equal, the pid unchanged, no panic text. The reader never saw the key or the sequence
+   * (Module scope, isolation "test", coverage off); the basis is R-937's finding that nothing crosses
+   * requests under any isolation. The cascade's test name, a name with no comma, is its only variable part.
+   */
+  "company-findset":
+    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+  "cascade-existing-state":
+    /^NotRun: out-of-scope: an earlier test of this codeunit, [^,\n]+, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured \(only a new key's IsolatedStorage\.Set and a new NumberSequence\.Insert are\)$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
