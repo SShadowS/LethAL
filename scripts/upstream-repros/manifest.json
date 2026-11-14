@@ -58,6 +58,22 @@
       }
     },
     {
+      "id": "u7586-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
+      "bcEvidence": "inferred, not measured on BC: the issue's five invented repros (R-902's Probe4.al, unchanged but for the app's name and id), each a call Microsoft's Statistical Accounts or VAT Group Management tests make and those tests ship as passing; item 2 expects BC's own error under asserterror. Plus R-902's Uri control test. Added by PR-05 (refusal ledger): on edge-a184cfc79 item 1 (AuditCategory::Authentication) already passes",
+      "rerun": [
+        "VAT Group Management (the 5-argument GetUrl stops 41 of its 82 tests) and Statistical Accounts, and the refusal ledger's causes under #7586"
+      ],
+      "tests": {
+        "Codeunit51137.AuditCategoryAuthentication": { "status": "pass" },
+        "Codeunit51137.RecordRefGetTableUnassignedVariant": { "status": "pass" },
+        "Codeunit51137.DeleteAllUnderOtherRecordsGlobalFilterGroup": { "status": "pass" },
+        "Codeunit51137.ConsistentFalseThenGuardedCodeunitRun": { "status": "pass" },
+        "Codeunit51137.UriSchemeThroughSystemApplication": { "status": "pass" },
+        "Codeunit51137.GetUrlODataFiveArgumentsWithRecord": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
       "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",
