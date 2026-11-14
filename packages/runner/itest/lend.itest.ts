@@ -10,7 +10,8 @@
  * lends from it on the positive half (L1 history, R1/R2/R3 resume) and seeds clones of it that one
  * field makes untrustworthy on the negative half (N0 control, N1 v3, N5 revoked; RN3, RN1d, RN2,
  * RN4 refused before the lease), then (R601, RP) resumes a crashed closed-world run's pending
- * state on the same server. Seeds are written by `lend-seed.ts`, whose offline test pins that
+ * state on the same server, and last (R969, RL) resets the lease with no restart and resumes a clone
+ * across the new generation on the unchanged database id. Seeds are written by `lend-seed.ts`, whose offline test pins that
  * each override changes only its own field.
  *
  * R-585 (pre-commitment docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md): since R621
