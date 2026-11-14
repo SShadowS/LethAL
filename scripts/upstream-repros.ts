@@ -15,6 +15,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isV3RefusalText } from "../packages/runner/src/al-runner-rows";
 
 /** What BC gives for one test. `message` is the whole message; `messageIncludes` a part of it. */
 export interface BcResult {
@@ -72,9 +73,13 @@ export interface TestChange {
   readonly why?: string;
 }
 
-/** BC's result for a test against one row. A missing row, or a test al-runner did not run, never matches. */
+/**
+ * BC's result for a test against one row. A missing row, a test al-runner did not run, or a row whose message holds v3's
+ * refusal marker anywhere (R675; a refusal written as a plain fail) never matches.
+ */
 export function matchesBc(bc: BcResult, row: Row | undefined): boolean {
-  if (row === undefined || row.notRun === true || row.status !== bc.status) return false;
+  if (row === undefined || row.notRun === true || isV3RefusalText(row.message)) return false;
+  if (row.status !== bc.status) return false;
   const msg = (row.message ?? "").trim();
   if (bc.message !== undefined && msg !== bc.message.trim()) return false;
   if (bc.messageIncludes !== undefined && !msg.includes(bc.messageIncludes)) return false;

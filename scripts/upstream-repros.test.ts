@@ -144,6 +144,17 @@ describe("R-996: a repro's change between current and the candidate", () => {
     expect(compare(M, new Map(), BC_LIKE).every((c) => c.change === "error")).toBe(true);
   });
 
+  test("PR-01 review: a refusal written as a plain fail never matches an expected fail", () => {
+    const failAny = { status: "fail" as const };
+    expect(
+      matchesBc(failAny, row("x", "fail", "NotRun: out-of-scope: use of an unassigned XmlElement")),
+    ).toBe(false);
+    expect(matchesBc(failAny, row("x", "fail", "a: NotRun: out-of-scope: y"))).toBe(false);
+    expect(matchesBc(failAny, row("x", "fail", "NavXmlElement variable not initialized."))).toBe(
+      true,
+    );
+  });
+
   test("a missing row, a not-run row, another status or another message never matches BC", () => {
     const bc = { status: "fail" as const, message: "stored 1754-01-01" };
     expect(matchesBc(bc, undefined)).toBe(false);

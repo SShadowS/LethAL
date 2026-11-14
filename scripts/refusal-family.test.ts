@@ -137,6 +137,17 @@ describe("PR-01: the refusal-family generator", () => {
     ]);
   });
 
+  test("review: v3's refusal marker in a plain fail row is a refusal; a timeout row is neither refusal nor score", () => {
+    const r = classify(F, [
+      row(0, "fail", "Runtime error: NotRun: out-of-scope: use of an unassigned XmlElement"),
+      row(1, "error", "Test exceeded 60s timeout.", true),
+    ]);
+    expect(r[0]?.outcome).toBe("refused");
+    expect(r[0]?.message).toBe("use of an unassigned XmlElement");
+    expect(r[1]?.outcome).toBe("timeout");
+    expect(refusalClasses(F, r).map((c) => c.text)).toEqual(["use of an unassigned XmlElement"]);
+  });
+
   test("the untouched-handle family: every cell's handle type is declared, and names are unique", () => {
     const f = UNTOUCHED_HANDLE;
     for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();

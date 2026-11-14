@@ -14,6 +14,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "../packages/runner/src/al-runner-rows";
 
 export interface Cell {
   readonly type: string;
@@ -67,7 +68,7 @@ export const UNTOUCHED_HANDLE: Family = {
     "RecordRef.FieldCount on a RecordRef that is not open",
     "FieldRef.Class on a FieldRef that was never assigned",
     "KeyRef.FieldCount on a KeyRef that was never assigned",
-    "CopyStream from an untouched handle",
+    "CopyStream from an untouched handle into a DotNet stream",
   ],
   support:
     'table 51000 "Cell Row"\n{\n    fields\n    {\n        field(1; "Code"; Code[10]) { }\n    }\n    keys { key(PK; "Code") { Clustered = true; } }\n}\n',
@@ -194,7 +195,7 @@ ${body}
   };
 }
 
-export type Outcome = "pass" | "fail" | "refused" | "missing";
+export type Outcome = "pass" | "fail" | "refused" | "timeout" | "missing";
 
 export interface CellResult {
   readonly cell: Cell;
@@ -202,10 +203,10 @@ export interface CellResult {
   readonly message?: string;
 }
 
-/** The refusal text of a row, without v3's prefix and a trailing ` (not pinned)`. */
+/** The refusal text of a row: what follows v3's marker (wherever it stands), without a trailing ` (not pinned)`. */
 export function refusalText(message: string): string {
-  return message
-    .replace(/^NotRun: out-of-scope: /, "")
+  const at = message.indexOf("NotRun: out-of-scope: ");
+  return (at >= 0 ? message.slice(at + "NotRun: out-of-scope: ".length) : message)
     .replace(/ \(not pinned\)$/, "")
     .trim();
 }
@@ -219,7 +220,15 @@ export function classify(
   return f.cells.map((cell, i) => {
     const r = byName.get(`Codeunit${BASE_ID + 1 + i}.Cell`);
     if (r === undefined) return { cell, outcome: "missing" };
-    if (r.notRun === true)
+    // A stopped test is neither a refusal nor a score.
+    if (r.notRun === true && V3_TIMEOUT_MESSAGE.test(r.message ?? ""))
+      return {
+        cell,
+        outcome: "timeout",
+        ...(r.message !== undefined ? { message: r.message } : {}),
+      };
+    // Review: v3's refusal marker ANYWHERE in the message is a refusal, with or without `notRun` (R675).
+    if (r.notRun === true || isV3RefusalText(r.message))
       return { cell, outcome: "refused", message: refusalText(r.message ?? "") };
     if (r.status === "pass") return { cell, outcome: "pass" };
     return { cell, outcome: "fail", ...(r.message !== undefined ? { message: r.message } : {}) };
@@ -274,11 +283,19 @@ if (import.meta.main) {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, ALRUNNER_SEED: "1" },
+    timeout: 600_000,
   });
-  const j = JSON.parse(p.stdout.toString()) as {
+  let j: {
     tests?: { name: string; status: string; message?: string; notRun?: boolean }[];
     compilationErrors?: unknown[];
   };
+  try {
+    j = JSON.parse(p.stdout.toString());
+  } catch (err) {
+    throw new Error(
+      `al-runner gave no JSON (exit ${p.exitCode}${p.exitedDueToTimeout === true ? ", timed out after 600 s" : ""}): ${String(err)}; stderr: ${p.stderr.toString().slice(-500)}`,
+    );
+  }
   if ((j.compilationErrors ?? []).length > 0 || !Array.isArray(j.tests) || j.tests.length === 0)
     throw new Error(
       `the generated app did not run (exit ${p.exitCode}): ${JSON.stringify(j.compilationErrors ?? []).slice(0, 2000)}`,
@@ -292,10 +309,14 @@ if (import.meta.main) {
     console.log(
       `${c.known ? "known" : "NEW  "} ${c.cells.length} cell(s): ${c.text}\n        ${c.cells.join(", ")}`,
     );
+  for (const r of results.filter((x) => x.outcome === "missing" || x.outcome === "timeout"))
+    console.log(`${r.outcome.toUpperCase()}: ${r.cell.type}.${r.cell.method} (${r.cell.state})`);
   for (const r of results.filter((x) => x.outcome === "fail"))
     console.log(
       `fail: ${r.cell.type}.${r.cell.method} (${r.cell.state}): ${(r.message ?? "").slice(0, 160)}`,
     );
   const json = opt("--json");
   if (json !== undefined) writeFileSync(json, `${JSON.stringify(results, null, 2)}\n`);
+  // A cell with no row means the run did not cover the family: not a result to read.
+  if (n("missing") > 0) process.exitCode = 2;
 }
