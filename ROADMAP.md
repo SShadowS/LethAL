@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 979 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**33 of 980 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1024,6 +1024,7 @@ that ordering is the priority.
 - **R1013** · The refusal ledger's 215 unexamined causes settled on al-runner edge-a184cfc79: 13 fixed (634 refused tests run again), 15 by-design (al-runner's own policy text), 187 open with their issue (124 seen on this build); #8117 filed; six regression-set entries · [R1013.md](docs/roadmap/R1013.md) · closed 2026-11-15 — every cause has a state; open causes carry their upstream issue
 - **R1015** · On al-runner v3 serve every mutant test gets the stop of the slowest green baseline test (R954: 20 x its time + 5 s), so on DO a hang in a sub-second test costs 1,762 s; a per-test stop would change verdicts and needs its own measurement · [R1015.md](docs/roadmap/R1015.md) · done (9cff3793)
 - **R1016** · The al-runner update gate and its regression set run a candidate without its .NET sidecar (built only after the pass), while every LethAL run uses it: edge-5a58a0f16 moved System.Uri into the sidecar, and the set read a false 'regressed'; the sidecar's behaviour is never gated · [R1016.md](docs/roadmap/R1016.md) · open
+- **R1017** · --regate (and a refresh) gated `current` with its .NET sidecar beside it, while a candidate's gate has none: the two paths measured different things against the same sidecar-less frozen figures · [R1017.md](docs/roadmap/R1017.md) · open
 
 ---
 

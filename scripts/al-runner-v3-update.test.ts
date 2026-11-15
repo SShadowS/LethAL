@@ -530,6 +530,51 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(g.lethalCommit).toBe(REGATE_COMMIT);
   });
 
+  test("R1017: --regate of a current that has a sidecar gates a copy that cannot see it, with current's .gated beside it", async () => {
+    await setup();
+    const cur = await current();
+    await mkdir(join(cur, "dotnet-sidecar"), { recursive: true });
+    await writeFile(join(cur, "dotnet-sidecar", "AlDotNetSidecar.dll"), "dll");
+    const f = fake({ outcome: "pass", receiptSha: sha("alpha2") });
+    f.deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+    const seenAtGate: { sidecar: boolean; gated: string | undefined; bytes: string }[] = [];
+    const deps = {
+      ...f.deps,
+      runGate: async (
+        c: string,
+        env: Readonly<Record<string, string>>,
+        log: (l: string) => Promise<void>,
+      ) => {
+        const p = env.LETHAL_ALRUNNER_V3_PATH ?? "";
+        const g = join(dirname(p), ".gated");
+        seenAtGate.push({
+          sidecar: existsSync(join(dirname(p), "dotnet-sidecar")),
+          gated: existsSync(g) ? await readFile(g, "utf8") : undefined,
+          bytes: await readFile(p, "utf8"),
+        });
+        return f.deps.runGate(c, env, log);
+      },
+    };
+    const gatedBefore = await readFile(join(cur, ".gated"), "utf8");
+    expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(seenAtGate).toEqual([
+      { sidecar: false, gated: gatedBefore, bytes: await readFile(join(cur, "al-runner"), "utf8") },
+    ]);
+    // current keeps its sidecar, and its .gated takes the new commit as before.
+    expect(existsSync(join(cur, "dotnet-sidecar", "AlDotNetSidecar.dll"))).toBe(true);
+    expect(JSON.parse(await readFile(join(cur, ".gated"), "utf8")).lethalCommit).toBe(
+      REGATE_COMMIT,
+    );
+  });
+
+  test("R1017: a binary with no sidecar beside it is gated in place, as before", async () => {
+    await setup();
+    const f = fake({ outcome: "pass", receiptSha: sha("alpha2") });
+    f.deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+    expect(await updateOnce(f.deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+    expect(f.seen.envs[0]?.LETHAL_ALRUNNER_V3_PATH).toBe(join(await current(), "al-runner"));
+  });
+
   test("R632 A: the gate gets LETHAL_ITEST_V3_CDO (the gate page's checkout by default), on a candidate and on --regate", async () => {
     await setup();
     const want = process.env.LETHAL_ITEST_V3_CDO ?? V3_CDO_DEFAULT;
@@ -1316,6 +1361,38 @@ linuxOnly("R639 --edge-rejudge (R1-R9)", () => {
     expect(seen.gates).toEqual([]);
   });
 
+  test("R1016: a rejudge with a sidecar builder runs its repros on a staged copy WITH the sidecar; no kept file changes and no sidecar lands there", async () => {
+    await setupKept();
+    const before = await tree();
+    const f = rj();
+    const repros: string[] = [];
+    const beside: boolean[] = [];
+    const deps = {
+      ...f.deps,
+      buildSidecar: async (_c: string, out: string) => {
+        await writeFile(join(out, "AlDotNetSidecar.dll"), "dll");
+        return join(out, "AlDotNetSidecar.dll");
+      },
+      upstreamRepros: async (candidate: string) => {
+        repros.push(candidate);
+        // Read at call time: the work folder is gone once gateOne returns.
+        beside.push(existsSync(join(dirname(candidate), "dotnet-sidecar", "AlDotNetSidecar.dll")));
+        return [];
+      },
+    };
+    expect(await edgeRejudge(deps, EDGE)).toBe("gate-fail");
+    // The gate keeps the kept binary (R6); the repros run a copy outside failed/ and held/, with its sidecar.
+    expect(f.seen.envs[0]?.LETHAL_ALRUNNER_V3_PATH).toBe(join(kept(), "al-runner"));
+    expect(repros.length).toBe(1);
+    const r = repros[0] ?? "";
+    expect(r.startsWith(join(root, "failed")) || r.startsWith(join(root, "held"))).toBe(false);
+    expect(beside).toEqual([true]);
+    const after = await tree();
+    // A gate-fail at this commit adds its own failed/<name>@<commit>/ (by design); no sidecar lands in any kept folder.
+    expect(Object.keys(after).filter((p) => p.includes("dotnet-sidecar"))).toEqual([]);
+    for (const [p, bytes] of Object.entries(before)) expect(after[p]).toBe(bytes);
+  });
+
   test("R6: the KEPT binary is gated, as a candidate, never a download", async () => {
     await setupKept();
     const { deps, seen } = rj();
@@ -1646,6 +1723,12 @@ linuxOnly("R814: the two tracks", () => {
     await setupPinned();
     const f = edgeOf(pinnedPass);
     const asked: string[] = [];
+    // R1016: the repros run a binary with its sidecar beside it, built once, before the gate; the gate runs the original
+    // binary with none (its frozen figures were measured without one).
+    const beside = (p: string) =>
+      existsSync(join(dirname(p), "dotnet-sidecar", "AlDotNetSidecar.dll"));
+    const atGate: boolean[] = [];
+    const repros: boolean[] = [];
     const deps = {
       ...f.deps,
       buildSidecar: async (commit: string, out: string) => {
@@ -1653,9 +1736,23 @@ linuxOnly("R814: the two tracks", () => {
         await writeFile(join(out, "AlDotNetSidecar.dll"), "dll");
         return join(out, "AlDotNetSidecar.dll");
       },
+      runGate: async (
+        c: string,
+        env: Readonly<Record<string, string>>,
+        log: (l: string) => Promise<void>,
+      ) => {
+        atGate.push(beside(env.LETHAL_ALRUNNER_V3_PATH ?? ""));
+        return f.deps.runGate(c, env, log);
+      },
+      upstreamRepros: async (candidate: string) => {
+        repros.push(beside(candidate));
+        return [];
+      },
     };
     expect(await edgeOnce(deps)).toBe("pass");
     expect(asked).toEqual(["c893e3633"]);
+    expect(atGate).toEqual([false]);
+    expect(repros).toEqual([true]);
     const want = { file: "dotnet-sidecar/AlDotNetSidecar.dll", sha256: sha("dll") };
     expect((await gatedOf(EDGE_DIR)).dotnetSidecar).toEqual(want);
     const [r] = await ledger();
@@ -1666,10 +1763,19 @@ linuxOnly("R814: the two tracks", () => {
   test("R886: a sidecar that fails to build still gates: current moves, the note is in .gated and the row", async () => {
     await setupPinned();
     const f = edgeOf(pinnedPass);
+    let tries = 0;
+    const repros: boolean[] = [];
     const deps = {
       ...f.deps,
-      buildSidecar: async () => {
+      buildSidecar: async (_c: string, out: string) => {
+        tries++;
+        // A half-built folder must not stay where al-runner would find it.
+        await writeFile(join(out, "partial.dll"), "half");
         throw new Error("dotnet publish: exit 1");
+      },
+      upstreamRepros: async (candidate: string) => {
+        repros.push(existsSync(join(dirname(candidate), "dotnet-sidecar")));
+        return [];
       },
     };
     expect(await edgeOnce(deps)).toBe("pass");
@@ -1681,6 +1787,11 @@ linuxOnly("R814: the two tracks", () => {
     expect(r.dotnetSidecarNote).toContain("dotnet publish: exit 1");
     expect(r.dotnetSidecarSha256).toBeUndefined();
     expect(f.seen.logs.join("\n")).toContain("the build still gates");
+    // R1016: the build was tried once, the gate still ran, and the repros saw no sidecar folder (the half-built one is gone).
+    expect(tries).toBe(1);
+    expect(f.seen.gates.length).toBe(1);
+    expect(repros).toEqual([false]);
+    expect(existsSync(join(root, EDGE_DIR, "dotnet-sidecar"))).toBe(false);
   });
 
   test("R886: no buildSidecar dep, no sidecar fields at all", async () => {

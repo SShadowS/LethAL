@@ -193,7 +193,8 @@ export interface UpdateDeps {
   /**
    * R886: builds the .NET sidecar of al-runner commit `commit` into the new, empty `outDir`;
    * returns the dll's path. Throws when it cannot. Optional: absent, no sidecar is tried (and no
-   * field is written). Run AFTER the gate passed; a throw never changes the outcome.
+   * field is written). R1016: run once BEFORE the gate, beside a staged copy the repros use; a throw never changes the
+   * outcome.
    */
   buildSidecar?(commit: string, outDir: string): Promise<string>;
 }
@@ -221,7 +222,89 @@ export async function sidecarFields(
     await deps.log(`${deps.now()} ${version}: .NET sidecar built, sha256 ${sha256}`);
     return { dotnetSidecar: { file: relative(dest, dll), sha256 } };
   } catch (err) {
+    // R1016 (review): no half-built folder stays where al-runner would find it beside its binary.
+    await rm(out, { recursive: true, force: true }).catch(() => undefined);
     const note = `sidecar build failed: ${String(err)}`.slice(0, 400);
+    await deps.log(`${deps.now()} ${version}: ${note} (the build still gates)`);
+    return { dotnetSidecarNote: note };
+  }
+}
+
+/**
+ * R1016: a candidate's repros run WITH its sidecar, as every LethAL run uses it (R886): a copy of the binary goes into
+ * `<work>/staged/`, its sidecar is built beside it (al-runner finds a `dotnet-sidecar/` next to its own binary), and the repros
+ * run that copy. The gate itself keeps the original binary (its frozen figures have no sidecar). The copy keeps the kept
+ * folders (held/, failed/) untouched. Never throws: a failed copy or build is a note, and the repros then run the original.
+ */
+export async function stageWithSidecar(
+  deps: UpdateDeps,
+  work: string,
+  binary: string,
+  version: string,
+): Promise<{
+  readonly binary: string;
+  readonly dir: string;
+  readonly fields: Pick<GatedBuild, "dotnetSidecar" | "dotnetSidecarNote">;
+}> {
+  const dir = join(work, "staged");
+  try {
+    await mkdir(dir, { recursive: true });
+    const staged = join(dir, "al-runner");
+    await cp(binary, staged);
+    await chmod(staged, 0o755);
+    return { binary: staged, dir, fields: await sidecarFields(deps, dir, version) };
+  } catch (err) {
+    const note = `sidecar not staged: ${String(err)}`.slice(0, 400);
+    await deps.log(`${deps.now()} ${version}: ${note} (the build still gates)`);
+    return { binary, dir, fields: { dotnetSidecarNote: note } };
+  }
+}
+
+/**
+ * R1017: the gate measures a build with NO sidecar beside it on every path, as its frozen figures were measured (R1016 keeps
+ * the gate sidecar-less). al-runner finds a `dotnet-sidecar/` next to its own binary, so a binary that has one (`current` on
+ * `--regate`, a row's folder on a refresh) is gated as a plain copy in `<work>/plain/`, with its `.gated` (a non-candidate
+ * gate reads it beside the binary) and nothing else. The gate hashes the copy it runs, and the receipt is checked against the
+ * original's sha, so custody holds. A binary with no sidecar beside it is gated in place, as before.
+ */
+export async function sidecarFreeBinary(work: string, binary: string): Promise<string> {
+  const from = dirname(binary);
+  if (!existsSync(join(from, SIDECAR_DIR))) return binary;
+  const dir = join(work, "plain");
+  await mkdir(dir, { recursive: true });
+  const copy = join(dir, "al-runner");
+  await cp(binary, copy);
+  await chmod(copy, 0o755);
+  if (existsSync(join(from, ".gated"))) await cp(join(from, ".gated"), join(dir, ".gated"));
+  return copy;
+}
+
+/**
+ * R1016: after a pass, the sidecar the gate ran with goes into the build's folder (never a second build), its bytes checked
+ * against the sha the stage recorded. Never throws: a failed copy is a note, like a failed build.
+ */
+async function keepStagedSidecar(
+  deps: UpdateDeps,
+  staged: {
+    readonly dir: string;
+    readonly fields: Pick<GatedBuild, "dotnetSidecar" | "dotnetSidecarNote">;
+  },
+  dest: string,
+  version: string,
+): Promise<Pick<GatedBuild, "dotnetSidecar" | "dotnetSidecarNote">> {
+  const built = staged.fields.dotnetSidecar;
+  if (built === undefined) return staged.fields;
+  const out = join(dest, SIDECAR_DIR);
+  try {
+    await rm(out, { recursive: true, force: true });
+    await cp(join(staged.dir, SIDECAR_DIR), out, { recursive: true });
+    const got = await sha256OfFile(join(dest, built.file));
+    if (got !== built.sha256)
+      throw new Error(`copied sidecar has sha256 ${got}, not ${built.sha256}`);
+    return { dotnetSidecar: built };
+  } catch (err) {
+    await rm(out, { recursive: true, force: true }).catch(() => undefined);
+    const note = `sidecar not kept: ${String(err)}`.slice(0, 400);
     await deps.log(`${deps.now()} ${version}: ${note} (the build still gates)`);
     return { dotnetSidecarNote: note };
   }
@@ -626,6 +709,14 @@ export async function gateOne(
         movesCurrent = false; // A rejudge still measures the kept build.
       }
     }
+    // R1016: a candidate's repros run with its own sidecar, as LethAL's runs will; the sidecar is built here, once, before the
+    // gate. Not on a re-gate of current (it has its own, or none, beside it) nor a refresh (no repros).
+    const staged =
+      candidate && !refresh && deps.buildSidecar !== undefined
+        ? await stageWithSidecar(deps, work, binary, version)
+        : undefined;
+    const runBinary = staged?.binary ?? binary;
+    const gateBinary = await sidecarFreeBinary(work, binary);
     const pinFrom = candidate ? pinRootOf(gated) : undefined;
     const nonce = randomUUID();
     const receipt = join(work, "receipt.json");
@@ -635,7 +726,9 @@ export async function gateOne(
         commit,
         {
           LETHAL_ITEST_ALRUNNER_V3: "1",
-          LETHAL_ALRUNNER_V3_PATH: binary,
+          // R1016/R1017: the gate runs the build with no sidecar beside it, on every path: its frozen figures were measured
+          // without one (al-runner-v3-gate's `dotnetSidecar: false`). Only the repros run the staged copy with one.
+          LETHAL_ALRUNNER_V3_PATH: gateBinary,
           // R814: K on every candidate, the only normal session a release ever gets.
           ...(candidate
             ? { LETHAL_ALRUNNER_V3_CANDIDATE: "1", LETHAL_ITEST_V3_K_ON_CANDIDATE: "1" }
@@ -668,7 +761,7 @@ export async function gateOne(
     if (candidate && !refresh && outcome !== "infra-fail" && deps.upstreamRepros !== undefined) {
       try {
         const cur = join(await readlink(join(root, "current")), "al-runner");
-        for (const l of await deps.upstreamRepros(binary, cur))
+        for (const l of await deps.upstreamRepros(runBinary, cur))
           await deps.log(`${deps.now()} ${tag}: ${l}`);
       } catch (err) {
         await deps.log(
@@ -754,12 +847,14 @@ export async function gateOne(
     }
     // R612 M-2: this gate's warn-fact readings, so a session shows what the gate read.
     const warnFacts = await receiptWarnFacts(receipt);
-    // R886: after the pass, never before: a sidecar that fails to build cannot change the outcome.
-    // A new build gets one; a regate keeps `current`'s, or tries again when it has none.
+    // R886: a sidecar that fails to build cannot change the outcome. R1016: a candidate's was built before the gate and ran
+    // with it; that one is kept. A regate keeps `current`'s, or tries a build when it has none.
     const sidecar =
       dirName === undefined && gated.dotnetSidecar !== undefined
         ? { dotnetSidecar: gated.dotnetSidecar }
-        : await sidecarFields(deps, dest, version);
+        : staged !== undefined && dirName !== undefined
+          ? await keepStagedSidecar(deps, staged, dest, version)
+          : await sidecarFields(deps, dest, version);
     const next: GatedBuild = {
       ...sidecar,
       ...(warnFacts !== undefined ? { warnFacts } : {}),
