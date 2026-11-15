@@ -65,6 +65,8 @@ export interface BaselineSnapshot {
   readonly batchHash: string;
   readonly testAppHash: string;
   readonly baseline: readonly BaselineObservation[];
+  /** PR-21 (L5): the backend's own baseline state stored with it (al-runner v3 on serve), if any. */
+  readonly backendState?: unknown;
 }
 
 /**

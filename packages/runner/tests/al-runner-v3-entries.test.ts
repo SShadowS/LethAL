@@ -145,7 +145,11 @@ interface Layout {
   readonly scratch: string;
 }
 
-async function layout(targetAl: string, suite: readonly TestMethodRef[]): Promise<Layout> {
+async function layout(
+  targetAl: string,
+  suite: readonly TestMethodRef[],
+  appExtra: Record<string, unknown> = {},
+): Promise<Layout> {
   const root = await mkdtemp(join(tmpdir(), "lethal-v3e-"));
   roots.push(root);
   const batch = join(root, "batch");
@@ -154,7 +158,7 @@ async function layout(targetAl: string, suite: readonly TestMethodRef[]): Promis
   for (const d of [batch, testDir, deps]) await mkdir(d, { recursive: true });
   await writeFile(
     join(batch, "app.json"),
-    JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0", runtime: "17.0" }),
+    JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0", runtime: "17.0", ...appExtra }),
   );
   await writeFile(
     join(batch, "mutant-manifest.json"),
@@ -571,6 +575,8 @@ interface Rig {
 }
 
 interface RigOpts {
+  /** PR-21: extra fields for the batch's app.json (e.g. a publisher). */
+  appExtra?: Record<string, unknown>;
   serve?: ServeScript;
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
@@ -600,7 +606,7 @@ function noProcReads(b: AlRunnerV3Backend): void {
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
-  const l = await layout(opts.targetAl ?? TARGET_AL, suite);
+  const l = await layout(opts.targetAl ?? TARGET_AL, suite, opts.appExtra);
   const serve = fakeServe(opts.serve);
   const one = fakeOneShot(
     opts.oneShotRows ?? opts.serve?.rows ?? allPass,
@@ -8743,5 +8749,140 @@ describe("R1001: a uniformly refused baseline stops by name", () => {
     } finally {
       for (const cu of cus) SUITE_METHODS[cu] = ["T1", "T2"];
     }
+  });
+});
+
+describe("PR-21 (L5): re-check of a reused serve baseline", () => {
+  const PUB = "Acme Pub";
+  const NAME = "T"; // the rig's app name
+  const msg = (v: string, tail = "boom") => `${tail} in ${NAME} by ${PUB} version ${v}`;
+  const rowsWith =
+    (text: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "fail" as const, message: text } : x,
+      );
+  const named = (opts: RigOpts) => rig({ ...opts, appExtra: { publisher: PUB } });
+  const rowsOf = (r: Rig) =>
+    (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
+  /** Each first session's stored coverage, as the orchestrator builds it from the baseline verdicts. */
+  const storedOf = new Map<Rig, ReadonlyMap<string, string>>();
+  /** A second session, in the baseline bracket the orchestrator holds, re-checks `first`'s state. */
+  const recheck = async (
+    first: Rig,
+    rows: RowsFn,
+    patch: (s: Record<string, unknown>) => unknown = (s) => s,
+    coverage: ReadonlyMap<string, string> = storedOf.get(first) ?? new Map(),
+  ) => {
+    const state = await first.b.baselineState();
+    const r2 = await named({ serve: { rows, coverage: plainCoverage } });
+    r2.b.baselinePhase(true);
+    const why = await r2.b.recheckReusedBaseline(
+      patch(JSON.parse(JSON.stringify(state)) as Record<string, unknown>),
+      coverage,
+      1000,
+    );
+    return { why, r2 };
+  };
+  const firstOf = async (rows: RowsFn) => {
+    const r = await named({ serve: { rows, coverage: plainCoverage } });
+    const verdicts = await baseline(r.b, SUITE1);
+    storedOf.set(
+      r,
+      new Map(
+        verdicts.map((v) => [
+          `codeunit${v.ref.codeunitId}.${v.ref.method}`.toLowerCase(),
+          JSON.stringify(v.coverage ?? null),
+        ]),
+      ),
+    );
+    return r;
+  };
+
+  test("1: the state round-trips: an equal second session reuses it and holds the same rows", async () => {
+    const r1 = await firstOf(allPass);
+    expect(await r1.b.baselineState()).toBeDefined();
+    const { why, r2 } = await recheck(r1, allPass);
+    expect(why).toBeUndefined();
+    expect(rowsOf(r2).size).toBeGreaterThan(0);
+    // review 1: this session's own rows are imported, so compare what the re-check compares
+    const shape = (r: Rig) =>
+      [...rowsOf(r).entries()].map(([k, rs]) => [
+        k,
+        (rs as Record<string, unknown>[]).map((x) => [x.method, x.status, x.notRun, x.message]),
+      ]);
+    expect(shape(r2)).toEqual(shape(r1));
+  });
+
+  test("2: a row that differs refuses by name and imports nothing", async () => {
+    const r1 = await firstOf(allPass);
+    const { why, r2 } = await recheck(r1, rowsWith("boom"));
+    expect(why).toContain("the re-check");
+    expect(why).toContain(String(CU));
+    expect(rowsOf(r2).size).toBe(0);
+  });
+
+  test("3: only the target app's minted version is masked", async () => {
+    const r1 = await firstOf(rowsWith(msg("1.0.0.1")));
+    expect((await recheck(r1, rowsWith(msg("1.0.0.2")))).why).toBeUndefined();
+    expect((await recheck(r1, rowsWith(msg("1.0.0.1", "bang")))).why).toContain("the re-check");
+    const other = (v: string) => `boom in Other App by X version ${v}`;
+    const r3 = await firstOf(rowsWith(other("1.2.3.4")));
+    expect((await recheck(r3, rowsWith(other("1.2.3.5")))).why).toContain("the re-check");
+  });
+
+  test("4: no usable state, or another seed, refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const none = await recheck(r1, allPass, () => undefined);
+    expect(none.why).toStartWith("no backend state");
+    const bad = await recheck(r1, allPass, (s) => ({ ...s, rows: "x" }));
+    expect(bad.why).toStartWith("no backend state");
+    const seed = await recheck(r1, allPass, (s) => ({ ...s, seed: 12345 }));
+    expect(seed.why).toStartWith("the seed");
+    expect(rowsOf(seed.r2).size).toBe(0);
+  });
+
+  test("5: another sidecar hash refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const { why } = await recheck(r1, allPass, (s) => ({ ...s, sidecarSha256: "abc" }));
+    expect(why).toStartWith("the .NET sidecar");
+  });
+
+  test("6: a stored coverage map that differs refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const { why } = await recheck(
+      r1,
+      allPass,
+      (s) => s,
+      new Map([[`codeunit${CU}.a`, JSON.stringify({ not: "it" })]]),
+    );
+    expect(why).toContain("coverage differs");
+  });
+
+  test("7 (review 2): an equal stored coverage map passes; a sampled codeunit with nothing to compare refuses", async () => {
+    const r1 = await firstOf(allPass);
+    expect((await recheck(r1, allPass)).why).toBeUndefined(); // the first session's own maps
+    // the stored keys renamed: nothing matches, so the check must not pass empty vs empty
+    const renamed = new Map(
+      [...(storedOf.get(r1) ?? new Map<string, string>())].map(([k, v]) => [`x${k}`, v]),
+    );
+    const { why } = await recheck(r1, allPass, (s) => s, renamed);
+    expect(why).toContain("no stored coverage to compare");
+  });
+
+  test("8 (review 1): the rows imported are this session's re-check rows, not the stored ones", async () => {
+    const r1 = await firstOf(allPass);
+    // the stored rows carry a tail the re-check does not compare (a refusal's first line only):
+    // a notRun row whose second line differs
+    const { why, r2 } = await recheck(r1, allPass, (s) => {
+      const rows = s.rows as [number, Record<string, unknown>[]][];
+      return {
+        ...s,
+        rows: rows.map(([k, rs]) => [k, rs.map((r) => ({ ...r, stored: true }))]),
+      };
+    });
+    expect(why).toBeUndefined();
+    for (const rs of rowsOf(r2).values())
+      for (const r of rs as Record<string, unknown>[]) expect(r.stored).toBeUndefined();
   });
 });

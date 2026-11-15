@@ -438,14 +438,27 @@ async function snapshotCase(c: {
   readonly isolate?: boolean;
   /** R1008: today's session is on serve-entries (`resumeRunsBaseline`); run 1 stays default. */
   readonly serve?: boolean;
+  /** PR-21 (L5): today's serve backend re-checks a reused snapshot and answers this ("ok": reused). */
+  readonly recheck?: string;
 }) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
+  const recheckCalls: unknown[] = [];
   const mode =
     c.isolate === true
       ? { isolatesTests: true }
       : c.serve === true
-        ? { resumeRunsBaseline: true }
+        ? {
+            resumeRunsBaseline: true,
+            ...(c.recheck !== undefined
+              ? {
+                  recheckReusedBaseline: async (state: unknown) => {
+                    recheckCalls.push(state);
+                    return c.recheck === "ok" ? undefined : c.recheck;
+                  },
+                }
+              : {}),
+          }
         : {};
   await runSession({ ...base(store, dirs), backend: new Stub(ABORT_AFTER) });
   const runId = lastRun(store);
@@ -501,7 +514,7 @@ async function snapshotCase(c: {
   const isolateSnapshots = snapshotsOf(isolateRun).n;
   const defaultSnapshots = snapshotsOf(other).n;
   store.close();
-  return { events, other, today, error, log, isolateSnapshots, defaultSnapshots };
+  return { events, other, today, error, log, isolateSnapshots, defaultSnapshots, recheckCalls };
 }
 const reusedOf = (events: readonly RunEvent[]) => warned(events, "resume-baseline-reused");
 
@@ -578,6 +591,33 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     const plain = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: B1 } });
     expect(plain.error).toBeUndefined();
     expect(reusedOf(plain.events)).toHaveLength(1);
+  });
+  // PR-21 (L5): a serve backend that re-checks a reused snapshot (`recheckReusedBaseline`) reuses it
+  // when the re-check passes, and runs its baseline again, by name, when it does not.
+  test("PR-21: a serve resume whose re-check passes reuses the snapshot (no baseline call)", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      serve: true,
+      recheck: "ok",
+    });
+    expect(s.error).toBeUndefined();
+    expect(s.recheckCalls).toHaveLength(1); // red without the orchestrator's re-check call
+    expect(reusedOf(s.events)).toHaveLength(1);
+    expect(reusedOf(s.events)[0]).toContain("Re-checked on this session's daemon");
+    expect(s.today.baselineRuns).toBe(0);
+  });
+  test("PR-21: a serve resume whose re-check fails runs its baseline again and says why", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      serve: true,
+      recheck: "the seed (stored 1, this session 2)",
+    });
+    expect(s.error).toBeUndefined();
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    const why = warned(s.events, "resume-baseline-not-reused");
+    expect(why).toHaveLength(1);
+    expect(why[0]).toContain("because the seed (stored 1, this session 2)");
   });
   test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
     const s = await snapshotCase({
