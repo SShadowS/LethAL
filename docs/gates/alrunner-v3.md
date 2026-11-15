@@ -76,7 +76,7 @@ The legs:
   runs seventeen codeunits and a report (nineteen tests) and judges 15 cases (16 keep-list entries; some entries have
   several cases): DO's FormatRegion family has its case;
   DO's ZipArchive family needs the .NET helper, so it is kept but not judged here. Since [[R1043]] it runs eighteen
-  codeunits, a report and a page (twenty tests) and judges 16 cases: DO's DataCaptionExpression caption family has its case
+  codeunits, a report and a page (twenty tests) and judges 16 cases (17 keep-list entries): DO's DataCaptionExpression caption family has its case
   (page 50688, codeunit 50689). no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe

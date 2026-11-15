@@ -854,8 +854,11 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * TestPage on a page with DataCaptionExpression and no source table; al-runner refuses BEFORE the expression runs. Measured
    * clean with R-967's kit on edge-847b1fa5a and edge-5a58a0f16, isolation "test" and "codeunit"
    * (`/coord/handoff/PR-18/probe-caption/README.md`, invented AL): 72 kept-daemon reader answers and 40 fresh ones equal to the
-   * control, the pid unchanged, no panic text. Not measured: a page extension's DataCaptionExpression (another text), a page
-   * with a source table. Leg C case 50688-50689.
+   * control, the pid unchanged, no panic text. Review follow-up: the refused test leaves its TestPage open, so readers that
+   * open, edit and close a TestPage and that Trap a page, and refusers with a pending Trap or an unused [HandlerFunctions],
+   * were added: 124 kept and 80 fresh reader answers per run equal to the control (12 runs). Not measured: a page extension's
+   * DataCaptionExpression (another text), a page with a source table, request pages, a modal handler pending at the refusal.
+   * Leg C case 50688-50689.
    */
   "caption-no-source-table":
     /^NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table \(not pinned\)$/,
