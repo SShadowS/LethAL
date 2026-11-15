@@ -255,6 +255,20 @@ export type RunEventInput =
       readonly tests: readonly string[];
     }
   | {
+      /**
+       * PR-36 (R1048, upstream #8160): the session's own scan on an al-runner-v3 run, emitted once before anything is sent and
+       * only when it found a test at risk. Each test, by qualified name, reaches a record access before any permission
+       * lowering in a codeunit BC runs Restrictive, with Permissions Mock installed: al-runner passes such a test where BC
+       * refuses it. A label only; no verdict reads it. See `restrictive-default.ts`.
+       */
+      readonly type: "tests-restrictive-default-at-risk";
+      readonly tests: ReadonlyArray<{
+        readonly test: string;
+        readonly tier: "firm" | "uncertain-write" | "uncertain-read";
+        readonly firstAccess: string;
+      }>;
+    }
+  | {
       readonly type: "batch-published";
       readonly batchIndex: number;
       readonly guardCount: number;

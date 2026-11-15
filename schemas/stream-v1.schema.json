@@ -748,6 +748,51 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "tests",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tests-restrictive-default-at-risk"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "tier",
+              "firstAccess"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "firm",
+                  "uncertain-write",
+                  "uncertain-read"
+                ]
+              },
+              "firstAccess": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "guardCount",
         "elapsedMs",

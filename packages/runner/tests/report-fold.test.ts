@@ -6,6 +6,7 @@ import { buildReport, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 import { foldEvents } from "../src/report-fold";
 import type { FoldStatics } from "../src/report-fold";
+import { RESTRICTIVE_DEFAULT_DIAGNOSIS } from "../src/restrictive-default";
 import { TESTPAGE_REFUSED_DIAGNOSIS, testPageNotRunMessage } from "../src/testpage-unsupported";
 
 /**
@@ -1255,5 +1256,93 @@ describe("foldEvents: R766 (b), the mutant code is the last tie-break of the rep
     const want = ["M0001", "M0002", "Z0001", "a0001"];
     expect(order(["a0001", "M0002", "Z0001", "M0001"])).toEqual(want);
     expect(order(["M0001", "Z0001", "a0001", "M0002"])).toEqual(want);
+  });
+});
+
+describe("PR-36 (R1048, #8160): the restrictive-default label, never a verdict change", () => {
+  const scored = (
+    id: string,
+    verdict: "killed" | "survived",
+    coveringTests: string[],
+    killingTest?: string,
+  ): RunEventInput => ({
+    type: "mutant-scored",
+    mutant: mutant(id, { startIndex: Number(id.slice(1)) }),
+    verdict,
+    batchIndex: 0,
+    durationMs: 1,
+    coveringTests,
+    ...(killingTest !== undefined ? { killingTest } : {}),
+  });
+  const mutants: RunEventInput[] = [
+    // killed by an at-risk test (bare method, as al-runner-v3 records it)
+    scored("M0001", "killed", ["Risky Tests.T1", "Safe Tests.T2"], "T1"),
+    // killed by a safe test
+    scored("M0002", "killed", ["Risky Tests.T1", "Safe Tests.T2"], "T2"),
+    // survived, covered by an at-risk test AND a safe one: it still survives on the safe one, so not labelled
+    scored("M0003", "survived", ["Risky Tests.T1", "Safe Tests.T2"]),
+    // survived, covered by at-risk tests only: on BC it would lose every covering test, so labelled
+    scored("M0006", "survived", ["Risky Tests.T1"]),
+    // survived, covered by safe tests only
+    scored("M0004", "survived", ["Safe Tests.T2"]),
+    // killed by "Same", a name both an at-risk and a safe covering test carry: ambiguous
+    scored("M0005", "killed", ["Risky Tests.Same", "Safe Tests.Same"], "Same"),
+  ];
+  const atRisk: RunEventInput = {
+    type: "tests-restrictive-default-at-risk",
+    tests: [
+      { test: "Risky Tests.T1", tier: "firm", firstAccess: "insert" },
+      { test: "Risky Tests.Same", tier: "uncertain-read", firstAccess: "findfirst" },
+    ],
+  };
+  const build = (withScan: boolean) =>
+    buildReport(
+      STATICS,
+      seq([
+        ...baseEvents(),
+        ...(withScan ? [atRisk] : []),
+        ...mutants,
+        { type: "session-finished", elapsedMs: 1 },
+      ]),
+    );
+
+  test("labels the kills and survivors resting on at-risk tests, and only those", () => {
+    const r = build(true);
+    expect(r.restrictiveDefault?.issue).toBe("#8160");
+    expect(r.restrictiveDefault?.tests.map((t) => [t.test, t.tier])).toEqual([
+      ["Risky Tests.Same", "uncertain-read"],
+      ["Risky Tests.T1", "firm"],
+    ]);
+    expect(r.restrictiveDefault?.kills).toEqual(["0/M0001"]);
+    expect(r.restrictiveDefault?.killsAmbiguous).toEqual(["0/M0005"]);
+    expect(r.restrictiveDefault?.survivors).toEqual(["0/M0006"]);
+    expect(r.restrictiveDefault?.diagnosis).toBe(RESTRICTIVE_DEFAULT_DIAGNOSIS);
+    expect(r.validity.caveats).toContain("tests-restrictive-default-at-risk");
+  });
+
+  test("labels only: verdicts, counts and the score equal the same run without the scan", () => {
+    const withScan = build(true);
+    const without = build(false);
+    expect(withScan.mutants.map((m) => [m.mutantCode, m.verdict])).toEqual(
+      without.mutants.map((m) => [m.mutantCode, m.verdict]),
+    );
+    expect(withScan.counts).toEqual(without.counts);
+    expect(withScan.mutationScore).toBe(without.mutationScore);
+  });
+
+  test("the other direction: no scan event, no field, no caveat, no banner line", () => {
+    const r = build(false);
+    expect(r.restrictiveDefault).toBeUndefined();
+    expect(r.validity.caveats).not.toContain("tests-restrictive-default-at-risk");
+    expect(renderConsole(r)).not.toContain("RESTRICTIVE DEFAULT");
+  });
+
+  test("one banner line, with the counts", () => {
+    const lines = renderConsole(build(true))
+      .split("\n")
+      .filter((l) => l.includes("RESTRICTIVE DEFAULT"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("2 test(s) pass here that BC would refuse (1 firm)");
+    expect(lines[0]).toContain("1 kill(s) and 1 survivor(s) rest on them");
   });
 });

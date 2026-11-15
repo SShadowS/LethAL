@@ -274,8 +274,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 27: R975 added the attribution value `line` to `$.survivors[].attribution` (and the suggestions'
  * member attribution). A new value, so it bumps (R233); v26 is frozen.
+ *
+ * 28: PR-36 (R1048) added the caveat value `tests-restrictive-default-at-risk` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v27 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 27;
+export const EXPLAIN_SCHEMA_VERSION = 28;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
