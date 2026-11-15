@@ -1,6 +1,111 @@
 {
   "repros": [
     {
+      "id": "u7775-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7775",
+      "bcEvidence": "inferred, not measured on BC: Part A's invented repro (R-915's probe, its AL unchanged; app.json's id, name, publisher and features are the set's); each statement is one a Microsoft app's shipped-passing test makes (Subscription Billing, E-Document Core, Quality Management, Shopify), and items 9 and 10 expect BC's own filter error under asserterror. Added by PR-05 (refusal ledger): on edge-a184cfc79, 5 of the 12 already pass (items 1, 3, 6, 7, 8)",
+      "rerun": [
+        "R-915's four apps (Subscription Billing, E-Document Core, Quality Management, Shopify) and every BC.History project the refusal ledger names under #7775 (Api Web Service: E-Document API, APIV2, PowerBI)"
+      ],
+      "tests": {
+        "Codeunit50141.XmlPortVariableTextWindows": { "status": "pass" },
+        "Codeunit50141.FeatureKeyRollback": { "status": "pass" },
+        "Codeunit50141.LicensePermissionTableData99": { "status": "pass" },
+        "Codeunit50141.ApiWebServiceFind": { "status": "pass" },
+        "Codeunit50141.DownloadFromStream": { "status": "pass" },
+        "Codeunit50141.ReportSaveAsHtml": { "status": "pass" },
+        "Codeunit50141.JsonNullAsDecimal": { "status": "pass" },
+        "Codeunit50141.ResourceWithoutEncoding": { "status": "pass" },
+        "Codeunit50141.InStreamReadBigIntegerLength": { "status": "pass" },
+        "Codeunit50141.SetFilterNotADecimal": { "status": "pass" },
+        "Codeunit50141.SetFilterNotAnInteger": { "status": "pass" },
+        "Codeunit50141.CompanyFindSet": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8028-no-client",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
+      "bcEvidence": "inferred, not measured on BC: a session without a client (BC's web-service and background sessions) answers CurrentClientType without an error, and never Windows; the issue's invented repro (R-975), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
+      "rerun": [
+        "every BC.History project whose closure holds System Initialization (its OnCompanyOpenCompleted subscriber reads the client type): the refusal ledger's no-client causes"
+      ],
+      "args": ["--no-client"],
+      "tests": {
+        "Codeunit50790.ReadCurrentClientType": { "status": "pass" },
+        "Codeunit50792.Nothing": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7934-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7934",
+      "bcEvidence": "inferred, not measured on BC: the issue's invented repro (R-940), its AL unchanged; app.json's id, name, publisher and features are the set's; each call is one a Microsoft System Application module test makes and those tests ship as passing; C06 and C09 expect BC's own error under asserterror (the issue: 'can't be evaluated into type', a permission error). Added by PR-05 (refusal ledger)",
+      "rerun": [
+        "Security Groups, Page Summary Provider, AI, BLOB Storage and Record Reference (R-940), and the refusal ledger's causes under #7934"
+      ],
+      "tests": {
+        "Codeunit50430.C01_NewMockGraphQuery": { "status": "pass" },
+        "Codeunit50430.C02_GetSummaryFields": { "status": "pass" },
+        "Codeunit50430.C02b_GetAvailableTableFields": { "status": "pass" },
+        "Codeunit50430.C03_HasInGeoSupport": { "status": "pass" },
+        "Codeunit50430.C04_GptTokenCount": { "status": "pass" },
+        "Codeunit50430.C05_IsPlatformAuthorizationConfigured": { "status": "pass" },
+        "Codeunit50431.C06_BlobIntoIntegerFieldRef": { "status": "pass" },
+        "Codeunit50431.C07_MediaDeleteAll": { "status": "pass" },
+        "Codeunit50431.C07b_MediaIsEmpty": { "status": "pass" },
+        "Codeunit50431.C08_CalcFieldOnBlobFieldRef": { "status": "pass" },
+        "Codeunit50431.C09_ModifyMissingRowNoPermission": { "status": "pass" },
+        "Codeunit50431.C10_WindowsSecurityIdUser": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7586-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
+      "bcEvidence": "inferred, not measured on BC: the issue's five invented repros (R-902's Probe4.al, its AL unchanged; app.json's id, name, publisher and features are the set's), each a call Microsoft's Statistical Accounts or VAT Group Management tests make and those tests ship as passing; item 2 expects BC's own error under asserterror. Plus R-902's Uri control test. Added by PR-05 (refusal ledger): on edge-a184cfc79 item 1 (AuditCategory::Authentication) already passes",
+      "rerun": [
+        "VAT Group Management (the 5-argument GetUrl stops 41 of its 82 tests) and Statistical Accounts, and the refusal ledger's causes under #7586"
+      ],
+      "tests": {
+        "Codeunit51137.AuditCategoryAuthentication": { "status": "pass" },
+        "Codeunit51137.RecordRefGetTableUnassignedVariant": { "status": "pass" },
+        "Codeunit51137.DeleteAllUnderOtherRecordsGlobalFilterGroup": { "status": "pass" },
+        "Codeunit51137.ConsistentFalseThenGuardedCodeunitRun": { "status": "pass" },
+        "Codeunit51137.UriSchemeThroughSystemApplication": { "status": "pass" },
+        "Codeunit51137.GetUrlODataFiveArgumentsWithRecord": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7850-autoformat",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7850",
+      "bcEvidence": "inferred, not measured on BC: BC runs a field's AutoFormatExpression when the row is fetched (the refusal says so), and the expression here is plain AL that returns a format, so opening the card passes; the issue's invented repro (R-925), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
+      "rerun": [
+        "the BC.History projects whose TestPage controls sit over such fields (the refusal ledger's AutoFormatExpression causes under #7850)"
+      ],
+      "tests": {
+        "Codeunit50102.OpenCard": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8117-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8117",
+      "bcEvidence": "inferred, not measured on BC: the issue's Part A repro (PR-05), each call one a Microsoft test makes and those tests ship as passing (Plan Configuration E2E Test.CustomizePermissionSetAdd; E-Document Core's Integration Tests.SubmitGetDocuments)",
+      "rerun": [
+        "Plan Configuration (Database.SID) and E-Document Core (GoToKey on a card), and the refusal ledger's causes under #8117"
+      ],
+      "tests": {
+        "Codeunit50903.SidWithoutUserName": { "status": "pass" },
+        "Codeunit50903.GoToKeyOnCardForMissingKey": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7778-json-null",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7778",
+      "bcEvidence": "inferred, not measured on BC: reading a JSON null as Boolean raises BC's error, which asserterror expects (#7778, closed: edge 764d69ecf made every JsonValue.AsX getter on a null raise BC's error). A guard: it passes on edge-a184cfc79, and the refusal ledger's 'reading a JSON null as Boolean' is fixed on its evidence (PR-05)",
+      "rerun": ["nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"],
+      "tests": {
+        "Codeunit50940.NullAsBoolean": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8006-date-1753",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8006",
       "bcEvidence": "which values BC stores and which it refuses: measured on BC 28.4 W1 (bc2, 2026-11-14) with the same writes in other apps, /coord/handoff/R-971/bc-probe-result.md (probes p, p2, p3), issue comments 6876327816, 6876525776; this app's exact texts are inferred (a stored value is checked by its date only, a refusal by BC's message start)",
@@ -16,7 +121,10 @@
         "Codeunit50106.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-01" },
         "Codeunit50107.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-02" },
         "Codeunit50108.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
-        "Codeunit50109.Measure": { "status": "fail", "messageIncludes": "stored datetime 1754-01-01" }
+        "Codeunit50109.Measure": {
+          "status": "fail",
+          "messageIncludes": "stored datetime 1754-01-01"
+        }
       }
     },
     {
@@ -84,6 +192,133 @@
         "Codeunit50300.FlowMappingOneKey": { "status": "pass" },
         "Codeunit50300.BlockMappingTwoKeys": { "status": "pass" },
         "Codeunit50300.FlowMappingTwoNumbersReadsValues": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7853-system-grant",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7853",
+      "bcEvidence": "inferred, not measured on BC: alc compiles the granted app (the platform System package's InternalsVisibleTo), as Microsoft's Guided Experience module does (issue body); the issue is closed and this passes now: a guard against it coming back",
+      "rerun": ["R946: the Guided Experience module and others the System package grants to"],
+      "tests": {
+        "Codeunit50294.CompilesAndRuns": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7922-part-visibility",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7922",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's test passes on BC, and Base Application's journal pages use the same part and call (issue body)",
+      "rerun": ["R942: the DO/DC tests that set a part's visibility from a part page call"],
+      "tests": {
+        "Codeunit50107.SendMakesStatusVisible": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-wildcard",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: BC lists Metadata Permission rows for a 'table * = X' grant (issue body; whether one row with Object ID 0 or one per object is not measured, and the repro's tests do not depend on it)",
+      "rerun": ["R994: Permission Sets (BC.History) under mutation"],
+      "tests": {
+        "Codeunit50411.ReadOwnWildcardSet": { "status": "pass" },
+        "Codeunit50411.ReadAllRows": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-xmlskip",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: the XMLport import finishes as on BC (issue body; whether BC keeps the skipped header's lines is not measured)",
+      "rerun": ["R994: Permission Sets (BC.History) under mutation"],
+      "tests": {
+        "Codeunit50424.SkipHeaderWithLines": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8036-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+      "bcEvidence": "inferred, not measured on BC. Only the nine tests the issue names (its seven causes), with the result it states: where a test uses asserterror only that BC raises an error is expected; Evaluate returns false and the test goes on; NormalDate(0D) = 0D and the OnOpenPage and AsDecimal cases are our expectation (issue body). The app's other tests belong to other issues (#7834, #7924, #7964, ...) or have no stated BC result, and are not compared",
+      "rerun": ["R995: the BC.History apps whose mutants met these refusals (R-983)"],
+      "tests": {
+        "Codeunit50520.UriAbsoluteUriNoObject": { "status": "pass" },
+        "Codeunit50520.UriBuilderQueryNoObject": { "status": "pass" },
+        "Codeunit50510.EvaluateDateRangeText": { "status": "pass" },
+        "Codeunit50510.EvaluateTimeRangeText": { "status": "pass" },
+        "Codeunit50541.RelativePathNoBaseAddress": { "status": "pass" },
+        "Codeunit50510.RecordRefReadPermissionNotOpen": { "status": "pass" },
+        "Codeunit50540.AsDecimalOfTextWithDigits": { "status": "pass" },
+        "Codeunit50540.OnOpenPageLeavesRecOffTheView": { "status": "pass" },
+        "Codeunit50510.NormalDateOfUndefinedDate": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8038-published-app",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8038",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's Guided Experience tests pass on BC with such a permission set (issue body)",
+      "rerun": ["R997: Guided Experience (84 of 104 tests)"],
+      "tests": {
+        "Codeunit50602.CalcFlowFieldOfAPublishedAppUnderOwnSet": { "status": "pass" },
+        "Codeunit50602.CalcFlowFieldOfNoAppUnderOwnSet": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8056-install-order",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8056",
+      "bcEvidence": "inferred, not measured on BC: no install order changes what a test can read (the subscribers touch only SingleInstance state of the install session), as with three of the apps (issue body)",
+      "rerun": ["R1003: the projects whose install routines meet each other's code (DC)"],
+      "apps": ["P", "A", "A2", "B", "B2", "T"],
+      "tests": {
+        "Codeunit50930.FeatureRowExists": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7760-untouched-handle",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7760",
+      "bcEvidence": "inferred, not measured on BC: a call on a handle nothing created raises an error on BC, as measured for a write to an OutStream never created (NavOutStream variable not initialized, issue comment) and as al-runner itself fails the sibling methods (XmlElement.Name, InnerText, Add: NavXmlElement variable not initialized); the error's text is not known, so only the failure is expected. Cells found by scripts/refusal-family.ts (PR-01)",
+      "rerun": ["the corpus mutants met by the untouched-handle refusals (R-913, R-961, R-983)"],
+      "tests": {
+        "Codeunit51101.Cell": { "status": "fail" },
+        "Codeunit51102.Cell": { "status": "fail" },
+        "Codeunit51103.Cell": { "status": "fail" },
+        "Codeunit51104.Cell": { "status": "fail" }
+      }
+    },
+    {
+      "id": "u8036-dotnet-no-object",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+      "bcEvidence": "inferred, not measured on BC: a member of a DotNet variable that holds no object raises an error on BC (a .NET null reference; issue item 1 refuses only because the text is not measured), so under asserterror the test passes, as u8036-refusals expects for Uri.AbsoluteUri. Types beyond the issue's, and Regex.IsMatch, whose refusal text wrongly says no overload (it passes on a constructed Regex), found by scripts/refusal-family.ts family dotnet-no-object (PR-02)",
+      "rerun": ["the corpus mutants met by the DotNet no-object refusals (R-983)"],
+      "tests": {
+        "Codeunit51201.Cell": { "status": "pass" },
+        "Codeunit51202.Cell": { "status": "pass" },
+        "Codeunit51203.Cell": { "status": "pass" },
+        "Codeunit51204.Cell": { "status": "pass" },
+        "Codeunit51205.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7994-u7995-evaluate",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7994",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, PR-03, 2026-11-15) for the calls these repros copy: Microsoft's Json Test, renumbered, passes all 18 tests on BC, including TestGetEnumPropertyValueFromJObjectByName (Evaluate into a memberless var Option parameter, #7994) and TestGetBoolPropertyValueFromJObjectByName (Evaluate of a Boolean with format 2, #7995 item 3). The invented repros themselves are not run on BC; each passes there by the same calls",
+      "rerun": [
+        "PR-03: BC.History Json (its two non-passing baseline tests)",
+        "every project whose code evaluates into a memberless var Option parameter or a Boolean with format 2"
+      ],
+      "tests": {
+        "Codeunit51301.Cell": { "status": "pass" },
+        "Codeunit51302.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7415-platform-no-provider",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
+      "bcEvidence": "inferred, not measured on BC: a read of a platform table returns on BC (rows or none), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",
+      "rerun": [
+        "the corpus mutants met by the platform-table no-provider refusals (ledger: 3,054 sightings, PR-13)"
+      ],
+      "tests": {
+        "Codeunit51301.Cell": { "status": "pass" },
+        "Codeunit51302.Cell": { "status": "pass" },
+        "Codeunit51303.Cell": { "status": "pass" },
+        "Codeunit51304.Cell": { "status": "pass" },
+        "Codeunit51305.Cell": { "status": "pass" }
       }
     }
   ]

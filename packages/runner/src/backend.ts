@@ -582,7 +582,13 @@ export interface ExecutionBackend {
    * `serve-daemon-closed` event. With no sink, closes are only counted (the close line).
    */
   setDaemonCloseSink?(
-    sink?: (close: { readonly reason: string; readonly family?: string }) => void,
+    sink?: (close: {
+      readonly reason: string;
+      readonly family?: string;
+      /** R1009: a refusal's whole first line, and the refused row's test name. */
+      readonly text?: string;
+      readonly test?: string;
+    }) => void,
   ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
@@ -809,6 +815,13 @@ export interface ExecutionBackend {
    * baseline is not lent to a one-shot session, nor the other way.
    */
   readonly baselineDaemon?: boolean;
+
+  /**
+   * R1008, OPTIONAL: true when a `--resume` of this session must run its baseline again rather than
+   * reuse a stored snapshot (al-runner-v3 on serve-entries: the warm-up needs this session's rows).
+   * Read after `decideTransport`. Absent counts as false.
+   */
+  readonly resumeRunsBaseline?: boolean;
 
   /**
    * R635 §4, OPTIONAL: once at the top of each mutant-loop call, every covered mutant of that

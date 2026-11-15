@@ -1,0 +1,16 @@
+{
+  "id": "94210000-0000-4000-8000-0000000000ff",
+  "name": "Order Probe Tests",
+  "publisher": "Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 50930, "to": 50939 }],
+  "features": ["NoImplicitWith"],
+  "dependencies": [
+    { "id": "94210000-0000-4000-8000-00000000000a", "name": "Order Probe A", "publisher": "Repro", "version": "1.0.0.0" },
+    { "id": "94210000-0000-4000-8000-00000000000b", "name": "Order Probe B", "publisher": "Repro", "version": "1.0.0.0" },
+    { "id": "94210000-0000-4000-8000-0000000000a2", "name": "Order Probe A2", "publisher": "Repro", "version": "1.0.0.0" },
+    { "id": "94210000-0000-4000-8000-0000000000b2", "name": "Order Probe B2", "publisher": "Repro", "version": "1.0.0.0" }
+  ]
+}

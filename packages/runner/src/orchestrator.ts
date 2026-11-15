@@ -4693,6 +4693,24 @@ function resolveResume(
             `--resume found an unfinished run for this project and backend, run ${otherEnv.runId}, but it was recorded under ${otherEnv.environment === null ? "no environment (before al-runner-v3 recorded one)" : `environment ${otherEnv.environment}`}, and this session's is ${mine}. A verdict is never carried across environments. Drop --resume to run from scratch.`,
           );
         }
+        // R1008 (build review): a serve session no longer falls back to one-shot on a resume, so a run
+        // recorded one-shot (a warm-up fallback, R786, or before R1008) lacks this session's
+        // ` baseline-daemon` tag (R948). Name it, and the way to resume it.
+        const tag = baselineSourceTag({ baselineDaemon: true });
+        if (lendingSession.runnerBuild.includes(tag)) {
+          const oneShot = cfg.store.findResumableRun({
+            projectPath: cfg.projectDir,
+            backend: backendName,
+            configFingerprint,
+            carryableVerdicts: [...CARRYABLE_VERDICTS],
+            runnerBuild: lendingSession.runnerBuild.replace(tag, ""),
+          });
+          if (oneShot !== null) {
+            throw new Error(
+              `--resume found an unfinished run for this project and backend, run ${oneShot}, but its baseline ran one-shot (no serve daemon: a warm-up fallback, R786, or a resume before R1008), and this session runs on serve-entries. A verdict is not carried between the two baseline sources (R948). To resume it, set "alRunnerV3.transport": "one-shot" in the config; or drop --resume to run from scratch.`,
+            );
+          }
+        }
       }
       throw new Error(
         `--resume found no unfinished run to resume in this database for this project (${cfg.projectDir}), backend ${backendName}, and configuration. A run that COMPLETED is not resumable (there is nothing left to score), and a run scoped by different --only/--tests-only patterns is deliberately not matched — carrying its verdicts would describe a different slice of the project. Drop --resume to run from scratch.`,
@@ -4907,6 +4925,8 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       type: "serve-daemon-closed",
       reason: c.reason,
       ...(c.family !== undefined ? { family: c.family } : {}),
+      ...(c.text !== undefined ? { text: c.text } : {}),
+      ...(c.test !== undefined ? { test: c.test } : {}),
     }),
   );
   return () => {
@@ -5175,24 +5195,25 @@ function resolveGroupRuns(a: {
 }
 
 /**
- * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN baseline
- * durations (`baselineDuration` holds green tests only). Tells the backend and says it on stderr once
- * per value (once per session in practice). Otherwise returns the configured floor unchanged.
+ * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN tests'
+ * times. R1015: each test's OWN time (`measuredDuration`), never the call's wall. A row with no own time
+ * gets R963's share of its call's wall (an AVERAGE over the call's rows, not a maximum), so a build that
+ * omitted own times on some rows could get a stop below a slow test's time; every v3 build gated today
+ * sends them (review: none of 763 stored v3 runs has a green baseline with own times on only some rows).
+ * Tells the backend and says it on stderr once per value (once per session in practice).
+ * Otherwise returns the configured floor unchanged.
  */
-function applyV3MutantStop(
-  scope: BatchScope,
-  baselineDuration: ReadonlyMap<string, number>,
-): number {
+function applyV3MutantStop(scope: BatchScope, ownDuration: ReadonlyMap<string, number>): number {
   const held = scope.v3MutantStop;
   if (held === undefined) return scope.minMutantBudgetMs;
   let largest = 0;
-  for (const ms of baselineDuration.values()) largest = Math.max(largest, ms);
+  for (const ms of ownDuration.values()) largest = Math.max(largest, ms);
   const s = Math.max(held.ms ?? 0, v3MutantStopMs(largest));
   if (s !== held.ms) {
     held.ms = s;
     (scope.parallel?.owner ?? scope.backend).useMutantStop?.(s);
     console.warn(
-      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green baseline ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s)); --mutant-timeout-ms overrides it`,
+      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green test's own time ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s; R1015)); --mutant-timeout-ms overrides it`,
     );
   }
   return s;
@@ -6198,7 +6219,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     memberCountsByTest: memberCounts,
   } = plan;
   // R954: the floor every mutant budget uses; v3's own rule after its baseline, else the configured one.
-  const minMutantBudgetMs = applyV3MutantStop(scope, baselineDuration);
+  // R1015: from each green test's OWN time (al-runner stops a test by its own time); `baselineDuration`
+  // is the call's wall, a whole codeunit's run on serve (DO: 87.8 s for a 1.3 s test, so 1,762 s).
+  const minMutantBudgetMs = applyV3MutantStop(scope, measuredDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
   const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
@@ -8950,6 +8973,7 @@ async function runSessionBody(
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.isolationAuto !== true && // R896 (review 1)
+            cfg.backend.resumeRunsBaseline !== true && // R1008: serve-entries' warm-up, as R857
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
@@ -12106,6 +12130,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    // R1014: a LANE checks the budget (a signal spends it, R955) before each mutant too. Between
+    // windows only let one window of hanging mutants (each a whole test timeout) run on past the
+    // budget and a SIGTERM (DO, R-998: 40 min). The commit stops as the memory guard's does: what
+    // finished stays recorded, what never started is left out (R962).
+    if (args.sink !== undefined && args.timeBudget?.exhausted === true) {
+      args.sink.memoryStop(m.mutantId, "the time budget was used up (or a stop signal spent it)");
+      break;
+    }
     // R948: the memory guard, per group start (each lane's loop too): when it stops the session
     // this group is not started, and the budget it spent ends the loop and the report names memory.
     if (args.backend.mayStartGroup !== undefined && !(await args.backend.mayStartGroup())) {
@@ -12917,6 +12949,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
                 `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
             )
           : undefined;
+    // R1014, R955's rule in the mutant phase: a stop signal reaches the whole process group, so a
+    // mutant whose calls ended while it arrived may hold a killed al-runner's answer, not a result.
+    // It is never recorded: it and the rest are left out, as the baseline drops such a call. Not for
+    // the memory guard's stop (it also sets `signalled`, R948): it kills nothing, and the group in
+    // flight keeps its verdicts.
+    if (args.timeBudget?.signalled === true && args.timeBudget.memory === undefined) {
+      if (args.sink === undefined) budgetSpent(at);
+      else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
+      break;
+    }
     if (args.sink === undefined) commitRecord();
     else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);
     if (stopAfterRecord !== undefined) throw stopAfterRecord;

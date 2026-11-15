@@ -103,8 +103,10 @@ export interface LaneSink {
    * (`stoppedByGuard`) and never as R766's "never finished or recorded" throw. R962: every mutant
    * that finished, or finishes while the lanes drain, is still recorded (none is a partial result);
    * only those never started count as left out. A stop already in place keeps its accounting.
+   * R1014: also the lane's own budget check (a spent `--time-budget` or a stop signal); `cause`
+   * names it (default: the memory guard).
    */
-  memoryStop(mutantId: string): void;
+  memoryStop(mutantId: string, cause?: string): void;
 }
 
 /** The session-stopping error of a parallel run; `cause` is the first cause, `discarded` the mutant codes. */
@@ -199,7 +201,7 @@ export class OrderedCommit {
       },
       finish: (code, commit, stop) => this.finish(code, commit, stop),
       unsafeBreak: (code) => this.unsafeBreak(code),
-      memoryStop: (code) => this.memoryStop(code),
+      memoryStop: (code, cause) => this.memoryStop(code, cause),
     };
     return { sink, current: () => current };
   }
@@ -278,10 +280,10 @@ export class OrderedCommit {
   /** R948: true once a lane's refused group closed this commit (see `LaneSink.memoryStop`). */
   stoppedByGuard = false;
 
-  private memoryStop(code: string): void {
+  private memoryStop(code: string, why = "the memory guard stopped the session"): void {
     // R962: a stop already in place (an unsafe break, a throw) keeps its own accounting.
     if (this.stopInfo !== undefined) {
-      this.also.push("the memory guard stopped the session");
+      this.also.push(why);
       return;
     }
     this.stoppedByGuard = true;
@@ -291,7 +293,7 @@ export class OrderedCommit {
     this.stopInfo = {
       selfIdx: this.idx(code),
       selfKept: false,
-      cause: "the memory guard stopped the session",
+      cause: why,
       benign: true,
     };
   }

@@ -130,6 +130,27 @@ describe("normaliseRefusal", () => {
       "al-runner-vN transport failure: vN exited N: <stderr>",
     );
   });
+  test("PR-13: no app text: a raised message after a SaveAs's or a failed install routine's 'not pinned' label", () => {
+    const saveAs = `${NR}an error in a SaveAs of report "Acme Invoice", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): You must specify Acme filters`;
+    expect(normaliseRefusal(saveAs)).toBe(
+      `${NR}an error in a SaveAs of report <x>, which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): <message>`,
+    );
+    const install = `${NR}install routine codeunit "Acme Install".OnInstallAppPerCompany could not run: failed (behaviour not pinned): Rate must not be over 100 (Acme): x`;
+    expect(normaliseRefusal(install)).toBe(
+      `${NR}install routine codeunit <x>.OnInstallAppPerCompany could not run: failed (behaviour not pinned): <message>`,
+    );
+    for (const label of [
+      "runner behaviour not pinned",
+      "not pinned",
+      "what BC reports then is not pinned",
+    ])
+      expect(normaliseRefusal(`${NR}OnRun failed (${label}): Acme is blocked`)).toBe(
+        `${NR}OnRun failed (${label}): <message>`,
+      );
+    expect(
+      normaliseRefusal(`${NR}X failed before the first test (behaviour not pinned): Acme`),
+    ).toBe(`${NR}X failed before the first test (behaviour not pinned): <message>`);
+  });
   test("a key is a fixed point, also when the 220-character cut ends on a space", () => {
     const k = normaliseRefusal(`${NR}${"word ".repeat(80)}`);
     expect(k.length).toBeLessThanOrEqual(220);

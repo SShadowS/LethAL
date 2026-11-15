@@ -96,6 +96,9 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {': "v3",
     'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
+    // R1018: the al-runner binary is pinned once per run, on v3 only
+    'if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)':
+      "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
     'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",
@@ -504,6 +507,30 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
         (e: unknown) => e,
       );
       expect(String(other)).toContain("recorded under environment onprem");
+    });
+  });
+
+  test("R1008 (build review): a serve resume of a run whose baseline ran one-shot names it and the way to resume it", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const serve = () =>
+        Object.assign(withProbe(new V3KindStub([]), []), { baselineDaemon: true });
+      await v3Session(root, store, serve());
+      expect(store.getRun(1)?.runnerBuild).toContain(" baseline-daemon");
+      // Run 1 as a warm-up fallback (R786) records it: one-shot, so no tag, and unfinished.
+      store.db.run(
+        "UPDATE runs SET runner_build = REPLACE(runner_build, ' baseline-daemon', ''), finished_at = NULL WHERE id = 1",
+      );
+      const err = await v3Session(root, store, serve(), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(err)).toContain("run 1, but its baseline ran one-shot");
+      expect(String(err)).toContain('"alRunnerV3.transport": "one-shot"');
+      // ...and a one-shot session (the way it names) resumes it.
+      const oneShot = await v3Session(root, store, withProbe(new V3KindStub([]), []), {
+        resume: "last",
+      });
+      expect(oneShot.validity.caveats).toContain("resumed");
     });
   });
 

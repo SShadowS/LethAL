@@ -1,14 +1,86 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   type BuildRows,
   type Manifest,
   type Row,
+  appsOf,
   compare,
   matchesBc,
   readManifest,
   reportLines,
   rowsOf,
+  testArgsOf,
 } from "./upstream-repros";
+
+// R-997: several apps run together, in the manifest's order.
+describe("R-997: a repro of several apps", () => {
+  const TMP = mkdtempSync(join(tmpdir(), "upstream-repros-test-"));
+  afterAll(() => rmSync(TMP, { recursive: true, force: true }));
+  const repro = (apps?: string[]) => ({
+    id: "u1",
+    issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/1",
+    bcEvidence: "invented",
+    rerun: [],
+    tests: { "Codeunit1.T": { status: "pass" as const } },
+    ...(apps !== undefined ? { apps } : {}),
+  });
+  const write = (dir: string, m: object, folders: string[]) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify(m));
+    for (const f of folders) {
+      mkdirSync(join(dir, f), { recursive: true });
+      writeFileSync(join(dir, f, "app.json"), "{}");
+    }
+  };
+
+  test("no apps: the repro's own folder; apps: each subfolder, in the manifest's order", () => {
+    expect(appsOf(repro())).toEqual(["u1"]);
+    expect(appsOf(repro(["P", "A", "T"]))).toEqual([
+      join("u1", "P"),
+      join("u1", "A"),
+      join("u1", "T"),
+    ]);
+  });
+
+  test("PR-05: a repro's own flags go after the fixed ones and before its apps", () => {
+    expect(testArgsOf(repro())).toEqual(["--bc-version", "28", "--output-json", "u1"]);
+    expect(testArgsOf({ ...repro(["A", "T"]), args: ["--no-client"] })).toEqual([
+      "--bc-version",
+      "28",
+      "--output-json",
+      "--no-client",
+      join("u1", "A"),
+      join("u1", "T"),
+    ]);
+  });
+
+  test("the manifest is refused for an empty apps list or an app folder without app.json", () => {
+    const empty = join(TMP, "empty");
+    write(empty, { repros: [repro([])] }, ["u1"]);
+    expect(() => readManifest(empty)).toThrow(/empty apps/);
+    const missing = join(TMP, "missing");
+    write(missing, { repros: [repro(["P", "A"])] }, ["u1/P"]);
+    expect(() => readManifest(missing)).toThrow(/u1[\\/]A has no app\.json/); // `\` on Windows
+    const ok = join(TMP, "ok");
+    write(ok, { repros: [repro(["P", "A"])] }, ["u1/P", "u1/A"]);
+    expect(readManifest(ok).repros).toHaveLength(1);
+  });
+
+  test("PR-05 review: args must be a list of strings, never a bare string", () => {
+    const str = join(TMP, "args-string");
+    write(str, { repros: [{ ...repro(), args: "--no-client" }] }, ["u1"]);
+    expect(() => readManifest(str)).toThrow(/args is not a list of strings/);
+    const num = join(TMP, "args-number");
+    write(num, { repros: [{ ...repro(), args: [7] }] }, ["u1"]);
+    expect(() => readManifest(num)).toThrow(/args is not a list of strings/);
+    const ok = join(TMP, "args-ok");
+    write(ok, { repros: [{ ...repro(), args: ["--no-client"] }] }, ["u1"]);
+    expect(readManifest(ok).repros[0]?.args).toEqual(["--no-client"]);
+  });
+});
 
 // R-996: the flip detection. Every case is an injected reading; no al-runner runs here.
 const M: Manifest = {
@@ -95,6 +167,17 @@ describe("R-996: a repro's change between current and the candidate", () => {
     expect(compare(M, broken, BC_LIKE).every((c) => c.change === "error")).toBe(true);
     expect(compare(M, BC_LIKE, broken).every((c) => c.change === "error")).toBe(true);
     expect(compare(M, new Map(), BC_LIKE).every((c) => c.change === "error")).toBe(true);
+  });
+
+  test("PR-01 review: a refusal written as a plain fail never matches an expected fail", () => {
+    const failAny = { status: "fail" as const };
+    expect(
+      matchesBc(failAny, row("x", "fail", "NotRun: out-of-scope: use of an unassigned XmlElement")),
+    ).toBe(false);
+    expect(matchesBc(failAny, row("x", "fail", "a: NotRun: out-of-scope: y"))).toBe(false);
+    expect(matchesBc(failAny, row("x", "fail", "NavXmlElement variable not initialized."))).toBe(
+      true,
+    );
   });
 
   test("a missing row, a not-run row, another status or another message never matches BC", () => {

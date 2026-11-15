@@ -176,6 +176,8 @@
     "al-runner-v3-update.ts",
     "upstream-repros.test.ts",
     "upstream-repros.ts",
+    "refusal-family.test.ts",
+    "refusal-family.ts",
     "automation-api-guard.test.ts",
     "build-native-parser.test.ts",
     "build-native-parser.ts",

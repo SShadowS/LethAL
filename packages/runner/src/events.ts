@@ -544,6 +544,14 @@ export type RunEventInput =
       readonly type: "serve-daemon-closed";
       readonly reason: string;
       readonly family?: string;
+      /**
+       * R1009: a refusal's whole first line, as al-runner wrote it in the row.
+       * `family` is cut at 80 characters, so a family seen only in closes could not be measured or
+       * kept. Local only: the events stream is never committed (it can hold the app's quoted text).
+       */
+      readonly text?: string;
+      /** R1009: the refused row's test name (`Codeunit<id>.<method>`), so its shape can be reduced. */
+      readonly test?: string;
     }
   | { readonly type: "quarantined"; readonly reason: string }
   | {

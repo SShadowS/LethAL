@@ -1496,7 +1496,7 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
-    const sunk: { reason: string; family?: string }[] = [];
+    const sunk: { reason: string; family?: string; text?: string; test?: string }[] = [];
     r.b.setNotify((c, m) => seen.push([c, m]));
     r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
@@ -1509,7 +1509,15 @@ describe("R939: why each serve daemon closed", () => {
     const c = r.b.daemonCloses();
     expect([...c.byReason]).toEqual([["refusal", 1]]);
     expect([...c.refusalFamilies]).toEqual([["WithEvents subscriber …", 1]]);
-    expect(sunk).toEqual([{ reason: "refusal", family: "WithEvents subscriber …" }]);
+    // R1009: the whole first line too, which the family cuts
+    expect(sunk).toEqual([
+      {
+        reason: "refusal",
+        family: "WithEvents subscriber …",
+        text: WITH_EVENTS,
+        test: `Codeunit${CU}.A`,
+      },
+    ]);
     // Not a warning: gates pin their warning sets (R939).
     expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
   });
@@ -1573,6 +1581,32 @@ describe("R939: why each serve daemon closed", () => {
     expect(family("NotRun: out-of-scope: field 'CO2e Emission' of table CO2e Ledger")).toBe(
       "field … of table CO2e Ledger",
     );
+  });
+
+  // R1009 (coord PR-09): DO's stale-buffer close was known only by its cut family ("... after a lock other
+  // tha"), so it could not be measured. The close carries the whole first line and the test.
+  test("R1009: a refusal's whole first line rides along (text), where the family is cut", () => {
+    const stale =
+      "NotRun: out-of-scope: a stale Issued Reminder Header buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)";
+    const why = unkeptRowReason([
+      {
+        name: "Codeunit1.A",
+        status: "error",
+        notRun: true,
+        message: `${stale}\nsecond line`,
+      },
+    ]);
+    expect(why?.family).toBe(
+      "a stale Issued Reminder Header buffer from its own write, after a lock other tha",
+    );
+    expect(why?.text).toBe(stale);
+    expect(why?.test).toBe("Codeunit1.A");
+    // a timeout carries none
+    expect(
+      unkeptRowReason([
+        { name: "Codeunit1.A", status: "error", notRun: false, message: TIMEOUT_1S },
+      ])?.text,
+    ).toBeUndefined();
   });
 });
 
@@ -2261,6 +2295,27 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     await r.b.activate("M0001");
     expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
     expect(since(r, n0).map((q) => q.ids[0])).toEqual([plainCu, plainEcho]);
+  });
+
+  // R998 (review 1): the coverage request leaves out what the entry left out, or the two disagree on the
+  // left-out test's row and the pass is never scored.
+  test("R998: a left-out test is left out of the coverage request too, so the pass is scored", async () => {
+    const bRefused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B"
+          ? {
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: "NotRun: out-of-scope: InStream method on an unassigned Variant",
+            }
+          : x,
+      );
+    const { r, n0 } = await windowOf({ serve: { rows: bRefused }, oneShotRows: bRefused });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const cov = since(r, n0).find((q) => q.body.coverage === true);
+    expect(cov?.body.excludeTests).toEqual([`Codeunit${CU}.B`]);
   });
 
   test("the coverage request's rows disagree with the entry's -> error entries-coverage-disagreement", async () => {
@@ -4492,6 +4547,7 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
       "mutant-stop",
       "probe",
       "session-end",
+      "stop-signal", // R1014: the session ends, no warm-up follows
     ]);
   });
 
@@ -4716,15 +4772,54 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     });
   }
 
-  test("only the warm-up leaves it out: the mutant entries still send the whole codeunit", async () => {
-    const r = asSource(await rig({ serve: { rows: bRefused } }), "default");
+  // R998 (coord R-998): the mutant entries leave the same tests out (DO t1: 35 daemon closes, 3,625 s
+  // of warm-ups, R-984). Red without the R998 change: every mutant request meets B's refusal and
+  // closes its daemon, and with the exclusion but without suiteMissing's allowance, A reads row-missing.
+  test("R998: the mutant entries leave it out too: no daemon closes on it, and the covering test's verdict reads as ever", async () => {
+    const bAlways: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(await rig({ serve: { rows: bAlways } }), "default");
     await baseline(r.b, SUITE1);
-    await r.b.prefetchMutants(plans(["M0001"]));
-    const later = r.serve.requests
+    const covering = [ref("A")]; // B is refused at baseline, so it covers no mutant
+    await r.b.prefetchMutants(plans(["M0001", "M0002"], covering));
+    const mutantEntries = r.serve.requests
       .slice(1)
-      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? []);
-    expect(later.length).toBeGreaterThan(0);
-    expect(later.every((e) => e.excludeTests === undefined)).toBe(true);
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.`);
+    expect(mutantEntries.length).toBeGreaterThan(0);
+    expect(mutantEntries.map((e) => e.excludeTests)).toEqual(
+      mutantEntries.map(() => [`Codeunit${CU}.B`]),
+    );
+    expect(r.serve.closes).toEqual([]);
+    expect(r.serve.daemons).toHaveLength(1);
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("pass");
+  });
+
+  // R998 (review 2-3): a refused test with a test after it stays in the mutant entries, so the test
+  // after it starts from the baseline's state; the warm-up (which only compares) still leaves it out.
+  test("R998: a refused test in the middle of its codeunit stays in the mutant entries (only a trailing run is left out)", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(await rig({ suite: SUITE_ABC, serve: { rows: bMid } }), "default");
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("C")])).catch(() => {});
+    expect(warmupEntry(r)?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+    const mutantEntries = r.serve.requests
+      .slice(1)
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.`);
+    expect(mutantEntries.length).toBeGreaterThan(0);
+    expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
   });
 
   test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
@@ -7235,6 +7330,85 @@ describe("R948 A: the baseline through one daemon", () => {
   });
 });
 
+// R1014 (coord PR-07): R-998's DO window ran 40 min past its budget and a SIGTERM, re-sending requests
+// whose hanging mutants each waited out the 1,762 s test stop.
+describe("R1014: the mutant phase honours a spent budget and a stop signal between and inside requests", () => {
+  const handle = (o: { spent: () => boolean; signalled: () => boolean }) => ({
+    ...o,
+    stopForMemory: () => {},
+  });
+
+  test("a spent budget sends no prefetch chunk (nor a warm-up for it); an unspent one does", async () => {
+    for (const spent of [true, false]) {
+      const r = await rig({ stopHandle: handle({ spent: () => false, signalled: () => false }) });
+      await baseline(r.b, SUITE1);
+      (r.b as unknown as { stopHandle: unknown }).stopHandle = handle({
+        spent: () => spent,
+        signalled: () => false,
+      });
+      await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+      // red without the check: the chunk starts a daemon and sends its warm-up and its request
+      expect([spent, r.serve.requests.length > 0]).toEqual([spent, !spent]);
+    }
+  });
+
+  test("a budget spent after the prefetch sends no kill-pair batch; an unspent one does", async () => {
+    const killsA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "M0001" && x.method === "A" ? { ...x, status: "fail" as const } : x,
+      );
+    for (const spendIt of [true, false]) {
+      const box: { r?: Rig } = {};
+      const prefetched = () =>
+        box.r?.serve.requests.some((q) => q.ids.some((id) => id.startsWith("M0001|"))) === true;
+      const r = await rig({
+        stopHandle: handle({ spent: () => spendIt && prefetched(), signalled: () => false }),
+        serve: { rows: killsA },
+        oneShotRows: killsA,
+        pairBatch: true,
+      });
+      box.r = r;
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+      const pairSent = r.serve.requests.some((q) => q.ids.some((id) => id.includes("#m")));
+      // red without the check: the pair batch goes out after the budget is spent
+      expect([spendIt, prefetched(), pairSent]).toEqual([spendIt, true, !spendIt]);
+    }
+  });
+
+  test("a stop signal ends a request that is still running (a hang) by closing its daemon; without one it runs to its answer", async () => {
+    for (const signal of [true, false]) {
+      let sig = false;
+      const notices: string[] = [];
+      const r = await rig({
+        stopHandle: handle({ spent: () => sig, signalled: () => sig }),
+        notify: (c) => notices.push(c),
+        // every request with a mutant's entries hangs for 1.5 s (a test that waits out its stop)
+        serve: { delayMs: (q) => (q.ids.some((id) => id.startsWith("M0001")) ? 1500 : 0) },
+      });
+      await baseline(r.b, SUITE1);
+      const started = Date.now();
+      if (signal)
+        setTimeout(() => {
+          sig = true;
+        }, 300);
+      await r.b.prefetchMutants(plans(["M0001"])).catch(() => {});
+      const ms = Date.now() - started;
+      const closes = r.b.daemonCloses().byReason;
+      if (signal) {
+        // red without the watch: the request waits out its whole delay
+        expect(ms).toBeLessThan(1000);
+        expect(closes.get("stop-signal")).toBe(1);
+        // review 6: no "its mutants run as live requests" warning after a stop
+        expect(notices).not.toContain("al-runner-v3-entries-prefetch-dropped");
+      } else {
+        expect(ms).toBeGreaterThanOrEqual(1400);
+        expect(closes.get("stop-signal")).toBeUndefined();
+      }
+    }
+  });
+});
+
 describe("R948 B: `method` codeunits as per-test requests", () => {
   const methodRig = (o: RigOpts = {}) =>
     dbRig({ suite: SUITE2, extra: { isolation: "method" }, ...o });
@@ -7259,19 +7433,73 @@ describe("R948 B: `method` codeunits as per-test requests", () => {
     expect(r.serve.closes).toHaveLength(1); // closed when the baseline ended, before any mutant daemon
   });
 
-  test("an answer that is not exactly that test's row, run, falls back to the test alone one-shot", async () => {
-    const refusedA: RowsFn = (m, cu, d, n) =>
+  const refusedA =
+    (message: string): RowsFn =>
+    (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
-        x.method === "A" && d >= 0
-          ? { ...x, status: "error" as const, notRun: true, message: COMMIT }
-          : x,
+        x.method === "A" && d >= 0 ? { ...x, status: "error" as const, notRun: true, message } : x,
       );
-    const r = await methodRig({ serve: { rows: refusedA } });
+  const askedOf = (r: Awaited<ReturnType<typeof methodRig>>) =>
+    r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1)).sort();
+
+  test("R1007: a refusal the daemon may keep (V3_SERVE_SAFE_REFUSALS) is kept from the daemon, not re-run", async () => {
+    // A fresh process refuses A alike (the rig's one-shot rows), so the kept answer is the one one-shot would give.
+    const r = await methodRig({ serve: { rows: refusedA(COMMIT) }, oneShotRows: refusedA(COMMIT) });
     const v = await baseline(r.b, SUITE2);
     expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
-    // A alone one-shot (the daemon's answer was a refusal), plus the sample's B and C.
-    const asked = r.one.calls.map((c) => c[c.indexOf("--test-exact") + 1]?.split(".").at(-1));
-    expect(asked.sort()).toEqual(["A", "B", "C"]);
+    expect(v[0]?.outcome).not.toBe("pass"); // A: the daemon's refusal stands
+    // Only the samples B and C ran one-shot.
+    expect(askedOf(r)).toEqual(["B", "C"]);
+  });
+
+  test("R1007 (build review): a cascade refusal is never kept in the per-test fill: one test per request cannot honestly give it", async () => {
+    const CASCADE =
+      "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (a refusal of an earlier test)";
+    const r = await methodRig({ serve: { rows: refusedA(CASCADE) } });
+    await baseline(r.b, SUITE2);
+    // A re-ran alone one-shot, as before R1007, besides the samples B and C.
+    expect(askedOf(r)).toEqual(["A", "B", "C"]);
+  });
+
+  test("R1007: a refused SAMPLE is compared like any row: the same refusal (first line) keeps the daemon baseline, another answer drops it by name", async () => {
+    // Not in V3_SERVE_SAFE_REFUSALS: before R1007 a sample like this was skipped as daemon-odd-row.
+    const REFUSED = "NotRun: out-of-scope: a refusal no serve rule names";
+    const refusedB =
+      (daemonOnly: boolean, tail: string): RowsFn =>
+      (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          x.method === "B" && (!daemonOnly || d >= 0)
+            ? { ...x, status: "error" as const, notRun: true, message: `${REFUSED}${tail}` }
+            : x,
+        );
+    // Same refusal in the fresh process; only text after the first line differs (it can, by path).
+    const same = await methodRig({
+      serve: { rows: refusedB(true, "\ndaemon path") },
+      oneShotRows: refusedB(false, "\none-shot path"),
+    });
+    const v = await baseline(same.b, SUITE2);
+    expect(same.b.daemonBaselineReport().dropped).toBeUndefined();
+    expect(same.b.daemonBaselineReport().sampledSkipped).toEqual([]);
+    expect(v[1]?.outcome).not.toBe("pass"); // B: the refusal both agreed on
+    expect(askedOf(same)).toEqual(["B", "C"]);
+    // The fresh process passes B: the daemon's refusal differs, and the daemon baseline drops by name.
+    const other = await methodRig({ serve: { rows: refusedB(true, "") } });
+    await baseline(other.b, SUITE2);
+    expect(other.b.daemonBaselineReport().dropped).toContain("differs from a fresh process's");
+    expect(other.b.daemonBaselineReport().droppedDetail.join(" ")).toContain(
+      "b: differs in status, notRun",
+    );
+  });
+
+  test("an answer that is not exactly that test's row, run, falls back to the test alone one-shot", async () => {
+    // A refusal outside V3_SERVE_SAFE_REFUSALS is not kept (R1007 keeps only the safe ones).
+    const r = await methodRig({
+      serve: { rows: refusedA("NotRun: out-of-scope: a refusal no serve rule names") },
+    });
+    const v = await baseline(r.b, SUITE2);
+    expect(v[1]?.outcome).toBe("pass"); // B stood from the daemon (and its sample agreed)
+    // A alone one-shot (the daemon's answer was a refusal it may not keep), plus the sample's B and C.
+    expect(askedOf(r)).toEqual(["A", "B", "C"]);
   });
 });
 
@@ -8020,6 +8248,8 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
     stubCus(r.b, Object.fromEntries(CUS.slice(1).map((c) => [c, bad])));
     await baseline(r.b, SUITE6);
     expect(dropNotice(seen)[0]?.[1]).toContain("too few clean cross-check samples: 0 of 2");
+    // R1007: and names the skipped samples with their reasons, not only the itests' report.
+    expect(dropNotice(seen)[0]?.[1]).toMatch(/; skipped samples: \S.* \(\S+\)/);
     expect(rep(r).served).toBe(0);
   });
 

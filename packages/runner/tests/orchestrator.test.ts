@@ -4410,13 +4410,26 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   // R939: the session installs a close sink; each close it gets is a `serve-daemon-closed` event,
   // which the report counts, and never a warning. Removed at the session's end.
   test("R939: a backend's daemon close becomes an event and the report's v3DaemonCloses, never a warning", async () => {
+    type Close = {
+      readonly reason: string;
+      readonly family?: string;
+      readonly text?: string;
+      readonly test?: string;
+    };
     class ClosingBackend extends RecordingBackend {
-      sink: ((c: { readonly reason: string; readonly family?: string }) => void) | undefined;
-      setDaemonCloseSink(sink?: (c: { readonly reason: string; readonly family?: string }) => void) {
+      sink: ((c: Close) => void) | undefined;
+      setDaemonCloseSink(sink?: (c: Close) => void) {
         this.sink = sink;
       }
       override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-        if (ref.method === "UnsupportedTest") this.sink?.({ reason: "refusal", family: "WithEvents …" });
+        if (ref.method === "UnsupportedTest")
+          this.sink?.({
+            reason: "refusal",
+            family: "WithEvents …",
+            // R1009: the whole text and the test reach the event (red without handNotify's spreads)
+            text: "NotRun: out-of-scope: WithEvents subscriber 'S' (not pinned)",
+            test: "Codeunit1.UnsupportedTest",
+          });
         return super.run(ref, opts);
       }
     }
@@ -4432,7 +4445,12 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     });
     const closed = events.filter((e) => e.type === "serve-daemon-closed");
     expect(closed.length).toBeGreaterThan(0);
-    expect(closed[0]).toMatchObject({ reason: "refusal", family: "WithEvents …" });
+    expect(closed[0]).toMatchObject({
+      reason: "refusal",
+      family: "WithEvents …",
+      text: "NotRun: out-of-scope: WithEvents subscriber 'S' (not pinned)",
+      test: "Codeunit1.UnsupportedTest",
+    });
     expect(report.v3DaemonCloses).toEqual({ refusal: closed.length });
     expect(events.some((e) => e.type === "warning" && e.code.includes("daemon"))).toBe(false);
     expect(backend.sink).toBeUndefined();
@@ -4993,6 +5011,32 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
       store.close();
       expect(backend.stops).toEqual([60_000]);
       for (const ms of mutantBudgets(backend)) expect(ms).toBe(60_000);
+    });
+
+    // R1015 (coord PR-08): DO's 87.8 s "largest test" was a whole serve call; the test's own time was
+    // 1.3 s, so every test got a 1,762 s stop. The stop reads the own time; the call's budget keeps
+    // 2 x its wall. Red with `baselineDuration`: the stop would be 20 x 87000 + 5000.
+    test("R1015: S comes from the green test's OWN time (measuredDurationMs), not the call's wall; each call's budget keeps 2 x its wall", async () => {
+      class OwnTimeProbe extends PerTestProbe {
+        override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+          const v = await super.run(ref, opts);
+          return this.activations.at(-1) === null && v.outcome === "pass"
+            ? { ...v, measuredDurationMs: 1_300 }
+            : v;
+        }
+      }
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new OwnTimeProbe({
+        GreenTest: { outcome: "pass", ms: 87_000 },
+        UnsupportedTest: { outcome: "fail", ms: 5 },
+      });
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds });
+      store.close();
+      expect(backend.stops).toEqual([60_000]);
+      const budgets = mutantBudgets(backend);
+      expect(budgets.length).toBeGreaterThan(0);
+      for (const ms of budgets) expect(ms).toBe(174_000);
     });
 
     test("an explicit mutantTimeoutMs: useMutantStop is not called and the floor is that value", async () => {

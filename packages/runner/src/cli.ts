@@ -39,12 +39,13 @@ import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
   assertAlcRunnable,
   assertBcVersionMatchesPackages,
+  defaultV3Path,
   readLicenseIdentity,
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
 import { chooseV3Environment, describeV3Environment } from "./al-runner-v3-environment";
-import { checkGated, v3InstallHint } from "./al-runner-v3-pin";
+import { checkGated, resolveV3Binary, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
 import { compareAppVersions, nextAbove } from "./app-version";
@@ -2988,6 +2989,24 @@ export function bcDevBackendConfig(
 }
 
 /**
+ * R1018: on al-runner-v3, the config with `alRunnerV3.path` resolved to the binary it names now
+ * (its default, the `current` link, when absent). Called once per `lethal run`, so every attempt and
+ * every backend of the run spawns the same build, whatever the link does meanwhile. Any other
+ * backend, or a config with no `alRunnerV3` section (refused by name later), comes back unchanged.
+ */
+export function pinV3Binary(parsed: RunCliConfig, config: LethalConfigFile): LethalConfigFile {
+  const section = config.alRunnerV3;
+  if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)
+    return config;
+  const raw = (section as { path?: unknown }).path;
+  // Only an ABSENT path takes the default; any other non-string or empty value is left for the
+  // validation to refuse by name, never replaced by a plausible build (review).
+  if (raw !== undefined && (typeof raw !== "string" || raw === "")) return config;
+  const path = raw ?? defaultV3Path();
+  return { ...config, alRunnerV3: { ...section, path: resolveV3Binary(path) } };
+}
+
+/**
  * Runs Task 6's `startEnvToolSession` lifecycle EXACTLY ONCE for a `run` invocation and returns a
  * `LethalConfigFile` with `bcdev` substituted by the resolved section — the object `buildBackend`,
  * `leaseSessionFor`, and `resourceIdentityFor` all read `configFile.bcdev` from (each calls
@@ -4120,11 +4139,16 @@ export async function runFromCli(
     // bcdev world, any per-worker one), `resourceIdentityFor`, and `leaseSessionFor` all still call
     // `validateBcDevConfig` independently, but against the SAME already-resolved section.
     const resolveSession = deps.resolveEnvToolSession ?? resolveEnvToolSession;
-    const { effectiveConfig, envSession, deploy } = await resolveSession(
-      parsed,
-      sessionConfig,
-      basename(scratchRoot),
-    );
+    const {
+      effectiveConfig: sessionEffectiveConfig,
+      envSession,
+      deploy,
+    } = await resolveSession(parsed, sessionConfig, basename(scratchRoot));
+    // R1018: the al-runner binary is resolved ONCE per run, here, and every attempt (R786's one-shot
+    // retry) and every backend built inside the run gets the resolved path. Each backend resolved the
+    // `current` link itself (R950), so a retry after a move ran another build than the warm-up it
+    // reported (PR-06: serve on a184cfc79, its retry on 5a58a0f16).
+    const effectiveConfig = pinV3Binary(parsed, sessionEffectiveConfig);
 
     // Minor 6 (Task 7 review): `--keep-env` with a bcdev backend but no `envTool` section configured
     // is a silent no-op — there is no environment for it to act on. Not catchable at parse time
