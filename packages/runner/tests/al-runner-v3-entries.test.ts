@@ -6658,6 +6658,108 @@ describe("R895: stop a request at its first timeout row", () => {
       expect(r.b.entriesStats().timeoutCuts).toBe(2);
     });
 
+    describe("PR-41: after a mutant's timeout cut, its later runs are alone calls (R577, trace L/A2)", () => {
+      type Sent = Awaited<ReturnType<typeof readyRig>>["serve"]["requests"][number];
+      /** The entry tests of a request, minus the echo, with the mutant its resources name. */
+      const shape = (q: Sent) => ({
+        alone: q.body.runSelectedOnly === true,
+        tests: (q.body.entries as { test: string }[])
+          .map((e) => e.test)
+          .filter((t) => t !== `Codeunit${ECHO}.`),
+        mutants: [
+          ...new Set(
+            (q.body.entries as { resources: Record<string, string> }[]).map(
+              (e) => e.resources["active-mutant.txt"],
+            ),
+          ),
+        ],
+      });
+      const sentFor = (r: Awaited<ReturnType<typeof readyRig>>, n0: number, m: string) =>
+        r.serve.requests
+          .slice(n0)
+          .map(shape)
+          .filter((s) => s.mutants.includes(m) && s.tests.length > 0);
+
+      test("1: the reproduction of a timeout-cut mutant is an alone request for the one test, not the whole codeunit", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        const n0 = r.serve.requests.length;
+        await r.b.activate("M0001"); // R577: the prefetched rows were consumed; this runs live
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.A`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("2: a mutant killed by a plain failure (no timeout cut) reproduces as a live whole-codeunit call, as today", async () => {
+        const r = await readyRig({
+          serve: { rows: killsM1 },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+        const n0 = r.serve.requests.length;
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("fail");
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: false, tests: [`Codeunit${CU}.`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("3: NONE after the mutant's timeout cut is a live whole-codeunit call, never alone", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        const n0 = r.serve.requests.length;
+        await r.b.activate(null);
+        expect((await r.b.run(A, OPTS)).outcome).toBe("pass");
+        // (the restarted daemon's NONE warm-up has the same shape; every NONE request is whole-codeunit)
+        const none = sentFor(r, n0, "NONE");
+        expect(none.length).toBeGreaterThan(0);
+        for (const s of none)
+          expect(s).toEqual({ alone: false, tests: [`Codeunit${CU}.`], mutants: ["NONE"] });
+      });
+
+      test("4: the set does not leak into the next batch or a redeploy", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        // Next batch: M0001 is not prefetched, so its run is live; the set was cleared.
+        await r.b.prefetchMutants(plans(["M0002"], SUITE2));
+        let n0 = r.serve.requests.length;
+        await r.b.activate("M0001");
+        await r.b.run(A, OPTS);
+        expect(sentFor(r, n0, "M0001").map((s) => s.alone)).toEqual([false]);
+        // Redeploy: the same.
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        await r.b.deploy(r.l.batch);
+        await baseline(r.b, SUITE2);
+        n0 = r.serve.requests.length;
+        await r.b.activate("M0001");
+        await r.b.run(A, OPTS);
+        expect(sentFor(r, n0, "M0001").map((s) => s.alone)).toEqual([false]);
+      });
+    });
+
     test("a cut with rows only after the cut entry in the answer is a protocol error: the prefetch is dropped", async () => {
       const r = await rig({
         suite: SUITE2,

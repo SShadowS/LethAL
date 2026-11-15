@@ -2350,6 +2350,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private uniformWatch = new UniformRefusalWatch();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
   private prefetched = new Map<string, Map<number, CallRows>>();
+  /** PR-41: mutants whose call was cut at a timeout in this batch; their later runs go alone (`runOn`). */
+  private timedOutMutants = new Set<string>();
   /**
    * PR-20 (L4): per mutant, per codeunit entry (a positive call id), the covering methods (lower-case)
    * of its plan, from `prefetchMutants`; `mutantExcludes` cuts the entry after the last of them.
@@ -3320,6 +3322,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.batchBlind = undefined;
     this.latchBy = undefined;
     this.prefetched = new Map();
+    this.timedOutMutants = new Set();
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
     this.l4Counted = new Set();
     this.pairStore.clear();
@@ -5396,14 +5399,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     let call = lane.rowsByCodeunit.get(this.callId(ref));
     if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
+    let alone = false;
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
-      const made =
-        this.entries && !this.inBaseline && !this.oneShotCodeunits.has(ref.codeunitId)
+      // PR-41 (R577, trace L/A2): once a mutant's call was cut at a timeout in this batch, any
+      // further run of it (R577's reproduction included) is ONE test alone (R895), never the whole
+      // codeunit again: that re-sent the same hang and paid a daemon restart each time. An active
+      // mutant only; NONE (the confirm) is never routed here. Other kills reproduce as before.
+      const live = this.entries && !this.inBaseline && !this.oneShotCodeunits.has(ref.codeunitId);
+      const toAlone =
+        live && lane.lastActivated !== null && this.timedOutMutants.has(lane.lastActivated);
+      const made = toAlone
+        ? await this.aloneCall(lane, ref)
+        : live
           ? await this.liveCall(lane, ref)
           : await this.callCodeunit(lane, ref, opts.timeoutMs, opts.coverage !== "none");
       if ("verdict" in made) return made.verdict;
       call = made.call;
+      alone = toAlone;
     }
     // R764: a call made without coverage must never serve a caller who wants it (its coverage
     // would read as undefined, so mutants would read no-coverage). Fail loudly.
@@ -5413,8 +5426,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R895: a call cut at a timeout row has rows only up to that test. A ref it has no row for is
     // run ALONE under the same mutant; its answer stands for the ref (it is not stored as the
     // codeunit's call). A ref it does have a row for reads that row, as ever.
-    let alone = false;
     if (
+      !alone &&
       call.cutAtTimeout !== undefined &&
       call.refusal === undefined &&
       call.missing === undefined &&
@@ -6941,6 +6954,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       // R895: the entry the answer was cut in holds the rows it had; its other tests did not run.
       const cutHere = partial !== undefined && partial.entry === e.id;
+      if (cutHere && e.mutantId !== SELECTOR_RESOURCE_NONE) this.timedOutMutants.add(e.mutantId);
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
@@ -7170,6 +7184,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.pairStore.clear();
     if (!this.entries) return;
     this.prefetched = new Map();
+    this.timedOutMutants = new Set();
     for (const p of opts?.batchPlans ?? [])
       for (const cu of new Set(this.serveRefs(p.refs).map((r) => this.callId(r))))
         this.union.add(cu);
