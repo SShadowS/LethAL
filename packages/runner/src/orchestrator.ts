@@ -5925,11 +5925,39 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             : undefined;
       }
       snapshotKey = { batchHash, testAppHash };
+      // PR-21 (L5): a backend that needs its own baseline state (serve-entries, R1008) reuses a
+      // snapshot only after re-checking it on its daemon; any reason not to falls back to the
+      // baseline as today, by name (docs/superpowers/specs/2026-11-15-pr21-l5-baseline-reuse.md).
+      if (
+        reused !== undefined &&
+        backend.resumeRunsBaseline === true &&
+        backend.recheckReusedBaseline !== undefined
+      ) {
+        const storedCoverage = new Map(
+          reused.baseline.map((b) => [
+            `codeunit${b.ref.codeunitId}.${b.ref.method}`.toLowerCase(),
+            JSON.stringify(b.verdict.coverage ?? null),
+          ]),
+        );
+        const why = await backend.recheckReusedBaseline(
+          reused.backendState,
+          storedCoverage,
+          scope.baselineTimeoutMs,
+        );
+        if (why !== undefined) {
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (PR-21). The stored run may itself be the odd one (a cascade a cold al-runner cache gave, #8002): this run's baseline is stored, and the next --resume compares against it.`,
+          });
+          reused = undefined;
+        }
+      }
       if (reused !== undefined) {
         emit({
           type: "warning",
           code: "resume-baseline-reused",
-          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). ${backend.recheckReusedBaseline !== undefined && backend.resumeRunsBaseline === true ? "Re-checked on this session's daemon: every test's outcome, and three codeunits' coverage (PR-21); a test that flips only sometimes can pass that check." : "Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here."} A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
         });
         for (const saved of reused.baseline) {
           // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
@@ -6038,6 +6066,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           ? `${testAppHash}${PENDING_SUFFIX}`
           : testAppHash,
       baseline: baseline as BaselineObservation[],
+      // PR-21 (L5): the backend's own baseline state, for a serve resume to take back
+      ...(await (async () => {
+        const state = await backend.baselineState?.();
+        return state !== undefined ? { backendState: state } : {};
+      })()),
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -8973,7 +9006,10 @@ async function runSessionBody(
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.isolationAuto !== true && // R896 (review 1)
-            cfg.backend.resumeRunsBaseline !== true && // R1008: serve-entries' warm-up, as R857
+            // R1008: serve-entries' warm-up needs its baseline rows, as R857; PR-21 (L5): unless the
+            // backend takes them back from the snapshot after a re-check (`recheckReusedBaseline`)
+            (cfg.backend.resumeRunsBaseline !== true ||
+              cfg.backend.recheckReusedBaseline !== undefined) &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),

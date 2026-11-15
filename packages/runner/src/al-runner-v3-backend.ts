@@ -956,6 +956,36 @@ interface NoOneShotAnswer {
   readonly noAnswer: string;
 }
 
+/**
+ * PR-21 (L5): what a serve baseline snapshot carries for the backend (`baselineState`): each
+ * codeunit's rows in run order, the seed it ran with, and the .NET sidecar's content hash.
+ */
+export interface L5BaselineState {
+  readonly v: 1;
+  readonly rows: readonly (readonly [number, readonly V3Row[]])[];
+  readonly seed: number | null;
+  readonly sidecarSha256: string | null;
+}
+
+/** PR-21: a stored state read back, or `undefined` when it is not one (never a partial one). */
+export function parseL5State(x: unknown): L5BaselineState | undefined {
+  if (typeof x !== "object" || x === null) return undefined;
+  const s = x as Record<string, unknown>;
+  if (s.v !== 1 || !Array.isArray(s.rows)) return undefined;
+  if (!(s.seed === null || typeof s.seed === "number")) return undefined;
+  if (!(s.sidecarSha256 === null || typeof s.sidecarSha256 === "string")) return undefined;
+  for (const e of s.rows) {
+    if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "number" || !Array.isArray(e[1]))
+      return undefined;
+    for (const r of e[1] as unknown[]) {
+      const row = r as Record<string, unknown> | null;
+      if (row === null || typeof row.method !== "string" || typeof row.status !== "string")
+        return undefined;
+    }
+  }
+  return s as unknown as L5BaselineState;
+}
+
 /** R948: one codeunit's (or one test's) baseline answer, as `callCodeunit` reads it. */
 interface BaselineAnswer {
   readonly rows: readonly V3Row[];
@@ -4849,6 +4879,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       useBuildSymbols: no("useBuildSymbols"),
       baselinePhase: no("baselinePhase"),
       noteReusedBaseline: no("noteReusedBaseline"),
+      baselineState: no("baselineState"),
+      recheckReusedBaseline: no("recheckReusedBaseline"),
       chooseIsolation: no("chooseIsolation"),
       prefetchMutants: no("prefetchMutants"),
       status: no("status"),
@@ -6006,6 +6038,127 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       this.noteRefused(ref.codeunitId, ref.method);
     }
+  }
+
+  /**
+   * PR-21 (L5): the baseline state a resumed serve session needs back from a snapshot: each
+   * codeunit's rows in run order (`baselineRows`), the seed the baseline ran with, and the .NET
+   * sidecar's content hash (docs/superpowers/specs/2026-11-15-pr21-l5-baseline-reuse.md). Only on
+   * serve-entries (one-shot keeps no rows); `undefined` otherwise.
+   */
+  async baselineState(): Promise<L5BaselineState | undefined> {
+    if (!this.entries || this.baselineRows.size === 0) return undefined;
+    return {
+      v: 1,
+      rows: [...this.baselineRows.entries()].map(([k, rows]) => [k, rows]),
+      seed: this.observedSeed ?? null,
+      sidecarSha256: this.sidecarPath === undefined ? null : await sha256OfFile(this.sidecarPath),
+    };
+  }
+
+  /**
+   * PR-21 (L5): re-check a reused baseline on this session's daemon, inside the baseline phase,
+   * and on success take its rows as this session's (`noteBaselineRows`). Returns why it is NOT
+   * reused (the caller then runs the baseline as today), or `undefined` when it is. The check:
+   * every codeunit runs once unmutated without coverage and each row must equal the stored one
+   * (status, notRun, failure text with the target app's minted version masked); three codeunits
+   * (the 2nd, the middle and the last) also run with coverage and each test's coverage map must
+   * equal the stored one (`storedCoverage`, by `Codeunit<id>.<method>`, lower-case, as JSON).
+   * Only a session whose every codeunit is a plain serve codeunit reuses (no test alone, no
+   * one-shot codeunit, no method isolation): those re-run, by name.
+   */
+  async recheckReusedBaseline(
+    state: unknown,
+    storedCoverage: ReadonlyMap<string, string>,
+    timeoutMs: number,
+  ): Promise<string | undefined> {
+    const lane = this.soleLane("recheckReusedBaseline");
+    const s = parseL5State(state);
+    if (s === undefined) return "no backend state (the snapshot was stored before PR-21)";
+    if (!this.entries) return "the transport (this session does not run on serve-entries)";
+    if (this.isolatesTests) return "the isolation (tests run alone)";
+    const ids = [...this.suitePerCodeunit.keys()];
+    const odd = ids.filter(
+      (id) => this.oneShotCodeunits.has(id) || this.isolationOf(id) === "method",
+    );
+    if (odd.length > 0)
+      return `the transport (codeunit ${odd[0]} runs one-shot or under method isolation)`;
+    const stored = new Map(s.rows);
+    const missing = ids.find((id) => !stored.has(id));
+    if (missing !== undefined || stored.size !== ids.length)
+      return `the suite (codeunit ${missing ?? "?"} has no stored rows, or the stored rows name other codeunits)`;
+    const sidecar = this.sidecarPath === undefined ? null : await sha256OfFile(this.sidecarPath);
+    if (sidecar !== s.sidecarSha256) return "the .NET sidecar (its content hash)";
+    const mask = await this.mintedVersionMask(lane);
+    const masked = (rows: readonly V3Row[]) =>
+      rows.map((r) => ({ ...r, ...(r.message !== undefined ? { message: mask(r.message) } : {}) }));
+    const none: V3CoverageRead = { kind: "unavailable", why: "PR-21 re-check rows only" };
+    const stopSeconds = stopSecondsOf(timeoutMs);
+    const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
+    const order = s.rows.map(([k]) => k);
+    const sample = new Set(
+      [order[1], order[Math.floor(order.length / 2)], order[order.length - 1]].filter(
+        (x): x is number => x !== undefined,
+      ),
+    );
+    for (const id of order) {
+      if (!(await this.memoryGate(true))) return "the memory bound (the re-check could not run)";
+      let got: BaselineAnswer | undefined;
+      try {
+        got = await this.baselineRequest(lane, mode, id, stopSeconds, sample.has(id));
+      } catch (err) {
+        if (!(err instanceof AlRunnerServerRequestError)) throw err;
+        got = undefined;
+      } finally {
+        this.memoryRelease();
+      }
+      if (got === undefined) return `the re-check (codeunit ${id} gave no usable answer)`;
+      const diffs = compareBaselineAnswers(
+        { rows: masked(got.rows), coverage: none },
+        { rows: masked(stored.get(id) ?? []), coverage: none },
+      );
+      if (diffs.length > 0) return `the re-check (codeunit ${id}: ${diffs[0]})`;
+      if (sample.has(id)) {
+        for (const r of got.rows) {
+          // as `runOn` reads it: a pass, or a test refused mid-run (R609), has coverage; others none
+          const refusedMidRun =
+            r.notRun &&
+            r.status === "error" &&
+            !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message));
+          let now =
+            (r.status === "pass" && !r.notRun) || refusedMidRun
+              ? this.coverageOf(lane, r.name, got.coverage)
+              : undefined;
+          if (refusedMidRun && now === "unavailable") now = undefined;
+          const was = storedCoverage.get(`codeunit${id}.${r.method}`.toLowerCase());
+          if (was === undefined) continue; // a test the session does not measure (TestPage-skipped, out of scope)
+          if (JSON.stringify(now ?? null) !== was)
+            return `the re-check (codeunit ${id}: ${r.method}'s coverage differs)`;
+        }
+      }
+    }
+    if ((this.observedSeed ?? null) !== s.seed)
+      return `the seed (stored ${String(s.seed)}, this session ${String(this.observedSeed ?? null)})`;
+    for (const [id, rows] of s.rows) this.noteBaselineRows(lane, id, rows);
+    this.daemonBaselineFilled = true; // nothing left for R948's fill to do
+    return undefined;
+  }
+
+  /** PR-21: masks the target app's minted version (`<name> by <publisher> version a.b.c.d`) only. */
+  private async mintedVersionMask(lane: Lane): Promise<(text: string) => string> {
+    const dir = lane.deployedDir;
+    if (dir === undefined) return (t) => t;
+    const app = JSON.parse(await readFile(join(dir, "app.json"), "utf8")) as {
+      name?: string;
+      publisher?: string;
+    };
+    if (app.name === undefined || app.publisher === undefined) return (t) => t;
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(
+      `(${esc(app.name)} by ${esc(app.publisher)} version )\\d+(?:\\.\\d+){3}`,
+      "g",
+    );
+    return (t) => t.replace(re, "$1<minted>");
   }
 
   private noteRefused(id: number, method: string): void {

@@ -762,6 +762,24 @@ export interface ExecutionBackend {
   ): void;
 
   /**
+   * PR-21 (L5), OPTIONAL (al-runner v3 on serve-entries): the backend's own baseline state, stored
+   * with the batch's snapshot so a resumed session can take it back. `undefined`: nothing to store.
+   */
+  baselineState?(): Promise<unknown>;
+
+  /**
+   * PR-21 (L5), OPTIONAL: a resumed session's re-check of a reused snapshot (`state`, from
+   * `baselineState`), inside the baseline bracket; on success the backend holds that state as its
+   * own. Returns why the snapshot is NOT reused, or `undefined` when it is. A backend that
+   * implements it reuses snapshots although `resumeRunsBaseline` is true.
+   */
+  recheckReusedBaseline?(
+    state: unknown,
+    storedCoverage: ReadonlyMap<string, string>,
+    timeoutMs: number,
+  ): Promise<string | undefined>;
+
+  /**
    * R896, OPTIONAL (al-runner v3, `isolation: "auto"` only): fixes test codeunit `codeunitId`'s
    * mode for the session: `"method"` runs each of its tests alone under codeunit isolation, `"test"`
    * runs it whole, as always. Clears the codeunit's baseline refusals (the orchestrator notes them

@@ -18,6 +18,15 @@ import {
 import { RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 
 /** R644: two faced lists name the same tests (order ignored); a `null` (no record) equals nothing. */
+/** PR-21: a stored JSON text, or `undefined` when it does not parse (the reader then has no value). */
+function parseJsonOrUndefined(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 function sameFaced(a: FacedTests, b: FacedTests): boolean {
   if (a === null || b === null) return false;
   const set = new Set(a);
@@ -720,6 +729,14 @@ export class ResultsStore {
    * `recordMutant` INSERT would throw mid-run.
    */
   private migrate(): void {
+    // PR-21 (L5): a serve snapshot also stores the backend's baseline state; older rows keep NULL,
+    // which a serve resume reads as "no backend state" and does not reuse.
+    const snapCols = this.db.query("PRAGMA table_info(baseline_snapshots)").all() as Array<{
+      name: string;
+    }>;
+    if (!snapCols.some((c) => c.name === "backend_state")) {
+      this.db.exec("ALTER TABLE baseline_snapshots ADD COLUMN backend_state TEXT");
+    }
     const cols = this.db.query("PRAGMA table_info(mutants)").all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === "failure_note")) {
       this.db.exec("ALTER TABLE mutants ADD COLUMN failure_note TEXT");
@@ -2113,11 +2130,13 @@ export class ResultsStore {
     readonly batchHash: string;
     readonly testAppHash: string;
     readonly baseline: readonly BaselineObservation[];
+    /** PR-21 (L5): the backend's own baseline state (`ExecutionBackend.baselineState`). */
+    readonly backendState?: unknown;
   }): void {
     this.db
       .query(
-        `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO baseline_snapshots (run_id, batch_index, batch_hash, test_app_hash, payload, backend_state)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.runId,
@@ -2125,6 +2144,7 @@ export class ResultsStore {
         input.batchHash,
         input.testAppHash,
         JSON.stringify(input.baseline),
+        input.backendState === undefined ? null : JSON.stringify(input.backendState),
       );
   }
 
@@ -2177,7 +2197,7 @@ export class ResultsStore {
   ): BaselineSnapshot | null {
     const row = this.db
       .query(
-        `SELECT run_id, batch_index, batch_hash, test_app_hash, payload FROM baseline_snapshots
+        `SELECT run_id, batch_index, batch_hash, test_app_hash, payload, backend_state FROM baseline_snapshots
          WHERE batch_hash = ?1 AND test_app_hash = ?2
            AND run_id IN (SELECT id FROM runs WHERE COALESCE(identity_scheme, 1) = ?3 AND coverage_mode = ?4
              AND test_app_hash = baseline_snapshots.test_app_hash
@@ -2202,6 +2222,7 @@ export class ResultsStore {
       batch_hash: string;
       test_app_hash: string;
       payload: string;
+      backend_state: string | null;
     } | null;
     if (row === null) return null;
     let baseline: unknown;
@@ -2221,6 +2242,10 @@ export class ResultsStore {
       batchHash: row.batch_hash,
       testAppHash: row.test_app_hash,
       baseline: baseline as BaselineObservation[],
+      // PR-21: unparseable state is no state (the serve resume then re-runs its baseline, by name)
+      ...(row.backend_state !== null
+        ? { backendState: parseJsonOrUndefined(row.backend_state) }
+        : {}),
     };
   }
 
