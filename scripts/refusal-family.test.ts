@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
+  DOTNET_EXCEPTION,
   DOTNET_NO_OBJECT,
   FAMILIES,
   type Family,
@@ -318,11 +319,13 @@ describe("PR-01: the refusal-family generator", () => {
       NO_CLIENT,
       GET_URL,
       TABLE_CONNECTION,
+      DOTNET_EXCEPTION,
     ].map((f) => bcCheckApp(f).id);
     // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
-    // (PR-26: get-url appended as 6; PR-30: table-connection is 8, as 7 is PR-27's hand-written number-sequence app)
+    // (PR-26: get-url appended as 6; PR-30: table-connection is 8, as 7 is PR-27's hand-written number-sequence app; PR-32:
+    // dotnet-exception is 9)
     expect(ids).toEqual(
-      [1, 2, 3, 4, 5, 6, 8].map((n) => `51000000-0000-4000-8000-00000005100${n}`),
+      [1, 2, 3, 4, 5, 6, 8, 9].map((n) => `51000000-0000-4000-8000-00000005100${n}`),
     );
     for (const id of ids)
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -407,5 +410,42 @@ describe("PR-01: the refusal-family generator", () => {
     const ns = Object.values(FAMILIES).map((f) => Number(bcCheckApp(f).id.slice(-2)));
     expect(new Set(ns).size).toBe(ns.length);
     expect(ns).not.toContain(7);
+  });
+
+  test("PR-32: the dotnet-exception family: 14 sites in a guarded and a text shape, 3 controls", () => {
+    const f = DOTNET_EXCEPTION;
+    expect(f.cells).toHaveLength(31);
+    expect(f.target).toBe("OnPrem");
+    const guarded = f.cells.filter((c) => c.state === "guarded");
+    const text = f.cells.filter((c) => c.state === "text");
+    expect(guarded).toHaveLength(14);
+    expect(text).toHaveLength(14);
+    // guarded: asserterror alone, so the outcome cannot depend on the text; text: the same call, then the text carried out
+    for (const [i, g] of guarded.entries()) {
+      expect(g.call).toMatch(/^asserterror [^;]+;$/);
+      expect(text[i]?.call).toBe(`${g.call} Error('DOTNET %1', GetLastErrorText());`);
+      expect(text[i]?.setup).toEqual(g.setup);
+    }
+    expect(f.cells.filter((c) => c.state === "ok").every((c) => !c.call.includes("asserterror"))).toBe(true);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("PR-32: classOf folds a .NET exception's text into one class, with or without its tail, and keeps other DotNet causes apart", () => {
+    const cls = "DotNet * raised the .NET exception *";
+    expect(
+      classOf(
+        "DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: Invalid port specified.; the text AL would see is not pinned (ADR-014 section 7)",
+      ),
+    ).toBe(cls);
+    expect(
+      classOf(
+        "DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value ('-5') must be greater than or equal to '-1'. (Parameter 'value')",
+      ),
+    ).toBe(cls);
+    expect(classOf(DOTNET_EXCEPTION.known[0] ?? "")).toBe(cls);
+    expect(
+      classOf("DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object"),
+    ).not.toBe(cls);
   });
 });
