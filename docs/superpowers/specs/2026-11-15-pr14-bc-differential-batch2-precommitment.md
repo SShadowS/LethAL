@@ -37,3 +37,14 @@ v3 evidence: `/coord/handoff/PR-14/v3/` (configs, stores, events) and `/coord/ha
    text must name a Base Application object for that call.
 3. Any other difference is decided by BC's answer and filed as in PR-03 (invented repro, upstream issue or comment, roadmap,
    regression-set entry).
+
+## Amendment 1 (2026-11-15, after the first publish was refused, before any test ran)
+
+On bc2 (lease attempt 369) the first publish, the copy "PR14 Permissions Mock", was refused (HTTP 422: permission set name
+'ALL OBJECTS' exists in both): the server already has Microsoft's own Permissions Mock (40860557-...dc80) and Any
+(e7320ebb-...280b), both 28.4.53241.56646 and installed. BC restored its state; nothing was installed. The rule above says to
+drop such a module. Instead, before any further publish and before any test of this batch ran, the method changes for these
+two apps only: the test apps and test libraries depend on the SERVER's own Any and Permissions Mock (compiled against
+Microsoft's symbols of the same app ids from the corpus pool) and no copy of either is published. The renumbered test-library
+copies (Field Selection, Video) stay. The modules, tests and predictions are unchanged. Rebuilt apps:
+`/coord/handoff/PR-14/bc2/` (`compile.md`).
