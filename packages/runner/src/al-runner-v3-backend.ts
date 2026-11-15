@@ -1486,8 +1486,11 @@ export interface V3EntriesStats {
   echoRequests: number;
   /** Prefetch requests dropped on a request error (each warned by name). */
   prefetchDropped: number;
-  /** PR-20 (L4): mutant entries cut after their last covering test, the tests the cut left out, the
-   *  refs the cut had left out that ran live after all, and entries not used for their order. */
+  /** PR-20 (L4), once per (mutant, codeunit): its mutant entries and their whole codeunits' tests;
+   *  the entries cut after their last covering test and the tests the cut left out; then the refs
+   *  the cut had left out that ran live after all, and cut entries not used for their order. */
+  l4MutantEntries: number;
+  l4WholeTests: number;
   l4Entries: number;
   l4Excluded: number;
   l4Widened: number;
@@ -2316,6 +2319,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * of its plan, from `prefetchMutants`; `mutantExcludes` cuts the entry after the last of them.
    */
   private coveringOf = new Map<string, Map<number, Set<string>>>();
+  /** PR-20 review 1: the (mutant, codeunit) entries `mutantExcludes` has counted in the stats. */
+  private l4Counted = new Set<string>();
   /**
    * R778: the kill pairs `batchKillPairs` sent after the prefetch, per `<artifactId>|<mutantId>`.
    * Single-use (deleted at the first lookup, match or not) and cleared by a deploy, a prefetch, the
@@ -2440,6 +2445,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     echoMismatches: 0,
     secondEchoMismatches: 0,
     prefetchDropped: 0,
+    l4MutantEntries: 0,
+    l4WholeTests: 0,
     l4Entries: 0,
     l4Excluded: 0,
     l4Widened: 0,
@@ -3276,6 +3283,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.latchBy = undefined;
     this.prefetched = new Map();
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
+    this.l4Counted = new Set();
     this.pairStore.clear();
     this.baselineRows = new Map();
     this.uniformWatch = new UniformRefusalWatch();
@@ -5385,7 +5393,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (
       !alone &&
       typeof m4 === "string" &&
+      call.refusal === undefined && // review 3: an error the call already carries stands
+      call.missing === undefined &&
       call.excluded?.some((n) => n.toLowerCase() === leftOutByCut) === true &&
+      // review 2: only a name the cut added, never one of R998's left-out run
+      this.mutantLeftOutNames(ref.codeunitId)?.some((n) => n.toLowerCase() === leftOutByCut) !==
+        true &&
       !call.rows.some(
         (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
       ) &&
@@ -6729,6 +6742,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private mutantExcludes(cu: number, mutantId: string): readonly string[] | undefined {
     const base = this.mutantLeftOutNames(cu);
+    const out = this.cutAfterLastCovering(cu, mutantId, base);
+    // Review 1: counted once per (mutant, codeunit), cut or not, so the stats line gives the share
+    // left out (`tests left out` over `of`); re-sends, kill pairs and live repeats count nothing.
+    const key = `${mutantId}|${cu}`;
+    if (mutantId !== SELECTOR_RESOURCE_NONE && !this.l4Counted.has(key)) {
+      this.l4Counted.add(key);
+      const added = (out?.length ?? 0) - (base?.length ?? 0);
+      this.stats.l4MutantEntries += 1;
+      this.stats.l4WholeTests += new Set(this.baselineOrder(cu)).size;
+      if (added > 0) {
+        this.stats.l4Entries += 1;
+        this.stats.l4Excluded += added;
+      }
+    }
+    return out;
+  }
+
+  /** PR-20 (L4): `mutantExcludes`' list, uncounted: R998's run `base`, and the cut if it applies. */
+  private cutAfterLastCovering(
+    cu: number,
+    mutantId: string,
+    base: readonly string[] | undefined,
+  ): readonly string[] | undefined {
     const covering = this.coveringOf.get(mutantId)?.get(cu);
     const order = this.baselineOrder(cu);
     if (covering === undefined || covering.size === 0 || order.length === 0) return base;
@@ -6749,9 +6785,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
     const names = new Set(base ?? []);
     for (const t of tail) names.add(`Codeunit${cu}.${original.get(t) ?? t}`);
-    this.stats.l4Entries += 1;
-    this.stats.l4Excluded += names.size - (base?.length ?? 0);
-    return [...names].sort();
+    // review 1: a tail already in R998's run is no cut (suiteMissing reads it as R998's list)
+    return names.size === (base?.length ?? 0) ? base : [...names].sort();
   }
 
   /** PR-20 (L4): `cu`'s tests in their baseline order, lower-case. */
@@ -7424,7 +7459,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); entries cut after the last covering test (PR-20) ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

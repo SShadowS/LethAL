@@ -8764,8 +8764,18 @@ describe("PR-20 (L4): a mutant entry stops after its last covering test", () => 
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
       .filter((e) => String(e.test) === `Codeunit${CU}.` && String(e.id).startsWith(`${m}|`));
   const stats = (r: Rig) =>
-    (r.b as unknown as { stats: { l4Entries: number; l4Widened: number; l4OrderBroken: number } })
-      .stats;
+    (
+      r.b as unknown as {
+        stats: {
+          l4MutantEntries: number;
+          l4WholeTests: number;
+          l4Entries: number;
+          l4Excluded: number;
+          l4Widened: number;
+          l4OrderBroken: number;
+        };
+      }
+    ).stats;
 
   test("the entry leaves out the tests after the last covering one; the NONE warm-up runs the whole codeunit", async () => {
     const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
@@ -8776,7 +8786,13 @@ describe("PR-20 (L4): a mutant entry stops after its last covering test", () => 
       [`Codeunit${CU}.B`, `Codeunit${CU}.C`],
     ]);
     expect(entriesOf(r, "NONE").every((e) => e.excludeTests === undefined)).toBe(true);
-    expect(stats(r).l4Entries).toBe(1);
+    // review 1: the stats line gives the share left out: 2 of the entry's 3 tests
+    expect(stats(r)).toMatchObject({
+      l4MutantEntries: 1,
+      l4WholeTests: 3,
+      l4Entries: 1,
+      l4Excluded: 2,
+    });
     await r.b.activate("M0001");
     // suiteMissing: B and C have no row, and that is not `missing`
     expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
@@ -8847,5 +8863,7 @@ describe("PR-20 (L4): a mutant entry stops after its last covering test", () => 
     expect(stats(r).l4Widened).toBe(1);
     // the live entry now runs B and still leaves out C
     expect(entriesOf(r, "M0001").at(-1)?.excludeTests).toEqual([`Codeunit${CU}.C`]);
+    // review 1: the live repeat of the (mutant, codeunit) entry is not counted again
+    expect(stats(r)).toMatchObject({ l4MutantEntries: 1, l4WholeTests: 3, l4Excluded: 2 });
   });
 });
