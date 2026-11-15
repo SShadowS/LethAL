@@ -2350,8 +2350,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private uniformWatch = new UniformRefusalWatch();
   /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
   private prefetched = new Map<string, Map<number, CallRows>>();
-  /** PR-41: mutants whose call was cut at a timeout in this batch; their later runs go alone (`runOn`). */
-  private timedOutMutants = new Set<string>();
+  /**
+   * PR-41: per mutant, the tests (lower-case `Codeunit<id>.<method>`) its calls were cut at a timeout
+   * on, since the last prefetch window or layout (both clear it). `runOn` reads it.
+   */
+  private timedOutMutants = new Map<string, Set<string>>();
   /**
    * PR-20 (L4): per mutant, per codeunit entry (a positive call id), the covering methods (lower-case)
    * of its plan, from `prefetchMutants`; `mutantExcludes` cuts the entry after the last of them.
@@ -3322,7 +3325,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.batchBlind = undefined;
     this.latchBy = undefined;
     this.prefetched = new Map();
-    this.timedOutMutants = new Set();
+    this.timedOutMutants = new Map();
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
     this.l4Counted = new Set();
     this.pairStore.clear();
@@ -5402,13 +5405,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let alone = false;
     if (call === undefined) {
       // R635 §4: outside the bracket, serve-entries sends a LIVE one-group request.
-      // PR-41 (R577, trace L/A2): once a mutant's call was cut at a timeout in this batch, any
-      // further run of it (R577's reproduction included) is ONE test alone (R895), never the whole
-      // codeunit again: that re-sent the same hang and paid a daemon restart each time. An active
-      // mutant only; NONE (the confirm) is never routed here. Other kills reproduce as before.
+      // PR-41 (R577, trace L/A2): if one of this mutant's calls was cut at a timeout on ANOTHER test
+      // of this ref's codeunit (since the last prefetch window or layout), a live whole-codeunit call
+      // would stop at that hang before reaching ref and pay a daemon restart. So ref runs ONE test
+      // alone (R895). A cut AT ref stays live: the reproduction runs in the kill's own context (tests
+      // of a codeunit share state in order). Other codeunits, other kills and NONE (the confirm,
+      // lastActivated null) are never routed here.
       const live = this.entries && !this.inBaseline && !this.oneShotCodeunits.has(ref.codeunitId);
-      const toAlone =
-        live && lane.lastActivated !== null && this.timedOutMutants.has(lane.lastActivated);
+      const self = `codeunit${ref.codeunitId}.${ref.method}`.toLowerCase();
+      const cutElsewhere =
+        lane.lastActivated !== null &&
+        [...(this.timedOutMutants.get(lane.lastActivated) ?? [])].some(
+          (t) => t.startsWith(`codeunit${ref.codeunitId}.`) && t !== self,
+        );
+      const toAlone = live && cutElsewhere;
       const made = toAlone
         ? await this.aloneCall(lane, ref)
         : live
@@ -6954,7 +6964,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       // R895: the entry the answer was cut in holds the rows it had; its other tests did not run.
       const cutHere = partial !== undefined && partial.entry === e.id;
-      if (cutHere && e.mutantId !== SELECTOR_RESOURCE_NONE) this.timedOutMutants.add(e.mutantId);
+      if (cutHere && partial !== undefined && e.mutantId !== SELECTOR_RESOURCE_NONE) {
+        const cuts = this.timedOutMutants.get(e.mutantId) ?? new Set<string>();
+        cuts.add(partial.test.toLowerCase());
+        this.timedOutMutants.set(e.mutantId, cuts);
+      }
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
@@ -7184,7 +7198,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.pairStore.clear();
     if (!this.entries) return;
     this.prefetched = new Map();
-    this.timedOutMutants = new Set();
+    this.timedOutMutants = new Map();
     for (const p of opts?.batchPlans ?? [])
       for (const cu of new Set(this.serveRefs(p.refs).map((r) => this.callId(r))))
         this.union.add(cu);
