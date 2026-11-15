@@ -1,6 +1,19 @@
 {
   "repros": [
     {
+      "id": "u7837-table-connection",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7837",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-30/bc-run/result.md): the refusal family table-connection's BC-check app (app 51000000-0000-4000-8000-000000051008), 22 cells run twice in one session, all pass; these three tests' shapes are among them (a string carrying the marker, an Insert with its trigger on a CRM table, the exact marker). Each test registers its own connection name, after unregistering a leftover of it. Posted on #7837 (6898468955)",
+      "rerun": [
+        "Field Service Integration (R-925 fsi, R-930, R-975 sweep 14; 6 stores, 300 standing sightings) and Sustainability ESG Integration (R-933, R-950, R-975 sweep 18; 5 stores, 80): the two causes; the refusal family table-connection"
+      ],
+      "tests": {
+        "Codeunit51581.MarkerInsideAConnectionString": { "status": "pass" },
+        "Codeunit51582.InsertWithTriggerOnCrmTable": { "status": "pass" },
+        "Codeunit51583.ExactMarker": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8154-noclient-handlers",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8154",
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15) in a web-service session (a LethAL bcdev run, test runner 130454 over OData, no client): the bound Confirm, StrMenu and Message handlers are called (pass), and an unhandled Message fails 'Unhandled UI: Message' (/coord/handoff/PR-17/ws-run/result.md, family 5's cells C3, C7, C5, C6)",
@@ -58,7 +71,9 @@
       "id": "u8013-file-guid",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
       "bcEvidence": "inferred, not measured on BC: File.Create converts the Guid to its text and the OnPrem server creates that file, so the test passes (PR-28)",
-      "rerun": ["Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"],
+      "rerun": [
+        "Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"
+      ],
       "tests": {
         "Codeunit51511.FileCreateWithGuidName": { "status": "pass" }
       }

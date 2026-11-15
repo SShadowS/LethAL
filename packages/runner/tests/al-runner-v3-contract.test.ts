@@ -343,6 +343,13 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     message:
       "NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table (not pinned)",
   },
+  // R1009 (coord PR-29): the stale-buffer refusal as edge-5a58a0f16 words it (`/coord/handoff/R1009-keep/probe/`).
+  "Codeunit50690.Refuses": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: a stale Serve Stale Row buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)",
+  },
 };
 
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
@@ -585,9 +592,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 16 entries");
-    // R998, R1019: each new family judged a refusal by its own entry
+    expect(f?.measured).toContain("the keep rule accepts every row of all 17 entries");
+    // R998, R1019, R1043, R1009: each new family judged a refusal by its own entry
     for (const e of [
+      "stale-buffer-after-lock",
       "recordref-not-open",
       "fieldref-never-assigned",
       "gettable-unassigned-variant",
@@ -772,12 +780,15 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(18);
+    // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade;
+    // PR-29: 50691 is the delete subscriber of 50690's table (the measured shape has one).
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[789]\d /gm)).toHaveLength(20);
     // R1043: the caption case's page.
-    expect(SERVE_TESTS_AL.match(/^page 506[78]\d /gm)).toHaveLength(1);
+    expect(SERVE_TESTS_AL.match(/^page 506[789]\d /gm)).toHaveLength(1);
     // PR-18: the FormatRegion case's report.
-    expect(SERVE_TESTS_AL.match(/^report 506[78]\d /gm)).toHaveLength(1);
+    expect(SERVE_TESTS_AL.match(/^report 506[789]\d /gm)).toHaveLength(1);
+    // PR-29: the stale-buffer case's table.
+    expect(SERVE_TESTS_AL.match(/^table 506[789]\d /gm)).toHaveLength(1);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });
