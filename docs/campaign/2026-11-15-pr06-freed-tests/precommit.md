@@ -25,6 +25,12 @@ measurement.
 Every run goes through `scripts/heavy-slot.sh` and is retried only on exit 75. Budgets: discovery 1,800 s, scoring 3,600 s. A run
 its budget stops is compared only on what it scored, and the receipt says so.
 
+## Amendment 1 (before every run but project 1's smoke run)
+Discovery adds `--operator lethal.empty-block`: one mutant per block, so nearly every procedure has one. It finds the covered files
+far cheaper than scoring every operator; project 1's smoke discovery scored 1,044 mutants in about 13 minutes. Discovery only
+picks the files, and its verdicts are not the result. Project 1 keeps its smoke discovery, which used all operators. Scoring is
+unchanged.
+
 ## References (the earlier full run per project)
 
 | project | freed tests | reference | reference scope |
