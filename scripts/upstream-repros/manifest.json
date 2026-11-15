@@ -1,6 +1,19 @@
 {
   "repros": [
     {
+      "id": "u7837-table-connection",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7837",
+      "bcEvidence": "inferred, not measured on BC: Microsoft's Field Service Integration tests register a connection string built around @@test@@ and ship as passing, so BC accepts the marker inside a fuller string; an Insert with its trigger on a CRM table through that connection passes too. Refusal family table-connection (PR-30), whose BC-check app (/coord/handoff/PR-30/bc-check, app 51000000-0000-4000-8000-000000051008) is for lethal-bugs to measure",
+      "rerun": [
+        "Field Service Integration (R-925 fsi, R-930): 380 standing sightings of the two causes; the refusal family table-connection"
+      ],
+      "tests": {
+        "Codeunit51581.MarkerInsideAConnectionString": { "status": "pass" },
+        "Codeunit51582.InsertWithTriggerOnCrmTable": { "status": "pass" },
+        "Codeunit51583.ExactMarker": { "status": "pass" }
+      }
+    },
+    {
       "id": "u8154-noclient-handlers",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8154",
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15) in a web-service session (a LethAL bcdev run, test runner 130454 over OData, no client): the bound Confirm, StrMenu and Message handlers are called (pass), and an unhandled Message fails 'Unhandled UI: Message' (/coord/handoff/PR-17/ws-run/result.md, family 5's cells C3, C7, C5, C6)",
