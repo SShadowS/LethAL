@@ -231,7 +231,9 @@ describe("R-996: a repro's change between current and the candidate", () => {
           idRanges?: { from: number; to: number }[];
         };
         expect([app, (json.idRanges ?? []).length > 0]).toEqual([app, true]); // never skipped silently
-        for (const { from, to } of json.idRanges ?? []) ranges.push({ app, from, to });
+        // appsOf joins with the platform's separator; the frozen pairs use "/" (CI's Windows job)
+        const name = app.replaceAll("\\", "/");
+        for (const { from, to } of json.idRanges ?? []) ranges.push({ app: name, from, to });
       }
     const clashes: string[] = [];
     for (let i = 0; i < ranges.length; i++)
