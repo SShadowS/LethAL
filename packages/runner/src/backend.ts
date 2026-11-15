@@ -585,8 +585,9 @@ export interface ExecutionBackend {
     sink?: (close: {
       readonly reason: string;
       readonly family?: string;
-      /** R1009: a refusal's whole first line. */
+      /** R1009: a refusal's whole first line, and the refused row's test name. */
       readonly text?: string;
+      readonly test?: string;
     }) => void,
   ): void;
   activate(mutantId: string | null): Promise<void>;

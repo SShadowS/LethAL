@@ -550,6 +550,8 @@ export type RunEventInput =
        * kept. Local only: the events stream is never committed (it can hold the app's quoted text).
        */
       readonly text?: string;
+      /** R1009: the refused row's test name (`Codeunit<id>.<method>`), so its shape can be reduced. */
+      readonly test?: string;
     }
   | { readonly type: "quarantined"; readonly reason: string }
   | {

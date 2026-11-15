@@ -1496,7 +1496,7 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
-    const sunk: { reason: string; family?: string; text?: string }[] = [];
+    const sunk: { reason: string; family?: string; text?: string; test?: string }[] = [];
     r.b.setNotify((c, m) => seen.push([c, m]));
     r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
@@ -1511,7 +1511,12 @@ describe("R939: why each serve daemon closed", () => {
     expect([...c.refusalFamilies]).toEqual([["WithEvents subscriber …", 1]]);
     // R1009: the whole first line too, which the family cuts
     expect(sunk).toEqual([
-      { reason: "refusal", family: "WithEvents subscriber …", text: WITH_EVENTS },
+      {
+        reason: "refusal",
+        family: "WithEvents subscriber …",
+        text: WITH_EVENTS,
+        test: `Codeunit${CU}.A`,
+      },
     ]);
     // Not a warning: gates pin their warning sets (R939).
     expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
@@ -1595,6 +1600,7 @@ describe("R939: why each serve daemon closed", () => {
       "a stale Issued Reminder Header buffer from its own write, after a lock other tha",
     );
     expect(why?.text).toBe(stale);
+    expect(why?.test).toBe("Codeunit1.A");
     // a timeout carries none
     expect(
       unkeptRowReason([

@@ -1771,6 +1771,9 @@
         "text": {
           "type": "string"
         },
+        "test": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }

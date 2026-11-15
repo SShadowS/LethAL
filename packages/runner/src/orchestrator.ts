@@ -4926,6 +4926,7 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       reason: c.reason,
       ...(c.family !== undefined ? { family: c.family } : {}),
       ...(c.text !== undefined ? { text: c.text } : {}),
+      ...(c.test !== undefined ? { test: c.test } : {}),
     }),
   );
   return () => {
