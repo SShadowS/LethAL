@@ -384,6 +384,32 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}RecordRef.GetTable of an unassigned Variant (not pinned)`,
     ],
   };
+  // R1019 (coord PR-14): the manual-binding cascade, measured clean (`/coord/handoff/PR-14/probe/`).
+  const MB = (failed: string, tail = "") =>
+    `${P}a test before this one in the codeunit did not pass (${failed}) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit 51402 was unsuccessful. The codeunit has already been bound.${tail}`;
+  R945["cascade-manual-binding"] = {
+    keeps: [
+      // the probe's text, and Filter Tokens' shape (al-runner cuts the inner message, so its parentheses do not balance)
+      MB("A1BindThenFail: failed (planted)"),
+      MB(
+        "MakeDateTimeFilter: failed (Assert.AreEqual failed. Expected:<12/24/2026 11:00 AM> (Text). Actual:<CHRISTMAS 11:00:00> (Te",
+      ),
+    ],
+    closes: [
+      // a timeout or panic in the failing test's message, a tail, another cause, no codeunit number
+      MB("A1: failed (the test used more than the time limit)"),
+      MB("A1: failed (Timeout)"),
+      MB("A1: failed (panicked at x)"),
+      MB("A1: failed (planted)", " (not pinned)"),
+      `${P}a test before this one in the codeunit did not pass (A1: failed (planted)) and changed a table that existed before it`,
+      `${P}a test before this one in the codeunit did not pass (A1: failed (planted)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit was unsuccessful. The codeunit has already been bound.`,
+      // a line break inside the failing message
+      MB("A1: failed (line one\nline two)"),
+      // review: a prefix before the refusal, and the text without its `NotRun: out-of-scope: ` head
+      `x${MB("A1: failed (planted)")}`,
+      MB("A1: failed (planted)").replace(P, ""),
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);

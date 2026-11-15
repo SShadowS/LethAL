@@ -70,7 +70,9 @@ The legs:
   REFUSED with a text no keep-list entry accepts reads `unkept`, which is gate-fail in leg C: at a serve warm-up such
   a row sends the whole run to one-shot (R786), as edge-847b1fa5a's reworded cascade did to R-984's DO run. Every
   row of the request is checked, with or without a message; a request with no row at all, or a daemon that does not
-  start, reads `unmeasurable`, now infra-fail. Any other move still only warns. no-callee
+  start, reads `unmeasurable`, now infra-fail. Any other move still only warns. Since R998 and [[R1019]] (coord PR-14)
+  the daemon runs sixteen codeunits (eighteen tests) and judges 14 entries, the last three families (R998's RecordRef,
+  FieldRef and GetTable texts, and R1019's manual-binding cascade) each by its own case. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.

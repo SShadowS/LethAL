@@ -812,6 +812,25 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
     /^NotRun: out-of-scope: FieldRef\.Class on a FieldRef that was never assigned: what BC does \(an error, or a no-op\) is not pinned \(docs\/probes-needed\.md\)$/,
   "gettable-unassigned-variant":
     /^NotRun: out-of-scope: RecordRef\.GetTable of an unassigned Variant$/,
+  /**
+   * R1019 (coord PR-14): the cascade after a test that failed while it held a manual event subscription
+   * (a BindSubscription whose UnbindSubscription it never reached): the next test's bind is refused.
+   * Filter Tokens closed its daemon 424 times on it (466 daemons for 343 mutants, edge-5a58a0f16).
+   * Measured clean with R-967's kit on edge-5a58a0f16 (`/coord/handoff/PR-14/probe/`, invented AL):
+   * the refuser binds a codeunit-global manual subscriber, raises, fails; readers bind the same
+   * subscriber (must succeed, one call) or only raise (no call). On one kept daemon 72 reader answers
+   * after refusals all equal the control, 20 fresh daemons equal it, the pid unchanged, no panic text,
+   * under isolation "test" and "codeunit"; a PASSING test that never unbinds measured the same. The
+   * failing test's name and message are the variable part (a SAFE_TAIL); the rest is fixed. Review: the
+   * greedy `.*` would also take a text nobody measured (two cascades joined, a status other than
+   * "failed"); that stays contained because the earlier test ran in the SAME request, so its own row
+   * is in the same answer and judged by this rule: an unsafe refusal there closes the daemon anyway.
+   * Measured with a separate subscriber codeunit; Filter Tokens' test codeunit binds itself (checked by
+   * the R1019 pre-commitment's Filter Tokens re-run, per mutant).
+   */
+  "cascade-manual-binding": new RegExp(
+    String.raw`^NotRun: out-of-scope: a test before this one in the codeunit did not pass \(${SAFE_TAIL}.*\) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit \d+ was unsuccessful\. The codeunit has already been bound\.$`,
+  ),
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

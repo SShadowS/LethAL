@@ -809,6 +809,53 @@ codeunit 50682 "Serve GetTable Variant"
         RecRef.GetTable(V);
     end;
 }
+
+codeunit 50683 "Serve Bind Publisher"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnPing()
+    begin
+    end;
+}
+
+codeunit 50684 "Serve Bind Sub"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Serve Bind Publisher", 'OnPing', '', false, false)]
+    local procedure HandlePing()
+    begin
+    end;
+}
+
+codeunit 50685 "Serve Bind Cascade"
+{
+    Subtype = Test;
+
+    var
+        Sub: Codeunit "Serve Bind Sub";
+        Pub: Codeunit "Serve Bind Publisher";
+        Fails: Boolean;
+
+    [Test]
+    procedure A_BindThenFail()
+    begin
+        Fails := true;
+        BindSubscription(Sub);
+        Pub.OnPing();
+        if Fails then
+            Error('planted');
+        UnbindSubscription(Sub);
+    end;
+
+    [Test]
+    procedure B_BindAgain()
+    begin
+        BindSubscription(Sub);
+        Pub.OnPing();
+        UnbindSubscription(Sub);
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -889,6 +936,8 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   ["recordref-not-open", "Codeunit50680.Refuses", false, false],
   ["fieldref-never-assigned", "Codeunit50681.Refuses", false, false],
   ["gettable-unassigned-variant", "Codeunit50682.Refuses", false, false],
+  // R1019 (coord PR-14): Filter Tokens' cascade, measured once. A_BindThenFail is a plain trusted fail.
+  ["cascade-manual-binding", "Codeunit50685.B_BindAgain", false, false],
 ];
 
 /**
@@ -936,7 +985,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): thirteen codeunits (sixteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): sixteen codeunits (eighteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(

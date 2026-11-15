@@ -320,6 +320,15 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     notRun: true,
     message: "NotRun: out-of-scope: RecordRef.GetTable of an unassigned Variant",
   },
+  // R1019 (coord PR-14): the manual-binding cascade as edge-5a58a0f16 words it (`/coord/handoff/PR-14/probe/`);
+  // the failing test before it is a plain trusted fail.
+  "Codeunit50685.A_BindThenFail": { status: "fail", notRun: false, message: "planted" },
+  "Codeunit50685.B_BindAgain": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: a test before this one in the codeunit did not pass (A_BindThenFail: failed (planted)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit 50684 was unsuccessful. The codeunit has already been bound.",
+  },
 };
 
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
@@ -562,12 +571,13 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 13 entries");
-    // R998: each new family judged a refusal by its own entry
+    expect(f?.measured).toContain("the keep rule accepts every row of all 14 entries");
+    // R998, R1019: each new family judged a refusal by its own entry
     for (const e of [
       "recordref-not-open",
       "fieldref-never-assigned",
       "gettable-unassigned-variant",
+      "cascade-manual-binding",
     ])
       expect(f?.measured).toContain(`${e}: refusal`);
     expect(f?.measured).toContain("http: refusal");
@@ -593,6 +603,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["http", "Codeunit50674.HttpGetPublic"],
     ["cascade-existing-state", "Codeunit50675.C_UsesSeq"],
     ["cascade-existing-state", "Codeunit50676.C_UsesKey"],
+    ["cascade-manual-binding", "Codeunit50685.B_BindAgain"],
   ] as const) {
     test(`R1000: a reworded ${entry} refusal (${name}) is unkept, names it, never refuses a session, and FAILS leg C`, async () => {
       const rows = {
@@ -707,7 +718,8 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(13);
+    // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade.
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(16);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });
