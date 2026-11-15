@@ -66,3 +66,21 @@ needs) are gone. A non-timeout kill, and every bcdev kill, are unchanged.
 3. The next DO window carrying it: a hanging mutant meets the timeout P (+ A when P stopped at another test) + 1 (the reproduction,
    alone), plus a re-send when a later codeunit of the same mutant also hangs: at most 3, against 3-4 in t5; verdicts and killing
    tests of every mutant both windows score equal.
+
+## Addendum 2 (2026-11-15, after the Opus review of the option-(c) build, before any gate): alone only when the cut is elsewhere
+
+**Why.** The review of lethal/pr-41 6061049f: when P was cut AT the killing test itself (the trace's M7544, "P-resend cut at
+killer"), routing its reproduction alone saves no request (the test hangs again either way) and only drops the earlier tests of
+the codeunit, which share state in order. A hang that rests on that state would then read `kill-not-reproduced` instead of
+`timeout-killed`, against "no verdict policy change" and prediction 3.
+
+**The rule now (narrowing addendum 1).** The backend records, per mutant, the test its call was cut at (cleared per prefetch
+window and on a new layout). A further run of that mutant's test `ref` is an alone call only when the mutant has a cut test in
+`ref`'s codeunit that is not `ref` (a live call would stop at that hang before reaching `ref`: the trace's M11468, where L and A2
+are what this removes). A cut at `ref` itself keeps the live whole-codeunit call, as before PR-41, so the reproduction runs in the
+kill's own context. Other codeunits, other kills, NONE and bcdev: unchanged.
+
+**Predictions (replacing addendum 1's prediction 1; 2 and 3 stand).** Unit tests, red both ways: a cut at another test of the
+codeunit makes the killing test's run and its reproduction alone requests (red when the routing is removed); a cut at the killing
+test keeps its reproduction a live whole-codeunit request (red under addendum 1's any-cut rule); a kill without a timeout
+reproduces live; NONE is never routed alone.
