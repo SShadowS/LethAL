@@ -10,7 +10,8 @@ Pre-commitment `precommit.md` (f0a3f8a9). Every run below is on al-runner edge-5
 - **Triage:** 76 of 104 green, 13 refused, 15 failed. Of the 84 freed tests, 57 pass, 14 fail and 13 are still refused.
   The 14 failures are freed tests in `Checklist Facade Test`: every
   test with profiles (`...WithProfiles`, `TestUpdateProfilesFor...`) finds 0 rows where it expects 1 or 2, while its twin
-  with users passes. This is probably an al-runner difference from BC, not measured on BC: filed as R1028.
+  with users passes. Correction (PR-15): this is not an al-runner difference. The tests depend on test order (only the
+  codeunit's first test inserts the profiles), and LethAL runs each test alone: R1028, closed by ruling.
 - **Discovery** found the files the 84 freed tests cover. **Scoring** compared 1,948 mutants, all of them in both runs.
 - **Allowed moves: 405** (296 no-coverage -> killed, 109 survived -> killed).
 - **BLOCKs**, each explained:
