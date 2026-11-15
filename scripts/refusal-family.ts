@@ -480,12 +480,106 @@ report 51000 "Cell Report"
   ],
 };
 
+/**
+ * PR-26: #7586's family, the largest coherent open one after families 1-5 (213 standing sightings over all v3 stores after
+ * R1036, 292 in PR-13's run): `GetUrl` in a form al-runner does not pin ("GetUrl(ClientType::<x>; the call had N arguments):
+ * this object type or argument list (not pinned)"). One cell per client type and argument form: the client type alone, with the
+ * company, with an object type and id (each object type), with a record, and with a record and UseFilters. Each cell fails on
+ * purpose with `GETURL <url>`, so a run shows the URL each runtime builds (al-runner's and BC's hosts differ; the form is the
+ * comparison), not only whether the call returned.
+ */
+const GETURL_CLIENTS = [
+  "Current",
+  "Default",
+  "Web",
+  "Windows",
+  "Tablet",
+  "Phone",
+  "Desktop",
+  "SOAP",
+  "OData",
+  "ODataV4",
+  "Api",
+] as const;
+const INSERT_A = ["Row.Code := 'A';", "if Row.Insert() then;"];
+const GETURL_FORMS: readonly (readonly [string, string, (readonly string[])?])[] = [
+  ["Plain", ""],
+  ["Company", ", CompanyName()"],
+  ["Page", ', CompanyName(), ObjectType::Page, Page::"Cell Url Card"'],
+  ["Report", ', CompanyName(), ObjectType::Report, Report::"Cell Url Report"'],
+  ["Codeunit", ', CompanyName(), ObjectType::Codeunit, Codeunit::"Cell Url Service"'],
+  ["Query", ', CompanyName(), ObjectType::Query, Query::"Cell Url Query"'],
+  ["Table", ', CompanyName(), ObjectType::Table, Database::"Cell Url Row"'],
+  ["PageRecord", ', CompanyName(), ObjectType::Page, Page::"Cell Url Card", Row', INSERT_A],
+  [
+    "PageFilters",
+    ', CompanyName(), ObjectType::Page, Page::"Cell Url Card", Row, true',
+    [...INSERT_A, "Row.SetRange(Code, 'A');"],
+  ],
+];
+export const GET_URL: Family = {
+  name: "get-url",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
+  // the issue's own text (the ledger's two #7586 keys). al-runner prints it with "(not pinned)", which `refusalText` strips
+  // before classOf sees it; classOf folds both forms.
+  known: [
+    "GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
+  ],
+  // ids 51000: BASE_ID (object types share ids; the cells' codeunits start at BASE_ID + 1)
+  support: `table 51000 "Cell Url Row"
+{
+    fields { field(1; "Code"; Code[20]) { } }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+page 51000 "Cell Url Card"
+{
+    PageType = Card;
+    SourceTable = "Cell Url Row";
+    layout { area(Content) { field(Code; Rec.Code) { } } }
+}
+
+report 51000 "Cell Url Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "Cell Url Row") { } }
+}
+
+codeunit 51000 "Cell Url Service"
+{
+    procedure Ping(): Text
+    begin
+        exit('pong');
+    end;
+}
+
+query 51000 "Cell Url Query"
+{
+    elements { dataitem(Row; "Cell Url Row") { column(Code; Code) { } } }
+}
+`,
+  handles: { GetUrl: 'Row: Record "Cell Url Row";' },
+  cells: GETURL_CLIENTS.flatMap((client) =>
+    GETURL_FORMS.map(
+      ([form, args, setup]): Cell => ({
+        type: "GetUrl",
+        method: form,
+        state: client,
+        ...(setup !== undefined ? { setup } : {}),
+        call: `Error('GETURL %1', GetUrl(ClientType::${client}${args}));`,
+      }),
+    ),
+  ),
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
   [PLATFORM_TABLE_READ.name]: PLATFORM_TABLE_READ,
   [PERMISSION_DENIAL.name]: PERMISSION_DENIAL,
   [NO_CLIENT.name]: NO_CLIENT,
+  // PR-26: appended (bcCheckApp's id is the place in this list)
+  [GET_URL.name]: GET_URL,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -648,6 +742,10 @@ export function classify(
  * "RecordRef.FieldCount on a RecordRef that is not open" are one class).
  */
 export function classOf(text: string): string {
+  // PR-26: a GetUrl text names the client type and the argument count (and, for Default or Windows, the object type); the
+  // reason after it is the class
+  const getUrl = /^GetUrl\([^)]*\)(?:: | of object type \w+ with \d+ arguments )(.*)$/.exec(text);
+  if (getUrl) return `GetUrl(*): ${getUrl[1]?.replace(/ \(not pinned\)$/, "")}`;
   // PR-02: a DotNet member's text names the member twice and the cause after it; the cause is the class.
   const dotnet = /^DotNet [\w.]+: '[\w.]+' (.*)$/.exec(text);
   if (dotnet) return `DotNet *: ${dotnet[1]}`;

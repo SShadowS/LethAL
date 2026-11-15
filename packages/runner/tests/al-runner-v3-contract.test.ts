@@ -715,6 +715,42 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   const serveFact = async (rows: Record<string, ServeRow>) =>
     (await probe({}, fakeServe(rows).spawn)).facts.find((x) => x.fact === "serve-keep-reasons");
 
+  // R1026: edge-5a58a0f16 runs R998's RecordRef and GetTable cases and fails them with BC's error
+  // (PR-14's gate, `/coord/handoff/PR-14/v3gate.txt`), so the fact read `diverged` on every candidate.
+  test("R1026: R998's RecordRef and GetTable cases accept a plain fail with BC's error; another text, or FieldRef.Class, moves", async () => {
+    const notOpen = { status: "fail", notRun: false, message: "The record is not open." };
+    const fixed: Record<string, ServeRow> = {
+      ...SERVE_ROWS,
+      "Codeunit50677.Refuses": notOpen,
+      "Codeunit50678.Refuses": notOpen,
+      "Codeunit50679.Refuses": notOpen,
+      "Codeunit50680.Refuses": notOpen,
+      "Codeunit50682.Refuses": {
+        status: "fail",
+        notRun: false,
+        message: "Microsoft.Dynamics.Nav.Runtime.NavVariant variable not initialized.",
+      },
+    };
+    const f = await serveFact(fixed);
+    expect(f?.verdict).toBe("matches"); // red before R1026: diverged, MOVED x5
+    expect(f?.measured).toContain("recordref-not-open: plain fail");
+    expect(f?.measured).toContain("gettable-unassigned-variant: plain fail");
+    // another plain-fail text is a move
+    const other = await serveFact({
+      ...fixed,
+      "Codeunit50678.Refuses": { status: "fail", notRun: false, message: "something else" },
+    });
+    expect(other?.verdict).toBe("diverged");
+    expect(other?.measured).toContain("recordref-not-open: MOVED fail notRun=false something else");
+    // FieldRef.Class accepts no plain fail
+    const field = await serveFact({
+      ...fixed,
+      "Codeunit50681.Refuses": { status: "fail", notRun: false, message: "anything" },
+    });
+    expect(field?.verdict).toBe("diverged");
+    expect(field?.measured).toContain("fieldref-never-assigned: MOVED");
+  });
+
   test("R705 fixed build: the four compilable cases come back as rows, not no row", async () => {
     const r = await probe({}, fakeServe(FIXED_ROWS).spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");

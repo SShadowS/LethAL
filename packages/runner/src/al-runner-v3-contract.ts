@@ -959,17 +959,31 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   // workspace" here (measured on the gate, R-989); its text is checked one-shot with packages instead
   // (`/coord/handoff/R-989/probe-cases/`, all 15 gated builds).
   // R998 (coord R-998): the three families kept for DO's mutant phase, each measured text once.
-  ["recordref-not-open", "Codeunit50677.Refuses", false, false],
-  ["recordref-not-open", "Codeunit50678.Refuses", false, false],
-  ["recordref-not-open", "Codeunit50679.Refuses", false, false],
-  ["recordref-not-open", "Codeunit50680.Refuses", false, false],
+  // R1026: edge-5a58a0f16 runs the RecordRef and GetTable cases and fails them with BC's error, so
+  // they also accept that plain fail (its text pinned in PLAIN_FAIL_TEXT); FieldRef.Class stays a refusal.
+  ["recordref-not-open", "Codeunit50677.Refuses", true, false],
+  ["recordref-not-open", "Codeunit50678.Refuses", true, false],
+  ["recordref-not-open", "Codeunit50679.Refuses", true, false],
+  ["recordref-not-open", "Codeunit50680.Refuses", true, false],
   ["fieldref-never-assigned", "Codeunit50681.Refuses", false, false],
-  ["gettable-unassigned-variant", "Codeunit50682.Refuses", false, false],
+  ["gettable-unassigned-variant", "Codeunit50682.Refuses", true, false],
   // R1019 (coord PR-14): Filter Tokens' cascade, measured once. A_BindThenFail is a plain trusted fail.
   ["cascade-manual-binding", "Codeunit50685.B_BindAgain", false, false],
   // PR-18 lever 1: DO's FormatRegion family, measured once (the zip family needs the .NET helper: not here).
   ["format-region-std4", "Codeunit50687.Refuses", false, false],
 ];
+
+/**
+ * R705, R1026: the message a plain trusted fail of an entry must carry to be accepted, where the
+ * case's own failure is known (cascade: its later test's `Error('later')`; R998's cases: the error
+ * BC raises, as edge-5a58a0f16 words it). Another plain fail of such an entry is a move.
+ */
+const PLAIN_FAIL_TEXT: Readonly<Record<string, string>> = {
+  cascade: "later",
+  "recordref-not-open": "The record is not open.",
+  "gettable-unassigned-variant":
+    "Microsoft.Dynamics.Nav.Runtime.NavVariant variable not initialized.",
+};
 
 /**
  * R1000: a row the runtime REFUSED (notRun, error) with a text no `V3_SERVE_SAFE_REFUSALS` entry
@@ -1016,7 +1030,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): seventeen codeunits and a report (nineteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): seventeen codeunits and a report (nineteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
@@ -1080,7 +1094,9 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     // R705: never a negated optional-chain form (r?.x !== ...): no row would read as fine.
     const pm = plainFailOk ? plainFailMessage(r) : undefined;
     const plainFail =
-      pm !== undefined && !isV3RefusalText(pm) && (entry !== "cascade" || pm === "later");
+      pm !== undefined &&
+      !isV3RefusalText(pm) &&
+      (PLAIN_FAIL_TEXT[entry] === undefined || pm === PLAIN_FAIL_TEXT[entry]);
     const plainPass =
       plainPassOk &&
       r !== undefined &&

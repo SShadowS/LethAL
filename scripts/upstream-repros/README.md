@@ -38,6 +38,18 @@ through Permissions Mock's own `table * = X` grant). Both depend on Microsoft's 
 `u8028-run-request-page` (100 tests in all), from family `no-client`: `Report.RunRequestPage` with a RequestPageHandler bound,
 run with `--no-client` like `u8028-no-client`.
 
+## Coverage (PR-26 to PR-28)
+
+39 entries, 134 tests in all.
+- `u7586-geturl-forms` (PR-26, family `get-url`): three GetUrl forms; BC's answer is measured.
+- `u8013-*` (PR-28): one entry per cause of #8013, six in all: ReadFromYaml shapes, a Company Triggers subscriber's writes,
+  Find('=<>') with no match, a file named by a Guid, a SQL counter stored in a field, and an XmlPort's Unbound text element.
+  BC's answers are inferred.
+- `u8152-number-sequence-next` (PR-28, from family `number-sequence`, #8002): BC keeps Next across a rollback and undoes Restart,
+  Delete and Insert. Measured.
+- `u8154-noclient-handlers` (PR-28): under `--no-client` the bound UI handlers are never called. BC calls them in a web-service
+  session. Measured; run with `--no-client`.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,

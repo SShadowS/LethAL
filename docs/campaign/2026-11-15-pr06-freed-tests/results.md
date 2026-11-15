@@ -21,7 +21,7 @@ BLOCK evidence: `blocks.md`.
 | 52 E-Doc Connector - Avalara | 33 (31) | 468 | – | – | no | gain |
 | 62 Azure AD Licensing | 10 (2) | 118 | – | – | no | gain |
 | 20 Sales Line Suggestions | 35 (0) | – | – | – | no: every freed test fails | gain |
-| 18 Sustainability | 257 (246) | 0 | – | – | not measurable | gain |
+| 18 Sustainability | 257 (246); 294 (283) on a finished re-baseline (PR-23, R1031) | 0 | – | – | not measurable (not re-run with the 37 more) | gain |
 | 68 E-Doc Connector (4) | 3 (2) | 880 | – | 6 S->NC | no | no gain |
 | 982-32 Permission Sets | 2 (0) | – | – | – | no covered file | no gain |
 | 51 APIV2 | 1 (0) | – | – | – | no covered file | no gain |

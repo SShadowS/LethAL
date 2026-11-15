@@ -5086,10 +5086,11 @@ interface ScoreBatchInput {
     readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
-  /** `ranHere`: the baseline refs whose row ran in THIS session (a reused snapshot's did not). */
+  /** `lineEvidence`: the baseline refs whose line coverage counts (`lineEvidenceOf`: rows that ran in
+   *  THIS session, plus every row of a reused snapshot, PR-25). */
   readonly select: (
     baseline: readonly BaselineRow[],
-    ranHere: ReadonlySet<TestMethodRef>,
+    lineEvidence: ReadonlySet<TestMethodRef>,
   ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
@@ -5925,11 +5926,39 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             : undefined;
       }
       snapshotKey = { batchHash, testAppHash };
+      // PR-21 (L5): a backend that needs its own baseline state (serve-entries, R1008) reuses a
+      // snapshot only after re-checking it on its daemon; any reason not to falls back to the
+      // baseline as today, by name (docs/superpowers/specs/2026-11-15-pr21-l5-baseline-reuse.md).
+      if (
+        reused !== undefined &&
+        backend.resumeRunsBaseline === true &&
+        backend.recheckReusedBaseline !== undefined
+      ) {
+        const storedCoverage = new Map(
+          reused.baseline.map((b) => [
+            `codeunit${b.ref.codeunitId}.${b.ref.method}`.toLowerCase(),
+            JSON.stringify(b.verdict.coverage ?? null),
+          ]),
+        );
+        const why = await backend.recheckReusedBaseline(
+          reused.backendState,
+          storedCoverage,
+          scope.baselineTimeoutMs,
+        );
+        if (why !== undefined) {
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (PR-21). The stored run may itself be the odd one: this run's baseline is stored, and the next --resume compares against it.`,
+          });
+          reused = undefined;
+        }
+      }
       if (reused !== undefined) {
         emit({
           type: "warning",
           code: "resume-baseline-reused",
-          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here. A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
+          message: `[lethal] --resume: batch ${batchIdx}'s baseline was not re-run. Its instrumented source and the published test app hash the same as run ${reused.runId}'s batch ${reused.batchIndex}, so that run's ${reused.baseline.length} baseline verdict(s), coverage and durations are reused (R192). ${backend.recheckReusedBaseline !== undefined && backend.resumeRunsBaseline === true ? "Re-checked on this session's daemon: every test's outcome, and three codeunits' coverage (PR-21); a test that flips only sometimes can pass that check." : "Not re-checked: the environment's DATA, which a re-run baseline would have observed; a test that has gone red since is not detected here."} A timeout is confirmed unmutated, with R53's 2x margin, before it is scored (R514).`,
         });
         for (const saved of reused.baseline) {
           // R-236c: the scan outranks the snapshot. A refused test's stored verdict (a pass from a
@@ -6038,6 +6067,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           ? `${testAppHash}${PENDING_SUFFIX}`
           : testAppHash,
       baseline: baseline as BaselineObservation[],
+      // PR-21 (L5): the backend's own baseline state, for a serve resume to take back
+      ...(await (async () => {
+        const state = await backend.baselineState?.();
+        return state !== undefined ? { backendState: state } : {};
+      })()),
     });
   }
   // baseline-batch-finished: the moment of observation IS the batch's baseline RETURNING (see
@@ -6208,7 +6242,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
-  const plan = input.select(baseline, ranHere);
+  // PR-21 addendum 2, PR-25 (R1034): the rows whose line coverage counts as this session's evidence
+  // (R926, R975): the rows that ran here, and a reused snapshot's rows on every transport (R192
+  // already builds the covering sets from them; leaving their lines out made a resumed session
+  // decide trigger mutants differently from an uninterrupted one).
+  const lineEvidence = lineEvidenceOf(ranHere, baseline, reused !== undefined);
+  const plan = input.select(baseline, lineEvidence);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -6223,7 +6262,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // is the call's wall, a whole codeunit's run on serve (DO: 87.8 s for a 1.3 s test, so 1,762 s).
   const minMutantBudgetMs = applyV3MutantStop(scope, measuredDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
-  const baselineReach = baselineReachOf(baseline, ranHere, backend);
+  const baselineReach = baselineReachOf(baseline, lineEvidence, backend);
 
   // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
@@ -8455,7 +8494,7 @@ async function runSessionBody(
       ]);
       const select = (
         baseline: readonly BaselineRow[],
-        ranHere: ReadonlySet<TestMethodRef>,
+        lineEvidence: ReadonlySet<TestMethodRef>,
       ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -8616,10 +8655,10 @@ async function runSessionBody(
               ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
             })),
             // R975: trigger mutants are placed by line where every test has line coverage. R926's
-            // condition: only rows that ran this session count (a reused snapshot's do not). The
-            // isolation mode is the one `baseline` ended under: `select` runs right after any
-            // `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
-            { lines: true, lineTrusted: (ref) => ranHere.has(ref) },
+            // condition: only rows in `lineEvidence` count (rows that ran this session, and a reused
+            // snapshot's, PR-25). The isolation mode is the one `baseline` ended under: `select` runs
+            // right after any `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
+            { lines: true, lineTrusted: (ref) => lineEvidence.has(ref) },
           );
           const split = coverageFilter(
             execute.filter((m) => !candidates.has(m.mutantId)),
@@ -8973,7 +9012,10 @@ async function runSessionBody(
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
             cfg.backend.isolationAuto !== true && // R896 (review 1)
-            cfg.backend.resumeRunsBaseline !== true && // R1008: serve-entries' warm-up, as R857
+            // R1008: serve-entries' warm-up needs its baseline rows, as R857; PR-21 (L5): unless the
+            // backend takes them back from the snapshot after a re-check (`recheckReusedBaseline`)
+            (cfg.backend.resumeRunsBaseline !== true ||
+              cfg.backend.recheckReusedBaseline !== undefined) &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
@@ -10077,8 +10119,8 @@ function selectNamed(
  * cannot reach it under the mutant, and a test that did hit it reaches it. The question is only
  * "did the baseline hit the line the `Reached` marker precedes", answered per covering test.
  *
- * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row ran in this session
- * (`ranHere`: no reused snapshot), passed (a flagged pass counts: it ran to its end), and carries line
+ * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row is line evidence
+ * (`lineEvidence`: it ran in this session, or it is a reused snapshot's row, PR-25), passed (a flagged pass counts: it ran to its end), and carries line
  * coverage with no naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
  * is decided only if its backend still runs the codeunit under that mode, because a `method`
  * baseline and a `test` baseline cover different lines.
@@ -10090,9 +10132,24 @@ export interface BaselineReach {
   readonly modes: ReadonlyMap<number, "test" | "method">;
 }
 
+/**
+ * PR-21 addendum 2: the baseline rows whose line coverage counts as this session's evidence for
+ * R926's reach and R975's trigger placement: the rows that ran here, plus, when the baseline is a
+ * reused snapshot (`reused`: R192 on any transport, L5's re-checked one on serve), every row of it.
+ * PR-25 (R1034): R192 already builds the covering sets from those rows; leaving their lines out
+ * made a resumed one-shot session decide trigger mutants differently from an uninterrupted one.
+ */
+export function lineEvidenceOf(
+  ranHere: ReadonlySet<TestMethodRef>,
+  baseline: readonly { readonly ref: TestMethodRef }[],
+  reused: boolean,
+): ReadonlySet<TestMethodRef> {
+  return reused ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
+}
+
 export function baselineReachOf(
   baseline: readonly BaselineRow[],
-  ranHere: ReadonlySet<TestMethodRef>,
+  lineEvidence: ReadonlySet<TestMethodRef>,
   backend: Pick<ExecutionBackend, "isolationOf">,
 ): BaselineReach {
   const hits = new Map<string, Set<string>>();
@@ -10103,7 +10160,7 @@ export function baselineReachOf(
     // R-917: a flagged pass (al-runner rests it on an unprobed assumption, R907) still ran to its end, so its
     // coverage is complete; excluding it left every reach undecided on Microsoft's apps, where nearly
     // every pass is flagged (measured: Data Search 11 of 11).
-    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass") continue;
+    if (!lineEvidence.has(b.ref) || b.verdict.outcome !== "pass") continue;
     if (cov === undefined || cov.granularity !== "line" || (cov.namingGaps?.length ?? 0) > 0) {
       continue;
     }

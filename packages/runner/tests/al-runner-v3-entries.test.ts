@@ -145,7 +145,11 @@ interface Layout {
   readonly scratch: string;
 }
 
-async function layout(targetAl: string, suite: readonly TestMethodRef[]): Promise<Layout> {
+async function layout(
+  targetAl: string,
+  suite: readonly TestMethodRef[],
+  appExtra: Record<string, unknown> = {},
+): Promise<Layout> {
   const root = await mkdtemp(join(tmpdir(), "lethal-v3e-"));
   roots.push(root);
   const batch = join(root, "batch");
@@ -154,7 +158,7 @@ async function layout(targetAl: string, suite: readonly TestMethodRef[]): Promis
   for (const d of [batch, testDir, deps]) await mkdir(d, { recursive: true });
   await writeFile(
     join(batch, "app.json"),
-    JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0", runtime: "17.0" }),
+    JSON.stringify({ id: TARGET_ID, name: "T", version: "1.0.0.0", runtime: "17.0", ...appExtra }),
   );
   await writeFile(
     join(batch, "mutant-manifest.json"),
@@ -571,6 +575,8 @@ interface Rig {
 }
 
 interface RigOpts {
+  /** PR-21: extra fields for the batch's app.json (e.g. a publisher). */
+  appExtra?: Record<string, unknown>;
   serve?: ServeScript;
   oneShotRows?: RowsFn;
   oneShotCoverage?: CoverageFn;
@@ -600,7 +606,7 @@ function noProcReads(b: AlRunnerV3Backend): void {
 
 async function rig(opts: RigOpts = {}): Promise<Rig> {
   const suite = opts.suite ?? SUITE1;
-  const l = await layout(opts.targetAl ?? TARGET_AL, suite);
+  const l = await layout(opts.targetAl ?? TARGET_AL, suite, opts.appExtra);
   const serve = fakeServe(opts.serve);
   const one = fakeOneShot(
     opts.oneShotRows ?? opts.serve?.rows ?? allPass,
@@ -4822,6 +4828,36 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
   });
 
+  // PR-24 (L2): a restarted daemon's lazy warm-up leaves out what the whole-union warm-up does
+  // (`leftOutNames`), not what a mutant entry does (`mutantLeftOutNames`): with B refused in the middle,
+  // the two differ, and the warm-up must not run B (it would dirty the daemon it proves).
+  test("PR-24: a restarted daemon's lazy warm-up leaves out the warm-up's tests, not the mutant entries'", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(
+      await rig({ suite: SUITE_ABC, serve: { rows: bMid }, extra: { daemonMaxRequests: 1 } }),
+      "default",
+    );
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("C")])).catch(() => {});
+    await r.b.prefetchMutants(plans(["M0002"], [ref("A"), ref("C")])).catch(() => {});
+    const lazy = r.serve.requests.filter(
+      (q) => q.daemon >= 1 && q.ids.every((i) => i.startsWith("NONE|")),
+    );
+    expect(lazy.length).toBeGreaterThan(0);
+    for (const q of lazy) {
+      const entries = (q.body.entries as Record<string, unknown>[] | undefined) ?? [];
+      const cuEntry = entries.find((e) => String(e.test) === `Codeunit${CU}.`);
+      expect(cuEntry?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+    }
+  });
+
   test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
     const KEPT =
       "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
@@ -6565,8 +6601,17 @@ describe("R895: stop a request at its first timeout row", () => {
       const v = await r.b.run(B, OPTS);
       expect(v.outcome).toBe("pass");
       const sent = r.serve.requests.slice(n0);
-      expect(sent).toHaveLength(1);
-      const body = sent[0]?.body ?? {};
+      // PR-24 (L2): the cut killed its daemon; the restarted one proves CU on itself (a NONE warm-up of
+      // exactly that codeunit) before the alone request runs one of its tests there.
+      expect(sent).toHaveLength(2);
+      expect(sent[0]?.daemon).toBe(sent[1]?.daemon);
+      expect(sent[0]?.body.runSelectedOnly).not.toBe(true);
+      const warm = sent[0]?.body.entries as { test: string; resources: object }[];
+      expect(warm.map((e) => e.test)).toEqual([`Codeunit${ECHO}.`, `Codeunit${CU}.`]);
+      expect(warm.map((e) => (e.resources as Record<string, string>)["active-mutant.txt"])).toEqual(
+        ["NONE", "NONE"],
+      );
+      const body = sent[1]?.body ?? {};
       expect(body.runSelectedOnly).toBe(true);
       const entries = body.entries as { id: string; test: string; resources: object }[];
       expect(entries.map((e) => e.test)).toEqual([`Codeunit${ECHO}.`, `Codeunit${CU}.B`]);
@@ -8060,6 +8105,169 @@ describe("R952 (R948): a serve daemon past its size or request bound is recycled
   });
 });
 
+describe("PR-24 (L2): a restarted daemon warms each codeunit on its first use there", () => {
+  const P1 = [ref("A"), ref("B")]; // codeunit CU
+  const P2 = [ref("C", CU2)]; // codeunit CU2
+  const STEPS: readonly [string, readonly TestMethodRef[]][] = [
+    ["M0001", P1],
+    ["M0002", P2],
+    ["M0003", P1],
+  ];
+  /** Each mutant prefetched on its own, then run; the union holds CU, then CU and CU2. */
+  const session = async (opts: RigOpts, steps = STEPS) => {
+    const r = await rig({ serve: { rows: killsM1 }, oneShotRows: killsM1, suite: SUITE2, ...opts });
+    await baseline(r.b, SUITE2);
+    const verdicts: string[] = [];
+    for (const [m, refs] of steps) {
+      await r.b.prefetchMutants([{ mutantId: m, refs }]);
+      await r.b.activate(m);
+      for (const t of refs) verdicts.push(`${m} ${t.method} ${outcome(await r.b.run(t, OPTS))}`);
+    }
+    return { r, verdicts };
+  };
+  const entriesOf = (r: Rig, d: number) =>
+    r.serve.requests.filter((q) => q.daemon === d && !q.ids.some((i) => i.startsWith("plain:")));
+  const codeunitsOf = (ids: readonly string[]) =>
+    [...new Set(ids.filter((i) => !i.endsWith("|echo")).map((i) => i.split("|")[1]))].sort();
+
+  test("daemonMaxRequests 1 does not loop; verdicts equal the control; each restarted daemon first proves exactly the codeunits of its next request", async () => {
+    const control = await session({});
+    const s = await session({ extra: { daemonMaxRequests: 1 } });
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(s.verdicts).toContain("M0001 A fail,"); // a kill is in the comparison
+    const daemons = s.r.serve.daemons.length;
+    expect(daemons).toBeGreaterThan(2); // a restart per request: the lazy path is what runs here
+    // The first mutant daemon warms the whole union it starts with, as before.
+    expect(entriesOf(s.r, 0)[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+    for (let d = 1; d < daemons; d++) {
+      const [warm, next] = entriesOf(s.r, d);
+      if (next === undefined) continue; // a daemon its session ended on
+      expect(warm?.ids[0]).toBe("NONE|echo");
+      expect(warm?.ids.every((i) => i.startsWith("NONE|"))).toBe(true);
+      expect(codeunitsOf(warm?.ids ?? [])).toEqual(codeunitsOf(next.ids));
+    }
+    // CU2 is in the union from M0002 on, but no daemon that runs only CU warms it.
+    for (let d = 1; d < daemons; d++) {
+      const [warm, ...rest] = entriesOf(s.r, d);
+      if (!rest.flatMap((q) => q.ids).some((i) => i.endsWith(`|${CU2}`)))
+        expect(warm?.ids ?? []).not.toContain(`NONE|${CU2}`);
+    }
+  });
+
+  test("a restarted daemon whose codeunit differs from the baseline under NONE is refused before that codeunit's first entry", async () => {
+    // Every daemon after the first answers NONE on CU with a failing A: the baseline (one-shot) has it passing.
+    const drift: RowsFn = (m, cu, d, n) =>
+      m === "NONE" && cu === CU && d >= 1
+        ? [
+            { method: "A", status: "fail", message: "drift" },
+            { method: "B", status: "pass" },
+          ]
+        : killsM1(m, cu, d, n);
+    const r = await rig({
+      serve: { rows: drift },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+    });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }]); // daemon 0: whole-union warm-up, clean
+    await r.b.prefetchMutants([{ mutantId: "M0002", refs: P2 }]); // a restart proves CU2 only: clean
+    await expect(r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }])).rejects.toThrow(
+      /al-runner-v3-entries-warmup-disagrees/,
+    );
+    // The refused daemon got its warm-up and nothing of M0003.
+    expect(r.serve.requests.flatMap((q) => q.ids)).not.toContain(`M0003|${CU}`);
+  });
+
+  // Review B1: a live request on a spent budget must still get its real verdict, as with master's
+  // whole-union restart warm-up (no spent check there); a "deadline" from the warm-up would become a
+  // deadline-exceeded verdict (`liveFailure`). Only prefetch and pair batches skip once spent, before request().
+  test("a live call on a restarted daemon with the budget spent still warms up and returns its real verdict", async () => {
+    const liveAfterRestart = async (spentNow: boolean) => {
+      let spent = false;
+      const r = await rig({
+        serve: { rows: killsM1 },
+        oneShotRows: killsM1,
+        suite: SUITE2,
+        extra: { daemonMaxRequests: 1 },
+        stopHandle: { spent: () => spent, signalled: () => false, stopForMemory: () => {} },
+      });
+      await baseline(r.b, SUITE2);
+      // Another mutant is prefetched (daemon 0, then recycled), so M0001's call below is live.
+      await r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }]);
+      spent = spentNow;
+      const n0 = r.serve.requests.length;
+      // A live call (not prefetched) on a restarted daemon.
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      return { ids: r.serve.requests.slice(n0).flatMap((q) => q.ids), v: outcome(v) };
+    };
+    const control = await liveAfterRestart(false);
+    expect(control.ids).toContain(`NONE|${CU}`); // the restarted daemon proves CU first
+    expect(control.v).toEqual(["fail", ""]); // M0001 kills A: a real verdict, not a timeout
+    const spentRun = await liveAfterRestart(true);
+    expect(spentRun.ids).toContain(`NONE|${CU}`);
+    expect(spentRun.v).toEqual(control.v);
+  });
+
+  test("a kill pair on a restarted daemon is preceded there by the warm-up of its codeunit", async () => {
+    const r = await rig({
+      serve: { rows: killsM1 },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+    });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0002", refs: P2 }]); // daemon 0: the union is CU2 only
+    await r.b.activate("M0001");
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const after = r.serve.requests
+      .slice(n0)
+      .filter((q) => !q.ids.some((i) => i.startsWith("plain:")));
+    const pair = after.findIndex((q) => q.ids.some((i) => i.startsWith("M0001|")));
+    expect(pair).toBeGreaterThan(0);
+    const warm = after[pair - 1];
+    expect(warm?.daemon).toBe(after[pair]?.daemon);
+    expect(warm?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+  });
+
+  // Review: rule 4. A daemon-filled baseline (R948) or L5's re-check runs on the baseline's own daemon,
+  // which never passes ensureDaemon; the first MUTANT daemon must still warm the whole union.
+  test("after a daemon-filled baseline the first mutant daemon still warms the whole union", async () => {
+    const r = await dbRig({ serve: { rows: killsM1 }, oneShotRows: killsM1 });
+    await baseline(r.b, SUITE3);
+    // The batch plans put CU, CU2 and CU3 in the union; the window's request needs CU only.
+    await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }], {
+      batchPlans: [
+        { mutantId: "M0001", refs: P1 },
+        { mutantId: "M0002", refs: [ref("C", CU2), ref("D", CU3)] },
+      ],
+    });
+    const firstMutantDaemon = r.serve.requests.find(
+      (q) => !q.ids.some((i) => i.startsWith("plain:")),
+    );
+    expect(firstMutantDaemon?.ids).toEqual([
+      "NONE|echo",
+      `NONE|${CU}`,
+      `NONE|${CU2}`,
+      `NONE|${CU3}`,
+    ]);
+  });
+
+  test("a lazy warm-up does not count toward R952's request bound: a restarted daemon still serves daemonMaxRequests requests", async () => {
+    const s = await session({ extra: { daemonMaxRequests: 2 } });
+    const daemons = s.r.serve.daemons.length;
+    expect(daemons).toBeGreaterThan(1);
+    // Every restarted daemon but the last: its warm-up, then exactly 2 requests before the recycle.
+    for (let d = 1; d < daemons - 1; d++) {
+      const [warm, ...rest] = entriesOf(s.r, d);
+      expect(warm?.ids.every((i) => i.startsWith("NONE|"))).toBe(true);
+      expect(rest.filter((q) => !q.ids.every((i) => i.startsWith("NONE|")))).toHaveLength(2);
+    }
+  });
+});
+
 /** One baseline call inside its bracket (the orchestrator's `baselinePhase` and null activation). */
 async function baselineOne(b: AlRunnerV3Backend, t: TestMethodRef): Promise<TestVerdict> {
   b.baselinePhase(true);
@@ -8743,5 +8951,140 @@ describe("R1001: a uniformly refused baseline stops by name", () => {
     } finally {
       for (const cu of cus) SUITE_METHODS[cu] = ["T1", "T2"];
     }
+  });
+});
+
+describe("PR-21 (L5): re-check of a reused serve baseline", () => {
+  const PUB = "Acme Pub";
+  const NAME = "T"; // the rig's app name
+  const msg = (v: string, tail = "boom") => `${tail} in ${NAME} by ${PUB} version ${v}`;
+  const rowsWith =
+    (text: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "fail" as const, message: text } : x,
+      );
+  const named = (opts: RigOpts) => rig({ ...opts, appExtra: { publisher: PUB } });
+  const rowsOf = (r: Rig) =>
+    (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
+  /** Each first session's stored coverage, as the orchestrator builds it from the baseline verdicts. */
+  const storedOf = new Map<Rig, ReadonlyMap<string, string>>();
+  /** A second session, in the baseline bracket the orchestrator holds, re-checks `first`'s state. */
+  const recheck = async (
+    first: Rig,
+    rows: RowsFn,
+    patch: (s: Record<string, unknown>) => unknown = (s) => s,
+    coverage: ReadonlyMap<string, string> = storedOf.get(first) ?? new Map(),
+  ) => {
+    const state = await first.b.baselineState();
+    const r2 = await named({ serve: { rows, coverage: plainCoverage } });
+    r2.b.baselinePhase(true);
+    const why = await r2.b.recheckReusedBaseline(
+      patch(JSON.parse(JSON.stringify(state)) as Record<string, unknown>),
+      coverage,
+      1000,
+    );
+    return { why, r2 };
+  };
+  const firstOf = async (rows: RowsFn) => {
+    const r = await named({ serve: { rows, coverage: plainCoverage } });
+    const verdicts = await baseline(r.b, SUITE1);
+    storedOf.set(
+      r,
+      new Map(
+        verdicts.map((v) => [
+          `codeunit${v.ref.codeunitId}.${v.ref.method}`.toLowerCase(),
+          JSON.stringify(v.coverage ?? null),
+        ]),
+      ),
+    );
+    return r;
+  };
+
+  test("1: the state round-trips: an equal second session reuses it and holds the same rows", async () => {
+    const r1 = await firstOf(allPass);
+    expect(await r1.b.baselineState()).toBeDefined();
+    const { why, r2 } = await recheck(r1, allPass);
+    expect(why).toBeUndefined();
+    expect(rowsOf(r2).size).toBeGreaterThan(0);
+    // review 1: this session's own rows are imported, so compare what the re-check compares
+    const shape = (r: Rig) =>
+      [...rowsOf(r).entries()].map(([k, rs]) => [
+        k,
+        (rs as Record<string, unknown>[]).map((x) => [x.method, x.status, x.notRun, x.message]),
+      ]);
+    expect(shape(r2)).toEqual(shape(r1));
+  });
+
+  test("2: a row that differs refuses by name and imports nothing", async () => {
+    const r1 = await firstOf(allPass);
+    const { why, r2 } = await recheck(r1, rowsWith("boom"));
+    expect(why).toContain("the re-check");
+    expect(why).toContain(String(CU));
+    expect(rowsOf(r2).size).toBe(0);
+  });
+
+  test("3: only the target app's minted version is masked", async () => {
+    const r1 = await firstOf(rowsWith(msg("1.0.0.1")));
+    expect((await recheck(r1, rowsWith(msg("1.0.0.2")))).why).toBeUndefined();
+    expect((await recheck(r1, rowsWith(msg("1.0.0.1", "bang")))).why).toContain("the re-check");
+    const other = (v: string) => `boom in Other App by X version ${v}`;
+    const r3 = await firstOf(rowsWith(other("1.2.3.4")));
+    expect((await recheck(r3, rowsWith(other("1.2.3.5")))).why).toContain("the re-check");
+  });
+
+  test("4: no usable state, or another seed, refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const none = await recheck(r1, allPass, () => undefined);
+    expect(none.why).toStartWith("no backend state");
+    const bad = await recheck(r1, allPass, (s) => ({ ...s, rows: "x" }));
+    expect(bad.why).toStartWith("no backend state");
+    const seed = await recheck(r1, allPass, (s) => ({ ...s, seed: 12345 }));
+    expect(seed.why).toStartWith("the seed");
+    expect(rowsOf(seed.r2).size).toBe(0);
+  });
+
+  test("5: another sidecar hash refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const { why } = await recheck(r1, allPass, (s) => ({ ...s, sidecarSha256: "abc" }));
+    expect(why).toStartWith("the .NET sidecar");
+  });
+
+  test("6: a stored coverage map that differs refuses by name", async () => {
+    const r1 = await firstOf(allPass);
+    const { why } = await recheck(
+      r1,
+      allPass,
+      (s) => s,
+      new Map([[`codeunit${CU}.a`, JSON.stringify({ not: "it" })]]),
+    );
+    expect(why).toContain("coverage differs");
+  });
+
+  test("7 (review 2): an equal stored coverage map passes; a sampled codeunit with nothing to compare refuses", async () => {
+    const r1 = await firstOf(allPass);
+    expect((await recheck(r1, allPass)).why).toBeUndefined(); // the first session's own maps
+    // the stored keys renamed: nothing matches, so the check must not pass empty vs empty
+    const renamed = new Map(
+      [...(storedOf.get(r1) ?? new Map<string, string>())].map(([k, v]) => [`x${k}`, v]),
+    );
+    const { why } = await recheck(r1, allPass, (s) => s, renamed);
+    expect(why).toContain("no stored coverage to compare");
+  });
+
+  test("8 (review 1): the rows imported are this session's re-check rows, not the stored ones", async () => {
+    const r1 = await firstOf(allPass);
+    // the stored rows carry a tail the re-check does not compare (a refusal's first line only):
+    // a notRun row whose second line differs
+    const { why, r2 } = await recheck(r1, allPass, (s) => {
+      const rows = s.rows as [number, Record<string, unknown>[]][];
+      return {
+        ...s,
+        rows: rows.map(([k, rs]) => [k, rs.map((r) => ({ ...r, stored: true }))]),
+      };
+    });
+    expect(why).toBeUndefined();
+    for (const rs of rowsOf(r2).values())
+      for (const r of rs as Record<string, unknown>[]) expect(r.stored).toBeUndefined();
   });
 });

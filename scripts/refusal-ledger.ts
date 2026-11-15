@@ -284,15 +284,23 @@ export function readStore(path: string, runId?: number): Sighting[] {
     }
     const base = db
       .query(
-        "select codeunit_name as cu, codeunit_id as id, method, failure_message as m from test_results where run_id=? and mutant_row_id is null and outcome='error' and failure_message like 'NotRun%' order by id",
+        // the codeunit is `cid`, never `id`: `order by id` would then sort by the alias (codeunit), not by the row
+        "select codeunit_name as cu, codeunit_id as cid, method, outcome as o, coalesce(failure_message,'') as m from test_results where run_id=? and mutant_row_id is null order by test_results.id",
       )
-      .all(run) as { cu: string | null; id: number; method: string; m: string }[];
-    for (const b of base)
-      out.push({
-        text: b.m,
-        kind: "test",
-        where: `${path} run ${run} ${b.cu ?? b.id}.${b.method}`,
-      });
+      .all(run) as { cu: string | null; cid: number; method: string; o: string; m: string }[];
+    // PR-26: a test baselined twice in the run (isolation auto's per-method re-baseline, R921) stands by
+    // its LAST row (rows in the order they were written), as `triage-baseline.ts` reads it; a first-pass
+    // refusal the re-baseline replaced cost no covered test, and counting it inflated the cascades
+    // (Sustainability: 412 refusal rows, 119 tests still refused; number sequences 213 rows, 0 standing).
+    const last = new Map<string, (typeof base)[number]>();
+    for (const b of base) last.set(`${b.cid}\u0000${b.method.toLowerCase()}`, b);
+    for (const b of last.values())
+      if (b.o === "error" && /^notrun/i.test(b.m))
+        out.push({
+          text: b.m,
+          kind: "test",
+          where: `${path} run ${run} ${b.cu ?? b.cid}.${b.method}`,
+        });
     return out;
   } finally {
     db.close();
