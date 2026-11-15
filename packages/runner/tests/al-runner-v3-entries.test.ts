@@ -7345,10 +7345,12 @@ describe("R1014: the mutant phase honours a spent budget and a stop signal betwe
   test("a stop signal ends a request that is still running (a hang) by closing its daemon; without one it runs to its answer", async () => {
     for (const signal of [true, false]) {
       let sig = false;
+      const notices: string[] = [];
       const r = await rig({
         stopHandle: handle({ spent: () => sig, signalled: () => sig }),
-        // every request with a mutant's entries hangs for 3 s (a test that waits out its stop)
-        serve: { delayMs: (q) => (q.ids.some((id) => id.startsWith("M0001")) ? 3000 : 0) },
+        notify: (c) => notices.push(c),
+        // every request with a mutant's entries hangs for 1.5 s (a test that waits out its stop)
+        serve: { delayMs: (q) => (q.ids.some((id) => id.startsWith("M0001")) ? 1500 : 0) },
       });
       await baseline(r.b, SUITE1);
       const started = Date.now();
@@ -7361,10 +7363,12 @@ describe("R1014: the mutant phase honours a spent budget and a stop signal betwe
       const closes = r.b.daemonCloses().byReason;
       if (signal) {
         // red without the watch: the request waits out its whole delay
-        expect(ms).toBeLessThan(2500);
+        expect(ms).toBeLessThan(1000);
         expect(closes.get("stop-signal")).toBe(1);
+        // review 6: no "its mutants run as live requests" warning after a stop
+        expect(notices).not.toContain("al-runner-v3-entries-prefetch-dropped");
       } else {
-        expect(ms).toBeGreaterThanOrEqual(2900);
+        expect(ms).toBeGreaterThanOrEqual(1400);
         expect(closes.get("stop-signal")).toBeUndefined();
       }
     }

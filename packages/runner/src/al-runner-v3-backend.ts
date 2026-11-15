@@ -6739,6 +6739,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         out = await this.request(this.lane, chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
+          // R1014 (review 6): a request the budget or a stop signal ended: nothing runs live after
+          // it, so the warning below would be wrong; the session stops with its report.
+          if (this.stopHandle?.spent() === true) break;
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
           this.stats.prefetchDropped += 1;
           this.notify(
@@ -6837,6 +6840,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // Like `prefetchMutants`: only a request error is absorbed; a refusal, an unproven batch
         // or a skipped dependency stops the session (S1: never serve stored pairs after one).
         if (!(err instanceof AlRunnerServerRequestError)) throw err;
+        if (this.stopHandle?.spent() === true) return; // R1014 (review 6): ended by the stop
         this.notify(
           "al-runner-v3-pair-batch-skipped",
           `[lethal] al-runner-v3-pair-batch-skipped: a batch of ${chunk.length} kill pair(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); nothing of it is stored, and each kill sends its own pair (R778).`,
