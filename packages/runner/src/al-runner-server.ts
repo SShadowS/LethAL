@@ -141,6 +141,8 @@ export interface ServerTestLine {
   readonly name: string;
   readonly status: string;
   readonly durationMs?: number;
+  /** PR-43: al-runner's `clock` on a time-limit row (`"cpu"` or `"virtual"`). Absent otherwise. */
+  readonly clock?: string;
   readonly message?: string;
   /** R612: v3's `notRun`, carried only when a boolean (v2's wire never sends it). A present
    *  non-boolean throws in `runTests`: the protocol moved. */
@@ -493,6 +495,7 @@ export class AlRunnerServer {
           name: String(msg.name ?? ""),
           status: String(msg.status ?? ""),
           ...(typeof msg.durationMs === "number" ? { durationMs: msg.durationMs } : {}),
+          ...(typeof msg.clock === "string" ? { clock: msg.clock } : {}),
           ...(typeof msg.message === "string" ? { message: msg.message } : {}),
           ...(typeof msg.notRun === "boolean" ? { notRun: msg.notRun } : {}),
         });

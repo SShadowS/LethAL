@@ -23783,6 +23783,150 @@ describe("R577: a kill must reproduce under the mutant", () => {
     store.close();
   });
 
+  /**
+   * PR-43: a ReproStub that models al-runner v3's timeout row. Under a mutant a timeout carries
+   * `reportedStopMs` (and `cpuStop` when `cpuStop` is on, the backend's decision from the row's
+   * clock and duration); an unmutated pass carries `measuredDurationMs = confirmMs`.
+   */
+  class CpuStub extends ReproStub {
+    cpuStop = true;
+    stopMs = 40000;
+    confirmMs: number | undefined = 1000;
+    /** The unmutated pass's call wall, used as the bound when `confirmMs` is undefined (a 0 ms test). */
+    wallMs = 5;
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      const active = this.activations.at(-1) ?? null;
+      if (v.outcome === "timeout" && active !== null) {
+        return {
+          ...v,
+          reportedStopMs: this.stopMs,
+          timeoutIn: "body",
+          ...(this.cpuStop ? { cpuStop: true as const } : {}),
+        };
+      }
+      if (v.outcome === "pass" && active === null) {
+        return this.confirmMs !== undefined
+          ? { ...v, measuredDurationMs: this.confirmMs }
+          : { ...v, durationMs: this.wallMs };
+      }
+      return v;
+    }
+  }
+  /** M0001's mutated runs, by the stub's own counter (1 = the kill only, 2 = kill + reproduction). */
+  const mutatedRuns = (b: ReproStub) => b.nth.get("M0001");
+  const cpuRun = async (
+    setup: (b: CpuStub) => void,
+    outcome: TestVerdict["outcome"] = "timeout",
+  ) => {
+    const backend = new CpuStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : outcome), [
+      "IsOverBudget",
+    ]);
+    setup(backend);
+    const { report, store } = await run(backend, { mutantTimeoutMs: 100000 });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    return { backend, report, store };
+  };
+  /** Each of these keeps R577's reproduction: two mutated runs, a reproduced kill, not v3-cpu-stop. */
+  const reproduces = async (setup: (b: CpuStub) => void) => {
+    const { backend, report, store } = await cpuRun(setup);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.stopEvidence).not.toBe("v3-cpu-stop");
+    }
+    expect(mutatedRuns(backend)).toBe(2);
+    store.close();
+  };
+
+  test("PR-43 (all hold): cpuStop, NONE passed within N/4 -> no reproduction, v3-cpu-stop", async () => {
+    const { backend, report, store } = await cpuRun((b) => {
+      b.confirmMs = 10000; // exactly N/4 of 40000: still within
+    });
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.stopEvidence).toBe("v3-cpu-stop");
+      expect(m.killReproduced).toBeUndefined();
+    }
+    // Counter, not clock: M0001 ran under the mutant once (the kill), then the confirm; no re-run.
+    expect(mutatedRuns(backend)).toBe(1);
+    expect(activationsOf(backend, "M0001", 3)).toEqual(["M0001", null, "M0002"]);
+    expect(store.mutantVerdicts(1).every((r) => r.stopEvidence === "v3-cpu-stop")).toBe(true);
+    store.close();
+  });
+
+  test("PR-43 (clock/duration): the row is not a provable CPU stop (no cpuStop) -> reproduces", async () => {
+    // v3RowVerdict drops cpuStop for clock absent, "virtual", or durationMs >= 10 x N (unit-tested
+    // there); here the orchestrator must reproduce whenever the flag is missing.
+    await reproduces((b) => {
+      b.cpuStop = false;
+    });
+  });
+
+  test("PR-43 (NONE duration): the unmutated confirm took more than N/4 -> reproduces", async () => {
+    await reproduces((b) => {
+      b.confirmMs = 10001;
+    });
+  });
+
+  test("PR-43 (NONE duration): no measured duration (a 0 ms test) and wall <= N/4 -> skips", async () => {
+    const { backend, report, store } = await cpuRun((b) => {
+      b.confirmMs = undefined;
+      b.wallMs = 10000;
+    });
+    for (const m of report.mutants) expect(m.stopEvidence).toBe("v3-cpu-stop");
+    expect(mutatedRuns(backend)).toBe(1);
+    store.close();
+  });
+
+  test("PR-43 (NONE duration): no measured duration and wall > N/4 -> reproduces", async () => {
+    await reproduces((b) => {
+      b.confirmMs = undefined;
+      b.wallMs = 10001;
+    });
+  });
+
+  test("PR-43: a non-timeout v3 kill still reproduces", async () => {
+    const { backend, report, store } = await cpuRun(() => {}, "fail");
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.stopEvidence).toBeUndefined();
+    }
+    expect(mutatedRuns(backend)).toBe(2);
+    store.close();
+  });
+
+  test("PR-43: a bcdev-like timeout kill (no cpuStop, no measured time) still reproduces", async () => {
+    const backend = new ReproStub(CAPS_NST, (mutant) => (mutant === null ? "pass" : "timeout"), [
+      "IsOverBudget",
+    ]);
+    const { report, store } = await run(backend);
+    for (const m of report.mutants) {
+      expect(m.verdict).toBe("timeout-killed");
+      expect(m.killReproduced).toBe(true);
+      expect(m.stopEvidence).not.toBe("v3-cpu-stop");
+    }
+    expect(mutatedRuns(backend)).toBe(2);
+    store.close();
+  });
+
+  test("PR-43: a cpuStop timeout whose unmutated confirm FAILS is never a kill nor v3-cpu-stop", async () => {
+    const backend: CpuStub = new CpuStub(
+      CAPS_NST,
+      // The baseline (before any mutated run) passes; the confirm after a mutated timeout fails.
+      (mutant) => (mutant === null ? (backend.nth.size > 0 ? "fail" : "pass") : "timeout"),
+      ["IsOverBudget"],
+    );
+    const { report, store } = await run(backend, { mutantTimeoutMs: 100000 });
+    expect(report.mutants.length).toBeGreaterThan(0);
+    for (const m of report.mutants) {
+      expect(m.verdict).not.toBe("timeout-killed");
+      expect(m.stopEvidence).toBeUndefined();
+    }
+    store.close();
+  });
+
   test("T9d: at k = 1, a reproduction of the OTHER kind is kill-not-reproduced, both ways (I1)", async () => {
     // A fail kill whose reproduction times out.
     const failKill: ReproStub = new ReproStub(

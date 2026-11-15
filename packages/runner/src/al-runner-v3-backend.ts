@@ -1019,6 +1019,12 @@ function readSpeculateBaseline(): boolean {
   throw new AlRunnerV3SpeculateBaselineRefusedError(v);
 }
 
+/**
+ * PR-43: al-runner's `WALL_BACKSTOP` is 10 x the test timeout, in wall time. A time-limit row with
+ * `clock: "cpu"` and a `durationMs` below 10 x N cannot be the backstop, so it is a CPU-time stop.
+ */
+const V3_WALL_BACKSTOP_FACTOR = 10;
+
 /** One row of v3's `--output-json` `tests[]`, decoded. */
 export interface V3Row {
   readonly codeunit: number;
@@ -1026,6 +1032,8 @@ export interface V3Row {
   readonly name: string;
   readonly status: "pass" | "fail" | "error";
   readonly durationMs?: number;
+  /** PR-43: al-runner's `clock` on a time-limit row (`"cpu"` or `"virtual"`). Absent otherwise. */
+  readonly clock?: string;
   readonly message?: string;
   /** R925: al-runner's AL call stack for a failure, when it gives one. Absent otherwise. */
   readonly stackTrace?: string;
@@ -1058,13 +1066,25 @@ export function decodeV3Rows(
   const rows: V3Row[] = [];
   for (const [i, t] of tests.entries()) {
     const r = (t ?? {}) as Record<string, unknown>;
-    const { codeunit, method, name, status, durationMs, message, stackTrace, notRun, flagged } = r;
+    const {
+      codeunit,
+      method,
+      name,
+      status,
+      durationMs,
+      message,
+      stackTrace,
+      notRun,
+      flagged,
+      clock,
+    } = r;
     if (
       typeof codeunit !== "number" ||
       typeof method !== "string" ||
       typeof name !== "string" ||
       (status !== "pass" && status !== "fail" && status !== "error") ||
       (durationMs !== undefined && typeof durationMs !== "number") ||
+      (clock !== undefined && typeof clock !== "string") ||
       (message !== undefined && typeof message !== "string") ||
       (stackTrace !== undefined && typeof stackTrace !== "string") ||
       (notRun !== undefined && typeof notRun !== "boolean") ||
@@ -1090,6 +1110,7 @@ export function decodeV3Rows(
       name,
       status,
       ...(durationMs !== undefined ? { durationMs } : {}),
+      ...(clock !== undefined ? { clock } : {}),
       ...(message !== undefined ? { message } : {}),
       ...(stackTrace !== undefined ? { stackTrace } : {}),
       notRun: notRun === true,
@@ -1154,6 +1175,12 @@ export function v3RowVerdict(
         reportedStopMs: n * 1000,
         timeoutIn: "body",
         failureMessage: row.message ?? "",
+        // PR-43: a provable CPU stop (see V3_WALL_BACKSTOP_FACTOR); the orchestrator adds the confirm check.
+        ...(row.clock === "cpu" &&
+        typeof row.durationMs === "number" &&
+        row.durationMs < V3_WALL_BACKSTOP_FACTOR * n * 1000
+          ? { cpuStop: true as const }
+          : {}),
       };
     }
     return {
@@ -5279,8 +5306,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * on a `run()` served from memory: every row comes from a send that was checked just before it
    * left. A change in the gap between that check and al-runner's read cannot make a kill, because
    * R577 (`killsMustReproduce`) sends every kill's confirm and reproduction fresh, after the kill's
-   * own send; R653 sends the two in ONE checked request (`sendKillPair`), confirm first. Turning
-   * R577 off for v3 would reopen the gap. A lasting change in the LAST send's gap (now the pair)
+   * own send; R653 sends the two in ONE checked request (`sendKillPair`), confirm first. The one
+   * exception is a v3-cpu-stop kill (PR-43): it is not re-sent, so a file change that came and
+   * went inside its own send's gap is not caught; a lasting one is caught by the confirm's own
+   * bound check. Turning R577 off for v3 would reopen the gap. A lasting change in the LAST send's gap (now the pair)
    * goes unreported (build review L1). R651's timer outside the bracket.
    */
   private async checkBound(lane: Lane): Promise<void> {
