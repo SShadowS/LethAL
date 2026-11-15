@@ -5846,6 +5846,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
   // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
   const ranHere = new Set<TestMethodRef>();
+  // PR-21 addendum 2: a reused snapshot that passed L5's re-check (`recheckReusedBaseline`); its rows
+  // then count as this session's line evidence (`lineEvidence`), never as durations measured here.
+  let rechecked = false;
   // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
   // when a reused snapshot leaves the loop over []). The only null activation inside it.
   backend.baselinePhase?.(true);
@@ -5948,9 +5951,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           emit({
             type: "warning",
             code: "resume-baseline-not-reused",
-            message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (PR-21). The stored run may itself be the odd one (a cascade a cold al-runner cache gave, #8002): this run's baseline is stored, and the next --resume compares against it.`,
+            message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (PR-21). The stored run may itself be the odd one: this run's baseline is stored, and the next --resume compares against it.`,
           });
           reused = undefined;
+        } else {
+          // PR-21 addendum 2: re-checked rows are this session's line evidence (R926 reach, R975
+          // trigger placement), as rows that ran here are; without it a resumed session decided
+          // fewer trigger mutants than a fresh one (2 of 222 on Service Declaration).
+          rechecked = true;
         }
       }
       if (reused !== undefined) {
@@ -6241,7 +6249,12 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
-  const plan = input.select(baseline, ranHere);
+  // PR-21 addendum 2: the rows whose line coverage counts as this session's evidence (R926, R975):
+  // the rows that ran here, and a reused snapshot's rows once L5's re-check passed.
+  const lineEvidence: ReadonlySet<TestMethodRef> = rechecked
+    ? new Set([...ranHere, ...baseline.map((b) => b.ref)])
+    : ranHere;
+  const plan = input.select(baseline, lineEvidence);
   if (plan === undefined) return "nothing-to-run";
   const {
     mutants: toExecute,
@@ -6256,7 +6269,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // is the call's wall, a whole codeunit's run on serve (DO: 87.8 s for a 1.3 s test, so 1,762 s).
   const minMutantBudgetMs = applyV3MutantStop(scope, measuredDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
-  const baselineReach = baselineReachOf(baseline, ranHere, backend);
+  const baselineReach = baselineReachOf(baseline, lineEvidence, backend);
 
   // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
