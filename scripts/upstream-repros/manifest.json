@@ -199,7 +199,7 @@
     {
       "id": "u8028-no-client",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
-      "bcEvidence": "inferred, not measured on BC: a session without a client (BC's web-service and background sessions) answers CurrentClientType without an error, and never Windows; the issue's invented repro (R-975), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
+      "bcEvidence": "partly measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's no-client check, 2026-11-15, a web-service session; /coord/handoff/PR-17/ws-run/result.md cell C0): CurrentClientType answers without an error; that it is never Windows is inferred; the issue's invented repro (R-975), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
       "rerun": [
         "every BC.History project whose closure holds System Initialization (its OnCompanyOpenCompleted subscriber reads the client type): the refusal ledger's no-client causes"
       ],
@@ -445,7 +445,7 @@
     {
       "id": "u7760-untouched-handle",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7760",
-      "bcEvidence": "inferred, not measured on BC: a call on a handle nothing created raises an error on BC, as measured for a write to an OutStream never created (NavOutStream variable not initialized, issue comment) and as al-runner itself fails the sibling methods (XmlElement.Name, InnerText, Add: NavXmlElement variable not initialized); the error's text is not known, so only the failure is expected. Cells found by scripts/refusal-family.ts (PR-01)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; /coord/handoff/PR-17/bc-check/runs/untouched-handle.joined.tsv): each of the four fails, InnerXml and GetChildElements with 'NavXmlElement variable not initialized.', SetAttribute with 'NavXmlAttributeCollection variable not initialized.', CopyStream with 'NavInStream variable not initialized.'; only the failure is expected. Of the family's 59 calls, XmlElement.AsXmlNode is the one where BC and al-runner differ (u8157-xml-asxmlnode). Cells found by scripts/refusal-family.ts (PR-01)",
       "rerun": ["the corpus mutants met by the untouched-handle refusals (R-913, R-961, R-983)"],
       "tests": {
         "Codeunit51101.Cell": { "status": "fail" },
@@ -457,7 +457,7 @@
     {
       "id": "u8036-dotnet-no-object",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
-      "bcEvidence": "inferred, not measured on BC: a member of a DotNet variable that holds no object raises an error on BC (a .NET null reference; issue item 1 refuses only because the text is not measured), so under asserterror the test passes, as u8036-refusals expects for Uri.AbsoluteUri. Types beyond the issue's, and Regex.IsMatch, whose refusal text wrongly says no overload (it passes on a constructed Regex), found by scripts/refusal-family.ts family dotnet-no-object (PR-02)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner): all 29 cells of family dotnet-no-object fail on BC with one text, 'A DotNet variable has not been instantiated. Attempting to call <Type>.<Member> in CodeUnit <name>: <method>', these five included (StringBuilder.Append, MemoryStream.Length, Encoding.WebName, XmlDocument.OuterXml, Regex.IsMatch), so under asserterror each test passes, as u8036-refusals expects for Uri.AbsoluteUri. Types beyond the issue's, and Regex.IsMatch, whose refusal text wrongly says no overload (it passes on a constructed Regex), found by scripts/refusal-family.ts family dotnet-no-object (PR-02)",
       "rerun": ["the corpus mutants met by the DotNet no-object refusals (R-983)"],
       "tests": {
         "Codeunit51201.Cell": { "status": "pass" },
@@ -483,7 +483,7 @@
     {
       "id": "u7415-platform-no-provider",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
-      "bcEvidence": "inferred, not measured on BC: a read of a platform table returns on BC (rows or none), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; /coord/handoff/PR-17/bc-check/runs/platform-table-read.joined.tsv): IsEmpty and FindFirst on each of these tables pass on BC (of the family's 203 refused cells, 176 pass and 27 fail, posted on the issue), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",
       "rerun": [
         "the corpus mutants met by the platform-table no-provider refusals (ledger: 3,054 sightings, PR-13)"
       ],
@@ -498,7 +498,7 @@
     {
       "id": "u7854-system-table-denial",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
-      "bcEvidence": "inferred, not measured on BC: BC denies a FindFirst without Read permission even when it finds no row (measured upstream on an ordinary table, #7854), so under asserterror each test passes; for a system table it is inferred. The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path, Permissions Mock; /coord/handoff/PR-17/bc-check/runs/permission-denial.joined.tsv): FindFirst on User and on Tenant Media under a set without Read (the cell's set grants only its own table, as the repro's does) fails with 'Sorry, the current permissions prevented the action. (TableData <id> <name> Read: ...)', so under asserterror each test passes. Not every system table is denied on BC: of the family's 154 refused cells, 112 pass and 42 fail (posted on the issue). Measured in a web-service session (Permissions Mock needs it) while the repro runs without --no-client: a permission check is not a client call, so the session kind is taken not to matter here (unlike u8158). The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
       "rerun": [
         "the corpus mutants met by the system-table permission-denial refusals (ledger: #7854's own six causes, 493 sightings, PR-16)"
       ],
@@ -510,7 +510,7 @@
     {
       "id": "u8032-permission-rows",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
-      "bcEvidence": "inferred, not measured on BC: a read of the Permission table under a set that grants it Read returns on BC. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path): IsEmpty and FindFirst on Permission under a Permissions Mock set that grants it Read (among about 84 tables; the repro's grants Permission and its own table) pass on BC. Measured in a web-service session while the repro runs without --no-client; as for u7854, the session kind is taken not to matter for a permission check. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
       "rerun": [
         "the corpus mutants whose tests read Permission, Metadata Permission or Expanded Permission under Permissions Mock (#8032)"
       ],
@@ -521,11 +521,31 @@
     {
       "id": "u8028-run-request-page",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
-      "bcEvidence": "inferred, not measured on BC: with a RequestPageHandler bound, the handler takes the request page and Report.RunRequestPage returns its parameters (it passes on al-runner with a client). Found by scripts/refusal-family.ts family no-client (PR-17); /coord/handoff/PR-17/bc-check/no-client measures it on BC",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's no-client check, 2026-11-15; /coord/handoff/PR-17/ws-run/result.md cells C21, C22): in a session without a client (a web-service session) Report.RunRequestPage FAILS with or without a RequestPageHandler bound: 'The report request page cannot be used in background or server sessions.' (PR-31 corrects PR-17's inferred pass; in a client session, the dev endpoint's test runner, it passes). Found by scripts/refusal-family.ts family no-client (PR-17)",
       "rerun": ["the corpus mutants whose tests call Report.RunRequestPage under --no-client"],
       "args": ["--no-client"],
       "tests": {
-        "Codeunit51441.Cell": { "status": "pass" }
+        "Codeunit51441.Cell": { "status": "fail" }
+      }
+    },
+    {
+      "id": "u8157-xml-asxmlnode",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8157",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; cell 51017 of untouched-handle.joined.tsv): XmlElement.AsXmlNode() on an untouched XmlElement returns without an error, so the test passes; al-runner fails it (NavXmlNode variable not initialized). Filed by PR-31",
+      "rerun": ["the corpus mutants whose tests call AsXmlNode on an XmlElement nothing created (none known)"],
+      "tests": {
+        "Codeunit51581.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8158-session-read",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8158",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path, Permissions Mock; cells 51013-51016 of permission-denial.joined.tsv): IsEmpty and FindFirst on Session fail with 'The Active Session does not exist. Identification fields and values: Server Instance ID=...,Session ID=...', granted or not, so under asserterror each test passes; al-runner returns. Not measured: without Permissions Mock, or in a client session. Filed by PR-31",
+      "rerun": ["the corpus mutants whose tests read Session under Permissions Mock (none known)"],
+      "args": ["--no-client"],
+      "tests": {
+        "Codeunit51591.Cell": { "status": "pass" },
+        "Codeunit51592.Cell": { "status": "pass" }
       }
     }
   ]

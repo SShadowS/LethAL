@@ -1,6 +1,7 @@
 // Upstream #8028 (PR-17): Report.RunRequestPage with a RequestPageHandler bound, in a session without a client (run with
-// --no-client). Invented, no corpus source text. On BC the handler takes the request page and RunRequestPage returns its
-// parameters (inferred, not measured), so the test is expected to pass.
+// --no-client). Invented, no corpus source text. Measured on BC 28.4 W1 (PR-17's no-client check, 2026-11-15) in a session
+// without a client: RunRequestPage fails, handler or not ("The report request page cannot be used in background or server
+// sessions."), so the test is expected to FAIL (PR-31; PR-17 had inferred a pass, which holds only in a client session).
 table 51440 "U8028 Row"
 {
     fields { field(1; "Code"; Code[20]) { } }
