@@ -39,6 +39,31 @@ So a stored al-runner baseline can hold a pass that BC would turn red, and a mut
   carry BC's permission refusal there. An at-risk test that passes on BC falsifies the predicate for it; it is reported, not
   dropped.
 
+## Addendum 1 (before any BC run for it): whose table?
+The parse (`/coord/handoff/PR-35/at-risk.ts`) found 307 exposed write-first tests. The table each one writes first is owned by:
+the test app 34, the app under test 47, another app (Microsoft's) 226. #8160's measurement covers only the first: a write to the
+test app's own table. The stored BC evidence points the other way for the rest: Service Declaration's "Serv. Decl. Suggest
+Lines" (no TestPermissions, Permissions Mock reachable through Tests-TestLibraries) has 7 tests that create data through Microsoft's
+libraries before any lowering, and all 7 pass in a stored BC baseline (R-882 S3.sqlite).
+
+So before counting, one BC measurement (lethal-bugs, bc2, Permissions Mock installed, LethAL's web-service path), of a target app
+and a test app that depends on it and on the mock. Each test codeunit declares no TestPermissions unless stated:
+1. Insert into the test app's own table (the #8160 shape; the control).
+2. Insert into the target app's table, from the test codeunit.
+3. Call a target-app codeunit that inserts into the target app's table.
+4. FindFirst on the target app's table.
+5. FindFirst on the test app's own table.
+6. As 2, with `TestPermissions = Disabled` (the control that it can pass).
+
+**Predictions.** 1 fails (measured before). 2 and 3 pass: the Service Declaration evidence says a Restrictive test can write tables
+outside its own app. 6 passes. No prediction for 4 and 5: the control app's probe reported reads as refused, but that probe read its
+own app's table.
+
+**How the count follows.**
+- If 2 and 3 pass, the at-risk set is the 34 tests that write the test app's own table.
+- If 2 fails and 3 passes, the at-risk set is 34 plus the direct writes to app-under-test tables (47); "other" stays out.
+- If 2 and 3 fail, the set is every exposed write-first test (307), and the indirect class must be re-examined.
+
 ## What is done with the result
 No al-runner build fixes #8160 yet, so nothing is re-scored. The at-risk set (per project: tests, baseline status, kills resting on
 them) is recorded in R1048 and in the refusal ledger's note for the class. A re-score follows when a build fails
