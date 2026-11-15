@@ -17,6 +17,7 @@ import {
   leaseSessionFor,
   makeEnvToolPublisher,
   parseCliConfig,
+  pinV3Binary,
   resolveAlToolPaths,
   resolveEnvToolSession,
   resourceIdentityFor,
@@ -1002,6 +1003,20 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // R1018 (review): the pin touches only a v3 run's string path; a bad path is left for validation to
+  // refuse by name, never replaced by the default build.
+  it("R1018: pinV3Binary leaves a bad path, another backend and a missing section unchanged", async () => {
+    const parsed = await v3Parsed();
+    for (const bad of ["", 7, false, null]) {
+      const c = { alRunnerV3: { path: bad } } as unknown as LethalConfigFile;
+      expect([bad, pinV3Binary(parsed, c)]).toEqual([bad, c]);
+    }
+    const bc = { alRunnerV3: { path: "/x/al-runner" } } as unknown as LethalConfigFile;
+    expect(pinV3Binary({ ...parsed, backendKind: "bcdev" }, bc)).toBe(bc);
+    const none = {} as LethalConfigFile;
+    expect(pinV3Binary(parsed, none)).toBe(none);
   });
 
   it("R786: --workers > 1 plus a fallback is refused by name BEFORE a second backend is built", async () => {

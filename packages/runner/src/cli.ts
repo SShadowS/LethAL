@@ -2999,7 +2999,10 @@ export function pinV3Binary(parsed: RunCliConfig, config: LethalConfigFile): Let
   if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)
     return config;
   const raw = (section as { path?: unknown }).path;
-  const path = typeof raw === "string" && raw !== "" ? raw : defaultV3Path();
+  // Only an ABSENT path takes the default; any other non-string or empty value is left for the
+  // validation to refuse by name, never replaced by a plausible build (review).
+  if (raw !== undefined && (typeof raw !== "string" || raw === "")) return config;
+  const path = raw ?? defaultV3Path();
   return { ...config, alRunnerV3: { ...section, path: resolveV3Binary(path) } };
 }
 
