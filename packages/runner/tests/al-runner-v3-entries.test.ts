@@ -7235,6 +7235,81 @@ describe("R948 A: the baseline through one daemon", () => {
   });
 });
 
+// R1014 (coord PR-07): R-998's DO window ran 40 min past its budget and a SIGTERM, re-sending requests
+// whose hanging mutants each waited out the 1,762 s test stop.
+describe("R1014: the mutant phase honours a spent budget and a stop signal between and inside requests", () => {
+  const handle = (o: { spent: () => boolean; signalled: () => boolean }) => ({
+    ...o,
+    stopForMemory: () => {},
+  });
+
+  test("a spent budget sends no prefetch chunk (nor a warm-up for it); an unspent one does", async () => {
+    for (const spent of [true, false]) {
+      const r = await rig({ stopHandle: handle({ spent: () => false, signalled: () => false }) });
+      await baseline(r.b, SUITE1);
+      (r.b as unknown as { stopHandle: unknown }).stopHandle = handle({
+        spent: () => spent,
+        signalled: () => false,
+      });
+      await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+      // red without the check: the chunk starts a daemon and sends its warm-up and its request
+      expect([spent, r.serve.requests.length > 0]).toEqual([spent, !spent]);
+    }
+  });
+
+  test("a budget spent after the prefetch sends no kill-pair batch; an unspent one does", async () => {
+    const killsA: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "M0001" && x.method === "A" ? { ...x, status: "fail" as const } : x,
+      );
+    for (const spendIt of [true, false]) {
+      const box: { r?: Rig } = {};
+      const prefetched = () =>
+        box.r?.serve.requests.some((q) => q.ids.some((id) => id.startsWith("M0001|"))) === true;
+      const r = await rig({
+        stopHandle: handle({ spent: () => spendIt && prefetched(), signalled: () => false }),
+        serve: { rows: killsA },
+        oneShotRows: killsA,
+        pairBatch: true,
+      });
+      box.r = r;
+      await baseline(r.b, SUITE1);
+      await r.b.prefetchMutants(plans(["M0001"]));
+      const pairSent = r.serve.requests.some((q) => q.ids.some((id) => id.includes("#m")));
+      // red without the check: the pair batch goes out after the budget is spent
+      expect([spendIt, prefetched(), pairSent]).toEqual([spendIt, true, !spendIt]);
+    }
+  });
+
+  test("a stop signal ends a request that is still running (a hang) by closing its daemon; without one it runs to its answer", async () => {
+    for (const signal of [true, false]) {
+      let sig = false;
+      const r = await rig({
+        stopHandle: handle({ spent: () => sig, signalled: () => sig }),
+        // every request with a mutant's entries hangs for 3 s (a test that waits out its stop)
+        serve: { delayMs: (q) => (q.ids.some((id) => id.startsWith("M0001")) ? 3000 : 0) },
+      });
+      await baseline(r.b, SUITE1);
+      const started = Date.now();
+      if (signal)
+        setTimeout(() => {
+          sig = true;
+        }, 300);
+      await r.b.prefetchMutants(plans(["M0001"])).catch(() => {});
+      const ms = Date.now() - started;
+      const closes = r.b.daemonCloses().byReason;
+      if (signal) {
+        // red without the watch: the request waits out its whole delay
+        expect(ms).toBeLessThan(2500);
+        expect(closes.get("stop-signal")).toBe(1);
+      } else {
+        expect(ms).toBeGreaterThanOrEqual(2900);
+        expect(closes.get("stop-signal")).toBeUndefined();
+      }
+    }
+  });
+});
+
 describe("R948 B: `method` codeunits as per-test requests", () => {
   const methodRig = (o: RigOpts = {}) =>
     dbRig({ suite: SUITE2, extra: { isolation: "method" }, ...o });

@@ -192,9 +192,12 @@ class ParStub implements ExecutionBackend {
   run = (ref: TestMethodRef) => this.root.run(ref);
 
   // --- shared behaviour, called by the views
+  /** R1014: called with each activated mutant and how many distinct ones that makes. */
+  onActivation: ((id: string, distinct: number) => void) | undefined;
   noteActivation(lane: number, id: string): void {
     this.activations.push({ lane, mutant: id });
     if (!this.seen.includes(id)) this.seen.push(id);
+    this.onActivation?.(id, new Set(this.activations.map((a) => a.mutant)).size);
   }
   isFirstOfProc(code: string): boolean {
     const proc = this.script.procOf?.get(code);
@@ -623,6 +626,77 @@ describe("R948: the memory guard refusing a group", () => {
     const root = await project();
     const { procOf } = await learn(root);
     const r = await session(root, new ParStub({ procOf }), { workers: 2 });
+    expect(r.timeBudget).toBeUndefined();
+  });
+});
+
+// R1014 (coord PR-07): R-998's DO window ran 40 min past its budget and a SIGTERM: a lane checked the
+// budget only between windows, and the mutant in flight was recorded from a killed al-runner.
+describe("R1014: a stop signal is honoured inside a window, and the mutant it cut is not recorded", () => {
+  const signalAt = (stub: ParStub, at: number): Partial<SessionConfig> => {
+    let stop: (() => void) | undefined;
+    let cut: string | undefined;
+    stub.onActivation = (id, distinct) => {
+      if (distinct === at && cut === undefined) {
+        cut = id;
+        stop?.();
+      }
+    };
+    return {
+      registerStopSignal: (s) => {
+        stop = s;
+        return () => {};
+      },
+      // the code the signal cut, for the assertions
+      ...({ cutCode: () => cut } as object),
+    };
+  };
+  const cutOf = (extra: Partial<SessionConfig>) =>
+    (extra as unknown as { cutCode: () => string | undefined }).cutCode();
+
+  for (const workers of [1, 2]) {
+    test(`--workers ${workers}: no mutant starts after the signal, the one it cut is not in the report, and every covered mutant is scored or counted`, async () => {
+      const root = await project();
+      const { procOf, report: one } = await learn(root);
+      const total = one.mutants.length;
+      const stub = new ParStub({ procOf, delay: () => 3 });
+      const extra = signalAt(stub, 3);
+      const r = await session(root, stub, { workers, ...extra });
+      const cut = cutOf(extra);
+      expect(cut).toBeDefined();
+      expect(r.timeBudget?.stoppedBySignal).toBeDefined();
+      // red without R1014: the window (here every mutant) ran on, and the cut mutant was recorded
+      expect(r.mutants.length).toBeLessThan(total);
+      expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
+      expect(new Set(stub.activations.map((a) => a.mutant)).size).toBeLessThanOrEqual(2 + workers);
+      expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+    });
+  }
+
+  test("--workers 2: a --time-budget that runs out inside a window (no signal) starts no further mutant; the ones in flight keep their verdicts", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const total = one.mutants.length;
+    const stub = new ParStub({ procOf, delay: () => 3 });
+    // 10 s of clock per distinct mutant activated: a 25 s budget runs out at the third
+    const clockMs = () => new Set(stub.activations.map((a) => a.mutant)).size * 10_000;
+    const r = await session(root, stub, { workers: 2, timeBudgetSeconds: 25, clockMs });
+    expect(r.timeBudget?.stoppedBySignal).toBeUndefined();
+    // red without the lane's own check: the budget was read between windows only, and the one
+    // window held every mutant
+    expect(r.mutants.length).toBeLessThan(total);
+    expect(new Set(stub.activations.map((a) => a.mutant)).size).toBeLessThanOrEqual(4);
+    expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+    expect(r.mutants.every((m) => m.verdict !== "error")).toBe(true);
+  });
+
+  test("the other direction: with no signal, the same parallel run scores every mutant", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const stub = new ParStub({ procOf, delay: () => 3 });
+    stub.onActivation = () => {};
+    const r = await session(root, stub, { workers: 2 });
+    expect(r.mutants).toHaveLength(one.mutants.length);
     expect(r.timeBudget).toBeUndefined();
   });
 });

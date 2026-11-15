@@ -258,6 +258,8 @@ export class AlRunnerV3ReusedBaselineUnclassifiedError extends Error {
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 /** The `testIsolation` every serve request sends (`requestBase`); leg O1 sends the same. */
 export const SERVE_TEST_ISOLATION = "test";
+/** R1014: how often a running serve request looks for a stop signal (`send`). */
+export const STOP_SIGNAL_POLL_MS = 250;
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
 /**
@@ -1388,16 +1390,20 @@ export type V3DaemonCloseReason =
   | "session-end"
   | "baseline-end"
   /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
-  | "recycle";
+  | "recycle"
+  /** R1014: a stop signal arrived while a request ran; its answer is dropped (R955). */
+  | "stop-signal";
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
- *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own. */
+ *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own.
+ *  R1014: `stop-signal` ends the session, so no warm-up follows it. */
 export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
   "probe",
   "deploy",
   "mutant-stop",
   "session-end",
   "baseline-end",
+  "stop-signal",
 ]);
 
 /**
@@ -6333,6 +6339,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (kind === "prefetch") this.stats.prefetchRequests += 1;
     else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
+    // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
+    // orchestrator records nothing that ended under a signal), so nothing scored is lost.
+    let signalClosed = false;
+    const watch = setInterval(() => {
+      // Not the memory guard's own stop (it sets `signalled` too, R948): its group in flight runs on.
+      if (this.stopHandle?.signalled() !== true || this.memoryStopped || signalClosed) return;
+      signalClosed = true;
+      void this.closeLane(lane, "stop-signal");
+    }, STOP_SIGNAL_POLL_MS);
     try {
       // R895: prefetch and live requests stop at a streamed timeout row; the warm-up never does. Only
       // on a build that retires the §6 Sleep rule: the coverage window compares a whole-codeunit run
@@ -6347,8 +6363,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
-      await this.closeLane(lane, "request-failed");
+      await this.closeLane(lane, signalClosed ? "stop-signal" : "request-failed");
       throw missingDependencyOr(err);
+    } finally {
+      clearInterval(watch);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.cut !== undefined) {
@@ -6666,6 +6684,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // R948: a prefetch request starts no group while the container is over its memory bound; the
       // session stops by the guard (R955's path), so the rest is never scored.
       if (!(await this.memoryGate())) break;
+      // R1014: nor once the budget is spent or a stop signal arrived: each chunk (and each re-sent
+      // segment after a cut) would start a daemon and a request no verdict can use.
+      if (this.stopHandle?.spent() === true) break;
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
         // R766 (b): the shared prefetch runs on lane 0 with the N = 1 grouping; any lane consumes it.
@@ -6752,6 +6773,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     const resent = new Set<string>();
     for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
+      // R1014: as `prefetchWindow`: no pair batch (nor a re-sent one) once the budget is spent.
+      if (this.stopHandle?.spent() === true) return;
       const groups: EntryGroup[] = chunk.flatMap((k) => [
         {
           mutantId: SELECTOR_RESOURCE_NONE,

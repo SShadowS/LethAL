@@ -12125,6 +12125,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    // R1014: a LANE checks the budget (a signal spends it, R955) before each mutant too. Between
+    // windows only let one window of hanging mutants (each a whole test timeout) run on past the
+    // budget and a SIGTERM (DO, R-998: 40 min). The commit stops as the memory guard's does: what
+    // finished stays recorded, what never started is left out (R962).
+    if (args.sink !== undefined && args.timeBudget?.exhausted === true) {
+      args.sink.memoryStop(m.mutantId, "the time budget was used up (or a stop signal spent it)");
+      break;
+    }
     // R948: the memory guard, per group start (each lane's loop too): when it stops the session
     // this group is not started, and the budget it spent ends the loop and the report names memory.
     if (args.backend.mayStartGroup !== undefined && !(await args.backend.mayStartGroup())) {
@@ -12936,6 +12944,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
                 `(test ${transportErrorRef.method}) — aborting session per spec §11: ${failureNote ?? ""}`,
             )
           : undefined;
+    // R1014, R955's rule in the mutant phase: a stop signal reaches the whole process group, so a
+    // mutant whose calls ended while it arrived may hold a killed al-runner's answer, not a result.
+    // It is never recorded: it and the rest are left out, as the baseline drops such a call. Not for
+    // the memory guard's stop (it also sets `signalled`, R948): it kills nothing, and the group in
+    // flight keeps its verdicts.
+    if (args.timeBudget?.signalled === true && args.timeBudget.memory === undefined) {
+      if (args.sink === undefined) budgetSpent(at);
+      else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
+      break;
+    }
     if (args.sink === undefined) commitRecord();
     else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);
     if (stopAfterRecord !== undefined) throw stopAfterRecord;
