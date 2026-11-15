@@ -329,6 +329,13 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     message:
       "NotRun: out-of-scope: a test before this one in the codeunit did not pass (A_BindThenFail: failed (planted)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit 50684 was unsuccessful. The codeunit has already been bound.",
   },
+  // R1009 (coord PR-29): the stale-buffer refusal as edge-5a58a0f16 words it (`/coord/handoff/R1009-keep/probe/`).
+  "Codeunit50686.Refuses": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: a stale Serve Stale Row buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)",
+  },
 };
 
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
@@ -571,9 +578,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 14 entries");
-    // R998, R1019: each new family judged a refusal by its own entry
+    expect(f?.measured).toContain("the keep rule accepts every row of all 15 entries");
+    // R998, R1019, R1009: each new family judged a refusal by its own entry
     for (const e of [
+      "stale-buffer-after-lock",
       "recordref-not-open",
       "fieldref-never-assigned",
       "gettable-unassigned-variant",
@@ -755,7 +763,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
     // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(16);
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(17);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });

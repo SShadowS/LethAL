@@ -384,6 +384,18 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}RecordRef.GetTable of an unassigned Variant (not pinned)`,
     ],
   };
+  // R1009 (coord PR-29): the stale-buffer refusal, measured clean (`/coord/handoff/R1009-keep/probe/`).
+  const SB = (t: string, tail = " (not pinned)") =>
+    `${P}a stale ${t} buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction${tail}`;
+  R945["stale-buffer-after-lock"] = {
+    keeps: [SB("Issued Reminder Header"), SB("R1009 Keep Row")],
+    closes: [
+      `${P}a Delete through a stale Issued Reminder Header buffer, with triggers or events: not pinned`,
+      `${P}a stale Issued Reminder Header buffer from its own write, after a rollback other than a failed guarded Codeunit.Run in the open transaction (not pinned)`,
+      SB("Issued Reminder Header", " (not pinned) again"),
+      SB("Issued Reminder Header", ""),
+    ],
+  };
   // R1019 (coord PR-14): the manual-binding cascade, measured clean (`/coord/handoff/PR-14/probe/`).
   const MB = (failed: string, tail = "") =>
     `${P}a test before this one in the codeunit did not pass (${failed}) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit 51402 was unsuccessful. The codeunit has already been bound.${tail}`;
