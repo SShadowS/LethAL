@@ -1394,6 +1394,14 @@ export type V3DaemonCloseReason =
   /** R1014: a stop signal arrived while a request ran; its answer is dropped (R955). */
   | "stop-signal";
 
+/** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
+export type V3DaemonClose = {
+  readonly reason: string;
+  readonly family?: string;
+  readonly text?: string;
+  readonly test?: string;
+};
+
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
  *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own.
  *  R1014: `stop-signal` ends the session, so no warm-up follows it. */
@@ -1410,11 +1418,19 @@ export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
  * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
  * for a refusal, its family: the text after `out-of-scope: `, with quoted and backticked spans
  * (names, code) masked as `…` FIRST, then cut at the first `(`, `[`, `;` or `:`, standalone numbers
- * as N, at most 80 characters. Undefined when every row is kept.
+ * as N, at most 80 characters. Undefined when every row is kept. R1009: `text`, a refusal's WHOLE
+ * first line, as the raw row has it, for the close event only: the
+ * family's cut hid DO's stale-buffer refusal, so it could not be measured; and `test`, the refused
+ * row's test name, so the shape can be reduced from its site.
  */
-export function unkeptRowReason(
-  rows: readonly ServerTestLine[],
-): { readonly reason: "refusal" | "timeout" | "unkept-row"; readonly family?: string } | undefined {
+export function unkeptRowReason(rows: readonly ServerTestLine[]):
+  | {
+      readonly reason: "refusal" | "timeout" | "unkept-row";
+      readonly family?: string;
+      readonly text?: string;
+      readonly test?: string;
+    }
+  | undefined {
   const bad = rows.find((r) => !serveDaemonReusable([r], "v3"));
   if (bad === undefined) return undefined;
   const m = bad.message ?? "";
@@ -1427,9 +1443,12 @@ export function unkeptRowReason(
       ?.replace(/\b\d+\b/g, "N")
       .trim()
       .slice(0, 80);
+    const text = m.split("\n")[0] ?? "";
     return {
       reason: "refusal",
       family: family !== undefined && family !== "" ? family : "unnamed",
+      ...(text !== "" ? { text } : {}),
+      test: bad.name,
     };
   }
   return { reason: "unkept-row" };
@@ -2365,28 +2384,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { byReason: new Map(this.closes), refusalFamilies: new Map(this.closeFamilies) };
   }
   /** R939: the session's close sink (`setDaemonCloseSink`); each call becomes a `serve-daemon-closed` event. */
-  private closeSink:
-    | ((c: { readonly reason: string; readonly family?: string }) => void)
-    | undefined;
+  private closeSink: ((c: V3DaemonClose) => void) | undefined;
   /** R939: see `ExecutionBackend.setDaemonCloseSink`. */
-  setDaemonCloseSink(
-    sink?: (c: { readonly reason: string; readonly family?: string }) => void,
-  ): void {
+  setDaemonCloseSink(sink?: (c: V3DaemonClose) => void): void {
     this.closeSink = sink;
   }
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
    * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
    * for an unexpected reason (every one but `deploy`, `session-end` and `probe`, which cost no extra
-   * warm-up) report it to the session's sink, naming a refusal's family.
+   * warm-up) report it to the session's sink, naming a refusal's family and (R1009) its whole text
+   * and its test.
    */
-  private async closeLane(lane: Lane, reason: V3DaemonCloseReason, family?: string): Promise<void> {
+  private async closeLane(
+    lane: Lane,
+    reason: V3DaemonCloseReason,
+    family?: string,
+    detail?: { readonly text?: string; readonly test?: string },
+  ): Promise<void> {
     if ((await lane.closeDaemon()) === 0) return;
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
     if (family !== undefined)
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
     if (V3_ROUTINE_CLOSES.has(reason)) return;
-    this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
+    this.closeSink?.({
+      reason,
+      ...(family !== undefined ? { family } : {}),
+      ...(detail?.text !== undefined ? { text: detail.text } : {}),
+      ...(detail?.test !== undefined ? { test: detail.test } : {}),
+    });
   }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
@@ -3817,7 +3843,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
     const wallMs = Date.now() - started;
     if (daemon.dirty) {
-      await this.closeLane(lane, daemon.dirtyWhy?.reason ?? "unkept-row", daemon.dirtyWhy?.family);
+      await this.closeLane(
+        lane,
+        daemon.dirtyWhy?.reason ?? "unkept-row",
+        daemon.dirtyWhy?.family,
+        daemon.dirtyWhy,
+      );
     }
     if (coverage && out.coverage.kind === "unavailable") return undefined;
     return {
@@ -6523,7 +6554,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
     if (cut < sent.length || daemon.dirty)
-      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family);
+      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family, unkept);
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -7167,6 +7198,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             lane,
             daemon.dirtyWhy?.reason ?? "unkept-row",
             daemon.dirtyWhy?.family,
+            daemon.dirtyWhy,
           );
         lane.timers.windowMs += this.now() - windowT0;
       }
