@@ -887,6 +887,30 @@
     "note": "R-983: filed"
   },
   {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.DeepClone: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (1 mutant); family issue (a member of a DotNet variable that holds no object), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JProperty.Value: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (2 mutants); family issue (a member of a DotNet variable that holds no object), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.Add raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (4 mutants); family issue (DotNet exception text not pinned), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: Text.CopyStr#N: text argument N of type an unassigned Variant",
+    "state": "open",
+    "issue": "#7995",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (1 mutant); the issue names CopyStr of an unassigned Variant (R-953)"
+  },
+  {
     "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.Dictionary<x>",
     "state": "open",
     "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",

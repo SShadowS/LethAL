@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 981 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 982 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1026,6 +1026,7 @@ that ordering is the priority.
 - **R1016** · The al-runner update gate and its regression set run a candidate without its .NET sidecar (built only after the pass), while every LethAL run uses it: edge-5a58a0f16 moved System.Uri into the sidecar, and the set read a false 'regressed'; the sidecar's behaviour is never gated · [R1016.md](docs/roadmap/R1016.md) · done (8edc6284)
 - **R1017** · --regate (and a refresh) gated `current` with its .NET sidecar beside it, while a candidate's gate has none: the two paths measured different things against the same sidecar-less frozen figures · [R1017.md](docs/roadmap/R1017.md) · done (8edc6284)
 - **R1019** · On al-runner v3 serve, the cascade refusal 'a test before this one in the codeunit did not pass' closes the daemon, so nearly every mutant that kills an early test costs a full warm-up: Filter Tokens (5 tests, 343 covered mutants) started 466 daemons and spent 37 min · [R1019.md](docs/roadmap/R1019.md) · open
+- **R1020** · al-runner v3 against BC, test by test, on six small BC.History modules (PR-03, review item 4): 66 of 67 tests decided; v3 differs from BC on two Json tests (#7994, #7995), Document Sharing fails on BC by the server's Base Application, not by v3 · [R1020.md](docs/roadmap/R1020.md) · closed 2026-11-15 — measured; the two v3 differences are on their upstream issues (#7994, #7995) with BC's…
 
 ---
 
