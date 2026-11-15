@@ -1876,5 +1876,80 @@
     "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#7854",
     "repro": "scripts/upstream-repros/u7854-xmlport-guid"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.MoveNext: <x> is an instance member and the variable holds no object",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 7 sighting(s) mutant 7, first in PR-06 62/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: Rec after Page.RunModal(Id, Rec) answered LookupOK on a page that shows no row (what Rec holds then is not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 5 sighting(s) mutant 5, first in PR-06 11/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of RecordId to Integer",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 2 sighting(s) mutant 2, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.Reset: <x> is an instance member and the variable holds no object",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 2 sighting(s) mutant 2, first in PR-06 62/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: a page saves a changed row that is no longer stored (whether the client writes it is not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 11/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: an action left the list's view without rows: the view had filters before the action (not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.LicensingService.Model.ServicePlanInfo.ServicePlanId: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 62/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.LicensingService.Model.SkuInfo.SkuId: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 62/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.LastError.Rethrow: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 68/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.IEnumerable<x>",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 62/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: First() after a save the page refused with SaveAbort (not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code DB:NothingInsideFilter)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code InvalidJsonData)",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: value expected after @",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 11/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
+  },
+  {
+    "key": "NotRun: out-of-scope: the caption of system field SystemRowVersion",
+    "state": "unexamined",
+    "note": "PR-06: NEW, 1 sighting(s) mutant 1, first in PR-06 10/score/store.sqlite (edge-a184cfc79); met by mutants in files no earlier run scored"
   }
 ]
