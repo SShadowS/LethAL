@@ -68,9 +68,27 @@
       }
     },
     {
+      "id": "u8152-number-sequence-next",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8152",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, the dev endpoint's default runner, codeunit isolation, every SPLIT cell's guard row gone so a rollback fell between change and read): /coord/handoff/PR-27/bc-run/result.md. A rollback keeps the numbers Next handed out (Current 101) and undoes Restart, Delete and Insert. This app asserts those answers; on edge-5a58a0f16 NextIsKept fails (100)",
+      "rerun": [
+        "the refusal family number-sequence's BC-check app (/coord/handoff/PR-27/bc-check), and the ledger's #8002 cause, whose refusal is answerable for Next"
+      ],
+      "tests": {
+        "Codeunit51551.Change": { "status": "pass" },
+        "Codeunit51552.NextIsKept": { "status": "pass" },
+        "Codeunit51553.Change": { "status": "pass" },
+        "Codeunit51554.RestartIsUndone": { "status": "pass" },
+        "Codeunit51555.Change": { "status": "pass" },
+        "Codeunit51556.DeleteIsUndone": { "status": "pass" },
+        "Codeunit51557.Change": { "status": "pass" },
+        "Codeunit51558.InsertIsUndone": { "status": "pass" }
+      }
+    },
+    {
       "id": "u7586-geturl-forms",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
-      "bcEvidence": "inferred, not measured on BC: GetUrl returns a string for every valid ClientType and ObjectType, so each test passes; refusal family get-url (PR-26), whose BC-check app (/coord/handoff/PR-26/bc-check, app 51000000-0000-4000-8000-000000051006) carries each form's URL out for lethal-bugs to measure",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15; /coord/handoff/PR-26/bc-check/bc2-result.md): GetUrl raised no error for any of the family's 99 calls, so each test passes. BC's URLs: Default with a codeunit dynamicsnav://<server>/BC/<company>/runcodeunit?codeunit=N; Tablet with a query ms-dynamicsnav://<server>/BC?company=<company>&query=N; SOAP with a company http://<server>/BC/WS/<company>/Services",
       "rerun": [
         "the refusal family get-url (scripts/refusal-family.ts --family get-url): its 27 cells of these three reasons, and the ledger's #7586 causes"
       ],
