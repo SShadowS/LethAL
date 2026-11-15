@@ -61,9 +61,23 @@ The offline rule overstated: a freed test that runs is not a freed test that pas
 18: the reference was narrowed to one file the freed tests' discovery did not reach.
 
 ## Ledger
-`refusal-ledger.ts` over the ten scoring stores on a184cfc79 found 84 sightings and 30 causes: 15 known and 15 NEW. Every NEW cause
-comes from an error mutant, never a freed baseline test. These files had never been scored before, so their mutants' refusals are
-new. They are added to `docs/measurements/refusal-ledger.json` as `unexamined`, noted PR-06; reducing them is a task of its own.
+`refusal-ledger.ts`, one store at a time against master's ledger, read all 11 scoring stores used (the pinned 982-9 included).
+Budget-cut runs were read with `--run <their latest run>` (`/coord/handoff/PR-06/ledger-all.txt`). It found **21 NEW causes**, and
+none comes from a freed test:
+- 20 from error mutants;
+- 1 from a baseline test that is not a freed one (Sustainability; a CaptionClass refusal).
+
+They are new to the ledger for two reasons:
+- Most were met in files no earlier ledger pass read.
+- Six (projects 62 and 68: IEnumerator MoveNext and Reset, IEnumerable, ServicePlanId, SkuId, LastError.Rethrow) were already
+  error mutants in those projects' references, on edge-c8fe56e05. No ledger pass had read those stores, or the wording changed.
+
+20 are added to `docs/measurements/refusal-ledger.json` as `unexamined`, each noted with its store and kind. Reducing them is a task
+of its own.
+
+**One NEW key is withheld.** It is the "an error in a SaveAs of report <x> ... (whether SaveAs raises it or answers false is not
+pinned)" refusal (982-9, 1 mutant), and the normaliser leaves the raised error's own message at its end, which is a source label.
+This repo is public, so the key is not committed. The normaliser gap is reported for the ledger's owner.
 
 ## Not done
 The repro-fixed causes' projects (R-915's Subscription Billing and three more, including the 122 tests behind the WINDOWS XmlPort
