@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 986 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 986 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1030,7 +1030,7 @@ that ordering is the priority.
 - **R1020** · al-runner v3 against BC, test by test, on six small BC.History modules (PR-03, review item 4): 66 of 67 tests decided; v3 differs from BC on two Json tests (#7994, #7995), Document Sharing fails on BC by the server's Base Application, not by v3 · [R1020.md](docs/roadmap/R1020.md) · closed 2026-11-15 — measured; the two v3 differences are on their upstream issues (#7994, #7995) with BC's…
 - **R1021** · The tests PR-05's fixes freed, scored on edge-a184cfc79: 26 mutants move to killed (20 by a freed test) in 5 of 16 projects; every other move is explained (59 survived -> no-coverage by attribution, 13 no-coverage -> survived, 1 error -> survived) with no kill lost · [R1021.md](docs/roadmap/R1021.md) · closed 2026-11-15 — measured; one LethAL defect found (R1018, fixed); 20 NEW ledger causes added unexamined…
 - **R1022** · Refusal family platform-table-read: 214 platform tables read on al-runner edge-5a58a0f16, 120 refused as "has no provider" (#7415, comment posted), ten one-table classes; regression-set entry u7415-platform-no-provider · [R1022.md](docs/roadmap/R1022.md) · done (7cdc114a)
-- **R1023** · Refusal family permission-denial: 83 readable platform tables read under Permissions Mock on al-runner edge-5a58a0f16; 75 refused when not granted (#7854), Permission refused when granted (#8032); two regression-set entries; the set's still-differing issues are all active · [R1023.md](docs/roadmap/R1023.md) · open
+- **R1023** · Refusal family permission-denial: 83 readable platform tables read under Permissions Mock on al-runner edge-5a58a0f16; 75 refused when not granted (#7854), Permission refused when granted (#8032); two regression-set entries; the set's still-differing issues are all active · [R1023.md](docs/roadmap/R1023.md) · done (917fedd7)
 
 ---
 
