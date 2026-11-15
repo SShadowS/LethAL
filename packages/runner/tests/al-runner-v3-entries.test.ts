@@ -8745,3 +8745,107 @@ describe("R1001: a uniformly refused baseline stops by name", () => {
     }
   });
 });
+
+// PR-20 (L4): a mutant's entry stops after the mutant's last covering test of the codeunit
+// (docs/superpowers/specs/2026-11-15-pr20-l4-entry-cut.md). A verdict reads only covering tests, and
+// a later test cannot change an earlier one, so the tests after it are left out (`excludeTests`).
+describe("PR-20 (L4): a mutant entry stops after its last covering test", () => {
+  const rowsIn =
+    (methods: readonly string[], over: (m: string, x: FakeRow) => FakeRow = (_m, x) => x): RowsFn =>
+    (m, cu, d, n) =>
+      (cu === CU
+        ? methods.map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) => over(m, x));
+  const ABC = ["A", "B", "C"];
+  const SUITE_ABC = ABC.map((m) => ref(m));
+  const entriesOf = (r: Rig, m: string) =>
+    r.serve.requests
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.` && String(e.id).startsWith(`${m}|`));
+  const stats = (r: Rig) =>
+    (r.b as unknown as { stats: { l4Entries: number; l4Widened: number; l4OrderBroken: number } })
+      .stats;
+
+  test("the entry leaves out the tests after the last covering one; the NONE warm-up runs the whole codeunit", async () => {
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    // red without L4: the mutant's entry has no excludeTests and B and C run
+    expect(entriesOf(r, "M0001").map((e) => e.excludeTests)).toEqual([
+      [`Codeunit${CU}.B`, `Codeunit${CU}.C`],
+    ]);
+    expect(entriesOf(r, "NONE").every((e) => e.excludeTests === undefined)).toBe(true);
+    expect(stats(r).l4Entries).toBe(1);
+    await r.b.activate("M0001");
+    // suiteMissing: B and C have no row, and that is not `missing`
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("a kill by the LAST covering test stays a kill (it runs); only the test after it is left out", async () => {
+    const bFails = rowsIn(ABC, (m, x) =>
+      m === "M0001" && x.method === "B" ? { ...x, status: "fail" as const, message: "boom" } : x,
+    );
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: bFails } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("B")]));
+    expect(entriesOf(r, "M0001").map((e) => e.excludeTests)).toEqual([[`Codeunit${CU}.C`]]);
+    await r.b.activate("M0001");
+    // red with a cut one test too early: B has no row and reads as missing, not as the kill
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+  });
+
+  test("#8059: a tail test whose name starts a test that must run stays in", async () => {
+    const order = ["AB", "A", "C"]; // v3 matches excludeTests by prefix: leaving out `A` drops `AB`
+    const suite = order.map((m) => ref(m));
+    const saved = SUITE_METHODS[CU];
+    SUITE_METHODS[CU] = order;
+    try {
+      const r = await rig({ suite, serve: { rows: rowsIn(order) } });
+      await baseline(r.b, suite);
+      await r.b.prefetchMutants(plans(["M0001"], [ref("AB")]));
+      // red without the guard: `Codeunit<cu>.A` is left out too, and AB (the covering test) with it
+      expect(entriesOf(r, "M0001").map((e) => e.excludeTests)).toEqual([[`Codeunit${CU}.C`]]);
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("AB"), OPTS)).outcome).toBe("pass");
+    } finally {
+      SUITE_METHODS[CU] = saved ?? ["A", "B"];
+    }
+  });
+
+  test("suiteMissing the other way: a covering test without a row is still missing", async () => {
+    const noA: RowsFn = (m, cu, d, n) =>
+      rowsIn(ABC)(m, cu, d, n).filter((x) => !(m === "M0001" && x.method === "A"));
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: noA } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("B")]));
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).not.toBe("pass");
+  });
+
+  test("rows out of the baseline order: the cut entry is not used (missing), never read", async () => {
+    const swapped: RowsFn = (m, cu, d, n) => {
+      const rs = rowsIn(ABC)(m, cu, d, n);
+      return m === "M0001" && cu === CU ? [...rs].reverse() : rs;
+    };
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: swapped } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("B")]));
+    await r.b.activate("M0001");
+    // red without the order check: B's row is read and the mutant passes
+    expect((await r.b.run(ref("B"), OPTS)).outcome).not.toBe("pass");
+    expect(stats(r).l4OrderBroken).toBeGreaterThan(0);
+  });
+
+  test("a ref the cut left out (not in the plan) runs live without that cut, never read as missing", async () => {
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.activate("M0001");
+    // red without the widening: B has no row in the prefetched call and reads as missing
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+    expect(stats(r).l4Widened).toBe(1);
+    // the live entry now runs B and still leaves out C
+    expect(entriesOf(r, "M0001").at(-1)?.excludeTests).toEqual([`Codeunit${CU}.C`]);
+  });
+});
