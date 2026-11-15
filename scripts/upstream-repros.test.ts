@@ -12,6 +12,7 @@ import {
   readManifest,
   reportLines,
   rowsOf,
+  testArgsOf,
 } from "./upstream-repros";
 
 // R-997: several apps run together, in the manifest's order.
@@ -44,6 +45,18 @@ describe("R-997: a repro of several apps", () => {
     ]);
   });
 
+  test("PR-05: a repro's own flags go after the fixed ones and before its apps", () => {
+    expect(testArgsOf(repro())).toEqual(["--bc-version", "28", "--output-json", "u1"]);
+    expect(testArgsOf({ ...repro(["A", "T"]), args: ["--no-client"] })).toEqual([
+      "--bc-version",
+      "28",
+      "--output-json",
+      "--no-client",
+      join("u1", "A"),
+      join("u1", "T"),
+    ]);
+  });
+
   test("the manifest is refused for an empty apps list or an app folder without app.json", () => {
     const empty = join(TMP, "empty");
     write(empty, { repros: [repro([])] }, ["u1"]);
@@ -54,6 +67,18 @@ describe("R-997: a repro of several apps", () => {
     const ok = join(TMP, "ok");
     write(ok, { repros: [repro(["P", "A"])] }, ["u1/P", "u1/A"]);
     expect(readManifest(ok).repros).toHaveLength(1);
+  });
+
+  test("PR-05 review: args must be a list of strings, never a bare string", () => {
+    const str = join(TMP, "args-string");
+    write(str, { repros: [{ ...repro(), args: "--no-client" }] }, ["u1"]);
+    expect(() => readManifest(str)).toThrow(/args is not a list of strings/);
+    const num = join(TMP, "args-number");
+    write(num, { repros: [{ ...repro(), args: [7] }] }, ["u1"]);
+    expect(() => readManifest(num)).toThrow(/args is not a list of strings/);
+    const ok = join(TMP, "args-ok");
+    write(ok, { repros: [{ ...repro(), args: ["--no-client"] }] }, ["u1"]);
+    expect(readManifest(ok).repros[0]?.args).toEqual(["--no-client"]);
   });
 });
 

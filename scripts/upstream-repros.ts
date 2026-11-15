@@ -39,11 +39,18 @@ export interface Repro {
    * them. Absent: the repro's folder is the one app.
    */
   readonly apps?: readonly string[];
+  /** PR-05: extra `al-runner test` flags the repro needs, before its apps (e.g. `--no-client` for #8028). */
+  readonly args?: readonly string[];
 }
 
 /** The app folders of a repro, relative to the set's root, in the order `al-runner test` gets them. */
 export function appsOf(r: Repro): string[] {
   return r.apps === undefined ? [r.id] : r.apps.map((a) => join(r.id, a));
+}
+
+/** Everything after `al-runner test`: the fixed flags, the repro's own flags, then its apps. */
+export function testArgsOf(r: Repro): string[] {
+  return ["--bc-version", "28", "--output-json", ...(r.args ?? []), ...appsOf(r)];
 }
 
 export interface Manifest {
@@ -168,6 +175,10 @@ export function readManifest(root = REPRO_ROOT): Manifest {
   for (const r of m.repros) {
     if (r.apps !== undefined && r.apps.length === 0)
       throw new Error(`upstream-repros: ${r.id} lists an empty apps`);
+    // PR-05 (review): a string would be spread into single characters and handed to al-runner
+    const args: unknown = r.args;
+    if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === "string")))
+      throw new Error(`upstream-repros: ${r.id}'s args is not a list of strings`);
     for (const a of appsOf(r))
       if (!existsSync(join(root, a, "app.json")))
         throw new Error(`upstream-repros: ${a} has no app.json`);
@@ -185,7 +196,7 @@ export async function runAll(
 ): Promise<BuildRows> {
   const out = new Map<string, ReadonlyMap<string, Row> | { readonly error: string }>();
   for (const r of manifest.repros) {
-    const p = Bun.spawn([bin, "test", "--bc-version", "28", "--output-json", ...appsOf(r)], {
+    const p = Bun.spawn([bin, "test", ...testArgsOf(r)], {
       cwd: root,
       stdout: "pipe",
       stderr: "pipe",
