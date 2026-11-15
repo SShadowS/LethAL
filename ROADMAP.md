@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**34 of 1005 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**34 of 1006 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1050,6 +1050,7 @@ that ordering is the priority.
 - **R1040** · #8013's causes split: each reduced to an invented repro (six regression entries), each posted to #8013 as its own comment; on edge-5a58a0f16 all seven are still refused, two YAML ones under new wordings · [R1040.md](docs/roadmap/R1040.md) · closed 2026-11-15 — reduced and filed; each cause's fix is upstream's, tracked by its regression entry
 - **R1041** · DO speed lever L1 (PR-18): keep the serve daemon after DO's ZipArchive.Dispose and FormatRegion refusals (measured clean); in DO window t4 they closed it 0 times (t3: 33), but the restart prediction missed: a third family, the DataCaptionExpression caption refusal, closed it 63 times · [R1041.md](docs/roadmap/R1041.md) · done (e753afba)
 - **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · open
+- **R1045** · PR-17's BC answers folded into the upstream-repro set (six entries now measured, u8028-run-request-page flipped to fail), two new al-runner differences filed (#8157 XmlElement.AsXmlNode, #8158 Session read), per-table BC answers posted on #7415, #7854 and #8028 · [R1045.md](docs/roadmap/R1045.md) · done (PENDING)
 
 ---
 
