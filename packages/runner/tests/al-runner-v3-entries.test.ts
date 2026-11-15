@@ -4828,6 +4828,36 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
   });
 
+  // PR-24 (L2): a restarted daemon's lazy warm-up leaves out what the whole-union warm-up does
+  // (`leftOutNames`), not what a mutant entry does (`mutantLeftOutNames`): with B refused in the middle,
+  // the two differ, and the warm-up must not run B (it would dirty the daemon it proves).
+  test("PR-24: a restarted daemon's lazy warm-up leaves out the warm-up's tests, not the mutant entries'", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(
+      await rig({ suite: SUITE_ABC, serve: { rows: bMid }, extra: { daemonMaxRequests: 1 } }),
+      "default",
+    );
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("C")])).catch(() => {});
+    await r.b.prefetchMutants(plans(["M0002"], [ref("A"), ref("C")])).catch(() => {});
+    const lazy = r.serve.requests.filter(
+      (q) => q.daemon >= 1 && q.ids.every((i) => i.startsWith("NONE|")),
+    );
+    expect(lazy.length).toBeGreaterThan(0);
+    for (const q of lazy) {
+      const entries = (q.body.entries as Record<string, unknown>[] | undefined) ?? [];
+      const cuEntry = entries.find((e) => String(e.test) === `Codeunit${CU}.`);
+      expect(cuEntry?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+    }
+  });
+
   test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
     const KEPT =
       "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)";
@@ -6571,8 +6601,17 @@ describe("R895: stop a request at its first timeout row", () => {
       const v = await r.b.run(B, OPTS);
       expect(v.outcome).toBe("pass");
       const sent = r.serve.requests.slice(n0);
-      expect(sent).toHaveLength(1);
-      const body = sent[0]?.body ?? {};
+      // PR-24 (L2): the cut killed its daemon; the restarted one proves CU on itself (a NONE warm-up of
+      // exactly that codeunit) before the alone request runs one of its tests there.
+      expect(sent).toHaveLength(2);
+      expect(sent[0]?.daemon).toBe(sent[1]?.daemon);
+      expect(sent[0]?.body.runSelectedOnly).not.toBe(true);
+      const warm = sent[0]?.body.entries as { test: string; resources: object }[];
+      expect(warm.map((e) => e.test)).toEqual([`Codeunit${ECHO}.`, `Codeunit${CU}.`]);
+      expect(warm.map((e) => (e.resources as Record<string, string>)["active-mutant.txt"])).toEqual(
+        ["NONE", "NONE"],
+      );
+      const body = sent[1]?.body ?? {};
       expect(body.runSelectedOnly).toBe(true);
       const entries = body.entries as { id: string; test: string; resources: object }[];
       expect(entries.map((e) => e.test)).toEqual([`Codeunit${ECHO}.`, `Codeunit${CU}.B`]);
@@ -8063,6 +8102,169 @@ describe("R952 (R948): a serve daemon past its size or request bound is recycled
 
   test("a recycle is not routine: it costs a warm-up, so it reaches the close sink", () => {
     expect(V3_ROUTINE_CLOSES.has("recycle")).toBe(false);
+  });
+});
+
+describe("PR-24 (L2): a restarted daemon warms each codeunit on its first use there", () => {
+  const P1 = [ref("A"), ref("B")]; // codeunit CU
+  const P2 = [ref("C", CU2)]; // codeunit CU2
+  const STEPS: readonly [string, readonly TestMethodRef[]][] = [
+    ["M0001", P1],
+    ["M0002", P2],
+    ["M0003", P1],
+  ];
+  /** Each mutant prefetched on its own, then run; the union holds CU, then CU and CU2. */
+  const session = async (opts: RigOpts, steps = STEPS) => {
+    const r = await rig({ serve: { rows: killsM1 }, oneShotRows: killsM1, suite: SUITE2, ...opts });
+    await baseline(r.b, SUITE2);
+    const verdicts: string[] = [];
+    for (const [m, refs] of steps) {
+      await r.b.prefetchMutants([{ mutantId: m, refs }]);
+      await r.b.activate(m);
+      for (const t of refs) verdicts.push(`${m} ${t.method} ${outcome(await r.b.run(t, OPTS))}`);
+    }
+    return { r, verdicts };
+  };
+  const entriesOf = (r: Rig, d: number) =>
+    r.serve.requests.filter((q) => q.daemon === d && !q.ids.some((i) => i.startsWith("plain:")));
+  const codeunitsOf = (ids: readonly string[]) =>
+    [...new Set(ids.filter((i) => !i.endsWith("|echo")).map((i) => i.split("|")[1]))].sort();
+
+  test("daemonMaxRequests 1 does not loop; verdicts equal the control; each restarted daemon first proves exactly the codeunits of its next request", async () => {
+    const control = await session({});
+    const s = await session({ extra: { daemonMaxRequests: 1 } });
+    expect(s.verdicts).toEqual(control.verdicts);
+    expect(s.verdicts).toContain("M0001 A fail,"); // a kill is in the comparison
+    const daemons = s.r.serve.daemons.length;
+    expect(daemons).toBeGreaterThan(2); // a restart per request: the lazy path is what runs here
+    // The first mutant daemon warms the whole union it starts with, as before.
+    expect(entriesOf(s.r, 0)[0]?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+    for (let d = 1; d < daemons; d++) {
+      const [warm, next] = entriesOf(s.r, d);
+      if (next === undefined) continue; // a daemon its session ended on
+      expect(warm?.ids[0]).toBe("NONE|echo");
+      expect(warm?.ids.every((i) => i.startsWith("NONE|"))).toBe(true);
+      expect(codeunitsOf(warm?.ids ?? [])).toEqual(codeunitsOf(next.ids));
+    }
+    // CU2 is in the union from M0002 on, but no daemon that runs only CU warms it.
+    for (let d = 1; d < daemons; d++) {
+      const [warm, ...rest] = entriesOf(s.r, d);
+      if (!rest.flatMap((q) => q.ids).some((i) => i.endsWith(`|${CU2}`)))
+        expect(warm?.ids ?? []).not.toContain(`NONE|${CU2}`);
+    }
+  });
+
+  test("a restarted daemon whose codeunit differs from the baseline under NONE is refused before that codeunit's first entry", async () => {
+    // Every daemon after the first answers NONE on CU with a failing A: the baseline (one-shot) has it passing.
+    const drift: RowsFn = (m, cu, d, n) =>
+      m === "NONE" && cu === CU && d >= 1
+        ? [
+            { method: "A", status: "fail", message: "drift" },
+            { method: "B", status: "pass" },
+          ]
+        : killsM1(m, cu, d, n);
+    const r = await rig({
+      serve: { rows: drift },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+    });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }]); // daemon 0: whole-union warm-up, clean
+    await r.b.prefetchMutants([{ mutantId: "M0002", refs: P2 }]); // a restart proves CU2 only: clean
+    await expect(r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }])).rejects.toThrow(
+      /al-runner-v3-entries-warmup-disagrees/,
+    );
+    // The refused daemon got its warm-up and nothing of M0003.
+    expect(r.serve.requests.flatMap((q) => q.ids)).not.toContain(`M0003|${CU}`);
+  });
+
+  // Review B1: a live request on a spent budget must still get its real verdict, as with master's
+  // whole-union restart warm-up (no spent check there); a "deadline" from the warm-up would become a
+  // deadline-exceeded verdict (`liveFailure`). Only prefetch and pair batches skip once spent, before request().
+  test("a live call on a restarted daemon with the budget spent still warms up and returns its real verdict", async () => {
+    const liveAfterRestart = async (spentNow: boolean) => {
+      let spent = false;
+      const r = await rig({
+        serve: { rows: killsM1 },
+        oneShotRows: killsM1,
+        suite: SUITE2,
+        extra: { daemonMaxRequests: 1 },
+        stopHandle: { spent: () => spent, signalled: () => false, stopForMemory: () => {} },
+      });
+      await baseline(r.b, SUITE2);
+      // Another mutant is prefetched (daemon 0, then recycled), so M0001's call below is live.
+      await r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }]);
+      spent = spentNow;
+      const n0 = r.serve.requests.length;
+      // A live call (not prefetched) on a restarted daemon.
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      return { ids: r.serve.requests.slice(n0).flatMap((q) => q.ids), v: outcome(v) };
+    };
+    const control = await liveAfterRestart(false);
+    expect(control.ids).toContain(`NONE|${CU}`); // the restarted daemon proves CU first
+    expect(control.v).toEqual(["fail", ""]); // M0001 kills A: a real verdict, not a timeout
+    const spentRun = await liveAfterRestart(true);
+    expect(spentRun.ids).toContain(`NONE|${CU}`);
+    expect(spentRun.v).toEqual(control.v);
+  });
+
+  test("a kill pair on a restarted daemon is preceded there by the warm-up of its codeunit", async () => {
+    const r = await rig({
+      serve: { rows: killsM1 },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+    });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0002", refs: P2 }]); // daemon 0: the union is CU2 only
+    await r.b.activate("M0001");
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const after = r.serve.requests
+      .slice(n0)
+      .filter((q) => !q.ids.some((i) => i.startsWith("plain:")));
+    const pair = after.findIndex((q) => q.ids.some((i) => i.startsWith("M0001|")));
+    expect(pair).toBeGreaterThan(0);
+    const warm = after[pair - 1];
+    expect(warm?.daemon).toBe(after[pair]?.daemon);
+    expect(warm?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+  });
+
+  // Review: rule 4. A daemon-filled baseline (R948) or L5's re-check runs on the baseline's own daemon,
+  // which never passes ensureDaemon; the first MUTANT daemon must still warm the whole union.
+  test("after a daemon-filled baseline the first mutant daemon still warms the whole union", async () => {
+    const r = await dbRig({ serve: { rows: killsM1 }, oneShotRows: killsM1 });
+    await baseline(r.b, SUITE3);
+    // The batch plans put CU, CU2 and CU3 in the union; the window's request needs CU only.
+    await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }], {
+      batchPlans: [
+        { mutantId: "M0001", refs: P1 },
+        { mutantId: "M0002", refs: [ref("C", CU2), ref("D", CU3)] },
+      ],
+    });
+    const firstMutantDaemon = r.serve.requests.find(
+      (q) => !q.ids.some((i) => i.startsWith("plain:")),
+    );
+    expect(firstMutantDaemon?.ids).toEqual([
+      "NONE|echo",
+      `NONE|${CU}`,
+      `NONE|${CU2}`,
+      `NONE|${CU3}`,
+    ]);
+  });
+
+  test("a lazy warm-up does not count toward R952's request bound: a restarted daemon still serves daemonMaxRequests requests", async () => {
+    const s = await session({ extra: { daemonMaxRequests: 2 } });
+    const daemons = s.r.serve.daemons.length;
+    expect(daemons).toBeGreaterThan(1);
+    // Every restarted daemon but the last: its warm-up, then exactly 2 requests before the recycle.
+    for (let d = 1; d < daemons - 1; d++) {
+      const [warm, ...rest] = entriesOf(s.r, d);
+      expect(warm?.ids.every((i) => i.startsWith("NONE|"))).toBe(true);
+      expect(rest.filter((q) => !q.ids.every((i) => i.startsWith("NONE|")))).toHaveLength(2);
+    }
   });
 });
 
