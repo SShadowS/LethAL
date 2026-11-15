@@ -912,6 +912,50 @@ codeunit 50689 "Serve Caption Test"
         C := TP.Caption();
     end;
 }
+
+table 50690 "Serve Stale Row"
+{
+    fields
+    {
+        field(1; "Key"; Code[20]) { }
+        field(2; Value; Integer) { }
+    }
+    keys
+    {
+        key(PK; "Key") { Clustered = true; }
+    }
+}
+
+codeunit 50691 "Serve Stale Sub"
+{
+    [EventSubscriber(ObjectType::Table, Database::"Serve Stale Row", 'OnBeforeDeleteEvent', '', false, false)]
+    local procedure OnBeforeDelete(var Rec: Record "Serve Stale Row"; RunTrigger: Boolean)
+    begin
+    end;
+}
+
+codeunit 50690 "Serve Stale Buffer"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        R: Record "Serve Stale Row";
+        Other: Record "Serve Stale Row";
+        RRef: RecordRef;
+    begin
+        R."Key" := 'A';
+        R.Insert(false);
+        Other.Get('A');
+        Other.Value := 5;
+        Other.Modify();
+        Commit();
+        RRef.Open(Database::"Serve Stale Row");
+        RRef.LockTable();
+        R.Delete(false);
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -1000,6 +1044,8 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   ["format-region-std4", "Codeunit50687.Refuses", false, false],
   // R1043: DO's caption family (t4: 63 of 87 daemons), measured once.
   ["caption-no-source-table", "Codeunit50689.Refuses", false, false],
+  // R1009 (coord PR-29): the stale-buffer refusal, measured once on edge-5a58a0f16.
+  ["stale-buffer-after-lock", "Codeunit50690.Refuses", false, false],
 ];
 
 /**
@@ -1059,7 +1105,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): eighteen codeunits, a report and a page (twenty tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty codeunits, a report, a page and a table (twenty-one tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
