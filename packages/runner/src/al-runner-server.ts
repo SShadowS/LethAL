@@ -831,6 +831,21 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "cascade-manual-binding": new RegExp(
     String.raw`^NotRun: out-of-scope: a test before this one in the codeunit did not pass \(${SAFE_TAIL}.*\) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: The binding of codeunit \d+ was unsuccessful\. The codeunit has already been bound\.$`,
   ),
+  /**
+   * PR-18 lever 1: DO's two biggest restart causes in R-984's window t3 (24 and 9 of 46 restarts, each a
+   * ~29 s compile plus a whole-suite warm-up). Measured clean with R-967's kit on edge-847b1fa5a and
+   * edge-5a58a0f16 (`/coord/handoff/PR-18/probe/README.md`, invented AL), isolation "test" and "codeunit":
+   * on one kept daemon 72 reader answers after refusals equal to the control, 20 fresh daemons equal it,
+   * the pid unchanged, no panic text. Readers saw WorkDate, a SingleInstance text and DotNet MemoryStream,
+   * the session's language and default and standard-4 formats; under isolation "test" rows and Blobs roll
+   * back per test, so a leaked row is not observable (as for every entry here). Only the measured texts:
+   * the ZipArchive Update-over-held-bytes Dispose (not in leg C: its serve fact runs without the .NET
+   * helper, like R945's), and standard format 4 under FormatRegion 'en-GB' (DO's; leg C case 50686-50687).
+   */
+  "zip-dispose-over-held-bytes":
+    /^NotRun: out-of-scope: DotNet System\.IO\.Compression\.ZipArchive\.Dispose: a \.NET write over the bytes an AL OutStream held before the call \(what the Blob then holds is not pinned\)$/,
+  "format-region-std4":
+    /^NotRun: out-of-scope: Format of a value \(standard format 4\) while CurrReport\.FormatRegion is 'en-GB' is not pinned \(docs\/probes-needed\.md\)$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

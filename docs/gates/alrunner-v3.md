@@ -72,7 +72,9 @@ The legs:
   row of the request is checked, with or without a message; a request with no row at all, or a daemon that does not
   start, reads `unmeasurable`, now infra-fail. Any other move still only warns. Since R998 and [[R1019]] (coord PR-14)
   the daemon runs sixteen codeunits (eighteen tests) and judges 14 entries, the last three families (R998's RecordRef,
-  FieldRef and GetTable texts, and R1019's manual-binding cascade) each by its own case. no-callee
+  FieldRef and GetTable texts, and R1019's manual-binding cascade) each by its own case. Since coord PR-18 (lever 1) it
+  runs seventeen codeunits and a report (nineteen tests) and judges 15 entries: DO's FormatRegion family has its case;
+  DO's ZipArchive family needs the .NET helper, so it is kept but not judged here. no-callee
   left with R705: a fixed build runs nothing in a request that does not compile. In serve-entries, a warm-up whose
   every entry refuses with one identical no-callee text now throws `al-runner-v3-entries-batch-refused`: the safe
   direction, opt-in and rare.
