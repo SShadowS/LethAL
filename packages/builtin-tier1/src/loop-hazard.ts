@@ -1016,8 +1016,87 @@ export function openItemHangRefuses(
     r896ValueSwap(node, ctx, op) ||
     r896InvisibleProgress(node, ctx) ||
     r896TestFieldOnlyExit(node, op) ||
-    deletedCallHangs(node, ctx)
+    deletedCallHangs(node, ctx) ||
+    (op === "lethal.empty-block" &&
+      (emptiedProgressCalleeHangs(node, ctx) || emptiedRefusedBlockHangs(node, ctx)))
   );
+}
+
+/** The `while`/`repeat` loops around `n`, inside its own procedure or trigger. */
+function loopsAround(n: ALSyntaxNode): ALSyntaxNode[] {
+  const loops: ALSyntaxNode[] = [];
+  for (let cur = n.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (LOOP_KINDS.has(cur.kind)) loops.push(cur);
+  }
+  return loops;
+}
+
+/**
+ * R1050 (PR-37): `empty-block` on a procedure's own body, when a same-object caller's loop only
+ * progresses through it. The shape: `while Length <> 0 do begin ReadUntil('|', Text, Position); ...
+ * Length := StrLen(Text); end` where `ReadUntil` moves its `var Position`. Emptying `ReadUntil`
+ * freezes Position, so Text and Length never change and the caller spins. Refused when, in some
+ * loop around a call to the procedure, a name the call moves (its arguments' base names, and what
+ * the callee chain writes) is read by the loop's exit and not stepped by it. The exit's reads
+ * already include what feeds them inside the loop (R818, `loopExitParts`: Length <- Text <-
+ * Position), so no extra closure is needed. This is `callIsProgress`'s test, asked of a call that
+ * emptying the callee removes. Not covered: sites INSIDE the callee ([[R837]]) and other objects'
+ * callers.
+ */
+function emptiedProgressCalleeHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const proc = node.parent;
+  if (node.kind !== ALNodeKind.block || proc === null || !isProcedureLike(proc)) return false;
+  const obj = objectOf(proc);
+  if (obj === null) return false;
+  const mine = new Set(procNames(proc));
+  const names = procedureNamesOf(obj, ctx);
+  let hangs = false;
+  visitAll(obj, (n) => {
+    if (hangs) return;
+    const callee = calleeOf(n, names, ctx);
+    if (callee === null || !mine.has(callee)) return;
+    const moved = new Set(chainEffect(callee, obj, ctx).writes);
+    // Only an argument bound to a `var` parameter can be moved by the callee: emptying `Consume(Left)`
+    // (by value) cannot freeze `Remaining := Consume(Remaining)`. An unreadable parameter counts as var.
+    argumentList(n).forEach((a, i) => {
+      const k = baseNameOf(a);
+      if (k !== null && (r531Param(proc, i)?.[1] ?? true)) moved.add(k);
+    });
+    hangs = loopsAround(n).some((loop) => {
+      const { read, steps } = exitEffect(loop, ctx);
+      return [...moved].some((k) => read.has(k) && !steps.has(k));
+    });
+  });
+  return hangs;
+}
+
+/**
+ * R1050 (PR-37): `empty-block` on a block that holds a statement the dispatch already refuses on
+ * its own, inside a loop that block sits in. Either an assignment to a name the loop's exit reads
+ * (and does not step), or a progress call (`callIsProgress`, R830). Emptying the block removes that
+ * statement just the same, so it hangs the same way. Any descendant counts, nested loops included:
+ * the safe direction.
+ */
+function emptiedRefusedBlockHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (node.kind !== ALNodeKind.block) return false;
+  const loops = loopsAround(node);
+  if (loops.length === 0) return false;
+  let hangs = false;
+  visitAll(node, (n) => {
+    if (hangs) return;
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const k = baseNameOf(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
+      hangs =
+        k !== null &&
+        loops.some((l) => {
+          const { read, steps } = exitEffect(l, ctx);
+          return read.has(k) && !steps.has(k);
+        });
+    } else if (n.kind === ALNodeKind.procedure_call && isStatementSlot(n)) {
+      hangs = callIsProgress(n, ctx);
+    }
+  });
+  return hangs;
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */
