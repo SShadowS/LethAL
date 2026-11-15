@@ -1,6 +1,7 @@
-// PR-28 (#8013, XmlPort export of an unbound text element): a VariableText export whose table element holds only an unbound text
-// element, filled in OnBeforePassVariable (the shape of Base Application's generic CSV and fixed-width exports, written fresh;
-// no corpus text). On BC the export writes one line per row and ends (inferred, not measured).
+// PR-28 (#8013, XmlPort export of an unbound text element): a VariableText export whose table element holds one text element with
+// Unbound = true (it may repeat without limit), filled in OnBeforePassVariable, which leaves the loop with
+// currXMLport.BreakUnbound() after one value (the pattern of Base Application's generic CSV export; written fresh, no corpus text).
+// On BC BreakUnbound ends the loop and the export ends (inferred, not measured).
 table 51530 "U8013 Port Row"
 {
     fields { field(1; "Code"; Code[20]) { } }
@@ -20,14 +21,23 @@ xmlport 51531 "U8013 Text Element Export"
             {
                 textelement(ColumnX)
                 {
+                    MinOccurs = Zero;
+                    Unbound = true;
+
                     trigger OnBeforePassVariable()
                     begin
+                        if Done then
+                            currXMLport.BreakUnbound();
                         ColumnX := Row.Code;
+                        Done := true;
                     end;
                 }
             }
         }
     }
+
+    var
+        Done: Boolean;
 }
 
 codeunit 51532 "U8013 Port Tests"

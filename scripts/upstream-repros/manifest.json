@@ -1,6 +1,21 @@
 {
   "repros": [
     {
+      "id": "u8154-noclient-handlers",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8154",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15) in a web-service session (a LethAL bcdev run, test runner 130454 over OData, no client): the bound Confirm, StrMenu and Message handlers are called (pass), and an unhandled Message fails 'Unhandled UI: Message' (/coord/handoff/PR-17/ws-run/result.md, family 5's cells C3, C7, C5, C6)",
+      "args": ["--no-client"],
+      "rerun": [
+        "family 5's no-client cells (scripts/refusal-family.ts --family no-client), and every suite whose tests bind a ConfirmHandler, such as Bank Deposits (2,290 standing sightings of the client-callback text)"
+      ],
+      "tests": {
+        "Codeunit51570.Cell": { "status": "pass" },
+        "Codeunit51571.Cell": { "status": "pass" },
+        "Codeunit51572.Cell": { "status": "pass" },
+        "Codeunit51573.Cell": { "status": "fail", "messageIncludes": "Unhandled UI" }
+      }
+    },
+    {
       "id": "u8013-yaml-shapes",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
       "bcEvidence": "inferred, not measured on BC: each document is ordinary YAML (a list at its key's indent, a decimal value, CRLF line endings: the shapes of Microsoft's AI Test Toolkit datasets that the Copilot test apps' install codeunits read), so ReadFromYaml reads it and each test passes (PR-28)",
@@ -35,7 +50,8 @@
       "rerun": ["Time Zone Selection (R-969: TestTimeZoneValidateFail)"],
       "tests": {
         "Codeunit51501.FindNoMatchOnAppTable": { "status": "pass" },
-        "Codeunit51501.FindNoMatchOnTimeZone": { "status": "pass" }
+        "Codeunit51501.FindNoMatchOnTimeZone": { "status": "pass" },
+        "Codeunit51501.FindFirstNoMatchControl": { "status": "pass" }
       }
     },
     {
@@ -59,7 +75,7 @@
     {
       "id": "u8013-xmlport-text-element",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
-      "bcEvidence": "inferred, not measured on BC: the VariableText export writes one line per row and ends, so the test passes (PR-28)",
+      "bcEvidence": "inferred, not measured on BC: currXMLport.BreakUnbound() ends the Unbound text element's loop on a VariableText port, so the export ends and the test passes (PR-28)",
       "rerun": [
         "Intrastat Core (R-975: 4 tests, e.g. E2EIntrastatReportFileCreation), through Base Application's generic CSV export"
       ],

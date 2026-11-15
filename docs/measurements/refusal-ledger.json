@@ -8,8 +8,9 @@
   {
     "key": "Microsoft Dynamics N Business Central Server attempted to issue a client callback to show a confirmation dialog box: <text>",
     "state": "open",
-    "note": "PR-28: not an unhandled Confirm. It is al-runner's text under --no-client (which LethAL passes) for a Confirm WITH a ConfirmHandler bound: measured on edge-5a58a0f16, family 5's cell C3 (and C7 for StrMenu) gives it under --no-client and passes without it. Its 2,290 standing sightings (6 stores) are Bank Deposits tests that bind a ConfirmHandler. #7480 upstream is another shape (an unhandled Confirm in OnClosePage). BC's answer is family 5's BC-check app (PR-17, cells C3 and C7), not measured yet (R1039) (was: PR-05: not re-run on edge-a184cfc79; family issue (client callback (Confirm without handler)), this instance not named in it)",
-    "issue": "#8028"
+    "note": "PR-28: not an unhandled Confirm. It is al-runner's text under --no-client (which LethAL passes) for a Confirm WITH a ConfirmHandler bound: family 5's cell C3 (and C7 for StrMenu) gives it under --no-client on edge-5a58a0f16 and passes without it. Measured on BC in a web-service session (lethal-bugs, bc2, /coord/handoff/PR-17/ws-run/result.md): BC calls the bound handler, so this is a wrong answer, filed as #8154 (R1039). R-908's BC run of the same Bank Deposits tests agrees: they reach Bank Deposit-Post past the Confirm. Its 2,290 standing sightings (6 stores; 2,080 from R-911's run) are mostly mutants whose baseline had no green test; 17 distinct tests raise it, all binding a ConfirmHandler. #7480 upstream is another shape (an unhandled Confirm in OnClosePage) (was: PR-05: not re-run on edge-a184cfc79; family issue (client callback (Confirm without handler)), this instance not named in it)",
+    "issue": "#8154",
+    "repro": "scripts/upstream-repros/u8154-noclient-handlers"
   },
   {
     "key": "NotRun: out-of-scope: [Native] procedure <x> is implemented by the platform and has no AL body (what it answers is not pinned)",
@@ -1868,7 +1869,7 @@
   {
     "key": "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
     "state": "open",
-    "note": "PR-28: reduced (a VariableText export whose table element holds only an unbound text element, Base Application's generic CSV shape, written fresh); on edge-5a58a0f16 refused by a broader rule ('a VariableText or FixedText port whose table element holds more than field elements'); 16 standing sightings; comment 6897716894 (was: PR-05: still refused on edge-a184cfc79 for 4 test(s); #8013 names it)",
+    "note": "PR-28: reduced (a VariableText export whose table element holds one text element with Unbound = true, left by currXMLport.BreakUnbound(), the pattern of Base Application's generic CSV export, written fresh); still refused with this text on edge-5a58a0f16; 16 standing sightings; comment 6897716894 and its correction (the first repro lacked Unbound = true and hit another rule) (was: PR-05: still refused on edge-a184cfc79 for 4 test(s); #8013 names it)",
     "issue": "#8013",
     "repro": "scripts/upstream-repros/u8013-xmlport-text-element"
   },

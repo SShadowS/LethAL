@@ -1,7 +1,8 @@
 // PR-28 (#8013, ReadFromYaml): the YAML shapes of Microsoft's AI Test Toolkit datasets, invented (no corpus text). The control is
-// the one list-of-mappings layout edge-5a58a0f16 pins (items at indent 4, under a key at indent 2); every other test changes ONE
-// thing: the datasets' layout (a list at indent 0), a key with a slash, a key ending in a full stop, a decimal value, CRLF line
-// endings. ReadFromYaml returning false fails the test. On BC each is ordinary YAML (inferred, not measured).
+// the one list-of-mappings layout edge-5a58a0f16 pins (items at indent 4, under a key at indent 2). Four tests change one thing in
+// it (a key with a slash, a key ending in a full stop, a decimal value, CRLF line endings); ListAtItsKeysIndent is the datasets'
+// own layout (a key at indent 0 with its list at indent 0, no root key), which differs in two ways. ReadFromYaml returning false
+// fails the test. On BC each is ordinary YAML (inferred, not measured).
 codeunit 51480 "U8013 Yaml Shapes"
 {
     Subtype = Test;
