@@ -85,6 +85,29 @@ while addendum 1's probe refused every `Insert`.
 DeleteAll with none passes, the 140 DeleteAll-first tests become "uncertain" (a parse cannot tell whether the table holds rows)
 and are reported apart. The figures of the first count (306 / 123 / 455) are replaced, not kept.
 
+## Addendum 3 (after probe 2, before any BC run for it): does TestType decide it?
+Probe 2 (lethal-bugs, bc3, `/coord/handoff/PR-35/bc3-run2/result.md`) did not answer the write question. Every cell failed on its
+first READ of the seeded table (a Get, or the filtered scan inside DeleteAll and ModifyAll), even a DeleteAll with no matching row.
+Probe 1's reads passed on an empty table. So under the Restrictive default BC refuses reads of a table that holds rows.
+
+That makes R-882 S3 harder to explain: its 7 passing tests read and write before any lowering. Their codeunit declares
+`TestType = Uncategorized` and no TestPermissions; probes 1 and 2 declared neither. Among the 83 exposed codeunits, TestType is
+absent in 61, Uncategorized in 8, IntegrationTest in 6, UnitTest in 5; 3 declare Restrictive. Probe 3, same setup as probe 2:
+1. `TestType = Uncategorized`: Get a seeded row, then Modify (the S3 shape).
+2. `TestType = IntegrationTest`: the same.
+3. `TestType = UnitTest`: the same.
+4. `TestType = Uncategorized`: Insert a new row.
+5. no TestType: FindFirst on the seeded (non-empty) table, read only.
+6. no TestType: Modify of a record built in memory with a seeded key, no read before it.
+7. no TestType: Get a seeded row, then Modify (probe 2's shape, the control).
+
+**Predictions.** 1 and 4 pass (S3). 5 fails (probe 2). 7 fails (probe 2). No prediction for 2, 3 and 6.
+
+**How the count follows.** If TestType lifts the refusal, codeunits declaring it leave the at-risk set. Because BC also refuses
+reads of tables with rows, the class is wider than "a write before lowering": it is any table access before lowering. A parse
+cannot see table contents, so the count becomes "tests whose first table access (read or write) comes before lowering", reported
+with that caveat.
+
 ## What is done with the result
 No al-runner build fixes #8160 yet, so nothing is re-scored. The at-risk set (per project: tests, baseline status, kills resting on
 them) is recorded in R1048 and in the refusal ledger's note for the class. A re-score follows when a build fails
