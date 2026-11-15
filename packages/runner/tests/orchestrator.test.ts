@@ -2138,9 +2138,11 @@ ${TRIGGER_TABLE_AL}#endif
       expect(await verdictOfBodyBlock(allBut)).toEqual(["no-coverage", null]);
     });
 
-    test("R975 review: a reused (--resume) baseline does not decide by line; its triggers keep FALLBACK 1", async () => {
-      // R926's condition, wired in the orchestrator (`lineTrusted`): a row that did not run in this
-      // session cannot place a trigger by line. Red if the wiring trusts every row.
+    test("PR-25 (R1034): a reused (--resume) baseline decides by line as the run that stored it did", async () => {
+      // R975 review first pinned the opposite (a reused row never placed a trigger by line), so a resumed
+      // session decided these triggers differently from an uninterrupted one. Since PR-25 every reused
+      // snapshot's rows are line evidence (`lineEvidenceOf(..., reused !== undefined)`); this is the call
+      // site's test: red if the orchestrator passes `false` there (they come back survived/object).
       const dirs = await makeProject(TWO_TEST_AL);
       await Bun.write(join(dirs.projectDir, "SandboxTable.Table.al"), TRIGGER_TABLE_AL);
       // R495: a served, installed test app, so run 1's identity is proven and run 2 can resume.
@@ -2185,8 +2187,8 @@ ${TRIGGER_TABLE_AL}#endif
           const now = again.find((x) => x.mutantCode === m.mutantCode);
           expect([m.mutantCode, now?.verdict, now?.coverageAttribution]).toEqual([
             m.mutantCode,
-            "survived",
-            "object",
+            m.verdict,
+            m.coverageAttribution,
           ]);
         }
       } finally {

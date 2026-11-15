@@ -5086,10 +5086,11 @@ interface ScoreBatchInput {
     readonly lendingSession?: LendingSession;
   };
   /** Called once, after the stale-test-app check. `undefined` = nothing left to run. */
-  /** `ranHere`: the baseline refs whose row ran in THIS session (a reused snapshot's did not). */
+  /** `lineEvidence`: the baseline refs whose line coverage counts (`lineEvidenceOf`: rows that ran in
+   *  THIS session, plus every row of a reused snapshot, PR-25). */
   readonly select: (
     baseline: readonly BaselineRow[],
-    ranHere: ReadonlySet<TestMethodRef>,
+    lineEvidence: ReadonlySet<TestMethodRef>,
   ) => CoveringPlan | undefined;
 }
 /** R514: the run and batch whose stored baseline (R192) a batch reused. */
@@ -5846,9 +5847,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R272: the tests whose baseline ran IN THIS SESSION. Only their durations reach the report: a
   // reused snapshot's (R192) may predate R272, and so be al-runner `--server`'s shared suite time.
   const ranHere = new Set<TestMethodRef>();
-  // PR-21 addendum 2: a reused snapshot that passed L5's re-check (`recheckReusedBaseline`); its rows
-  // then count as this session's line evidence (`lineEvidence`), never as durations measured here.
-  let rechecked = false;
   // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
   // when a reused snapshot leaves the loop over []). The only null activation inside it.
   backend.baselinePhase?.(true);
@@ -5954,11 +5952,6 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
             message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (PR-21). The stored run may itself be the odd one: this run's baseline is stored, and the next --resume compares against it.`,
           });
           reused = undefined;
-        } else {
-          // PR-21 addendum 2: re-checked rows are this session's line evidence (R926 reach, R975
-          // trigger placement), as rows that ran here are; without it a resumed session decided
-          // fewer trigger mutants than a fresh one (2 of 222 on Service Declaration).
-          rechecked = true;
         }
       }
       if (reused !== undefined) {
@@ -6249,9 +6242,11 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     if (dependency.length > 0) throw new StaleDependencyMemberError(dependency);
   }
 
-  // PR-21 addendum 2: the rows whose line coverage counts as this session's evidence (R926, R975):
-  // the rows that ran here, and a reused snapshot's rows once L5's re-check passed.
-  const lineEvidence = lineEvidenceOf(ranHere, baseline, rechecked);
+  // PR-21 addendum 2, PR-25 (R1034): the rows whose line coverage counts as this session's evidence
+  // (R926, R975): the rows that ran here, and a reused snapshot's rows on every transport (R192
+  // already builds the covering sets from them; leaving their lines out made a resumed session
+  // decide trigger mutants differently from an uninterrupted one).
+  const lineEvidence = lineEvidenceOf(ranHere, baseline, reused !== undefined);
   const plan = input.select(baseline, lineEvidence);
   if (plan === undefined) return "nothing-to-run";
   const {
@@ -8499,7 +8494,7 @@ async function runSessionBody(
       ]);
       const select = (
         baseline: readonly BaselineRow[],
-        ranHere: ReadonlySet<TestMethodRef>,
+        lineEvidence: ReadonlySet<TestMethodRef>,
       ): CoveringPlan | undefined => {
         const greenTests = baseline.filter((b) => b.verdict.outcome === "pass");
         if (greenTests.length < baseline.length) baselineGreenOverall = false;
@@ -8660,10 +8655,10 @@ async function runSessionBody(
               ...(b.verdict.coverage !== undefined ? { coverage: b.verdict.coverage } : {}),
             })),
             // R975: trigger mutants are placed by line where every test has line coverage. R926's
-            // condition: only rows that ran this session count (a reused snapshot's do not). The
-            // isolation mode is the one `baseline` ended under: `select` runs right after any
-            // `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
-            { lines: true, lineTrusted: (ref) => ranHere.has(ref) },
+            // condition: only rows in `lineEvidence` count (rows that ran this session, and a reused
+            // snapshot's, PR-25). The isolation mode is the one `baseline` ended under: `select` runs
+            // right after any `isolation: "auto"` choice, and the per-mutant reach check still compares modes.
+            { lines: true, lineTrusted: (ref) => lineEvidence.has(ref) },
           );
           const split = coverageFilter(
             execute.filter((m) => !candidates.has(m.mutantId)),
@@ -10124,8 +10119,8 @@ function selectNamed(
  * cannot reach it under the mutant, and a test that did hit it reaches it. The question is only
  * "did the baseline hit the line the `Reached` marker precedes", answered per covering test.
  *
- * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row ran in this session
- * (`ranHere`: no reused snapshot), passed (a flagged pass counts: it ran to its end), and carries line
+ * Only a COMPLETE answer counts. A test is in `hits` only if its baseline row is line evidence
+ * (`lineEvidence`: it ran in this session, or it is a reused snapshot's row, PR-25), passed (a flagged pass counts: it ran to its end), and carries line
  * coverage with no naming gap. `modes` is each test codeunit's isolation mode when that baseline ended; a mutant
  * is decided only if its backend still runs the codeunit under that mode, because a `method`
  * baseline and a `test` baseline cover different lines.
@@ -10139,20 +10134,22 @@ export interface BaselineReach {
 
 /**
  * PR-21 addendum 2: the baseline rows whose line coverage counts as this session's evidence for
- * R926's reach and R975's trigger placement: the rows that ran here, plus, when a reused snapshot
- * passed L5's re-check (`rechecked`), every row of the baseline. R192's unchecked reuse adds none.
+ * R926's reach and R975's trigger placement: the rows that ran here, plus, when the baseline is a
+ * reused snapshot (`reused`: R192 on any transport, L5's re-checked one on serve), every row of it.
+ * PR-25 (R1034): R192 already builds the covering sets from those rows; leaving their lines out
+ * made a resumed one-shot session decide trigger mutants differently from an uninterrupted one.
  */
 export function lineEvidenceOf(
   ranHere: ReadonlySet<TestMethodRef>,
   baseline: readonly { readonly ref: TestMethodRef }[],
-  rechecked: boolean,
+  reused: boolean,
 ): ReadonlySet<TestMethodRef> {
-  return rechecked ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
+  return reused ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
 }
 
 export function baselineReachOf(
   baseline: readonly BaselineRow[],
-  ranHere: ReadonlySet<TestMethodRef>,
+  lineEvidence: ReadonlySet<TestMethodRef>,
   backend: Pick<ExecutionBackend, "isolationOf">,
 ): BaselineReach {
   const hits = new Map<string, Set<string>>();
@@ -10163,7 +10160,7 @@ export function baselineReachOf(
     // R-917: a flagged pass (al-runner rests it on an unprobed assumption, R907) still ran to its end, so its
     // coverage is complete; excluding it left every reach undecided on Microsoft's apps, where nearly
     // every pass is flagged (measured: Data Search 11 of 11).
-    if (!ranHere.has(b.ref) || b.verdict.outcome !== "pass") continue;
+    if (!lineEvidence.has(b.ref) || b.verdict.outcome !== "pass") continue;
     if (cov === undefined || cov.granularity !== "line" || (cov.namingGaps?.length ?? 0) > 0) {
       continue;
     }

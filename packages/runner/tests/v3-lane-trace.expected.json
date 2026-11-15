@@ -276,7 +276,7 @@
   "secondEchoMismatches": 0,
   "prefetchDropped": 0,
   "entriesSent": 50,
-  "warmupMs": 10,
+  "warmupMs": 14,
   "prefetchMs": 4,
   "liveMs": 16,
   "windowMs": 28,
