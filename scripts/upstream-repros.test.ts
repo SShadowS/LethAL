@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type BuildRows,
   type Manifest,
+  REPRO_ROOT,
   type Row,
   appsOf,
   compare,
@@ -199,5 +200,54 @@ describe("R-996: a repro's change between current and the candidate", () => {
       expect(r.issue).toMatch(
         /^https:\/\/github\.com\/aldevtools\/BusinessCentral\.AL\.Runner\/issues\/\d+$/,
       );
+  });
+
+  // PR-34 (preproc's review of PR-31): two repros landed at once with the same id ranges. No NEW pair of apps may share an object
+  // id, so a repro can be published or run beside any other. The pairs below predate this test (several copy an issue's own AL
+  // unchanged); they are frozen here, and the list may only shrink (its size is pinned below). Each pair's two sides are sorted, so
+  // a reordered manifest never turns a frozen pair into a "new" one.
+  const LEGACY_OVERLAPS = new Set([
+    "u7415-platform-no-provider 51300-51310 / u7994-u7995-evaluate 51300-51310",
+    "u7775-refusals 50140-50149 / u7850-autoformat 50100-50199",
+    "u7775-refusals 50140-50149 / u7922-part-visibility 50100-50199",
+    "u7778-json-null 50940-50949 / u8056-install-order/A2 50940-50949",
+    "u7812-json-tab 50280-50289 / u7818-api-version 50280-50289",
+    "u7812-json-tab 50280-50289 / u7819-refusals 50280-50289",
+    "u7818-api-version 50280-50289 / u7819-refusals 50280-50289",
+    "u7850-autoformat 50100-50199 / u7922-part-visibility 50100-50199",
+    "u7850-autoformat 50100-50199 / u8006-date-1753 50100-50120",
+    "u7922-part-visibility 50100-50199 / u8006-date-1753 50100-50120",
+    "u7934-refusals 50430-50479 / u8032-xmlskip 50420-50440",
+    "u8032-wildcard 50410-50420 / u8032-xmlskip 50420-50440",
+    "u8056-install-order/A 50910-50919 / u8117-refusals 50900-50919",
+    "u8056-install-order/P 50900-50909 / u8117-refusals 50900-50919",
+  ]);
+  test("no new pair of apps in the committed set has overlapping idRanges (and the legacy list holds no stale pair)", () => {
+    expect(LEGACY_OVERLAPS.size).toBeLessThanOrEqual(14); // the list may only shrink
+    const ranges: { app: string; from: number; to: number }[] = [];
+    for (const r of readManifest().repros)
+      for (const app of appsOf(r)) {
+        const json = JSON.parse(readFileSync(join(REPRO_ROOT, app, "app.json"), "utf8")) as {
+          idRanges?: { from: number; to: number }[];
+        };
+        expect([app, (json.idRanges ?? []).length > 0]).toEqual([app, true]); // never skipped silently
+        // appsOf joins with the platform's separator; the frozen pairs use "/" (CI's Windows job)
+        const name = app.replaceAll("\\", "/");
+        for (const { from, to } of json.idRanges ?? []) ranges.push({ app: name, from, to });
+      }
+    const clashes: string[] = [];
+    for (let i = 0; i < ranges.length; i++)
+      for (let j = i + 1; j < ranges.length; j++) {
+        const a = ranges[i];
+        const b = ranges[j];
+        if (a === undefined || b === undefined || a.app === b.app) continue;
+        if (a.from <= b.to && b.from <= a.to)
+          clashes.push(
+            [`${a.app} ${a.from}-${a.to}`, `${b.app} ${b.from}-${b.to}`].sort().join(" / "),
+          );
+      }
+    expect(clashes.filter((c) => !LEGACY_OVERLAPS.has(c))).toEqual([]);
+    // a pair fixed since must leave the list
+    expect([...LEGACY_OVERLAPS].filter((c) => !clashes.includes(c))).toEqual([]);
   });
 });

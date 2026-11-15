@@ -3,13 +3,13 @@
 // session (LethAL's bcdev path, test runner 130454 over OData): IsEmpty and FindFirst both FAIL with "The Active Session does
 // not exist. Identification fields and values: Server Instance ID=...,Session ID=...", granted or not. So under asserterror
 // each test is expected to pass. Not measured: the same read without Permissions Mock, or in a client session.
-permissionset 51590 "Session Grant Read"
+permissionset 51630 "Session Grant Read"
 {
     Assignable = true;
     Permissions = tabledata "Session" = R;
 }
 
-codeunit 51591 "Session IsEmpty Granted"
+codeunit 51631 "Session IsEmpty Granted"
 {
     Subtype = Test;
 
@@ -24,7 +24,7 @@ codeunit 51591 "Session IsEmpty Granted"
     end;
 }
 
-codeunit 51592 "Session FindFirst Granted"
+codeunit 51632 "Session FindFirst Granted"
 {
     Subtype = Test;
 
