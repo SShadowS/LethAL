@@ -104,8 +104,8 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
     expect(refused(src, ALNodeKind.block, CALLEE_BODY, EMPTY)).toBe(false);
   });
 
-  it("keeps a callee whose argument is passed by value (only a var parameter can be moved)", () => {
-    // revert: count every argument, not only those bound to a var parameter (the PR-37 build review fix)
+  it("refuses a by-value callee whose result is assigned to the exit's name (R829's trade)", () => {
+    // revert: drop the return-value seed (the `targets.some(live)` branch in r1050Progress)
     const src = `codeunit 50102 "ByValue"
 {
     procedure Run(): Integer
@@ -123,10 +123,164 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
         exit(Left - 1);
     end;
 }`;
-    expect(refused(src, ALNodeKind.block, "begin\n        exit(Left", EMPTY)).toBe(false);
-    // the same shape with `var Left` is refused: the callee could move Remaining
-    const byVar = src.replace("Consume(Left: Integer)", "Consume(var Left: Integer)");
-    expect(refused(byVar, ALNodeKind.block, "begin\n        exit(Left", EMPTY)).toBe(true);
+    expect(refused(src, ALNodeKind.block, "begin\n        exit(Left", EMPTY)).toBe(true);
+  });
+
+  it("keeps a by-value procedure with no return value (it cannot move the exit's name)", () => {
+    // revert: count every argument, not only those bound to a var parameter (the PR-37 build review fix)
+    const src = `codeunit 50103 "ByValueLog"
+{
+    procedure Run(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do begin
+            Log(Pos);
+            Pos += 1;
+        end;
+    end;
+
+    local procedure Log(P: Integer)
+    begin
+        Message('%1', P);
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        Message", EMPTY)).toBe(false);
+    // the same procedure taking `var P` is refused: it could move Pos
+    const byVar = src.replace("Log(P: Integer)", "Log(var P: Integer)");
+    expect(refused(byVar, ALNodeKind.block, "begin\n        Message", EMPTY)).toBe(true);
+  });
+
+  it("B: refuses a callee reached only through another progress callee", () => {
+    // revert: remove the fixpoint loop in r1050Progress
+    const src = `codeunit 50104 "Transitive"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            StepB(Pos);
+    end;
+
+    local procedure StepB(var P: Integer)
+    begin
+        AdvB(P);
+    end;
+
+    local procedure AdvB(var P: Integer)
+    begin
+        P := P + 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        P := P + 1", EMPTY)).toBe(true);
+  });
+
+  it("C: refuses a function whose result is assigned to the exit's name", () => {
+    // revert: remove the return-value seed
+    const src = `codeunit 50105 "Assigned"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            Pos := NextC(Pos);
+    end;
+
+    local procedure NextC(P: Integer): Integer
+    begin
+        exit(P + 1);
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        exit(P + 1)", EMPTY)).toBe(true);
+  });
+
+  it("D: refuses a function called in the loop's own exit", () => {
+    // revert: remove the return-value seed
+    const src = `codeunit 50106 "InExit"
+{
+    procedure Caller()
+    var
+        Counter: Integer;
+    begin
+        repeat
+            Counter += 1;
+        until IsDoneD(Counter);
+    end;
+
+    local procedure IsDoneD(C: Integer): Boolean
+    begin
+        exit(C >= 10);
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        exit(C >= 10)", EMPTY)).toBe(true);
+  });
+
+  it("refuses the progress callee of a repeat loop", () => {
+    const src = `codeunit 50107 "Repeat"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        repeat
+            Adv(Pos);
+        until Pos >= N;
+    end;
+
+    local procedure Adv(var P: Integer)
+    begin
+        P += 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        P += 1", EMPTY)).toBe(true);
+  });
+
+  it("F: refuses a callee that writes a global the loop's exit reads", () => {
+    const src = `codeunit 50108 "Global"
+{
+    var
+        GPos: Integer;
+
+    trigger OnRun()
+    begin
+        while GPos < 10 do
+            BumpF();
+    end;
+
+    local procedure BumpF()
+    begin
+        GPos += 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        GPos += 1", EMPTY)).toBe(true);
+  });
+
+  it("M: refuses a block holding a bare progress call in a loop", () => {
+    // revert: drop the `procedure_call` branch of emptiedRefusedBlockHangs
+    const src = `codeunit 50109 "BareCall"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+        Log: Integer;
+        Go: Boolean;
+    begin
+        Go := N > 0;
+        while Pos < N do
+            if Go then begin
+                AdvA(Pos);
+                Log += 1;
+            end;
+    end;
+
+    local procedure AdvA(var P: Integer)
+    begin
+        P := P + 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n                AdvA", EMPTY)).toBe(true);
   });
 
   it("keeps a block in a loop that holds no exit-feeding write", () => {
@@ -146,5 +300,46 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
     end;
 }`;
     expect(refused(src, ALNodeKind.block, "begin\n                Log", EMPTY)).toBe(false);
+  });
+
+  // exitsOnDefault: a value-returning callee in the loop's exit, emptied, returns its default.
+  const exitCase = (loopStmt: string, ret: string, id: number): boolean => {
+    const src = `codeunit ${id} "Dflt"
+{
+    procedure Caller()
+    var
+        Counter: Integer;
+    begin
+        ${loopStmt}
+    end;
+
+    local procedure F(): ${ret}
+    begin
+        exit(Probe);
+    end;
+}`;
+    return refused(src, ALNodeKind.block, "begin\n        exit(Probe)", EMPTY);
+  };
+
+  it("NOT refused: repeat until F() = 0 (the default 0 exits at once)", () => {
+    // revert: make exitsOnDefault return false
+    expect(exitCase("repeat Counter += 1; until F() = 0;", "Integer", 50110)).toBe(false);
+  });
+
+  it("refused: repeat until IsDone() (the default false never exits)", () => {
+    expect(exitCase("repeat Counter += 1; until F();", "Boolean", 50111)).toBe(true);
+  });
+
+  it("NOT refused: while Step() do (the default false never enters)", () => {
+    // revert: make exitsOnDefault return false
+    expect(exitCase("while F() do Counter += 1;", "Boolean", 50112)).toBe(false);
+  });
+
+  it("refused: while not AtEnd() do (the default false never leaves)", () => {
+    expect(exitCase("while not F() do Counter += 1;", "Boolean", 50113)).toBe(true);
+  });
+
+  it("refused: until F() > 5 (0 > 5 is false, never exits)", () => {
+    expect(exitCase("repeat Counter += 1; until F() > 5;", "Integer", 50114)).toBe(true);
   });
 });
