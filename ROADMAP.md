@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**37 of 1015 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1016 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -574,6 +574,7 @@ that ordering is the priority.
 - **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
 - **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
 - **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · done (6ba7c956) — shift-integer sets compared-value on a comparison operand (by parse); 208 of 448 distinct…
+- **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · open
 
 ## Backends and tooling
 

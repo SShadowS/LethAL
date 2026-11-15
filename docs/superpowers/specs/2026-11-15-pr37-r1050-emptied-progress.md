@@ -46,3 +46,29 @@ hang-capable; the safety net is the zero-timeout check and `--stop-hung-sessions
    orchestrator's ruling for that one re-record (the test's own rule); every other entry, and the reach-grain golden, unchanged.
 3. Gates: no gate fixture's site list changes, so `itest:alrunner-v3` passes every leg, and `itest:hang`, `itest:harden` and the
    bcdev gates are predicted unchanged (not run: their mutant sets are identical by the dry run; the v3 gate runs).
+
+## Addendum 1 (2026-11-15, after the Opus build review, before the golden re-record, VERIFY and any gate)
+
+**Review fixes** (lethal/pr-37 94790266). Three hangs the first build missed, each an `empty-block` of a callee body, now refused:
+B, a progress callee one call further down (`StepB(Pos)` -> `AdvB(var P)`: progress procedures are a per-object fixpoint over
+same-object calls that move a name the caller moves); C, a value-returning callee whose result is assigned to a name the exit reads
+(`Pos := NextC(Pos)`); D, a value-returning callee called in the loop's exit (`until IsDone()`). D is refined by the callee's
+default return (0, false, ''): when the exit is the call, its `not`, or a comparison with a literal, and the default makes the loop
+exit at once, the call is not progress (keeps `sandbox-hang`'s `until NextRow() = 0`, frozen as `survived` in
+`hang.single.baseline.json`). Calls are indexed per object. Tests: 18 in `r1050-emptied-progress.test.ts`, red-checked.
+The review's two other shapes (a progress call inside an assignment; emptying the block that holds a loop's only exit) are R1052.
+
+**Re-measured, replacing the figures above:**
+- Fixtures (`dry-after3/`): only `sandbox-optin`'s `OptinLogic.Codeunit.al` changes, sites 124 -> 122: line 130 (`ResetCounter`'s
+  body, as above) and line 257 (`Consume(Left): Integer`'s body, called as `Remaining := Consume(Remaining)` under
+  `while Remaining > 0`: refused by C; it does not hang, the default 0 exits, R829's trade). `sandbox-hang` and every other fixture
+  unchanged, so no gate's mutant set moves.
+- Corpus (`corpus-diff2.txt`, `classify2.txt`): 53 sites refused in 13 modules (was 26 in 11), none newly allowed. Earlier v3
+  verdicts: 4 timeout-killed (the same 4 hangs), 25 killed, 3 survived, 13 error, 8 no-coverage: **28 scored mutants lost for 4
+  hangs, about 1 in 8** (was 11, 1 in 4). The review fixes added 27 sites and no hang met in this corpus; most of the extra cost is
+  B's transitive step in Filter Tokens (11 helper bodies, all killed). Accepted by the orchestrator (2026-11-15) for server safety;
+  narrowing B's step is the follow-up [[R1053]].
+
+**Prediction 2 replaced:** the emit golden changes in exactly one entry, `fixtures/sandbox-optin/src/OptinLogic.Codeunit.al`, 124 ->
+122 mutants (lines 130 and 257 leave its output); the orchestrator's ruling covers both sites. Every other entry and the reach-grain
+golden byte-identical; with mutant ids normalized, the entry's output differs only by those two mutants' guards.
