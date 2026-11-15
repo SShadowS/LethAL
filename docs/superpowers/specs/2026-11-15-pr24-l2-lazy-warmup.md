@@ -76,3 +76,36 @@ Today t4 is still running. The amendment will give:
 - restarts per window;
 - the warm-up time per start, split into start and compile against running tests;
 - codeunits per restarted daemon.
+
+## Amendment 1 (2026-11-15): the DO figure, from t4's stored data, before any DO window measures L2
+t4 (`/coord/handoff/R-984/t4.run.*`, edge-5a58a0f16, before L2) ended on its 12,600 s budget, with 14,378 mutants left.
+
+**Restarts.**
+- 87 daemons: one was the baseline's own, so 86 were mutant daemons.
+- 83 warm-up requests: per lane and mode, the first daemon's plus about 82 restarted daemons' warm-ups.
+- Closes: 81 R612 cuts (63 of them one refusal, a page caption with DataCaptionExpression and no source table) and 5 timeouts.
+
+**Warm-up time.** 7,322 s of wall time in all, about 88 s per warm-up: **58% of the window**.
+
+**Split, and codeunits per restarted daemon.** t4 has no per-request trace, so both come from PR-18's DO trace
+(`/coord/handoff/PR-18/trace.ndjson`, three restarted daemons):
+- in each warm-up request, the tests' entries took about 55% of the wall time (37-69 s of 70-104 s); the rest is daemon start
+  and compile, which L2 does not save;
+- the restarted daemons then used 24, 4 and 3 of 110 codeunits;
+- so their lazy warm-ups' entries would take 32.3, 1.3 and 0.9 s, against 69.1, 45.9 and 36.8 s: about 39 s saved per restart.
+
+**Prediction for the next DO window that runs L2,** on the same config and build line as t4:
+1. **Per restarted daemon:** the warm-up wall time falls from about 88 s to **at most 60 s** on average. The start and compile stay,
+   plus a short warm-up of the codeunits used.
+2. **Per window:** with about as many restarts as t4 (80 or more), the total warm-up time falls by **at least 1,600 s**, with
+   **about 3,200 s** as the central estimate (82 × 39 s). The saved time goes to mutants.
+3. **The range is wide (1,600-3,700 s), because:**
+   - PR-18's three restarts are a small sample;
+   - lethal-code warned that a resend chunk after an R612 cut can hold many codeunits, which would shrink the saving;
+   - the restart count itself depends on which mutants the window reaches.
+4. **No verdict moves.** That is shown on the fixtures (IDENTICAL), not by this window. Its mutants differ from t4's, so a DO
+   comparison per mutant needs a fixed set of mutants.
+
+**How it is read.** The window's report gives `warmupMs` and the number of warm-ups; per restart = (warmupMs − the first daemons'
+warm-ups) / restarts. If prediction 1 or 2 misses, the cause is named (the codeunits per restarted daemon read from a trace, if one
+is taken) before L2's figure is quoted anywhere.
