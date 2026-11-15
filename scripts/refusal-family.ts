@@ -40,6 +40,13 @@ export interface Family {
   readonly cells: readonly Cell[];
   /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
   readonly target?: "OnPrem";
+  /** PR-16: apps the cells call (Microsoft's Permissions Mock), as app.json `dependencies`. */
+  readonly dependencies?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+    readonly version: string;
+  }[];
 }
 
 const untouched = (type: string, method: string, call: string, vars: string[] = []): Cell => ({
@@ -257,10 +264,92 @@ export const PLATFORM_TABLE_READ: Family = {
   ]),
 };
 
+/**
+ * PR-16: #7854's family, the ledger's largest open one after #7415 (843 sightings; its own permission denials 493): a read of a
+ * system table under permission sets a test assigned with Microsoft's Permissions Mock (as Library - Lower Permissions
+ * does). One pair of cells per platform table whose plain read runs on al-runner (PR-13's run on edge-5a58a0f16): the read
+ * under a set that does not grant the table, and under one that grants it Read.
+ */
+const READABLE = new Set(
+  (
+    "PermissionSet Permission Date Session Integer AllObj Printer Field WindowsLanguage CodeCoverage LanguageSelection " +
+    "AccessControl AllObjWithCaption Key RecordLink UserPersonalization WebService Chart PageDataPersonalization " +
+    "TenantProfileSetting APIWebhookSubscription APIWebhookNotification APIWebhookNotificationAggr ActiveSession " +
+    "ServerInstance DocumentService DocumentServiceScenario User UserProperty Device EntityText TableSynchSetup " +
+    "TableMetadata CodeUnitMetadata PageMetadata ReportMetadata EventSubscription TableRelationsMetadata QueryMetadata " +
+    "IntelligentCloud NAVAppInstalledApp NAVAppExtra DataSensitivity TimeZone TenantPermissionSet TenantPermission " +
+    "AggregatePermissionSet TenantWebService ConfigurationPackageFile ScheduledTask TenantProfile AllProfile " +
+    "ODataEdmType MediaResources TenantMedia TenantProfilePageMetadata TenantLicenseState PageControlField " +
+    "WebhookNotification ObjectOptions WebhookSubscription NAVAppSetting ReportDataItems ObjectAccessIntentOverride " +
+    "PublishedApplication FeatureKey InstalledApplication ReportSettingsOverride TenantReportLayout " +
+    "TenantReportLayoutSelection ReportLayoutList PrivacyNotice PrivacyNoticeApproval MetadataPermissionSet " +
+    "MetadataPermissionSetRel TenantPermissionSetRel SignupContext XmlPortMetadata CodeCoverageTestLookup " +
+    "CodeCoverageTestsRun MCPConfiguration MCPConfigurationTool AgentCreationControl"
+  ).split(" "),
+);
+const READABLE_TABLES = PLATFORM_TABLES.filter(([, name]) =>
+  READABLE.has(tableType(name).slice(1)),
+);
+// IsEmpty and FindFirst: BC allows an IsEmpty without Read permission on an ordinary table (#7854, measured upstream),
+// while FindFirst reads a row
+const underSet = (name: string, set: string, method: "IsEmpty" | "FindFirst") => ({
+  type: tableType(name),
+  method,
+  state: set === "Cell No Grant" ? "denied" : "granted",
+  vars: ['PermissionsMock: Codeunit "Permissions Mock";'],
+  call: `PermissionsMock.Set('${set}');\n        if R.${method}() then;`,
+});
+export const PERMISSION_DENIAL: Family = {
+  name: "permission-denial",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
+  target: "OnPrem",
+  dependencies: [
+    {
+      id: "40860557-a18d-42ad-aecb-22b7dd80dc80",
+      name: "Permissions Mock",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    },
+  ],
+  known: [
+    "a permission denial (read permission on object type 1 id 2000000183) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+    "ReadPermission on a system table under sets that do not grant it is not pinned (ADR-062 probe P19)",
+  ],
+  // ids 51000/51001: BASE_ID (declared below), the first id of the app's range; codeunits start at BASE_ID + 1
+  support: `table 51000 "Perm Cell Row"
+{
+    fields { field(1; "Code"; Code[20]) { } }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+permissionset 51000 "Cell No Grant"
+{
+    Assignable = true;
+    Permissions = tabledata "Perm Cell Row" = R;
+}
+
+permissionset 51001 "Cell Grant Read"
+{
+    Assignable = true;
+    Permissions = tabledata "Perm Cell Row" = R${READABLE_TABLES.map(([, name]) => `,\n        tabledata "${name}" = R`).join("")};
+}
+`,
+  handles: Object.fromEntries(
+    READABLE_TABLES.map(([, name]) => [tableType(name), `R: Record "${name}";`]),
+  ),
+  cells: READABLE_TABLES.flatMap(([, name]) =>
+    (["IsEmpty", "FindFirst"] as const).flatMap((m) => [
+      underSet(name, "Cell No Grant", m),
+      underSet(name, "Cell Grant Read", m),
+    ]),
+  ),
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
   [PLATFORM_TABLE_READ.name]: PLATFORM_TABLE_READ,
+  [PERMISSION_DENIAL.name]: PERMISSION_DENIAL,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -304,6 +393,7 @@ ${body}
         ...(f.target !== undefined ? { target: f.target } : {}),
         idRanges: [{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length }],
         features: ["NoImplicitWith"],
+        ...(f.dependencies !== undefined ? { dependencies: f.dependencies } : {}),
       },
       null,
       2,
@@ -366,6 +456,13 @@ export function classOf(text: string): string {
   if (platform) return `platform table *: ${platform[1]}`;
   // PR-13: the store words a read's refusal with `store error ` or without, and names the read (`IsEmpty on`,
   // `FindFirst on`): one class per cause.
+  // PR-16: a permission denial names the object it denies; the permission and the reason are the class
+  const denial = text.replace(/ on object type \d+ id \d+\)/, " on object type * id *)");
+  if (denial !== text) return classOf(denial);
+  // PR-16: `<table>: permission set '<set>': `<grant>` <reason>`: a set's rows read through a system table; the reason is
+  // the class, whichever table and set
+  const setRows = /^(?:store error )?[^:]+: permission set '[^']*': `[^`]*` (.*)$/.exec(text);
+  if (setRows) return `*: permission set *: ${setRows[1]}`;
   const store = text
     .replace(/^store error /, "")
     .replace(/^(?:IsEmpty|FindFirst|FindSet|Count) on /, "* on ");

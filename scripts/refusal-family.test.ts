@@ -3,6 +3,7 @@ import {
   BASE_ID,
   DOTNET_NO_OBJECT,
   type Family,
+  PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   UNTOUCHED_HANDLE,
   cellName,
@@ -214,5 +215,42 @@ describe("PR-01: the refusal-family generator", () => {
     const names = f.cells.map((c, i) => cellName(c, i));
     expect(new Set(names).size).toBe(names.length);
     expect(f.handles.TApiWebService).toBe('R: Record "Api Web Service";');
+  });
+
+  test("PR-16: a permission denial folds over the object it names; the issue's text is known for any table", () => {
+    const deny = (id: number) =>
+      `a permission denial (read permission on object type 1 id ${id}) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run`;
+    expect(classOf(deny(2000000120))).toBe(classOf(deny(2000000005)));
+    expect(classOf(deny(2000000120))).toContain("on object type * id *)");
+    const f = PERMISSION_DENIAL;
+    const r = classify(f, [row(0, "error", `NotRun: out-of-scope: ${deny(2000000120)}`, true)]);
+    expect(refusalClasses(f, r)[0]?.known).toBe(true);
+  });
+
+  test("PR-16: a set's rows read through a system table fold to their reason, whichever table and set", () => {
+    const why = "grants a whole object type (not listed row by row)";
+    expect(classOf(`Permission: permission set 'All Objects': \`table * = X\` ${why}`)).toBe(
+      `*: permission set *: ${why}`,
+    );
+    expect(
+      classOf(`store error Metadata Permission: permission set 'Base': \`table * = X\` ${why}`),
+    ).toBe(`*: permission set *: ${why}`);
+  });
+
+  test("PR-16: the permission-denial family depends on Permissions Mock; both sets are emitted; every cell sets one", () => {
+    const f = PERMISSION_DENIAL;
+    expect(f.cells.length).toBe(4 * 83);
+    for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const files = emitApp(f);
+    expect(JSON.parse(files["app.json"] ?? "{}").dependencies[0].name).toBe("Permissions Mock");
+    const al = files["src/Cells.al"] ?? "";
+    expect(al).toContain('permissionset 51000 "Cell No Grant"');
+    expect(al).toContain('tabledata "User" = R');
+    expect(f.cells.filter((c) => c.state === "denied").length).toBe(2 * 83);
+    expect(
+      f.cells.every((c) => /PermissionsMock\.Set\('Cell (No Grant|Grant Read)'\)/.test(c.call)),
+    ).toBe(true);
   });
 });
