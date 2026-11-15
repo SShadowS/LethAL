@@ -22,6 +22,11 @@ Seven entries added while settling the refusal ledger, one per issue, biggest fi
 (new), and #7778 as a guard behind a fixed ledger state. The set now holds 89 tests. Not here, with the reason in R1013: #7415 and
 #8002 (not filed by LethAL), #8001 (needs an assembly folder from a BC service), #7837 (a pin request; BC's result unknown).
 
+## Coverage (PR-13)
+
+#7415 is now in, as `u7415-platform-no-provider` (5 tests, 94 in all): LethAL commented on it with a sweep of every platform table
+(`scripts/refusal-family.ts` family `platform-table-read`), and its refusal is the largest open group in the refusal ledger.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,

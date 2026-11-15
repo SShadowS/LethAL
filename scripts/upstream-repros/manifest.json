@@ -100,9 +100,7 @@
       "id": "u7778-json-null",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7778",
       "bcEvidence": "inferred, not measured on BC: reading a JSON null as Boolean raises BC's error, which asserterror expects (#7778, closed: edge 764d69ecf made every JsonValue.AsX getter on a null raise BC's error). A guard: it passes on edge-a184cfc79, and the refusal ledger's 'reading a JSON null as Boolean' is fixed on its evidence (PR-05)",
-      "rerun": [
-        "nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"
-      ],
+      "rerun": ["nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"],
       "tests": {
         "Codeunit50940.NullAsBoolean": { "status": "pass" }
       }
@@ -123,7 +121,10 @@
         "Codeunit50106.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-01" },
         "Codeunit50107.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-02" },
         "Codeunit50108.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
-        "Codeunit50109.Measure": { "status": "fail", "messageIncludes": "stored datetime 1754-01-01" }
+        "Codeunit50109.Measure": {
+          "status": "fail",
+          "messageIncludes": "stored datetime 1754-01-01"
+        }
       }
     },
     {
@@ -290,6 +291,21 @@
         "Codeunit51203.Cell": { "status": "pass" },
         "Codeunit51204.Cell": { "status": "pass" },
         "Codeunit51205.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7415-platform-no-provider",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
+      "bcEvidence": "inferred, not measured on BC: a read of a platform table returns on BC (rows or none), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",
+      "rerun": [
+        "the corpus mutants met by the platform-table no-provider refusals (ledger: 3,054 sightings, PR-13)"
+      ],
+      "tests": {
+        "Codeunit51301.Cell": { "status": "pass" },
+        "Codeunit51302.Cell": { "status": "pass" },
+        "Codeunit51303.Cell": { "status": "pass" },
+        "Codeunit51304.Cell": { "status": "pass" },
+        "Codeunit51305.Cell": { "status": "pass" }
       }
     }
   ]

@@ -3,6 +3,7 @@ import {
   BASE_ID,
   DOTNET_NO_OBJECT,
   type Family,
+  PLATFORM_TABLE_READ,
   UNTOUCHED_HANDLE,
   cellName,
   classOf,
@@ -161,15 +162,21 @@ describe("PR-01: the refusal-family generator", () => {
     const none = "is an instance member and the variable holds no object";
     expect(classOf(t("System.Uri.Host", none))).toBe(`DotNet *: ${none}`);
     expect(classOf(t("System.Text.StringBuilder.Append", none))).toBe(`DotNet *: ${none}`);
-    expect(classOf(t("System.Uri.Host", "is not found on System.Uri"))).toBe("DotNet *: is not found on System.Uri");
+    expect(classOf(t("System.Uri.Host", "is not found on System.Uri"))).toBe(
+      "DotNet *: is not found on System.Uri",
+    );
     // review: a DotNet text of another shape (no quoted member) stays its own class, so it reads NEW, never known
     const overload =
       "DotNet System.Text.RegularExpressions.Regex.IsMatch: System.Text.RegularExpressions.Regex.IsMatch has no overload taking 1 argument(s) of the given types (String)";
     expect(classOf(overload)).toBe("DotNet System.Text.RegularExpressions.Regex.IsMatch");
-    const o = classify(DOTNET_NO_OBJECT, [row(0, "error", `NotRun: out-of-scope: ${overload}`, true)]);
+    const o = classify(DOTNET_NO_OBJECT, [
+      row(0, "error", `NotRun: out-of-scope: ${overload}`, true),
+    ]);
     expect(refusalClasses(DOTNET_NO_OBJECT, o)[0]?.known).toBe(false);
     const f = DOTNET_NO_OBJECT;
-    const r = classify(f, [row(0, "error", `NotRun: out-of-scope: ${t("System.Regex.IsMatch", none)}`, true)]);
+    const r = classify(f, [
+      row(0, "error", `NotRun: out-of-scope: ${t("System.Regex.IsMatch", none)}`, true),
+    ]);
     expect(refusalClasses(f, r)[0]?.known).toBe(true);
   });
 
@@ -178,5 +185,34 @@ describe("PR-01: the refusal-family generator", () => {
     for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();
     expect(JSON.parse(emitApp(f)["app.json"] ?? "{}").target).toBe("OnPrem");
     expect(JSON.parse(emitApp(UNTOUCHED_HANDLE)["app.json"] ?? "{}").target).toBeUndefined();
+  });
+
+  test("PR-13: a platform table's no-provider text folds to one class, with or without `store error `; the issue's text is known", () => {
+    const np = (t: string, id: number) => `platform table '${t}' (${id}) has no provider`;
+    expect(classOf(np("Api Web Service", 2000000193))).toBe("platform table *: has no provider");
+    expect(classOf(`store error ${np("Tenant Media Set", 2000000183)}`)).toBe(
+      "platform table *: has no provider",
+    );
+    const f = PLATFORM_TABLE_READ;
+    const r = classify(f, [
+      row(0, "error", `NotRun: out-of-scope: store error ${np("Object", 2000000001)}`, true),
+    ]);
+    expect(refusalClasses(f, r)[0]?.known).toBe(true);
+  });
+
+  test("PR-13: a read's refusal drops `store error ` and the read verb, so IsEmpty and FindFirst on a table are one class", () => {
+    const why = "BC holds rows here that an install trigger or Company-Initialize creates";
+    expect(classOf(`IsEmpty on Power BI Blob: ${why}`)).toBe("* on Power BI Blob");
+    expect(classOf(`store error FindFirst on Power BI Blob: ${why}`)).toBe("* on Power BI Blob");
+    expect(classOf("FindSet on Media: x")).toBe("* on Media");
+  });
+
+  test("PR-13: the platform-table family reads every listed table twice; handles are declared; names are unique", () => {
+    const f = PLATFORM_TABLE_READ;
+    expect(f.cells.length).toBe(2 * 214);
+    for (const c of f.cells) expect(f.handles[c.type]).toBeDefined();
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    expect(f.handles.TApiWebService).toBe('R: Record "Api Web Service";');
   });
 });

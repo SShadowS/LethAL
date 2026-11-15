@@ -232,9 +232,35 @@ export const DOTNET_NO_OBJECT: Family = {
   ],
 };
 
+/**
+ * PR-13: #7415's family, the ledger's largest open one (3,054 sightings, nearly all `Api Web Service`): a read of a platform
+ * table al-runner's store has no provider for. One cell per platform table and read: `IsEmpty` and `FindFirst` of each
+ * non-temporary table of BC 28.4's System app (`refusal-family-platform-tables.json`, read from al-runner's own artifact),
+ * so every table without a provider shows up before a corpus meets it.
+ */
+const PLATFORM_TABLES = (await Bun.file(
+  join(import.meta.dir, "refusal-family-platform-tables.json"),
+).json()) as readonly (readonly [number, string])[];
+const tableType = (name: string) => `T${name.replace(/[^A-Za-z0-9]/g, "")}`;
+export const PLATFORM_TABLE_READ: Family = {
+  name: "platform-table-read",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
+  target: "OnPrem",
+  known: ["store error platform table 'All Control Fields' (2000000202) has no provider"],
+  support: "",
+  handles: Object.fromEntries(
+    PLATFORM_TABLES.map(([, name]) => [tableType(name), `R: Record "${name}";`]),
+  ),
+  cells: PLATFORM_TABLES.flatMap(([, name]) => [
+    { type: tableType(name), method: "IsEmpty", state: "fresh", call: "if R.IsEmpty() then;" },
+    { type: tableType(name), method: "FindFirst", state: "fresh", call: "if R.FindFirst() then;" },
+  ]),
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
+  [PLATFORM_TABLE_READ.name]: PLATFORM_TABLE_READ,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -335,6 +361,15 @@ export function classOf(text: string): string {
   // PR-02: a DotNet member's text names the member twice and the cause after it; the cause is the class.
   const dotnet = /^DotNet [\w.]+: '[\w.]+' (.*)$/.exec(text);
   if (dotnet) return `DotNet *: ${dotnet[1]}`;
+  // PR-13: a platform table's text names the table; the store's reason is the class.
+  const platform = /^(?:store error )?platform table '[^']+' \(\d+\) (.*)$/.exec(text);
+  if (platform) return `platform table *: ${platform[1]}`;
+  // PR-13: the store words a read's refusal with `store error ` or without, and names the read (`IsEmpty on`,
+  // `FindFirst on`): one class per cause.
+  const store = text
+    .replace(/^store error /, "")
+    .replace(/^(?:IsEmpty|FindFirst|FindSet|Count) on /, "* on ");
+  if (store !== text) return classOf(store);
   const head = text.split(": ")[0] ?? text;
   return head.replace(/^([A-Za-z]+)\.[A-Za-z]+ on /, "$1.* on ").trim();
 }
