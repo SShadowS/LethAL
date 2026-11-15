@@ -1156,8 +1156,17 @@ permissionset 51001 "Cell Grant Item"
           method,
           state,
           vars: PUBAPP_VARS,
-          setup: ["NavApp.GetCurrentModuleInfo(Me);", ...(type === "Item" ? PUBAPP_ITEM : filters)],
-          call: `PermissionsMock.Set('${set}');\n        ${read}`,
+          // BC review (lethal-bugs, bc2): a test codeunit without TestPermissions runs Restrictive on BC, so an Item cell's own
+          // Insert is refused before the set is applied; an Item cell applies its set (which grants Cell Item RIMD) first
+          setup:
+            type === "Item"
+              ? [
+                  "NavApp.GetCurrentModuleInfo(Me);",
+                  `PermissionsMock.Set('${set}');`,
+                  ...PUBAPP_ITEM,
+                ]
+              : ["NavApp.GetCurrentModuleInfo(Me);", ...filters],
+          call: type === "Item" ? read : `PermissionsMock.Set('${set}');\n        ${read}`,
         }),
       ),
     ),

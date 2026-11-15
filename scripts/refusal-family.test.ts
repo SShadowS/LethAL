@@ -511,11 +511,16 @@ describe("PR-01: the refusal-family generator", () => {
       const set = state === "granted" ? "Cell Grant PubApp" : "Cell Grant Item";
       const cells = f.cells.filter((c) => c.state === state);
       expect(cells).toHaveLength(15);
-      for (const c of cells) expect(c.call.startsWith(`PermissionsMock.Set('${set}');`)).toBe(true);
+      // BC review: a codeunit without TestPermissions runs Restrictive on BC, so an Item cell applies its set (which grants
+      // Cell Item RIMD) before its own Insert; a Published Application cell applies it in the call, after its filters
+      for (const c of cells) {
+        const body = [...(c.setup ?? []), c.call].join("\n");
+        const at = body.indexOf(`PermissionsMock.Set('${set}');`);
+        expect(at).toBeGreaterThanOrEqual(0);
+        if (c.type === "Item") expect(at).toBeLessThan(body.indexOf("Item.Insert();"));
+        else expect(c.call.startsWith(`PermissionsMock.Set('${set}');`)).toBe(true);
+      }
     }
-    // the set under test is applied after the setup (an Item cell inserts its row with the test's own permissions first)
-    for (const c of f.cells)
-      expect(c.setup?.some((s) => s.includes("PermissionsMock"))).toBe(false);
     // only the 'granted' set grants Published Application
     expect(f.support).toMatch(/"Cell Grant PubApp"[^}]*tabledata "Published Application" = R/);
     expect(f.support).not.toMatch(/"Cell Grant Item"[^}]*Published Application/);
