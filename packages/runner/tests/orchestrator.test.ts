@@ -4410,13 +4410,26 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   // R939: the session installs a close sink; each close it gets is a `serve-daemon-closed` event,
   // which the report counts, and never a warning. Removed at the session's end.
   test("R939: a backend's daemon close becomes an event and the report's v3DaemonCloses, never a warning", async () => {
+    type Close = {
+      readonly reason: string;
+      readonly family?: string;
+      readonly text?: string;
+      readonly test?: string;
+    };
     class ClosingBackend extends RecordingBackend {
-      sink: ((c: { readonly reason: string; readonly family?: string }) => void) | undefined;
-      setDaemonCloseSink(sink?: (c: { readonly reason: string; readonly family?: string }) => void) {
+      sink: ((c: Close) => void) | undefined;
+      setDaemonCloseSink(sink?: (c: Close) => void) {
         this.sink = sink;
       }
       override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-        if (ref.method === "UnsupportedTest") this.sink?.({ reason: "refusal", family: "WithEvents …" });
+        if (ref.method === "UnsupportedTest")
+          this.sink?.({
+            reason: "refusal",
+            family: "WithEvents …",
+            // R1009: the whole text and the test reach the event (red without handNotify's spreads)
+            text: "NotRun: out-of-scope: WithEvents subscriber 'S' (not pinned)",
+            test: "Codeunit1.UnsupportedTest",
+          });
         return super.run(ref, opts);
       }
     }
@@ -4432,7 +4445,12 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     });
     const closed = events.filter((e) => e.type === "serve-daemon-closed");
     expect(closed.length).toBeGreaterThan(0);
-    expect(closed[0]).toMatchObject({ reason: "refusal", family: "WithEvents …" });
+    expect(closed[0]).toMatchObject({
+      reason: "refusal",
+      family: "WithEvents …",
+      text: "NotRun: out-of-scope: WithEvents subscriber 'S' (not pinned)",
+      test: "Codeunit1.UnsupportedTest",
+    });
     expect(report.v3DaemonCloses).toEqual({ refusal: closed.length });
     expect(events.some((e) => e.type === "warning" && e.code.includes("daemon"))).toBe(false);
     expect(backend.sink).toBeUndefined();
