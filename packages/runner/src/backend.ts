@@ -582,7 +582,12 @@ export interface ExecutionBackend {
    * `serve-daemon-closed` event. With no sink, closes are only counted (the close line).
    */
   setDaemonCloseSink?(
-    sink?: (close: { readonly reason: string; readonly family?: string }) => void,
+    sink?: (close: {
+      readonly reason: string;
+      readonly family?: string;
+      /** R1009: a refusal's whole first line. */
+      readonly text?: string;
+    }) => void,
   ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;

@@ -1496,7 +1496,7 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
-    const sunk: { reason: string; family?: string }[] = [];
+    const sunk: { reason: string; family?: string; text?: string }[] = [];
     r.b.setNotify((c, m) => seen.push([c, m]));
     r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
@@ -1509,7 +1509,10 @@ describe("R939: why each serve daemon closed", () => {
     const c = r.b.daemonCloses();
     expect([...c.byReason]).toEqual([["refusal", 1]]);
     expect([...c.refusalFamilies]).toEqual([["WithEvents subscriber …", 1]]);
-    expect(sunk).toEqual([{ reason: "refusal", family: "WithEvents subscriber …" }]);
+    // R1009: the whole first line too, which the family cuts
+    expect(sunk).toEqual([
+      { reason: "refusal", family: "WithEvents subscriber …", text: WITH_EVENTS },
+    ]);
     // Not a warning: gates pin their warning sets (R939).
     expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
   });
@@ -1573,6 +1576,31 @@ describe("R939: why each serve daemon closed", () => {
     expect(family("NotRun: out-of-scope: field 'CO2e Emission' of table CO2e Ledger")).toBe(
       "field … of table CO2e Ledger",
     );
+  });
+
+  // R1009 (coord PR-09): DO's stale-buffer close was known only by its cut family ("... after a lock other
+  // tha"), so it could not be measured. The close carries the whole first line, without v3's suffix.
+  test("R1009: a refusal's whole first line rides along (text), where the family is cut", () => {
+    const stale =
+      "NotRun: out-of-scope: a stale Issued Reminder Header buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)";
+    const why = unkeptRowReason([
+      {
+        name: "Codeunit1.A",
+        status: "error",
+        notRun: true,
+        message: `${stale} [al-runner v3 did not run this test (notRun)]\nsecond line`,
+      },
+    ]);
+    expect(why?.family).toBe(
+      "a stale Issued Reminder Header buffer from its own write, after a lock other tha",
+    );
+    expect(why?.text).toBe(stale);
+    // a timeout carries none
+    expect(
+      unkeptRowReason([
+        { name: "Codeunit1.A", status: "error", notRun: false, message: TIMEOUT_1S },
+      ])?.text,
+    ).toBeUndefined();
   });
 });
 

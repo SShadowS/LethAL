@@ -1768,6 +1768,9 @@
         "family": {
           "type": "string"
         },
+        "text": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         }

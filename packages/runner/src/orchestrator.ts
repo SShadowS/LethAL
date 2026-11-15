@@ -4925,6 +4925,7 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       type: "serve-daemon-closed",
       reason: c.reason,
       ...(c.family !== undefined ? { family: c.family } : {}),
+      ...(c.text !== undefined ? { text: c.text } : {}),
     }),
   );
   return () => {
@@ -5201,10 +5202,7 @@ function resolveGroupRuns(a: {
  * Tells the backend and says it on stderr once per value (once per session in practice).
  * Otherwise returns the configured floor unchanged.
  */
-function applyV3MutantStop(
-  scope: BatchScope,
-  ownDuration: ReadonlyMap<string, number>,
-): number {
+function applyV3MutantStop(scope: BatchScope, ownDuration: ReadonlyMap<string, number>): number {
   const held = scope.v3MutantStop;
   if (held === undefined) return scope.minMutantBudgetMs;
   let largest = 0;
