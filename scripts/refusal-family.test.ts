@@ -445,6 +445,12 @@ describe("PR-01: the refusal-family generator", () => {
         "DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value ('-5') must be greater than or equal to '-1'. (Parameter 'value')",
       ),
     ).toBe(cls);
+    // review: a nested type's member (`Outer+Inner.Member`), as .NET names it
+    expect(
+      classOf(
+        "DotNet Microsoft.Cell.Outer+Inner.Run raised the .NET exception System.InvalidOperationException: x; the text AL would see is not pinned (ADR-014 section 7)",
+      ),
+    ).toBe(cls);
     expect(classOf(DOTNET_EXCEPTION.known[0] ?? "")).toBe(cls);
     expect(
       classOf(
