@@ -563,7 +563,7 @@
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; cell 51017 of untouched-handle.joined.tsv): XmlElement.AsXmlNode() on an untouched XmlElement returns without an error, so the test passes; al-runner fails it (NavXmlNode variable not initialized). Filed by PR-31",
       "rerun": ["the corpus mutants whose tests call AsXmlNode on an XmlElement nothing created (none known)"],
       "tests": {
-        "Codeunit51581.Cell": { "status": "pass" }
+        "Codeunit51621.Cell": { "status": "pass" }
       }
     },
     {
@@ -573,8 +573,8 @@
       "rerun": ["the corpus mutants whose tests read Session under Permissions Mock (none known)"],
       "args": ["--no-client"],
       "tests": {
-        "Codeunit51591.Cell": { "status": "pass" },
-        "Codeunit51592.Cell": { "status": "pass" }
+        "Codeunit51631.Cell": { "status": "pass" },
+        "Codeunit51632.Cell": { "status": "pass" }
       }
     }
   ]
