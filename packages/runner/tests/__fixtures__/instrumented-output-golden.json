@@ -281,8 +281,8 @@
       "mutants": 5
     },
     "fixtures/sandbox-optin/src/OptinLogic.Codeunit.al": {
-      "sha256": "899ebfc87805a67ea3354b5da795b4b351236224404047f2c18b7ee3265c7d94",
-      "mutants": 123
+      "sha256": "02d203ce8b0c60df4e2598ff6d19bae4e59b9ac4022c07a0c22ced1c223d6c3e",
+      "mutants": 122
     },
     "fixtures/sandbox-order-tests/src/OrderProbe.al": {
       "sha256": "f352cbfe85e917a51d9886a8eddf1a86b0e1ef7cf41532286881b232b44b9a28",
