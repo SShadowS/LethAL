@@ -105,3 +105,19 @@ src/Processing/GetServiceDeclarationLines.Codeunit.al`, al-runner `current`, fre
 DO (no new window for this task; the next DO window after t4 measures it): the baseline phase of a resumed window falls from about
 1,986 s to at most 300 s (one daemon start with its compile, the whole-suite re-check without coverage, three coverage requests, no
 one-shot cross-check processes).
+
+## Addendum 1 (lethal-preproc's review, before any build or run)
+
+lethal-preproc (R1008's owner) reviewed the draft that had only the three-codeunit check. Of its points, the whole-suite re-check
+above already covers three: a transient row (a timeout under load, a cascade after a stopped sibling) is re-run and must come back
+the same, an order-dependent cascade (#8002's number-sequence refusals) is re-run in the same order with every codeunit, and a
+date-dependent outcome is re-run on today's clock. The other three change the design:
+1. **The .NET sidecar by content.** The sidecar is compared by path today (`resumeInputsChange`); a dll rebuilt at the same path keeps
+   the key. The reuse key also holds the sha256 of the sidecar file (the backend hashes it already for R998's warning), and of the
+   demo-data file when the config names one. A difference re-runs the baseline by name (`the .NET sidecar`).
+2. **The seed.** A reuse also requires the session's baseline seed to equal the stored run's (seed value and source); otherwise it
+   re-runs by name (`the seed`). Random- and CreateGuid-dependent outcomes and coverage depend on it.
+3. **A narrower mask.** The check masks the minted version only in the target app's own call-stack line (`<target app name> by
+   <publisher> version <a.b.c.d>`), not every version in a stack, so a dependency's line still compares exactly.
+Red check 2 adds: the sidecar's content changed at the same path, and another seed, each re-runs by name. Red check 4 adds: a stack
+that differs in a dependency's version fails the check.
