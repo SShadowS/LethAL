@@ -14,6 +14,13 @@ Adding a repro: a folder `u<issue>-<topic>` with `app.json` (its own app id) and
 `bun scripts/upstream-repros.ts --candidate /work/tools/al-runner-v3/current/al-runner` to see it run. A repro must run with
 `al-runner test --bc-version 28 <folder>` alone (no package cache), as these do. A repro of several apps (an install order) keeps
 each app in a subfolder and lists them, in the order `al-runner test` takes them, in the entry's `apps` (R-997: `u8056-install-order`).
+A repro that needs an al-runner flag names it in the entry's `args`, a list of strings put before its apps (PR-05: `u8028-no-client`).
+
+## Coverage (PR-05, R1013)
+
+Seven entries added while settling the refusal ledger, one per issue, biggest first: #7775, #8028, #7934, #7586, #7850, #8117
+(new), and #7778 as a guard behind a fixed ledger state. The set now holds 89 tests. Not here, with the reason in R1013: #7415 and
+#8002 (not filed by LethAL), #8001 (needs an assembly folder from a BC service), #7837 (a pin request; BC's result unknown).
 
 ## Coverage (R-997)
 
