@@ -3,11 +3,13 @@ import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
   DOTNET_NO_OBJECT,
+  FAMILIES,
   type Family,
   GET_URL,
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
+  TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
   bcCheckFamily,
@@ -315,10 +317,13 @@ describe("PR-01: the refusal-family generator", () => {
       PERMISSION_DENIAL,
       NO_CLIENT,
       GET_URL,
+      TABLE_CONNECTION,
     ].map((f) => bcCheckApp(f).id);
     // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
-    // (PR-26: get-url appended as 6, /coord/handoff/PR-26/bc-check)
-    expect(ids).toEqual([1, 2, 3, 4, 5, 6].map((n) => `51000000-0000-4000-8000-00000005100${n}`));
+    // (PR-26: get-url appended as 6; PR-30: table-connection is 8, as 7 is PR-27's hand-written number-sequence app)
+    expect(ids).toEqual(
+      [1, 2, 3, 4, 5, 6, 8].map((n) => `51000000-0000-4000-8000-00000005100${n}`),
+    );
     for (const id of ids)
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     const kept = bcCheckFamily(PLATFORM_TABLE_READ);
@@ -365,5 +370,42 @@ describe("PR-01: the refusal-family generator", () => {
     expect(
       classOf("GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters"),
     ).not.toBe(known);
+  });
+
+  test("PR-30: the table-connection family: 5 strings by 3 operations, 5 CRM row and 2 trigger cells, one control string", () => {
+    const f = TABLE_CONNECTION;
+    expect(f.cells).toHaveLength(22);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051008");
+    // the exact marker is the pinned control; every other string differs from it
+    const marker = f.cells.filter((c) => c.type === "Connection" && c.state === "Marker");
+    expect(marker.map((c) => c.method)).toEqual(["Register", "SetDefault", "Unregister"]);
+    for (const c of marker) expect([...(c.setup ?? []), c.call].join(" ")).toContain("'@@test@@'");
+    // review: BC keeps a connection for the session and refuses a second registration of a name, so each cell registers
+    // its own name, after unregistering a leftover of it; a CRM cell then sets that name as the default
+    const registered = f.cells.map((c) => {
+      const all = [...(c.setup ?? []), c.call].join("\n");
+      const name = /RegisterTableConnection\(TableConnectionType::CRM, '(\w+)'/.exec(all)?.[1];
+      expect(c.setup?.[0]).toBe(
+        `if HasTableConnection(TableConnectionType::CRM, '${name}') then UnregisterTableConnection(TableConnectionType::CRM, '${name}');`,
+      );
+      if (c.type.startsWith("CRM")) {
+        expect(c.setup?.[1]).toBe(
+          `RegisterTableConnection(TableConnectionType::CRM, '${name}', '@@test@@');`,
+        );
+        expect(c.setup?.[2]).toBe(
+          `SetDefaultTableConnection(TableConnectionType::CRM, '${name}');`,
+        );
+      }
+      return name;
+    });
+    expect(new Set(registered).size).toBe(22);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("PR-30 review: every family's BC-check app id is unique and none takes 7 (PR-27's hand-written app)", () => {
+    const ns = Object.values(FAMILIES).map((f) => Number(bcCheckApp(f).id.slice(-2)));
+    expect(new Set(ns).size).toBe(ns.length);
+    expect(ns).not.toContain(7);
   });
 });
