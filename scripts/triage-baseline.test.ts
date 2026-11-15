@@ -6,11 +6,13 @@ import { ResultsStore } from "../packages/runner/src/store";
 import {
   type BaselineRow,
   EXIT,
+  REBASELINE_CUT_LINE,
   type RunFacts,
   classify,
   kindOf,
   pickFiles,
   readStore,
+  rebaselineCutOf,
   stderrFallbacks,
 } from "./triage-baseline";
 
@@ -31,6 +33,7 @@ const run = (over: Partial<RunFacts> = {}): RunFacts => ({
   reported: true,
   caveats: [],
   mutantTestRows: 5,
+  rebaselineCut: false,
   ...over,
 });
 
@@ -101,6 +104,47 @@ test("each stop is named, in order, and only a usable baseline is go", () => {
   });
   expect(new Set(Object.values(EXIT)).size).toBe(Object.keys(EXIT).length);
   expect(EXIT.go).toBe(0);
+});
+
+test("R1031: a budget cut inside isolation auto's re-baseline stops by name, whatever the first pass looks like", () => {
+  const cut = run({ rc: 7, caveats: ["time-budget-reached"], rebaselineCut: true });
+  // Sustainability's shape: green tests, mutants reached, exit 7. Without the rule it reads go.
+  const t = classify([pass("A.x"), notRun("B.y", "number sequence"), fail("C.z")], cut);
+  expect(t).toMatchObject({ stop: "rebaseline-cut", tests: 3, green: 1, refused: 1 });
+  expect(t.detail).toContain("first pass");
+  expect(t.detail).toContain("raise --budget-s");
+  expect(EXIT["rebaseline-cut"]).toBe(17);
+  // ...also before the content rules (a first pass is not the baseline to judge) and before fallback-unchecked.
+  expect(classify([fail("A.x")], cut).stop).toBe("rebaseline-cut");
+  expect(classify([pass("A.x")], { ...cut, mutantTestRows: 0 }).stop).toBe("rebaseline-cut");
+  // ...but after the config faults, which name the cause better.
+  expect(
+    classify([pass("A.x")], { ...cut, caveats: ["al-runner-v3-serve-default-fallback-warmup"] })
+      .stop,
+  ).toBe("fallback");
+  // The same run with the re-baseline finished is go: the rule fires on the cut, not on the budget.
+  expect(classify([pass("A.x")], { ...cut, rebaselineCut: false }).stop).toBe("go");
+});
+
+test("R1031: rebaselineCutOf reads the report, and only without one the stderr line", () => {
+  const stopped = {
+    timeBudget: { baselineStopped: { testsRun: 526, testsTotal: 526, inAutoRebaseline: true } },
+  };
+  expect(rebaselineCutOf(stopped, "")).toBe(true);
+  // A budget stop in an ordinary baseline is not this cut.
+  expect(
+    rebaselineCutOf({ timeBudget: { baselineStopped: { testsRun: 3, testsTotal: 9 } } }, ""),
+  ).toBe(false);
+  expect(rebaselineCutOf({ timeBudget: {} }, `${REBASELINE_CUT_LINE}: 1 of 1 test(s) ran.`)).toBe(
+    false,
+  );
+  expect(rebaselineCutOf({}, "")).toBe(false);
+  expect(rebaselineCutOf(undefined, `x\n${REBASELINE_CUT_LINE}: 526 of 526 test(s) ran.\n`)).toBe(
+    true,
+  );
+  expect(rebaselineCutOf(undefined, "TIME BUDGET REACHED: --time-budget 900 s used up")).toBe(
+    false,
+  );
 });
 
 test("both stored refusal forms count as refused", () => {

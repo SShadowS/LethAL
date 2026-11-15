@@ -7,6 +7,10 @@
  *   exit 10  no-baseline         no baseline rows in the store (read triage.stderr.txt)
  *   exit 11  fallback            the serve-entries default fell back to one-shot (caveat al-runner-v3-serve-default-fallback*)
  *   exit 12  no-license          al-runner refused a test "with no license file loaded" (R956: set alRunnerV3.license)
+ *   exit 17  rebaseline-cut      the time budget ran out inside isolation auto's re-baseline (R1031): the store holds the
+ *                                first pass for the codeunits it did not reach, which is no baseline to compare with (a
+ *                                cut Sustainability triage read 273-356 green, a finished one 393): raise --budget-s.
+ *                                Checked after fallback and no-license, before the rules below that judge the baseline
  *   exit 13  uniform-refusal     every baseline test was refused (notRun) for one and the same cause
  *   exit 14  zero-green          no baseline test passed
  *   exit 16  run-failed          the run itself ended badly: no report, quarantined (3), nothing scored (4), killed by the
@@ -51,7 +55,8 @@ export interface Triage {
     | "uniform-refusal"
     | "zero-green"
     | "fallback-unchecked"
-    | "run-failed";
+    | "run-failed"
+    | "rebaseline-cut";
   readonly detail: string;
   readonly tests: number;
   readonly green: number;
@@ -67,6 +72,7 @@ export const EXIT: Record<Triage["stop"], number> = {
   "zero-green": 14,
   "fallback-unchecked": 15,
   "run-failed": 16,
+  "rebaseline-cut": 17,
 };
 
 /**
@@ -78,6 +84,25 @@ export interface RunFacts {
   readonly reported: boolean;
   readonly caveats: readonly string[];
   readonly mutantTestRows: number;
+  /**
+   * R1031: the time budget ran out inside isolation auto's re-baseline (the report's
+   * `timeBudget.baselineStopped.inAutoRebaseline`, or with no report LethAL's stderr line), so the store holds the first
+   * pass for every codeunit the re-baseline did not reach.
+   */
+  readonly rebaselineCut: boolean;
+}
+
+/** R1031: LethAL's own line when the budget ends inside isolation auto's re-baseline (orchestrator.ts). */
+export const REBASELINE_CUT_LINE = "TIME BUDGET REACHED IN THE AUTO ISOLATION RE-BASELINE";
+
+/** R1031: whether the run's budget ran out inside the re-baseline, from its report, else from its stderr. */
+export function rebaselineCutOf(report: unknown, stderr: string): boolean {
+  if (report !== undefined) {
+    const tb = (report as { timeBudget?: { baselineStopped?: { inAutoRebaseline?: unknown } } })
+      .timeBudget;
+    return tb?.baselineStopped?.inAutoRebaseline === true;
+  }
+  return stderr.includes(REBASELINE_CUT_LINE);
 }
 
 const RC_MEANING: Record<number, string> = {
@@ -106,6 +131,12 @@ export function classify(rows: readonly BaselineRow[], run: RunFacts): Triage {
   const lic = rows.filter((r) => r.message.includes("with no license file loaded"));
   if (lic.length > 0)
     return say("no-license", `${lic.length} test(s) refused with no license file loaded`);
+  // R1031: before the rules that judge the baseline's content, as a first pass is not the baseline to judge.
+  if (run.rebaselineCut)
+    return say(
+      "rebaseline-cut",
+      `the time budget ran out inside isolation auto's re-baseline, so the stored baseline is the first pass for the codeunits it did not reach (${green} of ${rows.length} green there), not a usable baseline: raise --budget-s`,
+    );
   const causes = new Set(refusedRows.map((r) => cause(r.message)));
   if (refusedRows.length === rows.length && causes.size === 1)
     return say("uniform-refusal", `all ${rows.length} refused: ${[...causes][0]}`);
@@ -302,14 +333,19 @@ async function main(): Promise<number> {
     await Bun.sleep(60_000);
   }
   const reported = existsSync(p("report.json"));
-  const caveats = reported
+  const report = reported
     ? (JSON.parse(readFileSync(p("report.json"), "utf8")) as { validity: { caveats: string[] } })
-        .validity.caveats
-    : existsSync(p("stderr.txt"))
-      ? stderrFallbacks(readFileSync(p("stderr.txt"), "utf8"))
-      : [];
+    : undefined;
+  const stderr = existsSync(p("stderr.txt")) ? readFileSync(p("stderr.txt"), "utf8") : "";
+  const caveats = report !== undefined ? report.validity.caveats : stderrFallbacks(stderr);
   const store = existsSync(p("sqlite")) ? readStore(p("sqlite")) : { rows: [], mutantTestRows: 0 };
-  const t = classify(store.rows, { rc, reported, caveats, mutantTestRows: store.mutantTestRows });
+  const t = classify(store.rows, {
+    rc,
+    reported,
+    caveats,
+    mutantTestRows: store.mutantTestRows,
+    rebaselineCut: rebaselineCutOf(report, stderr),
+  });
   writeFileSync(p("json"), `${JSON.stringify({ project, only, runExit: rc, ...t }, null, 2)}\n`);
   console.log(
     `TRIAGE ${t.stop === "go" ? "GO" : `STOP ${t.stop}`}: ${t.detail} (run exit ${rc}; --only ${only.join(" ")})`,
