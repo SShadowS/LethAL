@@ -6146,27 +6146,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
     // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
     // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
-    const leftOutRows = (id: number): readonly V3Row[] => {
-      const rows = (this.baselineRows.get(id) ?? []).filter(
-        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
-      );
-      if (this.isolatedRefs.has(id)) return rows;
-      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
-      return rows.filter((r) => {
-        const m = r.method.toLowerCase();
-        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
-      });
-    };
-    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
-    const leftOut = (cu: number): readonly string[] | undefined => {
-      if (this.isolatedRefs.has(cu)) return undefined;
-      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
-      return names.length === 0 ? undefined : names;
-    };
+    // R998: mutant entries leave the same tests out (`leftOutNames`).
+    const warm = union.filter(
+      (id) => !this.isolatedRefs.has(id) || this.leftOutRows(id).length === 0,
+    );
+    const leftOut = (cu: number) => this.leftOutNames(cu);
     const expected = (e: SentEntry): readonly V3Row[] => {
       const rows = this.baselineRows.get(callOf(e)) ?? [];
       if (e.call !== undefined) return rows;
-      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
+      const out = new Set(this.leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
       return rows.filter((r) => !out.has(r.method.toLowerCase()));
     };
     const daemon = await this.spawnDaemon(lane, mode, s);
@@ -6491,6 +6479,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           mode,
           groupCount,
           alone,
+          (cu) => this.mutantLeftOutNames(cu), // R998: the warm-up's, at the codeunit's end only
         ),
       );
     } finally {
@@ -6586,15 +6575,72 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
-  /** §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. */
+  /**
+   * R1004, R998: the baseline rows of `id` whose test a codeunit entry leaves out (`excludeTests`):
+   * a named refusal in THIS batch's baseline that the daemon cannot keep (`serveDaemonReusable`
+   * false). v3 matches `excludeTests` by PREFIX (#8059, measured `/coord/handoff/R-992/excl.ts`), so a
+   * test is left out only when no other test of its codeunit starts with its name. For a test run
+   * alone (R857/R896) the rows are returned unfiltered, for the warm-up to leave the call out.
+   */
+  private leftOutRows(id: number): readonly V3Row[] {
+    const rows = (this.baselineRows.get(id) ?? []).filter(
+      (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    if (this.isolatedRefs.has(id)) return rows;
+    const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+    return rows.filter((r) => {
+      const m = r.method.toLowerCase();
+      return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+    });
+  }
+
+  /** R1004, R998: the `excludeTests` of a plain codeunit entry for `cu`, or `undefined`. */
+  private leftOutNames(cu: number): readonly string[] | undefined {
+    if (this.isolatedRefs.has(cu)) return undefined;
+    const names = [...new Set(this.leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+    return names.length === 0 ? undefined : names;
+  }
+
+  /**
+   * R998: the tests a MUTANT entry of `cu` leaves out: of `leftOutNames`, only the run at the END of
+   * the codeunit's baseline order (every test after one of them is one of them too). So no test that
+   * still runs follows a left-out one, and none starts from other state than at the baseline (a
+   * refused test can change the codeunit's globals before v3 refuses it, which v3's cascades do not
+   * track; review 2-3). The warm-up keeps `leftOutNames`: it only compares, and a difference there
+   * fails loudly.
+   */
+  private mutantLeftOutNames(cu: number): readonly string[] | undefined {
+    const out = this.leftOutNames(cu);
+    if (out === undefined) return undefined;
+    const names = new Set(out.map((n) => n.toLowerCase()));
+    const order = this.baselineRows.get(cu) ?? [];
+    const tail: string[] = [];
+    for (let i = order.length - 1; i >= 0; i--) {
+      const name = `Codeunit${cu}.${order[i]?.method ?? ""}`;
+      if (!names.has(name.toLowerCase())) break;
+      tail.push(name);
+    }
+    return tail.length === 0 ? undefined : [...new Set(tail)].sort();
+  }
+
+  /**
+   * §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. R998: a test the
+   * entry left out (`mutantLeftOutNames`) may have no row; one that comes back anyway is read as ever.
+   */
   private suiteMissing(cu: number, rows: readonly V3Row[]): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
     if (one !== undefined && rows.length > 1) {
       return `the entry for ${one.codeunitName}.${one.method} has ${rows.length} rows, so that test did not run alone`;
     }
+    const out = new Set(
+      (one !== undefined ? [] : (this.mutantLeftOutNames(cu) ?? [])).map((n) =>
+        n.slice(`Codeunit${cu}.`.length).toLowerCase(),
+      ),
+    );
     for (const t of one !== undefined ? [one] : (this.suitePerCodeunit.get(cu) ?? [])) {
       const n = rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
+      if (n === 0 && out.has(t.method.toLowerCase())) continue;
       if (n !== 1)
         return `codeunit ${one?.codeunitId ?? cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
     }
@@ -7053,8 +7099,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
+        // R998 (review 1): the same tests left out as the entry it is compared with
         const cov = await lane.timed("coverageMs", () =>
-          this.plain(lane, daemon, mode, this.callId(ref), true),
+          this.plain(
+            lane,
+            daemon,
+            mode,
+            this.callId(ref),
+            true,
+            undefined,
+            this.mutantLeftOutNames(this.callId(ref)),
+          ),
         );
         const after = await echoOk();
         const echoWhy = before ?? after;
@@ -7130,14 +7185,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
     /** R948: the baseline daemon's own stop; absent: the mutant phase's `serveStopSeconds`. */
     stopSeconds?: number,
+    /** R998: a plain codeunit's left-out tests (the §6 coverage window only; never the baseline). */
+    leaveOut?: readonly string[],
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
     const s = stopSeconds ?? this.serveStopSeconds() ?? 1;
     const one = this.isolated(call);
     const cu = one?.codeunit ?? call;
+    const excludeTests = one !== undefined ? one.excludeTests : leaveOut;
     const body = {
       ...lane.requestBase(mode),
       test: one?.test ?? `Codeunit${cu}.`,
-      ...(one?.excludeTests !== undefined ? { excludeTests: one.excludeTests } : {}),
+      ...(excludeTests !== undefined ? { excludeTests } : {}),
       ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
     };
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;

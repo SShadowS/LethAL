@@ -301,6 +301,27 @@ const CASCADE_736 = (t: string): string =>
 const SEQ_847 = `NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesSeq, changed number sequence 'R1000SEQ' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.Insert is)`;
 const KEY_847 = `NotRun: out-of-scope: an earlier test of this codeunit, B_ChangesKey, changed isolated storage key 'R1000KEY' that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set is)`;
 
+/** R998: the three kept families as edge-a184cfc79 words them (`/coord/handoff/R-998/probe/out/`). */
+const RECREF = (m: string): string =>
+  `NotRun: out-of-scope: RecordRef.${m} on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)`;
+const R998_ROWS: Record<string, { status: string; notRun: boolean; message: string }> = {
+  "Codeunit50677.Refuses": { status: "error", notRun: true, message: RECREF("FieldCount") },
+  "Codeunit50678.Refuses": { status: "error", notRun: true, message: RECREF("FindSet") },
+  "Codeunit50679.Refuses": { status: "error", notRun: true, message: RECREF("SetRecFilter") },
+  "Codeunit50680.Refuses": { status: "error", notRun: true, message: RECREF("SetLoadFields") },
+  "Codeunit50681.Refuses": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+  },
+  "Codeunit50682.Refuses": {
+    status: "error",
+    notRun: true,
+    message: "NotRun: out-of-scope: RecordRef.GetTable of an unassigned Variant",
+  },
+};
+
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
 const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: string }> = {
   "Codeunit50670.HttpGet": {
@@ -351,6 +372,8 @@ const SERVE_ROWS: Record<string, { status: string; notRun?: boolean; message?: s
     notRun: true,
     message: CASCADE_736("B_ChangesKey"),
   },
+  // R998 (coord R-998): the three kept families, as edge-a184cfc79 words them (R-998's probe).
+  ...R998_ROWS,
 };
 
 type ServeRow = { status: string; notRun?: boolean; message?: string };
@@ -539,7 +562,14 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 7 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 13 entries");
+    // R998: each new family judged a refusal by its own entry
+    for (const e of [
+      "recordref-not-open",
+      "fieldref-never-assigned",
+      "gettable-unassigned-variant",
+    ])
+      expect(f?.measured).toContain(`${e}: refusal`);
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
@@ -677,7 +707,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    expect(SERVE_TESTS_AL.match(/^codeunit 5067\d /gm)).toHaveLength(7);
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(13);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });

@@ -2263,6 +2263,27 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     expect(since(r, n0).map((q) => q.ids[0])).toEqual([plainCu, plainEcho]);
   });
 
+  // R998 (review 1): the coverage request leaves out what the entry left out, or the two disagree on the
+  // left-out test's row and the pass is never scored.
+  test("R998: a left-out test is left out of the coverage request too, so the pass is scored", async () => {
+    const bRefused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B"
+          ? {
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: "NotRun: out-of-scope: InStream method on an unassigned Variant",
+            }
+          : x,
+      );
+    const { r, n0 } = await windowOf({ serve: { rows: bRefused }, oneShotRows: bRefused });
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const cov = since(r, n0).find((q) => q.body.coverage === true);
+    expect(cov?.body.excludeTests).toEqual([`Codeunit${CU}.B`]);
+  });
+
   test("the coverage request's rows disagree with the entry's -> error entries-coverage-disagreement", async () => {
     const plainFails: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
@@ -4716,15 +4737,54 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     });
   }
 
-  test("only the warm-up leaves it out: the mutant entries still send the whole codeunit", async () => {
-    const r = asSource(await rig({ serve: { rows: bRefused } }), "default");
+  // R998 (coord R-998): the mutant entries leave the same tests out (DO t1: 35 daemon closes, 3,625 s
+  // of warm-ups, R-984). Red without the R998 change: every mutant request meets B's refusal and
+  // closes its daemon, and with the exclusion but without suiteMissing's allowance, A reads row-missing.
+  test("R998: the mutant entries leave it out too: no daemon closes on it, and the covering test's verdict reads as ever", async () => {
+    const bAlways: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(await rig({ serve: { rows: bAlways } }), "default");
     await baseline(r.b, SUITE1);
-    await r.b.prefetchMutants(plans(["M0001"]));
-    const later = r.serve.requests
+    const covering = [ref("A")]; // B is refused at baseline, so it covers no mutant
+    await r.b.prefetchMutants(plans(["M0001", "M0002"], covering));
+    const mutantEntries = r.serve.requests
       .slice(1)
-      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? []);
-    expect(later.length).toBeGreaterThan(0);
-    expect(later.every((e) => e.excludeTests === undefined)).toBe(true);
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.`);
+    expect(mutantEntries.length).toBeGreaterThan(0);
+    expect(mutantEntries.map((e) => e.excludeTests)).toEqual(
+      mutantEntries.map(() => [`Codeunit${CU}.B`]),
+    );
+    expect(r.serve.closes).toEqual([]);
+    expect(r.serve.daemons).toHaveLength(1);
+    await r.b.activate("M0001");
+    const v = await r.b.run(ref("A"), OPTS);
+    expect(v.outcome).toBe("pass");
+  });
+
+  // R998 (review 2-3): a refused test with a test after it stays in the mutant entries, so the test
+  // after it starts from the baseline's state; the warm-up (which only compares) still leaves it out.
+  test("R998: a refused test in the middle of its codeunit stays in the mutant entries (only a trailing run is left out)", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      );
+    const r = asSource(await rig({ suite: SUITE_ABC, serve: { rows: bMid } }), "default");
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("C")])).catch(() => {});
+    expect(warmupEntry(r)?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+    const mutantEntries = r.serve.requests
+      .slice(1)
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .filter((e) => String(e.test) === `Codeunit${CU}.`);
+    expect(mutantEntries.length).toBeGreaterThan(0);
+    expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
   });
 
   test("a refusal the daemon keeps (R945: Company FindSet) is not left out: the warm-up still runs it", async () => {
