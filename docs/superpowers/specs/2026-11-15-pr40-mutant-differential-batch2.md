@@ -41,3 +41,17 @@ Install` runs when the copy installs (it writes the copy's own tables). Base64 h
    `killed`/`survived` disagreement, or an `error` on bcdev that v3 scored — is a finding: classified (al-runner wrong, BC flaky
    by one re-run, LethAL), invented repro, upstream issue or roadmap item.
 3. No `error` verdict on bcdev that v3 scored; no daemon left stranded (every bcdev run carries `--stop-hung-sessions`).
+
+## Addendum 1 (2026-11-15, after the measured v3 runs, before any bcdev run)
+
+**The v3 side** (`/coord/handoff/PR-40/v3/`, edge-5a58a0f16; the configs' `packagesDir` is `/coord/handoff/PR-40/pkgs`, the corpus
+closure plus the four copied dependency apps, which LethAL's alc needs): **0 timeout-killed in every module**, so each goes to
+bcdev with its whole mutant set.
+- Encoding: baseline 3/3; 9 mutants (6 killed, 1 survived, 2 error).
+- Base64: baseline 13/13; 88 mutants (30 killed, 24 survived, 34 no-coverage).
+- Confirm Management: baseline 4/4; 24 mutants (18 killed, 6 no-coverage).
+- Upgrade Tags: baseline **11/12**, 199 mutants (107 killed, 54 survived, 35 no-coverage, 3 error).
+
+**Prediction 1 was wrong for Upgrade Tags on v3:** `Upgrade Tag Test.TestUpgradeTagsPassValidation` is refused on v3 (`FindSet
+on the Company table`, #7775 row 11; LethAL met this same test in R-961). On BC it is expected to run. Mutants that only it covers
+on BC will differ: they are class (a) (a v3 refusal BC scores), listed, not findings. The rest of prediction 1 stands.
