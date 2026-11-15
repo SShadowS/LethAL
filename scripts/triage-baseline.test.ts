@@ -122,6 +122,13 @@ test("R1031: a budget cut inside isolation auto's re-baseline stops by name, wha
     classify([pass("A.x")], { ...cut, caveats: ["al-runner-v3-serve-default-fallback-warmup"] })
       .stop,
   ).toBe("fallback");
+  expect(
+    classify([pass("A.x"), notRun("A.y", "Permission ... with no license file loaded")], cut).stop,
+  ).toBe("no-license");
+  // ...and before uniform-refusal, the first content rule.
+  expect(classify([notRun("A.x", "one cause"), notRun("B.y", "one cause")], cut).stop).toBe(
+    "rebaseline-cut",
+  );
   // The same run with the re-baseline finished is go: the rule fires on the cut, not on the budget.
   expect(classify([pass("A.x")], { ...cut, rebaselineCut: false }).stop).toBe("go");
 });
@@ -139,6 +146,19 @@ test("R1031: rebaselineCutOf reads the report, and only without one the stderr l
     false,
   );
   expect(rebaselineCutOf({}, "")).toBe(false);
+  // A signal (triage's own timeout) or the memory guard stopping inside the re-baseline is not the budget.
+  const inRebaseline = { testsRun: 9, testsTotal: 9, inAutoRebaseline: true };
+  expect(
+    rebaselineCutOf({ timeBudget: { baselineStopped: inRebaseline, stoppedBySignal: true } }, ""),
+  ).toBe(false);
+  expect(
+    rebaselineCutOf(
+      { timeBudget: { baselineStopped: inRebaseline, stoppedByMemory: { limitGiB: 30 } } },
+      "",
+    ),
+  ).toBe(false);
+  // ...so a timeout kill there reads run-failed, not "raise --budget-s".
+  expect(classify([pass("A.x")], run({ rc: 124, rebaselineCut: false })).stop).toBe("run-failed");
   expect(rebaselineCutOf(undefined, `x\n${REBASELINE_CUT_LINE}: 526 of 526 test(s) ran.\n`)).toBe(
     true,
   );

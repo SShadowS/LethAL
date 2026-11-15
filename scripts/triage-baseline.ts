@@ -98,9 +98,22 @@ export const REBASELINE_CUT_LINE = "TIME BUDGET REACHED IN THE AUTO ISOLATION RE
 /** R1031: whether the run's budget ran out inside the re-baseline, from its report, else from its stderr. */
 export function rebaselineCutOf(report: unknown, stderr: string): boolean {
   if (report !== undefined) {
-    const tb = (report as { timeBudget?: { baselineStopped?: { inAutoRebaseline?: unknown } } })
-      .timeBudget;
-    return tb?.baselineStopped?.inAutoRebaseline === true;
+    const tb = (
+      report as {
+        timeBudget?: {
+          baselineStopped?: { inAutoRebaseline?: unknown };
+          stoppedBySignal?: unknown;
+          stoppedByMemory?: unknown;
+        };
+      }
+    ).timeBudget;
+    // A signal (triage's own timeout) or the memory guard also stops inside the re-baseline with the same flag: not the
+    // budget, so not this stop's advice; those fall to the rules after it (a timeout kill reads run-failed).
+    return (
+      tb?.baselineStopped?.inAutoRebaseline === true &&
+      tb.stoppedBySignal !== true &&
+      tb.stoppedByMemory === undefined
+    );
   }
   return stderr.includes(REBASELINE_CUT_LINE);
 }
@@ -135,7 +148,7 @@ export function classify(rows: readonly BaselineRow[], run: RunFacts): Triage {
   if (run.rebaselineCut)
     return say(
       "rebaseline-cut",
-      `the time budget ran out inside isolation auto's re-baseline, so the stored baseline is the first pass for the codeunits it did not reach (${green} of ${rows.length} green there), not a usable baseline: raise --budget-s`,
+      `the time budget ran out inside isolation auto's re-baseline, so the stored baseline is the first pass for the codeunits it did not reach (${green} of ${rows.length} green in the stored baseline), not a usable baseline: raise --budget-s`,
     );
   const causes = new Set(refusedRows.map((r) => cause(r.message)));
   if (refusedRows.length === rows.length && causes.size === 1)
