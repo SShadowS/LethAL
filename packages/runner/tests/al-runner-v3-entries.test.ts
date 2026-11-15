@@ -1584,7 +1584,7 @@ describe("R939: why each serve daemon closed", () => {
   });
 
   // R1009 (coord PR-09): DO's stale-buffer close was known only by its cut family ("... after a lock other
-  // tha"), so it could not be measured. The close carries the whole first line, without v3's suffix.
+  // tha"), so it could not be measured. The close carries the whole first line and the test.
   test("R1009: a refusal's whole first line rides along (text), where the family is cut", () => {
     const stale =
       "NotRun: out-of-scope: a stale Issued Reminder Header buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction (not pinned)";
@@ -1593,7 +1593,7 @@ describe("R939: why each serve daemon closed", () => {
         name: "Codeunit1.A",
         status: "error",
         notRun: true,
-        message: `${stale} [al-runner v3 did not run this test (notRun)]\nsecond line`,
+        message: `${stale}\nsecond line`,
       },
     ]);
     expect(why?.family).toBe(

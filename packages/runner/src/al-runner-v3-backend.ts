@@ -1419,7 +1419,7 @@ export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
  * for a refusal, its family: the text after `out-of-scope: `, with quoted and backticked spans
  * (names, code) masked as `…` FIRST, then cut at the first `(`, `[`, `;` or `:`, standalone numbers
  * as N, at most 80 characters. Undefined when every row is kept. R1009: `text`, a refusal's WHOLE
- * first line (the `[al-runner v3 did not run ...]` suffix dropped), for the close event only: the
+ * first line, as the raw row has it, for the close event only: the
  * family's cut hid DO's stale-buffer refusal, so it could not be measured; and `test`, the refused
  * row's test name, so the shape can be reduced from its site.
  */
@@ -1443,7 +1443,7 @@ export function unkeptRowReason(rows: readonly ServerTestLine[]):
       ?.replace(/\b\d+\b/g, "N")
       .trim()
       .slice(0, 80);
-    const text = (m.split("\n")[0] ?? "").replace(/\s*\[al-runner v\d+ did not run.*$/, "");
+    const text = m.split("\n")[0] ?? "";
     return {
       reason: "refusal",
       family: family !== undefined && family !== "" ? family : "unnamed",

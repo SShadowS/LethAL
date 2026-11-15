@@ -545,7 +545,7 @@ export type RunEventInput =
       readonly reason: string;
       readonly family?: string;
       /**
-       * R1009: a refusal's whole first line (al-runner's `[... did not run ...]` suffix dropped).
+       * R1009: a refusal's whole first line, as al-runner wrote it in the row.
        * `family` is cut at 80 characters, so a family seen only in closes could not be measured or
        * kept. Local only: the events stream is never committed (it can hold the app's quoted text).
        */
