@@ -84,3 +84,30 @@ coverage-differential skill's ground truth), output `bc/secrets.none.*`, otherwi
 too; a different killing test is a finding only where both sides ran the same tests before it (under `none` bcdev runs all six,
 v3 only its covering set, so a kill by an earlier test v3 did not run is listed, not a finding). Filter Tokens is unchanged: no
 `[NonDebuggable]` there, bcdev's default mode, predictions 1 to 3 as above.
+
+## Addendum 2 (2026-11-15, after the Filter Tokens bcdev run, before any further bcdev run)
+
+**What went wrong.** The Filter Tokens scope did not keep every hang-capable mutant off bc2. M0332 (`ReadUntilCharacter`,
+`lethal.empty-block`, its block lines 450-454) touched line 454, which the scope allowed, and `--lines` keeps a mutant that touches
+any allowed line. The command also lacked `--stop-hung-sessions` (the control app's stop is opt-in for mutant runs, R053/R191),
+so LethAL's own 180 s timer aborted the call, M0332 reads `error` (stranded), and bc2's control-app lease was orphaned (owner
+question q-20261115T185041-55e86d96; lethal-bugs holds the lease). The scope was not checked against a v3 run before the hand-off.
+Why M0332 exists at all: R1050 (R830 refuses deleting a loop's progress call but not emptying the callee's body).
+
+**The rule for every further bcdev run in PR-34:**
+1. The census of hang-capable sites, `bun scripts/census-hang-capable.ts /coord/handoff/PR-34/src/filtertokens` (output
+   `/coord/handoff/PR-34/census-filtertokens.{txt,json}`): 2 files, 97 assignments, 10 tagged sites, all in
+   `FilterTokensImpl.Codeunit.al`: lines 88, 89, 90, 95, 96, 99, 100, 101 (`MakeFilterExpression`), 444
+   (`GetPositionDifferentCharacter`), 453 (`ReadUntilCharacter`); every one with an empty operator list (no operator reaches a
+   tagged site). The census covers assignment-shaped hangs only; M0041 (a negated loop condition) and M0332 (an emptied callee,
+   R1050) are other shapes, so it alone is not the filter.
+2. The scope excludes whole procedures' hang-prone spans: `--lines src/FilterTokensImpl.Codeunit.al:1-91 --lines
+   src/FilterTokensImpl.Codeunit.al:104-446 --lines src/FilterTokensImpl.Codeunit.al:455-486 --lines
+   src/FilterTokens.Codeunit.al:1-122` (`/coord/handoff/PR-34/scope-filtertokens.txt`), and it is checked BEFORE use: a v3 run on
+   exactly that scope (`/coord/handoff/PR-34/v3-scope2/`) gives 341 mutants, **0 timeout-killed** (212 killed, 106 survived, 13
+   error, 10 no-coverage). Secrets: 0 timeout-killed on v3 (68 mutants).
+3. Every bcdev command carries `--stop-hung-sessions` as a backstop.
+
+**Filter Tokens is not re-run on bcdev in PR-34**: the run on the first scope (331 scored) is compared as it is, with M0332 left
+out (error on bcdev, timeout-killed on v3). Its comparison and the Secrets re-run under `coverageMode: "none"` (addendum 1,
+waiting for bc2's recovery, now with `--stop-hung-sessions`) are PR-34's two measurements.

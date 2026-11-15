@@ -723,13 +723,27 @@ table 51001 "Cell CRM Trigger Row"
  * that raise nothing. Left out: the BC-internal QR-code and PDF converters (a TypeInitializationException of the environment) and
  * XmlDocument.Validate (needs a schema set).
  */
-const DOTNET_SITES: readonly {
+interface DotnetSite {
   type: string;
   method: string;
   vars?: string[];
   setup?: string[];
   stmt: string;
-}[] = [
+}
+/** PR-32: a throwing site in two shapes: under asserterror alone, and with GetLastErrorText carried out through Error. */
+const guardedAndText = (s: DotnetSite): Cell[] =>
+  (["guarded", "text"] as const).map((state) => ({
+    type: s.type,
+    method: s.method,
+    state,
+    ...(s.vars !== undefined ? { vars: s.vars } : {}),
+    ...(s.setup !== undefined ? { setup: s.setup } : {}),
+    call:
+      state === "guarded"
+        ? `asserterror ${s.stmt}`
+        : `asserterror ${s.stmt} Error('DOTNET %1', GetLastErrorText());`,
+  }));
+const DOTNET_SITES: readonly DotnetSite[] = [
   { type: "Uri", method: "Ctor", stmt: "U := U.Uri('not a uri');" },
   { type: "UriBuilder", method: "Ctor", stmt: "UB := UB.UriBuilder('http://cell.example:port/');" },
   {
@@ -870,19 +884,7 @@ export const DOTNET_EXCEPTION: Family = {
     Aes: "A: DotNet GenAes;",
   },
   cells: [
-    ...DOTNET_SITES.flatMap((s): Cell[] =>
-      (["guarded", "text"] as const).map((state) => ({
-        type: s.type,
-        method: s.method,
-        state,
-        ...(s.vars !== undefined ? { vars: s.vars } : {}),
-        ...(s.setup !== undefined ? { setup: s.setup } : {}),
-        call:
-          state === "guarded"
-            ? `asserterror ${s.stmt}`
-            : `asserterror ${s.stmt} Error('DOTNET %1', GetLastErrorText());`,
-      })),
-    ),
+    ...DOTNET_SITES.flatMap(guardedAndText),
     // controls: the same members with arguments that raise nothing
     { type: "Uri", method: "Ctor", state: "ok", call: "U := U.Uri('https://cell.example/');" },
     {
@@ -892,6 +894,293 @@ export const DOTNET_EXCEPTION: Family = {
       call: "UB := UB.UriBuilder('http://cell.example/');",
     },
     { type: "CultureInfo", method: "Ctor", state: "ok", call: "CI := CI.CultureInfo('en-US');" },
+  ],
+};
+
+/**
+ * PR-33: R1044's uncovered form, the OpenSSL one of #7924's two largest keys (RSAWrapper.Decrypt 43, RSACryptoServiceProvider.Decrypt
+ * 38 standing sightings, all Microsoft's crypto test apps): "raised the .NET exception Interop+Crypto+OpenSslCryptographicException".
+ * The stored texts name three OpenSSL causes: "oaep decoding error" (PKCS1 ciphertext decrypted with OAEP), "padding check failed"
+ * (OAEP ciphertext decrypted with PKCS1) and "value missing" (a key holding only its public part used to decrypt or sign). Each on
+ * both RSA paths (RSACryptoServiceProvider; RSA.Create(), whose type is RSAWrapper), in PR-32's guarded and text shapes, plus a
+ * control per path that decrypts with the padding it encrypted with.
+ */
+const CSP_VARS = ["EN: DotNet GenEncoding;", "Data: DotNet GenArray;", "Bytes: DotNet GenArray;"];
+const WRAP_VARS = [...CSP_VARS, "P: DotNet GenRSAEncryptionPadding;"];
+const CSP = (s: Omit<DotnetSite, "type" | "vars">): DotnetSite => ({
+  type: "CSP",
+  vars: CSP_VARS,
+  ...s,
+});
+const WRAP = (s: Omit<DotnetSite, "type" | "vars">): DotnetSite => ({
+  type: "RSA",
+  vars: WRAP_VARS,
+  ...s,
+});
+const CSP_KEY = ["R := R.RSACryptoServiceProvider();", "Data := EN.UTF8.GetBytes('cell');"];
+const CSP_PUBLIC = [
+  ...CSP_KEY,
+  "R2 := R2.RSACryptoServiceProvider();",
+  "R2.FromXmlString(R.ToXmlString(false));",
+];
+const WRAP_KEY = ["W := W.Create();", "Data := EN.UTF8.GetBytes('cell');"];
+const WRAP_PUBLIC = [...WRAP_KEY, "W2 := W2.Create();", "W2.FromXmlString(W.ToXmlString(false));"];
+const RSA_SITES: readonly DotnetSite[] = [
+  CSP({
+    method: "PkcsThenOaep",
+    setup: [...CSP_KEY, "Bytes := R.Encrypt(Data, false);"],
+    stmt: "Bytes := R.Decrypt(Bytes, true);",
+  }),
+  CSP({
+    method: "OaepThenPkcs",
+    setup: [...CSP_KEY, "Bytes := R.Encrypt(Data, true);"],
+    stmt: "Bytes := R.Decrypt(Bytes, false);",
+  }),
+  CSP({
+    method: "PublicOnlyDecrypt",
+    setup: [...CSP_PUBLIC, "Bytes := R2.Encrypt(Data, false);"],
+    stmt: "Bytes := R2.Decrypt(Bytes, false);",
+  }),
+  CSP({
+    method: "PublicOnlySignData",
+    setup: CSP_PUBLIC,
+    stmt: "Bytes := R2.SignData(Data, 'SHA256');",
+  }),
+  WRAP({
+    method: "PkcsThenOaep",
+    setup: [...WRAP_KEY, "Bytes := W.Encrypt(Data, P.Pkcs1);"],
+    stmt: "Bytes := W.Decrypt(Bytes, P.OaepSHA1);",
+  }),
+  WRAP({
+    method: "OaepThenPkcs",
+    setup: [...WRAP_KEY, "Bytes := W.Encrypt(Data, P.OaepSHA1);"],
+    stmt: "Bytes := W.Decrypt(Bytes, P.Pkcs1);",
+  }),
+  WRAP({
+    method: "PublicOnlyDecrypt",
+    setup: [...WRAP_PUBLIC, "Bytes := W2.Encrypt(Data, P.Pkcs1);"],
+    stmt: "Bytes := W2.Decrypt(Bytes, P.Pkcs1);",
+  }),
+];
+export const DOTNET_EXCEPTION_RSA: Family = {
+  name: "dotnet-exception-rsa",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: DOTNET_EXCEPTION.known,
+  support: `dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.Text.Encoding; GenEncoding) { }
+        type(System.Array; GenArray) { }
+        type(System.Security.Cryptography.RSACryptoServiceProvider; GenRSACryptoServiceProvider) { }
+        type(System.Security.Cryptography.RSA; GenRSA) { }
+        type(System.Security.Cryptography.RSAEncryptionPadding; GenRSAEncryptionPadding) { }
+    }
+}
+`,
+  handles: {
+    CSP: "R: DotNet GenRSACryptoServiceProvider;\n        R2: DotNet GenRSACryptoServiceProvider;",
+    RSA: "W: DotNet GenRSA;\n        W2: DotNet GenRSA;",
+  },
+  cells: [
+    ...RSA_SITES.flatMap(guardedAndText),
+    // controls: decrypt with the padding the data was encrypted with
+    {
+      type: "CSP",
+      method: "SamePadding",
+      state: "ok",
+      vars: CSP_VARS,
+      setup: [...CSP_KEY, "Bytes := R.Encrypt(Data, true);"],
+      call: "Bytes := R.Decrypt(Bytes, true);",
+    },
+    {
+      type: "RSA",
+      method: "SamePadding",
+      state: "ok",
+      vars: WRAP_VARS,
+      setup: [...WRAP_KEY, "Bytes := W.Encrypt(Data, P.OaepSHA1);"],
+      call: "Bytes := W.Decrypt(Bytes, P.OaepSHA1);",
+    },
+  ],
+};
+
+/**
+ * PR-33: family 10, #8038's, the largest open coherent one after families 1-9 under R1036's count (133 standing sightings, one
+ * key): "a permission denial (read permission on object type 0 id 2000000157) whose error is not pinned yet (a FlowField over a
+ * system table)". Published Application's own FlowFields read system tables the caller never names: Tenant Visible and PerTenant
+ * Or Installed look up NAV App Extra (2000000157), Installed checks Installed Application. Upstream has pinned two shapes (a
+ * FindFirst with ID and Tenant Visible; an app table's FlowField over Published Application with ID and Tenant Visible); four
+ * Extension Management tests still meet the refusal. One cell per read that makes such a FlowField read, under a set that grants
+ * Published Application and under one that grants only the app's own table, plus a plain FindFirst as the control.
+ */
+const PUBAPP_READS: readonly (readonly [
+  type: "PubApp" | "Item",
+  method: string,
+  setup: string[],
+  read: string,
+])[] = [
+  [
+    "PubApp",
+    "FindFirstIdTenantVisible",
+    ["PA.SetRange(ID, Me.Id());", 'PA.SetRange("Tenant Visible", true);'],
+    "if PA.FindFirst() then;",
+  ],
+  [
+    "PubApp",
+    "FindFirstTenantVisible",
+    ['PA.SetRange("Tenant Visible", true);'],
+    "if PA.FindFirst() then;",
+  ],
+  [
+    "PubApp",
+    "FindFirstIdPerTenant",
+    ["PA.SetRange(ID, Me.Id());", 'PA.SetRange("PerTenant Or Installed", true);'],
+    "if PA.FindFirst() then;",
+  ],
+  [
+    "PubApp",
+    "FindFirstIdInstalled",
+    ["PA.SetRange(ID, Me.Id());", "PA.SetRange(Installed, true);"],
+    "if PA.FindFirst() then;",
+  ],
+  [
+    "PubApp",
+    "CalcTenantVisible",
+    ["PA.SetRange(ID, Me.Id());"],
+    'if PA.FindFirst() then PA.CalcFields("Tenant Visible");',
+  ],
+  [
+    "PubApp",
+    "CalcPerTenant",
+    ["PA.SetRange(ID, Me.Id());"],
+    'if PA.FindFirst() then PA.CalcFields("PerTenant Or Installed");',
+  ],
+  [
+    "PubApp",
+    "CalcInstalled",
+    ["PA.SetRange(ID, Me.Id());"],
+    "if PA.FindFirst() then PA.CalcFields(Installed);",
+  ],
+  [
+    "PubApp",
+    "IsEmptyTenantVisible",
+    ['PA.SetRange("Tenant Visible", true);'],
+    "if PA.IsEmpty() then;",
+  ],
+  [
+    "PubApp",
+    "CountTenantVisible",
+    ['PA.SetRange("Tenant Visible", true);'],
+    "if PA.Count() = 0 then;",
+  ],
+  ["Item", "LookupNameTenantVisible", [], 'Item.CalcFields("Name TV");'],
+  ["Item", "ExistTenantVisible", [], 'Item.CalcFields("Exists TV");'],
+  ["Item", "CountTenantVisible", [], 'Item.CalcFields("Count TV");'],
+  ["Item", "LookupNamePerTenant", [], 'Item.CalcFields("Name PerTenant");'],
+  ["Item", "LookupTenantVisible", [], 'Item.CalcFields("Tenant Visible Of App");'],
+];
+const PUBAPP_SETS = [
+  ["granted", "Cell Grant PubApp"],
+  ["item only", "Cell Grant Item"],
+] as const;
+const PUBAPP_VARS = ["Me: ModuleInfo;", 'PermissionsMock: Codeunit "Permissions Mock";'];
+const PUBAPP_ITEM = ["Item.Code := 'A';", 'Item."Extension ID" := Me.Id();', "Item.Insert();"];
+export const PUBAPP_FLOWFIELD: Family = {
+  name: "pubapp-flowfield",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8038",
+  target: "OnPrem",
+  dependencies: PERMISSION_DENIAL.dependencies ?? [],
+  known: [
+    "a permission denial (read permission on object type 0 id 2000000157) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+    // family 4's (#7854): under the set without Published Application, the read of Published Application itself
+    ...(PERMISSION_DENIAL.known[0] !== undefined ? [PERMISSION_DENIAL.known[0]] : []),
+  ],
+  support: `table 51000 "Cell Item"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; "Extension ID"; Guid) { }
+        field(3; "Name TV"; Text[250])
+        {
+            FieldClass = FlowField;
+            CalcFormula = lookup("Published Application".Name where(ID = field("Extension ID"), "Tenant Visible" = const(true)));
+        }
+        field(4; "Exists TV"; Boolean)
+        {
+            FieldClass = FlowField;
+            CalcFormula = exist("Published Application" where(ID = field("Extension ID"), "Tenant Visible" = const(true)));
+        }
+        field(5; "Count TV"; Integer)
+        {
+            FieldClass = FlowField;
+            CalcFormula = count("Published Application" where("Tenant Visible" = const(true)));
+        }
+        field(6; "Name PerTenant"; Text[250])
+        {
+            FieldClass = FlowField;
+            CalcFormula = lookup("Published Application".Name where(ID = field("Extension ID"), "PerTenant Or Installed" = const(true)));
+        }
+        field(7; "Tenant Visible Of App"; Boolean)
+        {
+            FieldClass = FlowField;
+            CalcFormula = lookup("Published Application"."Tenant Visible" where(ID = field("Extension ID")));
+        }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+permissionset 51000 "Cell Grant PubApp"
+{
+    Assignable = true;
+    Permissions = tabledata "Cell Item" = RIMD,
+        tabledata "Published Application" = R;
+}
+
+permissionset 51001 "Cell Grant Item"
+{
+    Assignable = true;
+    Permissions = tabledata "Cell Item" = RIMD;
+}
+`,
+  handles: {
+    PubApp: 'PA: Record "Published Application";',
+    Item: 'Item: Record "Cell Item";',
+  },
+  cells: [
+    ...PUBAPP_READS.flatMap(([type, method, filters, read]) =>
+      PUBAPP_SETS.map(
+        ([state, set]): Cell => ({
+          type,
+          method,
+          state,
+          vars: PUBAPP_VARS,
+          // BC review (lethal-bugs, bc2): a test codeunit without TestPermissions runs Restrictive on BC, so an Item cell's own
+          // Insert is refused before the set is applied; an Item cell applies its set (which grants Cell Item RIMD) first
+          setup:
+            type === "Item"
+              ? [
+                  "NavApp.GetCurrentModuleInfo(Me);",
+                  `PermissionsMock.Set('${set}');`,
+                  ...PUBAPP_ITEM,
+                ]
+              : ["NavApp.GetCurrentModuleInfo(Me);", ...filters],
+          call: type === "Item" ? read : `PermissionsMock.Set('${set}');\n        ${read}`,
+        }),
+      ),
+    ),
+    // control: a read of Published Application that touches none of its FlowFields
+    ...PUBAPP_SETS.map(
+      ([state, set]): Cell => ({
+        type: "PubApp",
+        method: "FindFirstIdOnly",
+        state,
+        vars: PUBAPP_VARS,
+        setup: ["NavApp.GetCurrentModuleInfo(Me);", "PA.SetRange(ID, Me.Id());"],
+        call: `PermissionsMock.Set('${set}');\n        if PA.FindFirst() then;`,
+      }),
+    ),
   ],
 };
 
@@ -907,6 +1196,10 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [TABLE_CONNECTION.name]: TABLE_CONNECTION,
   // PR-32: appended (BC-check number 9)
   [DOTNET_EXCEPTION.name]: DOTNET_EXCEPTION,
+  // PR-33: appended (BC-check number 10): family 9's OpenSSL RSA form
+  [DOTNET_EXCEPTION_RSA.name]: DOTNET_EXCEPTION_RSA,
+  // PR-33: appended (BC-check number 11): family 10, #8038
+  [PUBAPP_FLOWFIELD.name]: PUBAPP_FLOWFIELD,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
