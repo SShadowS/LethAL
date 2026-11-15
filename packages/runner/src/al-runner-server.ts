@@ -836,9 +836,12 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * ~29 s compile plus a whole-suite warm-up). Measured clean with R-967's kit on edge-847b1fa5a and
    * edge-5a58a0f16 (`/coord/handoff/PR-18/probe/README.md`, invented AL), isolation "test" and "codeunit":
    * on one kept daemon 72 reader answers after refusals equal to the control, 20 fresh daemons equal it,
-   * the pid unchanged, no panic text. Readers saw WorkDate, a SingleInstance text and DotNet MemoryStream,
-   * the session's language and default and standard-4 formats; under isolation "test" rows and Blobs roll
-   * back per test, so a leaked row is not observable (as for every entry here). Only the measured texts:
+   * the pid unchanged, no panic text. Readers saw WorkDate, a SingleInstance text, the session's language
+   * and default and standard-4 formats, and a fresh zip; under isolation "test" rows and Blobs roll back per
+   * test, so a leaked row is not observable (as for every entry here). Review: NOT measured is the .NET
+   * helper's own state across requests (it lives for the daemon; a refused Dispose may leave a half-
+   * disposed archive behind in it); the DO window that brings this in is compared with earlier windows per
+   * mutant, which is where such a leak would show. Only the measured texts:
    * the ZipArchive Update-over-held-bytes Dispose (not in leg C: its serve fact runs without the .NET
    * helper, like R945's), and standard format 4 under FormatRegion 'en-GB' (DO's; leg C case 50686-50687).
    */
