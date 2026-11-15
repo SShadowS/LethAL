@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 991 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 992 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1033,9 +1033,10 @@ that ordering is the priority.
 - **R1023** · Refusal family permission-denial: 83 readable platform tables read under Permissions Mock on al-runner edge-5a58a0f16; 75 refused when not granted (#7854), Permission refused when granted (#8032); two regression-set entries; the set's still-differing issues are all active · [R1023.md](docs/roadmap/R1023.md) · done (917fedd7)
 - **R1024** · Refusal family no-client (#8028): 28 client-dependent cells under --no-client on edge-5a58a0f16, Report.RunRequestPage refused (new); BC-check apps for families 1-5 (824 cells, alc-clean) for a BC run; 26 platform tables BC 28 rejects · [R1024.md](docs/roadmap/R1024.md) · done (8d36aa0f)
 - **R1025** · al-runner v3 against BC, test by test, batch 2 (PR-14): five more BC.History modules, all 13 tests equal; the server's own Any, Permissions Mock and System Application Test Library replace published copies · [R1025.md](docs/roadmap/R1025.md) · closed 2026-11-15 — measured; no v3 difference
-- **R1026** · Leg C's serve-keep-reasons reads 'diverged' on edge-5a58a0f16: R998's four RecordRef-not-open cases and its GetTable-of-an-unassigned-Variant case are plain fails there (upstream fixed them), so every candidate gate warns · [R1026.md](docs/roadmap/R1026.md) · open
+- **R1026** · Leg C's serve-keep-reasons reads 'diverged' on edge-5a58a0f16: R998's four RecordRef-not-open cases and its GetTable-of-an-unassigned-Variant case are plain fails there (upstream fixed them), so every candidate gate warns · [R1026.md](docs/roadmap/R1026.md) · done (9c248d53)
 - **R1027** · What al-runner edge-5a58a0f16's flips free: Guided Experience mostly freed (405 mutants to killed); 4 of 12 freed error mutants killed, 2 more moved, 6 still refused in shapes the flips miss (reduced, filed); Extension Management not freed · [R1027.md](docs/roadmap/R1027.md) · closed 2026-11-15 — the measurement is done; Email's and SAF-T's shapes are reduced and filed (#8036, #7760)…
 - **R1028** · 14 Guided Experience tests freed by #8038 fail on al-runner edge-5a58a0f16: every checklist test with profiles finds 0 rows, while its twin with users passes; BC's answer not measured · [R1028.md](docs/roadmap/R1028.md) · open
+- **R1029** · What makes al-runner serve's cost grow: invented scaling probes. Per entry under 1 ms for every app shape; install and company-open code re-run once per entry (#8144); one compile per daemon, a restart always recompiles (#8143); DO's cost is test volume and restart warm-ups · [R1029.md](docs/roadmap/R1029.md) · closed 2026-11-15 — measured; the levers are filed (PR-20 for L4, #8143, #8144)
 
 ---
 
