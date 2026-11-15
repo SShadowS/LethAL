@@ -320,6 +320,29 @@
         "Codeunit51304.Cell": { "status": "pass" },
         "Codeunit51305.Cell": { "status": "pass" }
       }
+    },
+    {
+      "id": "u7854-system-table-denial",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
+      "bcEvidence": "inferred, not measured on BC: BC denies a FindFirst without Read permission even when it finds no row (measured upstream on an ordinary table, #7854), so under asserterror each test passes; for a system table it is inferred. The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
+      "rerun": [
+        "the corpus mutants met by the system-table permission-denial refusals (ledger: 677 sightings over eight causes, PR-16)"
+      ],
+      "tests": {
+        "Codeunit51401.Cell": { "status": "pass" },
+        "Codeunit51402.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-permission-rows",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: a read of the Permission table under a set that grants it Read returns on BC. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
+      "rerun": [
+        "the corpus mutants whose tests read Permission, Metadata Permission or Expanded Permission under Permissions Mock (#8032)"
+      ],
+      "tests": {
+        "Codeunit51421.Cell": { "status": "pass" }
+      }
     }
   ]
 }
