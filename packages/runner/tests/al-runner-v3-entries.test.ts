@@ -4513,6 +4513,7 @@ describe("R927: an explicit serve-entries run probes for a batch refusal before 
       "mutant-stop",
       "probe",
       "session-end",
+      "stop-signal", // R1014: the session ends, no warm-up follows
     ]);
   });
 

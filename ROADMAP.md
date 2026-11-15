@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 977 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**33 of 978 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1022,6 +1022,7 @@ that ordering is the priority.
 - **R1011** · DotNet variable that holds no object on al-runner v3 (generated, 29 cells over 9 .NET types): all refused; 25 with the no-object cause, Regex.IsMatch/Replace with a wrong 'no overload' text (they pass on a constructed Regex), TimeZoneInfo by policy (upstream #8036 item 1) · [R1011.md](docs/roadmap/R1011.md) · open
 - **R1012** · R969's live negative leg: after a real server1 restart (in-memory databases lost), a `--resume-run` must refuse because both the generation and the database id changed · [R1012.md](docs/roadmap/R1012.md) · open
 - **R1013** · The refusal ledger's 215 unexamined causes settled on al-runner edge-a184cfc79: 13 fixed (634 refused tests run again), 15 by-design (al-runner's own policy text), 187 open with their issue (124 seen on this build); #8117 filed; six regression-set entries · [R1013.md](docs/roadmap/R1013.md) · closed 2026-11-15 — every cause has a state; open causes carry their upstream issue
+- **R1015** · On al-runner v3 serve every mutant test gets the stop of the slowest green baseline test (R954: 20 x its time + 5 s), so on DO a hang in a sub-second test costs 1,762 s; a per-test stop would change verdicts and needs its own measurement · [R1015.md](docs/roadmap/R1015.md) · open
 
 ---
 
