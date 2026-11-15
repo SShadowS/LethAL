@@ -6,7 +6,8 @@ Pre-commitment `docs/superpowers/specs/2026-11-15-pr24-l2-lazy-warmup.md` (a027d
 ## The fixture legs
 - **Setup:** A is the branch point a027deb2 and B is the build. Both use al-runner edge-5a58a0f16 pinned, serve-entries, isolation
   "test" and `daemonMaxRequests: 1` (a restart after every request), with a fresh store per leg (`fx/run.sh`).
-- **B on the merged head:** see the last section.
+- **B on the merged head:** B was re-run on the head after master was merged in (542bcbee). It is still IDENTICAL to A on both
+  fixtures, with the same daemons, warm-ups and entries (`fx/run-merged.log`).
 
 | fixture | mutants (killed / survived / no-coverage) | A vs B per mutant | daemons A / B | warm-ups A / B | entries sent A / B |
 |---|---|---|---|---|---|
