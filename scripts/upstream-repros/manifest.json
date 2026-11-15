@@ -1,6 +1,126 @@
 {
   "repros": [
     {
+      "id": "u8154-noclient-handlers",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8154",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15) in a web-service session (a LethAL bcdev run, test runner 130454 over OData, no client): the bound Confirm, StrMenu and Message handlers are called (pass), and an unhandled Message fails 'Unhandled UI: Message' (/coord/handoff/PR-17/ws-run/result.md, family 5's cells C3, C7, C5, C6)",
+      "args": ["--no-client"],
+      "rerun": [
+        "family 5's no-client cells (scripts/refusal-family.ts --family no-client), and every suite whose tests bind a ConfirmHandler, such as Bank Deposits (2,290 standing sightings of the client-callback text)"
+      ],
+      "tests": {
+        "Codeunit51570.Cell": { "status": "pass" },
+        "Codeunit51571.Cell": { "status": "pass" },
+        "Codeunit51572.Cell": { "status": "pass" },
+        "Codeunit51573.Cell": { "status": "fail", "messageIncludes": "Unhandled UI" }
+      }
+    },
+    {
+      "id": "u8013-yaml-shapes",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: each document is ordinary YAML (a list at its key's indent, a decimal value, CRLF line endings: the shapes of Microsoft's AI Test Toolkit datasets that the Copilot test apps' install codeunits read), so ReadFromYaml reads it and each test passes (PR-28)",
+      "rerun": [
+        "Sustainability Copilot Suggestion and No. Series Suggestions (R-969, R-986): their install codeunits read the datasets, so every test is refused today"
+      ],
+      "tests": {
+        "Codeunit51480.PinnedLayout": { "status": "pass" },
+        "Codeunit51480.ListAtItsKeysIndent": { "status": "pass" },
+        "Codeunit51480.KeyWithSlash": { "status": "pass" },
+        "Codeunit51480.KeyEndingInFullStop": { "status": "pass" },
+        "Codeunit51480.DecimalValue": { "status": "pass" },
+        "Codeunit51480.CrLfLineEndings": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-company-open",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: BC runs an OnCompanyOpenCompleted subscriber when the test session opens the company, before the first test, and its row is there for the tests, so the reading test passes (PR-28)",
+      "rerun": [
+        "System Initialization (R-969: all 8 tests) and VAT Group Management (R-975), whose Company Triggers subscribers write User Login and User Environment Login"
+      ],
+      "tests": {
+        "Codeunit51492.ReadsTheTableTheSubscriberWrote": { "status": "pass" },
+        "Codeunit51492.NeverReadsIt": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-find-no-match",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: Find('=<>') on a filter that matches nothing raises, so asserterror passes; on an app table and on Time Zone (PR-28)",
+      "rerun": ["Time Zone Selection (R-969: TestTimeZoneValidateFail)"],
+      "tests": {
+        "Codeunit51501.FindNoMatchOnAppTable": { "status": "pass" },
+        "Codeunit51501.FindNoMatchOnTimeZone": { "status": "pass" },
+        "Codeunit51501.FindFirstNoMatchControl": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-file-guid",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: File.Create converts the Guid to its text and the OnPrem server creates that file, so the test passes (PR-28)",
+      "rerun": ["Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"],
+      "tests": {
+        "Codeunit51511.FileCreateWithGuidName": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-sql-counter",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: SqlStatementsExecuted returns a non-negative count, the field takes it and the insert succeeds; the test never reads the value (PR-28)",
+      "rerun": ["Performance Toolkit (R-969: 1 test)"],
+      "tests": {
+        "Codeunit51521.SqlCounterStoredInAField": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-xmlport-text-element",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: currXMLport.BreakUnbound() ends the Unbound text element's loop on a VariableText port, so the export ends and the test passes (PR-28)",
+      "rerun": [
+        "Intrastat Core (R-975: 4 tests, e.g. E2EIntrastatReportFileCreation), through Base Application's generic CSV export"
+      ],
+      "tests": {
+        "Codeunit51532.ExportUnboundTextElement": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8152-number-sequence-next",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8152",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, the dev endpoint's default runner, codeunit isolation, every SPLIT cell's guard row gone so a rollback fell between change and read): /coord/handoff/PR-27/bc-run/result.md. A rollback keeps the numbers Next handed out (Current 101) and undoes Restart, Delete and Insert. This app asserts those answers; on edge-5a58a0f16 NextIsKept fails (100)",
+      "rerun": [
+        "the refusal family number-sequence's BC-check app (/coord/handoff/PR-27/bc-check), and the ledger's #8002 cause, whose refusal is answerable for Next"
+      ],
+      "tests": {
+        "Codeunit51551.Change": { "status": "pass" },
+        "Codeunit51552.NextIsKept": { "status": "pass" },
+        "Codeunit51553.Change": { "status": "pass" },
+        "Codeunit51554.RestartIsUndone": { "status": "pass" },
+        "Codeunit51555.Change": { "status": "pass" },
+        "Codeunit51556.DeleteIsUndone": { "status": "pass" },
+        "Codeunit51557.Change": { "status": "pass" },
+        "Codeunit51558.InsertIsUndone": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7586-geturl-forms",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15; /coord/handoff/PR-26/bc-check/bc2-result.md): GetUrl raised no error for any of the family's 99 calls, so each test passes. BC's URLs: Default with a codeunit dynamicsnav://<server>/BC/<company>/runcodeunit?codeunit=N; Tablet with a query ms-dynamicsnav://<server>/BC?company=<company>&query=N; SOAP with a company http://<server>/BC/WS/<company>/Services",
+      "rerun": [
+        "the refusal family get-url (scripts/refusal-family.ts --family get-url): its 27 cells of these three reasons, and the ledger's #7586 causes"
+      ],
+      "tests": {
+        "Codeunit51463.DefaultClientCodeunitUrl": {
+          "status": "pass"
+        },
+        "Codeunit51463.TabletClientQueryUrl": {
+          "status": "pass"
+        },
+        "Codeunit51463.SoapCompanyUrl": {
+          "status": "pass"
+        }
+      }
+    },
+    {
       "id": "u8036-open-zero",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
       "bcEvidence": "inferred, not measured on BC: RecordRef.Open of a table id with no table raises an error (as al-runner already does for an id no app declares), so under asserterror all three tests pass; comment 6892946955 (PR-10). Still refused on edge-5a58a0f16 for Open(0)",

@@ -282,7 +282,7 @@
   "l4Widened": 0,
   "l4OrderBroken": 0,
   "entriesSent": 50,
-  "warmupMs": 10,
+  "warmupMs": 14,
   "prefetchMs": 4,
   "liveMs": 16,
   "windowMs": 28,
