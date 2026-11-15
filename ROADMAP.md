@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**34 of 1010 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**34 of 1011 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1052,6 +1052,7 @@ that ordering is the priority.
 - **R1042** · Refusal family table-connection (#7837, family 8): 22 cells on edge-5a58a0f16; only the exact '@@test@@' connection string runs, so an app's string built around the marker (Field Service and Sustainability ESG integration, 322 refused test rows) is refused, and so is an Insert with its trigger on a CRM table (58); BC-check app for lethal-bugs · [R1042.md](docs/roadmap/R1042.md) · closed 2026-11-15 — measured on BC: all 22 cells pass, so the 13 al-runner refuses are BC passes…
 - **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · open
 - **R1044** · Refusal family dotnet-exception (#7924, family 9): 31 cells on edge-5a58a0f16; 12 of 13 throwing .NET members are refused even under asserterror alone, where the outcome cannot depend on the text (265 standing sightings, 18 ledger keys); BC-check app for lethal-bugs · [R1044.md](docs/roadmap/R1044.md) · closed 2026-11-15 — measured on BC: 22 of the 24 refused cells pass guarded, and BC's text per member is on…
+- **R1045** · PR-17's BC answers folded into the upstream-repro set (six entries now measured, u8028-run-request-page flipped to fail), two new al-runner differences filed (#8157 XmlElement.AsXmlNode, #8158 Session read), per-table BC answers posted on #7415, #7854 and #8028 · [R1045.md](docs/roadmap/R1045.md) · done (4df2adc5)
 - **R1046** · The OpenSSL RSA form of #7924 (R1044's gap, 81 standing sightings): 16 cells on edge-5a58a0f16, all 14 site cells refused; on BC every guarded cell passes and the text is 'A call to <Type>.<Member> failed with this message: <OpenSSL message>', the message al-runner's refusal already prints · [R1046.md](docs/roadmap/R1046.md) · closed 2026-11-15 — measured on BC: all 7 guarded cells pass, BC's text per site is on #7924 and two repros…
 - **R1047** · Refusal family pubapp-flowfield (#8038, family 10, 133 standing sightings): 30 cells; with Published Application R, BC needs no grant for its FlowFields over NAV App Extra (8 refused cells pass on BC), while CalcFields(Installed) needs IndirectRead on Installed Application; BC-check app measured · [R1047.md](docs/roadmap/R1047.md) · closed 2026-11-15 — measured on BC: per-cell answers posted on #8038, regression entry…
 - **R1048** · al-runner lets a test codeunit without TestPermissions write its own table before any permission set, where BC (Permissions Mock installed) refuses the write under the Restrictive default: a wrong verdict, not a refusal (#8160) · [R1048.md](docs/roadmap/R1048.md) · open

@@ -50,6 +50,19 @@ run with `--no-client` like `u8028-no-client`.
 - `u8154-noclient-handlers` (PR-28): under `--no-client` the bound UI handlers are never called. BC calls them in a web-service
   session. Measured; run with `--no-client`.
 
+## Coverage (PR-31)
+
+144 tests in all (with `u7837-table-connection` and `u7924-dotnet-exception`, which landed alongside). PR-17's BC check (lethal-bugs, bc2, 2026-11-15, `/coord/handoff/PR-17/bc-check/runs/`, `ws-run/`) measured
+the families' cells on BC:
+- Now measured, expectation unchanged: `u7760-untouched-handle`, `u8036-dotnet-no-object`, `u7415-platform-no-provider`,
+  `u7854-system-table-denial`, `u8032-permission-rows`; `u8028-no-client` partly (CurrentClientType answers; "never Windows" is
+  still inferred).
+- **Flipped expectation:** `u8028-run-request-page` now expects a FAIL. In a session without a client BC fails
+  `Report.RunRequestPage`, handler or not ("The report request page cannot be used in background or server sessions.").
+  PR-17's inferred pass holds only in a client session.
+- New: `u8157-xml-asxmlnode` (#8157: `XmlElement.AsXmlNode()` on an untouched element passes on BC) and `u8158-session-read`
+  (#8158: a Session read under Permissions Mock fails on BC in a web-service session; run with `--no-client`).
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
