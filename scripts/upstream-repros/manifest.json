@@ -3,7 +3,7 @@
     {
       "id": "u7775-refusals",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7775",
-      "bcEvidence": "inferred, not measured on BC: Part A's invented repro (R-915's probe, unchanged but for the app's name and id); each statement is one a Microsoft app's shipped-passing test makes (Subscription Billing, E-Document Core, Quality Management, Shopify), and items 9 and 10 expect BC's own filter error under asserterror. Added by PR-05 (refusal ledger): on edge-a184cfc79, 5 of the 12 already pass (items 1, 3, 6, 7, 8)",
+      "bcEvidence": "inferred, not measured on BC: Part A's invented repro (R-915's probe, its AL unchanged; app.json's id, name, publisher and features are the set's); each statement is one a Microsoft app's shipped-passing test makes (Subscription Billing, E-Document Core, Quality Management, Shopify), and items 9 and 10 expect BC's own filter error under asserterror. Added by PR-05 (refusal ledger): on edge-a184cfc79, 5 of the 12 already pass (items 1, 3, 6, 7, 8)",
       "rerun": [
         "R-915's four apps (Subscription Billing, E-Document Core, Quality Management, Shopify) and every BC.History project the refusal ledger names under #7775 (Api Web Service: E-Document API, APIV2, PowerBI)"
       ],
@@ -25,7 +25,7 @@
     {
       "id": "u8028-no-client",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
-      "bcEvidence": "inferred, not measured on BC: a session without a client (BC's web-service and background sessions) answers CurrentClientType without an error, and never Windows; the issue's invented repro (R-975), unchanged but for the app's name and id. Added by PR-05 (refusal ledger)",
+      "bcEvidence": "inferred, not measured on BC: a session without a client (BC's web-service and background sessions) answers CurrentClientType without an error, and never Windows; the issue's invented repro (R-975), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
       "rerun": [
         "every BC.History project whose closure holds System Initialization (its OnCompanyOpenCompleted subscriber reads the client type): the refusal ledger's no-client causes"
       ],
@@ -38,7 +38,7 @@
     {
       "id": "u7934-refusals",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7934",
-      "bcEvidence": "inferred, not measured on BC: the issue's invented repro (R-940), unchanged but for the app's name and id; each call is one a Microsoft System Application module test makes and those tests ship as passing; C06 and C09 expect BC's own error under asserterror (the issue: 'can't be evaluated into type', a permission error). Added by PR-05 (refusal ledger)",
+      "bcEvidence": "inferred, not measured on BC: the issue's invented repro (R-940), its AL unchanged; app.json's id, name, publisher and features are the set's; each call is one a Microsoft System Application module test makes and those tests ship as passing; C06 and C09 expect BC's own error under asserterror (the issue: 'can't be evaluated into type', a permission error). Added by PR-05 (refusal ledger)",
       "rerun": [
         "Security Groups, Page Summary Provider, AI, BLOB Storage and Record Reference (R-940), and the refusal ledger's causes under #7934"
       ],
@@ -60,7 +60,7 @@
     {
       "id": "u7586-refusals",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
-      "bcEvidence": "inferred, not measured on BC: the issue's five invented repros (R-902's Probe4.al, unchanged but for the app's name and id), each a call Microsoft's Statistical Accounts or VAT Group Management tests make and those tests ship as passing; item 2 expects BC's own error under asserterror. Plus R-902's Uri control test. Added by PR-05 (refusal ledger): on edge-a184cfc79 item 1 (AuditCategory::Authentication) already passes",
+      "bcEvidence": "inferred, not measured on BC: the issue's five invented repros (R-902's Probe4.al, its AL unchanged; app.json's id, name, publisher and features are the set's), each a call Microsoft's Statistical Accounts or VAT Group Management tests make and those tests ship as passing; item 2 expects BC's own error under asserterror. Plus R-902's Uri control test. Added by PR-05 (refusal ledger): on edge-a184cfc79 item 1 (AuditCategory::Authentication) already passes",
       "rerun": [
         "VAT Group Management (the 5-argument GetUrl stops 41 of its 82 tests) and Statistical Accounts, and the refusal ledger's causes under #7586"
       ],
@@ -76,7 +76,7 @@
     {
       "id": "u7850-autoformat",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7850",
-      "bcEvidence": "inferred, not measured on BC: BC runs a field's AutoFormatExpression when the row is fetched (the refusal says so), and the expression here is plain AL that returns a format, so opening the card passes; the issue's invented repro (R-925), unchanged but for the app's name and id. Added by PR-05 (refusal ledger)",
+      "bcEvidence": "inferred, not measured on BC: BC runs a field's AutoFormatExpression when the row is fetched (the refusal says so), and the expression here is plain AL that returns a format, so opening the card passes; the issue's invented repro (R-925), its AL unchanged; app.json's id, name, publisher and features are the set's. Added by PR-05 (refusal ledger)",
       "rerun": [
         "the BC.History projects whose TestPage controls sit over such fields (the refusal ledger's AutoFormatExpression causes under #7850)"
       ],
@@ -94,6 +94,17 @@
       "tests": {
         "Codeunit50903.SidWithoutUserName": { "status": "pass" },
         "Codeunit50903.GoToKeyOnCardForMissingKey": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7778-json-null",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7778",
+      "bcEvidence": "inferred, not measured on BC: reading a JSON null as Boolean raises BC's error, which asserterror expects (#7778, closed: edge 764d69ecf made every JsonValue.AsX getter on a null raise BC's error). A guard: it passes on edge-a184cfc79, and the refusal ledger's 'reading a JSON null as Boolean' is fixed on its evidence (PR-05)",
+      "rerun": [
+        "nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"
+      ],
+      "tests": {
+        "Codeunit50940.NullAsBoolean": { "status": "pass" }
       }
     },
     {

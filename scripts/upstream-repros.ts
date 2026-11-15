@@ -175,6 +175,10 @@ export function readManifest(root = REPRO_ROOT): Manifest {
   for (const r of m.repros) {
     if (r.apps !== undefined && r.apps.length === 0)
       throw new Error(`upstream-repros: ${r.id} lists an empty apps`);
+    // PR-05 (review): a string would be spread into single characters and handed to al-runner
+    const args: unknown = r.args;
+    if (args !== undefined && !(Array.isArray(args) && args.every((a) => typeof a === "string")))
+      throw new Error(`upstream-repros: ${r.id}'s args is not a list of strings`);
     for (const a of appsOf(r))
       if (!existsSync(join(root, a, "app.json")))
         throw new Error(`upstream-repros: ${a} has no app.json`);

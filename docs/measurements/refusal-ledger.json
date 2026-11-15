@@ -323,7 +323,7 @@
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (onl",
     "state": "fixed",
-    "note": "PR-05: 620 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (728 now another refusal, 0 not reached) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-05: 620 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (728 now another refusal, 0 not reached); 176 of those other refusals are its narrowed number-sequence wording, which stays open under #8002 (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#8002, #6638"
   },
   {
@@ -1260,8 +1260,9 @@
   {
     "key": "NotRun: out-of-scope: GetResourceAsText of <x> without a text encoding: one character per byte is pinned, which characters the bytes from N up become is not pinned",
     "state": "fixed",
-    "note": "PR-05: #7775 item 7 passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#7775"
+    "note": "PR-05: #7775 item 7 passes on edge-a184cfc79 (regression set u7775-refusals); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "issue": "#7775",
+    "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: GetUrl(ClientType::OData; the call had N arguments): this object type or argument list (not pinned)",
@@ -1331,8 +1332,9 @@
   {
     "key": "NotRun: out-of-scope: InStream.Read with a length that is not an Integer (not pinned)",
     "state": "fixed",
-    "note": "PR-05: #7775 item 8 passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#7775"
+    "note": "PR-05: #7775 item 8 passes on edge-a184cfc79 (regression set u7775-refusals); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "issue": "#7775",
+    "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: IsolatedStorage.Get of a missing Guid key as a statement (the Key of the error text is not pinned)",
@@ -1492,14 +1494,16 @@
   {
     "key": "NotRun: out-of-scope: reading a JSON null as Boolean (conversion not pinned yet)",
     "state": "fixed",
-    "note": "PR-05: PR-05 invented repro (JSON null as Boolean under asserterror; #7778 closed) passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983: not examined)",
-    "issue": "#7778"
+    "note": "PR-05: an invented repro (JSON null read as Boolean under asserterror; #7778, closed) passes on edge-a184cfc79 (regression set u7778-json-null); the corpus project was not re-run (was: R-983: not examined)",
+    "issue": "#7778",
+    "repro": "scripts/upstream-repros/u7778-json-null"
   },
   {
     "key": "NotRun: out-of-scope: reading a JSON null as Decimal (conversion not pinned yet)",
     "state": "fixed",
-    "note": "PR-05: #7775 item 6 passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#7775"
+    "note": "PR-05: #7775 item 6 passes on edge-a184cfc79 (regression set u7775-refusals); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "issue": "#7775",
+    "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: ReadPermission on a system table under sets that do not grant it is not pinned (ADR-N probe PN)",
@@ -1659,8 +1663,9 @@
   {
     "key": "NotRun: out-of-scope: store error License Permission: whether object type N number N is a row is not pinned (ADR-N: with no license file loaded, only the rows the corpus pins are served)",
     "state": "fixed",
-    "note": "PR-05: #7775 item 3 passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#7775"
+    "note": "PR-05: #7775 item 3 passes on edge-a184cfc79 (regression set u7775-refusals); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "issue": "#7775",
+    "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
@@ -1837,8 +1842,9 @@
   {
     "key": "NotRun: out-of-scope: XmlPort import into a VariableText port with TextEncoding = WINDOWS (not pinned)",
     "state": "fixed",
-    "note": "PR-05: #7775 item 1 passes on edge-a184cfc79 (regression set u7775-refusals or PR-05 repro); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#7775"
+    "note": "PR-05: #7775 item 1 passes on edge-a184cfc79 (regression set u7775-refusals); the corpus project was not re-run (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "issue": "#7775",
+    "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: XmlPort import of a table element with AutoUpdate or AutoSave = false after its linked child rows (whether it is stored again is not pinned)",

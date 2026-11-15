@@ -68,6 +68,18 @@ describe("R-997: a repro of several apps", () => {
     write(ok, { repros: [repro(["P", "A"])] }, ["u1/P", "u1/A"]);
     expect(readManifest(ok).repros).toHaveLength(1);
   });
+
+  test("PR-05 review: args must be a list of strings, never a bare string", () => {
+    const str = join(TMP, "args-string");
+    write(str, { repros: [{ ...repro(), args: "--no-client" }] }, ["u1"]);
+    expect(() => readManifest(str)).toThrow(/args is not a list of strings/);
+    const num = join(TMP, "args-number");
+    write(num, { repros: [{ ...repro(), args: [7] }] }, ["u1"]);
+    expect(() => readManifest(num)).toThrow(/args is not a list of strings/);
+    const ok = join(TMP, "args-ok");
+    write(ok, { repros: [{ ...repro(), args: ["--no-client"] }] }, ["u1"]);
+    expect(readManifest(ok).repros[0]?.args).toEqual(["--no-client"]);
+  });
 });
 
 // R-996: the flip detection. Every case is an injected reading; no al-runner runs here.
