@@ -448,8 +448,7 @@
             "type": "string",
             "enum": [
               "bc-named-stop",
-              "begin-transaction-world",
-              "v3-cpu-stop"
+              "begin-transaction-world"
             ]
           },
           "killReproduced": {

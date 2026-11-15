@@ -46,9 +46,6 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     get killsMustReproduce() {
       return lane0.killsMustReproduce === true;
     },
-    get timeoutIsCpuTime() {
-      return lane0.timeoutIsCpuTime === true;
-    },
     get inRunStopIsBudget() {
       return lane0.inRunStopIsBudget === true;
     },

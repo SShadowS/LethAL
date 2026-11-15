@@ -1519,12 +1519,11 @@ export class ResultsStore {
     value: string,
     row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
   ): StopEvidence {
-    if (value === "bc-named-stop" || value === "begin-transaction-world" || value === "v3-cpu-stop")
-      return value;
+    if (value === "bc-named-stop" || value === "begin-transaction-world") return value;
     throw new Error(
       `store.ts: mutant row (astHash=${row.astHash}, codeunitName=${row.codeunitName}, ` +
         `operatorName=${row.operatorName}, operatorMajor=${row.operatorMajor}) has a corrupt ` +
-        `"stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", "v3-cpu-stop", or NULL`,
+        `"stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", or NULL`,
     );
   }
 

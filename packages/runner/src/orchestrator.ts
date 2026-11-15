@@ -12405,11 +12405,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       }
       // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
       // which leaves every kill site exactly as it was.
-      // PR-41: a timeout on a backend whose stop is CPU time (load cannot cause it), reached here
-      // only after the unmutated confirm passed, is not reproduced; it is scored `v3-cpu-stop`.
-      const cpuStop = v.outcome === "timeout" && args.backend.timeoutIsCpuTime === true;
       const reproduce = (): Promise<ReproDecision | undefined> =>
-        args.backend.killsMustReproduce === true && !cpuStop
+        args.backend.killsMustReproduce === true
           ? reproduceKill({ args, m, step, leaseSession, resyncOpSeq, testResultBuffer })
           : Promise.resolve(undefined);
       // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
@@ -12541,9 +12538,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               break;
             }
             reproduction = repro?.reproduction;
-            stopEvidence = cpuStop
-              ? "v3-cpu-stop"
-              : weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
+            stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
             verdict = "timeout-killed";
             killingTest = ref.method;
             killingTestRef = ref;
@@ -12823,11 +12818,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             break;
           }
           reproduction = repro?.reproduction;
-          if (timedOut) {
-            stopEvidence = cpuStop
-              ? "v3-cpu-stop"
-              : weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
-          }
+          if (timedOut) stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;

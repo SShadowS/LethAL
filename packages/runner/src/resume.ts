@@ -243,9 +243,7 @@ export function buildResumeIndex(
   const unreproducedKill = (row: MutantVerdictRow): boolean =>
     killsMustReproduce &&
     (row.verdict === "killed" || row.verdict === "timeout-killed") &&
-    row.killReproduced !== true &&
-    // PR-41: a v3 CPU-time timeout kill was deliberately not reproduced; it carries as it is.
-    !(row.verdict === "timeout-killed" && row.stopEvidence === "v3-cpu-stop");
+    row.killReproduced !== true;
   const carryableRow = (row: MutantVerdictRow): boolean =>
     CARRYABLE_VERDICTS.has(row.verdict) &&
     (row.verdict !== "timeout-killed" || stopHungSessions) &&
