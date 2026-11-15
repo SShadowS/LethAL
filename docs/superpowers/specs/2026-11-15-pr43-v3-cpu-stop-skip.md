@@ -58,3 +58,15 @@ holds for t5's hangs that were killed at position 1. One killed at a warm positi
 
 **Predictions, added to 1.** A confirm with no measured time and a wall at most N/4 skips. One with a wall above N/4 reproduces.
 Both are red both ways.
+
+## Addendum 2 (2026-11-15, after the Opus build review, before any gate)
+
+**No separate report count.** Prediction 2 said "the report its count". A new `SessionReport` field means regenerating every
+committed sample report live (CLAUDE.md's ripple rule), and the count can already be read from each mutant's `stopEvidence`
+(`v3-cpu-stop`) in the report. So no count is added. Prediction 2 now reads: the schemas gain the enum value, and every committed
+sample report still validates.
+
+**Every-kill-reproduced checks.** `killReproductionFailures` (`kill-reproduction.ts`) and the v3 itest's `assertReproduced`
+exempt a `timeout-killed` mutant with `stopEvidence` `v3-cpu-stop`. A v3 timeout kill with neither marker still fails them. The
+exemption is unit-tested both ways. No v3 baseline holds a `timeout-killed` today (hang sites stay in `itest:hang`, R164), so the
+v3 gate cannot exercise the skip live; DO's next window is where it shows (prediction 4).
