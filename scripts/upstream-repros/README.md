@@ -24,7 +24,7 @@ Seven entries added while settling the refusal ledger, one per issue, biggest fi
 
 ## Coverage (PR-13)
 
-#7415 is now in, as `u7415-platform-no-provider` (5 tests, 94 in all): LethAL commented on it with a sweep of every platform table
+#7415 is now in, as `u7415-platform-no-provider` (5 tests; with PR-03's `u7994-u7995-evaluate`, 96 in all): LethAL commented on it with a sweep of every platform table
 (`scripts/refusal-family.ts` family `platform-table-read`), and its refusal is the largest open group in the refusal ledger.
 
 ## Coverage (R-997)

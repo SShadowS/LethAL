@@ -887,6 +887,30 @@
     "note": "R-983: filed"
   },
   {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.DeepClone: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (1 mutant); family issue (a member of a DotNet variable that holds no object), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JProperty.Value: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036 §1",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (2 mutants); family issue (a member of a DotNet variable that holds no object), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.Add raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (4 mutants); family issue (DotNet exception text not pinned), this instance not named in it"
+  },
+  {
+    "key": "NotRun: out-of-scope: Text.CopyStr#N: text argument N of type an unassigned Variant",
+    "state": "open",
+    "issue": "#7995",
+    "note": "PR-03: Json's mutants on edge-5a58a0f16 (1 mutant); the issue names CopyStr of an unassigned Variant (R-953)"
+  },
+  {
     "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.Dictionary<x>",
     "state": "open",
     "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
@@ -1876,5 +1900,105 @@
     "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#7854",
     "repro": "scripts/upstream-repros/u7854-xmlport-guid"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of RecordId to Integer",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: an action left the list's view without rows: the view had filters before the action (not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: First() after a save the page refused with SaveAbort (not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code DB:NothingInsideFilter)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code InvalidJsonData)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: the caption of system field SystemRowVersion",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 10"
+  },
+  {
+    "key": "NotRun: out-of-scope: Rec after Page.RunModal(Id, Rec) answered LookupOK on a page that shows no row (what Rec holds then is not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 5 sighting(s) from error mutants, in the scoring store of project 11"
+  },
+  {
+    "key": "NotRun: out-of-scope: a page saves a changed row that is no longer stored (whether the client writes it is not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 11"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: value expected after @",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 11"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureMLWrapper.AzureMLRequest: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 15"
+  },
+  {
+    "key": "NotRun: out-of-scope: the CaptionClass expression of field Dimension N Filter of table Acc. Schedule Line calls Record.Modify, and how many times BC runs it with an empty record during a page open is not pinned (al-runne",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 3 sighting(s) from a baseline test that is not a freed test, in the scoring store of project 18"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.MoveNext: <x> is an instance member and the variable holds no object",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 7 sighting(s) from error mutants, in the scoring store of project 62; already an error mutant in the reference R-969/azureadlicensi.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.Reset: <x> is an instance member and the variable holds no object",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 62; already an error mutant in the reference R-969/azureadlicensi.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.LicensingService.Model.ServicePlanInfo.ServicePlanId: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 62; already an error mutant in the reference R-969/azureadlicensi.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.LicensingService.Model.SkuInfo.SkuId: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 62; already an error mutant in the reference R-969/azureadlicensi.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Collections.Generic.IEnumerable<x>",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 62; already an error mutant in the reference R-969/azureadlicensi.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.LastError.Rethrow: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 68; already an error mutant in the reference R-969/edocumentconne4.run (edge-c8fe56e05): new to the ledger because no earlier ledger pass read that store, or its wording changed"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.GetTable of an unassigned Variant",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs as Pdf of report <x>: not measured on BC. Nearest measured rows differ in: dataset rows none (row: some) [reports/html-email-body/RxLayoutSelectionTests.al:N]; default layout Word (row",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+  },
+  {
+    "key": "NotRun: out-of-scope: Report.SaveAs#N of id N, which no report declares (error text not pinned)",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
   }
 ]

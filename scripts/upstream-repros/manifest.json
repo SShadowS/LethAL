@@ -294,6 +294,19 @@
       }
     },
     {
+      "id": "u7994-u7995-evaluate",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7994",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, PR-03, 2026-11-15) for the calls these repros copy: Microsoft's Json Test, renumbered, passes all 18 tests on BC, including TestGetEnumPropertyValueFromJObjectByName (Evaluate into a memberless var Option parameter, #7994) and TestGetBoolPropertyValueFromJObjectByName (Evaluate of a Boolean with format 2, #7995 item 3). The invented repros themselves are not run on BC; each passes there by the same calls",
+      "rerun": [
+        "PR-03: BC.History Json (its two non-passing baseline tests)",
+        "every project whose code evaluates into a memberless var Option parameter or a Boolean with format 2"
+      ],
+      "tests": {
+        "Codeunit51301.Cell": { "status": "pass" },
+        "Codeunit51302.Cell": { "status": "pass" }
+      }
+    },
+    {
       "id": "u7415-platform-no-provider",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
       "bcEvidence": "inferred, not measured on BC: a read of a platform table returns on BC (rows or none), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",

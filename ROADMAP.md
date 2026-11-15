@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 982 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 985 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -374,6 +374,7 @@ that ordering is the priority.
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
 - **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 - **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · done (ffcbeda0)
+- **R1018** · One `lethal run` can use two al-runner builds: the R786 warm-up-fallback retry builds a new backend, which resolves the configured `current` link again, so a move of `current` between the attempts silently switches the build · [R1018.md](docs/roadmap/R1018.md) · done (51c9da08)
 
 ## Product gaps a real project hits
 
@@ -1026,7 +1027,9 @@ that ordering is the priority.
 - **R1016** · The al-runner update gate and its regression set run a candidate without its .NET sidecar (built only after the pass), while every LethAL run uses it: edge-5a58a0f16 moved System.Uri into the sidecar, and the set read a false 'regressed'; the sidecar's behaviour is never gated · [R1016.md](docs/roadmap/R1016.md) · done (8edc6284)
 - **R1017** · --regate (and a refresh) gated `current` with its .NET sidecar beside it, while a candidate's gate has none: the two paths measured different things against the same sidecar-less frozen figures · [R1017.md](docs/roadmap/R1017.md) · done (8edc6284)
 - **R1019** · On al-runner v3 serve, the cascade refusal 'a test before this one in the codeunit did not pass' closes the daemon, so nearly every mutant that kills an early test costs a full warm-up: Filter Tokens (5 tests, 343 covered mutants) started 466 daemons and spent 37 min · [R1019.md](docs/roadmap/R1019.md) · open
-- **R1021** · Refusal family platform-table-read: 214 platform tables read on al-runner edge-5a58a0f16, 120 refused as "has no provider" (#7415, comment posted), ten one-table classes; regression-set entry u7415-platform-no-provider · [R1021.md](docs/roadmap/R1021.md) · done (7cdc114a)
+- **R1020** · al-runner v3 against BC, test by test, on six small BC.History modules (PR-03, review item 4): 66 of 67 tests decided; v3 differs from BC on two Json tests (#7994, #7995), Document Sharing fails on BC by the server's Base Application, not by v3 · [R1020.md](docs/roadmap/R1020.md) · closed 2026-11-15 — measured; the two v3 differences are on their upstream issues (#7994, #7995) with BC's…
+- **R1021** · The tests PR-05's fixes freed, scored on edge-a184cfc79: 26 mutants move to killed (20 by a freed test) in 5 of 16 projects; every other move is explained (59 survived -> no-coverage by attribution, 13 no-coverage -> survived, 1 error -> survived) with no kill lost · [R1021.md](docs/roadmap/R1021.md) · closed 2026-11-15 — measured; one LethAL defect found (R1018, fixed); 20 NEW ledger causes added unexamined…
+- **R1022** · Refusal family platform-table-read: 214 platform tables read on al-runner edge-5a58a0f16, 120 refused as "has no provider" (#7415, comment posted), ten one-table classes; regression-set entry u7415-platform-no-provider · [R1022.md](docs/roadmap/R1022.md) · done (7cdc114a)
 
 ---
 
