@@ -32,7 +32,7 @@
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-32/bc-run/result.md): the refusal family dotnet-exception's BC-check app (app 51000000-0000-4000-8000-000000051009), where these four shapes' guarded cells pass (DataRowCollection.Item, DataColumnCollection.Item, UriBuilder.Port, the Uri control). XmlTextWriter.WriteEndDocument is left out: its guarded cell fails on BC at the procedure's end, in the writer's Dispose. PR-33: the OpenSSL RSA form (51595, 51596), measured by the dotnet-exception-rsa family's equivalent guarded cells (app ...051010, /coord/handoff/PR-33/bc-run/result.md), which pass on BC. The entry's own app has not run on BC",
       "rerun": [
         "Business Chart, Xml Writer and the other apps behind #7924's 18 ledger keys (265 standing sightings): the refusal family dotnet-exception",
-        "Microsoft's crypto test apps (R-932, R-933 crypto: RSA Test, RSACryptoServiceProviderTests; 81 standing sightings of the OpenSSL form): the refusal family dotnet-exception-rsa"
+        "Microsoft's crypto test apps (R-932, R-933 crypto: RSA Test, RSACryptoServiceProviderTests; 81 standing sightings of the OpenSSL form; the family covers the three causes of 80, not 'failed to decrypt' (1)): the refusal family dotnet-exception-rsa"
       ],
       "tests": {
         "Codeunit51591.RowIndexOutOfRange": { "status": "pass" },

@@ -529,6 +529,11 @@ describe("PR-01: the refusal-family generator", () => {
       /Tenant Visible|PerTenant Or Installed|Installed|Name TV|Exists TV|Count TV|Name PerTenant|Tenant Visible Of App/;
     for (const c of f.cells.filter((c) => c.method !== "FindFirstIdOnly"))
       expect([...(c.setup ?? []), c.call].join(" ")).toMatch(flowFields);
+    // review: and the control touches none
+    const controls = f.cells.filter((c) => c.method === "FindFirstIdOnly");
+    expect(controls).toHaveLength(2);
+    for (const c of controls)
+      expect([...(c.setup ?? []), c.call].join(" ")).not.toMatch(flowFields);
     expect(classOf(f.known[0] ?? "")).not.toBe(classOf(f.known[1] ?? ""));
   });
 });
