@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 1003 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**34 of 1005 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1048,6 +1048,8 @@ that ordering is the priority.
 - **R1038** · Refusal family number-sequence (#8002, family 7): al-runner refuses a test after its codeunit changed an existing NumberSequence, and undoes every change when a codeunit ends; measured on BC: BC keeps Next across a rollback (a wrong answer, #8152) and undoes Restart, Delete and Insert as al-runner does · [R1038.md](docs/roadmap/R1038.md) · closed 2026-11-15 — measured on BC (mixed): Next is a new wrong answer, filed as #8152 with regression entry…
 - **R1039** · Under --no-client (which LethAL passes), al-runner never calls a test's bound UI handlers (Confirm, StrMenu, Message, Notification, Hyperlink) and lets an unhandled Message or Hyperlink pass; measured on BC in a web-service session, BC calls them: 9 wrong answers of 28 cells, filed as #8154 · [R1039.md](docs/roadmap/R1039.md) · open
 - **R1040** · #8013's causes split: each reduced to an invented repro (six regression entries), each posted to #8013 as its own comment; on edge-5a58a0f16 all seven are still refused, two YAML ones under new wordings · [R1040.md](docs/roadmap/R1040.md) · closed 2026-11-15 — reduced and filed; each cause's fix is upstream's, tracked by its regression entry
+- **R1041** · DO speed lever L1 (PR-18): keep the serve daemon after DO's ZipArchive.Dispose and FormatRegion refusals (measured clean); in DO window t4 they closed it 0 times (t3: 33), but the restart prediction missed: a third family, the DataCaptionExpression caption refusal, closed it 63 times · [R1041.md](docs/roadmap/R1041.md) · done (e753afba)
+- **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · open
 
 ---
 

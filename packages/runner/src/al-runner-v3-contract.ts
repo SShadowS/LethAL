@@ -856,6 +856,62 @@ codeunit 50685 "Serve Bind Cascade"
         UnbindSubscription(Sub);
     end;
 }
+
+report 50686 "Serve Format Region"
+{
+    ProcessingOnly = true;
+    UsageCategory = None;
+
+    trigger OnPreReport()
+    var
+        D: Decimal;
+        T: Text;
+    begin
+        CurrReport.FormatRegion := 'en-GB';
+        D := 1234.5;
+        T := Format(D, 0, 4);
+        if T = '' then
+            Error('empty');
+    end;
+}
+
+codeunit 50687 "Serve Format Region Test"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    begin
+        Report.Run(Report::"Serve Format Region", false, false);
+    end;
+}
+
+page 50688 "Serve Caption Page"
+{
+    PageType = Card;
+    UsageCategory = None;
+    DataCaptionExpression = CaptionText();
+
+    local procedure CaptionText(): Text
+    begin
+        exit('x');
+    end;
+}
+
+codeunit 50689 "Serve Caption Test"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        TP: TestPage "Serve Caption Page";
+        C: Text;
+    begin
+        TP.OpenView();
+        C := TP.Caption();
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -940,6 +996,10 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   ["gettable-unassigned-variant", "Codeunit50682.Refuses", true, false],
   // R1019 (coord PR-14): Filter Tokens' cascade, measured once. A_BindThenFail is a plain trusted fail.
   ["cascade-manual-binding", "Codeunit50685.B_BindAgain", false, false],
+  // PR-18 lever 1: DO's FormatRegion family, measured once (the zip family needs the .NET helper: not here).
+  ["format-region-std4", "Codeunit50687.Refuses", false, false],
+  // R1043: DO's caption family (t4: 63 of 87 daemons), measured once.
+  ["caption-no-source-table", "Codeunit50689.Refuses", false, false],
 ];
 
 /**
@@ -999,7 +1059,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): sixteen codeunits (eighteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): eighteen codeunits, a report and a page (twenty tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
