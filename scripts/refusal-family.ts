@@ -714,6 +714,187 @@ table 51001 "Cell CRM Trigger Row"
   ],
 };
 
+/**
+ * PR-32: #7924's family, the largest open coherent one after families 1-8 under R1036's count (265 standing sightings, 18 ledger
+ * keys): a .NET exception raised inside AL ("DotNet <member> raised the .NET exception <type>: <message>; the text AL would see is
+ * not pinned"). One site per .NET member the ledger names (invented calls that raise the same exception type), each in two
+ * shapes: `guarded`, under asserterror alone, so the test's outcome does not depend on the text (the issue's claim); and `text`,
+ * which carries the text AL sees (GetLastErrorText) out through Error, so BC's run gives upstream the texts. Plus three controls
+ * that raise nothing. Left out: the BC-internal QR-code and PDF converters (a TypeInitializationException of the environment) and
+ * XmlDocument.Validate (needs a schema set).
+ */
+const DOTNET_SITES: readonly {
+  type: string;
+  method: string;
+  vars?: string[];
+  setup?: string[];
+  stmt: string;
+}[] = [
+  { type: "Uri", method: "Ctor", stmt: "U := U.Uri('not a uri');" },
+  { type: "UriBuilder", method: "Ctor", stmt: "UB := UB.UriBuilder('http://cell.example:port/');" },
+  {
+    type: "UriBuilder",
+    method: "Port",
+    setup: ["UB := UB.UriBuilder('http://cell.example/');"],
+    stmt: "UB.Port := -5;",
+  },
+  {
+    type: "UriBuilder",
+    method: "Scheme",
+    setup: ["UB := UB.UriBuilder('http://cell.example/');"],
+    stmt: "UB.Scheme := '1 bad';",
+  },
+  { type: "CultureInfo", method: "Ctor", stmt: "CI := CI.CultureInfo('xx-NOPE-zz');" },
+  {
+    type: "ZipArchive",
+    method: "Ctor",
+    vars: ["MS: DotNet GenMemoryStream;"],
+    setup: ["MS := MS.MemoryStream();"],
+    stmt: "ZA := ZA.ZipArchive(MS);",
+  },
+  {
+    type: "XmlTextWriter",
+    method: "WriteEndDocument",
+    vars: ["MS: DotNet GenMemoryStream;", "EN: DotNet GenEncoding;"],
+    setup: ["MS := MS.MemoryStream();", "XW := XW.XmlTextWriter(MS, EN.UTF8);"],
+    stmt: "XW.WriteEndDocument();",
+  },
+  {
+    type: "DataTable",
+    method: "RowsItem",
+    vars: ["DR: DotNet GenDataRow;"],
+    setup: ["DT := DT.DataTable();"],
+    stmt: "DR := DT.Rows.Item(0);",
+  },
+  {
+    type: "DataTable",
+    method: "ColumnsItem",
+    vars: ["DC: DotNet GenDataColumn;"],
+    setup: ["DT := DT.DataTable();"],
+    stmt: "DC := DT.Columns.Item(0);",
+  },
+  {
+    type: "DataTable",
+    method: "RowItem",
+    vars: ["DR: DotNet GenDataRow;", "V: Variant;"],
+    setup: ["DT := DT.DataTable();", "DR := DT.NewRow();"],
+    stmt: "V := DR.Item('nope');",
+  },
+  {
+    type: "JObject",
+    method: "AddTwice",
+    vars: ["JO2: DotNet GenJObject;"],
+    setup: ["JO := JO.JObject();", "JO2 := JO2.JObject();", "JO.Add('a', JO2);"],
+    stmt: "JO.Add('a', JO2);",
+  },
+  {
+    type: "X509Certificate2",
+    method: "Ctor",
+    vars: ["Conv: DotNet GenConvert;"],
+    stmt: "C := C.X509Certificate2(Conv.FromBase64String('AAAA'));",
+  },
+  {
+    type: "RSACryptoServiceProvider",
+    method: "Decrypt",
+    vars: ["Conv: DotNet GenConvert;", "Bytes: DotNet GenArray;"],
+    setup: ["RSA := RSA.RSACryptoServiceProvider();"],
+    stmt: "Bytes := RSA.Decrypt(Conv.FromBase64String('AAAA'), false);",
+  },
+  {
+    type: "Aes",
+    method: "TransformFinalBlock",
+    vars: ["D: DotNet GenICryptoTransform;", "Conv: DotNet GenConvert;", "Bytes: DotNet GenArray;"],
+    setup: ["A := A.Create();", "D := A.CreateDecryptor();"],
+    stmt: "Bytes := D.TransformFinalBlock(Conv.FromBase64String('AAAA'), 0, 3);",
+  },
+];
+export const DOTNET_EXCEPTION: Family = {
+  name: "dotnet-exception",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [
+    "DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-014 section 7)",
+  ],
+  support: `dotnet
+{
+    assembly(System)
+    {
+        type(System.Uri; GenUri) { }
+        type(System.UriBuilder; GenUriBuilder) { }
+        type(System.Security.Cryptography.X509Certificates.X509Certificate2; GenX509Certificate2) { }
+    }
+    assembly(mscorlib)
+    {
+        type(System.Globalization.CultureInfo; GenCultureInfo) { }
+        type(System.IO.MemoryStream; GenMemoryStream) { }
+        type(System.Text.Encoding; GenEncoding) { }
+        type(System.Convert; GenConvert) { }
+        type(System.Array; GenArray) { }
+        type(System.Security.Cryptography.RSACryptoServiceProvider; GenRSACryptoServiceProvider) { }
+        type(System.Security.Cryptography.ICryptoTransform; GenICryptoTransform) { }
+    }
+    assembly(System.Core)
+    {
+        type(System.Security.Cryptography.Aes; GenAes) { }
+    }
+    assembly(System.IO.Compression)
+    {
+        type(System.IO.Compression.ZipArchive; GenZipArchive) { }
+    }
+    assembly(System.Xml)
+    {
+        type(System.Xml.XmlTextWriter; GenXmlTextWriter) { }
+    }
+    assembly(System.Data)
+    {
+        type(System.Data.DataTable; GenDataTable) { }
+        type(System.Data.DataRow; GenDataRow) { }
+        type(System.Data.DataColumn; GenDataColumn) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.Linq.JObject; GenJObject) { }
+    }
+}
+`,
+  handles: {
+    Uri: "U: DotNet GenUri;",
+    UriBuilder: "UB: DotNet GenUriBuilder;",
+    CultureInfo: "CI: DotNet GenCultureInfo;",
+    ZipArchive: "ZA: DotNet GenZipArchive;",
+    XmlTextWriter: "XW: DotNet GenXmlTextWriter;",
+    DataTable: "DT: DotNet GenDataTable;",
+    JObject: "JO: DotNet GenJObject;",
+    X509Certificate2: "C: DotNet GenX509Certificate2;",
+    RSACryptoServiceProvider: "RSA: DotNet GenRSACryptoServiceProvider;",
+    Aes: "A: DotNet GenAes;",
+  },
+  cells: [
+    ...DOTNET_SITES.flatMap((s): Cell[] =>
+      (["guarded", "text"] as const).map((state) => ({
+        type: s.type,
+        method: s.method,
+        state,
+        ...(s.vars !== undefined ? { vars: s.vars } : {}),
+        ...(s.setup !== undefined ? { setup: s.setup } : {}),
+        call:
+          state === "guarded"
+            ? `asserterror ${s.stmt}`
+            : `asserterror ${s.stmt} Error('DOTNET %1', GetLastErrorText());`,
+      })),
+    ),
+    // controls: the same members with arguments that raise nothing
+    { type: "Uri", method: "Ctor", state: "ok", call: "U := U.Uri('https://cell.example/');" },
+    {
+      type: "UriBuilder",
+      method: "Ctor",
+      state: "ok",
+      call: "UB := UB.UriBuilder('http://cell.example/');",
+    },
+    { type: "CultureInfo", method: "Ctor", state: "ok", call: "CI := CI.CultureInfo('en-US');" },
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -724,6 +905,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [GET_URL.name]: GET_URL,
   // PR-30: appended; its BC-check number is 8 (bcCheckApp skips 7), as 7 is PR-27's hand-written number-sequence app
   [TABLE_CONNECTION.name]: TABLE_CONNECTION,
+  // PR-32: appended (BC-check number 9)
+  [DOTNET_EXCEPTION.name]: DOTNET_EXCEPTION,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -895,6 +1078,10 @@ export function classOf(text: string): string {
   // PR-02: a DotNet member's text names the member twice and the cause after it; the cause is the class.
   const dotnet = /^DotNet [\w.]+: '[\w.]+' (.*)$/.exec(text);
   if (dotnet) return `DotNet *: ${dotnet[1]}`;
+  // PR-32: a .NET exception's text names the member, the exception and its message (some without the "; the text AL would see
+  // is not pinned" tail); one class, #7924's
+  if (/^DotNet (?:new )?[\w.+]+ raised the \.NET exception /.test(text))
+    return "DotNet * raised the .NET exception *";
   // PR-13: a platform table's text names the table; the store's reason is the class.
   const platform = /^(?:store error )?platform table '[^']+' \(\d+\) (.*)$/.exec(text);
   if (platform) return `platform table *: ${platform[1]}`;
