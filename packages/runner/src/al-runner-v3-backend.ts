@@ -6084,9 +6084,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (odd.length > 0)
       return `the transport (codeunit ${odd[0]} runs one-shot or under method isolation)`;
     const stored = new Map(s.rows);
-    const missing = ids.find((id) => !stored.has(id));
-    if (missing !== undefined || stored.size !== ids.length)
-      return `the suite (codeunit ${missing ?? "?"} has no stored rows, or the stored rows name other codeunits)`;
+    // Review 4: a suite codeunit with no stored rows is one no baseline call reached (every test
+    // TestPage-refused, R-236c); a stored codeunit outside today's suite is a different suite.
+    const foreign = [...stored.keys()].find((id) => !this.suitePerCodeunit.has(id));
+    if (foreign !== undefined)
+      return `the suite (codeunit ${foreign} has stored rows but is not in this session's suite)`;
     const sidecar = this.sidecarPath === undefined ? null : await sha256OfFile(this.sidecarPath);
     if (sidecar !== s.sidecarSha256) return "the .NET sidecar (its content hash)";
     const mask = await this.mintedVersionMask(lane);
@@ -6101,10 +6103,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         (x): x is number => x !== undefined,
       ),
     );
+    // Review 1: this session's own NONE rows are imported (what a live fill gives the warm-up), only
+    // after every check passed; they equal the stored rows in everything the check compares.
+    const fresh = new Map<number, readonly V3Row[]>();
     for (const id of order) {
+      // Review 3: the daemon fill's safeguards (R955 budget and signal, R652 bound, R948 rows).
+      if (this.stopHandle?.spent() === true) return "the time budget (spent during the re-check)";
       if (!(await this.memoryGate(true))) return "the memory bound (the re-check could not run)";
       let got: BaselineAnswer | undefined;
       try {
+        await this.checkBound(lane);
         got = await this.baselineRequest(lane, mode, id, stopSeconds, sample.has(id));
       } catch (err) {
         if (!(err instanceof AlRunnerServerRequestError)) throw err;
@@ -6112,13 +6120,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       } finally {
         this.memoryRelease();
       }
+      if (this.stopHandle?.signalled() === true) return "a stop signal (during the re-check)";
       if (got === undefined) return `the re-check (codeunit ${id} gave no usable answer)`;
+      if (!this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? []))
+        return `the re-check (codeunit ${id}'s answer does not hold exactly one row per suite test)`;
+      fresh.set(id, got.rows);
       const diffs = compareBaselineAnswers(
         { rows: masked(got.rows), coverage: none },
         { rows: masked(stored.get(id) ?? []), coverage: none },
       );
       if (diffs.length > 0) return `the re-check (codeunit ${id}: ${diffs[0]})`;
       if (sample.has(id)) {
+        // Review 2: a sampled codeunit with a passing test must compare at least one coverage map,
+        // or the check would pass with nothing compared (empty vs empty)
+        let compared = 0;
+        const passing = got.rows.some((r) => r.status === "pass" && !r.notRun);
         for (const r of got.rows) {
           // as `runOn` reads it: a pass, or a test refused mid-run (R609), has coverage; others none
           const refusedMidRun =
@@ -6134,12 +6150,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           if (was === undefined) continue; // a test the session does not measure (TestPage-skipped, out of scope)
           if (JSON.stringify(now ?? null) !== was)
             return `the re-check (codeunit ${id}: ${r.method}'s coverage differs)`;
+          compared += 1;
         }
+        if (passing && compared === 0)
+          return `the re-check (codeunit ${id}: no stored coverage to compare for its passing tests)`;
       }
     }
     if ((this.observedSeed ?? null) !== s.seed)
       return `the seed (stored ${String(s.seed)}, this session ${String(this.observedSeed ?? null)})`;
-    for (const [id, rows] of s.rows) this.noteBaselineRows(lane, id, rows);
+    for (const [id, rows] of fresh) this.noteBaselineRows(lane, id, rows);
     this.daemonBaselineFilled = true; // nothing left for R948's fill to do
     return undefined;
   }

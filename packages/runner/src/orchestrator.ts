@@ -6251,9 +6251,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
 
   // PR-21 addendum 2: the rows whose line coverage counts as this session's evidence (R926, R975):
   // the rows that ran here, and a reused snapshot's rows once L5's re-check passed.
-  const lineEvidence: ReadonlySet<TestMethodRef> = rechecked
-    ? new Set([...ranHere, ...baseline.map((b) => b.ref)])
-    : ranHere;
+  const lineEvidence = lineEvidenceOf(ranHere, baseline, rechecked);
   const plan = input.select(baseline, lineEvidence);
   if (plan === undefined) return "nothing-to-run";
   const {
@@ -10137,6 +10135,19 @@ export interface BaselineReach {
   readonly hits: ReadonlyMap<string, ReadonlySet<string>>;
   /** Test codeunit id -> the mode its baseline ran under. */
   readonly modes: ReadonlyMap<number, "test" | "method">;
+}
+
+/**
+ * PR-21 addendum 2: the baseline rows whose line coverage counts as this session's evidence for
+ * R926's reach and R975's trigger placement: the rows that ran here, plus, when a reused snapshot
+ * passed L5's re-check (`rechecked`), every row of the baseline. R192's unchecked reuse adds none.
+ */
+export function lineEvidenceOf(
+  ranHere: ReadonlySet<TestMethodRef>,
+  baseline: readonly { readonly ref: TestMethodRef }[],
+  rechecked: boolean,
+): ReadonlySet<TestMethodRef> {
+  return rechecked ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
 }
 
 export function baselineReachOf(
