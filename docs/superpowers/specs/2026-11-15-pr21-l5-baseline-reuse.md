@@ -121,3 +121,24 @@ date-dependent outcome is re-run on today's clock. The other three change the de
    <publisher> version <a.b.c.d>`), not every version in a stack, so a dependency's line still compares exactly.
 Red check 2 adds: the sidecar's content changed at the same path, and another seed, each re-runs by name. Red check 4 adds: a stack
 that differs in a dependency's version fails the check.
+
+## Addendum 2 (after the first fixture attempt failed prediction 2; before the second)
+
+**The first attempt** (`/coord/handoff/PR-21/precommit/`, build ff9748ea, al-runner edge-5a58a0f16): prediction 1 held (B2 printed
+`resume-baseline-reused`; baseline phase 3.3 s against B1's 9.5 s). Prediction 2 FAILED: `report-diff A B2` gave 2 differences of 222,
+both trigger mutants of `Get Service Declaration Lines` `OnRun` (`flip-boolean-literal`, `remove-not`): `no-coverage` in A, `survived`
+in B2, which ran them against `ServDeclWithMixOfSalesAndPurchaseLines`.
+
+**The cause.** R926 (a statement's reach from baseline line coverage) and R975 (trigger mutants placed by line) trust line coverage
+only from rows that ran in the session (`lineTrusted: ranHere.has`); a reused snapshot's rows are left out. So a resumed session
+decides fewer trigger mutants than a fresh one. It is not L5's: the same comparison on the ONE-SHOT transport, where R192's reuse
+has always applied (`/coord/handoff/PR-21/oneshot/`), gives the same 2 differences. R192's reuse was never verdict-identical for
+such mutants; it is filed as its own roadmap item.
+
+**The change.** A reused snapshot that passed L5's re-check counts as this session's line evidence for R926 and R975 (`lineEvidence`
+in `scoreBatch`): its rows' outcomes were just re-checked against this session's run, and its coverage is the same inputs'
+(measured equal across DO's snapshots). It still does not count for durations (R272) or flags, which stay with the rows that ran.
+R192's one-shot reuse is not changed here (its figures in `itest:lend` would move; its own item decides).
+
+**The second attempt** repeats A, B1 and B2 in `/coord/handoff/PR-21/precommit2/` on the build with this change, with the same three
+predictions; B3 as before.
