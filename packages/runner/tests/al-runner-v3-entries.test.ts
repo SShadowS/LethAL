@@ -8179,7 +8179,10 @@ describe("PR-24 (L2): a restarted daemon warms each codeunit on its first use th
     expect(r.serve.requests.flatMap((q) => q.ids)).not.toContain(`M0003|${CU}`);
   });
 
-  test("a spent budget sends no lazy warm-up (and the same live call with budget left does)", async () => {
+  // Review B1: a live request on a spent budget must still get its real verdict, as with master's
+  // whole-union restart warm-up (no spent check there); a "deadline" from the warm-up would become a
+  // deadline-exceeded verdict (`liveFailure`). Only prefetch and pair batches skip once spent, before request().
+  test("a live call on a restarted daemon with the budget spent still warms up and returns its real verdict", async () => {
     const liveAfterRestart = async (spentNow: boolean) => {
       let spent = false;
       const r = await rig({
@@ -8190,16 +8193,66 @@ describe("PR-24 (L2): a restarted daemon warms each codeunit on its first use th
         stopHandle: { spent: () => spent, signalled: () => false, stopForMemory: () => {} },
       });
       await baseline(r.b, SUITE2);
-      await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }]);
+      // Another mutant is prefetched (daemon 0, then recycled), so M0001's call below is live.
+      await r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }]);
       spent = spentNow;
       const n0 = r.serve.requests.length;
       // A live call (not prefetched) on a restarted daemon.
-      await r.b.activate("M0002");
-      await r.b.run(ref("C", CU2), OPTS);
-      return r.serve.requests.slice(n0).flatMap((q) => q.ids);
+      await r.b.activate("M0001");
+      const v = await r.b.run(ref("A"), OPTS);
+      return { ids: r.serve.requests.slice(n0).flatMap((q) => q.ids), v: outcome(v) };
     };
-    expect(await liveAfterRestart(false)).toContain(`NONE|${CU2}`); // the control: the warm-up is sent
-    expect(await liveAfterRestart(true)).not.toContain(`NONE|${CU2}`);
+    const control = await liveAfterRestart(false);
+    expect(control.ids).toContain(`NONE|${CU}`); // the restarted daemon proves CU first
+    expect(control.v).toEqual(["fail", ""]); // M0001 kills A: a real verdict, not a timeout
+    const spentRun = await liveAfterRestart(true);
+    expect(spentRun.ids).toContain(`NONE|${CU}`);
+    expect(spentRun.v).toEqual(control.v);
+  });
+
+  test("a kill pair on a restarted daemon is preceded there by the warm-up of its codeunit", async () => {
+    const r = await rig({
+      serve: { rows: killsM1 },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+    });
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0002", refs: P2 }]); // daemon 0: the union is CU2 only
+    await r.b.activate("M0001");
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const after = r.serve.requests
+      .slice(n0)
+      .filter((q) => !q.ids.some((i) => i.startsWith("plain:")));
+    const pair = after.findIndex((q) => q.ids.some((i) => i.startsWith("M0001|")));
+    expect(pair).toBeGreaterThan(0);
+    const warm = after[pair - 1];
+    expect(warm?.daemon).toBe(after[pair]?.daemon);
+    expect(warm?.ids).toEqual(["NONE|echo", `NONE|${CU}`]);
+  });
+
+  // Review: rule 4. A daemon-filled baseline (R948) or L5's re-check runs on the baseline's own daemon,
+  // which never passes ensureDaemon; the first MUTANT daemon must still warm the whole union.
+  test("after a daemon-filled baseline the first mutant daemon still warms the whole union", async () => {
+    const r = await dbRig({ serve: { rows: killsM1 }, oneShotRows: killsM1 });
+    await baseline(r.b, SUITE3);
+    // The batch plans put CU, CU2 and CU3 in the union; the window's request needs CU only.
+    await r.b.prefetchMutants([{ mutantId: "M0001", refs: P1 }], {
+      batchPlans: [
+        { mutantId: "M0001", refs: P1 },
+        { mutantId: "M0002", refs: [ref("C", CU2), ref("D", CU3)] },
+      ],
+    });
+    const firstMutantDaemon = r.serve.requests.find(
+      (q) => !q.ids.some((i) => i.startsWith("plain:")),
+    );
+    expect(firstMutantDaemon?.ids).toEqual([
+      "NONE|echo",
+      `NONE|${CU}`,
+      `NONE|${CU2}`,
+      `NONE|${CU3}`,
+    ]);
   });
 
   test("a lazy warm-up does not count toward R952's request bound: a restarted daemon still serves daemonMaxRequests requests", async () => {

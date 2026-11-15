@@ -53,3 +53,14 @@ daemons. Each warm-up ran all 110 codeunits:
   readings, positive controls). See the pre-commitment.
 - **Red checks:** 7 reverts, each red, all restored green. Six were by a sonnet `mutation-red-checker` and one by hand: the
   `leftOutNames` choice, which the first round found unpinned, so a test was added.
+- **Build review (lethal-code, Opus, d9b547b3): one BLOCK, fixed.**
+  - **B1:** the lazy warm-up's spent-budget check could turn a live call's verdict into `deadline-exceeded` in a `--time-budget`
+    run. The check is removed, as master's restart warm-up has none.
+  - **Smaller fixes:**
+    - a failure with no baseline rows now closes the daemon;
+    - the request-bound comment gives the right reason;
+    - the `lastWarmupMs` comment is corrected;
+    - a stray block from the extraction is removed.
+  - **New tests,** each red on its revert, checked by hand: a live call on a spent budget keeps its real verdict; a kill pair is
+    preceded by its codeunit's warm-up; after a daemon-filled baseline the first mutant daemon warms the whole union.
+  - R1035 states the spec's departures and withdrawals.

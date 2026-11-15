@@ -6239,7 +6239,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
         warmed.add(modeKey(mode));
       }
-      lane.lastWarmupMs = lane.timers.warmupMs - before; // this start alone, not the session total
+      // This daemon's start (and, on a restarted one, `proveOnDaemon` adds its lazy warm-ups): R785's
+      // pacing reads it; not the session total.
+      lane.lastWarmupMs = lane.timers.warmupMs - before;
       lane.daemonStarts += 1;
     }
     if (d.proven !== undefined) await this.proveOnDaemon(lane, d, mode, need);
@@ -6261,11 +6263,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * not yet proven on `d`, one NONE warm-up request for exactly those codeunits (and the echo), judged as
    * the whole-union warm-up is (`judgeWarmup`: echo, agreement with this batch's one-shot baseline
    * without the tests the warm-up leaves out, R612 clean). It sends `leftOutNames` (the warm-up's),
-   * never `mutantLeftOutNames`. It does not count toward R952's request bound (otherwise
-   * `daemonMaxRequests: 1` would recycle the daemon before its entries, forever), it counts in
-   * `stats.warmups` (R652's `boundChecks`), and it is not sampled by R987's `noteEntryCost`. A spent
-   * budget sends none (R1014): the request it would precede could not be used. A failure closes the
-   * daemon and refuses by name, as a restarted daemon's whole-union warm-up did.
+   * never `mutantLeftOutNames`. It does not count toward R952's request bound, so a restarted daemon
+   * serves `daemonMaxRequests` requests as before, not one fewer; it counts in `stats.warmups` (R652's
+   * `boundChecks`), and it is not sampled by R987's `noteEntryCost`. It has NO spent-budget check of its
+   * own, as the whole-union restart warm-up had none (review B1): the paths whose request is skipped
+   * once the budget is spent (prefetch, pair batches) check `spent()` before they call `request()`, and
+   * a live, pair-confirm or coverage-window request must still get its real verdict (R912: a live
+   * request is never clamped); `send()`'s `signalled()` watch still ends a warm-up on a stop signal.
+   * Any failure closes the daemon and refuses by name, as a restarted daemon's whole-union warm-up did.
    */
   private async proveOnDaemon(
     lane: Lane,
@@ -6282,6 +6287,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const none = missing.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {
       const named = none.map((id) => this.isolated(id)?.test ?? id);
+      await this.closeLane(lane, "warmup-refused");
       throw new AlRunnerV3EntriesRefusedError(
         "al-runner-v3-entries-no-baseline-rows",
         `codeunit(s) ${named.join(", ")} of a restarted daemon's warm-up have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
@@ -6290,11 +6296,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R1004: as the whole-union warm-up, an isolated call whose one test is left out is not warmed.
     const warm = missing.filter((id) => this.warmable(id));
     if (warm.length > 0) {
-      if (this.stopHandle?.spent() === true)
-        throw new AlRunnerServerRequestError(
-          "deadline",
-          "the budget is spent: a restarted daemon's warm-up was not sent (PR-24, R1014)",
-        );
       const before = lane.timers.warmupMs;
       try {
         await lane.timed("warmupMs", async () => {
@@ -6539,64 +6540,61 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     sent: readonly SentEntry[],
     rows: ReadonlyMap<string, readonly V3Row[]>,
   ): void {
-    {
-      const expected = (e: SentEntry) => this.warmupExpected(e);
-      const disagree: string[] = [];
-      const echo = rows.get(sent[0]?.id ?? "") ?? [];
-      const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
-      if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
-      for (const e of sent.slice(1)) {
-        const got = rowsClass(rows.get(e.id) ?? []);
-        const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
-        if (got !== want)
-          disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
-      }
-      if (disagree.length > 0) {
-        throw new AlRunnerV3EntriesRefusedError(
-          "al-runner-v3-entries-warmup-disagrees",
-          `the daemon's NONE rows are not this batch's one-shot baseline (${disagree.join("; ")}), so no entry on it is trusted`,
+    const expected = (e: SentEntry) => this.warmupExpected(e);
+    const disagree: string[] = [];
+    const echo = rows.get(sent[0]?.id ?? "") ?? [];
+    const echoWhy = echoMismatch(echo, SELECTOR_RESOURCE_NONE);
+    if (echoWhy !== undefined) disagree.push(`echo: ${echoWhy}`);
+    for (const e of sent.slice(1)) {
+      const got = rowsClass(rows.get(e.id) ?? []);
+      const want = rowsClass(expected(e)); // R1004: without the tests the warm-up left out
+      if (got !== want) disagree.push(`codeunit ${e.codeunit}: serve [${got}], one-shot [${want}]`);
+    }
+    if (disagree.length > 0) {
+      throw new AlRunnerV3EntriesRefusedError(
+        "al-runner-v3-entries-warmup-disagrees",
+        `the daemon's NONE rows are not this batch's one-shot baseline (${disagree.join("; ")}), so no entry on it is trusted`,
+      );
+    }
+    // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
+    // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
+    // it, so re-sending cannot help: refused by name before any mutant entry is sent.
+    const unkept: { readonly e: SentEntry; readonly bad: V3Row | undefined }[] = [];
+    for (const e of sent) {
+      const mine = rows.get(e.id) ?? [];
+      if (serveDaemonReusable(serveLines(mine), "v3")) continue;
+      const bad = mine.filter((r) => !serveDaemonReusable(serveLines([r]), "v3"));
+      if (bad.length === 0) unkept.push({ e, bad: undefined });
+      for (const b of bad) unkept.push({ e, bad: b });
+    }
+    const first = unkept[0];
+    if (first !== undefined) {
+      // R786: the disagreement check above passed, so one-shot's baseline held the same rows. On
+      // the default transport "run one-shot" is right only when EVERY unkept row, in every entry,
+      // is a named refusal; one timeout or other unkept kind among them still refuses.
+      if (
+        this.cfg.transportSource === "default" &&
+        first.bad !== undefined &&
+        unkept.every((u) => u.bad !== undefined && isNamedRefusalRow(u.bad))
+      ) {
+        throw new AlRunnerV3ServeFallbackWarmupError(
+          `${first.bad.name} (codeunit ${first.e.codeunit})`,
+          first.bad.message ?? "?",
         );
       }
-      // Build review r1 M1: a warm-up row R612 does not keep (a union test that times out under
-      // NONE) would leave every later request on an untrusted daemon, and every fresh daemon repeats
-      // it, so re-sending cannot help: refused by name before any mutant entry is sent.
-      const unkept: { readonly e: SentEntry; readonly bad: V3Row | undefined }[] = [];
-      for (const e of sent) {
-        const mine = rows.get(e.id) ?? [];
-        if (serveDaemonReusable(serveLines(mine), "v3")) continue;
-        const bad = mine.filter((r) => !serveDaemonReusable(serveLines([r]), "v3"));
-        if (bad.length === 0) unkept.push({ e, bad: undefined });
-        for (const b of bad) unkept.push({ e, bad: b });
-      }
-      const first = unkept[0];
-      if (first !== undefined) {
-        // R786: the disagreement check above passed, so one-shot's baseline held the same rows. On
-        // the default transport "run one-shot" is right only when EVERY unkept row, in every entry,
-        // is a named refusal; one timeout or other unkept kind among them still refuses.
-        if (
-          this.cfg.transportSource === "default" &&
-          first.bad !== undefined &&
-          unkept.every((u) => u.bad !== undefined && isNamedRefusalRow(u.bad))
-        ) {
-          throw new AlRunnerV3ServeFallbackWarmupError(
-            `${first.bad.name} (codeunit ${first.e.codeunit})`,
-            first.bad.message ?? "?",
-          );
-        }
-        // Name the row that blocks the fallback when there is one, else the first unkept row.
-        const blocker = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad));
-        const named = blocker ?? first;
-        // R927: on an explicit transport whose every unkept row is a named refusal, the default
-        // would have re-run the session one-shot (R786): say so, so the user knows the way out.
-        const wayOut =
-          blocker === undefined
-            ? `; with no "alRunnerV3.transport" key the default would re-run this session one-shot instead (R786)`
-            : "";
-        throw new AlRunnerV3EntriesRefusedError(
-          "al-runner-v3-entries-warmup-dirty",
-          `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any${wayOut}`,
-        );
-      }
+      // Name the row that blocks the fallback when there is one, else the first unkept row.
+      const blocker = unkept.find((u) => u.bad === undefined || !isNamedRefusalRow(u.bad));
+      const named = blocker ?? first;
+      // R927: on an explicit transport whose every unkept row is a named refusal, the default
+      // would have re-run the session one-shot (R786): say so, so the user knows the way out.
+      const wayOut =
+        blocker === undefined
+          ? `; with no "alRunnerV3.transport" key the default would re-run this session one-shot instead (R786)`
+          : "";
+      throw new AlRunnerV3EntriesRefusedError(
+        "al-runner-v3-entries-warmup-dirty",
+        `the warm-up row ${named.bad?.name ?? named.e.id} (codeunit ${named.e.codeunit}) is ${r672Unkept(named.bad) ?? "one R612 does not keep"} (${named.bad?.message ?? named.bad?.status ?? "?"}); every daemon repeats it, so no entry is trusted on any${wayOut}`,
+      );
     }
   }
 
@@ -6635,8 +6633,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
       throw new Error("al-runner-v3: send() without a daemon");
-    // PR-24 (L2): a restarted daemon's lazy warm-up is not counted toward R952's request bound, or
-    // `daemonMaxRequests: 1` would recycle the daemon before the entries it was warmed for, forever.
+    // PR-24 (L2): a restarted daemon's lazy warm-up is not counted toward R952's request bound, so the
+    // daemon serves `daemonMaxRequests` requests as a daemon warmed at its start did, not one fewer.
     if (!(kind === "warmup" && daemon.proven !== undefined)) daemon.requests += 1;
     const sent = encodeGroups(
       groups,
