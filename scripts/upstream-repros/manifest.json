@@ -3,7 +3,7 @@
     {
       "id": "u7837-table-connection",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7837",
-      "bcEvidence": "inferred, not measured on BC: Microsoft's Field Service and Sustainability ESG integration tests register a connection string built around @@test@@ and ship as passing, so BC accepts the marker inside a fuller string; an Insert with its trigger on a CRM table through that connection passes too. Each test registers its own connection name, after unregistering a leftover of it, as BC keeps a connection for the session. Refusal family table-connection (PR-30), whose BC-check app (/coord/handoff/PR-30/bc-check, app 51000000-0000-4000-8000-000000051008) is for lethal-bugs to measure",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-30/bc-run/result.md): the refusal family table-connection's BC-check app (app 51000000-0000-4000-8000-000000051008), 22 cells run twice in one session, all pass; these three tests' shapes are among them (a string carrying the marker, an Insert with its trigger on a CRM table, the exact marker). Each test registers its own connection name, after unregistering a leftover of it. Posted on #7837 (6898468955)",
       "rerun": [
         "Field Service Integration (R-925 fsi, R-930, R-975 sweep 14; 6 stores, 300 standing sightings) and Sustainability ESG Integration (R-933, R-950, R-975 sweep 18; 5 stores, 80): the two causes; the refusal family table-connection"
       ],
