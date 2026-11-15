@@ -19,7 +19,7 @@ A repro that needs an al-runner flag names it in the entry's `args`, a list of s
 ## Coverage (PR-05, R1013)
 
 Seven entries added while settling the refusal ledger, one per issue, biggest first: #7775, #8028, #7934, #7586, #7850, #8117
-(new), and #7778 as a guard behind a fixed ledger state. The set now holds 89 tests. Not here, with the reason in R1013: #7415 and
+(new), and #7778 as a guard behind a fixed ledger state. The set now holds 89 tests. Not here, with the reason in R1013: #7415 (added since, PR-13) and
 #8002 (not filed by LethAL), #8001 (needs an assembly folder from a BC service), #7837 (a pin request; BC's result unknown).
 
 ## Coverage (PR-13)
