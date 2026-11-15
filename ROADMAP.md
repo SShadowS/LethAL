@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 991 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 991 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1035,7 +1035,7 @@ that ordering is the priority.
 - **R1025** · al-runner v3 against BC, test by test, batch 2 (PR-14): five more BC.History modules, all 13 tests equal; the server's own Any, Permissions Mock and System Application Test Library replace published copies · [R1025.md](docs/roadmap/R1025.md) · closed 2026-11-15 — measured; no v3 difference
 - **R1026** · Leg C's serve-keep-reasons reads 'diverged' on edge-5a58a0f16: R998's four RecordRef-not-open cases and its GetTable-of-an-unassigned-Variant case are plain fails there (upstream fixed them), so every candidate gate warns · [R1026.md](docs/roadmap/R1026.md) · open
 - **R1027** · What al-runner edge-5a58a0f16's flips free: Guided Experience mostly freed (405 mutants to killed); 4 of 12 freed error mutants killed, 2 more moved, 6 still refused in shapes the flips miss (reduced, filed); Extension Management not freed · [R1027.md](docs/roadmap/R1027.md) · closed 2026-11-15 — the measurement is done; Email's and SAF-T's shapes are reduced and filed (#8036, #7760)…
-- **R1028** · 14 Guided Experience tests freed by #8038 fail on al-runner edge-5a58a0f16: every checklist test with profiles finds 0 rows, while its twin with users passes; BC's answer not measured · [R1028.md](docs/roadmap/R1028.md) · open
+- **R1028** · 14 Guided Experience tests freed by #8038 fail under LethAL: every checklist test with profiles finds 0 rows, while its twin with users passes. Not an al-runner difference: the tests depend on test order · [R1028.md](docs/roadmap/R1028.md) · closed 2026-11-15 — not an al-runner difference; order-dependent tests under LethAL's per-method runs, see…
 
 ---
 
