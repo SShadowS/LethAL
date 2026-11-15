@@ -64,6 +64,27 @@ own app's table.
 - If 2 fails and 3 passes, the at-risk set is 34 plus the direct writes to app-under-test tables (47); "other" stays out.
 - If 2 and 3 fail, the set is every exposed write-first test (307), and the indirect class must be re-examined.
 
+## Addendum 2 (after the review, before any BC run for it): which write methods?
+The probe of addendum 1 measured `Insert` only: refused everywhere. The 306 write-first tests write first with: DeleteAll 140,
+Insert 114, Modify 48, Delete 3, ModifyAll 1. A stored BC baseline (R-882 S3, Service Declaration, mock installed, 7 tests passing)
+has tests whose first write is a `RecordRef.Modify` of a table without InherentPermissions, before any lowering. So a second probe,
+same setup (target app plus test app, no TestPermissions, nothing lowered). The target app seeds one row per test at install:
+1. `Modify` of a seeded target row.
+2. `Delete` of a seeded target row.
+3. `DeleteAll` on the target table, filtered to a seeded row.
+4. `DeleteAll` on the target table, filtered to a value no row has (nothing to delete).
+5. `ModifyAll` on a seeded target row.
+6. `Rename` of a seeded target row.
+7. `RecordRef.Modify` of a seeded target row (the S3 shape).
+8. `Insert` into the target table (the control: refused before).
+
+**Predictions.** 8 fails. 4 passes (no row is written). No firm prediction for 1-3 and 5-7: S3 says a `RecordRef.Modify` can pass,
+while addendum 1's probe refused every `Insert`.
+
+**How the count follows.** The at-risk set keeps a test only if BC refuses its first write method. If DeleteAll with rows fails and
+DeleteAll with none passes, the 140 DeleteAll-first tests become "uncertain" (a parse cannot tell whether the table holds rows)
+and are reported apart. The figures of the first count (306 / 123 / 455) are replaced, not kept.
+
 ## What is done with the result
 No al-runner build fixes #8160 yet, so nothing is re-scored. The at-risk set (per project: tests, baseline status, kills resting on
 them) is recorded in R1048 and in the refusal ledger's note for the class. A re-score follows when a build fails
