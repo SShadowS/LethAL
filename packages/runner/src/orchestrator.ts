@@ -268,6 +268,7 @@ import type {
 import type { FoldStatics } from "./report-fold";
 import { applyBatchInvalidations } from "./report-fold";
 import { quarantineResourceKey } from "./resource-key";
+import { restrictiveDefaultAtRisk, testAppInstallsPermissionsMock } from "./restrictive-default";
 import {
   CARRYABLE_VERDICTS,
   STRANDED_NOTE_PREFIX,
@@ -6735,6 +6736,14 @@ async function runSessionBody(
       type: "tests-testpage-refused",
       tests: testPageRefusedNames.map((t) => t.qualifiedName),
     });
+  }
+  // PR-36 (R1048, upstream #8160): on al-runner-v3 only (on BC the refusal is BC's own, which R35's
+  // `tests-permission-refused` names), the tests al-runner passes that BC would refuse under the Restrictive
+  // default. A label for the report; nothing here changes what runs or how it is scored.
+  if (!isBcdev(caps.kind) && (await testAppInstallsPermissionsMock(cfg.testDir))) {
+    const restrictive = restrictiveDefaultAtRisk(testModel, tests);
+    if (restrictive.length > 0)
+      emit({ type: "tests-restrictive-default-at-risk", tests: restrictive });
   }
 
   // R139 check 2: ask the server what test app it holds BEFORE measuring, so a stale one is named

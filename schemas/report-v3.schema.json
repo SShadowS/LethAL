@@ -68,6 +68,7 @@
               "tests-permission-refused",
               "tests-testpage-unsupported",
               "tests-testpage-refused",
+              "tests-restrictive-default-at-risk",
               "runner-disagreement",
               "stop-hung-sessions",
               "stop-answer-400",
@@ -942,6 +943,72 @@
       ],
       "properties": {
         "tests": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "diagnosis": {
+          "type": "string"
+        }
+      }
+    },
+    "restrictiveDefault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issue",
+        "tests",
+        "kills",
+        "killsAmbiguous",
+        "survivors",
+        "diagnosis"
+      ],
+      "properties": {
+        "issue": {
+          "const": "#8160"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "tier",
+              "firstAccess"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "firm",
+                  "uncertain-write",
+                  "uncertain-read"
+                ]
+              },
+              "firstAccess": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "kills": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "killsAmbiguous": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "survivors": {
           "type": "array",
           "items": {
             "type": "string"

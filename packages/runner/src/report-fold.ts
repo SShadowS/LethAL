@@ -180,6 +180,13 @@ export interface FoldedReport {
   /** R-236c: baseline verdicts classified `tests-testpage-refused`, plus the session scan's
    *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
   readonly testPageRefusedTests?: readonly string[];
+  /** PR-36 (R1048): the session scan's `tests-restrictive-default-at-risk` event; see
+   *  `SessionReport.restrictiveDefault`. */
+  readonly restrictiveDefaultTests?: ReadonlyArray<{
+    readonly test: string;
+    readonly tier: "firm" | "uncertain-write" | "uncertain-read";
+    readonly firstAccess: string;
+  }>;
   /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
   readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
   readonly runnerDisagreementTests?: readonly string[];
@@ -369,6 +376,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
   const testPageRefusedTests = new Set<string>();
+  // PR-36: keyed by test, so an event seen twice (a resumed session) counts each test once
+  const restrictiveDefaultTests = new Map<
+    string,
+    { test: string; tier: "firm" | "uncertain-write" | "uncertain-read"; firstAccess: string }
+  >();
   const baselineStoppedTests = new Set<string>();
   let stoppedBudgetMs: number | undefined;
   const runnerDisagreementTests = new Set<string>();
@@ -566,6 +578,10 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         // A refused test does not pass, so the baseline is not green, also on a resume whose
         // every batch carries and so runs no baseline (run 002, review r1 #3).
         if (e.tests.length > 0) baselineGreen = false;
+        break;
+      case "tests-restrictive-default-at-risk":
+        // PR-36 (R1048): a label only. The baseline and every verdict stay as al-runner gave them.
+        for (const t of e.tests) restrictiveDefaultTests.set(t.test, { ...t });
         break;
       case "tests-discovered":
         discoveredTests = e.tests;
@@ -862,6 +878,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     ...(testPageRefusedTests.size > 0
       ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
+      : {}),
+    ...(restrictiveDefaultTests.size > 0
+      ? {
+          restrictiveDefaultTests: [...restrictiveDefaultTests.values()].sort((a, b) =>
+            a.test.localeCompare(b.test),
+          ),
+        }
       : {}),
     ...(baselineStoppedTests.size > 0
       ? {

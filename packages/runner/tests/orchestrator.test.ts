@@ -3937,6 +3937,55 @@ describe("runSession — Task 6 unsupported-baseline qualification (spec §9)", 
   });
 });
 
+describe("PR-36 (R1048, #8160): the session scan labels tests BC would refuse under the Restrictive default", () => {
+  // invented: a test that inserts before any permission lowering, in a codeunit with no TestPermissions
+  const RISKY_TEST_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GreenTest()
+    var
+        Row: Record "Sandbox Row";
+    begin
+        Row.Insert();
+    end;
+}
+`;
+  const MOCK_DEP = {
+    id: "40860557-a18d-42ad-aecb-22b7dd80dc80",
+    name: "Permissions Mock",
+    publisher: "Microsoft",
+    version: "28.0.0.0",
+  };
+  const V3 = { ...CAPS_NST, kind: "al-runner-v3" as const, authoritative: false };
+  async function run(caps: BackendCapabilities, withMock: boolean) {
+    const dirs = await makeProject(RISKY_TEST_AL);
+    await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
+    await Bun.write(
+      join(dirs.testDir, "app.json"),
+      JSON.stringify({ ...JSON.parse(testAppJson()), ...(withMock ? { dependencies: [MOCK_DEP] } : {}) }),
+    );
+    const backend = new QualificationBackend(() => ({ outcome: "pass" as const, procedure: "IsOverBudget" }));
+    Object.assign(backend, { capabilities: () => caps });
+    if (caps.authoritative) Object.assign(backend, servesTestApp());
+    return runSession({ backend, store: new ResultsStore(":memory:"), ...dirs, selectorIds });
+  }
+
+  test("al-runner-v3 with Permissions Mock installed: the test is named, with its tier", async () => {
+    const report = await run(V3, true);
+    expect(report.restrictiveDefault?.tests).toEqual([
+      { test: "Sandbox Tests.GreenTest", tier: "firm", firstAccess: "insert" },
+    ]);
+    expect(report.validity.caveats).toContain("tests-restrictive-default-at-risk");
+  });
+
+  test("the other direction: without the mock, and on bcdev, nothing is labelled", async () => {
+    expect((await run(V3, false)).restrictiveDefault).toBeUndefined();
+    expect((await run(CAPS_NST, true)).restrictiveDefault).toBeUndefined();
+  });
+});
+
 describe("R-236c: a test with a reachable call that may open a TestPage is refused before sending", () => {
   const PAGE_TEST_AL = `codeunit 79100 "Sandbox Tests"
 {

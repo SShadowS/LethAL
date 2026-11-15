@@ -173,6 +173,11 @@ export function lossesFor(report: SessionReport): string[] {
       `the assertion screen's discrimination ("${report.assertionScreen.discrimination}", R121) has no schema equivalent.`,
     );
   }
+  if (report.restrictiveDefault !== undefined) {
+    losses.push(
+      `${report.restrictiveDefault.kills.length} kill(s) and ${report.restrictiveDefault.survivors.length} survivor(s) labelled as resting on tests BC would refuse (#8160, R1048) become ordinary verdicts: the schema has no field for the label.`,
+    );
+  }
   const excludedSites = report.excludedSites;
   if (excludedSites !== undefined && excludedSites.siteCount > 0) {
     // Carried, but LOSSILY, and the difference is worth stating rather than letting a reader assume
