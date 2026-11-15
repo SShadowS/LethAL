@@ -7,7 +7,10 @@ Pre-commitment `precommit.md` (f0a3f8a9). Every run below is on al-runner edge-5
 ## Freed tests (#8038)
 
 **Guided Experience** (reference R-985/guided, edge-847b1fa5a, where 84 of 104 tests were refused):
-- **Triage:** 76 of 104 green, 13 refused.
+- **Triage:** 76 of 104 green, 13 refused, 15 failed. Of the 84 freed tests, 57 pass, 14 fail and 13 are still refused.
+  The 14 failures are freed tests in `Checklist Facade Test`: every
+  test with profiles (`...WithProfiles`, `TestUpdateProfilesFor...`) finds 0 rows where it expects 1 or 2, while its twin
+  with users passes. This is probably an al-runner difference from BC, not measured on BC: filed as R1028.
 - **Discovery** found the files the 84 freed tests cover. **Scoring** compared 1,948 mutants, all of them in both runs.
 - **Allowed moves: 405** (296 no-coverage -> killed, 109 survived -> killed).
 - **BLOCKs**, each explained:
@@ -64,9 +67,15 @@ None of the reference's other mutants on those lines moved (no BLOCK).
    survived -> error (refusals under mutation). Both are explained above, and neither is a lost kill.
 
 ## Ledger
-`refusal-ledger.ts --run` over all seven PR-10 stores (triage and scoring) found **3 NEW causes**, all in Guided Experience:
-- a permission denial on a page control over an unreadable FlowField (15 tests);
+`refusal-ledger.ts --run` over all ten PR-10 stores (triage, discovery, scoring and Guided's ground truth) found **3 NEW
+causes**, all in Guided Experience:
+- a permission denial on a page control over an unreadable FlowField (9 tests, 15 sightings);
 - a list over a temporary source after OnOpenPage moved its key (1 test);
 - the Rename primary-key shape (3 mutants).
 
 They are added `unexamined`. PR-06's withheld SaveAs key is added too, now that the normaliser masks its message (5fddfb6d).
+
+Two keys the ledger had as `fixed` were met again on 5a58a0f16, so they are reopened:
+- "use of an unassigned XmlElement": SAF-T's 3 (above), #7760, `u7760-addfirst`;
+- "an InStream was expected, got an untouched handle": Guided M1690, M1873 and M1874 under mutation. R-983's repro still
+  passes, so this is another shape. Not reduced.

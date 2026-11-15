@@ -3,7 +3,7 @@
     {
       "id": "u8036-open-zero",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
-      "bcEvidence": "inferred, not measured on BC: RecordRef.Open of a table id with no table raises an error (as al-runner already does for an id no app declares), so under asserterror both tests pass; comment 6892946955 (PR-10). Still refused on edge-5a58a0f16 for Open(0)",
+      "bcEvidence": "inferred, not measured on BC: RecordRef.Open of a table id with no table raises an error (as al-runner already does for an id no app declares), so under asserterror all three tests pass; comment 6892946955 (PR-10). Still refused on edge-5a58a0f16 for Open(0)",
       "rerun": [
         "System Application's Email module: the 3 mutants of PR-10 (ViewIfAllRelatedRecords / ViewIfAnyRelatedRecords HasAccess, EmailImpl FilterRemovedSourceRecords) still refused on 5a58a0f16"
       ],
