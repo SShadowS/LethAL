@@ -389,8 +389,12 @@ describe("PR-01: the refusal-family generator", () => {
         `if HasTableConnection(TableConnectionType::CRM, '${name}') then UnregisterTableConnection(TableConnectionType::CRM, '${name}');`,
       );
       if (c.type.startsWith("CRM")) {
-        expect(c.setup?.[1]).toBe(`RegisterTableConnection(TableConnectionType::CRM, '${name}', '@@test@@');`);
-        expect(c.setup?.[2]).toBe(`SetDefaultTableConnection(TableConnectionType::CRM, '${name}');`);
+        expect(c.setup?.[1]).toBe(
+          `RegisterTableConnection(TableConnectionType::CRM, '${name}', '@@test@@');`,
+        );
+        expect(c.setup?.[2]).toBe(
+          `SetDefaultTableConnection(TableConnectionType::CRM, '${name}');`,
+        );
       }
       return name;
     });

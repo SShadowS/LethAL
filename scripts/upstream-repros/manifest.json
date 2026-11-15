@@ -71,7 +71,9 @@
       "id": "u8013-file-guid",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
       "bcEvidence": "inferred, not measured on BC: File.Create converts the Guid to its text and the OnPrem server creates that file, so the test passes (PR-28)",
-      "rerun": ["Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"],
+      "rerun": [
+        "Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"
+      ],
       "tests": {
         "Codeunit51511.FileCreateWithGuidName": { "status": "pass" }
       }
