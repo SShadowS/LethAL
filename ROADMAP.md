@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 987 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 989 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1026,12 +1026,14 @@ that ordering is the priority.
 - **R1015** · On al-runner v3 serve every mutant test gets the stop of the slowest green baseline test (R954: 20 x its time + 5 s), so on DO a hang in a sub-second test costs 1,762 s; a per-test stop would change verdicts and needs its own measurement · [R1015.md](docs/roadmap/R1015.md) · done (9cff3793)
 - **R1016** · The al-runner update gate and its regression set run a candidate without its .NET sidecar (built only after the pass), while every LethAL run uses it: edge-5a58a0f16 moved System.Uri into the sidecar, and the set read a false 'regressed'; the sidecar's behaviour is never gated · [R1016.md](docs/roadmap/R1016.md) · done (8edc6284)
 - **R1017** · --regate (and a refresh) gated `current` with its .NET sidecar beside it, while a candidate's gate has none: the two paths measured different things against the same sidecar-less frozen figures · [R1017.md](docs/roadmap/R1017.md) · done (8edc6284)
-- **R1019** · On al-runner v3 serve, the cascade refusal 'a test before this one in the codeunit did not pass' closes the daemon, so nearly every mutant that kills an early test costs a full warm-up: Filter Tokens (5 tests, 343 covered mutants) started 466 daemons and spent 37 min · [R1019.md](docs/roadmap/R1019.md) · open
+- **R1019** · On al-runner v3 serve, the cascade refusal 'a test before this one in the codeunit did not pass' closes the daemon, so nearly every mutant that kills an early test costs a full warm-up: Filter Tokens (5 tests, 343 covered mutants) started 466 daemons and spent 37 min · [R1019.md](docs/roadmap/R1019.md) · done (671e6190)
 - **R1020** · al-runner v3 against BC, test by test, on six small BC.History modules (PR-03, review item 4): 66 of 67 tests decided; v3 differs from BC on two Json tests (#7994, #7995), Document Sharing fails on BC by the server's Base Application, not by v3 · [R1020.md](docs/roadmap/R1020.md) · closed 2026-11-15 — measured; the two v3 differences are on their upstream issues (#7994, #7995) with BC's…
 - **R1021** · The tests PR-05's fixes freed, scored on edge-a184cfc79: 26 mutants move to killed (20 by a freed test) in 5 of 16 projects; every other move is explained (59 survived -> no-coverage by attribution, 13 no-coverage -> survived, 1 error -> survived) with no kill lost · [R1021.md](docs/roadmap/R1021.md) · closed 2026-11-15 — measured; one LethAL defect found (R1018, fixed); 20 NEW ledger causes added unexamined…
 - **R1022** · Refusal family platform-table-read: 214 platform tables read on al-runner edge-5a58a0f16, 120 refused as "has no provider" (#7415, comment posted), ten one-table classes; regression-set entry u7415-platform-no-provider · [R1022.md](docs/roadmap/R1022.md) · done (7cdc114a)
 - **R1023** · Refusal family permission-denial: 83 readable platform tables read under Permissions Mock on al-runner edge-5a58a0f16; 75 refused when not granted (#7854), Permission refused when granted (#8032); two regression-set entries; the set's still-differing issues are all active · [R1023.md](docs/roadmap/R1023.md) · done (917fedd7)
 - **R1024** · Refusal family no-client (#8028): 28 client-dependent cells under --no-client on edge-5a58a0f16, Report.RunRequestPage refused (new); BC-check apps for families 1-5 (824 cells, alc-clean) for a BC run; 26 platform tables BC 28 rejects · [R1024.md](docs/roadmap/R1024.md) · done (8d36aa0f)
+- **R1025** · al-runner v3 against BC, test by test, batch 2 (PR-14): five more BC.History modules, all 13 tests equal; the server's own Any, Permissions Mock and System Application Test Library replace published copies · [R1025.md](docs/roadmap/R1025.md) · closed 2026-11-15 — measured; no v3 difference
+- **R1026** · Leg C's serve-keep-reasons reads 'diverged' on edge-5a58a0f16: R998's four RecordRef-not-open cases and its GetTable-of-an-unassigned-Variant case are plain fails there (upstream fixed them), so every candidate gate warns · [R1026.md](docs/roadmap/R1026.md) · open
 
 ---
 
