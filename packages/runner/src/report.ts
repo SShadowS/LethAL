@@ -2138,6 +2138,8 @@ export interface MutantOutcome {
    * `stop-answer-400`). A kill that ran twice (kill, then reproduction) shows the weaker of the
    * two. Absent on every other verdict, and on a `timeout-killed` carried from a store written
    * before the field: absent means unknown there, never `bc-named-stop`.
+   * PR-41: `v3-cpu-stop` marks a timeout kill on a CPU-time backend (al-runner v3) whose unmutated
+   * confirm passed and which was deliberately NOT reproduced; count them by this field.
    */
   readonly stopEvidence?: StopEvidence;
   /**

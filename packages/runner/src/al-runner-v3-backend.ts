@@ -2065,6 +2065,8 @@ class Lane {
 export class AlRunnerV3Backend implements ExecutionBackend {
   /** R577 with C2: every activate/deploy clears the rows, so a reproduction really re-runs. */
   readonly killsMustReproduce = true;
+  /** PR-41: `--test-timeout-secs` is CPU time (leg C `timeout-is-cpu`); see `ExecutionBackend.timeoutIsCpuTime`. */
+  readonly timeoutIsCpuTime = true;
   /** R857: `--isolate-tests`; see `ExecutionBackend.isolatesTests`. */
   get isolatesTests(): boolean {
     return this.cfg.isolateTests === true || this.methodIsolation;
@@ -4885,6 +4887,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return {
       laneIndex: lane.index,
       killsMustReproduce: true,
+      timeoutIsCpuTime: true,
       get inRunStopIsBudget(): boolean {
         return b.inRunStopIsBudget;
       },

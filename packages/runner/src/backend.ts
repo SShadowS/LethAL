@@ -280,9 +280,11 @@ export type StopState = "issued" | "pending" | "confirmed" | "refused" | "unknow
 /**
  * GitHub #49: what ended a held request after our confirmed stop. `bc-named-stop` is BC's 408 that
  * names the AL `StopSession` call; `begin-transaction-world` is BC 29's exact 400, which does not
- * name the stop and is the weaker of the two.
+ * name the stop and is the weaker of the two. PR-41: `v3-cpu-stop` is al-runner v3's CPU-time stop
+ * with the unmutated confirm passed; the kill was NOT reproduced (R577), because machine load
+ * cannot cause a CPU-time stop. The report counts such kills by this row field.
  */
-export type StopEvidence = "bc-named-stop" | "begin-transaction-world";
+export type StopEvidence = "bc-named-stop" | "begin-transaction-world" | "v3-cpu-stop";
 
 /**
  * GitHub #49: the evidence of a kill that ran twice (the kill, then its reproduction). Mixed runs
@@ -491,6 +493,13 @@ export interface ExecutionBackend {
    * change, like `inRunStopIsBudget`.
    */
   readonly killsMustReproduce?: boolean;
+  /**
+   * PR-41: the backend's timeout stops a test after N seconds of CPU TIME, so load cannot cause
+   * one. A timeout kill whose unmutated confirm passed then skips R577's reproduction and is
+   * scored `v3-cpu-stop`. Absent counts as false. al-runner-v3 only; read by capability, never by
+   * name. Kept off `BackendCapabilities`, like `killsMustReproduce`.
+   */
+  readonly timeoutIsCpuTime?: boolean;
   /**
    * R857: `--isolate-tests`, al-runner-v3 only: every test ran alone. Absent counts as false. The
    * session puts it in its fingerprint and in `runner_build`, so nothing of such a run reaches a
