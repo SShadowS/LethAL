@@ -1050,6 +1050,10 @@ the figures are pre-committed in `docs/superpowers/specs/2026-10-21-r586-alrunne
   reads the clock after a Sleep behaves as on BC, but a wait never costs time and is never stopped.
   `CurrentDateTime()` does not follow wall time either, so a loop on the clock is not a CPU burn (r4's
   wall-clock `timeout-is-cpu` probe failed on exactly that).
+- **The clock starts at noon** (#8161; measured 2026-11-15 on edge 5a58a0f16, PR-34): a test reads
+  `Time()` 12:00:00.028 and `CurrentDateTime()` 12:00:00.03Z of the run's day, then the clock steps
+  forward. Code that falls back to the current time therefore equals a test's noon constant: 2 Filter
+  Tokens mutants survive on v3 that BC kills. Upstream will move the start off a round value.
 - **Code that does not compile runs** (#5602): a target with an AL0118 error ran, and its test passed.
 - **Duplicate key.** A statement-form duplicate-key `Insert()` does not raise (#5603).
 - **Isolation.** `Commit()` is refused under `--isolation test` (#5607), and `--isolation disabled`
