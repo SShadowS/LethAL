@@ -33,6 +33,11 @@ Two entries from family `permission-denial` (99 tests in all): `u7854-system-tab
 does not grant it, under `asserterror`) and `u8032-permission-rows` (a read of Permission under a set that grants it, refused
 through Permissions Mock's own `table * = X` grant). Both depend on Microsoft's Permissions Mock, as `u8038-published-app` does.
 
+## Coverage (PR-17)
+
+`u8028-run-request-page` (100 tests in all), from family `no-client`: `Report.RunRequestPage` with a RequestPageHandler bound,
+run with `--no-client` like `u8028-no-client`.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,

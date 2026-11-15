@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   BASE_ID,
+  BC_UNAVAILABLE_TABLES,
   DOTNET_NO_OBJECT,
   type Family,
+  NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   UNTOUCHED_HANDLE,
+  bcCheckApp,
+  bcCheckFamily,
   cellName,
   classOf,
   classify,
@@ -252,5 +256,75 @@ describe("PR-01: the refusal-family generator", () => {
     expect(
       f.cells.every((c) => /PermissionsMock\.Set\('Cell (No Grant|Grant Read)'\)/.test(c.call)),
     ).toBe(true);
+  });
+
+  test("PR-17: a cell's handlers are bound and emitted; a cell with no var has no var block", () => {
+    const h =
+      "    [ConfirmHandler]\n    procedure OnConfirm(Question: Text[1024]; var Reply: Boolean)\n    begin\n    end;\n";
+    const f: Family = {
+      name: "t",
+      issue: "",
+      known: [],
+      support: "",
+      handles: {},
+      cells: [
+        {
+          type: "Dialog",
+          method: "Confirm",
+          state: "handler",
+          call: "if Confirm('x') then;",
+          handlers: [h],
+        },
+        { type: "Session", method: "GuiAllowed", state: "noclient", call: "if GuiAllowed() then;" },
+      ],
+    };
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    const [first, second] = al.split(/\ncodeunit /).slice(1);
+    expect(first).toContain("[HandlerFunctions('OnConfirm')]\n    [Test]");
+    expect(first).toContain("procedure OnConfirm(Question");
+    expect(second).not.toContain("HandlerFunctions");
+    expect(second).not.toContain("var");
+  });
+
+  test("PR-17: the no-client family runs with --no-client; every UI call has a cell without its handler; handlers are whole procedures", () => {
+    const f = NO_CLIENT;
+    expect(f.args).toEqual(["--no-client"]);
+    for (const c of f.cells) {
+      expect(
+        f.handles[c.type] !== undefined || ["Session", "Dialog", "Report"].includes(c.type),
+      ).toBe(true);
+      for (const h of c.handlers ?? []) expect(h).toMatch(/^ {4}\[\w+\]\n {4}procedure \w+\(/);
+    }
+    const handled = new Set(
+      f.cells.filter((c) => c.state === "handler").map((c) => `${c.type}.${c.method}`),
+    );
+    for (const k of handled)
+      expect(f.cells.some((c) => `${c.type}.${c.method}` === k && c.state === "nohandler")).toBe(
+        true,
+      );
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("PR-17: a BC-check app has its own id per family and leaves out the tables BC 28 rejects", () => {
+    const ids = [
+      UNTOUCHED_HANDLE,
+      DOTNET_NO_OBJECT,
+      PLATFORM_TABLE_READ,
+      PERMISSION_DENIAL,
+      NO_CLIENT,
+    ].map((f) => bcCheckApp(f).id);
+    // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
+    expect(ids).toEqual([1, 2, 3, 4, 5].map((n) => `51000000-0000-4000-8000-00000005100${n}`));
+    for (const id of ids)
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    const kept = bcCheckFamily(PLATFORM_TABLE_READ);
+    expect(BC_UNAVAILABLE_TABLES.size).toBe(26);
+    expect(kept.cells.length).toBe(2 * (214 - 26));
+    expect(kept.cells.some((c) => c.type === "TNAVApp")).toBe(false);
+    expect(kept.cells.some((c) => c.type === "TApiWebService")).toBe(true);
+    expect(bcCheckFamily(NO_CLIENT).cells.length).toBe(NO_CLIENT.cells.length);
+    const app = JSON.parse(emitApp(kept, bcCheckApp(PLATFORM_TABLE_READ))["app.json"] ?? "{}");
+    expect(app.name).toBe("LethAL BC Check platform-table-read");
   });
 });
