@@ -436,7 +436,9 @@ describe("serveDaemonReusable, the rule alone", () => {
   };
   // R1043: DO's caption family, measured clean (`/coord/handoff/PR-18/probe-caption/`).
   R945["caption-no-source-table"] = {
-    keeps: [`${P}the caption of a page with DataCaptionExpression and no source table (not pinned)`],
+    keeps: [
+      `${P}the caption of a page with DataCaptionExpression and no source table (not pinned)`,
+    ],
     closes: [
       // the page-extension wording, a page with a source table, no "(not pinned)", a tail
       `${P}the caption of a page extension with DataCaptionExpression and no source table (not pinned)`,
