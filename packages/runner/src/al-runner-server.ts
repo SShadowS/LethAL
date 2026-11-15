@@ -849,6 +849,16 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
     /^NotRun: out-of-scope: DotNet System\.IO\.Compression\.ZipArchive\.Dispose: a \.NET write over the bytes an AL OutStream held before the call \(what the Blob then holds is not pinned\)$/,
   "format-region-std4":
     /^NotRun: out-of-scope: Format of a value \(standard format 4\) while CurrReport\.FormatRegion is 'en-GB' is not pinned \(docs\/probes-needed\.md\)$/,
+  /**
+   * PR-18 follow-up (R1043): DO's dominant restart cause in R-984's window t4 (63 of 87 daemons, ~88 s each). The caption of a
+   * TestPage on a page with DataCaptionExpression and no source table; al-runner refuses BEFORE the expression runs. Measured
+   * clean with R-967's kit on edge-847b1fa5a and edge-5a58a0f16, isolation "test" and "codeunit"
+   * (`/coord/handoff/PR-18/probe-caption/README.md`, invented AL): 72 kept-daemon reader answers and 40 fresh ones equal to the
+   * control, the pid unchanged, no panic text. Not measured: a page extension's DataCaptionExpression (another text), a page
+   * with a source table. Leg C case 50688-50689.
+   */
+  "caption-no-source-table":
+    /^NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table \(not pinned\)$/,
 };
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns

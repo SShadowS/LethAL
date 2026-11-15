@@ -336,6 +336,13 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     message:
       "NotRun: out-of-scope: Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
   },
+  // R1043: the caption family as both builds word it (`/coord/handoff/PR-18/probe-caption/`).
+  "Codeunit50689.Refuses": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table (not pinned)",
+  },
 };
 
 /** R612: the serve rows as measured on alpha.2 (`/coord/handoff/R-612/measure.md`), by name. */
@@ -578,7 +585,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 15 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 16 entries");
     // R998, R1019: each new family judged a refusal by its own entry
     for (const e of [
       "recordref-not-open",
@@ -586,6 +593,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
       "gettable-unassigned-variant",
       "cascade-manual-binding",
       "format-region-std4",
+      "caption-no-source-table",
     ])
       expect(f?.measured).toContain(`${e}: refusal`);
     expect(f?.measured).toContain("http: refusal");
@@ -613,6 +621,7 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     ["cascade-existing-state", "Codeunit50676.C_UsesKey"],
     ["cascade-manual-binding", "Codeunit50685.B_BindAgain"],
     ["format-region-std4", "Codeunit50687.Refuses"],
+    ["caption-no-source-table", "Codeunit50689.Refuses"],
   ] as const) {
     test(`R1000: a reworded ${entry} refusal (${name}) is unkept, names it, never refuses a session, and FAILS leg C`, async () => {
       const rows = {
@@ -764,7 +773,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
     // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(17);
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(18);
+    // R1043: the caption case's page.
+    expect(SERVE_TESTS_AL.match(/^page 506[78]\d /gm)).toHaveLength(1);
     // PR-18: the FormatRegion case's report.
     expect(SERVE_TESTS_AL.match(/^report 506[78]\d /gm)).toHaveLength(1);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.

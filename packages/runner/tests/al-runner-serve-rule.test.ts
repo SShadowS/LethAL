@@ -434,6 +434,17 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned`,
     ],
   };
+  // R1043: DO's caption family, measured clean (`/coord/handoff/PR-18/probe-caption/`).
+  R945["caption-no-source-table"] = {
+    keeps: [`${P}the caption of a page with DataCaptionExpression and no source table (not pinned)`],
+    closes: [
+      // the page-extension wording, a page with a source table, no "(not pinned)", a tail
+      `${P}the caption of a page extension with DataCaptionExpression and no source table (not pinned)`,
+      `${P}the caption of a page with DataCaptionExpression and a source table (not pinned)`,
+      `${P}the caption of a page with DataCaptionExpression and no source table`,
+      `${P}the caption of a page with DataCaptionExpression and no source table (not pinned) (timeout)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
