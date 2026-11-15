@@ -265,7 +265,7 @@ export const PLATFORM_TABLE_READ: Family = {
 };
 
 /**
- * PR-16: #7854's family, the ledger's largest open one after #7415 (843 sightings; its permission denials 677): a read of a
+ * PR-16: #7854's family, the ledger's largest open one after #7415 (843 sightings; its own permission denials 493): a read of a
  * system table under permission sets a test assigned with Microsoft's Permissions Mock (as Library - Lower Permissions
  * does). One pair of cells per platform table whose plain read runs on al-runner (PR-13's run on edge-5a58a0f16): the read
  * under a set that does not grant the table, and under one that grants it Read.
