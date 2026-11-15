@@ -3,6 +3,7 @@ import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
   DOTNET_EXCEPTION,
+  DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   FAMILIES,
   type Family,
@@ -10,6 +11,7 @@ import {
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
+  PUBAPP_FLOWFIELD,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
@@ -320,12 +322,16 @@ describe("PR-01: the refusal-family generator", () => {
       GET_URL,
       TABLE_CONNECTION,
       DOTNET_EXCEPTION,
+      DOTNET_EXCEPTION_RSA,
+      PUBAPP_FLOWFIELD,
     ].map((f) => bcCheckApp(f).id);
     // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
     // (PR-26: get-url appended as 6; PR-30: table-connection is 8, as 7 is PR-27's hand-written number-sequence app; PR-32:
-    // dotnet-exception is 9)
+    // dotnet-exception is 9; PR-33: dotnet-exception-rsa 10, pubapp-flowfield 11)
     expect(ids).toEqual(
-      [1, 2, 3, 4, 5, 6, 8, 9].map((n) => `51000000-0000-4000-8000-00000005100${n}`),
+      [1, 2, 3, 4, 5, 6, 8, 9, 10, 11].map(
+        (n) => `51000000-0000-4000-8000-0000000510${String(n).padStart(2, "0")}`,
+      ),
     );
     for (const id of ids)
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -457,5 +463,67 @@ describe("PR-01: the refusal-family generator", () => {
         "DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object",
       ),
     ).not.toBe(cls);
+  });
+
+  test("PR-33: the RSA family: 7 OpenSSL sites on both RSA paths in PR-32's two shapes, and a same-padding control per path", () => {
+    const f = DOTNET_EXCEPTION_RSA;
+    expect(f.cells).toHaveLength(16);
+    const guarded = f.cells.filter((c) => c.state === "guarded");
+    const text = f.cells.filter((c) => c.state === "text");
+    expect(guarded.map((c) => `${c.type}.${c.method}`)).toEqual([
+      "CSP.PkcsThenOaep",
+      "CSP.OaepThenPkcs",
+      "CSP.PublicOnlyDecrypt",
+      "CSP.PublicOnlySignData",
+      "RSA.PkcsThenOaep",
+      "RSA.OaepThenPkcs",
+      "RSA.PublicOnlyDecrypt",
+    ]);
+    for (const [i, g] of guarded.entries()) {
+      expect(g.call).toMatch(/^asserterror [^;]+;$/);
+      expect(text[i]?.call).toBe(`${g.call} Error('DOTNET %1', GetLastErrorText());`);
+    }
+    // a wrong-padding site decrypts with the other padding than it encrypted with; the control with the same one
+    const padding = (c: (typeof f.cells)[number]) => [
+      /Encrypt\(Data, (\w+(?:\.\w+)?)\)/.exec(c.setup?.join(" ") ?? "")?.[1],
+      /Decrypt\(Bytes, (\w+(?:\.\w+)?)\)/.exec(c.call)?.[1],
+    ];
+    for (const c of guarded.filter((c) => /Then/.test(c.method))) {
+      const [enc, dec] = padding(c);
+      expect(enc).toBeDefined();
+      expect(enc).not.toBe(dec);
+    }
+    for (const c of f.cells.filter((c) => c.state === "ok")) {
+      const [enc, dec] = padding(c);
+      expect(enc).toBeDefined();
+      expect(enc).toBe(dec);
+    }
+    // the public-only sites act on a key made from the other's public part only
+    for (const c of guarded.filter((c) => c.method.startsWith("PublicOnly")))
+      expect(c.setup?.join(" ")).toMatch(/FromXmlString\(\w+\.ToXmlString\(false\)\)/);
+  });
+
+  test("PR-33: family 10 (pubapp-flowfield): 14 reads that touch Published Application's FlowFields, each under two sets, and a control", () => {
+    const f = PUBAPP_FLOWFIELD;
+    expect(f.cells).toHaveLength(30);
+    expect(f.dependencies?.[0]?.name).toBe("Permissions Mock");
+    for (const state of ["granted", "item only"]) {
+      const set = state === "granted" ? "Cell Grant PubApp" : "Cell Grant Item";
+      const cells = f.cells.filter((c) => c.state === state);
+      expect(cells).toHaveLength(15);
+      for (const c of cells) expect(c.call.startsWith(`PermissionsMock.Set('${set}');`)).toBe(true);
+    }
+    // the set under test is applied after the setup (an Item cell inserts its row with the test's own permissions first)
+    for (const c of f.cells)
+      expect(c.setup?.some((s) => s.includes("PermissionsMock"))).toBe(false);
+    // only the 'granted' set grants Published Application
+    expect(f.support).toMatch(/"Cell Grant PubApp"[^}]*tabledata "Published Application" = R/);
+    expect(f.support).not.toMatch(/"Cell Grant Item"[^}]*Published Application/);
+    // every read but the control touches one of the FlowFields over a system table
+    const flowFields =
+      /Tenant Visible|PerTenant Or Installed|Installed|Name TV|Exists TV|Count TV|Name PerTenant|Tenant Visible Of App/;
+    for (const c of f.cells.filter((c) => c.method !== "FindFirstIdOnly"))
+      expect([...(c.setup ?? []), c.call].join(" ")).toMatch(flowFields);
+    expect(classOf(f.known[0] ?? "")).not.toBe(classOf(f.known[1] ?? ""));
   });
 });
