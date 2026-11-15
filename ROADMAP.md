@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 987 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 988 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1032,6 +1032,7 @@ that ordering is the priority.
 - **R1022** · Refusal family platform-table-read: 214 platform tables read on al-runner edge-5a58a0f16, 120 refused as "has no provider" (#7415, comment posted), ten one-table classes; regression-set entry u7415-platform-no-provider · [R1022.md](docs/roadmap/R1022.md) · done (7cdc114a)
 - **R1023** · Refusal family permission-denial: 83 readable platform tables read under Permissions Mock on al-runner edge-5a58a0f16; 75 refused when not granted (#7854), Permission refused when granted (#8032); two regression-set entries; the set's still-differing issues are all active · [R1023.md](docs/roadmap/R1023.md) · done (917fedd7)
 - **R1024** · Refusal family no-client (#8028): 28 client-dependent cells under --no-client on edge-5a58a0f16, Report.RunRequestPage refused (new); BC-check apps for families 1-5 (824 cells, alc-clean) for a BC run; 26 platform tables BC 28 rejects · [R1024.md](docs/roadmap/R1024.md) · done (8d36aa0f)
+- **R1027** · What al-runner edge-5a58a0f16's flips free: Guided Experience mostly freed (405 mutants to killed); 4 of 12 freed error mutants killed, 2 more moved, 6 still refused in shapes the flips miss (reduced, filed); Extension Management not freed · [R1027.md](docs/roadmap/R1027.md) · closed 2026-11-15 — measured; the shapes the flips miss are filed upstream (#8036, #7760, #8038) with…
 
 ---
 

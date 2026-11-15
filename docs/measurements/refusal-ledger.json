@@ -2005,5 +2005,20 @@
     "key": "NotRun: out-of-scope: an error in a SaveAs of report <x>, which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): <message>",
     "state": "unexamined",
     "note": "PR-06: NEW on edge-a184cfc79, 1 sighting from error mutants, in the scoring store of project 982-9; withheld in PR-06 until the normaliser masked the raised message (code PR-13, 5fddfb6d); added by PR-10"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a page control over a FlowField the session cannot read: BC leaves the control off the page); the test is n",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 15 sighting(s) from a baseline test, Guided Experience (guided/score, guided/triage); met where #8038's fix freed its tests and they now run further"
+  },
+  {
+    "key": "NotRun: out-of-scope: a list over a temporary source opened without a record whose OnOpenPage changed its key and left Rec on a row other than the first of its view (not pinned)",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 1 sighting(s) from a baseline test, Guided Experience (guided/score, guided/triage); met where #8038's fix freed its tests and they now run further"
+  },
+  {
+    "key": "NotRun: out-of-scope: Rename of Guided Experience Item: a primary key field another table relates to changes to or from a blank or zero key value, in a shape that is not measured (more than one relation targets the table",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 3 sighting(s) from error mutants, Guided Experience (guided/score); met where #8038's fix freed its tests and they now run further"
   }
 ]
