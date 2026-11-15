@@ -8,8 +8,9 @@
   {
     "key": "Microsoft Dynamics N Business Central Server attempted to issue a client callback to show a confirmation dialog box: <text>",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (client callback (Confirm without handler)), this instance not named in it (was: R-983: not examined)",
-    "issue": "#7480"
+    "note": "PR-28: not an unhandled Confirm. It is al-runner's text under --no-client (which LethAL passes) for a Confirm WITH a ConfirmHandler bound: family 5's cell C3 (and C7 for StrMenu) gives it under --no-client on edge-5a58a0f16 and passes without it. Measured on BC in a web-service session (lethal-bugs, bc2, /coord/handoff/PR-17/ws-run/result.md): BC calls the bound handler, so this is a wrong answer, filed as #8154 (R1039). R-908's BC run of the same Bank Deposits tests agrees: they reach Bank Deposit-Post past the Confirm. Its 2,290 standing sightings (6 stores; 2,080 from R-911's run) are mostly mutants whose baseline had no green test; 17 distinct tests raise it, all binding a ConfirmHandler. #7480 upstream is another shape (an unhandled Confirm in OnClosePage) (was: PR-05: not re-run on edge-a184cfc79; family issue (client callback (Confirm without handler)), this instance not named in it)",
+    "issue": "#8154",
+    "repro": "scripts/upstream-repros/u8154-noclient-handlers"
   },
   {
     "key": "NotRun: out-of-scope: [Native] procedure <x> is implemented by the platform and has no AL body (what it answers is not pinned)",
@@ -137,8 +138,9 @@
   {
     "key": "NotRun: out-of-scope: a file name, got Guid",
     "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 2 test(s) (PR-05 re-run) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#8013"
+    "note": "PR-28: reduced (File.Create(CreateGuid())), still refused on edge-5a58a0f16; 8 standing sightings; comment 6897717456 (was: PR-05: still refused on edge-a184cfc79 for 2 test(s))",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-file-guid"
   },
   {
     "key": "NotRun: out-of-scope: a page opened without a record whose OnOpenPage left Rec where its view has no row (not pinned)",
@@ -414,14 +416,16 @@
   {
     "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.Init writes the database in the test session before the first test, and this test can read table User Environment Login: what the te",
     "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#8013"
+    "note": "PR-28: reduced (an invented OnCompanyOpenCompleted subscriber that writes an app table, read by a test), still refused on edge-5a58a0f16; 56 standing sightings (User Environment Login); comment 6897716586 (was: PR-05: seen on edge-a184cfc79 (R-993 stores))",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-company-open"
   },
   {
     "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.Init writes the database in the test session before the first test, and this test can read table User Login: what the test runner do",
     "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983: not examined)",
-    "issue": "#8013"
+    "note": "PR-28: reduced (an invented OnCompanyOpenCompleted subscriber that writes an app table, read by a test), still refused on edge-5a58a0f16; 192 standing sightings (User Login); comment 6897716586 (was: PR-05: seen on edge-a184cfc79 (R-993 stores))",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-company-open"
   },
   {
     "key": "NotRun: out-of-scope: Company Triggers OnCompanyOpen(Completed) subscriber codeunit <x>.InitCompany before the first test: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (",
@@ -1245,8 +1249,9 @@
   {
     "key": "NotRun: out-of-scope: Find on an empty set of table <x> without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
     "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#8013"
+    "note": "PR-28: reduced (a filter that matches nothing, then Find('=<>') unused; on an app table too, not only Time Zone), still refused on edge-5a58a0f16; its text says 'without a filter' although a filter is set; 9 standing sightings; comment 6897717185 (was: PR-05: seen on edge-a184cfc79 (R-993 stores))",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-find-no-match"
   },
   {
     "key": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-N decision Na)",
@@ -1337,14 +1342,16 @@
   {
     "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: ReadFromYaml of a carriage return or a blank line in a nested, list or flow form (not pinned)",
     "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-995: met in 2026-11-14's BC.History stores (R-975, R-982, R-985, R-993), not examined)",
-    "issue": "#8013, #8027"
+    "note": "PR-28: reduced: the AI Test Toolkit datasets the Copilot test apps' install reads use CRLF on every line; an invented CRLF document is still refused on edge-5a58a0f16; 451 standing sightings (10 stores); comment 6897716294 (was: PR-05: seen on edge-a184cfc79 (R-993 stores))",
+    "issue": "#8013, #8027",
+    "repro": "scripts/upstream-repros/u8013-yaml-shapes"
   },
   {
     "key": "NotRun: out-of-scope: install routine codeunit <x>.OnInstallAppPerCompany could not run: ReadFromYaml of a line that is not <x> (the YAML form is not pinned)",
     "state": "open",
-    "note": "PR-05: not observed on edge-a184cfc79: its 4 test(s) stop earlier (4 another refusal, 0 not reached), so neither fixed nor seen (was: R-983: not examined)",
-    "issue": "#8013, #8027"
+    "note": "PR-28: on edge-5a58a0f16 the same datasets now meet 'a mapping item in a list at another indent than 4' (a list at its key's indent) and 'a number other than null and a whole number' (decimal values), both reduced; 2,384 standing sightings in 4 stores (older builds); comment 6897716294 (was: PR-05: not observed on edge-a184cfc79: its 4 test(s) stop earlier)",
+    "issue": "#8013, #8027",
+    "repro": "scripts/upstream-repros/u8013-yaml-shapes"
   },
   {
     "key": "NotRun: out-of-scope: InStream method on an unassigned Variant",
@@ -1721,8 +1728,9 @@
   {
     "key": "NotRun: out-of-scope: storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinn",
     "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 1 test(s) (PR-05 re-run) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#8013"
+    "note": "PR-28: reduced (SqlStatementsExecuted stored in a BigInteger field, never read back), still refused on edge-5a58a0f16; 4 standing sightings; comment 6897717738 (was: PR-05: still refused on edge-a184cfc79 for 1 test(s))",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-sql-counter"
   },
   {
     "key": "NotRun: out-of-scope: TestField.DrillDown right after a GoToKey moved a list without OnAfterGetCurrRecord (whether the row is read again is not pinned)",
@@ -1861,8 +1869,9 @@
   {
     "key": "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
     "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 4 test(s) (PR-05 re-run); #8013 names it (Intrastat Core; the maintainer will narrow the refusal to the Xml case) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
-    "issue": "#8013"
+    "note": "PR-28: reduced (a VariableText export whose table element holds one text element with Unbound = true, left by currXMLport.BreakUnbound(), the pattern of Base Application's generic CSV export, written fresh); still refused with this text on edge-5a58a0f16; 16 standing sightings; comment 6897716894 and its correction (the first repro lacked Unbound = true and hit another rule) (was: PR-05: still refused on edge-a184cfc79 for 4 test(s); #8013 names it)",
+    "issue": "#8013",
+    "repro": "scripts/upstream-repros/u8013-xmlport-text-element"
   },
   {
     "key": "NotRun: out-of-scope: XmlPort import into a VariableText port with TextEncoding = WINDOWS (not pinned)",
