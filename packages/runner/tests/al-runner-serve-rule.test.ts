@@ -422,6 +422,43 @@ describe("serveDaemonReusable, the rule alone", () => {
       MB("A1: failed (planted)").replace(P, ""),
     ],
   };
+  // PR-18 lever 1: DO's two restart families, measured clean (`/coord/handoff/PR-18/probe/`).
+  R945["zip-dispose-over-held-bytes"] = {
+    keeps: [
+      `${P}DotNet System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned)`,
+    ],
+    closes: [
+      // another member, another type, the same text with a tail
+      `${P}DotNet System.IO.Compression.ZipArchive.CreateEntry: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned)`,
+      `${P}DotNet System.IO.Compression.ZipArchiveEntry.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned)`,
+      `${P}DotNet System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then holds is not pinned) (timeout)`,
+    ],
+  };
+  R945["format-region-std4"] = {
+    keeps: [
+      `${P}Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)`,
+    ],
+    closes: [
+      // another region, another standard format, an unquoted region, no doc pointer
+      `${P}Format of a value (standard format 4) while CurrReport.FormatRegion is 'da-DK' is not pinned (docs/probes-needed.md)`,
+      `${P}Format of a value (standard format 9) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)`,
+      `${P}Format of a value (standard format 4) while CurrReport.FormatRegion is en-GB is not pinned (docs/probes-needed.md)`,
+      `${P}Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned`,
+    ],
+  };
+  // R1043: DO's caption family, measured clean (`/coord/handoff/PR-18/probe-caption/`).
+  R945["caption-no-source-table"] = {
+    keeps: [
+      `${P}the caption of a page with DataCaptionExpression and no source table (not pinned)`,
+    ],
+    closes: [
+      // the page-extension wording, a page with a source table, no "(not pinned)", a tail
+      `${P}the caption of a page extension with DataCaptionExpression and no source table (not pinned)`,
+      `${P}the caption of a page with DataCaptionExpression and a source table (not pinned)`,
+      `${P}the caption of a page with DataCaptionExpression and no source table`,
+      `${P}the caption of a page with DataCaptionExpression and no source table (not pinned) (timeout)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
