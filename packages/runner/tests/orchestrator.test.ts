@@ -4995,6 +4995,32 @@ describe("runSession — per-mutant budget floor (Tier 6B Phase 0 Task 6)", () =
       for (const ms of mutantBudgets(backend)) expect(ms).toBe(60_000);
     });
 
+    // R1015 (coord PR-08): DO's 87.8 s "largest test" was a whole serve call; the test's own time was
+    // 1.3 s, so every test got a 1,762 s stop. The stop reads the own time; the call's budget keeps
+    // 2 x its wall. Red with `baselineDuration`: the stop would be 20 x 87000 + 5000.
+    test("R1015: S comes from the green test's OWN time (measuredDurationMs), not the call's wall; each call's budget keeps 2 x its wall", async () => {
+      class OwnTimeProbe extends PerTestProbe {
+        override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+          const v = await super.run(ref, opts);
+          return this.activations.at(-1) === null && v.outcome === "pass"
+            ? { ...v, measuredDurationMs: 1_300 }
+            : v;
+        }
+      }
+      const dirs = await makeProject(TWO_TEST_AL);
+      const backend = new OwnTimeProbe({
+        GreenTest: { outcome: "pass", ms: 87_000 },
+        UnsupportedTest: { outcome: "fail", ms: 5 },
+      });
+      const store = new ResultsStore(":memory:");
+      await runSession({ backend, store, ...dirs, selectorIds });
+      store.close();
+      expect(backend.stops).toEqual([60_000]);
+      const budgets = mutantBudgets(backend);
+      expect(budgets.length).toBeGreaterThan(0);
+      for (const ms of budgets) expect(ms).toBe(174_000);
+    });
+
     test("an explicit mutantTimeoutMs: useMutantStop is not called and the floor is that value", async () => {
       const dirs = await makeProject(TWO_TEST_AL);
       const backend = new PerTestProbe({
