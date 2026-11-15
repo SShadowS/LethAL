@@ -43,3 +43,18 @@ conditions 1-2); the orchestrator adds condition 3. bcdev never sets the flag, s
    unmutated own time 0-449 ms, under 15 s; kill rows 63-183 s, under 600 s), so their reproductions go: about 450 s of single runs
    plus about 5 x 32 s of restarts, about 610 s of t5's 10,525 s mutant phase. Each such hang meets the timeout once (P) or twice
    (P and A).
+
+## Addendum 1 (2026-11-15, after the first build, before any review or gate)
+
+**Condition 3's time when the row has none.** al-runner omits `durationMs` on a row whose time is zero
+(`crates/alrunner-cli/src/output.rs`, `test_row`: `if !time.is_zero()`), so a 0 ms unmutated test (2 of t5's 5 hangs: M11934 and
+M11940) gives a confirm with no measured time, and condition 3 as written would always keep R577 for it. Condition 3 now reads the
+confirm's own `durationMs` when the row has one, else the confirm call's wall time, which is never below the test's own time. So
+the rule stays conservative. A missing time on both keeps R577.
+
+**Only the cold confirm site.** The skip applies where a kill at position 1 is confirmed by the NONE run of that test. A warm group
+timeout (position > 1, confirmed by `confirmWarm`) has no NONE run of that test's own time: it reproduces as today. Prediction 4
+holds for t5's hangs that were killed at position 1. One killed at a warm position keeps its reproduction, and the result names it.
+
+**Predictions, added to 1.** A confirm with no measured time and a wall at most N/4 skips. One with a wall above N/4 reproduces.
+Both are red both ways.
