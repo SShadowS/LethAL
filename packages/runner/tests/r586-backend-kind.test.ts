@@ -96,6 +96,9 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {': "v3",
     'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
+    // R1018: the al-runner binary is pinned once per run, on v3 only
+    'if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)':
+      "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
     'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",

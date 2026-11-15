@@ -258,6 +258,8 @@ export class AlRunnerV3ReusedBaselineUnclassifiedError extends Error {
 /** The four note tags (plan §4, §6), in `failureNote`; the gate and any count read them by tag. */
 /** The `testIsolation` every serve request sends (`requestBase`); leg O1 sends the same. */
 export const SERVE_TEST_ISOLATION = "test";
+/** R1014: how often a running serve request looks for a stop signal (`send`). */
+export const STOP_SIGNAL_POLL_MS = 250;
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
 /**
@@ -1388,27 +1390,47 @@ export type V3DaemonCloseReason =
   | "session-end"
   | "baseline-end"
   /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
-  | "recycle";
+  | "recycle"
+  /** R1014: a stop signal arrived while a request ran; its answer is dropped (R955). */
+  | "stop-signal";
+
+/** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
+export type V3DaemonClose = {
+  readonly reason: string;
+  readonly family?: string;
+  readonly text?: string;
+  readonly test?: string;
+};
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
- *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own. */
+ *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own.
+ *  R1014: `stop-signal` ends the session, so no warm-up follows it. */
 export const V3_ROUTINE_CLOSES: ReadonlySet<V3DaemonCloseReason> = new Set([
   "probe",
   "deploy",
   "mutant-stop",
   "session-end",
   "baseline-end",
+  "stop-signal",
 ]);
 
 /**
  * R939: why `rows` stop a daemon being reused: the first row the keep rule refuses, as a reason and,
  * for a refusal, its family: the text after `out-of-scope: `, with quoted and backticked spans
  * (names, code) masked as `…` FIRST, then cut at the first `(`, `[`, `;` or `:`, standalone numbers
- * as N, at most 80 characters. Undefined when every row is kept.
+ * as N, at most 80 characters. Undefined when every row is kept. R1009: `text`, a refusal's WHOLE
+ * first line, as the raw row has it, for the close event only: the
+ * family's cut hid DO's stale-buffer refusal, so it could not be measured; and `test`, the refused
+ * row's test name, so the shape can be reduced from its site.
  */
-export function unkeptRowReason(
-  rows: readonly ServerTestLine[],
-): { readonly reason: "refusal" | "timeout" | "unkept-row"; readonly family?: string } | undefined {
+export function unkeptRowReason(rows: readonly ServerTestLine[]):
+  | {
+      readonly reason: "refusal" | "timeout" | "unkept-row";
+      readonly family?: string;
+      readonly text?: string;
+      readonly test?: string;
+    }
+  | undefined {
   const bad = rows.find((r) => !serveDaemonReusable([r], "v3"));
   if (bad === undefined) return undefined;
   const m = bad.message ?? "";
@@ -1421,9 +1443,12 @@ export function unkeptRowReason(
       ?.replace(/\b\d+\b/g, "N")
       .trim()
       .slice(0, 80);
+    const text = m.split("\n")[0] ?? "";
     return {
       reason: "refusal",
       family: family !== undefined && family !== "" ? family : "unnamed",
+      ...(text !== "" ? { text } : {}),
+      test: bad.name,
     };
   }
   return { reason: "unkept-row" };
@@ -2359,28 +2384,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { byReason: new Map(this.closes), refusalFamilies: new Map(this.closeFamilies) };
   }
   /** R939: the session's close sink (`setDaemonCloseSink`); each call becomes a `serve-daemon-closed` event. */
-  private closeSink:
-    | ((c: { readonly reason: string; readonly family?: string }) => void)
-    | undefined;
+  private closeSink: ((c: V3DaemonClose) => void) | undefined;
   /** R939: see `ExecutionBackend.setDaemonCloseSink`. */
-  setDaemonCloseSink(
-    sink?: (c: { readonly reason: string; readonly family?: string }) => void,
-  ): void {
+  setDaemonCloseSink(sink?: (c: V3DaemonClose) => void): void {
     this.closeSink = sink;
   }
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
    * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
    * for an unexpected reason (every one but `deploy`, `session-end` and `probe`, which cost no extra
-   * warm-up) report it to the session's sink, naming a refusal's family.
+   * warm-up) report it to the session's sink, naming a refusal's family and (R1009) its whole text
+   * and its test.
    */
-  private async closeLane(lane: Lane, reason: V3DaemonCloseReason, family?: string): Promise<void> {
+  private async closeLane(
+    lane: Lane,
+    reason: V3DaemonCloseReason,
+    family?: string,
+    detail?: { readonly text?: string; readonly test?: string },
+  ): Promise<void> {
     if ((await lane.closeDaemon()) === 0) return;
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
     if (family !== undefined)
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
     if (V3_ROUTINE_CLOSES.has(reason)) return;
-    this.closeSink?.({ reason, ...(family !== undefined ? { family } : {}) });
+    this.closeSink?.({
+      reason,
+      ...(family !== undefined ? { family } : {}),
+      ...(detail?.text !== undefined ? { text: detail.text } : {}),
+      ...(detail?.test !== undefined ? { test: detail.test } : {}),
+    });
   }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
   private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
@@ -3811,7 +3843,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
     const wallMs = Date.now() - started;
     if (daemon.dirty) {
-      await this.closeLane(lane, daemon.dirtyWhy?.reason ?? "unkept-row", daemon.dirtyWhy?.family);
+      await this.closeLane(
+        lane,
+        daemon.dirtyWhy?.reason ?? "unkept-row",
+        daemon.dirtyWhy?.family,
+        daemon.dirtyWhy,
+      );
     }
     if (coverage && out.coverage.kind === "unavailable") return undefined;
     return {
@@ -6146,27 +6183,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // excluding `Codeunit<id>.R1` drops `R1Read`), so a test is left out only when no other test of its
     // codeunit starts with its name; otherwise it stays, as before this change. A refused row not left
     // out (or a row of a left-out test that comes back anyway) still refuses or falls back as before.
-    const leftOutRows = (id: number): readonly V3Row[] => {
-      const rows = (this.baselineRows.get(id) ?? []).filter(
-        (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
-      );
-      if (this.isolatedRefs.has(id)) return rows;
-      const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
-      return rows.filter((r) => {
-        const m = r.method.toLowerCase();
-        return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
-      });
-    };
-    const warm = union.filter((id) => !this.isolatedRefs.has(id) || leftOutRows(id).length === 0);
-    const leftOut = (cu: number): readonly string[] | undefined => {
-      if (this.isolatedRefs.has(cu)) return undefined;
-      const names = [...new Set(leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
-      return names.length === 0 ? undefined : names;
-    };
+    // R998: mutant entries leave the same tests out (`leftOutNames`).
+    const warm = union.filter(
+      (id) => !this.isolatedRefs.has(id) || this.leftOutRows(id).length === 0,
+    );
+    const leftOut = (cu: number) => this.leftOutNames(cu);
     const expected = (e: SentEntry): readonly V3Row[] => {
       const rows = this.baselineRows.get(callOf(e)) ?? [];
       if (e.call !== undefined) return rows;
-      const out = new Set(leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
+      const out = new Set(this.leftOutRows(e.codeunit).map((r) => r.method.toLowerCase()));
       return rows.filter((r) => !out.has(r.method.toLowerCase()));
     };
     const daemon = await this.spawnDaemon(lane, mode, s);
@@ -6333,6 +6358,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (kind === "prefetch") this.stats.prefetchRequests += 1;
     else if (kind === "live") this.stats.liveRequests += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
+    // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
+    // orchestrator records nothing that ended under a signal), so nothing scored is lost.
+    let signalClosed = false;
+    const watch = setInterval(() => {
+      // Not the memory guard's own stop (it sets `signalled` too, R948): its group in flight runs on.
+      if (this.stopHandle?.signalled() !== true || this.memoryStopped || signalClosed) return;
+      signalClosed = true;
+      void this.closeLane(lane, "stop-signal");
+    }, STOP_SIGNAL_POLL_MS);
     try {
       // R895: prefetch and live requests stop at a streamed timeout row; the warm-up never does. Only
       // on a build that retires the §6 Sleep rule: the coverage window compares a whole-codeunit run
@@ -6347,8 +6382,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
-      await this.closeLane(lane, "request-failed");
+      await this.closeLane(lane, signalClosed ? "stop-signal" : "request-failed");
       throw missingDependencyOr(err);
+    } finally {
+      clearInterval(watch);
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.cut !== undefined) {
@@ -6491,6 +6528,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           mode,
           groupCount,
           alone,
+          (cu) => this.mutantLeftOutNames(cu), // R998: the warm-up's, at the codeunit's end only
         ),
       );
     } finally {
@@ -6516,7 +6554,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
     if (cut < sent.length || daemon.dirty)
-      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family);
+      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family, unkept);
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -6586,15 +6624,72 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
-  /** §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. */
+  /**
+   * R1004, R998: the baseline rows of `id` whose test a codeunit entry leaves out (`excludeTests`):
+   * a named refusal in THIS batch's baseline that the daemon cannot keep (`serveDaemonReusable`
+   * false). v3 matches `excludeTests` by PREFIX (#8059, measured `/coord/handoff/R-992/excl.ts`), so a
+   * test is left out only when no other test of its codeunit starts with its name. For a test run
+   * alone (R857/R896) the rows are returned unfiltered, for the warm-up to leave the call out.
+   */
+  private leftOutRows(id: number): readonly V3Row[] {
+    const rows = (this.baselineRows.get(id) ?? []).filter(
+      (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    if (this.isolatedRefs.has(id)) return rows;
+    const methods = this.discovered.filter((t) => t.codeunitId === id).map((t) => t.method);
+    return rows.filter((r) => {
+      const m = r.method.toLowerCase();
+      return !methods.some((o) => o.toLowerCase() !== m && o.toLowerCase().startsWith(m));
+    });
+  }
+
+  /** R1004, R998: the `excludeTests` of a plain codeunit entry for `cu`, or `undefined`. */
+  private leftOutNames(cu: number): readonly string[] | undefined {
+    if (this.isolatedRefs.has(cu)) return undefined;
+    const names = [...new Set(this.leftOutRows(cu).map((r) => `Codeunit${cu}.${r.method}`))].sort();
+    return names.length === 0 ? undefined : names;
+  }
+
+  /**
+   * R998: the tests a MUTANT entry of `cu` leaves out: of `leftOutNames`, only the run at the END of
+   * the codeunit's baseline order (every test after one of them is one of them too). So no test that
+   * still runs follows a left-out one, and none starts from other state than at the baseline (a
+   * refused test can change the codeunit's globals before v3 refuses it, which v3's cascades do not
+   * track; review 2-3). The warm-up keeps `leftOutNames`: it only compares, and a difference there
+   * fails loudly.
+   */
+  private mutantLeftOutNames(cu: number): readonly string[] | undefined {
+    const out = this.leftOutNames(cu);
+    if (out === undefined) return undefined;
+    const names = new Set(out.map((n) => n.toLowerCase()));
+    const order = this.baselineRows.get(cu) ?? [];
+    const tail: string[] = [];
+    for (let i = order.length - 1; i >= 0; i--) {
+      const name = `Codeunit${cu}.${order[i]?.method ?? ""}`;
+      if (!names.has(name.toLowerCase())) break;
+      tail.push(name);
+    }
+    return tail.length === 0 ? undefined : [...new Set(tail)].sort();
+  }
+
+  /**
+   * §6 (#5704): the suite test of `cu` without exactly one row, or `undefined`. R998: a test the
+   * entry left out (`mutantLeftOutNames`) may have no row; one that comes back anyway is read as ever.
+   */
   private suiteMissing(cu: number, rows: readonly V3Row[]): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
     if (one !== undefined && rows.length > 1) {
       return `the entry for ${one.codeunitName}.${one.method} has ${rows.length} rows, so that test did not run alone`;
     }
+    const out = new Set(
+      (one !== undefined ? [] : (this.mutantLeftOutNames(cu) ?? [])).map((n) =>
+        n.slice(`Codeunit${cu}.`.length).toLowerCase(),
+      ),
+    );
     for (const t of one !== undefined ? [one] : (this.suitePerCodeunit.get(cu) ?? [])) {
       const n = rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
+      if (n === 0 && out.has(t.method.toLowerCase())) continue;
       if (n !== 1)
         return `codeunit ${one?.codeunitId ?? cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
     }
@@ -6666,12 +6761,18 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // R948: a prefetch request starts no group while the container is over its memory bound; the
       // session stops by the guard (R955's path), so the rest is never scored.
       if (!(await this.memoryGate())) break;
+      // R1014: nor once the budget is spent or a stop signal arrived: each chunk (and each re-sent
+      // segment after a cut) would start a daemon and a request no verdict can use.
+      if (this.stopHandle?.spent() === true) break;
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
         // R766 (b): the shared prefetch runs on lane 0 with the N = 1 grouping; any lane consumes it.
         out = await this.request(this.lane, chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
+          // R1014 (review 6): a request the budget or a stop signal ended: nothing runs live after
+          // it, so the warning below would be wrong; the session stops with its report.
+          if (this.stopHandle?.spent() === true) break;
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
           this.stats.prefetchDropped += 1;
           this.notify(
@@ -6752,6 +6853,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     const resent = new Set<string>();
     for (let chunk = nextChunk(); chunk !== undefined; chunk = nextChunk()) {
+      // R1014: as `prefetchWindow`: no pair batch (nor a re-sent one) once the budget is spent.
+      if (this.stopHandle?.spent() === true) return;
       const groups: EntryGroup[] = chunk.flatMap((k) => [
         {
           mutantId: SELECTOR_RESOURCE_NONE,
@@ -6768,6 +6871,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // Like `prefetchMutants`: only a request error is absorbed; a refusal, an unproven batch
         // or a skipped dependency stops the session (S1: never serve stored pairs after one).
         if (!(err instanceof AlRunnerServerRequestError)) throw err;
+        if (this.stopHandle?.spent() === true) return; // R1014 (review 6): ended by the stop
         this.notify(
           "al-runner-v3-pair-batch-skipped",
           `[lethal] al-runner-v3-pair-batch-skipped: a batch of ${chunk.length} kill pair(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); nothing of it is stored, and each kill sends its own pair (R778).`,
@@ -7053,8 +7157,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
         if (before !== undefined) this.stats.secondEchoMismatches += 1;
+        // R998 (review 1): the same tests left out as the entry it is compared with
         const cov = await lane.timed("coverageMs", () =>
-          this.plain(lane, daemon, mode, this.callId(ref), true),
+          this.plain(
+            lane,
+            daemon,
+            mode,
+            this.callId(ref),
+            true,
+            undefined,
+            this.mutantLeftOutNames(this.callId(ref)),
+          ),
         );
         const after = await echoOk();
         const echoWhy = before ?? after;
@@ -7085,6 +7198,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             lane,
             daemon.dirtyWhy?.reason ?? "unkept-row",
             daemon.dirtyWhy?.family,
+            daemon.dirtyWhy,
           );
         lane.timers.windowMs += this.now() - windowT0;
       }
@@ -7130,14 +7244,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
     /** R948: the baseline daemon's own stop; absent: the mutant phase's `serveStopSeconds`. */
     stopSeconds?: number,
+    /** R998: a plain codeunit's left-out tests (the §6 coverage window only; never the baseline). */
+    leaveOut?: readonly string[],
   ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
     const s = stopSeconds ?? this.serveStopSeconds() ?? 1;
     const one = this.isolated(call);
     const cu = one?.codeunit ?? call;
+    const excludeTests = one !== undefined ? one.excludeTests : leaveOut;
     const body = {
       ...lane.requestBase(mode),
       test: one?.test ?? `Codeunit${cu}.`,
-      ...(one?.excludeTests !== undefined ? { excludeTests: one.excludeTests } : {}),
+      ...(excludeTests !== undefined ? { excludeTests } : {}),
       ...(coverage ? { coverage: true, perTestCoverage: true } : {}),
     };
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;

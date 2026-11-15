@@ -355,6 +355,35 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}an earlier test of this codeunit, X, changed a table, then B_Changes, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new key's IsolatedStorage.Set and a new NumberSequence.Insert are)`,
     ],
   };
+  // R998 (coord R-998): DO's mutant-phase families, each text measured clean (`/coord/handoff/R-998/probe/`).
+  const RR = (m: string) =>
+    `${P}RecordRef.${m} on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)`;
+  R945["recordref-not-open"] = {
+    keeps: ["FieldCount", "FindSet", "SetRecFilter", "SetLoadFields"].map(RR),
+    // a method never measured, and the other RecordRef "not open" wording al-runner has
+    closes: ["Get", "FindFirst", "CopyLinks", "ReadPermission"]
+      .map(RR)
+      .concat([
+        `${P}RecordRef.FieldCount by this overload on a RecordRef that is not open (not pinned)`,
+      ]),
+  };
+  R945["fieldref-never-assigned"] = {
+    keeps: [
+      `${P}FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
+    ],
+    closes: [
+      `${P}FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
+      `${P}FieldRef.Class on a FieldRef that was never assigned`,
+    ],
+  };
+  R945["gettable-unassigned-variant"] = {
+    keeps: [`${P}RecordRef.GetTable of an unassigned Variant`],
+    closes: [
+      `${P}RecordRef.GetTable of a RecordRef that is not open`,
+      `${P}RecordRef.GetTable of Text 'x'`,
+      `${P}RecordRef.GetTable of an unassigned Variant (not pinned)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
