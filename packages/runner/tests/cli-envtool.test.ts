@@ -1,7 +1,7 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
@@ -947,6 +947,60 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
     } finally {
       AlRunnerV3Backend.prototype.close = original;
       warn.mockRestore();
+    }
+  });
+
+  // R1018 (coord PR-12): each attempt's backend resolved the `current` link itself, so a link moved
+  // between the warm-up and the one-shot retry ran another build (PR-06: a184cfc79, then 5a58a0f16).
+  it("R1018: a link moved between the attempts: both get the build the run resolved first; with no move, unchanged", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-r1018-"));
+    try {
+      const a = join(dir, "build-a");
+      const b = join(dir, "build-b");
+      await mkdir(a);
+      await mkdir(b);
+      await writeFile(join(a, "al-runner"), "a");
+      await writeFile(join(b, "al-runner"), "b");
+      for (const move of [true, false]) {
+        const link = join(dir, `current-${move}`);
+        await symlink(a, link);
+        const parsed = await v3Parsed();
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        const paths: unknown[] = [];
+        let sessions = 0;
+        const original = AlRunnerV3Backend.prototype.close;
+        AlRunnerV3Backend.prototype.close = async () => {};
+        try {
+          await runFromCli(parsed, {
+            validateSelectorIdsForProject: async () => {},
+            resolveEnvToolSession: async () => ({
+              effectiveConfig: { alRunnerV3: { path: join(link, "al-runner") } },
+            }),
+            buildBackend: async (_p, c) => {
+              paths.push((c.alRunnerV3 as { path?: string } | undefined)?.path);
+              if (move && paths.length === 1) {
+                await unlink(link);
+                await symlink(b, link); // the daily update moved `current`
+              }
+              return Object.create(AlRunnerV3Backend.prototype) as AlRunnerV3Backend;
+            },
+            runSession: async () => {
+              sessions += 1;
+              if (sessions === 1)
+                throw new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company");
+              return FAKE_REPORT;
+            },
+          });
+          // red without the pin: the retry's backend got the link, which now names build-b
+          const first = await realpath(join(a, "al-runner"));
+          expect([move, paths]).toEqual([move, [first, first]]);
+        } finally {
+          AlRunnerV3Backend.prototype.close = original;
+          warn.mockRestore();
+        }
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
