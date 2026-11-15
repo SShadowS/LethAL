@@ -52,7 +52,7 @@ run with `--no-client` like `u8028-no-client`.
 
 ## Coverage (PR-31)
 
-137 tests in all. PR-17's BC check (lethal-bugs, bc2, 2026-11-15, `/coord/handoff/PR-17/bc-check/runs/`, `ws-run/`) measured
+140 tests in all (with `u7837-table-connection`, which landed alongside). PR-17's BC check (lethal-bugs, bc2, 2026-11-15, `/coord/handoff/PR-17/bc-check/runs/`, `ws-run/`) measured
 the families' cells on BC:
 - Now measured, expectation unchanged: `u7760-untouched-handle`, `u8036-dotnet-no-object`, `u7415-platform-no-provider`,
   `u7854-system-table-denial`, `u8032-permission-rows`; `u8028-no-client` partly (CurrentClientType answers; "never Windows" is
