@@ -30,6 +30,7 @@ import {
   PLATFORM_KILL_MECHANISM_EXPLANATIONS,
 } from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
+import { RESTRICTIVE_DEFAULT_DIAGNOSIS } from "./restrictive-default";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf, isCarryDisabled, memberGroupNameOf, serializeKey } from "./selection";
 import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
@@ -239,6 +240,7 @@ export type Caveat =
   | "tests-permission-refused"
   | "tests-testpage-unsupported"
   | "tests-testpage-refused"
+  | "tests-restrictive-default-at-risk"
   | "runner-disagreement"
   | "stop-hung-sessions"
   | "stop-answer-400"
@@ -413,6 +415,16 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "sent; this one is LethAL's static decision from the test source, and the test never reached " +
       "BC. It does not say the test is wrong, nor that it would open a page on this path.",
     basis: "R236",
+  },
+  "tests-restrictive-default-at-risk": {
+    meaning: RESTRICTIVE_DEFAULT_DIAGNOSIS,
+    entailedNegative:
+      "Does NOT change a verdict, a count or `mutationScore`: the labelled kills and survivors " +
+      "stay as al-runner scored them. Nor does it say they are wrong: a `firm` test's first write " +
+      "is refused on BC whatever the table holds, but an `uncertain-*` test is refused only when " +
+      "the table it touches holds rows, which a parse cannot see. A test that reaches its first " +
+      "table access through another codeunit is not seen, so absence does not clear a run.",
+    basis: "R1048",
   },
   "runner-disagreement": {
     meaning:
@@ -1491,6 +1503,29 @@ export interface SessionReport {
    */
   readonly testPageRefused?: {
     readonly tests: readonly string[];
+    readonly diagnosis: string;
+  };
+  /**
+   * PR-36 (R1048, upstream #8160): on an al-runner-v3 run, the tests al-runner passes that BC, as LethAL runs it, would refuse
+   * under the Restrictive default (see `CAVEAT_INTERPRETATIONS["tests-restrictive-default-at-risk"]` and
+   * `restrictive-default.ts`), and the verdicts resting on them. LABELS ONLY: no verdict, count or `mutationScore` moves.
+   * Absent when the session's scan found no such test (or the backend is not al-runner-v3).
+   */
+  readonly restrictiveDefault?: {
+    readonly issue: "#8160";
+    /** Each test with its tier: `firm` (first access an Insert or Modify), `uncertain-write` (a DeleteAll, ModifyAll,
+     *  Delete or Rename), `uncertain-read` (a read). */
+    readonly tests: ReadonlyArray<{
+      readonly test: string;
+      readonly tier: "firm" | "uncertain-write" | "uncertain-read";
+      readonly firstAccess: string;
+    }>;
+    /** Kills (`killed`, `timeout-killed`) whose killing test is one of `tests`, by mutant ref. */
+    readonly kills: readonly string[];
+    /** Kills whose killing test's method name matches both an at-risk covering test and a safe one (not counted above). */
+    readonly killsAmbiguous: readonly string[];
+    /** Survivors with at least one of `tests` among their covering tests. */
+    readonly survivors: readonly string[];
     readonly diagnosis: string;
   };
   /**
@@ -3243,6 +3278,39 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
           runnerRefusalMutants: refsOf(runnerRefusals),
           diagnosis: ASSERTION_SCREEN_DIAGNOSIS,
         };
+  // PR-36 (R1048, #8160): label the verdicts resting on the session scan's at-risk tests. A kill's `killingTest` is the bare
+  // method name, so it is resolved through the mutant's own covering tests (qualified names): it is labelled when every
+  // covering test of that method name is at risk, and listed as ambiguous when some are and some are not.
+  const restrictiveTests = input.restrictiveDefaultTests ?? [];
+  const restrictiveDefault = (() => {
+    if (restrictiveTests.length === 0) return undefined;
+    const atRisk = new Set(restrictiveTests.map((t) => t.test));
+    const methodOf = (q: string) => q.slice(q.lastIndexOf(".") + 1).toLowerCase();
+    const kills: MutantOutcome[] = [];
+    const ambiguous: MutantOutcome[] = [];
+    for (const m of screenedKills) {
+      if (m.killingTest === undefined) continue;
+      // al-runner-v3 records the bare method; compare method parts so a qualified name reads the same
+      const killer = methodOf(m.killingTest);
+      const candidates = (m.coveringTests ?? []).filter((c) => methodOf(c) === killer);
+      const risky = candidates.filter((c) => atRisk.has(c));
+      if (risky.length === 0) continue;
+      if (risky.length === candidates.length) kills.push(m);
+      else ambiguous.push(m);
+    }
+    const survivors = mutants.filter(
+      (m) => m.verdict === "survived" && (m.coveringTests ?? []).some((c) => atRisk.has(c)),
+    );
+    return {
+      issue: "#8160" as const,
+      tests: restrictiveTests.map((t) => ({ ...t })),
+      kills: refsOf(kills),
+      killsAmbiguous: refsOf(ambiguous),
+      survivors: refsOf(survivors),
+      diagnosis: RESTRICTIVE_DEFAULT_DIAGNOSIS,
+    };
+  })();
+  if (restrictiveDefault !== undefined) caveats.push("tests-restrictive-default-at-risk");
   const narrowed =
     input.only !== undefined ||
     // R221: an exclusion narrows the measured scope like any other filter, so `reliability` must
@@ -3377,6 +3445,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : {}),
     ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
+    ...(restrictiveDefault !== undefined ? { restrictiveDefault } : {}),
     ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
     ...(readerMarkedEquivalent !== undefined ? { readerMarkedEquivalent } : {}),
     ...(assertionScreen !== undefined ? { assertionScreen } : {}),
@@ -3788,6 +3857,14 @@ export function renderConsole(r: SessionReport): string {
     );
     for (const t of r.testPageRefused.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);
+  }
+  // PR-36 (R1048): ONE line, by design. The tests and the labelled mutants are in `restrictiveDefault`.
+  if (r.restrictiveDefault !== undefined) {
+    const rd = r.restrictiveDefault;
+    const firm = rd.tests.filter((t) => t.tier === "firm").length;
+    lines.push(
+      `RESTRICTIVE DEFAULT (${rd.issue}): ${rd.tests.length} test(s) pass here that BC would refuse (${firm} firm), and ${rd.kills.length} kill(s) and ${rd.survivors.length} survivor(s) rest on them; labelled, not changed (restrictiveDefault in the JSON report; fix: TestPermissions = Disabled, or lower permissions first).`,
+    );
   }
   // R658: a stopped baseline test reads as one more failing test otherwise.
   if (r.baselineStopped !== undefined) {

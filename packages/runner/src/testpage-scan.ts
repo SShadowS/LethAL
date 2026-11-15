@@ -432,6 +432,8 @@ export interface Unit {
   readonly namespace: string;
   /** R-389: the file's `using` namespaces, normalised. */
   readonly usings: readonly string[];
+  /** PR-36 (R1048): a codeunit's `TestPermissions` value as written, when it declares one. */
+  readonly testPermissions?: string;
 }
 
 /** R-389: a namespace as written, normalised: each dotted segment unquoted and lower-cased. */
@@ -909,7 +911,9 @@ function buildUnit(
   const implicit = new Map<string, string[]>();
   const tableNo = propertyValue(body, "TableNo");
   if (tableNo !== undefined) addType(implicit, "Rec", `Record ${tableNo}`);
+  const testPermissions = propertyValue(body, "TestPermissions");
   const unitShell = {
+    ...(testPermissions !== undefined ? { testPermissions } : {}),
     kind: "codeunit",
     file,
     id,

@@ -220,6 +220,7 @@ describe("Caveat union", () => {
       "tests-permission-refused": true,
       "tests-testpage-unsupported": true,
       "tests-testpage-refused": true,
+      "tests-restrictive-default-at-risk": true,
       "runner-disagreement": true,
       "stop-hung-sessions": true,
       "stop-answer-400": true,
@@ -242,7 +243,7 @@ describe("Caveat union", () => {
       "al-runner-v3-coverage-off": true,
       "time-budget-reached": true,
     };
-    expect(Object.keys(all).length).toBe(32);
+    expect(Object.keys(all).length).toBe(33);
   });
 });
 
