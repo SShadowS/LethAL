@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**35 of 1014 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1016 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -376,7 +376,8 @@ that ordering is the priority.
 - **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · done (ffcbeda0)
 - **R1018** · One `lethal run` can use two al-runner builds: the R786 warm-up-fallback retry builds a new backend, which resolves the configured `current` link again, so a move of `current` between the attempts silently switches the build · [R1018.md](docs/roadmap/R1018.md) · done (51c9da08)
 - **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · open
-- **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (0db704d2)
+- **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (94790266)
+- **R1052** · Two hang shapes no refusal covers: an assignment whose right side is a loop's progress call (`X := Adv(Pos)` — its `remove-assignment` and the `empty-block` of its block), and the `empty-block` of a block holding a loop's only exit · [R1052.md](docs/roadmap/R1052.md) · open
 
 ## Product gaps a real project hits
 
@@ -573,6 +574,7 @@ that ordering is the priority.
 - **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
 - **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
 - **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · done (6ba7c956) — shift-integer sets compared-value on a comparison operand (by parse); 208 of 448 distinct…
+- **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · open
 
 ## Backends and tooling
 
@@ -1057,7 +1059,7 @@ that ordering is the priority.
 - **R1045** · PR-17's BC answers folded into the upstream-repro set (six entries now measured, u8028-run-request-page flipped to fail), two new al-runner differences filed (#8157 XmlElement.AsXmlNode, #8158 Session read), per-table BC answers posted on #7415, #7854 and #8028 · [R1045.md](docs/roadmap/R1045.md) · done (4df2adc5)
 - **R1046** · The OpenSSL RSA form of #7924 (R1044's gap, 81 standing sightings): 16 cells on edge-5a58a0f16, all 14 site cells refused; on BC every guarded cell passes and the text is 'A call to <Type>.<Member> failed with this message: <OpenSSL message>', the message al-runner's refusal already prints · [R1046.md](docs/roadmap/R1046.md) · closed 2026-11-15 — measured on BC: all 7 guarded cells pass, BC's text per site is on #7924 and two repros…
 - **R1047** · Refusal family pubapp-flowfield (#8038, family 10, 133 standing sightings): 30 cells; with Published Application R, BC needs no grant for its FlowFields over NAV App Extra (8 refused cells pass on BC), while CalcFields(Installed) needs IndirectRead on Installed Application; BC-check app measured · [R1047.md](docs/roadmap/R1047.md) · closed 2026-11-15 — measured on BC: per-cell answers posted on #8038, regression entry…
-- **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 36 passing baselines and 169 kills rest on tests whose first write is an Insert or Modify (PR-35; at most 127 and 476 counting DeleteAll-first and read-first tests) · [R1048.md](docs/roadmap/R1048.md) · open
+- **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 111 passing baselines and 384 kills rest on tests with an Insert or Modify before lowering (PR-35, recounted by PR-36; at most 127 and 476 counting DeleteAll-only and read-only tests); PR-36 labels them in v3 reports · [R1048.md](docs/roadmap/R1048.md) · open
 - **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
 
 ---
