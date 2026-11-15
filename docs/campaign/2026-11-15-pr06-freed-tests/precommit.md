@@ -31,6 +31,21 @@ far cheaper than scoring every operator; project 1's smoke discovery scored 1,04
 picks the files, and its verdicts are not the result. Project 1 keeps its smoke discovery, which used all operators. Scoring is
 unchanged.
 
+## Amendment 2 (2026-11-15 ~08:05 UTC, before the runs it names)
+Two build problems, found on reading each report's `runnerBuild`:
+- R-982's configs name `edge-736fc7677` by path, not `current`. Projects 982-9 and 982-32 ran on 736fc7677. So did PR-05's
+  triage of R-982's four projects (9, 21, 31, 32), which R1013 states as edge-a184cfc79.
+- `current` moved to edge-5a58a0f16 at 07:57:56 UTC. Projects 51 and 42 and the ground-truth runs for 15 and 68 were still queued
+  in heavy-slot. No LethAL process of theirs had started, so none of them mixed builds, but they would have run on 5a58a0f16. They
+  were stopped while queued.
+
+Every run named here is re-run with a config whose `alRunnerV3.path` is pinned to edge-a184cfc79, outputs under `pinned-runs/`:
+- PR-06 projects 982-9, 982-32, 51 and 42 (`run3.sh`, `plan-pinned.tsv`);
+- the ground-truth runs for 15 and 68 (`none2.sh`);
+- PR-05's triage of R-982's projects 9, 21, 31 and 32 (`triage-baseline.ts`), to correct R1013.
+
+The first 982-9 and 982-32 results (on 736fc7677) are kept and reported, but they are not the result. Predictions are unchanged.
+
 ## References (the earlier full run per project)
 
 | project | freed tests | reference | reference scope |
