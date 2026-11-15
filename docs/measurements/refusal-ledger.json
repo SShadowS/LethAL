@@ -358,9 +358,9 @@
   },
   {
     "key": "NotRun: out-of-scope: an InStream was expected, got an untouched handle",
-    "state": "fixed",
+    "state": "open",
     "repro": "/coord/handoff/R-983/repro",
-    "note": "R-983: fixed on current (repro)"
+    "note": "PR-10: met again on edge-5a58a0f16 under mutation (Guided Experience Impl. M1690 InsertGuidedExperienceItem, M1873/M1874 GetIconInStream); R-983's repro still passes, so this is another shape, not reduced (was: R-983: fixed on current (repro))"
   },
   {
     "key": "NotRun: out-of-scope: an outbound HTTP request that a test handler does not answer: the runtime never opens a connection (ADR-N). To run the test, bind an [HttpClientHandler] that answers the request, or set TestHttpRequ",
@@ -1814,9 +1814,10 @@
   },
   {
     "key": "NotRun: out-of-scope: use of an unassigned XmlElement",
-    "state": "fixed",
-    "repro": "/coord/handoff/R-983/repro",
-    "note": "R-983: fixed on current (repro)"
+    "state": "open",
+    "issue": "#7760",
+    "repro": "scripts/upstream-repros/u7760-addfirst",
+    "note": "PR-10: still met on edge-5a58a0f16 (SAF-T, 3 mutants): AddFirst on an unassigned XmlElement; reduced to u7760-addfirst, commented on #7760 (was: R-983: fixed on current (repro))"
   },
   {
     "key": "NotRun: out-of-scope: variable <x> has the attribute RunOnClient, which is not supported",
@@ -2000,5 +2001,25 @@
     "key": "NotRun: out-of-scope: Report.SaveAs#N of id N, which no report declares (error text not pinned)",
     "state": "unexamined",
     "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error in a SaveAs of report <x>, which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): <message>",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting from error mutants, in the scoring store of project 982-9; withheld in PR-06 until the normaliser masked the raised message (code PR-13, 5fddfb6d); added by PR-10"
+  },
+  {
+    "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a page control over a FlowField the session cannot read: BC leaves the control off the page); the test is n",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 15 sighting(s) from a baseline test, Guided Experience (guided/score, guided/triage); met where #8038's fix freed its tests and they now run further"
+  },
+  {
+    "key": "NotRun: out-of-scope: a list over a temporary source opened without a record whose OnOpenPage changed its key and left Rec on a row other than the first of its view (not pinned)",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 1 sighting(s) from a baseline test, Guided Experience (guided/score, guided/triage); met where #8038's fix freed its tests and they now run further"
+  },
+  {
+    "key": "NotRun: out-of-scope: Rename of Guided Experience Item: a primary key field another table relates to changes to or from a blank or zero key value, in a shape that is not measured (more than one relation targets the table",
+    "state": "unexamined",
+    "note": "PR-10: NEW on edge-5a58a0f16, 3 sighting(s) from error mutants, Guided Experience (guided/score); met where #8038's fix freed its tests and they now run further"
   }
 ]

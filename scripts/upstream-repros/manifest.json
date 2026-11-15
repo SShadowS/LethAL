@@ -1,6 +1,31 @@
 {
   "repros": [
     {
+      "id": "u8036-open-zero",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
+      "bcEvidence": "inferred, not measured on BC: RecordRef.Open of a table id with no table raises an error (as al-runner already does for an id no app declares), so under asserterror all three tests pass; comment 6892946955 (PR-10). Still refused on edge-5a58a0f16 for Open(0)",
+      "rerun": [
+        "System Application's Email module: the 3 mutants of PR-10 (ViewIfAllRelatedRecords / ViewIfAnyRelatedRecords HasAccess, EmailImpl FilterRemovedSourceRecords) still refused on 5a58a0f16"
+      ],
+      "tests": {
+        "Codeunit50960.OpenTableZeroThenReadPermission": { "status": "pass" },
+        "Codeunit50960.OpenMissingTableThenReadPermission": { "status": "pass" },
+        "Codeunit50960.OpenMissingTableAlone": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7760-addfirst",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7760",
+      "bcEvidence": "inferred, not measured on BC: a member of an unassigned XmlElement raises an error on BC, as the members 5a58a0f16 fixed do, so under asserterror both tests pass; comment 6892957812 (PR-10)",
+      "rerun": [
+        "the SAF-T export (Audit File Export): the 3 mutants of PR-10 that leave its XML helper's saved element unassigned"
+      ],
+      "tests": {
+        "Codeunit50970.AddFirstOnUnassignedAsBoolean": { "status": "pass" },
+        "Codeunit50970.AddFirstOnUnassignedStatement": { "status": "pass" }
+      }
+    },
+    {
       "id": "u7775-refusals",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7775",
       "bcEvidence": "inferred, not measured on BC: Part A's invented repro (R-915's probe, its AL unchanged; app.json's id, name, publisher and features are the set's); each statement is one a Microsoft app's shipped-passing test makes (Subscription Billing, E-Document Core, Quality Management, Shopify), and items 9 and 10 expect BC's own filter error under asserterror. Added by PR-05 (refusal ledger): on edge-a184cfc79, 5 of the 12 already pass (items 1, 3, 6, 7, 8)",
