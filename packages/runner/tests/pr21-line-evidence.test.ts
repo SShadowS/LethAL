@@ -1,7 +1,7 @@
 // PR-21 addendum 2, PR-25 (R1034): which baseline rows count as this session's line evidence (R926 reach, R975
 // trigger placement). Without a reused snapshot's rows, a resumed session decided 2 of Service Declaration's 222
 // mutants differently from an uninterrupted one, on serve (`/coord/handoff/PR-21/precommit/`) and one-shot
-// (`/coord/handoff/PR-21/oneshot/`). The call site passes `reused !== undefined`; the fixture run is its live check.
+// (`/coord/handoff/PR-21/oneshot/`). The call site passes `reused !== undefined`; orchestrator.test.ts's "PR-25 (R1034)" test is its check.
 import { describe, expect, test } from "bun:test";
 import type { TestMethodRef } from "../src/backend";
 import { lineEvidenceOf } from "../src/orchestrator";
