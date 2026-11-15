@@ -67,3 +67,20 @@ expected to run in a test. If a run shows otherwise it is reported.
   one after this commit.
 - PR-03's v3 run of the original modules is known (Filter Tokens 353 mutants: 214 killed, 108 survived, 8 timeout-killed, 10
   no-coverage, 13 error; Secrets 68: 47 killed, 20 survived, 1 error); that was a different build of the source (ids, namespace).
+
+## Addendum 1 (2026-11-15, after the first bcdev run of Secrets, before its re-run)
+
+**Measured (lethal-bugs, bc2, lease 382, `/coord/handoff/PR-34/bc/secrets.*`):** Secrets' bcdev baseline is green (6/6), but all 68
+mutants are `no-coverage`. Every Secrets procedure is `[NonDebuggable]`, and BC records no Code Coverage line for such a
+procedure: each test's stored coverage holds only the selector codeunit's `Active` (91729), although the target's code ran (its
+guards call `Active`). v3 records coverage there. So under bcdev's default `coverageMode: "procedure"` Secrets cannot be compared
+per mutant. This is a LethAL attribution gap on bcdev (the R175 class: a lost attribution that reads as untested code), filed by
+lethal-bugs as a roadmap item. It is not a verdict difference between the backends.
+
+**Re-run:** Secrets on bcdev with `"coverageMode": "none"` (no attribution: every mutant against every green test; the
+coverage-differential skill's ground truth), output `bc/secrets.none.*`, otherwise as before.
+
+**Prediction for the re-run:** every Secrets mutant has the same verdict on bcdev (`none`) as on v3. The killing test is compared
+too; a different killing test is a finding only where both sides ran the same tests before it (under `none` bcdev runs all six,
+v3 only its covering set, so a kill by an earlier test v3 did not run is listed, not a finding). Filter Tokens is unchanged: no
+`[NonDebuggable]` there, bcdev's default mode, predictions 1 to 3 as above.

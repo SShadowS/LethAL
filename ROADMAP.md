@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**34 of 1011 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**35 of 1012 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -375,6 +375,7 @@ that ordering is the priority.
 - **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 - **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · done (ffcbeda0)
 - **R1018** · One `lethal run` can use two al-runner builds: the R786 warm-up-fallback retry builds a new backend, which resolves the configured `current` link again, so a move of `current` between the attempts silently switches the build · [R1018.md](docs/roadmap/R1018.md) · done (51c9da08)
+- **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · open
 
 ## Product gaps a real project hits
 
