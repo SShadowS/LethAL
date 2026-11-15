@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**31 of 976 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 977 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -373,6 +373,7 @@ that ordering is the priority.
 - **R985** · toggle-blank-temporal's Date substitute 17530101D is a value BC refuses to store (BC refuses every non-zero date in 1753, as Date or DateTime): a written mutant can be killed by the write, not by a test's assertion · [R985.md](docs/roadmap/R985.md) · done (85b1ba64)
 - **R989** · The reach line is an unmeasured proxy in two shapes: al-runner's hit on a bare loop keyword line (`repeat`, `while`, `for`, `with`, `case`), and a one-line `if c then begin X end` whose first statement shares the `if` line · [R989.md](docs/roadmap/R989.md) · closed 2026-11-14 — measured on edge-736fc7677 (coord R-976, /coord/handoff/R-976/result.md): v3 reports the…
 - **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
+- **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · open
 
 ## Product gaps a real project hits
 
