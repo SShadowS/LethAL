@@ -1,6 +1,7 @@
 // PR-32 (#7924, refusal family dotnet-exception): a .NET exception raised inside AL under asserterror alone, so the test's outcome
 // does not depend on the exception's text. One test codeunit each, so a refusal's cascade cannot reach another. Invented; no corpus
-// text. On BC each passes: asserterror passes on any error (inferred, not measured; the family's BC-check app measures it).
+// text. On BC each passes (measured: the family's BC-check app on BC 28.4, 2026-11-15). XmlTextWriter.WriteEndDocument is left out:
+// on BC its guarded cell fails at the procedure's end, in the writer's Dispose ("Cannot access a closed Stream").
 dotnet
 {
     assembly(System)
@@ -12,15 +13,7 @@ dotnet
     {
         type(System.Data.DataTable; U7924DataTable) { }
         type(System.Data.DataRow; U7924DataRow) { }
-    }
-    assembly(mscorlib)
-    {
-        type(System.IO.MemoryStream; U7924MemoryStream) { }
-        type(System.Text.Encoding; U7924Encoding) { }
-    }
-    assembly(System.Xml)
-    {
-        type(System.Xml.XmlTextWriter; U7924XmlTextWriter) { }
+        type(System.Data.DataColumn; U7924DataColumn) { }
     }
 }
 
@@ -39,20 +32,18 @@ codeunit 51591 "U7924 Data Row Index"
     end;
 }
 
-codeunit 51592 "U7924 Xml End Document"
+codeunit 51592 "U7924 Data Column Index"
 {
     Subtype = Test;
 
     [Test]
-    procedure EndDocumentWithoutRoot()
+    procedure ColumnIndexOutOfRange()
     var
-        Stream: DotNet U7924MemoryStream;
-        Enc: DotNet U7924Encoding;
-        Writer: DotNet U7924XmlTextWriter;
+        Table: DotNet U7924DataTable;
+        Column: DotNet U7924DataColumn;
     begin
-        Stream := Stream.MemoryStream();
-        Writer := Writer.XmlTextWriter(Stream, Enc.UTF8);
-        asserterror Writer.WriteEndDocument();
+        Table := Table.DataTable();
+        asserterror Column := Table.Columns.Item(0);
     end;
 }
 

@@ -426,7 +426,9 @@ describe("PR-01: the refusal-family generator", () => {
       expect(text[i]?.call).toBe(`${g.call} Error('DOTNET %1', GetLastErrorText());`);
       expect(text[i]?.setup).toEqual(g.setup);
     }
-    expect(f.cells.filter((c) => c.state === "ok").every((c) => !c.call.includes("asserterror"))).toBe(true);
+    expect(
+      f.cells.filter((c) => c.state === "ok").every((c) => !c.call.includes("asserterror")),
+    ).toBe(true);
     const names = f.cells.map((c, i) => cellName(c, i));
     expect(new Set(names).size).toBe(names.length);
   });
@@ -445,7 +447,9 @@ describe("PR-01: the refusal-family generator", () => {
     ).toBe(cls);
     expect(classOf(DOTNET_EXCEPTION.known[0] ?? "")).toBe(cls);
     expect(
-      classOf("DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object"),
+      classOf(
+        "DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object",
+      ),
     ).not.toBe(cls);
   });
 });

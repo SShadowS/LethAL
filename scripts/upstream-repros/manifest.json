@@ -3,13 +3,13 @@
     {
       "id": "u7924-dotnet-exception",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
-      "bcEvidence": "inferred, not measured on BC: each test raises a .NET exception under asserterror alone, and asserterror passes on any error, so the test passes whatever the text. Refusal family dotnet-exception (PR-32), whose BC-check app (/coord/handoff/PR-32/bc-check, app 51000000-0000-4000-8000-000000051009) is for lethal-bugs to measure",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-32/bc-run/result.md): the refusal family dotnet-exception's BC-check app (app 51000000-0000-4000-8000-000000051009), where these four shapes' guarded cells pass (DataRowCollection.Item, DataColumnCollection.Item, UriBuilder.Port, the Uri control). XmlTextWriter.WriteEndDocument is left out: its guarded cell fails on BC at the procedure's end, in the writer's Dispose",
       "rerun": [
         "Business Chart, Xml Writer and the other apps behind #7924's 18 ledger keys (265 standing sightings): the refusal family dotnet-exception"
       ],
       "tests": {
         "Codeunit51591.RowIndexOutOfRange": { "status": "pass" },
-        "Codeunit51592.EndDocumentWithoutRoot": { "status": "pass" },
+        "Codeunit51592.ColumnIndexOutOfRange": { "status": "pass" },
         "Codeunit51593.NegativePort": { "status": "pass" },
         "Codeunit51594.InvalidUri": { "status": "pass" }
       }
