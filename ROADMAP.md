@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 1002 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 1002 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1018,7 +1018,7 @@ that ordering is the priority.
 - **R1006** · Corpus windows started without a cheap check and ran for hours measuring nothing (DO's no-license window, Avalara's warm-up fallback): `scripts/triage-baseline.ts` now runs the baseline plus a few small codeunits first and stops by name · [R1006.md](docs/roadmap/R1006.md) · done (2e598e35)
 - **R1007** · The per-test daemon baseline skips a cross-check sample whose daemon row al-runner refused (daemon-odd-row) instead of comparing it, so a project whose samples land on refused tests loses its daemon baseline and runs the whole baseline one-shot · [R1007.md](docs/roadmap/R1007.md) · done (ff33b1f9)
 - **R1008** · A run on al-runner v3's serve default can never be resumed: --resume forces one-shot (R761), and the one-shot session's runner_build lacks the run's ` baseline-daemon` tag (R948), so no run matches; DO's 15,563 remaining covered mutants cannot be split across windows · [R1008.md](docs/roadmap/R1008.md) · done (12d8a503)
-- **R1009** · DO's serve daemons close on 'a stale <table> buffer from its own write, after a lock other tha...' (7 of 35 closes in R-984 t1), but the text is never stored whole, so it cannot be measured for the keep-list · [R1009.md](docs/roadmap/R1009.md) · open
+- **R1009** · DO's serve daemons close on 'a stale <table> buffer from its own write, after a lock other tha...' (7 of 35 closes in R-984 t1), but the text is never stored whole, so it cannot be measured for the keep-list · [R1009.md](docs/roadmap/R1009.md) · done (c155a839)
 - **R1010** · Untouched handles on al-runner v3 (generated, 59 cells): XmlElement's InnerXml/SetAttribute/GetChildElements/Attributes/AsXmlNode and CopyStream between two uncreated streams are refused (new classes, upstream #7760); within one type some methods refuse while their siblings fail · [R1010.md](docs/roadmap/R1010.md) · open
 - **R1011** · DotNet variable that holds no object on al-runner v3 (generated, 29 cells over 9 .NET types): all refused; 25 with the no-object cause, Regex.IsMatch/Replace with a wrong 'no overload' text (they pass on a constructed Regex), TimeZoneInfo by policy (upstream #8036 item 1) · [R1011.md](docs/roadmap/R1011.md) · open
 - **R1012** · R969's live negative leg: after a real server1 restart (in-memory databases lost), a `--resume-run` must refuse because both the generation and the database id changed · [R1012.md](docs/roadmap/R1012.md) · open
