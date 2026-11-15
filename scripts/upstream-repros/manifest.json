@@ -1,6 +1,25 @@
 {
   "repros": [
     {
+      "id": "u7586-geturl-forms",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
+      "bcEvidence": "inferred, not measured on BC: GetUrl returns a string for every valid ClientType and ObjectType, so each test passes; refusal family get-url (PR-26), whose BC-check app (/coord/handoff/PR-26/bc-check, app 51000000-0000-4000-8000-000000051006) carries each form's URL out for lethal-bugs to measure",
+      "rerun": [
+        "the refusal family get-url (scripts/refusal-family.ts --family get-url): its 27 cells of these three reasons, and the ledger's #7586 causes"
+      ],
+      "tests": {
+        "Codeunit51463.DefaultClientCodeunitUrl": {
+          "status": "pass"
+        },
+        "Codeunit51463.TabletClientQueryUrl": {
+          "status": "pass"
+        },
+        "Codeunit51463.SoapCompanyUrl": {
+          "status": "pass"
+        }
+      }
+    },
+    {
       "id": "u8036-open-zero",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8036",
       "bcEvidence": "inferred, not measured on BC: RecordRef.Open of a table id with no table raises an error (as al-runner already does for an id no app declares), so under asserterror all three tests pass; comment 6892946955 (PR-10). Still refused on edge-5a58a0f16 for Open(0)",

@@ -4,6 +4,7 @@ import {
   BC_UNAVAILABLE_TABLES,
   DOTNET_NO_OBJECT,
   type Family,
+  GET_URL,
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
@@ -313,9 +314,11 @@ describe("PR-01: the refusal-family generator", () => {
       PLATFORM_TABLE_READ,
       PERMISSION_DENIAL,
       NO_CLIENT,
+      GET_URL,
     ].map((f) => bcCheckApp(f).id);
     // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
-    expect(ids).toEqual([1, 2, 3, 4, 5].map((n) => `51000000-0000-4000-8000-00000005100${n}`));
+    // (PR-26: get-url appended as 6, /coord/handoff/PR-26/bc-check)
+    expect(ids).toEqual([1, 2, 3, 4, 5, 6].map((n) => `51000000-0000-4000-8000-00000005100${n}`));
     for (const id of ids)
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     const kept = bcCheckFamily(PLATFORM_TABLE_READ);
@@ -326,5 +329,45 @@ describe("PR-01: the refusal-family generator", () => {
     expect(bcCheckFamily(NO_CLIENT).cells.length).toBe(NO_CLIENT.cells.length);
     const app = JSON.parse(emitApp(kept, bcCheckApp(PLATFORM_TABLE_READ))["app.json"] ?? "{}");
     expect(app.name).toBe("LethAL BC Check platform-table-read");
+  });
+
+  test("PR-26: the get-url family: 11 client types by 9 forms, each cell carries its URL out, unique names", () => {
+    const f = GET_URL;
+    expect(f.cells).toHaveLength(99);
+    for (const c of f.cells) expect(c.call).toMatch(/^Error\('GETURL %1', GetUrl\(ClientType::\w+/);
+    // a form with a record inserts it first; one with UseFilters also filters
+    const filters = f.cells.find((c) => c.method === "PageFilters");
+    expect(filters?.setup).toContain("Row.SetRange(Code, 'A');");
+    expect(f.cells.filter((c) => c.method === "Plain").every((c) => c.setup === undefined)).toBe(
+      true,
+    );
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("PR-26: classOf folds a GetUrl text's client type, argument count and object type, keeping its reason", () => {
+    const known = classOf(
+      "GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
+    );
+    expect(known).toBe("GetUrl(*): this object type or argument list");
+    // edge-5a58a0f16 drops "(not pinned)": the same class
+    expect(
+      classOf(
+        "GetUrl(ClientType::Api; the call had 4 arguments): this object type or argument list",
+      ),
+    ).toBe(known);
+    expect(
+      classOf(
+        "GetUrl(ClientType::Default or Windows) of object type Codeunit with 4 arguments (only a page or a report are pinned)",
+      ),
+    ).toBe(
+      classOf(
+        "GetUrl(ClientType::Default or Windows) of object type Query with 4 arguments (only a page or a report are pinned)",
+      ),
+    );
+    // a different reason is a different class
+    expect(
+      classOf("GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters"),
+    ).not.toBe(known);
   });
 });
