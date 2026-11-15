@@ -90,8 +90,19 @@ export function installsPermissionsMock(appJsonText: string): boolean {
   });
 }
 
+/**
+ * A test project with no app.json (R-371 runs one) declares no dependency, so installs no mock; any other read or parse failure
+ * is thrown, never read as "not installed".
+ */
 export async function testAppInstallsPermissionsMock(testDir: string): Promise<boolean> {
-  return installsPermissionsMock(await readFile(join(testDir, "app.json"), "utf8"));
+  let text: string;
+  try {
+    text = await readFile(join(testDir, "app.json"), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
+  return installsPermissionsMock(text);
 }
 
 /** A codeunit is exposed when it declares no `TestPermissions`, or `Restrictive`. */

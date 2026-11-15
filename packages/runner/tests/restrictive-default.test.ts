@@ -1,10 +1,14 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import {
   PERMISSIONS_MOCK_APP_ID,
   TESTS_TESTLIBRARIES_APP_ID,
   installsPermissionsMock,
   restrictiveDefaultAtRisk,
+  testAppInstallsPermissionsMock,
 } from "../src/restrictive-default";
 import { buildTestAppModel } from "../src/testpage-scan";
 
@@ -159,5 +163,13 @@ describe("PR-36: #8160's at-risk tests, by parse", () => {
     expect(installsPermissionsMock(app([TESTS_TESTLIBRARIES_APP_ID.toUpperCase()]))).toBe(true);
     expect(installsPermissionsMock(app(["dd0be2ea-f733-4d65-bb34-a28f4624fb14"]))).toBe(false);
     expect(installsPermissionsMock(JSON.stringify({}))).toBe(false);
+  });
+
+  test("a test project with no app.json installs no mock; a corrupt one throws, never reads as 'not installed'", async () => {
+    const empty = await mkdtemp(join(tmpdir(), "pr36-noapp-"));
+    expect(await testAppInstallsPermissionsMock(empty)).toBe(false);
+    const corrupt = await mkdtemp(join(tmpdir(), "pr36-badapp-"));
+    await writeFile(join(corrupt, "app.json"), "{ not json");
+    await expect(testAppInstallsPermissionsMock(corrupt)).rejects.toThrow();
   });
 });
