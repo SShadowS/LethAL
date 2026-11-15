@@ -5194,8 +5194,11 @@ function resolveGroupRuns(a: {
 
 /**
  * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN tests'
- * times. R1015: each test's OWN time (`measuredDuration`: `measuredDurationMs ?? durationMs`), never the
- * call's wall. Tells the backend and says it on stderr once per value (once per session in practice).
+ * times. R1015: each test's OWN time (`measuredDuration`), never the call's wall. A row with no own time
+ * gets R963's share of its call's wall (an AVERAGE over the call's rows, not a maximum), so a build that
+ * omitted own times on some rows could get a stop below a slow test's time; every v3 build gated today
+ * sends them (review: none of 763 stored v3 runs has a green baseline with own times on only some rows).
+ * Tells the backend and says it on stderr once per value (once per session in practice).
  * Otherwise returns the configured floor unchanged.
  */
 function applyV3MutantStop(
