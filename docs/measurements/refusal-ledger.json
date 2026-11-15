@@ -2000,5 +2000,10 @@
     "key": "NotRun: out-of-scope: Report.SaveAs#N of id N, which no report declares (error text not pinned)",
     "state": "unexamined",
     "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+  },
+  {
+    "key": "NotRun: out-of-scope: an error in a SaveAs of report <x>, which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): <message>",
+    "state": "unexamined",
+    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting from error mutants, in the scoring store of project 982-9; withheld in PR-06 until the normaliser masked the raised message (code PR-13, 5fddfb6d); added by PR-10"
   }
 ]
