@@ -207,6 +207,9 @@ type Site =
       readonly args: number;
       readonly arg0: string | undefined;
       readonly argFacts: readonly ArgFact[];
+      /** PR-36: the call sits inside an `asserterror` statement (an error there is expected). Read only by
+       *  restrictive-default.ts. */
+      readonly inAssertError?: true;
     };
 
 /**
@@ -1244,6 +1247,12 @@ function callSites(block: ALSyntaxNode): Site[] {
   ): void => {
     const [receiver, name] = realChildren(m);
     if (receiver === undefined || name === undefined) return;
+    let inAssertError = false;
+    for (let p = m.parent; p !== null && p.startIndex >= block.startIndex; p = p.parent)
+      if (p.rawKind === "asserterror_statement") {
+        inAssertError = true;
+        break;
+      }
     out.push({
       kind: "member",
       recv: toRecv(receiver),
@@ -1252,6 +1261,7 @@ function callSites(block: ALSyntaxNode): Site[] {
       args,
       arg0,
       argFacts,
+      ...(inAssertError ? { inAssertError: true as const } : {}),
     });
   };
   const bare = (

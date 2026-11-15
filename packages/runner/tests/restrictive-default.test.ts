@@ -106,6 +106,8 @@ describe("PR-36: #8160's at-risk tests, by parse", () => {
         testProc("LowerFirst", "        Lower.SetO365Basic();\n        Row.Insert();"),
         testProc("TemporaryOnly", "        Temp.Insert();\n        Mock.Set('A');"),
         testProc("LibraryOnly", "        Lib.CreateRow();\n        Mock.Set('A');"),
+        // review: an expected error is not one BC's refusal turns red
+        testProc("AssertErrorOnly", "        asserterror Row.Insert();\n        Mock.Set('A');"),
       ].join("\n"),
     );
     expect(
@@ -114,6 +116,43 @@ describe("PR-36: #8160's at-risk tests, by parse", () => {
         { id: 50101, cu: "Y", m: "LowerFirst" },
         { id: 50101, cu: "Y", m: "TemporaryOnly" },
         { id: 50101, cu: "Y", m: "LibraryOnly" },
+        { id: 50101, cu: "Y", m: "AssertErrorOnly" },
+      ]),
+    ).toEqual([]);
+  });
+
+  test("review: a mock declared namespace-qualified or by id lowers too", () => {
+    const qualified = `codeunit 50106 "Q"
+{
+    Subtype = Test;
+
+    var
+        MockQ: Codeunit System.TestLibraries.Security.AccessControl."Permissions Mock";
+        MockId: Codeunit 131006;
+
+    [Test]
+    procedure QualifiedFirst()
+    var
+        Row: Record "Cell Row";
+    begin
+        MockQ.Set('A');
+        Row.Insert();
+    end;
+
+    [Test]
+    procedure ByIdFirst()
+    var
+        Row: Record "Cell Row";
+    begin
+        MockId.Set('A');
+        Row.Insert();
+    end;
+}
+`;
+    expect(
+      atRisk(qualified, [
+        { id: 50106, cu: "Q", m: "QualifiedFirst" },
+        { id: 50106, cu: "Q", m: "ByIdFirst" },
       ]),
     ).toEqual([]);
   });

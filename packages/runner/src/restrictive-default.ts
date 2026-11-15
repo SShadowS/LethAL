@@ -13,15 +13,19 @@
  *   PR-35 found no other path in 84 projects). Without it BC's behaviour is not measured, and nothing is labelled.
  * - **The codeunit is exposed:** no `TestPermissions`, or `Restrictive`.
  * - **The test, in statement order** (same-codeunit procedures followed, depth 5), reaches a record access before any lowering
- *   (a `Permissions Mock` call, or any `Library - Lower Permissions` method). PR-35's tiers:
- *   - `firm`: the first access is an Insert or a Modify (refused whatever the table holds);
- *   - `uncertain-write`: a DeleteAll, ModifyAll or Delete (refused at its read when the table holds rows);
- *   - `uncertain-read`: a read (refused when the table holds rows).
- * - **Not seen (documented limits):**
- *   - an access inside another codeunit (a library), which PR-35 left out because a stored BC run passes some;
- *   - temporary records (they need no permission);
- *   - a table's `InherentPermissions`;
- *   - a codeunit's own `Permissions`.
+ *   (a `Permissions Mock` call, or any `Library - Lower Permissions` method). The tier is over every access before that
+ *   lowering:
+ *   - `firm`: an Insert or a Modify (refused whatever the table holds, and whatever came before it);
+ *   - `uncertain-write`: otherwise a DeleteAll, ModifyAll, Delete or Rename (refused at its read when the table holds rows);
+ *   - `uncertain-read`: reads only (refused when the table holds rows).
+ * - **Not counted:** an access under `asserterror` (an error there is expected); temporary records (they need no permission).
+ * - **Not seen (documented limits, so a label can be wrong both ways):**
+ *   - an access or a lowering inside another codeunit (a library), which PR-35 left out because a stored BC run passes some;
+ *   - branches: the walk is a flat statement-order pass over every branch and every `#if` arm, so an access in an untaken
+ *     branch counts; a call's arguments are walked after the call;
+ *   - `this.Helper()`, and a bare record method inside `with Row do`;
+ *   - a table's `InherentPermissions`, and a codeunit's own `Permissions`;
+ *   - `TestPermissions = NonRestrictive` or `InheritFromTestRunner` (not measured; not labelled).
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -74,9 +78,11 @@ const MOCK_LOWERING = new Set([
   "assign",
   "start",
   "addpermissionset",
-  "clearassignments",
   "setexactpermissionset",
 ]);
+/** By object id too: Permissions Mock is codeunit 131006, Library - Lower Permissions 132217. */
+const MOCK_TYPE = /^codeunit (?:131006|(?:[\w.]+\.)?"?permissions mock"?)$/;
+const LOWER_TYPE = /^codeunit (?:132217|(?:[\w.]+\.)?"?library - lower permissions"?)$/;
 const MAX_DEPTH = 5;
 
 /** Whether the test app's own app.json depends on Permissions Mock, directly or through Tests-TestLibraries. */
@@ -118,8 +124,8 @@ function kindOf(types: readonly string[] | undefined): Kind {
     const t = raw.replace(/\s+/g, " ").trim().toLowerCase();
     if (t.startsWith("record ")) return /\btemporary\b/.test(t) ? "temporary" : "record";
     if (t === "recordref" || t.startsWith("recordref ")) return "record";
-    if (/^codeunit "?permissions mock"?$/.test(t)) return "mock";
-    if (/^codeunit "?library - lower permissions"?$/.test(t)) return "lower";
+    if (MOCK_TYPE.test(t)) return "mock";
+    if (LOWER_TYPE.test(t)) return "lower";
     if (t.startsWith("codeunit ")) return "codeunit";
   }
   return "other";
@@ -137,7 +143,12 @@ function walk(proc: Proc, unit: Unit, depth: number, seen: Set<Proc>, out: Event
       const name = normalizeAlName(s.receiver.replace(/^"|"$/g, ""));
       const k = kindOf(proc.scope.get(name) ?? unit.globals.get(name));
       const m = s.member.replace(/^"|"$/g, "").toLowerCase();
-      if (k === "record" && (WRITE_FIRM.has(m) || WRITE_UNCERTAIN.has(m) || READS.has(m)))
+      // review: an access under `asserterror` expects an error, so it is not one BC's refusal would turn red
+      if (
+        k === "record" &&
+        s.inAssertError !== true &&
+        (WRITE_FIRM.has(m) || WRITE_UNCERTAIN.has(m) || READS.has(m))
+      )
         out.push({ e: "access", method: m });
       else if ((k === "mock" && MOCK_LOWERING.has(m)) || k === "lower") out.push({ e: "lower" });
     } else {
@@ -170,6 +181,7 @@ export function restrictiveDefaultAtRisk(
 ): RestrictiveAtRisk[] {
   const out: RestrictiveAtRisk[] = [];
   for (const t of tests) {
+    // `model.units` holds codeunits only (other objects are `model.objects`)
     for (const unit of model.units.filter((u) => u.id === t.codeunitId)) {
       if (!isExposed(unit)) continue;
       const decl = unit.procs.find((p) => p.name === normalizeAlName(t.method) && p.params === 0);

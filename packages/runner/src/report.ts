@@ -420,10 +420,11 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     meaning: RESTRICTIVE_DEFAULT_DIAGNOSIS,
     entailedNegative:
       "Does NOT change a verdict, a count or `mutationScore`: the labelled kills and survivors " +
-      "stay as al-runner scored them. Nor does it say they are wrong: a `firm` test's first write " +
-      "is refused on BC whatever the table holds, but an `uncertain-*` test is refused only when " +
-      "the table it touches holds rows, which a parse cannot see. A test that reaches its first " +
-      "table access through another codeunit is not seen, so absence does not clear a run.",
+      "stay as al-runner scored them. Nor does it say they are wrong: a `firm` test writes with " +
+      "Insert or Modify, refused on BC whatever the table holds, but an `uncertain-*` test is " +
+      "refused only when the table it touches holds rows, which a parse cannot see. The scan is " +
+      "by parse: branches are not distinguished, and an access or a lowering inside another " +
+      "codeunit is not seen, so a label can be wrong both ways and absence does not clear a run.",
     basis: "R1048",
   },
   "runner-disagreement": {
@@ -1520,11 +1521,13 @@ export interface SessionReport {
       readonly tier: "firm" | "uncertain-write" | "uncertain-read";
       readonly firstAccess: string;
     }>;
-    /** Kills (`killed`, `timeout-killed`) whose killing test is one of `tests`, by mutant ref. */
+    /** Kills (`killed`, `timeout-killed`) whose killing test is one of `tests`, by mutant ref. A kill with no recorded killing
+     *  test, or no covering tests (an older carried row), cannot be resolved and is not listed. */
     readonly kills: readonly string[];
     /** Kills whose killing test's method name matches both an at-risk covering test and a safe one (not counted above). */
     readonly killsAmbiguous: readonly string[];
-    /** Survivors with at least one of `tests` among their covering tests. */
+    /** Survivors whose every covering test is one of `tests`: on BC those tests would be red, leaving the survivor with no
+     *  covering test. A survivor with a safe covering test still survives on it, and is not listed. */
     readonly survivors: readonly string[];
     readonly diagnosis: string;
   };
@@ -3299,7 +3302,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       else ambiguous.push(m);
     }
     const survivors = mutants.filter(
-      (m) => m.verdict === "survived" && (m.coveringTests ?? []).some((c) => atRisk.has(c)),
+      (m) =>
+        m.verdict === "survived" &&
+        (m.coveringTests ?? []).length > 0 &&
+        (m.coveringTests ?? []).every((c) => atRisk.has(c)),
     );
     return {
       issue: "#8160" as const,

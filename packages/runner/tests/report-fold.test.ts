@@ -1279,8 +1279,10 @@ describe("PR-36 (R1048, #8160): the restrictive-default label, never a verdict c
     scored("M0001", "killed", ["Risky Tests.T1", "Safe Tests.T2"], "T1"),
     // killed by a safe test
     scored("M0002", "killed", ["Risky Tests.T1", "Safe Tests.T2"], "T2"),
-    // survived, covered by an at-risk test among others
+    // survived, covered by an at-risk test AND a safe one: it still survives on the safe one, so not labelled
     scored("M0003", "survived", ["Risky Tests.T1", "Safe Tests.T2"]),
+    // survived, covered by at-risk tests only: on BC it would lose every covering test, so labelled
+    scored("M0006", "survived", ["Risky Tests.T1"]),
     // survived, covered by safe tests only
     scored("M0004", "survived", ["Safe Tests.T2"]),
     // killed by "Same", a name both an at-risk and a safe covering test carry: ambiguous
@@ -1313,7 +1315,7 @@ describe("PR-36 (R1048, #8160): the restrictive-default label, never a verdict c
     ]);
     expect(r.restrictiveDefault?.kills).toEqual(["0/M0001"]);
     expect(r.restrictiveDefault?.killsAmbiguous).toEqual(["0/M0005"]);
-    expect(r.restrictiveDefault?.survivors).toEqual(["0/M0003"]);
+    expect(r.restrictiveDefault?.survivors).toEqual(["0/M0006"]);
     expect(r.restrictiveDefault?.diagnosis).toBe(RESTRICTIVE_DEFAULT_DIAGNOSIS);
     expect(r.validity.caveats).toContain("tests-restrictive-default-at-risk");
   });
