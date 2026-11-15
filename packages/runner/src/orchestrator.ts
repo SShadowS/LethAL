@@ -5193,24 +5193,25 @@ function resolveGroupRuns(a: {
 }
 
 /**
- * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN baseline
- * durations (`baselineDuration` holds green tests only). Tells the backend and says it on stderr once
- * per value (once per session in practice). Otherwise returns the configured floor unchanged.
+ * R954: on al-runner-v3 without `--mutant-timeout-ms`, the mutant stop from this batch's GREEN tests'
+ * times. R1015: each test's OWN time (`measuredDuration`: `measuredDurationMs ?? durationMs`), never the
+ * call's wall. Tells the backend and says it on stderr once per value (once per session in practice).
+ * Otherwise returns the configured floor unchanged.
  */
 function applyV3MutantStop(
   scope: BatchScope,
-  baselineDuration: ReadonlyMap<string, number>,
+  ownDuration: ReadonlyMap<string, number>,
 ): number {
   const held = scope.v3MutantStop;
   if (held === undefined) return scope.minMutantBudgetMs;
   let largest = 0;
-  for (const ms of baselineDuration.values()) largest = Math.max(largest, ms);
+  for (const ms of ownDuration.values()) largest = Math.max(largest, ms);
   const s = Math.max(held.ms ?? 0, v3MutantStopMs(largest));
   if (s !== held.ms) {
     held.ms = s;
     (scope.parallel?.owner ?? scope.backend).useMutantStop?.(s);
     console.warn(
-      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green baseline ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s)); --mutant-timeout-ms overrides it`,
+      `[lethal] al-runner-v3 mutant stop ${s / 1000} s (R954: max(${V3_MUTANT_STOP_MIN_MS / 1000} s, ${V3_MUTANT_STOP_FACTOR} x the largest green test's own time ${largest} ms + ${V3_MUTANT_STOP_PAD_MS / 1000} s; R1015)); --mutant-timeout-ms overrides it`,
     );
   }
   return s;
@@ -6216,7 +6217,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     memberCountsByTest: memberCounts,
   } = plan;
   // R954: the floor every mutant budget uses; v3's own rule after its baseline, else the configured one.
-  const minMutantBudgetMs = applyV3MutantStop(scope, baselineDuration);
+  // R1015: from each green test's OWN time (al-runner stops a test by its own time); `baselineDuration`
+  // is the call's wall, a whole codeunit's run on serve (DO: 87.8 s for a 1.3 s test, so 1,762 s).
+  const minMutantBudgetMs = applyV3MutantStop(scope, measuredDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
   const baselineReach = baselineReachOf(baseline, ranHere, backend);
 
