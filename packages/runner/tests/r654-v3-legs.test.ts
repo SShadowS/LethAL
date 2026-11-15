@@ -41,6 +41,13 @@ describe("R857: the warning says state can carry over", () => {
     expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/carry over to later tests/);
     expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/work date.*SingleInstance/);
   });
+
+  // PR-34: two Filter Tokens mutants survived on v3 and were killed on BC because v3's clock is fixed at noon (#8161).
+  test("it names the fixed 12:00:00 clock and what it does to a verdict (PR-34, #8161)", () => {
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/test clock starts at 12:00:00 UTC/);
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/#8161/);
+    expect(AL_RUNNER_V3_NOT_AUTHORITATIVE).toMatch(/survives where BC kills it/);
+  });
 });
 
 describe("R913: a PASS that skipped legs says so", () => {

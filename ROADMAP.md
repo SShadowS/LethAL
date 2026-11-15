@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 1008 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**36 of 1014 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -375,6 +375,8 @@ that ordering is the priority.
 - **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 - **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · done (ffcbeda0)
 - **R1018** · One `lethal run` can use two al-runner builds: the R786 warm-up-fallback retry builds a new backend, which resolves the configured `current` link again, so a move of `current` between the attempts silently switches the build · [R1018.md](docs/roadmap/R1018.md) · done (51c9da08)
+- **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · open
+- **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · open
 
 ## Product gaps a real project hits
 
@@ -1053,6 +1055,10 @@ that ordering is the priority.
 - **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · open
 - **R1044** · Refusal family dotnet-exception (#7924, family 9): 31 cells on edge-5a58a0f16; 12 of 13 throwing .NET members are refused even under asserterror alone, where the outcome cannot depend on the text (265 standing sightings, 18 ledger keys); BC-check app for lethal-bugs · [R1044.md](docs/roadmap/R1044.md) · closed 2026-11-15 — measured on BC: 22 of the 24 refused cells pass guarded, and BC's text per member is on…
 - **R1045** · PR-17's BC answers folded into the upstream-repro set (six entries now measured, u8028-run-request-page flipped to fail), two new al-runner differences filed (#8157 XmlElement.AsXmlNode, #8158 Session read), per-table BC answers posted on #7415, #7854 and #8028 · [R1045.md](docs/roadmap/R1045.md) · done (4df2adc5)
+- **R1046** · The OpenSSL RSA form of #7924 (R1044's gap, 81 standing sightings): 16 cells on edge-5a58a0f16, all 14 site cells refused; on BC every guarded cell passes and the text is 'A call to <Type>.<Member> failed with this message: <OpenSSL message>', the message al-runner's refusal already prints · [R1046.md](docs/roadmap/R1046.md) · closed 2026-11-15 — measured on BC: all 7 guarded cells pass, BC's text per site is on #7924 and two repros…
+- **R1047** · Refusal family pubapp-flowfield (#8038, family 10, 133 standing sightings): 30 cells; with Published Application R, BC needs no grant for its FlowFields over NAV App Extra (8 refused cells pass on BC), while CalcFields(Installed) needs IndirectRead on Installed Application; BC-check app measured · [R1047.md](docs/roadmap/R1047.md) · closed 2026-11-15 — measured on BC: per-cell answers posted on #8038, regression entry…
+- **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 36 passing baselines and 169 kills rest on tests whose first write is an Insert or Modify (PR-35; at most 127 and 476 counting DeleteAll-first and read-first tests) · [R1048.md](docs/roadmap/R1048.md) · open
+- **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
 
 ---
 

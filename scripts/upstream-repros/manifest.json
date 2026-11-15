@@ -1,17 +1,46 @@
 {
   "repros": [
     {
+      "id": "u8160-restrictive-default",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8160",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, Permissions Mock installed, through LethAL's web-service path; this app itself, /coord/handoff/PR-33/ws-run/result.md): InsertUnderRestrictiveDefault fails with 'Sorry, the current permissions prevented the action. (TableData 51600 URD Row Insert: Upstream Repro Restrictive Default)'; InsertWithTestPermissionsDisabled passes",
+      "rerun": [
+        "the refusal family pubapp-flowfield's first BC-check app, whose ten Item cells inserted before PermissionsMock.Set (PR-33)"
+      ],
+      "tests": {
+        "Codeunit51601.InsertUnderRestrictiveDefault": { "status": "fail" },
+        "Codeunit51602.InsertWithTestPermissionsDisabled": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8038-pubapp-flowfields",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8038",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, through LethAL's web-service path, /coord/handoff/PR-33/ws-run/result.md) by the refusal family pubapp-flowfield's BC-check cells of the same shapes (C2, C8, C6, C12), under a set that grants Published Application R: a Tenant Visible filter alone, CalcFields of Tenant Visible and a filter on Installed pass; CalcFields of Installed fails ('Sorry, the current permissions prevented the action. (TableData 2000000212 Installed Application IndirectRead: ...)'). The entry's own app has not run on BC",
+      "rerun": [
+        "133 standing sightings of the FlowField denial (flowfield-texts.txt): Guided Experience 87 (R-985 guided, PR-10 guided; upstream has fixed its shape since), Extension Management and R-982's module 31 46 (R-932 extmgmt, PR-10 extmgmt, R-982 sweep 31 and its triage reruns): the refusal family pubapp-flowfield"
+      ],
+      "tests": {
+        "Codeunit51611.FindFirstOnTenantVisibleAlone": { "status": "pass" },
+        "Codeunit51612.CalcFieldsTenantVisible": { "status": "pass" },
+        "Codeunit51613.FindFirstOnInstalled": { "status": "pass" },
+        "Codeunit51614.CalcFieldsInstalled": { "status": "fail" }
+      }
+    },
+    {
       "id": "u7924-dotnet-exception",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
-      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-32/bc-run/result.md): the refusal family dotnet-exception's BC-check app (app 51000000-0000-4000-8000-000000051009), where these four shapes' guarded cells pass (DataRowCollection.Item, DataColumnCollection.Item, UriBuilder.Port, the Uri control). XmlTextWriter.WriteEndDocument is left out: its guarded cell fails on BC at the procedure's end, in the writer's Dispose",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-32/bc-run/result.md): the refusal family dotnet-exception's BC-check app (app 51000000-0000-4000-8000-000000051009), where these four shapes' guarded cells pass (DataRowCollection.Item, DataColumnCollection.Item, UriBuilder.Port, the Uri control). XmlTextWriter.WriteEndDocument is left out: its guarded cell fails on BC at the procedure's end, in the writer's Dispose. PR-33: the OpenSSL RSA form (51595, 51596), measured by the dotnet-exception-rsa family's equivalent guarded cells (app ...051010, /coord/handoff/PR-33/bc-run/result.md), which pass on BC. The entry's own app has not run on BC",
       "rerun": [
-        "Business Chart, Xml Writer and the other apps behind #7924's 18 ledger keys (265 standing sightings): the refusal family dotnet-exception"
+        "Business Chart, Xml Writer and the other apps behind #7924's 18 ledger keys (265 standing sightings): the refusal family dotnet-exception",
+        "Microsoft's crypto test apps (R-932, R-933 crypto: RSA Test, RSACryptoServiceProviderTests; 81 standing sightings of the OpenSSL form; the family covers the three causes of 80, not 'failed to decrypt' (1)): the refusal family dotnet-exception-rsa"
       ],
       "tests": {
         "Codeunit51591.RowIndexOutOfRange": { "status": "pass" },
         "Codeunit51592.ColumnIndexOutOfRange": { "status": "pass" },
         "Codeunit51593.NegativePort": { "status": "pass" },
-        "Codeunit51594.InvalidUri": { "status": "pass" }
+        "Codeunit51594.InvalidUri": { "status": "pass" },
+        "Codeunit51595.Pkcs1CiphertextDecryptedWithOaep": { "status": "pass" },
+        "Codeunit51596.PublicOnlyKeyDecrypts": { "status": "pass" }
       }
     },
     {
@@ -534,7 +563,7 @@
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; cell 51017 of untouched-handle.joined.tsv): XmlElement.AsXmlNode() on an untouched XmlElement returns without an error, so the test passes; al-runner fails it (NavXmlNode variable not initialized). Filed by PR-31",
       "rerun": ["the corpus mutants whose tests call AsXmlNode on an XmlElement nothing created (none known)"],
       "tests": {
-        "Codeunit51581.Cell": { "status": "pass" }
+        "Codeunit51621.Cell": { "status": "pass" }
       }
     },
     {
@@ -544,8 +573,8 @@
       "rerun": ["the corpus mutants whose tests read Session under Permissions Mock (none known)"],
       "args": ["--no-client"],
       "tests": {
-        "Codeunit51591.Cell": { "status": "pass" },
-        "Codeunit51592.Cell": { "status": "pass" }
+        "Codeunit51631.Cell": { "status": "pass" },
+        "Codeunit51632.Cell": { "status": "pass" }
       }
     }
   ]
