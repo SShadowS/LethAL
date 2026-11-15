@@ -439,7 +439,14 @@ const refusedCause = (r: SessionReport) =>
 /** Every kill reproduced (R577), and none `kill-not-reproduced`. */
 function assertReproduced(r: SessionReport, leg: string): void {
   const kills = r.mutants.filter((m) => m.verdict === "killed" || m.verdict === "timeout-killed");
-  const bare = kills.filter((m) => m.killReproduced !== true).map((m) => m.mutantCode);
+  // PR-43: a v3 CPU-stop timeout kill is deliberately not reproduced, so it has no marker.
+  const bare = kills
+    .filter(
+      (m) =>
+        m.killReproduced !== true &&
+        !(m.verdict === "timeout-killed" && m.stopEvidence === "v3-cpu-stop"),
+    )
+    .map((m) => m.mutantCode);
   must(bare.length === 0, `${leg}: kills without killReproduced: ${bare.join(", ")}`);
   const nr = r.mutants.filter((m) => m.cause === "kill-not-reproduced").map((m) => m.mutantCode);
   must(nr.length === 0, `${leg}: kill-not-reproduced: ${nr.join(", ")}`);

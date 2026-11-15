@@ -2149,7 +2149,8 @@ export interface MutantOutcome {
    * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
    * carried no message still says so. Set only on a backend with the rule on
    * (`ExecutionBackend.killsMustReproduce`: al-runner, al-runner-v3 and bcdev); absent elsewhere and on a kill
-   * recorded before the rule existed.
+   * recorded before the rule existed. PR-43: also absent, by design, on a `timeout-killed` with
+   * `stopEvidence` `v3-cpu-stop`, which was deliberately not reproduced.
    */
   readonly killReproduced?: true;
   /**

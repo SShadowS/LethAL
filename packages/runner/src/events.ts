@@ -433,9 +433,9 @@ export type RunEventInput =
       readonly killingTestFailure?: string;
       /** R206 — see `MutantRow.killPosition` (store.ts). Set on `killed`/`timeout-killed` only. */
       readonly killPosition?: number;
-      /** GitHub #49 — see `MutantOutcome.stopEvidence` (report.ts). Set on a `timeout-killed` our stop ended only. */
+      /** GitHub #49 — see `MutantOutcome.stopEvidence` (report.ts). Set on a `timeout-killed` our stop ended, or (PR-43) a v3 CPU-stop one (`v3-cpu-stop`). */
       readonly stopEvidence?: StopEvidence;
-      /** R577 — see `MutantOutcome.killReproduced` (report.ts). Set on a reproduced kill only. */
+      /** R577 — see `MutantOutcome.killReproduced` (report.ts). Set on a reproduced kill only (not on a `v3-cpu-stop` one, PR-43). */
       readonly killReproduced?: true;
       /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
       readonly reproducedFailure?: string;

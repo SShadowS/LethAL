@@ -23506,6 +23506,39 @@ describe("R577: a kill must reproduce under the mutant", () => {
     b.store.close();
   });
 
+  test("PR-43: a WARM group timeout (position 2) with cpuStop and a quick confirm still reproduces: two timeouts, killReproduced, not v3-cpu-stop", async () => {
+    // The fake's watchdog stops M0001's T2 (warm) in the kill call AND in the replay (a
+    // reproduction that times out again); every such timeout row carries cpuStop.
+    class CpuWarmStub extends ReproWarmStub {
+      override async runMany(opts: RunManyOpts): Promise<RunManyResult> {
+        const r = await super.runMany(opts);
+        return r.kind === "call" && r.verdict.outcome === "timeout"
+          ? { ...r, verdict: { ...r.verdict, reportedStopMs: 40000, cpuStop: true as const } }
+          : r;
+      }
+    }
+    const backend = new CpuWarmStub(
+      CAPS_NST,
+      (mutant, ref) => (mutant === "M0001" && ref.method === "T2" ? "fail" : "pass"),
+      ["IsOverBudget"],
+    );
+    let stopped = 0;
+    backend.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stopped += 1;
+      return 999_999;
+    };
+    const { report, store } = await run(backend, { testAl: FIVE_TESTS_AL });
+    const k = rowOf(report, "M0001");
+    expect(k?.verdict).toBe("timeout-killed");
+    expect(k?.killPosition).toBe(2);
+    expect(k?.killReproduced).toBe(true);
+    expect(k?.stopEvidence).not.toBe("v3-cpu-stop");
+    // Counter, not clock: the kill and its reproduction each hit the stop.
+    expect(stopped).toBe(2);
+    store.close();
+  });
+
   test("T6: the order is activate(m), fail, activate(null), pass, activate(m), fail, and only then is the mutant scored", async () => {
     const backend = deterministic();
     const { store } = await run(backend, {

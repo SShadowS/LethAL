@@ -5309,8 +5309,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * own send; R653 sends the two in ONE checked request (`sendKillPair`), confirm first. The one
    * exception is a v3-cpu-stop kill (PR-43): it is not re-sent, so a file change that came and
    * went inside its own send's gap is not caught; a lasting one is caught by the confirm's own
-   * bound check. Turning R577 off for v3 would reopen the gap. A lasting change in the LAST send's gap (now the pair)
-   * goes unreported (build review L1). R651's timer outside the bracket.
+   * bound check. Turning R577 off for v3 would reopen the gap. A lasting change in the LAST
+   * send's gap (now the pair) goes unreported (build review L1). R651's timer outside the
+   * bracket.
    */
   private async checkBound(lane: Lane): Promise<void> {
     if (this.inBaseline) return this.assertBound(lane);

@@ -142,7 +142,8 @@ export interface MutantRow {
    *  verdict and on a row recorded before the column existed: never read as `bc-named-stop`. */
   readonly stopEvidence?: StopEvidence;
   /** R577 — see `MutantOutcome.killReproduced` (report.ts). Absent on every non-kill, on a kill
-   *  scored with the rule off, and on a row recorded before the column existed. */
+   *  scored with the rule off, on a row recorded before the column existed, and (PR-43) on a
+   *  `timeout-killed` with `stopEvidence` `v3-cpu-stop`, which was deliberately not reproduced. */
   readonly killReproduced?: true;
   /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
   readonly reproducedFailure?: string;
