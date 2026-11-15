@@ -26,6 +26,8 @@ export interface Cell {
   readonly setup?: readonly string[];
   /** The one AL statement under test. */
   readonly call: string;
+  /** PR-17: whole handler procedures the cell binds (`[HandlerFunctions]`), for a call that shows UI. */
+  readonly handlers?: readonly string[];
 }
 
 export interface Family {
@@ -40,6 +42,8 @@ export interface Family {
   readonly cells: readonly Cell[];
   /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
   readonly target?: "OnPrem";
+  /** PR-17: al-runner arguments the family's run needs (`--no-client`), put before the app. */
+  readonly args?: readonly string[];
   /** PR-16: apps the cells call (Microsoft's Permissions Mock), as app.json `dependencies`. */
   readonly dependencies?: readonly {
     readonly id: string;
@@ -345,11 +349,143 @@ permissionset 51001 "Cell Grant Read"
   ),
 };
 
+/**
+ * PR-17: #8028's family, the ledger's largest open one after #7854 (429 sightings over six causes, every one "... in a session
+ * without a client (--no-client): what BC does there is not pinned"). LethAL runs al-runner with `--no-client` because BC's
+ * web-service path, where LethAL runs tests on BC, has no client. One cell per call that asks the client something or shows
+ * UI, with its handler bound and without (BC's answer may differ: a handler can take the UI, or a session with no client
+ * can answer without one).
+ */
+const handler = (attr: string, sig: string, body = "") =>
+  `    [${attr}]\n    procedure ${sig}\n    begin\n${body ? `        ${body}\n` : ""}    end;\n`;
+const H = {
+  confirm: handler(
+    "ConfirmHandler",
+    "OnConfirm(Question: Text[1024]; var Reply: Boolean)",
+    "Reply := true;",
+  ),
+  message: handler("MessageHandler", "OnMessage(Msg: Text[1024])"),
+  strMenu: handler(
+    "StrMenuHandler",
+    "OnStrMenu(Options: Text[1024]; var Choice: Integer; Instruction: Text[1024])",
+    "Choice := 1;",
+  ),
+  page: handler("PageHandler", 'OnPage(var P: TestPage "Cell Card")', "P.Close();"),
+  modal: handler("ModalPageHandler", 'OnModal(var P: TestPage "Cell Card")', "P.OK().Invoke();"),
+  request: handler(
+    "RequestPageHandler",
+    'OnRequest(var R: TestRequestPage "Cell Report")',
+    "R.OK().Invoke();",
+  ),
+  report: handler("ReportHandler", 'OnReport(var R: Report "Cell Report")'),
+  notify: handler("SendNotificationHandler", "OnNotify(var N: Notification): Boolean"),
+  link: handler("HyperlinkHandler", "OnLink(Link: Text[1024])"),
+};
+const insertRow = ["Row.Code := 'A';", "if Row.Insert() then;"];
+const ui = (
+  type: string,
+  method: string,
+  call: string,
+  h: string | undefined,
+  extra: Partial<Cell> = {},
+): Cell[] => [
+  ...(h !== undefined ? [{ type, method, state: "handler", call, handlers: [h], ...extra }] : []),
+  { type, method, state: "nohandler", call, ...extra },
+];
+export const NO_CLIENT: Family = {
+  name: "no-client",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8028",
+  args: ["--no-client"],
+  known: [
+    "CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md P1)",
+    // the text names the report; the family's report is always "Cell Report"
+    'the request page of report "Cell Report" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned',
+    "Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned",
+    "Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned",
+  ],
+  // ids 51000: BASE_ID, the first id of the app's range (codeunits start at BASE_ID + 1)
+  support: `table 51000 "Cell Client Row"
+{
+    fields { field(1; "Code"; Code[20]) { } }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+page 51000 "Cell Card"
+{
+    PageType = Card;
+    SourceTable = "Cell Client Row";
+    layout { area(Content) { field(Code; Rec.Code) { } } }
+}
+
+report 51000 "Cell Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "Cell Client Row") { } }
+    requestpage { layout { area(Content) { } } }
+}
+`,
+  handles: {
+    Page: 'Row: Record "Cell Client Row";',
+    TestPage: 'P: TestPage "Cell Card";',
+    Dialog: "D: Dialog;",
+    Notification: "N: Notification;",
+  },
+  cells: [
+    {
+      type: "Session",
+      method: "CurrentClientType",
+      state: "noclient",
+      call: "if CurrentClientType() = ClientType::Web then;",
+    },
+    {
+      type: "Session",
+      method: "DefaultClientType",
+      state: "noclient",
+      call: "if DefaultClientType() = ClientType::Web then;",
+    },
+    { type: "Session", method: "GuiAllowed", state: "noclient", call: "if GuiAllowed() then;" },
+    ...ui("Dialog", "Confirm", "if Confirm('Go on?') then;", H.confirm),
+    ...ui("Dialog", "Message", "Message('Done.');", H.message),
+    ...ui("Dialog", "StrMenu", "if StrMenu('One,Two') = 1 then;", H.strMenu),
+    ...ui("Dialog", "Open", "D.Open('Working');\n        D.Close();", undefined),
+    ...ui("Page", "Run", 'Page.Run(Page::"Cell Card");', H.page),
+    ...ui("Page", "RunRecord", 'Page.Run(Page::"Cell Card", Row);', H.page, { setup: insertRow }),
+    ...ui(
+      "Page",
+      "RunModal",
+      'if Page.RunModal(Page::"Cell Card", Row) = Action::LookupOK then;',
+      H.modal,
+      {
+        setup: insertRow,
+      },
+    ),
+    ...ui("TestPage", "OpenView", "P.OpenView();\n        P.Close();", undefined),
+    ...ui("Report", "Run", 'Report.Run(Report::"Cell Report");', H.request),
+    ...ui("Report", "RunModal", 'Report.RunModal(Report::"Cell Report");', H.request),
+    ...ui(
+      "Report",
+      "RunRequestPage",
+      "if Report.RunRequestPage(Report::\"Cell Report\") <> '' then;",
+      H.request,
+    ),
+    {
+      type: "Report",
+      method: "Run",
+      state: "reporthandler",
+      call: 'Report.Run(Report::"Cell Report");',
+      handlers: [H.report],
+    },
+    ...ui("Notification", "Send", "N.Message('Note');\n        N.Send();", H.notify),
+    ...ui("Session", "Hyperlink", "Hyperlink('https://example.invalid/');", H.link),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
   [PLATFORM_TABLE_READ.name]: PLATFORM_TABLE_READ,
   [PERMISSION_DENIAL.name]: PERMISSION_DENIAL,
+  [NO_CLIENT.name]: NO_CLIENT,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -362,30 +498,93 @@ export function cellName(c: Cell, i: number): string {
     .slice(0, 30);
 }
 
+/**
+ * PR-17: the id and name of a family's BC-check app (the same cells, run on BC to measure what al-runner's answer is only
+ * inferred against). Each family gets its own app id, so publishing one never reads as an upgrade of another; they share the
+ * object range, so a BC server holds one at a time.
+ */
+/**
+ * PR-17: platform tables BC 28's compiler rejects in an app (AL0433: removed; AL0161: internal to the System app), measured
+ * with alc against the bc2 server's own System symbols. al-runner compiles them, so family 3 reads them, but no app on BC
+ * can: a BC-check app leaves their cells out.
+ */
+export const BC_UNAVAILABLE_TABLES: ReadonlySet<string> = new Set([
+  "Agent Access Control Data",
+  "Agent Data",
+  "Agent Task Data",
+  "Agent Task File Data",
+  "Agent Task Log Entry Data",
+  "Agent Task Memory Entry Data",
+  "Agent Task Message Data",
+  "Agent Task Msg Attach Data",
+  "Agent Task Timeline Step Data",
+  "Agent Task User Int. Data",
+  "Agent Troubleshoot Info Data",
+  "Debugger Breakpoint",
+  "Debugger Call Stack",
+  "Debugger Variable",
+  "Debugger Watch",
+  "NAV App",
+  "NAV App Dependencies",
+  "NAV App Object Metadata",
+  "NAV App Publish Reference",
+  "NAV App Published App",
+  "NAV App Resource",
+  "NAV App Tenant App",
+  "Profile",
+  "Profile Metadata",
+  "Profile Page Metadata",
+  "User Metadata",
+]);
+
+/** PR-17: a family's cells that a BC app can hold (cells on a table BC 28 rejects are left out). */
+export function bcCheckFamily(f: Family): Family {
+  const gone = new Set([...BC_UNAVAILABLE_TABLES].map(tableType));
+  return { ...f, cells: f.cells.filter((c) => !gone.has(c.type)) };
+}
+
+export function bcCheckApp(f: Family): { id: string; name: string } {
+  const n = Object.keys(FAMILIES).indexOf(f.name) + 1;
+  if (n === 0) throw new Error(`refusal-family: ${f.name} is not a listed family`);
+  return {
+    id: `51000000-0000-4000-8000-0000000510${String(n).padStart(2, "0")}`,
+    name: `LethAL BC Check ${f.name}`,
+  };
+}
+
 /** The app's files: app.json and one .al file with the support objects and one test codeunit per cell. */
-export function emitApp(f: Family): Record<string, string> {
+export function emitApp(
+  f: Family,
+  app: { id: string; name: string } = {
+    id: "51000000-0000-4000-8000-000000051000",
+    name: `Refusal Family ${f.name}`,
+  },
+): Record<string, string> {
   const units = f.cells.map((c, i) => {
     const vars = [f.handles[c.type], ...(c.vars ?? [])].filter((v) => v !== undefined);
     const body = [...(c.setup ?? []), c.call].map((s) => `        ${s}`).join("\n");
+    // PR-17: a cell that shows UI binds its handlers; each handler is a whole procedure, named by its `procedure` line
+    const handlers = c.handlers ?? [];
+    const names = handlers
+      .map((h) => /procedure (\w+)/.exec(h)?.[1])
+      .filter((n) => n !== undefined);
     return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
     Subtype = Test;
 
-    [Test]
+${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
     procedure Cell()
-    var
-${vars.map((v) => `        ${v}`).join("\n")}
-    begin
+${vars.length > 0 ? `    var\n${vars.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
 ${body}
     end;
-}
+${handlers.map((h) => `\n${h}`).join("")}}
 `;
   });
   return {
     "app.json": `${JSON.stringify(
       {
-        id: "51000000-0000-4000-8000-000000051000",
-        name: `Refusal Family ${f.name}`,
+        id: app.id,
+        name: app.name,
         publisher: "LethAL Repro",
         version: "1.0.0.0",
         platform: "28.0.0.0",
@@ -497,20 +696,32 @@ if (import.meta.main) {
   const f = FAMILIES[opt("--family") ?? ""];
   if (f === undefined)
     throw new Error(
-      `usage: refusal-family.ts --family ${Object.keys(FAMILIES).join("|")} [--bin <al-runner>] [--out <dir>] [--json <file>]`,
+      `usage: refusal-family.ts --family ${Object.keys(FAMILIES).join("|")} [--bin <al-runner>] [--out <dir>] [--json <file>] | --emit-bc-check <dir>`,
     );
+  const check = opt("--emit-bc-check");
+  if (check !== undefined) {
+    // PR-17: only the app, under its own BC-check id and name, for a BC run; al-runner is not run
+    for (const [file, text] of Object.entries(emitApp(bcCheckFamily(f), bcCheckApp(f)))) {
+      mkdirSync(join(check, file, ".."), { recursive: true });
+      writeFileSync(join(check, file), text);
+    }
+    process.exit(0);
+  }
   const bin = opt("--bin") ?? "/work/tools/al-runner-v3/current/al-runner";
   const dir = opt("--out") ?? mkdtempSync(join(tmpdir(), "refusal-family-"));
   for (const [file, text] of Object.entries(emitApp(f))) {
     mkdirSync(join(dir, file, ".."), { recursive: true });
     writeFileSync(join(dir, file), text);
   }
-  const p = Bun.spawnSync([bin, "test", "--bc-version", "28", "--output-json", dir], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ALRUNNER_SEED: "1" },
-    timeout: 600_000,
-  });
+  const p = Bun.spawnSync(
+    [bin, "test", "--bc-version", "28", ...(f.args ?? []), "--output-json", dir],
+    {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ALRUNNER_SEED: "1" },
+      timeout: 600_000,
+    },
+  );
   let j: {
     tests?: { name: string; status: string; message?: string; notRun?: boolean }[];
     compilationErrors?: unknown[];
