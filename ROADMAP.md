@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 997 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**33 of 999 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1042,6 +1042,8 @@ that ordering is the priority.
 - **R1033** · Speed lever L5: a resumed al-runner v3 serve session reuses its stored baseline after a whole-suite re-check (Service Declaration: identical per mutant, baseline 6.6 s -> 2.6 s; DO predicted 1,986 s -> at most 300 s); the ~655 s 'gap' between DO's baseline requests is R948's one-shot cross-check · [R1033.md](docs/roadmap/R1033.md) · done (4546cd3a)
 - **R1034** · R192's baseline reuse on --resume is not verdict-identical: R926 reach and R975 trigger placement trust only rows that ran in the session, so a resumed session decides fewer trigger mutants (Service Declaration: 2 of 222 no-coverage -> survived, one-shot and serve) · [R1034.md](docs/roadmap/R1034.md) · done (d077ca1e)
 - **R1035** · Speed lever L2: a restarted al-runner serve daemon warmed the whole union again (DO: 110 codeunits, 37-69 s of tests per restart); it now proves each codeunit on its first use there · [R1035.md](docs/roadmap/R1035.md) · open
+- **R1036** · refusal-ledger.ts counted every baseline refusal row, including first-pass rows that isolation auto's re-baseline replaced with a pass, so cascades looked larger than they are (all v3 stores: 166,464 sightings, 156,454 standing; #8002 1,981 -> 1,121) · [R1036.md](docs/roadmap/R1036.md) · done (6f4b96b9)
+- **R1037** · Refusal family get-url (#7586, family 6): 99 GetUrl calls (11 client types by 9 argument forms) on edge-5a58a0f16, 60 return without a refusal (42 a URL, 18 an empty string) and 39 are refused under four reasons, three of them new (commented upstream, regression entry); BC-check app for lethal-bugs · [R1037.md](docs/roadmap/R1037.md) · open
 
 ---
 
