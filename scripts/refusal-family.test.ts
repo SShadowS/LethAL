@@ -314,7 +314,8 @@ describe("PR-01: the refusal-family generator", () => {
       PERMISSION_DENIAL,
       NO_CLIENT,
     ].map((f) => bcCheckApp(f).id);
-    expect(new Set(ids).size).toBe(5);
+    // review: pinned, because /coord/handoff/PR-17/bc-check hands these ids to lethal-bugs; a reordered FAMILIES must go red
+    expect(ids).toEqual([1, 2, 3, 4, 5].map((n) => `51000000-0000-4000-8000-00000005100${n}`));
     for (const id of ids)
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     const kept = bcCheckFamily(PLATFORM_TABLE_READ);

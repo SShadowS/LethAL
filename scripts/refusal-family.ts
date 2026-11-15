@@ -499,11 +499,6 @@ export function cellName(c: Cell, i: number): string {
 }
 
 /**
- * PR-17: the id and name of a family's BC-check app (the same cells, run on BC to measure what al-runner's answer is only
- * inferred against). Each family gets its own app id, so publishing one never reads as an upgrade of another; they share the
- * object range, so a BC server holds one at a time.
- */
-/**
  * PR-17: platform tables BC 28's compiler rejects in an app (AL0433: removed; AL0161: internal to the System app), measured
  * with alc against the bc2 server's own System symbols. al-runner compiles them, so family 3 reads them, but no app on BC
  * can: a BC-check app leaves their cells out.
@@ -543,6 +538,12 @@ export function bcCheckFamily(f: Family): Family {
   return { ...f, cells: f.cells.filter((c) => !gone.has(c.type)) };
 }
 
+/**
+ * PR-17: the id and name of a family's BC-check app (the same cells, run on BC to measure what al-runner's answer is only
+ * inferred against). Each family gets its own app id, so publishing one never reads as an upgrade of another; they share the
+ * object range, so a BC server holds one at a time. The id is the family's place in FAMILIES: append a family, never insert
+ * one (the test pins the ids handed to lethal-bugs).
+ */
 export function bcCheckApp(f: Family): { id: string; name: string } {
   const n = Object.keys(FAMILIES).indexOf(f.name) + 1;
   if (n === 0) throw new Error(`refusal-family: ${f.name} is not a listed family`);
