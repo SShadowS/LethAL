@@ -817,10 +817,12 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * with R-967's kit on edge-5a58a0f16 (`/coord/handoff/R1009-keep/probe/`): refuser 51006 after
    * R-937's standard writes, one-shot text equal to DO's; on one kept daemon 27 readers equal to the
    * control, 20 fresh daemons one answer equal to it, the pid unchanged, no panic text. Shape reduced
-   * on #8139. The table name is the only variable part; it cannot span a line, the rest is literal.
+   * on #8139 (the measured table has an OnBeforeDeleteEvent subscriber, as leg C's case does). The
+   * table name is the only variable part, at most 30 characters (an AL object name) and on one line;
+   * the rest is literal.
    */
   "stale-buffer-after-lock":
-    /^NotRun: out-of-scope: a stale [^\n]+ buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction \(not pinned\)$/,
+    /^NotRun: out-of-scope: a stale [^\n]{1,30} buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction \(not pinned\)$/,
   /**
    * R1019 (coord PR-14): the cascade after a test that failed while it held a manual event subscription
    * (a BindSubscription whose UnbindSubscription it never reached): the next test's bind is refused.

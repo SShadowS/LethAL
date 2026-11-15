@@ -762,8 +762,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
 
   test("R705 guard: the probe's tests app has no uncompilable test", () => {
     expect(SERVE_TESTS_AL).not.toContain("NoSuchProcedure");
-    // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(17);
+    // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade;
+    // PR-29: 50688 is the delete subscriber of 50686's table (the measured shape has one).
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[78]\d /gm)).toHaveLength(18);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });

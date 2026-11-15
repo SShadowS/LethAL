@@ -870,6 +870,14 @@ table 50687 "Serve Stale Row"
     }
 }
 
+codeunit 50688 "Serve Stale Sub"
+{
+    [EventSubscriber(ObjectType::Table, Database::"Serve Stale Row", 'OnBeforeDeleteEvent', '', false, false)]
+    local procedure OnBeforeDelete(var Rec: Record "Serve Stale Row"; RunTrigger: Boolean)
+    begin
+    end;
+}
+
 codeunit 50686 "Serve Stale Buffer"
 {
     Subtype = Test;
@@ -1037,7 +1045,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): seventeen codeunits (nineteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): eighteen codeunits (nineteen tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
