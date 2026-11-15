@@ -187,12 +187,14 @@ export class AlRunnerV3EntriesRefusedError extends Error {
  * R857: `isolated` turns a call id of a group into its one test; absent, or `undefined` for an id,
  * the id is a codeunit. R1004: `excluded` names the tests (`Codeunit<id>.<method>`) a plain
  * codeunit entry leaves out (`excludeTests`); absent, or empty for a codeunit, it runs them all.
+ * PR-20 (L4): it is asked per group, so a mutant's entry can leave out the tests after its last
+ * covering one.
  */
 export function encodeGroups(
   groups: readonly EntryGroup[],
   echoCodeunit: number,
   isolated?: (call: number) => IsolatedSelection | undefined,
-  excluded?: (codeunit: number) => readonly string[] | undefined,
+  excluded?: (codeunit: number, group: EntryGroup) => readonly string[] | undefined,
 ): SentEntry[] {
   const out: SentEntry[] = [];
   for (const g of groups) {
@@ -223,7 +225,7 @@ export function encodeGroups(
         });
         continue;
       }
-      const leftOut = excluded?.(cu);
+      const leftOut = excluded?.(cu, g);
       out.push({
         id: `${key}|${cu}`,
         mutantId: g.mutantId,

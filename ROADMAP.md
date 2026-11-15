@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**33 of 1002 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**33 of 1003 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1037,6 +1037,7 @@ that ordering is the priority.
 - **R1027** · What al-runner edge-5a58a0f16's flips free: Guided Experience mostly freed (405 mutants to killed); 4 of 12 freed error mutants killed, 2 more moved, 6 still refused in shapes the flips miss (reduced, filed); Extension Management not freed · [R1027.md](docs/roadmap/R1027.md) · closed 2026-11-15 — the measurement is done; Email's and SAF-T's shapes are reduced and filed (#8036, #7760)…
 - **R1028** · 14 Guided Experience tests freed by #8038 fail under LethAL: every checklist test with profiles finds 0 rows, while its twin with users passes. Not an al-runner difference: the tests depend on test order · [R1028.md](docs/roadmap/R1028.md) · closed 2026-11-15 — not an al-runner difference; order-dependent tests under LethAL's per-method runs, see…
 - **R1029** · What makes al-runner serve's cost grow: invented scaling probes. Per entry under 1 ms for every app shape; install and company-open code re-run once per entry (#8144); one compile per daemon, a restart always recompiles (#8143); DO's cost is test volume and restart warm-ups · [R1029.md](docs/roadmap/R1029.md) · closed 2026-11-15 — measured; the levers are filed (PR-20 for L4, #8143, #8144)
+- **R1030** · Speed lever L4: on al-runner v3 serve, a mutant's entry stops after the mutant's last covering test of its codeunit (DO: about half the tests per mutant); verdict-safe by pre-commitment, guarded for #8059 and order · [R1030.md](docs/roadmap/R1030.md) · done (870f77b7)
 - **R1031** · scripts/triage-baseline.ts's one-line summary does not say when its 900 s budget ran out inside isolation auto's re-baseline, so its stored baseline is the first pass only (Sustainability: 273-356 green instead of 393), and comparisons read it as a real baseline · [R1031.md](docs/roadmap/R1031.md) · done (2de21239)
 - **R1032** · #8006's wrong-verdict class (1753 dates stored where BC refuses them) did not reach any BC.History baseline: 0 sites by parse in 84 projects, and none of the 2,462 tests that ran on edge-5a58a0f16 turned red with it (2,298 more were refused) · [R1032.md](docs/roadmap/R1032.md) · closed 2026-11-15 — measured: no test of the class, so no mutant re-scored and nothing upstream
 - **R1033** · Speed lever L5: a resumed al-runner v3 serve session reuses its stored baseline after a whole-suite re-check (Service Declaration: identical per mutant, baseline 6.6 s -> 2.6 s; DO predicted 1,986 s -> at most 300 s); the ~655 s 'gap' between DO's baseline requests is R948's one-shot cross-check · [R1033.md](docs/roadmap/R1033.md) · done (4546cd3a)
