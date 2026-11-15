@@ -44,11 +44,6 @@ export interface Family {
   readonly target?: "OnPrem";
   /** PR-17: al-runner arguments the family's run needs (`--no-client`), put before the app. */
   readonly args?: readonly string[];
-  /**
-   * PR-30: the BC-check app's number when it is not the family's place in FAMILIES. Family 7 (number-sequence, PR-27) was
-   * written by hand and took 7 without a FAMILIES entry, so a family from 8 on names its number.
-   */
-  readonly bcCheckNumber?: number;
   /** PR-16: apps the cells call (Microsoft's Permissions Mock), as app.json `dependencies`. */
   readonly dependencies?: readonly {
     readonly id: string;
@@ -592,12 +587,16 @@ const TC_STRINGS: readonly (readonly [string, string])[] = [
   ["MarkerUpper", "@@TEST@@"],
   ["RealUrl", "Url=https://cell.example.invalid; AuthType=Office365"],
 ];
-const TC_REGISTER = (s: string) =>
-  `RegisterTableConnection(TableConnectionType::CRM, 'CELL', '${s}');`;
+// Review (PR-30): BC keeps a table connection for the whole session and refuses a second registration of the same name ("...
+// has already been registered"), while al-runner starts each codeunit fresh. So every cell uses its own connection name, and
+// first unregisters a leftover of it, so no cell meets another's connection on BC.
+const TC_FRESH = (name: string) =>
+  `if HasTableConnection(TableConnectionType::CRM, '${name}') then UnregisterTableConnection(TableConnectionType::CRM, '${name}');`;
+const TC_REGISTER = (name: string, s: string) =>
+  `RegisterTableConnection(TableConnectionType::CRM, '${name}', '${s}');`;
 export const TABLE_CONNECTION: Family = {
   name: "table-connection",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7837",
-  bcCheckNumber: 8,
   known: [
     "RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
     "Insert on a TableType = CRM table through a table connection: whether the database trigger runs is not pinned",
@@ -639,20 +638,26 @@ table 51001 "Cell CRM Trigger Row"
   },
   cells: [
     ...TC_STRINGS.flatMap(([name, s]): Cell[] => [
-      { type: "Connection", method: "Register", state: name, call: TC_REGISTER(s) },
+      {
+        type: "Connection",
+        method: "Register",
+        state: name,
+        setup: [TC_FRESH(`${name}Register`)],
+        call: TC_REGISTER(`${name}Register`, s),
+      },
       {
         type: "Connection",
         method: "SetDefault",
         state: name,
-        setup: [TC_REGISTER(s)],
-        call: "SetDefaultTableConnection(TableConnectionType::CRM, 'CELL');",
+        setup: [TC_FRESH(`${name}SetDefault`), TC_REGISTER(`${name}SetDefault`, s)],
+        call: `SetDefaultTableConnection(TableConnectionType::CRM, '${name}SetDefault');`,
       },
       {
         type: "Connection",
         method: "Unregister",
         state: name,
-        setup: [TC_REGISTER(s)],
-        call: "UnregisterTableConnection(TableConnectionType::CRM, 'CELL');",
+        setup: [TC_FRESH(`${name}Unregister`), TC_REGISTER(`${name}Unregister`, s)],
+        call: `UnregisterTableConnection(TableConnectionType::CRM, '${name}Unregister');`,
       },
     ]),
     ...(
@@ -677,8 +682,9 @@ table 51001 "Cell CRM Trigger Row"
         method,
         state: "marker",
         setup: [
-          TC_REGISTER("@@test@@"),
-          "SetDefaultTableConnection(TableConnectionType::CRM, 'CELL');",
+          TC_FRESH(`CRM${method}`),
+          TC_REGISTER(`CRM${method}`, "@@test@@"),
+          `SetDefaultTableConnection(TableConnectionType::CRM, 'CRM${method}');`,
           ...more,
         ],
         call,
@@ -696,8 +702,9 @@ table 51001 "Cell CRM Trigger Row"
         method,
         state: "marker",
         setup: [
-          TC_REGISTER("@@test@@"),
-          "SetDefaultTableConnection(TableConnectionType::CRM, 'CELL');",
+          TC_FRESH(`CRMT${method}`),
+          TC_REGISTER(`CRMT${method}`, "@@test@@"),
+          `SetDefaultTableConnection(TableConnectionType::CRM, 'CRMT${method}');`,
           "Row.Id := CreateGuid();",
           "Row.Name := 'A';",
         ],
@@ -715,7 +722,7 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [NO_CLIENT.name]: NO_CLIENT,
   // PR-26: appended (bcCheckApp's id is the place in this list)
   [GET_URL.name]: GET_URL,
-  // PR-30: appended; its BC-check number is 8 (bcCheckNumber), as 7 is PR-27's hand-written number-sequence app
+  // PR-30: appended; its BC-check number is 8 (bcCheckApp skips 7), as 7 is PR-27's hand-written number-sequence app
   [TABLE_CONNECTION.name]: TABLE_CONNECTION,
 };
 
@@ -778,7 +785,8 @@ export function bcCheckFamily(f: Family): Family {
 export function bcCheckApp(f: Family): { id: string; name: string } {
   const place = Object.keys(FAMILIES).indexOf(f.name) + 1;
   if (place === 0) throw new Error(`refusal-family: ${f.name} is not a listed family`);
-  const n = f.bcCheckNumber ?? place;
+  // PR-30: 7 is PR-27's hand-written number-sequence app, which has no FAMILIES entry, so places from 7 on take the next number
+  const n = place >= 7 ? place + 1 : place;
   return {
     id: `51000000-0000-4000-8000-0000000510${String(n).padStart(2, "0")}`,
     name: `LethAL BC Check ${f.name}`,
