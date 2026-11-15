@@ -100,9 +100,7 @@
       "id": "u7778-json-null",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7778",
       "bcEvidence": "inferred, not measured on BC: reading a JSON null as Boolean raises BC's error, which asserterror expects (#7778, closed: edge 764d69ecf made every JsonValue.AsX getter on a null raise BC's error). A guard: it passes on edge-a184cfc79, and the refusal ledger's 'reading a JSON null as Boolean' is fixed on its evidence (PR-05)",
-      "rerun": [
-        "nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"
-      ],
+      "rerun": ["nothing while it passes; if it regresses, the refusal ledger's JSON-null causes"],
       "tests": {
         "Codeunit50940.NullAsBoolean": { "status": "pass" }
       }
@@ -123,7 +121,10 @@
         "Codeunit50106.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-01" },
         "Codeunit50107.Measure": { "status": "fail", "messageIncludes": "stored date 1754-01-02" },
         "Codeunit50108.Measure": { "status": "fail", "messageIncludes": "Cannot write the value" },
-        "Codeunit50109.Measure": { "status": "fail", "messageIncludes": "stored datetime 1754-01-01" }
+        "Codeunit50109.Measure": {
+          "status": "fail",
+          "messageIncludes": "stored datetime 1754-01-01"
+        }
       }
     },
     {
@@ -296,10 +297,51 @@
       "id": "u7994-u7995-evaluate",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7994",
       "bcEvidence": "measured on BC 28.4 W1 (bc2, PR-03, 2026-11-15) for the calls these repros copy: Microsoft's Json Test, renumbered, passes all 18 tests on BC, including TestGetEnumPropertyValueFromJObjectByName (Evaluate into a memberless var Option parameter, #7994) and TestGetBoolPropertyValueFromJObjectByName (Evaluate of a Boolean with format 2, #7995 item 3). The invented repros themselves are not run on BC; each passes there by the same calls",
-      "rerun": ["PR-03: BC.History Json (its two non-passing baseline tests)", "every project whose code evaluates into a memberless var Option parameter or a Boolean with format 2"],
+      "rerun": [
+        "PR-03: BC.History Json (its two non-passing baseline tests)",
+        "every project whose code evaluates into a memberless var Option parameter or a Boolean with format 2"
+      ],
       "tests": {
         "Codeunit51301.Cell": { "status": "pass" },
         "Codeunit51302.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7415-platform-no-provider",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7415",
+      "bcEvidence": "inferred, not measured on BC: a read of a platform table returns on BC (rows or none), so each IsEmpty passes. The four tables are those LethAL's corpus runs met most (Api Web Service by far), plus the issue's own All Control Fields; the full set of 120 tables is from scripts/refusal-family.ts family platform-table-read (PR-13), posted on the issue",
+      "rerun": [
+        "the corpus mutants met by the platform-table no-provider refusals (ledger: 3,054 sightings, PR-13)"
+      ],
+      "tests": {
+        "Codeunit51301.Cell": { "status": "pass" },
+        "Codeunit51302.Cell": { "status": "pass" },
+        "Codeunit51303.Cell": { "status": "pass" },
+        "Codeunit51304.Cell": { "status": "pass" },
+        "Codeunit51305.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7854-system-table-denial",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
+      "bcEvidence": "inferred, not measured on BC: BC denies a FindFirst without Read permission even when it finds no row (measured upstream on an ordinary table, #7854), so under asserterror each test passes; for a system table it is inferred. The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
+      "rerun": [
+        "the corpus mutants met by the system-table permission-denial refusals (ledger: #7854's own six causes, 493 sightings, PR-16)"
+      ],
+      "tests": {
+        "Codeunit51401.Cell": { "status": "pass" },
+        "Codeunit51402.Cell": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8032-permission-rows",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
+      "bcEvidence": "inferred, not measured on BC: a read of the Permission table under a set that grants it Read returns on BC. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
+      "rerun": [
+        "the corpus mutants whose tests read Permission, Metadata Permission or Expanded Permission under Permissions Mock (#8032)"
+      ],
+      "tests": {
+        "Codeunit51421.Cell": { "status": "pass" }
       }
     }
   ]

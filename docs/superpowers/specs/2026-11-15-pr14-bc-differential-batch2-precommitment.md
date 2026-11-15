@@ -48,3 +48,17 @@ two apps only: the test apps and test libraries depend on the SERVER's own Any a
 Microsoft's symbols of the same app ids from the corpus pool) and no copy of either is published. The renumbered test-library
 copies (Field Selection, Video) stay. The modules, tests and predictions are unchanged. Rebuilt apps:
 `/coord/handoff/PR-14/bc2/` (`compile.md`).
+
+## Amendment 2 (2026-11-15, after the second publish was refused, before any test ran)
+
+On bc2 (lease attempt 370) the copy "PR14 Field Selection Test Library" was refused (HTTP 422: permission set name 'FIELD
+SELECTION READ' exists in both): the server already has Microsoft's "System Application Test Library" (9856ae4f-...8228,
+28.4.53241.56646), which holds the module test libraries. Nothing was installed (BC restored its state; a test app sent in
+parallel was refused for the missing library, and its test run found no codeunit). Changes, before any test of this batch ran:
+- No test-library copy is published either: the test apps depend on the server's System Application Test Library, Any and
+  Permissions Mock, and reference their objects by Microsoft's own names and ids.
+- The test apps are compiled against the server's OWN symbols (downloaded from bc2 under lease attempt 371:
+  `/coord/handoff/PR-14/server-symbols/.alpackages`, System 28.0.54946.56477 and the five apps at 28.4.53241.56646), not the
+  fixtures' symbols. All five compile clean (`/coord/handoff/PR-14/bc3/compile.md`).
+- Dependent publish and run steps go one at a time.
+The modules, tests and predictions are unchanged.
