@@ -240,6 +240,25 @@ describe("inputs", () => {
     ]);
     expect(readStore(store(), 1).map((x) => x.text)).toEqual([`${NR}old`]);
   });
+  test("PR-26: a test baselined twice stands by its last row: a first-pass refusal the re-baseline replaced is not a sighting, one it kept is", () => {
+    const p = store();
+    const db = new Database(p);
+    // W: refused in the first pass, passes when re-baselined per method (isolation auto, R921)
+    db.run(
+      `insert into test_results values (6, 2, null, 5, 'C', 'W', 'error', '${NR}first pass only')`,
+    );
+    db.run("insert into test_results values (7, 2, null, 5, 'C', 'W', 'pass', null)");
+    // X: refused in both passes: it stands, once
+    db.run(`insert into test_results values (8, 2, null, 5, 'C', 'X', 'error', '${NR}kept')`);
+    db.run(`insert into test_results values (9, 2, null, 5, 'C', 'X', 'error', '${NR}kept')`);
+    db.close();
+    const texts = readStore(p)
+      .filter((x) => x.kind === "test")
+      .map((x) => x.text);
+    expect(texts).not.toContain(`${NR}first pass only`);
+    expect(texts.filter((t) => t === `${NR}kept`)).toHaveLength(1);
+    expect(texts).toContain(`${NR}a baseline refusal`);
+  });
   test("--run naming a run the store has not, or a run that is not v3, is refused by name", () => {
     expect(() => readStore(store(), 9)).toThrow(/no al-runner-v3 run 9 \(no such run\)/);
     expect(() => readStore(store(), 4)).toThrow(/no al-runner-v3 run 4 \(backend bcdev\)/);
