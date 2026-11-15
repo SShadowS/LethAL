@@ -350,21 +350,17 @@ describe("PR-01: the refusal-family generator", () => {
       "GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
     );
     expect(known).toBe("GetUrl(*): this object type or argument list");
-    // edge-5a58a0f16 drops "(not pinned)": the same class
+    // `refusalText` strips "(not pinned)" before a run's texts reach classOf: the same class either way
     expect(
       classOf(
         "GetUrl(ClientType::Api; the call had 4 arguments): this object type or argument list",
       ),
     ).toBe(known);
-    expect(
-      classOf(
-        "GetUrl(ClientType::Default or Windows) of object type Codeunit with 4 arguments (only a page or a report are pinned)",
-      ),
-    ).toBe(
-      classOf(
-        "GetUrl(ClientType::Default or Windows) of object type Query with 4 arguments (only a page or a report are pinned)",
-      ),
-    );
+    // edge-5a58a0f16's own Default/Windows text: one class whichever object type and count it names
+    const dw = (o: string, n: number) =>
+      `GetUrl(ClientType::Default or Windows) of object type ${o} with ${n} arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)`;
+    expect(classOf(dw("Codeunit", 4))).toBe(classOf(dw("Query", 4)));
+    expect(classOf(dw("Page", 5))).toBe(classOf(dw("Codeunit", 4)));
     // a different reason is a different class
     expect(
       classOf("GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters"),

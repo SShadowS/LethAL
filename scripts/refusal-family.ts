@@ -520,7 +520,8 @@ const GETURL_FORMS: readonly (readonly [string, string, (readonly string[])?])[]
 export const GET_URL: Family = {
   name: "get-url",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
-  // the issue's own text (the ledger's two #7586 keys; edge-5a58a0f16 drops "(not pinned)", and classOf folds both)
+  // the issue's own text (the ledger's two #7586 keys). al-runner prints it with "(not pinned)", which `refusalText` strips
+  // before classOf sees it; classOf folds both forms.
   known: [
     "GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
   ],

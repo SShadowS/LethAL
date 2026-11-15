@@ -47,8 +47,8 @@ codeunit 51463 "U7586 GetUrl Forms"
     var
         Url: Text;
     begin
-        // edge-5a58a0f16: "a company of other characters than letters, digits and space" (the demo company ends in a full stop),
-        // though the same company in a 4-argument SOAP call with a page is accepted
+        // edge-5a58a0f16: "a company of other characters than letters, digits and space" (the demo company ends in a full stop);
+        // only this 2-argument form raises it (with a page, SOAP returns an empty string)
         Url := GetUrl(ClientType::SOAP, CompanyName());
     end;
 }
