@@ -431,7 +431,7 @@
     {
       "id": "u7760-untouched-handle",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7760",
-      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; /coord/handoff/PR-17/bc-check/runs/untouched-handle.joined.tsv): each of the four fails, InnerXml and GetChildElements with 'NavXmlElement variable not initialized.', SetAttribute with 'NavXmlAttributeCollection variable not initialized.', CopyStream with 'NavInStream variable not initialized.'; only the failure is expected. Of the family's 59 calls, XmlElement.AsXmlNode is the one BC lets through (u8157-xml-asxmlnode). Cells found by scripts/refusal-family.ts (PR-01)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, the dev endpoint's test runner; /coord/handoff/PR-17/bc-check/runs/untouched-handle.joined.tsv): each of the four fails, InnerXml and GetChildElements with 'NavXmlElement variable not initialized.', SetAttribute with 'NavXmlAttributeCollection variable not initialized.', CopyStream with 'NavInStream variable not initialized.'; only the failure is expected. Of the family's 59 calls, XmlElement.AsXmlNode is the one where BC and al-runner differ (u8157-xml-asxmlnode). Cells found by scripts/refusal-family.ts (PR-01)",
       "rerun": ["the corpus mutants met by the untouched-handle refusals (R-913, R-961, R-983)"],
       "tests": {
         "Codeunit51101.Cell": { "status": "fail" },
@@ -484,7 +484,7 @@
     {
       "id": "u7854-system-table-denial",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7854",
-      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path, Permissions Mock; /coord/handoff/PR-17/bc-check/runs/permission-denial.joined.tsv): FindFirst on User and on Tenant Media under a set without Read fails with 'Sorry, the current permissions prevented the action. (TableData <id> <name> Read: ...)', so under asserterror each test passes. Not every system table is denied on BC: of the family's 154 refused cells, 112 pass and 42 fail (posted on the issue). The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path, Permissions Mock; /coord/handoff/PR-17/bc-check/runs/permission-denial.joined.tsv): FindFirst on User and on Tenant Media under a set without Read (the cell's set grants only its own table, as the repro's does) fails with 'Sorry, the current permissions prevented the action. (TableData <id> <name> Read: ...)', so under asserterror each test passes. Not every system table is denied on BC: of the family's 154 refused cells, 112 pass and 42 fail (posted on the issue). Measured in a web-service session (Permissions Mock needs it) while the repro runs without --no-client: a permission check is not a client call, so the session kind is taken not to matter here (unlike u8158). The 75 tables al-runner refuses this way are from scripts/refusal-family.ts family permission-denial (PR-16)",
       "rerun": [
         "the corpus mutants met by the system-table permission-denial refusals (ledger: #7854's own six causes, 493 sightings, PR-16)"
       ],
@@ -496,7 +496,7 @@
     {
       "id": "u8032-permission-rows",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8032",
-      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path): IsEmpty and FindFirst on Permission under a Permissions Mock set that grants it Read pass on BC. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-17's BC check, 2026-11-15, LethAL's web-service path): IsEmpty and FindFirst on Permission under a Permissions Mock set that grants it Read (among about 84 tables; the repro's grants Permission and its own table) pass on BC. Measured in a web-service session while the repro runs without --no-client; as for u7854, the session kind is taken not to matter for a permission check. Found by scripts/refusal-family.ts family permission-denial (PR-16)",
       "rerun": [
         "the corpus mutants whose tests read Permission, Metadata Permission or Expanded Permission under Permissions Mock (#8032)"
       ],
