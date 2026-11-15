@@ -106,7 +106,9 @@ function maskParen(s: string, open: string, mask: string): string {
  */
 const FAILED_GOES_ON = /\)+ and (?:left|could) |\)+: /g;
 function maskFailed(s: string): string {
-  const at = s.indexOf("failed (");
+  // `failed (behaviour not pinned): <message>` is al-runner's label, not a cascade's failure; its raised
+  // message is masked by the tail rules
+  const at = s.search(/failed \((?![^()]*not pinned\): )/);
   if (at < 0) return s;
   const rest = s.slice(at + "failed (".length);
   let last = -1;
@@ -149,7 +151,8 @@ const TRANSPORT = /^(al-runner-v(?:\d+|N) transport failure: v(?:\d+|N) exited (
  * place that can quote the app's or a test's own text is masked: a quoted string (an apostrophe
  * inside a word, as in "BC's", opens none; an unclosed quote masks to the end), a cascade's earlier
  * test, its failure (`failed (...)`, `this failure is not trusted: ...`), its refusal and reach,
- * a SaveAsXml run's error, a .NET exception's message, the callback's question and the transport's
+ * a SaveAsXml run's error, a raised message after a "not pinned" label (PR-13), a .NET exception's
+ * message, the callback's question and the transport's
  * stderr. Then GUIDs, digits, and a 220-character cut; trimming after the cut keeps the key a fixed
  * point, which `loadLedger` checks.
  */
@@ -180,6 +183,13 @@ function normaliseOnce(text: string): string {
     .replace(
       /(an error in a SaveAsXml run \(what the handler sees is not pinned\)): .*$/,
       "$1: <error>",
+    )
+    // PR-13: a raised error's own message after al-runner's "not pinned" label (an install routine's or
+    // OnRun's `failed (behaviour not pinned): ...`, a SaveAs's `(whether SaveAs raises it or answers
+    // false is not pinned): ...`) can be an app's label or data
+    .replace(
+      /((?:failed(?: before the first test)? \(|\(whether SaveAs raises it or answers false is )[^()]*not pinned\)): .*$/,
+      "$1: <message>",
     )
     .replace(
       /(raised the \.NET exception [\w.+`]+): .*?(?=; the text AL would see|$)/,
