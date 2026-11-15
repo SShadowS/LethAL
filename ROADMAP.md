@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**34 of 1000 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**35 of 1002 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1045,6 +1045,8 @@ that ordering is the priority.
 - **R1036** · refusal-ledger.ts counted every baseline refusal row, including first-pass rows that isolation auto's re-baseline replaced with a pass, so cascades looked larger than they are (all v3 stores: 166,464 sightings, 156,454 standing; #8002 1,981 -> 1,121) · [R1036.md](docs/roadmap/R1036.md) · done (6f4b96b9)
 - **R1037** · Refusal family get-url (#7586, family 6): 99 GetUrl calls (11 client types by 9 argument forms) on edge-5a58a0f16, 60 return without a refusal (42 a URL, 18 an empty string) and 39 are refused under four reasons, three of them new (commented upstream, regression entry); BC-check app for lethal-bugs · [R1037.md](docs/roadmap/R1037.md) · open
 - **R1038** · Refusal family number-sequence (#8002, family 7): al-runner refuses a test after its codeunit changed an existing NumberSequence, and undoes every change when a codeunit ends; BC's answer (sequences documented as not transactional) is to be measured with a BC-check app · [R1038.md](docs/roadmap/R1038.md) · open
+- **R1039** · Under --no-client (which LethAL passes), al-runner ignores a bound ConfirmHandler or StrMenuHandler and raises BC's client-callback error; 2,290 standing sightings (Bank Deposits) rest on it. If BC's test runner calls bound handlers on LethAL's web-service path, these are wrong answers · [R1039.md](docs/roadmap/R1039.md) · open
+- **R1040** · #8013's causes split: each reduced to an invented repro (six regression entries), each posted to #8013 as its own comment; on edge-5a58a0f16 all seven are still refused, two YAML ones under new wordings · [R1040.md](docs/roadmap/R1040.md) · closed 2026-11-15 — reduced and filed; each cause's fix is upstream's, tracked by its regression entry
 
 ---
 

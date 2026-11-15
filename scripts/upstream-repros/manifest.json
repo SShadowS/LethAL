@@ -1,6 +1,73 @@
 {
   "repros": [
     {
+      "id": "u8013-yaml-shapes",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: each document is ordinary YAML (a list at its key's indent, a decimal value, CRLF line endings: the shapes of Microsoft's AI Test Toolkit datasets that the Copilot test apps' install codeunits read), so ReadFromYaml reads it and each test passes (PR-28)",
+      "rerun": [
+        "Sustainability Copilot Suggestion and No. Series Suggestions (R-969, R-986): their install codeunits read the datasets, so every test is refused today"
+      ],
+      "tests": {
+        "Codeunit51480.PinnedLayout": { "status": "pass" },
+        "Codeunit51480.ListAtItsKeysIndent": { "status": "pass" },
+        "Codeunit51480.KeyWithSlash": { "status": "pass" },
+        "Codeunit51480.KeyEndingInFullStop": { "status": "pass" },
+        "Codeunit51480.DecimalValue": { "status": "pass" },
+        "Codeunit51480.CrLfLineEndings": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-company-open",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: BC runs an OnCompanyOpenCompleted subscriber when the test session opens the company, before the first test, and its row is there for the tests, so the reading test passes (PR-28)",
+      "rerun": [
+        "System Initialization (R-969: all 8 tests) and VAT Group Management (R-975), whose Company Triggers subscribers write User Login and User Environment Login"
+      ],
+      "tests": {
+        "Codeunit51492.ReadsTheTableTheSubscriberWrote": { "status": "pass" },
+        "Codeunit51492.NeverReadsIt": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-find-no-match",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: Find('=<>') on a filter that matches nothing raises, so asserterror passes; on an app table and on Time Zone (PR-28)",
+      "rerun": ["Time Zone Selection (R-969: TestTimeZoneValidateFail)"],
+      "tests": {
+        "Codeunit51501.FindNoMatchOnAppTable": { "status": "pass" },
+        "Codeunit51501.FindNoMatchOnTimeZone": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-file-guid",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: File.Create converts the Guid to its text and the OnPrem server creates that file, so the test passes (PR-28)",
+      "rerun": ["Performance Toolkit (R-969: ExportImportOneBCPTSuite, ExportImportMultipleBCPTSuite)"],
+      "tests": {
+        "Codeunit51511.FileCreateWithGuidName": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-sql-counter",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: SqlStatementsExecuted returns a non-negative count, the field takes it and the insert succeeds; the test never reads the value (PR-28)",
+      "rerun": ["Performance Toolkit (R-969: 1 test)"],
+      "tests": {
+        "Codeunit51521.SqlCounterStoredInAField": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8013-xmlport-text-element",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8013",
+      "bcEvidence": "inferred, not measured on BC: the VariableText export writes one line per row and ends, so the test passes (PR-28)",
+      "rerun": [
+        "Intrastat Core (R-975: 4 tests, e.g. E2EIntrastatReportFileCreation), through Base Application's generic CSV export"
+      ],
+      "tests": {
+        "Codeunit51532.ExportUnboundTextElement": { "status": "pass" }
+      }
+    },
+    {
       "id": "u7586-geturl-forms",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7586",
       "bcEvidence": "inferred, not measured on BC: GetUrl returns a string for every valid ClientType and ObjectType, so each test passes; refusal family get-url (PR-26), whose BC-check app (/coord/handoff/PR-26/bc-check, app 51000000-0000-4000-8000-000000051006) carries each form's URL out for lethal-bugs to measure",
