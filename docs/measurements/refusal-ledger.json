@@ -118,7 +118,7 @@
   {
     "key": "NotRun: out-of-scope: a control over table field Total CONe whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
     "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 22 test(s) (PR-05 re-run) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-05: still refused on edge-a184cfc79 for 29 test(s) (PR-05 re-run; 22 as first written, PR-23 recounted Sustainability on a finished re-baseline, R1031) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#7850",
     "repro": "scripts/upstream-repros/u7850-autoformat"
   },
@@ -323,7 +323,7 @@
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed an isolated storage key or a number sequence that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (onl",
     "state": "fixed",
-    "note": "PR-05: 620 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (728 now another refusal, 0 not reached); 176 of those other refusals are its narrowed number-sequence wording, which stays open under #8002 (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-05: 657 previously refused test(s) run on edge-a184cfc79 (PR-05 re-run), none still refused for it (691 now another refusal, 0 not reached); 135 of those other refusals are its narrowed number-sequence wording, which stays open under #8002. PR-23 corrected these from 620, 728 and 176: PR-05's Sustainability re-run was cut inside the re-baseline (R1031), recounted on a finished one (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
     "issue": "#8002, #6638"
   },
   {

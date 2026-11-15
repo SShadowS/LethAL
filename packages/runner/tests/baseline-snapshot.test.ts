@@ -405,4 +405,64 @@ describe("ResultsStore baseline snapshots (R192)", () => {
     store.db.run("UPDATE runs SET test_app_deps = NULL WHERE id = ?", [id]);
     expect(store.findBaselineSnapshot("b", "package:t", "D", "procedure")).toBeNull();
   });
+
+  describe("PR-21 (L5): the backend's baseline state", () => {
+    const record = (store: ResultsStore, id: number, hash: string, extra: object) =>
+      store.recordBaselineSnapshot({
+        runId: id,
+        batchIndex: 0,
+        batchHash: hash,
+        testAppHash: "package:t",
+        baseline: [],
+        ...extra,
+      });
+    const newStore = () => {
+      const store = new ResultsStore(":memory:");
+      const id = store.createRun({
+        testScope: [],
+        coverageMode: "procedure",
+        identityScheme: IDENTITY_SCHEME,
+        buildSymbols: [],
+        projectPath: "/p",
+        backend: "al-runner-v3",
+        appVersion: "1",
+        testAppHash: "package:t",
+        testAppProven: true,
+        testAppDeps: "D",
+      });
+      return { store, id };
+    };
+
+    test("PR-21: a snapshot comes back with its state; one without has none", () => {
+      const { store, id } = newStore();
+      record(store, id, "with", { backendState: { x: 1 } });
+      record(store, id, "without", {});
+      expect(
+        store.findBaselineSnapshot("with", "package:t", "D", "procedure")?.backendState,
+      ).toEqual({
+        x: 1,
+      });
+      const bare = store.findBaselineSnapshot("without", "package:t", "D", "procedure");
+      expect(bare).not.toBeNull();
+      expect(bare !== null && "backendState" in bare).toBe(false);
+    });
+
+    test("PR-21: an older store without the column gains it, and keeps its snapshots", () => {
+      const { store, id } = newStore();
+      record(store, id, "old", {});
+      store.db.exec("ALTER TABLE baseline_snapshots DROP COLUMN backend_state");
+      (store as unknown as { migrate: () => void }).migrate();
+      const cols = store.db.query("PRAGMA table_info(baseline_snapshots)").all() as {
+        name: string;
+      }[];
+      expect(cols.some((c) => c.name === "backend_state")).toBe(true);
+      expect(store.findBaselineSnapshot("old", "package:t", "D", "procedure")?.runId).toBe(id);
+      record(store, id, "new", { backendState: { y: 2 } });
+      expect(
+        store.findBaselineSnapshot("new", "package:t", "D", "procedure")?.backendState,
+      ).toEqual({
+        y: 2,
+      });
+    });
+  });
 });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**32 of 992 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**32 of 996 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1035,8 +1035,12 @@ that ordering is the priority.
 - **R1025** · al-runner v3 against BC, test by test, batch 2 (PR-14): five more BC.History modules, all 13 tests equal; the server's own Any, Permissions Mock and System Application Test Library replace published copies · [R1025.md](docs/roadmap/R1025.md) · closed 2026-11-15 — measured; no v3 difference
 - **R1026** · Leg C's serve-keep-reasons reads 'diverged' on edge-5a58a0f16: R998's four RecordRef-not-open cases and its GetTable-of-an-unassigned-Variant case are plain fails there (upstream fixed them), so every candidate gate warns · [R1026.md](docs/roadmap/R1026.md) · done (9c248d53)
 - **R1027** · What al-runner edge-5a58a0f16's flips free: Guided Experience mostly freed (405 mutants to killed); 4 of 12 freed error mutants killed, 2 more moved, 6 still refused in shapes the flips miss (reduced, filed); Extension Management not freed · [R1027.md](docs/roadmap/R1027.md) · closed 2026-11-15 — the measurement is done; Email's and SAF-T's shapes are reduced and filed (#8036, #7760)…
-- **R1028** · 14 Guided Experience tests freed by #8038 fail on al-runner edge-5a58a0f16: every checklist test with profiles finds 0 rows, while its twin with users passes; BC's answer not measured · [R1028.md](docs/roadmap/R1028.md) · open
+- **R1028** · 14 Guided Experience tests freed by #8038 fail under LethAL: every checklist test with profiles finds 0 rows, while its twin with users passes. Not an al-runner difference: the tests depend on test order · [R1028.md](docs/roadmap/R1028.md) · closed 2026-11-15 — not an al-runner difference; order-dependent tests under LethAL's per-method runs, see…
 - **R1029** · What makes al-runner serve's cost grow: invented scaling probes. Per entry under 1 ms for every app shape; install and company-open code re-run once per entry (#8144); one compile per daemon, a restart always recompiles (#8143); DO's cost is test volume and restart warm-ups · [R1029.md](docs/roadmap/R1029.md) · closed 2026-11-15 — measured; the levers are filed (PR-20 for L4, #8143, #8144)
+- **R1031** · scripts/triage-baseline.ts's one-line summary does not say when its 900 s budget ran out inside isolation auto's re-baseline, so its stored baseline is the first pass only (Sustainability: 273-356 green instead of 393), and comparisons read it as a real baseline · [R1031.md](docs/roadmap/R1031.md) · done (2de21239)
+- **R1032** · #8006's wrong-verdict class (1753 dates stored where BC refuses them) did not reach any BC.History baseline: 0 sites by parse in 84 projects, and none of the 2,462 tests that ran on edge-5a58a0f16 turned red with it (2,298 more were refused) · [R1032.md](docs/roadmap/R1032.md) · closed 2026-11-15 — measured: no test of the class, so no mutant re-scored and nothing upstream
+- **R1033** · Speed lever L5: a resumed al-runner v3 serve session reuses its stored baseline after a whole-suite re-check (Service Declaration: identical per mutant, baseline 6.6 s -> 2.6 s; DO predicted 1,986 s -> at most 300 s); the ~655 s 'gap' between DO's baseline requests is R948's one-shot cross-check · [R1033.md](docs/roadmap/R1033.md) · done (4546cd3a)
+- **R1034** · R192's baseline reuse on --resume is not verdict-identical: R926 reach and R975 trigger placement trust only rows that ran in the session, so a resumed session decides fewer trigger mutants (Service Declaration: 2 of 222 no-coverage -> survived, one-shot and serve) · [R1034.md](docs/roadmap/R1034.md) · open
 
 ---
 
