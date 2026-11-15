@@ -41,3 +41,28 @@ its stop is CPU time by a capability, not by its name.
 3. `itest:alrunner-v3` passes every leg; no frozen verdict moves (stop evidence is not part of the per-mutant compare).
 4. The next DO window carrying it: every `timeout-killed` mutant meets the timeout at most twice in serve requests (P, and A when
    P stopped at another test), never in a reproduction; verdicts and killing tests of every mutant both windows score equal.
+
+## Addendum 1 (2026-11-15, after the Opus build review, before any gate): the skip is withdrawn; R577 stays, its reproduction is an alone call
+
+**Why.** The review of the skip build (lethal/pr-41 54635577) found two gaps, and the orchestrator chose to withdraw the skip:
+- B1: R652's comment above `checkBound` rests on R577 re-sending every kill fresh; skipping the reproduction reopens a transient
+  file-drift gap between the bound check and al-runner's read (a lasting drift is still caught by the confirm's own check).
+- B2: "load cannot cause a CPU-time stop" is only partly measured: leg C's `timeout-is-cpu` loads the core from OUTSIDE the
+  process; whether v3 counts the test thread's CPU or the process's is not known, nor whether the 10 x N wall stop for a waiting
+  test prints the same text. Asked upstream: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8168. The skip returns
+  as a follow-up only if the answer is the test thread's CPU and a distinct wait-stop text (and B1's comment is rewritten).
+
+**The change now (no verdict policy change; runner only, the emitted AL does not change).** On the al-runner v3 serve transport,
+once a mutant's call was cut at a timeout, every further run of that mutant's tests (the alone call A, and R577's reproduction) is
+an alone call of the one test asked, never a live call of the whole codeunit. So R577 still re-runs the killing test under the
+mutant, fresh, but only that test: L (a whole-codeunit live call that can stop at another test) and A2 (the alone call it then
+needs) are gone. A non-timeout kill, and every bcdev kill, are unchanged.
+
+**Predictions (replacing 1-4 above).**
+1. Unit tests, red both ways: after a cut-at-timeout, the reproduction of that mutant's killing test is an alone call (counted on
+   a stateful fake), red when the routing is removed; a kill without a timeout still reproduces through the live path; NONE (the
+   confirm) is never routed alone by this rule.
+2. No schema or report change; no frozen baseline or sample report moves; `itest:alrunner-v3` passes every leg.
+3. The next DO window carrying it: a hanging mutant meets the timeout P (+ A when P stopped at another test) + 1 (the reproduction,
+   alone), plus a re-send when a later codeunit of the same mutant also hangs: at most 3, against 3-4 in t5; verdicts and killing
+   tests of every mutant both windows score equal.
