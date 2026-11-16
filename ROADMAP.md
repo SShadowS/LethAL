@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1030 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**39 of 1031 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -381,6 +381,7 @@ that ordering is the priority.
 - **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · open
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · open
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · open
+- **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
 
 ## Product gaps a real project hits
 
