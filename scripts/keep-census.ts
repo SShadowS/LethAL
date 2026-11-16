@@ -235,21 +235,30 @@ export interface Evidence {
   readonly coldReader: string | undefined;
   readonly keptReaders: readonly string[];
   readonly freshReaders: readonly string[];
-  readonly refusedInServe: number;
-  readonly pids: readonly number[];
+  /** Per refuser, how many times its row was a refusal under serve (kept and fresh daemons together). */
+  readonly refusalsPerRefuser: readonly number[];
+  /** `engineKept` of each kept-daemon reader request after a refusal: true is real evidence the engine was reused. */
+  readonly keptEngineFlags: readonly boolean[];
   readonly panics: readonly string[];
   readonly keptAliveAtEnd: boolean;
 }
 
-/** PR-53's rule: every reader equals the control, the pid never moved, no panic text, and the refuser did refuse. */
+/**
+ * PR-53's rule: every reader equals the control, no panic text, and EACH refuser refused at least once. On the kept daemon
+ * every reader request reports `engineKept` (the engine was reused, not rebuilt). The pid is not evidence: it is constant by
+ * construction while the process lives, so only "still alive at the end" is checked.
+ */
 export function judge(e: Evidence): Judgement {
   if (e.control === undefined || !e.control.startsWith("OBS "))
     return {
       verdict: "NOT MEASURED",
       why: `the control reader gave no OBS line: ${e.control ?? "none"}`,
     };
-  if (e.refusedInServe === 0)
-    return { verdict: "NOT MEASURED", why: "the refuser did not refuse under serve" };
+  if (e.refusalsPerRefuser.length === 0 || e.refusalsPerRefuser.some((n) => n === 0))
+    return {
+      verdict: "NOT MEASURED",
+      why: `a refuser did not refuse under serve (refusals per refuser: ${e.refusalsPerRefuser.join(",") || "no refuser"})`,
+    };
   if (e.keptReaders.length === 0 || e.freshReaders.length === 0)
     return { verdict: "NOT MEASURED", why: "no reader answers after a refusal" };
   const bad: string[] = [];
@@ -257,13 +266,17 @@ export function judge(e: Evidence): Judgement {
   if (dk > 0) bad.push(`${dk} kept reader(s) differ from the control`);
   const df = e.freshReaders.filter((o) => o !== e.control).length;
   if (df > 0) bad.push(`${df} fresh reader(s) differ from the control`);
-  if (new Set(e.pids).size > 1) bad.push("the kept daemon's pid changed");
+  const nk = e.keptEngineFlags.filter((f) => !f).length;
+  if (e.keptEngineFlags.length === 0 || nk > 0)
+    bad.push(
+      `engineKept was not true on ${e.keptEngineFlags.length === 0 ? "any" : `${nk} of ${e.keptEngineFlags.length}`} kept reader request(s): reuse not shown`,
+    );
   if (!e.keptAliveAtEnd) bad.push("the kept daemon did not survive");
   if (e.panics.length > 0) bad.push(`panic text: ${e.panics[0]}`);
   return bad.length === 0
     ? {
         verdict: "CLEAN",
-        why: `${e.keptReaders.length} kept + ${e.freshReaders.length} fresh readers equal the control, pid constant, no panic text`,
+        why: `${e.keptReaders.length} kept + ${e.freshReaders.length} fresh readers equal the control, engineKept on all ${e.keptEngineFlags.length} kept reader requests, each of ${e.refusalsPerRefuser.length} refuser(s) refused (${e.refusalsPerRefuser.join("+")}), no panic text`,
       }
     : { verdict: "NOT CLEAN", why: bad.join("; ") };
 }
@@ -280,7 +293,10 @@ class Daemon {
   private readonly rd: { read(): Promise<{ value?: Uint8Array | undefined; done: boolean }> };
   private buf = "";
   panics: string[] = [];
-  refused = 0;
+  /** Refusal rows seen per refuser selector. */
+  readonly refusals = new Map<string, number>();
+  /** `timings.engineKept` of the last summary. */
+  lastEngineKept: boolean | undefined;
   constructor(
     private readonly bin: string,
     private readonly app: string,
@@ -376,6 +392,9 @@ class Daemon {
       if (l.type === "test" || l.type === "summary" || "error" in l)
         this.log.push(`  ${j.slice(0, 600)}`);
       if (/panic/i.test(j)) this.panics.push(`${label}: ${j.slice(0, 160)}`);
+      if (l.type === "summary")
+        this.lastEngineKept =
+          (l.timings as { engineKept?: unknown } | undefined)?.engineKept === true;
       if (l.type !== "test" || typeof l.message !== "string") continue;
       const name = String(l.name);
       if (name.startsWith(`Codeunit${KIT_READER}.`))
@@ -385,7 +404,7 @@ class Daemon {
         name.startsWith(refuserName) &&
         (l.notRun === true || isV3RefusalText(l.message))
       )
-        this.refused++;
+        this.refusals.set(refuserName, (this.refusals.get(refuserName) ?? 0) + 1);
     }
     return obs;
   }
@@ -443,41 +462,34 @@ export async function measureClass(
   const READER = `Codeunit${KIT_READER}.`;
   const kept: string[] = [];
   const fresh: string[] = [];
-  const pids: number[] = [];
+  const engineFlags: boolean[] = [];
   const panics: string[] = [];
+  const refusals = new Map<string, number>();
+  const addRefusals = (d: Daemon) => {
+    for (const [k, n] of d.refusals) refusals.set(k, (refusals.get(k) ?? 0) + n);
+  };
   let control: string | undefined;
   let cold: string | undefined;
-  let refused = 0;
   let aliveEnd = false;
   const open: Daemon[] = [];
   try {
     const d = mk();
     open.push(d);
     await d.ready();
-    pids.push(d.pid);
     cold = (await d.request("cold reader", [READER]))[0];
     await d.request("setter", [`Codeunit${KIT_SETTER}.`]);
     control = (await d.request("reader after setter", [READER]))[0];
     for (const r of refusers) {
       for (let i = 1; i <= 3; i++) {
-        await d.request(
-          `${r.label} round ${i} refuser`,
-          [r.selector],
-          r.selector.replace(/\.\w*$/, "."),
-        );
+        await d.request(`${r.label} round ${i} refuser`, [r.selector], r.selector);
         kept.push(...(await d.request(`${r.label} round ${i} reader`, [READER])));
-        pids.push(d.pid);
+        engineFlags.push(d.lastEngineKept === true);
       }
-      kept.push(
-        ...(await d.request(
-          `${r.label} entries`,
-          [r.selector, READER],
-          r.selector.replace(/\.\w*$/, "."),
-        )),
-      );
+      kept.push(...(await d.request(`${r.label} entries`, [r.selector, READER], r.selector)));
+      engineFlags.push(d.lastEngineKept === true);
     }
     aliveEnd = d.alive();
-    refused += d.refused;
+    addRefusals(d);
     panics.push(...d.panics);
     await d.stop();
     for (const r of refusers)
@@ -485,13 +497,9 @@ export async function measureClass(
         const f = mk();
         open.push(f);
         await f.ready();
-        await f.request(
-          `${r.label} fresh ${i} refuser`,
-          [r.selector],
-          r.selector.replace(/\.\w*$/, "."),
-        );
+        await f.request(`${r.label} fresh ${i} refuser`, [r.selector], r.selector);
         fresh.push(...(await f.request(`${r.label} fresh ${i} reader`, [READER])));
-        refused += f.refused;
+        addRefusals(f);
         panics.push(...f.panics);
         await f.stop();
       }
@@ -513,8 +521,8 @@ export async function measureClass(
     coldReader: cold,
     keptReaders: kept,
     freshReaders: fresh,
-    refusedInServe: refused,
-    pids,
+    refusalsPerRefuser: refusers.map((r) => refusals.get(r.selector) ?? 0),
+    keptEngineFlags: engineFlags,
     panics,
     keptAliveAtEnd: aliveEnd,
   });

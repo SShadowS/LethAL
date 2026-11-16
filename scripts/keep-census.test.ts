@@ -109,23 +109,30 @@ describe("judge", () => {
     coldReader: ctl,
     keptReaders: [ctl, ctl],
     freshReaders: [ctl],
-    refusedInServe: 3,
-    pids: [7, 7],
+    refusalsPerRefuser: [4, 3, 5],
+    keptEngineFlags: [true, true],
     panics: [],
     keptAliveAtEnd: true,
   };
-  test("equal readers, one pid, no panic is CLEAN", () => expect(judge(ok).verdict).toBe("CLEAN"));
+  test("equal readers, engine kept, every refuser refused, no panic is CLEAN", () =>
+    expect(judge(ok).verdict).toBe("CLEAN"));
+  test("a refuser that never refused is NOT MEASURED even when the others did", () => {
+    expect(judge({ ...ok, refusalsPerRefuser: [4, 0, 5] }).verdict).toBe("NOT MEASURED");
+    expect(judge({ ...ok, refusalsPerRefuser: [] }).verdict).toBe("NOT MEASURED");
+  });
+  test("a kept reader request without engineKept is NOT CLEAN", () => {
+    expect(judge({ ...ok, keptEngineFlags: [true, false] }).verdict).toBe("NOT CLEAN");
+    expect(judge({ ...ok, keptEngineFlags: [] }).verdict).toBe("NOT CLEAN");
+  });
   test("a differing kept reader is NOT CLEAN", () =>
     expect(judge({ ...ok, keptReaders: [ctl, `${ctl}x`] }).verdict).toBe("NOT CLEAN"));
   test("a differing fresh reader is NOT CLEAN", () =>
     expect(judge({ ...ok, freshReaders: ["OBS other"] }).verdict).toBe("NOT CLEAN"));
-  test("a pid change, a panic or a dead daemon is NOT CLEAN", () => {
-    expect(judge({ ...ok, pids: [7, 8] }).verdict).toBe("NOT CLEAN");
+  test("a panic or a dead daemon is NOT CLEAN", () => {
     expect(judge({ ...ok, panics: ["x: panicked"] }).verdict).toBe("NOT CLEAN");
     expect(judge({ ...ok, keptAliveAtEnd: false }).verdict).toBe("NOT CLEAN");
   });
-  test("no refusal seen, or no control, is NOT MEASURED, never CLEAN", () => {
-    expect(judge({ ...ok, refusedInServe: 0 }).verdict).toBe("NOT MEASURED");
+  test("no control, or no reader after a refusal, is NOT MEASURED, never CLEAN", () => {
     expect(judge({ ...ok, control: undefined }).verdict).toBe("NOT MEASURED");
     expect(judge({ ...ok, keptReaders: [] }).verdict).toBe("NOT MEASURED");
   });

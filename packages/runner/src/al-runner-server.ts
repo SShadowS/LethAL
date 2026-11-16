@@ -847,18 +847,20 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "setfilter-boolean-language-words":
     /^NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage \d{1,5} \(the words of that language are not pinned\)$/,
   /**
-   * PR-54: DO closes of `File.DownloadFromStream` (11 in t5-t7, all this text). Measured CLEAN in the
-   * keep census (`/coord/handoff/PR-54/census.md`, R-967's kit on edge-5a58a0f16): 1 refuser,
-   * 4 kept + 3 fresh readers equal the control, pid constant, no panic. No variable part: DO's 11
-   * events carry one text. The refusal is made before any download; the session is the headless one.
+   * PR-54: DO closes of `File.DownloadFromStream`: 11 in all over t5-t7 (about 3-5 per run, all this
+   * text). Measured CLEAN in the keep census (`/coord/handoff/PR-54/census.md`, R-967's kit on
+   * edge-5a58a0f16): 1 refuser, 4 kept + 3 fresh readers equal the control, no panic. The control is
+   * weak: the reader cannot see even a passing setter's writes, so CLEAN means nothing crossed
+   * requests. No variable part: DO's 11 events carry one text.
    */
   "download-from-stream-needs-client":
     /^NotRun: out-of-scope: File\.DownloadFromStream needs a client \(a browser round trip\), which a headless run has not$/,
   /**
    * PR-54: DO closes of `DotNet new System.IO.Compression.ZipArchive` on a stream that holds no zip
-   * (6 in t4-t8, all this text, message included). Measured CLEAN in the keep census
-   * (`/coord/handoff/PR-54/census.md`, repro u8036-refusals' shape: 1 refuser, 4 kept + 3 fresh
-   * readers equal the control, pid constant, no panic). The .NET message is pinned whole: another
+   * (6 in all over t4-t8, about 1-2 per run, all this text, message included). Measured CLEAN in the
+   * keep census (`/coord/handoff/PR-54/census.md`, repro u8036-refusals' shape: 1 refuser, 4 kept + 3
+   * fresh readers equal the control, no panic; same weak control). It has no leg C case: the zip
+   * family needs the .NET helper, which the update gate lacks; the serve-rule tests pin it. The .NET message is pinned whole: another
    * exception type or message was not measured and closes. (`System.IO.InvalidDataException` is not
    * in DOTNET_CLEAN_EXCEPTIONS, so the general dotnet-exception entry does not keep it.)
    */

@@ -336,18 +336,12 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     message:
       "NotRun: out-of-scope: Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
   },
-  // PR-54: DO's two refusals as edge-5a58a0f16 words them (`/coord/handoff/PR-54/`).
+  // PR-54: DO's File.DownloadFromStream refusal as edge-5a58a0f16 words it (`/coord/handoff/PR-54/`).
   "Codeunit50697.Refuses": {
     status: "error",
     notRun: true,
     message:
       "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
-  },
-  "Codeunit50699.Refuses": {
-    status: "error",
-    notRun: true,
-    message:
-      "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)",
   },
   // PR-53: the SetFilter-Boolean refusal as edge-5a58a0f16 words it (`/coord/handoff/PR-53/`).
   "Codeunit50696.Refuses": {
@@ -619,11 +613,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 21 entries");
+    expect(f?.measured).toContain("the keep rule accepts every row of all 20 entries");
     // R998, R1019, R1043, R1009, PR-47, PR-53, PR-54: each new family judged a refusal by its own entry
     for (const e of [
       "download-from-stream-needs-client",
-      "zip-archive-invalid-data",
       "setfilter-boolean-language-words",
       "gotokey-desc-last-row-above-window",
       "stale-buffer-after-lock",
@@ -815,8 +808,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     // PR-29: 50691 is the delete subscriber of 50690's table (the measured shape has one).
     // PR-47: 50694 is the GoToKey case's test codeunit.
     // PR-53: 50696 is the SetFilter-Boolean case's test codeunit.
-    // PR-54: 50697 (File.DownloadFromStream) and 50699 (ZipArchive on no zip) are test codeunits.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[789]\d /gm)).toHaveLength(24);
+    // PR-54: 50697 is the File.DownloadFromStream case's test codeunit. The zip family needs the .NET
+    // helper, which the update gate does not have (R1017): no dotnet declaration here.
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[789]\d /gm)).toHaveLength(23);
+    expect(SERVE_TESTS_AL).not.toMatch(/^dotnet\b|DotNet /m);
     // R1043: the caption case's page; PR-47: the GoToKey case's list page.
     expect(SERVE_TESTS_AL.match(/^page 506[789]\d /gm)).toHaveLength(2);
     // PR-18: the FormatRegion case's report.
