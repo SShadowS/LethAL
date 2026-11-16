@@ -692,7 +692,8 @@ missing, the AL0451 error says which folder to add (R951). Measured with alc onl
 measured with it.
 
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
-`4` nothing scored, meaning every mutant errored and the run measured nothing.
+`4` nothing scored, meaning every mutant errored and the run measured nothing, `7` time budget reached (or a signal), meaning
+the report is partial and `--resume` continues it. For CI, see [`docs/ci/`](docs/ci/README.md).
 
 ## How it works, in short
 

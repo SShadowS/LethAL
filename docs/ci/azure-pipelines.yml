@@ -1,0 +1,70 @@
+# LethAL on a pull request: Azure DevOps (example; PR-70).
+#
+# What it does: mutation-tests only the AL lines the pull request changes (`--changed-since`), exports the report in the
+# mutation-testing-elements JSON format (`lethal export`, R178) and publishes the reports as a pipeline artifact. LethAL
+# gates on nothing: exit 0 means the run completed, whatever survived (see docs/ci/README.md for the exit codes and
+# docs/ci/threshold-options.md).
+#
+# Assumptions, adjust them for your repository:
+# - `lethal` is on the agent's PATH: there is no published release yet, so build it once (README, "Installation").
+# - The app is in `app/` and its tests in `test/`; `app/lethal.config.json` configures the backend (README, "Configuration").
+# - `al-runner-v3` runs offline on Linux x64 and is NOT authoritative; it runs only an al-runner build LethAL has gated
+#   (R814), so install the one `lethal doctor` names. For BC's own answers use `--backend bcdev` on an agent that reaches a
+#   BC sandbox (never a production tenant).
+# - Run it as a pull-request validation build (a branch policy), with a path filter of `*.al` on that policy: the target
+#   branch is known only there, and a pull request whose changed lines hold no mutation site makes `lethal run` exit 1
+#   ("kept no deployable mutation site", R1079). A comment-only .al edit still does.
+# - Every artifact below carries your AL source (the report's mutant texts, the export's embedded files): keep them inside
+#   your organisation.
+# - Showing the report as a build tab: the Stryker extension's PublishMutationReport task reads an HTML report, and LethAL
+#   writes only the JSON today (R1080); the artifact holds the JSON.
+
+trigger: none
+
+pool:
+  name: Default # a self-hosted Linux x64 pool with lethal installed
+
+steps:
+  - checkout: self
+    fetchDepth: 0 # --changed-since runs git merge-base against the target branch
+    clean: true # a self-hosted agent keeps files between builds; a stale report must never be published
+
+  - bash: |
+      set +e
+      rm -f lethal-report.json mutation-report.json lethal-events.ndjson
+      if [ -z "$TARGET" ] || [ "$TARGET" = '$(System.PullRequest.TargetBranchName)' ]; then
+        echo "##vso[task.logissue type=error]not a pull-request build: the target branch is unknown"
+        exit 1
+      fi
+      lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since "origin/$TARGET" --out lethal-report.json --progress-out lethal-events.ndjson
+      rc=$?
+      case "$rc" in
+        0) echo "LethAL: run completed" ;;
+        3) echo "##vso[task.logissue type=error]LethAL quarantined the run: it refused to vouch for its own verdicts" ;;
+        4) echo "##vso[task.logissue type=error]LethAL scored nothing: every mutant errored" ;;
+        7) echo "##vso[task.logissue type=error]LethAL stopped early (time budget or a signal); the report is partial" ;;
+        *) echo "##vso[task.logissue type=error]LethAL failed with exit code $rc (the message is on stderr)" ;;
+      esac
+      exit "$rc"
+    displayName: Mutation-test the changed lines
+    env:
+      TARGET: $(System.PullRequest.TargetBranchName)
+
+  - bash: |
+      test -f lethal-report.json || { echo "no report was written"; exit 0; }
+      lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+    displayName: Export the report for display
+    condition: succeededOrFailed()
+
+  - bash: |
+      mkdir -p "$(Build.ArtifactStagingDirectory)/lethal"
+      for f in lethal-report.json mutation-report.json lethal-events.ndjson; do
+        test -f "$f" && cp "$f" "$(Build.ArtifactStagingDirectory)/lethal/"
+      done
+      true
+    displayName: Collect the reports
+    condition: succeededOrFailed()
+
+  - publish: $(Build.ArtifactStagingDirectory)/lethal
+    artifact: lethal-reports
+    condition: succeededOrFailed()
