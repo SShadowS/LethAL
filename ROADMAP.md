@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1040 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**39 of 1043 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -585,6 +585,8 @@ that ordering is the priority.
 - **R1061** · Removing a loop bound set before the loop can hang (DO M7544: a batch size left at 0 is never above the count), but a plain rule refuses non-hanging sites too; narrow it before building · [R1061.md](docs/roadmap/R1061.md) · done (4e7d2cb9)
 - **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
 - **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · open
+- **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · open
+- **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
 
 ## Backends and tooling
 
@@ -1060,7 +1062,7 @@ that ordering is the priority.
 - **R1036** · refusal-ledger.ts counted every baseline refusal row, including first-pass rows that isolation auto's re-baseline replaced with a pass, so cascades looked larger than they are (all v3 stores: 166,464 sightings, 156,454 standing; #8002 1,981 -> 1,121) · [R1036.md](docs/roadmap/R1036.md) · done (6f4b96b9)
 - **R1037** · Refusal family get-url (#7586, family 6): 99 GetUrl calls (11 client types by 9 argument forms) on edge-5a58a0f16, 60 return without a refusal (42 a URL, 18 an empty string) and 39 are refused under four reasons, three of them new (commented upstream, regression entry); BC-check app for lethal-bugs · [R1037.md](docs/roadmap/R1037.md) · closed 2026-11-15 — measured on BC: al-runner's 60 answers equal BC's, and the 39 refused cells have BC's…
 - **R1038** · Refusal family number-sequence (#8002, family 7): al-runner refuses a test after its codeunit changed an existing NumberSequence, and undoes every change when a codeunit ends; measured on BC: BC keeps Next across a rollback (a wrong answer, #8152) and undoes Restart, Delete and Insert as al-runner does · [R1038.md](docs/roadmap/R1038.md) · closed 2026-11-15 — measured on BC (mixed): Next is a new wrong answer, filed as #8152 with regression entry…
-- **R1039** · Under --no-client (which LethAL passes), al-runner never calls a test's bound UI handlers (Confirm, StrMenu, Message, Notification, Hyperlink) and lets an unhandled Message or Hyperlink pass; measured on BC in a web-service session, BC calls them: 9 wrong answers of 28 cells, filed as #8154 · [R1039.md](docs/roadmap/R1039.md) · open
+- **R1039** · Under --no-client (which LethAL passes), al-runner never calls a test's bound UI handlers (Confirm, StrMenu, Message, Notification, Hyperlink) and lets an unhandled Message or Hyperlink pass; measured on BC in a web-service session, BC calls them: 9 wrong answers of 28 cells, filed as #8154 · [R1039.md](docs/roadmap/R1039.md) · closed 2026-11-16 — #8154 fixed upstream: u8154-noclient-handlers flipped to BC on edge-4ebfe7913; PR-65…
 - **R1040** · #8013's causes split: each reduced to an invented repro (six regression entries), each posted to #8013 as its own comment; on edge-5a58a0f16 all seven are still refused, two YAML ones under new wordings · [R1040.md](docs/roadmap/R1040.md) · closed 2026-11-15 — reduced and filed; each cause's fix is upstream's, tracked by its regression entry
 - **R1041** · DO speed lever L1 (PR-18): keep the serve daemon after DO's ZipArchive.Dispose and FormatRegion refusals (measured clean); in DO window t4 they closed it 0 times (t3: 33), but the restart prediction missed: a third family, the DataCaptionExpression caption refusal, closed it 63 times · [R1041.md](docs/roadmap/R1041.md) · done (e753afba)
 - **R1042** · Refusal family table-connection (#7837, family 8): 22 cells on edge-5a58a0f16; only the exact '@@test@@' connection string runs, so an app's string built around the marker (Field Service and Sustainability ESG integration, 322 refused test rows) is refused, and so is an Insert with its trigger on a CRM table (58); BC-check app for lethal-bugs · [R1042.md](docs/roadmap/R1042.md) · closed 2026-11-15 — measured on BC: all 22 cells pass, so the 13 al-runner refuses are BC passes…
@@ -1085,6 +1087,7 @@ that ordering is the priority.
 - **R1075** · A resume onto a changed instrumented tree was silent when the resumed run had reused an earlier baseline (DO t8); the store now records baseline reuses, and the warning follows that lineage · [R1075.md](docs/roadmap/R1075.md) · done (8490d4f8)
 - **R1076** · Format/Evaluate family under five more languages (PR-63): 480 of 539 cells equal; Nordic Boolean words (#8182), closing-date letters (#8178) and refused month/weekday names (#8183) · [R1076.md](docs/roadmap/R1076.md) · closed 2026-11-16 — measured; two al-runner differences filed (#8182, R586 row 22; #8178 extended, row 21)…
 - **R1077** · heavy-slot: warn when a declared --peak is far above what the same kind of command measured in heavy-peaks.tsv · [R1077.md](docs/roadmap/R1077.md) · done (03240cf2)
+- **R1078** · t9's refusal families kept on the serve daemon (PR-74): 10 census classes CLEAN, 7 new entries and 2 widened; the t9 drift was a false fire on a red test · [R1078.md](docs/roadmap/R1078.md) · done (6024238e)
 
 ---
 
