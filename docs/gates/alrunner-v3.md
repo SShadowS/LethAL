@@ -601,6 +601,13 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 
 **Pre-commitment, R885 (2026-11-09): leg T's warning set gains `al-runner-v3-test-data-off`.** The gate opts out of downloads (`alRunnerV3.downloadDemoData: false`), and on `sandbox-data` al-runner then prints "test data is off: the demo data of build 28.0.46665.47126 is not cached and --no-download is set"; R885 surfaces that line as this warning, once per run. It is true and expected: the leg runs without demo data on purpose, and none of its tests needs it. Seen on the first gate run with R885, at 47f8b693 on edge-05d692e5e; every other leg's set is unchanged, and no verdict, count or killing test moved. Only `al-runner-v3/T` changes; the BC `tables/*` sets do not.
 
+**Pre-commitment, PR-55 addendum 1 (2026-11-16, master 7d4f2688): leg X (d)'s warning set gains `alone-confirm`.**
+- **Why:** X (d)'s sleep mutants are cut at their timeout, so `SleeperDoubles` runs alone for M0001 and M0005, and their
+  kills are now confirmed alone (R1067). PR-55 emits one `alone-confirm` warning per such confirm.
+- **Seen:** on the first gate run at 64100794 on edge-4ebfe7913, which failed on that mismatch before its verdict checks.
+- **Predicted, to be confirmed by the re-run:** every verdict, killing test and count of X (d) and of every other leg is
+  unchanged, and only `al-runner-v3/xd-d` changes.
+
 Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
 - If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
   The default `from` is `survived`/`null`/`null`. Since R804 a row may name another `from`: edge-8078bcf49's
