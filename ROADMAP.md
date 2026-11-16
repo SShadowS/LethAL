@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**35 of 1019 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**36 of 1020 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -378,6 +378,7 @@ that ordering is the priority.
 - **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · done (2affd336)
 - **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (94790266)
 - **R1052** · Two hang shapes no refusal covers: an assignment whose right side is a loop's progress call (`X := Adv(Pos)` — its `remove-assignment` and the `empty-block` of its block), and the `empty-block` of a block holding a loop's only exit · [R1052.md](docs/roadmap/R1052.md) · open
+- **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · open
 
 ## Product gaps a real project hits
 
