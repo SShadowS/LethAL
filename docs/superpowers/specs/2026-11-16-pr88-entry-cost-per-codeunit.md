@@ -79,3 +79,22 @@ and freed it.
   - the event's fields;
   - the estimator unchanged: today's tests pass as they are.
   A fake `/proc` reader is injected (tests never read `/proc`, as today: `rssReader`).
+
+## Addendum 1 (2026-11-16, after the build's Opus review and the observe run; before the real gate)
+
+The text above is left as it was committed. These corrections are made before the gate runs against them:
+- **The observe run** (`LETHAL_ITEST_V3_OBSERVE_PINS=1`, at commit 83c2c524, log `/coord/handoff/PR-88/gate-observe.log`):
+  every serve pin of S1E, DB, N1S, MOE and WRE is unchanged (0 `MOVED`), and every verdict and killing test passes. No
+  `al-runner-v3-peak-unverified` warning appeared, so the reset worked in the gate's container. **So no pin moves: the gate
+  runs against today's pins, unchanged.**
+- **Wrong in the spec, and fixed in the build** (review H1): "a daemon whose process exited before the read gives no reading
+  ... this only removes readings; it never lowers a cost" is FALSE. A dropped reading that would have RAISED a cost leaves it
+  lower than today. That happens on every R895 timeout cut, the requests most likely to have grown the daemon. The build
+  now keeps the sampled peak (source `sampled`, no `hwm`) whenever the process is gone, or its pid is no longer the daemon's,
+  exactly as today. Readings are therefore never lower than today's, without exception. The unit test "an exited daemon
+  gives no reading" above now reads "an exited daemon keeps its sampled reading".
+- **The DO prediction's wording** (review L1): `serve-request-sized` reaches the `--progress-out` NDJSON only. The progress
+  renderer does not print it, so "its stderr shows" should read "its `--progress-out` file holds". The per-codeunit cap lines
+  are stderr warnings, as stated.
+- **The observe switch** is validated, refused together with a gate receipt, and ends as exit 3 (never a pass), mirroring
+  `LETHAL_ITEST_OBSERVE_WARNINGS` (review M1).

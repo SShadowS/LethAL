@@ -1872,6 +1872,73 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "calls",
+        "floor",
+        "start",
+        "sampledPeak",
+        "g",
+        "peakSource",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "serve-request-sized"
+        },
+        "calls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "call",
+              "entries",
+              "cost"
+            ],
+            "properties": {
+              "call": {
+                "type": "number"
+              },
+              "entries": {
+                "type": "number"
+              },
+              "cost": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "floor": {
+          "type": "number"
+        },
+        "start": {
+          "type": "number"
+        },
+        "sampledPeak": {
+          "type": "number"
+        },
+        "hwm": {
+          "type": "number"
+        },
+        "g": {
+          "type": "number"
+        },
+        "peakSource": {
+          "type": "string",
+          "enum": [
+            "hwm",
+            "sampled"
+          ]
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "reason",
         "seq"
       ],

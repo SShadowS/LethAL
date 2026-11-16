@@ -27,6 +27,7 @@ import type {
   StopEvidence,
   TestMethodRef,
   TestOutcome,
+  V3RequestSized,
 } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
@@ -582,6 +583,17 @@ export type RunEventInput =
       readonly baselineRow: string;
       readonly row: string;
     }
+  | ({
+      /**
+       * PR-88: one al-runner-v3 serve request that gave a memory reading (R987's sensor). Bytes
+       * throughout: the daemon's `floor` and `start` resident size, the `sampledPeak` of the 200 ms
+       * sampler, `hwm` (`VmHWM`, present only when its reset was verified) and `g` (the peak less the
+       * floor). `peakSource` says which the estimator used. `calls` lists each call with its test
+       * entries in the request and its highest cost per entry after the reading. Debug: events stream
+       * only, not the report.
+       */
+      readonly type: "serve-request-sized";
+    } & V3RequestSized)
   | { readonly type: "quarantined"; readonly reason: string }
   | {
       /**

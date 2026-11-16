@@ -76,11 +76,14 @@ import {
   BASELINE_MIN_CLEAN_SAMPLES,
   type MemorySample,
   ONE_SHOT_EXITS,
+  PEAK_RESET_TOLERANCE_BYTES,
+  type PeakProbe,
   SKIPPABLE_NO_ANSWER,
   SamplePlan,
   baselineSampleIds,
   compareBaselineAnswers,
   durationCouldMoveBudget,
+  makeProcPeakProbe,
   memoryBoundBytes,
   readCgroupMemory,
   readProcessRssBytes,
@@ -180,6 +183,7 @@ import type {
   RunOpts,
   TestMethodRef,
   TestVerdict,
+  V3RequestSized,
 } from "./backend";
 import {
   type OtherFile,
@@ -1467,6 +1471,9 @@ export type V3KeptDrift = {
   readonly row: string;
 };
 
+/** PR-88: what the request-sized sink gets; declared in `backend.ts`, one type for the sink, the event and here. */
+export type { V3RequestSized };
+
 /** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
 export type V3DaemonClose = {
   readonly reason: string;
@@ -2176,8 +2183,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * session: it never falls.
    */
   private readonly costByCall = new Map<number, number>();
-  /** R987: set once a lowered cap was announced. */
-  private capLoweredSaid = false;
+  /** PR-88: the calls whose lowered cap was announced (one line per call). */
+  private readonly capLoweredCalls = new Set<number>();
+  /** PR-88: set once `al-runner-v3-peak-unverified` was printed. */
+  private peakUnverifiedSaid = false;
+  private readonly defaultProbe: PeakProbe = makeProcPeakProbe();
 
   /** R987: a call's measured cost per entry (`groupsThatFit`), `undefined` until a request ran it. */
   private readonly costOf = (call: number): number | undefined => this.costByCall.get(call);
@@ -2201,24 +2211,47 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     floorRss: number | undefined,
     peakRss: number | undefined,
     sent: readonly SentEntry[],
+    /** PR-88: where `peakRss` came from, for the cap lines and the `serve-request-sized` event. */
+    reading: {
+      readonly source: "hwm" | "sampled";
+      readonly sampledPeak: number | undefined;
+      readonly hwm?: number;
+    },
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
     const tests = sent.filter((e) => !e.echo);
     if (tests.length === 0) return;
     if (!(peakRss > startRss) && startRss - floorRss >= RETAINED_SLACK_BYTES) return;
     const cost = (peakRss - floorRss) / tests.length;
+    const entriesPerCall = new Map<number, number>();
     for (const e of tests) {
       const call = callOf(e);
+      entriesPerCall.set(call, (entriesPerCall.get(call) ?? 0) + 1);
       if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
     }
-    const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / cost);
-    if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredSaid) {
-      this.capLoweredSaid = true;
-      this.notify(
-        "al-runner-v3-entries-cap-lowered",
-        `[lethal] al-runner-v3: a serve request grew its daemon by ${(cost / 2 ** 20).toFixed(0)} MiB per test entry, so requests of its tests carry about ${Math.max(1, fit)} test entries (not ${ENTRIES_CHUNK_CAP}): the daemon holds every entry's state until the request ends (R987)`,
-      );
+    // PR-88: one line per call whose cap falls below the chunk cap, once per call.
+    const calls: { call: number; entries: number; cost: number }[] = [];
+    for (const [call, entries] of entriesPerCall) {
+      const highest = this.costByCall.get(call) ?? cost;
+      calls.push({ call, entries, cost: highest });
+      const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / highest);
+      if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredCalls.has(call)) {
+        this.capLoweredCalls.add(call);
+        this.notify(
+          "al-runner-v3-entries-cap-lowered",
+          `[lethal] al-runner-v3: requests carrying codeunit ${call} hold about ${Math.max(1, fit)} test entries (its highest measured cost: ${(highest / 2 ** 20).toFixed(0)} MiB per entry, from a ${reading.source} peak)`,
+        );
+      }
     }
+    this.requestSizedSink?.({
+      calls,
+      floor: floorRss,
+      start: startRss,
+      sampledPeak: reading.sampledPeak ?? peakRss,
+      ...(reading.hwm !== undefined ? { hwm: reading.hwm } : {}),
+      g: peakRss - floorRss,
+      peakSource: reading.source,
+    });
   }
 
   /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
@@ -2455,6 +2488,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     rssReader?: (pid: number) => number | undefined;
     /** R987: replaces the daemon RSS reader that measures a request's entries (tests never read `/proc`). */
     requestRssReader?: (pid: number) => number | undefined;
+    /**
+     * PR-88: replaces the real peak probe (`/proc/<pid>/clear_refs` and `VmHWM`). With `requestRssReader`
+     * set and no probe, a request is read by the sampler alone (tests never read `/proc`).
+     */
+    peakProbe?: PeakProbe;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
@@ -2503,6 +2541,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** PR-56: see `ExecutionBackend.setKeptDriftSink`. */
   setKeptDriftSink(sink?: (d: V3KeptDrift) => void): void {
     this.driftSink = sink;
+  }
+  /** PR-88: the session's sink for `serve-request-sized` events (`setRequestSizedSink`). */
+  private requestSizedSink: ((e: V3RequestSized) => void) | undefined;
+  /** PR-88: see `ExecutionBackend.setRequestSizedSink`. */
+  setRequestSizedSink(sink?: (e: V3RequestSized) => void): void {
+    this.requestSizedSink = sink;
   }
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
@@ -7011,6 +7055,27 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const r = readRss();
       if (r !== undefined && (peakRss === undefined || r > peakRss)) peakRss = r;
     };
+    // PR-88: reset the daemon's high-water mark right before the request is sent, and check the reset took.
+    const probe =
+      this.seams.peakProbe ??
+      (this.seams.requestRssReader !== undefined ? undefined : this.defaultProbe);
+    let hwmVerified = false;
+    if (probe !== undefined && pid !== undefined) {
+      const wrote = probe.reset(pid);
+      const m = probe.read(pid);
+      hwmVerified =
+        wrote &&
+        m?.hwm !== undefined &&
+        m.rss !== undefined &&
+        Math.abs(m.hwm - m.rss) <= PEAK_RESET_TOLERANCE_BYTES;
+      if (!hwmVerified && !this.peakUnverifiedSaid) {
+        this.peakUnverifiedSaid = true;
+        this.notify(
+          "al-runner-v3-peak-unverified",
+          "[lethal] al-runner-v3-peak-unverified: the serve daemon's high-water mark could not be reset (or read back near its resident size), so request peaks are read by sampling every 200 ms and may miss a short spike (PR-88)",
+        );
+      }
+    }
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
     // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
@@ -7038,6 +7103,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       clearInterval(sampler);
     }
     sampleRss();
+    // PR-88: the request's peak is the larger of the high-water mark and the sampled peak. A daemon that
+    // exited (a cut answer, R895: its server has no pid now, and the number may be reused) or whose
+    // /proc entry is gone keeps the sampled peak alone, as before: a reading is never dropped.
+    const sampledPeak = peakRss;
+    let peakSource: "hwm" | "sampled" = "sampled";
+    let hwmPeak: number | undefined;
+    if (probe !== undefined && pid !== undefined && daemon.server.pid === pid) {
+      const m = probe.read(pid);
+      if (m?.rss !== undefined && hwmVerified && m.hwm !== undefined) {
+        hwmPeak = m.hwm;
+        if (peakRss === undefined || m.hwm >= peakRss) {
+          peakSource = "hwm";
+          peakRss = m.hwm;
+        }
+      }
+    }
     const { sent, rows, cut: partial } = answer;
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
     // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
@@ -7076,7 +7157,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     daemon.keptRefusal = this.firstKeptRefusal(sent, rows);
-    this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent);
+    this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent, {
+      source: peakSource,
+      sampledPeak,
+      ...(hwmPeak !== undefined ? { hwm: hwmPeak } : {}),
+    });
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;

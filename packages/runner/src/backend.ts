@@ -488,6 +488,27 @@ export type PublishedPackageRead = Uint8Array | PackageUnread | undefined;
 export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
   r !== undefined && !(r instanceof Uint8Array);
 
+/**
+ * PR-88: what the request-sized sink gets (`ExecutionBackend.setRequestSizedSink`), per serve request that
+ * gave a reading; also the body of the `serve-request-sized` event. Bytes throughout. `g` is the peak less
+ * the floor. `calls` lists each call with its test entries in the request and its highest cost per entry
+ * after the reading.
+ */
+export type V3RequestSized = {
+  readonly calls: readonly {
+    readonly call: number;
+    readonly entries: number;
+    readonly cost: number;
+  }[];
+  readonly floor: number;
+  readonly start: number;
+  readonly sampledPeak: number;
+  /** `VmHWM`, present only when its reset was verified and the daemon was still running. */
+  readonly hwm?: number;
+  readonly g: number;
+  readonly peakSource: "hwm" | "sampled";
+};
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
@@ -625,6 +646,12 @@ export interface ExecutionBackend {
       readonly row: string;
     }) => void,
   ): void;
+  /**
+   * PR-88, OPTIONAL: where the backend reports the size of a serve request that gave a memory reading
+   * (al-runner-v3 only). Installed and removed with `setNotify`; each call becomes a `serve-request-sized`
+   * event (events stream only, not the report). Bytes throughout.
+   */
+  setRequestSizedSink?(sink?: (sized: V3RequestSized) => void): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**
