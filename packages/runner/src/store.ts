@@ -652,6 +652,15 @@ CREATE TABLE IF NOT EXISTS lost_batches (
   recorded_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (run_id, batch_index)
 );
+-- PR-66: which stored snapshot a run's batch REUSED (it stores none of its own). Read only by the
+-- resume warning for a changed tree. A whole new TABLE needs no migrate() step.
+CREATE TABLE IF NOT EXISTS baseline_snapshot_reuses (
+  run_id INTEGER NOT NULL,
+  batch_index INTEGER NOT NULL,
+  from_run_id INTEGER NOT NULL,
+  from_batch_index INTEGER NOT NULL,
+  PRIMARY KEY (run_id, batch_index)
+);
 -- C02-02: one row per PUBLISHED batch, alongside the runs columns above which stay last-batch-wins
 -- (unchanged, for every existing reader). A whole new TABLE needs no migrate() step: see the R90
 -- publish_outcomes comment below.
@@ -2251,13 +2260,42 @@ export class ResultsStore {
     };
   }
 
-  /** PR-47: the instrumented-tree hash a run stored for one batch's baseline snapshot, or null
-   *  when it stored none. Only the warning for a resume whose tree changed reads it. */
-  snapshotBatchHash(runId: number, batchIndex: number): string | null {
+  /** PR-66: this run's batch ran on (reused) the snapshot of run `fromRunId` batch `fromBatchIndex`. */
+  recordSnapshotReuse(
+    runId: number,
+    batchIndex: number,
+    fromRunId: number,
+    fromBatchIndex: number,
+  ): void {
+    this.db
+      .query(
+        "INSERT OR REPLACE INTO baseline_snapshot_reuses (run_id, batch_index, from_run_id, from_batch_index) VALUES (?, ?, ?, ?)",
+      )
+      .run(runId, batchIndex, fromRunId, fromBatchIndex);
+  }
+
+  /** PR-47/PR-66: the baseline snapshot a run's batch ran on, with its run and tree hash: the
+   *  run's own snapshot row, else the one it recorded reusing (`baseline_snapshot_reuses`); null
+   *  when neither (silent). No guess by run order. It skips what `findBaselineSnapshot` skips
+   *  (suspect snapshots, lost batches). Only the warning for a resume whose tree changed reads it.
+   *  A store from before PR-66 has no reuse rows: a run that reused then (DO's t8: run 8 reused
+   *  run 7) is named from the next window on. */
+  snapshotBatchHash(
+    runId: number,
+    batchIndex: number,
+  ): { batchHash: string; runId: number } | null {
     const row = this.db
-      .query("SELECT batch_hash FROM baseline_snapshots WHERE run_id = ? AND batch_index = ?")
-      .get(runId, batchIndex) as { batch_hash: string } | null;
-    return row === null ? null : row.batch_hash;
+      .query(
+        `SELECT batch_hash, run_id FROM baseline_snapshots
+         WHERE ((run_id = ?1 AND batch_index = ?2)
+             OR EXISTS (SELECT 1 FROM baseline_snapshot_reuses r WHERE r.run_id = ?1 AND r.batch_index = ?2
+               AND r.from_run_id = baseline_snapshots.run_id AND r.from_batch_index = baseline_snapshots.batch_index))
+           AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
+         ORDER BY (run_id = ?1) DESC, id DESC LIMIT 1`,
+      )
+      .get(runId, batchIndex) as { batch_hash: string; run_id: number } | null;
+    return row === null ? null : { batchHash: row.batch_hash, runId: row.run_id };
   }
 
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone
