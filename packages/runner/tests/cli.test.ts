@@ -646,6 +646,20 @@ describe("validateBcDevConfig", () => {
     expect(() => validateBcDevConfig({ ...full, mcpCommand: [] })).toThrow(/mcpCommand/);
   });
 
+  test("PR-42: stopHungSessions true or false passes; any other value is refused by name", () => {
+    for (const stopHungSessions of [true, false]) {
+      expect(validateBcDevConfig({ ...full, stopHungSessions })).toEqual({
+        ...full,
+        stopHungSessions,
+      });
+    }
+    for (const bad of ["true", 1, null]) {
+      expect(() =>
+        validateBcDevConfig({ ...full, stopHungSessions: bad as unknown as boolean }),
+      ).toThrow(`"stopHungSessions" ${JSON.stringify(bad)} is not true or false`);
+    }
+  });
+
   test("R681: every accepted coverageMode passes", () => {
     for (const coverageMode of ["procedure", "none", "fenced"] as const) {
       expect(validateBcDevConfig({ ...full, coverageMode })).toEqual({ ...full, coverageMode });
@@ -2439,6 +2453,98 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(row.source_sha256).not.toBe(await hashTargetSource(projectDir, []));
   });
 
+  // PR-42: the bcdev section's `stopHungSessions: true` turns the stop on for the backend AND the
+  // session (report caveat, resume), as the flag does; absent or false, or on another backend, not.
+  test("PR-42: a bcdev section's stopHungSessions reaches the backend and the session", async () => {
+    const bcdev = {
+      mcpCommand: ["bc-dev-mcp"],
+      server: "http://bc:7049",
+      serverInstance: "BC",
+      company: "CRONUS",
+      username: "u",
+      password: "p",
+      packageCachePath: "/x/symbols",
+      controlSymbolPath: "/x/control.app",
+    };
+    const seen = async (
+      backendKind: RunCliConfig["backendKind"],
+      stop: boolean | undefined,
+      flag: boolean,
+      envTool = false,
+    ): Promise<[boolean | undefined, boolean | undefined]> => {
+      const root = scratch("lethal-cli-stop-");
+      const projectDir = join(root, "app");
+      const testDir = join(root, "tests");
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(testDir, { recursive: true });
+      await writeFile(
+        join(projectDir, "app.json"),
+        JSON.stringify({
+          id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+          name: "Stop Fixture",
+          publisher: "LethAL",
+          version: "1.0.0.0",
+          idRanges: [{ from: 79000, to: 79199 }],
+        }),
+      );
+      await writeFile(
+        join(testDir, "app.json"),
+        JSON.stringify({ name: "Stop Tests", publisher: "LethAL", version: "1.0.0.0" }),
+      );
+      const configPath = join(root, "lethal.config.json");
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          bcdev: { ...bcdev, ...(stop !== undefined ? { stopHungSessions: stop } : {}) },
+          ...(envTool
+            ? { envTool: { toolPath: "tool.exe", publish: { command: ["publish"] } } }
+            : {}),
+        }),
+      );
+      const parsed: RunCliConfig = {
+        mode: "run",
+        projectDir,
+        testDir,
+        backendKind,
+        dbPath: testDbPath("lethal.sqlite"),
+        configPath,
+        skipKnownSurvivors: false,
+        workers: 1,
+        keepEnv: false,
+        allowExpiringEnv: false,
+        ...(flag ? { stopHungSessions: true } : {}),
+      };
+      let backendSaw: boolean | undefined;
+      let sessionSaw: boolean | undefined;
+      const sentinel = new Error("PR-42 sentinel");
+      await expect(
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          // the environment tool is never started; the config passes through unchanged
+          resolveEnvToolSession: async (_p, cfg) => ({ effectiveConfig: cfg }),
+          buildBackend: async (p) => {
+            backendSaw = p.stopHungSessions;
+            return new PassingBackend();
+          },
+          runSession: async (cfg) => {
+            sessionSaw = cfg.stopHungSessions;
+            throw sentinel;
+          },
+        }),
+      ).rejects.toBe(sentinel);
+      return [backendSaw, sessionSaw];
+    };
+    expect(await seen("bcdev", true, false)).toEqual([true, true]);
+    expect(await seen("bcdev", undefined, false)).toEqual([undefined, undefined]);
+    expect(await seen("bcdev", false, false)).toEqual([undefined, undefined]);
+    // the flag still turns it on with the config saying false
+    expect(await seen("bcdev", false, true)).toEqual([true, true]);
+    // another backend ignores the bcdev section
+    expect(await seen("al-runner-v3", true, false)).toEqual([undefined, undefined]);
+    // an envTool config provisions another environment: the section's yes does not reach it
+    expect(await seen("bcdev", true, false, true)).toEqual([undefined, undefined]);
+  });
+
   // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.
   const R214_LOGIC = `codeunit 79000 "Sandbox Logic"
 {
@@ -2801,6 +2907,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
   /** Verify through the REAL id check against app.json, recording the ids it was handed. */
   async function verifyOnce(ctx: Awaited<ReturnType<typeof runThenArtifact>>) {
     let reachedWith: string | undefined;
+    let stop: boolean | undefined;
     const handed: SelectorConfig[] = [];
     let printed = "";
     const outcome = await verifyFromCli(
@@ -2818,6 +2925,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         },
         buildBackend: async (inputs, _config, _dir, _deploy, _deps, selectorIds) => {
           if (selectorIds === undefined) throw new Error("verify passed no selector ids");
+          stop = inputs.stopHungSessions;
           handed.push(selectorIds);
           await validateSelectorIdsForProject(inputs.projectDir, selectorIds);
           return verifyBackendFake((id) => {
@@ -2826,8 +2934,23 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         },
       },
     ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
-    return { outcome, printed, handed, reachedWith };
+    return { outcome, printed, handed, reachedWith, stop };
   }
+
+  // PR-42: verify runs mutants on bcdev, so the bcdev section's standing yes reaches its backend.
+  test("PR-42: verify's backend gets the stop when the bcdev section says stopHungSessions true, not otherwise", async () => {
+    const ctx = await runThenArtifact();
+    const off = await verifyOnce(ctx);
+    expect(off.outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(off.stop).toBeUndefined();
+    await writeFile(
+      ctx.configPath,
+      JSON.stringify({ bcdev: { ...ctx.bcdev, stopHungSessions: true } }),
+    );
+    const on = await verifyOnce(ctx);
+    expect(on.outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(on.stop).toBe(true);
+  });
 
   test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
     const before = runFolders();

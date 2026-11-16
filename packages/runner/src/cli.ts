@@ -2466,6 +2466,13 @@ export interface BcDevConfigSection {
    * measurement behind it. `"procedure"` (legacy hub) remains selectable for one release.
    */
   readonly coverageMode?: "procedure" | "none" | "fenced";
+  /**
+   * PR-42: the server owner's standing yes for `--stop-hung-sessions` on this server, so every
+   * `lethal run --backend bcdev` with this config ends a hung mutant's session as if the flag were
+   * given. Absent or false, the flag alone decides (the product default stays off). Read once, in
+   * `runFromCli`; `bc-linux-setup.ts` writes it for our own servers bc1-bc4.
+   */
+  readonly stopHungSessions?: boolean;
 }
 
 export interface LethalConfigFile {
@@ -2628,6 +2635,11 @@ export function validateBcDevConfig(
   if (raw.coverageMode !== undefined && !modes.includes(raw.coverageMode)) {
     throw new Error(
       `lethal.config.json "bcdev" section: "coverageMode" ${JSON.stringify(raw.coverageMode)} is not one of ${modes.map((m) => `"${m}"`).join(", ")}`,
+    );
+  }
+  if (raw.stopHungSessions !== undefined && typeof raw.stopHungSessions !== "boolean") {
+    throw new Error(
+      `lethal.config.json "bcdev" section: "stopHungSessions" ${JSON.stringify(raw.stopHungSessions)} is not true or false`,
     );
   }
   return raw as BcDevConfigSection;
@@ -4022,7 +4034,7 @@ export function runOutputPaths(
 }
 
 export async function runFromCli(
-  parsed: RunCliConfig,
+  given: RunCliConfig,
   deps: {
     resolveEnvToolSession?: typeof resolveEnvToolSession;
     buildBackend?: typeof buildBackend;
@@ -4048,9 +4060,16 @@ export async function runFromCli(
   // R-445: a test project inside the target (or containing it) is refused by name before anything
   // reads or builds the target: the build copies every .al under the target, so its tests would be
   // mutated and published as target code. Campaign stages run through here too.
-  const nested = await testProjectNestedProblem(parsed.projectDir, parsed.testDir, "lethal run");
+  const nested = await testProjectNestedProblem(given.projectDir, given.testDir, "lethal run");
   if (nested !== null) throw new TestProjectNestedError(nested);
-  const configFile = await loadLethalConfigFile(parsed.configPath);
+  const configFile = await loadLethalConfigFile(given.configPath);
+  // PR-42: the bcdev section's standing yes turns the stop on for the whole run (backend, report,
+  // resume), exactly as `--stop-hung-sessions` does; a non-boolean is refused by validateBcDevConfig.
+  // Not with an envTool section: the environment it provisions is not the server the yes was for.
+  const configStop =
+    configFile.bcdev?.stopHungSessions === true && configFile.envTool === undefined;
+  const parsed: RunCliConfig =
+    given.backendKind === "bcdev" && configStop ? { ...given, stopHungSessions: true } : given;
   // R674 (R18's warning, which R654 S3 deleted with the .NET al-runner's branch): a configured
   // `envTool` section is silently unused on a local runner, since `resolveEnvToolSession` returns
   // early for every backend but bcdev. Warned, not refused: a config file is often shared across
@@ -5687,7 +5706,13 @@ export async function verifyFromCli(
         "the config has an envTool section; lethal verify runs only against a directly configured bcdev container",
       );
     }
-    const inputs: BackendInputs = { backendKind: "bcdev", projectDir, testDir: parsed.testDir };
+    // PR-42: verify runs mutants too, so the bcdev section's standing yes turns the stop on here.
+    const inputs: BackendInputs = {
+      backendKind: "bcdev",
+      projectDir,
+      testDir: parsed.testDir,
+      ...(configFile.bcdev?.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    };
     // R261: the ids the installed build was made with, from its hash-checked manifest, so a source
     // run given --selector-id overrides verifies with those. Never the config's current defaults.
     // buildBackend validates them against app.json; the bcdev backend has no other use for them.

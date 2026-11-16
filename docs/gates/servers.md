@@ -157,6 +157,24 @@ checked (config-only)`, or `symbol cache empty for bcN: run setup --server bcN o
 run fails and never claims gate-ready. It never asks the server which build it runs: with more than one
 verified dir it takes the newest by its marker's `writtenAt`, and every line it prints says so.
 
+### The hung-session stop is ON for mutant runs on bc1-bc4 (owner, 2026-11-15; PR-42)
+The owner's yes for `--stop-hung-sessions` on our own servers is given (q-20261115T202541-baaa349b), while
+LethAL's product default stays off. So every `bcdev` section the setup scripts build for `bc1`-`bc4`
+(`bcdevSection`, also used by r560c's credit-limit config) carries `"stopHungSessions": true`, and every
+`lethal run --backend bcdev` or `lethal verify` with such a config, or a copy of its `bcdev` section (how lanes
+build per-task configs), has the stop. bc-demo's config does not, and a config with an `envTool` section ignores
+the field (the environment it provisions is not our server).
+- **No gate moves.** The gates build their backend from named config fields and set the stop per leg
+  (`itest:hang` keeps its OFF leg); none reads this field, and none starts a run through `lethal run`.
+- **After this lands, rewrite your configs**: `bun scripts/bc-linux-setup.ts --write-config-only --server <bcN>`
+  in each worktree (`--server all` covers bc1-bc3 only; bc4 needs its own run), and copy the new `bcdev` section
+  into any per-task config. An older config without the field still needs `--stop-hung-sessions` on the command
+  line. To check a run: its `--progress-out` events' `run-configured` line says `"stopHungSessions":true` (the
+  report names the stop only in a caveat, when a mutant was `timeout-killed`).
+- **Results can differ from a run without the stop.** A hung mutant is now scored `timeout-killed` instead of
+  stranding its tier, and `--resume` with the stop on re-runs stored `timeout-killed` rows. A campaign stage frozen
+  on bc1-bc4 without the stop may therefore differ under `campaign compare` where it had a stranded mutant.
+
 ### The shared symbol cache
 
 A gate's instrumented compile reads `bcdev.packageCachePath`, and nothing on the bcdev path downloads

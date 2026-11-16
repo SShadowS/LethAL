@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**37 of 1027 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1028 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1071,6 +1071,7 @@ that ordering is the priority.
 - **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
 - **R1059** · The ledger's 60 open causes PR-05 could not re-run, settled on edge-5a58a0f16 (PR-39): 4 fixed (Bank Deposits, Service Declaration, Data Archive, Record Link Management), 50 still seen, 4 not observed, 2 with no sighting; Quality Management and Shopify rebuilt and cached · [R1059.md](docs/roadmap/R1059.md) · closed 2026-11-16 — measured: the 60 states are in the refusal ledger; a re-score of the four apps' stored…
 - **R1060** · DO window t6 ran ~65 s per new covered mutant (t5: 8.3 s): a mid-order baseline-refused GoToKey test closed the serve daemon on every mutant request of a newly reached region; the refusal is now kept (measured clean), and a resume that reuses no baseline says why · [R1060.md](docs/roadmap/R1060.md) · done (11605dbb)
+- **R1064** · The hung-session stop is ON for every mutant run on our own servers bc1-bc4 (a `bcdev.stopHungSessions` config field the setup scripts write); the product default stays off; no gate reads it · [R1064.md](docs/roadmap/R1064.md) · done (b4be7fc1)
 - **R1065** · Mutant-level differential, al-runner v3 vs bcdev, batch 4 (PR-49): Regex 99.6%, Recurrence Schedule 100%, Headlines 100%, Record Link Management 80% (its red BC baseline); no new al-runner difference · [R1065.md](docs/roadmap/R1065.md) · closed 2026-11-16 — measured; every difference is a known class
 
 ---
