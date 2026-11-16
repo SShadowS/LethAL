@@ -487,6 +487,33 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}SetFilter: a Date filter value under GlobalLanguage 1030 (the words of that language are not pinned)`,
     ],
   };
+  // PR-54: DO's File.DownloadFromStream refusal, measured clean (`/coord/handoff/PR-54/census.md`). One text, no variable part.
+  R945["download-from-stream-needs-client"] = {
+    keeps: [
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not`,
+    ],
+    closes: [
+      // reworded, a tail, its sibling UploadIntoStream, a timeout word
+      `${P}File.DownloadFromStream needs a client, which a headless run has not`,
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not (not pinned)`,
+      `${P}File.UploadIntoStream needs a client (a browser round trip), which a headless run has not`,
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not (timeout)`,
+    ],
+  };
+  // PR-54: DO's ZipArchive-on-no-zip refusal, measured clean. The exception message is pinned whole.
+  R945["zip-archive-invalid-data"] = {
+    keeps: [
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+    ],
+    closes: [
+      // another message, another exception type, another member (Dispose), no ADR tail, an extra tail
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Number of entries expected in End Of Central Directory does not correspond to number of entries in Central Directory.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.TimeoutException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet System.IO.Compression.ZipArchive.Dispose raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7) (timeout)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);

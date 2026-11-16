@@ -178,6 +178,8 @@
     "upstream-repros.ts",
     "refusal-family.test.ts",
     "refusal-family.ts",
+    "keep-census.test.ts",
+    "keep-census.ts",
     "automation-api-guard.test.ts",
     "build-native-parser.test.ts",
     "build-native-parser.ts",
