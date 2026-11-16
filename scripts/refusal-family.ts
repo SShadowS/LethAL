@@ -29,7 +29,7 @@ export interface Cell {
   /** PR-17: whole handler procedures the cell binds (`[HandlerFunctions]`), for a call that shows UI. */
   readonly handlers?: readonly string[];
   /** PR-52: what the answer depends on besides the call: the session's language and region, or its time zone. */
-  readonly depends?: "locale" | "tz";
+  readonly depends?: "locale" | "tz" | "carry";
   /**
    * PR-63: a second test in the same codeunit, run after the first. The cell's own body becomes `SetLanguage` (it must pass);
    * this becomes `ReadLanguage`, and its failure message is the cell's answer.
@@ -42,8 +42,9 @@ export interface Cell {
 }
 
 /** PR-63: the two test names of a two-test cell. */
-export const SET_TEST = "SetLanguage";
-export const READ_TEST = "ReadLanguage";
+// the A_/B_ prefixes make alphabetical and declaration order agree
+export const SET_TEST = "A_SetLanguage";
+export const READ_TEST = "B_ReadLanguage";
 
 export interface Family {
   readonly name: string;
@@ -1745,8 +1746,9 @@ const LR_ENUM: FmtValue = {
   type: "Enum",
   decl: 'Enum "LR Color"',
   states: [
-    ["first", 'V := "LR Color"::Red;'],
-    ["third", 'V := "LR Color"::Blue;'],
+    // the captions are the enum's default ones: no translation files, so these cells are no evidence about translated captions
+    ["first default caption", 'V := "LR Color"::Red;'],
+    ["third default caption", 'V := "LR Color"::Blue;'],
   ],
 };
 const ENUM_SUPPORT = `enum 51000 "LR Color"
@@ -1756,6 +1758,24 @@ const ENUM_SUPPORT = `enum 51000 "LR Color"
     value(0; Red) { Caption = 'Red'; }
     value(1; Green) { Caption = 'Green'; }
     value(2; Blue) { Caption = 'Blue'; }
+}
+
+codeunit 51540 "LR Carry Mark"
+{
+    SingleInstance = true;
+
+    var
+        Counter: Integer;
+
+    procedure Increment()
+    begin
+        Counter += 1;
+    end;
+
+    procedure Count(): Integer
+    begin
+        exit(Counter);
+    end;
 }
 `;
 const PICTURES: readonly (readonly [string, string])[] = [
@@ -1774,7 +1794,7 @@ const LANG_WORDS: Readonly<
 const langExtras = (code: number): Cell[] => [
   ...LR_ENUM.states.flatMap(([state, setup]) => [
     inLang(fmtCell(LR_ENUM, state, setup, "Format", "Format(V)"), code),
-    ...(state === "third"
+    ...(state.startsWith("third")
       ? [inLang(fmtCell(LR_ENUM, state, setup, "Format len8", "Format(V, 8)"), code)]
       : []),
   ]),
@@ -1793,7 +1813,10 @@ const langSet = (code: number): Cell[] => {
     ...LANG_FORMATS.flatMap(([type, state, len]) => [
       fmtIn(type, state, "Format", "Format(V)", code),
       ...(len !== "" ? [fmtIn(type, state, `Format len${len}`, `Format(V, ${len})`, code)] : []),
-    ]),
+    ]).map((c) =>
+      // an Option variable has no captions: its cells are no evidence about translated captions
+      c.type === "Option" ? { ...c, state: `${c.state} default caption` } : c,
+    ),
     ...[w.yes, w.no, "Yes", "true"].map((t) =>
       inLang(evalCell(["Boolean", "Boolean"], t, t, false), code),
     ),
@@ -1811,7 +1834,7 @@ const langSet = (code: number): Cell[] => {
 };
 const NAME_DATES: readonly (readonly [string, string])[] = [
   ["15 March 2024", "V := DMY2Date(15, 3, 2024);"],
-  ["1 August 2024", "V := DMY2Date(1, 8, 2024);"],
+  ["6 August 2024", "V := DMY2Date(6, 8, 2024);"],
 ];
 const NAME_PICTURES: readonly (readonly [string, string])[] = [
   ["month", "<Month Text>"],
@@ -1841,13 +1864,15 @@ const CARRY_CELL: Cell = {
   type: "GlobalLanguage",
   method: "carry-over",
   state: "set 1030 then read",
-  call: "GlobalLanguage(1030);",
+  // the counter says whether the setter ran first in the same session (1) or not (0)
+  vars: ['Mark: Codeunit "LR Carry Mark";'],
+  call: "GlobalLanguage(1030); Mark.Increment();",
   reader: {
-    vars: ["V: Date;"],
+    vars: ["V: Date;", 'Mark: Codeunit "LR Carry Mark";'],
     setup: ["V := ClosingDate(DMY2Date(31, 12, 2023));"],
-    call: "Error('V:[%1|%2]', Format(GlobalLanguage(), 0, 9), Format(V));",
+    call: "Error('V:[%1|%2|%3]', Format(GlobalLanguage(), 0, 9), Format(V), Format(Mark.Count(), 0, 9));",
   },
-  depends: "locale",
+  depends: "carry",
 };
 const LANGUAGES_1031_1053 = [1031, 1036, 1044, 1053];
 const LANGUAGE_CELLS: Cell[] = [
@@ -2120,12 +2145,18 @@ export function refusalClasses(
 export interface BcRow {
   readonly outcome: string;
   readonly message: string;
+  /**
+   * PR-63: how the id came: bare (`51001`), as the reader (`51539.B_ReadLanguage`) or as the setter only
+   * (`51539.A_SetLanguage`). `joinCells` checks the form against the cell: a two-test cell needs `reader` plus `setter`.
+   */
+  readonly form?: "plain" | "reader" | "setter";
+  readonly setter?: { readonly outcome: string; readonly message: string };
 }
 
 export function parseBcTsv(text: string): Map<number, BcRow> {
-  const rows = new Map<number, BcRow>();
+  const answers = new Map<number, BcRow>();
+  const setters = new Map<number, { outcome: string; message: string }>();
   const seen = new Set<string>();
-  const failedSetters = new Map<number, string>();
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/\r$/, "");
     if (line.trim() === "") continue;
@@ -2141,20 +2172,21 @@ export function parseBcTsv(text: string): Map<number, BcRow> {
       (outcome !== "pass" && outcome !== "fail")
     )
       throw new Error(
-        `refusal-family: bad BC row (want id[.SetLanguage|.ReadLanguage], pass|fail, message): ${line.slice(0, 80)}`,
+        `refusal-family: bad BC row (want id[.${SET_TEST}|.${READ_TEST}], pass|fail, message): ${line.slice(0, 80)}`,
       );
     const key = `${n}.${test === SET_TEST ? SET_TEST : "answer"}`;
     if (seen.has(key)) throw new Error(`refusal-family: BC row ${idText} appears twice`);
     seen.add(key);
-    if (test === SET_TEST) {
-      if (outcome === "fail") failedSetters.set(n, rest.join("\t"));
-      continue;
-    }
-    rows.set(n, { outcome, message: rest.join("\t") });
+    const row = { outcome, message: rest.join("\t") };
+    if (test === SET_TEST) setters.set(n, row);
+    else answers.set(n, test === READ_TEST ? { ...row, form: "reader" } : row);
   }
-  // a setter that failed makes the reader's answer meaningless: the cell's answer is the setter's failure
-  for (const [n, m] of failedSetters)
-    rows.set(n, { outcome: "fail", message: `${SET_TEST} did not pass: ${m}` });
+  const rows = new Map<number, BcRow>();
+  for (const [n, a] of answers) {
+    const setter = setters.get(n);
+    rows.set(n, setter !== undefined ? { ...a, setter } : a);
+  }
+  for (const [n, s] of setters) if (!rows.has(n)) rows.set(n, { ...s, form: "setter" });
   return rows;
 }
 
@@ -2216,8 +2248,25 @@ export function joinCells(
       );
   return results.map((r, i) => {
     const id = BASE_ID + 1 + i;
-    const b = bc.get(id);
-    if (b === undefined) throw new Error(`refusal-family: no BC row for cell ${id}`);
+    const got = bc.get(id);
+    if (got === undefined) throw new Error(`refusal-family: no BC row for cell ${id}`);
+    // PR-63: the row's form must fit the cell. A two-test cell needs the reader's row AND the setter's; a one-test cell takes a bare id.
+    const form = got.form ?? "plain";
+    if (r.cell.reader !== undefined) {
+      if (form === "plain")
+        throw new Error(
+          `refusal-family: cell ${id} has two tests: give ${id}.${READ_TEST}, not ${id}`,
+        );
+      if (form === "setter") throw new Error(`refusal-family: no ${READ_TEST} row for cell ${id}`);
+      if (got.setter === undefined)
+        throw new Error(`refusal-family: no ${SET_TEST} row for cell ${id}`);
+    } else if (form !== "plain" || got.setter !== undefined)
+      throw new Error(`refusal-family: cell ${id} has one test: give ${id}, not a test suffix`);
+    // a setter that failed makes the reader's answer meaningless: the answer is the setter's failure
+    const b =
+      got.setter !== undefined && got.setter.outcome !== "pass"
+        ? { outcome: "fail", message: `${SET_TEST} did not pass: ${got.setter.message}` }
+        : got;
     const v3 = say(r.outcome, r.message);
     const row = (cls: JoinClass): JoinRow => ({
       id,
