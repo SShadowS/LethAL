@@ -72,3 +72,21 @@ this on bc3 (dependencies at 30.0 required, 28.5 installed).
 ## Predictions
 - No gate figure moves: gates do not use doctor's new check, and their configs keep plain credentials.
 - No report schema change.
+
+## Addendum 1 (2026-11-16, after the Opus build review)
+
+The text above is left as it was committed. Corrections found by the review:
+- **A read error fails the check; it is not skipped.** The R1087 text says both that the check is "skipped ... when the server
+  cannot be read" and that "a read error fails the check". The build follows the second: a failed read of an id fails the
+  check and names that id, and is never read as "missing". The check is skipped only when doctor cannot ask at all: no
+  `--project`, an `envTool` config, or no API base for the server (`ApiBaseUnsetError`, through `runCheck`).
+- **A refusal never prints the variable NAME a `credentialsEnv` field holds.** It names the field (`credentialsEnv.password`)
+  only. A password pasted into the field can look like a valid name, and printing the name would leak it. Doctor's ok line
+  shows the names, because a set variable is not a pasted password.
+- **Doctor validates a `credentialsEnv` config eagerly** with a stub environment that sets both named variables, so structure
+  errors stay configuration errors, as in `run`. Only the real environment read is in the `credentials-env` check.
+- **The CI templates do not switch to `credentialsEnv`:** they run al-runner-v3, which needs no login. Their comments say how a
+  bcdev job would map its CI secrets to the named variables.
+- **"Missing" is worded** "not installed (absent or published but not installed)", because the read cannot tell the two
+  apart.
+- **The doctor JSON schema (`schemas/doctor-v1.schema.json`)** gains the additive `checks[].dependencies` field.
