@@ -576,6 +576,27 @@
         "Codeunit51631.Cell": { "status": "pass" },
         "Codeunit51632.Cell": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8171-namespace-subscriber",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8171",
+      "bcEvidence": "not measured on BC; alc 18.1.43.24897 compiles all apps clean and binds Codeunit::\"Shared Name\" through `using Repro.Copy;` to 51655; BC binds an event subscriber by publisher object id. Found by PR-46 (System Application module copies in their own namespace)",
+      "rerun": ["the PR-46 copies' renames (Document Sharing, Telemetry Loggers, Telemetry Custom Dimensions) could be undone once fixed"],
+      "apps": ["base", "copy", "test"],
+      "tests": {
+        "Codeunit51660.SubscriberBindsToCopy": { "status": "pass" },
+        "Codeunit51660.ControlUniqueName": { "status": "pass" },
+        "Codeunit51660.TableIsCopys": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8170-field-closure",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8170",
+      "bcEvidence": "measured indirectly on BC 28.4 W1 (bc2, PR-40, a copy with no dependency: a Field lookup by name without a TableNo filter found Base Application table 450 field 5); see /coord/handoff/PR-40/finding-field-closure.md. This entry's own app has not run on BC",
+      "rerun": ["the corpus mutants whose tests read the Field table of tables outside their own app"],
+      "tests": {
+        "Codeunit51641.RowsBelowOwnTable": { "status": "pass" }
+      }
     }
   ]
 }
