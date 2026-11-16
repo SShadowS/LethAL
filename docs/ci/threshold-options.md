@@ -20,15 +20,19 @@ until the owner rules.
    - Pros: no false red; nothing new to maintain.
    - Cons: nobody acts on survivors unless they read the report.
 2. **Absolute score on the changed lines.** Fail if killed / (killed + survived) on the changed lines is below X (for example
-   60%). Error and no-coverage are reported apart, never in the ratio.
+   60%). `timeout-killed` counts as killed. Error and no-coverage are reported apart, never in the ratio.
    - Pros: simple, familiar (Stryker's `break` threshold).
    - Cons: a change of three mutants swings the score by 33 points. Small pull requests become noisy, so the threshold needs
      a minimum count. The number also invites gaming (add asserts until green).
 3. **No new survivor on the changed lines.** Fail if any mutant on a line the pull request changed survives. An "accept"
    file lists survivors the team accepts, one per line, with a reason (an equivalent mutant, or logging only).
    - Pros: points at a concrete line; no arbitrary number; the accept list is reviewable and shrinks over time.
-   - Cons: needs the accept-list format and a stable mutant identity across runs. LethAL has one: astHash, object,
-     procedure, operator, ordinal, which equivalence marks already use (R193).
+   - Cons: needs the accept-list format and a mutant identity that holds across runs. LethAL's identity key (astHash,
+     object, procedure, operator, operator major, and an ordinal for twins) is what equivalence marks use (R193). It is NOT
+     stable under exactly this use: an edit changes the mutated code's astHash, and twins are told apart by a run-wide
+     ordinal, so an edit anywhere, or a `--lines`/`--changed-since` filter, can hand a key to another twin. Marks are
+     matched only under R443's proof rules. So an accept list needs that proof or another anchor, and an entry on an
+     edited line goes stale by design (it must be re-accepted).
 4. **Ratchet against the target branch.** Fail if the changed lines' score is lower than the same lines scored on the
    target branch.
    - Pros: never worse than before.
@@ -44,6 +48,8 @@ until the owner rules.
 - Measure, then gate: principle 4.
 - On al-runner-v3, a survivor whose site carries a v3 caveat is listed apart and never fails the pipeline.
 - Option 2 is the cheapest to build, but the most likely to be noisy on small pull requests.
+- The cost of option 3 is the accept list's anchoring (see its cons): building it means extending R443's proof rules to
+  accepted survivors, not only to equivalence marks.
 
 ## Asked
 Filed to the owner through kraken, naming this file.
