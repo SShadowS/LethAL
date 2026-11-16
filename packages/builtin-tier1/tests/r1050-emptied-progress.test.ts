@@ -151,6 +151,122 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
     expect(refused(byVar, ALNodeKind.block, "begin\n        Message", EMPTY)).toBe(true);
   });
 
+  it("P1a: refuses a helper that moves a global the member copies into its var parameter", () => {
+    // revert: drop the chain-writes-and-reads loop in the transitive step of r1050Progress
+    const src = `codeunit 50140 "Glob"
+{
+    var
+        Cursor: Integer;
+
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            Step(Pos);
+    end;
+
+    local procedure Step(var P: Integer)
+    begin
+        Advance();
+        P := Cursor;
+    end;
+
+    local procedure Advance()
+    begin
+        Cursor := Cursor + 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        Cursor := Cursor + 1", EMPTY)).toBe(true);
+  });
+
+  it("P1b: refuses a helper that takes that global as a var argument", () => {
+    // revert: drop the chain-writes-and-reads loop in the transitive step of r1050Progress
+    const src = `codeunit 50141 "Glob2"
+{
+    var
+        Cursor: Integer;
+
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            Step(Pos);
+    end;
+
+    local procedure Step(var P: Integer)
+    begin
+        Bump(Cursor);
+        P := Cursor;
+    end;
+
+    local procedure Bump(var C: Integer)
+    begin
+        C += 1;
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        C += 1", EMPTY)).toBe(true);
+  });
+
+  it("P1d: refuses a helper that steps a Record global the member copies into its var parameter", () => {
+    // revert: keep only plain-value globals (a Record global is then dropped from the names)
+    const src = `codeunit 50143 "Glob4"
+{
+    var
+        GlobalRec: Record "Some Table";
+
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            Step(Pos);
+    end;
+
+    local procedure Step(var P: Integer)
+    begin
+        Advance();
+        P := GlobalRec."No.";
+    end;
+
+    local procedure Advance()
+    begin
+        GlobalRec.Next();
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        GlobalRec.Next", EMPTY)).toBe(true);
+  });
+
+  it("P1c: gives back a helper that only calls a codeunit variable (no data global)", () => {
+    // revert: drop the dataGlobalNames filter on the chain-writes-and-reads names
+    const src = `codeunit 50142 "Glob3"
+{
+    var
+        Tools: Codeunit "Some Tools";
+
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+    begin
+        while Pos < N do
+            Step(Pos);
+    end;
+
+    local procedure Step(var P: Integer)
+    begin
+        P += 1;
+        Fmt();
+    end;
+
+    local procedure Fmt()
+    begin
+        Tools.Run();
+    end;
+}`;
+    expect(refused(src, ALNodeKind.block, "begin\n        Tools.Run", EMPTY)).toBe(false);
+  });
+
   it("B: refuses a callee reached only through another progress callee", () => {
     // revert: remove the fixpoint loop in r1050Progress
     const src = `codeunit 50104 "Transitive"
@@ -174,6 +290,43 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
     end;
 }`;
     expect(refused(src, ALNodeKind.block, "begin\n        P := P + 1", EMPTY)).toBe(true);
+  });
+
+  // R1053 (PR-48): the transitive step follows only names Q moves toward the outer exit.
+  const scratchSrc = (outerArg: string) => `codeunit 50120 "Scratch"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+        Tail: Integer;
+    begin
+        while Pos < N do begin
+            StepG(Pos, ${outerArg});
+            Tail := 0;
+        end;
+    end;
+
+    local procedure StepG(var P: Integer; var Scratch: Integer)
+    begin
+        P := P + 1;
+        FillG(Scratch);
+    end;
+
+    local procedure FillG(var S: Integer)
+    begin
+        S := 7;
+    end;
+}`;
+  const FILL_BODY = "begin\n        S := 7";
+
+  it("G: gives back a helper called with a var the loop overwrites after the call", () => {
+    // revert: seed every var parameter of Q into the transitive step (the pre-R1053 qNames)
+    expect(refused(scratchSrc("Tail"), ALNodeKind.block, FILL_BODY, EMPTY)).toBe(false);
+  });
+
+  it("H: keeps refusing a helper whose var parameter is bound to an exit-read name", () => {
+    // revert: drop the bind() of a live argument in the first hop
+    expect(refused(scratchSrc("Pos"), ALNodeKind.block, FILL_BODY, EMPTY)).toBe(true);
   });
 
   it("C: refuses a function whose result is assigned to the exit's name", () => {
