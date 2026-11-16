@@ -28,6 +28,8 @@ export interface Cell {
   readonly call: string;
   /** PR-17: whole handler procedures the cell binds (`[HandlerFunctions]`), for a call that shows UI. */
   readonly handlers?: readonly string[];
+  /** PR-52: what the answer depends on besides the call: the session's language and region, or its time zone. */
+  readonly depends?: "locale" | "tz";
 }
 
 export interface Family {
@@ -1474,6 +1476,27 @@ const EVAL_XML = new Set([
   "Guid|braced",
 ]);
 
+const withDepends = (d: Cell["depends"]) => (d !== undefined ? { depends: d } : {});
+/** Evaluate cells start with X set to this, so a failed Evaluate shows whether X was kept or reset. */
+const EVAL_SENTINEL: Readonly<Record<string, string>> = {
+  Integer: "X := 77;",
+  Decimal: "X := 7.25;",
+  Boolean: "X := true;",
+  Date: "X := DMY2Date(1, 1, 2000);",
+  Time: "X := 120000T;",
+  DateTime: "X := CreateDateTime(DMY2Date(1, 1, 2000), 120000T);",
+  Duration: "X := 5000;",
+  Guid: "Evaluate(X, '{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}');",
+  Option: "X := X::Gamma;",
+  Code: "X := 'zz';",
+};
+/** A value cell's dependence: the DateTime built with CreateDateTime reads the time zone; default formats read language and region. */
+const fmtDepends = (v: FmtValue, state: string, method: string): Cell["depends"] =>
+  v.type === "DateTime" && state === "normal"
+    ? "tz"
+    : ["Text", "Code", "Guid"].includes(v.type) || method === "Format 0,9"
+      ? undefined
+      : "locale";
 const fmtCell = (
   v: FmtValue,
   state: string,
@@ -1486,7 +1509,8 @@ const fmtCell = (
   state,
   vars: [`V: ${v.decl};`],
   setup: setup.split("\n"),
-  call: `Error('V:%1', ${expr});`,
+  call: `Error('V:[%1]', ${expr});`,
+  ...withDepends(fmtDepends(v, state, method)),
 });
 /** A text-function cell; a `vars` entry holding `:=` is a setup statement. */
 const textCell = (
@@ -1495,14 +1519,24 @@ const textCell = (
   expr: string,
   text = true,
   vars: string[] = [],
+  depends?: Cell["depends"],
 ): Cell => ({
   type,
   method,
   state: "",
   vars: vars.filter((v) => !v.includes(":=")),
   setup: vars.filter((v) => v.includes(":=")),
-  call: `Error('V:%1', ${text ? expr : `Format(${expr}, 0, 9)`});`,
+  call: `Error('V:[%1]', ${text ? expr : `Format(${expr}, 0, 9)`});`,
+  ...withDepends(depends),
 });
+/** A text-function cell whose answer reads the session's language and region. */
+const localeCell = (
+  type: string,
+  method: string,
+  expr: string,
+  text = true,
+  vars: string[] = [],
+): Cell => textCell(type, method, expr, text, vars, "locale");
 const evalCell = (
   [type, decl]: readonly [string, string],
   state: string,
@@ -1513,7 +1547,15 @@ const evalCell = (
   method: n9 ? "Evaluate 9" : "Evaluate",
   state,
   vars: [`X: ${decl};`, "Ok: Boolean;"],
-  call: `Ok := Evaluate(X, '${text}'${n9 ? ", 9" : ""}); Error('V:%1|%2', Format(Ok, 0, 9), Format(X, 0, 9));`,
+  setup: [EVAL_SENTINEL[type] ?? ""],
+  call: `Ok := Evaluate(X, '${text}'${n9 ? ", 9" : ""}); Error('V:[%1|%2]', Format(Ok, 0, 9), Format(X, 0, 9));`,
+  ...withDepends(
+    type === "DateTime" && ["iso", "date only", "date and time"].includes(state)
+      ? "tz"
+      : n9
+        ? undefined
+        : "locale",
+  ),
 });
 
 const S_ABCDEF = ["S: Text;", "S := 'abcdef';"];
@@ -1576,12 +1618,12 @@ const FORMAT_EVALUATE_CELLS: Cell[] = [
   textCell("StrSubstNo", "hash slots", "StrSubstNo('#1###', 'ab')"),
   textCell("StrSubstNo", "no slot", "StrSubstNo('plain', 'a')"),
   textCell("StrSubstNo", "slot twice", "StrSubstNo('%1-%1', 'a')"),
-  textCell("StrSubstNo", "integer arg", "StrSubstNo('%1', 12)"),
-  textCell("StrSubstNo", "boolean arg", "StrSubstNo('%1', true)"),
-  textCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1.5)"),
-  textCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))"),
-  textCell("UpperCase", "non-ASCII", "UpperCase('äöüßé')"),
-  textCell("LowerCase", "non-ASCII", "LowerCase('ÄÖÜÉ')"),
+  localeCell("StrSubstNo", "integer arg", "StrSubstNo('%1', 12)"),
+  localeCell("StrSubstNo", "boolean arg", "StrSubstNo('%1', true)"),
+  localeCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1.5)"),
+  localeCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))"),
+  localeCell("UpperCase", "non-ASCII", "UpperCase('äöüßé')"),
+  localeCell("LowerCase", "non-ASCII", "LowerCase('ÄÖÜÉ')"),
   textCell("UpperCase", "ASCII", "UpperCase('abc xyz')"),
   textCell("LowerCase", "ASCII", "LowerCase('ABC XYZ')"),
   textCell("StrPos", "found", "StrPos('abcabc', 'ca')", false),
@@ -1619,14 +1661,67 @@ const FORMAT_EVALUATE_CELLS: Cell[] = [
   textCell("PadLeft", "pad", "S.PadLeft(5, '0')", true, ["S: Text;", "S := '12';"]),
   textCell("PadRight", "pad", "S.PadRight(5, '0')", true, ["S: Text;", "S := '12';"]),
   textCell("PadLeft", "shorter", "S.PadLeft(1, '0')", true, ["S: Text;", "S := '12';"]),
-  textCell("ToUpper", "non-ASCII", "S.ToUpper()", true, ["S: Text;", "S := 'äöüß';"]),
-  textCell("ToLower", "non-ASCII", "S.ToLower()", true, ["S: Text;", "S := 'ÄÖÜ';"]),
+  localeCell("ToUpper", "non-ASCII", "S.ToUpper()", true, ["S: Text;", "S := 'äöüß';"]),
+  localeCell("ToLower", "non-ASCII", "S.ToLower()", true, ["S: Text;", "S := 'ÄÖÜ';"]),
   textCell("StartsWith", "case differs", "S.StartsWith('AB')", false, ["S: Text;", "S := 'abc';"]),
   textCell("EndsWith", "empty", "S.EndsWith('')", false, ["S: Text;", "S := 'abc';"]),
   textCell("Contains", "case differs", "S.Contains('B')", false, ["S: Text;", "S := 'abc';"]),
   textCell("Format", "text literal", "Format('abc')"),
   textCell("Format", "text literal len 2", "Format('abc', 2)"),
   textCell("Format", "text literal 0,9", "Format('a<b&c', 0, 9)"),
+  // the control for Error's own substitution: a `%1`, a `#1#` and a backslash inside the argument, passed through unchanged?
+  textCell("Error", "own substitution", "'%1#1#\\x'"),
+  // the time-zone probe: local midnight 2000-01-01 printed as UTC, so the answer IS the session's UTC offset
+  textCell(
+    "TimeZone",
+    "probe",
+    "Format(CreateDateTime(DMY2Date(1, 1, 2000), 0T), 0, 9)",
+    true,
+    [],
+    "tz",
+  ),
+];
+
+/** The same cell under Danish (GlobalLanguage 1030), set before the one call; each is its own codeunit, so nothing is restored. */
+const inLang = (c: Cell): Cell => ({
+  ...c,
+  state: `lang1030 ${c.state}`.trim(),
+  setup: ["GlobalLanguage(1030);", ...(c.setup ?? [])],
+  depends: "locale",
+});
+const fmtIn = (type: string, state: string, method: string, expr: string): Cell => {
+  const v = FMT_VALUES.find((x) => x.type === type);
+  const s = v?.states.find(([n]) => n === state);
+  if (v === undefined || s === undefined) throw new Error(`no value ${type} ${state}`);
+  return inLang(fmtCell(v, state, s[1], method, expr));
+};
+const LANG_FORMATS: readonly (readonly [string, string, string])[] = [
+  ["Boolean", "true", "6"],
+  ["Decimal", "negative", "12"],
+  ["Decimal", "large", ""],
+  ["Date", "normal", "12"],
+  ["Date", "closing date", ""],
+  ["Time", "afternoon", "10"],
+  ["DateTime", "normal", "20"],
+  ["Option", "third", "8"],
+];
+const LANG_CELLS: Cell[] = [
+  ...LANG_FORMATS.flatMap(([type, state, len]) => [
+    fmtIn(type, state, "Format", "Format(V)"),
+    ...(len !== "" ? [fmtIn(type, state, `Format len${len}`, `Format(V, ${len})`)] : []),
+  ]),
+  ...["Ja", "Nej", "Yes", "true"].map((t) => inLang(evalCell(["Boolean", "Boolean"], t, t, false))),
+  ...["1,5", "1.5"].map((t) => inLang(evalCell(["Decimal", "Decimal"], t, t, false))),
+  ...["15.03.2024", "15-03-2024", "2024-03-15"].map((t) =>
+    inLang(evalCell(["Date", "Date"], t, t, false)),
+  ),
+  inLang(textCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1234.5)")),
+  inLang(textCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))")),
+  inLang(textCell("UpperCase", "Danish letters", "UpperCase('æøåé')")),
+  inLang(textCell("LowerCase", "Danish letters", "LowerCase('ÆØÅÉ')")),
+  // the session probes: the language the set took, and the Windows language (read-only; no AL call sets a region or format)
+  inLang(textCell("GlobalLanguage", "probe", "GlobalLanguage()", false)),
+  textCell("WindowsLanguage", "probe", "WindowsLanguage()", false, [], "locale"),
 ];
 
 export const FORMAT_EVALUATE: Family = {
@@ -1635,7 +1730,7 @@ export const FORMAT_EVALUATE: Family = {
   known: [],
   support: "",
   handles: {},
-  cells: FORMAT_EVALUATE_CELLS,
+  cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS],
 };
 
 export const FAMILIES: Readonly<Record<string, Family>> = {
@@ -1876,7 +1971,8 @@ export interface BcRow {
 
 export function parseBcTsv(text: string): Map<number, BcRow> {
   const rows = new Map<number, BcRow>();
-  for (const line of text.split("\n")) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/\r$/, "");
     if (line.trim() === "") continue;
     const [id, outcome, ...rest] = line.split("\t");
     const n = Number(id);
@@ -1896,53 +1992,78 @@ export type JoinClass =
   | "different value"
   | "different error text"
   | "one errors, one returns"
-  | "bc missing"
+  | "transport-trimmed"
   | "v3 not run";
 
-/** The default-format cells: their answer depends on the session's language and region (Format with n 0, 1, 2, a picture, a length; Evaluate without 9). */
-export function localeDependent(c: Cell): boolean {
-  return /^(Format( len\d+| 0,[012]| picture)?|Evaluate)$/.test(c.method);
-}
+/** Both sides' messages go through this before they are compared: line breaks and tabs become one space. */
+export const normalizeMessage = (m: string | undefined): string =>
+  (m ?? "").replace(/\r\n|[\r\n\t]/g, " ");
+
+/** A cell's value ends in `]`; a message that starts `V:` but does not end that way lost its tail on the way. */
+const intactValue = (m: string) => /^V:\[[\s\S]*\]$/.test(m);
 
 export interface JoinRow {
   readonly id: number;
   readonly cell: Cell;
   readonly cls: JoinClass;
-  /** A differing cell whose method is locale-dependent: a locale difference may explain it. */
-  readonly locale: boolean;
+  /** A differing cell that depends on locale or time zone: that difference may explain it. */
+  readonly depends: Cell["depends"];
   readonly v3: string;
   readonly bc: string;
 }
 
+/** The raw answer, with every escape visible (JSON), never collapsed whitespace. */
 const say = (outcome: string, message: string | undefined) =>
-  outcome === "pass" ? "pass" : `${outcome}: ${(message ?? "").replace(/\s+/g, " ")}`;
+  outcome === "pass" ? "pass" : `${outcome}: ${JSON.stringify(message ?? "")}`;
 
-/** Join v3's results (`--json`, cell i is codeunit BASE_ID+1+i) with BC's rows, per cell. */
+/** The report's cells must be the family's cells, in order. */
+export function checkReportCells(results: readonly CellResult[]): void {
+  if (results.length !== FORMAT_EVALUATE.cells.length)
+    throw new Error(
+      `the report has ${results.length} cells, the family ${FORMAT_EVALUATE.cells.length}`,
+    );
+  for (const [i, r] of results.entries()) {
+    const c = FORMAT_EVALUATE.cells[i];
+    if (c?.type !== r.cell.type || c.method !== r.cell.method || c.state !== r.cell.state)
+      throw new Error(`cell ${i} of the report is not the family's cell ${i}`);
+  }
+}
+
+/**
+ * Join v3's results (`--json`, cell i is codeunit BASE_ID+1+i) with BC's rows, per cell. A BC id outside the family's range
+ * or a cell with no BC row is refused, never skipped.
+ */
 export function joinCells(
   results: readonly CellResult[],
   bc: ReadonlyMap<number, BcRow>,
 ): JoinRow[] {
+  for (const id of bc.keys())
+    if (id <= BASE_ID || id > BASE_ID + results.length)
+      throw new Error(
+        `refusal-family: BC id ${id} is outside the family's ${BASE_ID + 1}..${BASE_ID + results.length}`,
+      );
   return results.map((r, i) => {
     const id = BASE_ID + 1 + i;
     const b = bc.get(id);
+    if (b === undefined) throw new Error(`refusal-family: no BC row for cell ${id}`);
     const v3 = say(r.outcome, r.message);
-    const bcText = b === undefined ? "missing" : say(b.outcome, b.message);
     const row = (cls: JoinClass): JoinRow => ({
       id,
       cell: r.cell,
       cls,
-      locale: cls !== "equal" && localeDependent(r.cell),
+      depends: cls !== "equal" ? r.cell.depends : undefined,
       v3,
-      bc: bcText,
+      bc: say(b.outcome, b.message),
     });
-    if (b === undefined) return row("bc missing");
     if (r.outcome === "refused") return row("v3 refused");
     if (r.outcome !== "pass" && r.outcome !== "fail") return row("v3 not run");
-    if (r.outcome === b.outcome && (r.message ?? "") === b.message) return row("equal");
-    const returned = (o: string, m: string | undefined) =>
-      o === "fail" && (m ?? "").startsWith("V:");
-    const rv = returned(r.outcome, r.message);
-    const bv = returned(b.outcome, b.message);
+    const [rm, bm] = [normalizeMessage(r.message), normalizeMessage(b.message)];
+    if (r.outcome === b.outcome && rm === bm) return row("equal");
+    const starts = (o: string, m: string) => o === "fail" && m.startsWith("V:");
+    if ((starts(r.outcome, rm) && !intactValue(rm)) || (starts(b.outcome, bm) && !intactValue(bm)))
+      return row("transport-trimmed");
+    const rv = starts(r.outcome, rm);
+    const bv = starts(b.outcome, bm);
     if (rv && bv) return row("different value");
     if (rv !== bv) return row("one errors, one returns");
     return row("different error text");
@@ -1956,7 +2077,7 @@ export function joinTsv(rows: readonly JoinRow[]): string {
         r.id,
         `${r.cell.type} ${r.cell.method} ${r.cell.state}`.trim(),
         r.cls,
-        r.locale ? "locale?" : "",
+        r.depends !== undefined ? `${r.depends}?` : "",
         r.v3,
         r.bc,
       ].join("\t"),
@@ -1967,7 +2088,7 @@ export function joinTsv(rows: readonly JoinRow[]): string {
 export function joinCounts(rows: readonly JoinRow[]): Record<string, number> {
   const n: Record<string, number> = {};
   for (const r of rows) {
-    const k = r.locale ? `${r.cls} (locale?)` : r.cls;
+    const k = r.depends !== undefined ? `${r.cls} (${r.depends}?)` : r.cls;
     n[k] = (n[k] ?? 0) + 1;
   }
   return n;
@@ -1988,15 +2109,7 @@ if (import.meta.main) {
         "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]",
       );
     const results = JSON.parse(await Bun.file(reportPath).text()) as CellResult[];
-    if (results.length !== FORMAT_EVALUATE.cells.length)
-      throw new Error(
-        `the report has ${results.length} cells, the family ${FORMAT_EVALUATE.cells.length}`,
-      );
-    for (const [i, r] of results.entries()) {
-      const c = FORMAT_EVALUATE.cells[i];
-      if (c?.type !== r.cell.type || c.method !== r.cell.method || c.state !== r.cell.state)
-        throw new Error(`cell ${i} of the report is not the family's cell ${i}`);
-    }
+    checkReportCells(results);
     const rows = joinCells(results, parseBcTsv(await Bun.file(bcPath).text()));
     const out = opt("--out");
     if (out !== undefined) writeFileSync(out, joinTsv(rows));
