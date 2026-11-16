@@ -17,6 +17,7 @@ type Row = {
   verdict: string;
   reproduced?: boolean;
   cause?: string;
+  stopEvidence?: string;
   rows: number;
   /** The `op_kind` of each killer row, in order; all `many` when absent. */
   kinds?: readonly ("many" | "single")[];
@@ -35,7 +36,7 @@ function recordRun(store: ResultsStore, rows: readonly Row[]): number {
   });
   const ref = { codeunitId: 1, codeunitName: "Tests", method: "T1" };
   for (const r of rows) {
-    const kill = r.verdict === "killed";
+    const kill = r.verdict === "killed" || r.verdict === "timeout-killed";
     const id = store.recordMutant(runId, {
       mutantCode: r.code,
       astHash: `h-${r.code}`,
@@ -67,6 +68,7 @@ function reportOf(rows: readonly Row[]): SessionReport {
       verdict: r.verdict,
       ...(r.reproduced === true ? { killReproduced: true } : {}),
       ...(r.cause !== undefined ? { cause: r.cause } : {}),
+      ...(r.stopEvidence !== undefined ? { stopEvidence: r.stopEvidence } : {}),
     })),
   } as unknown as SessionReport;
 }
@@ -97,6 +99,27 @@ describe("R577: the gate's kill-reproduction check", () => {
     const f = killReproductionFailures("leg", report, store, runId, {}, TABLE);
     expect(f).toHaveLength(1);
     expect(f[0]).toContain("0/M0001 is killed without killReproduced");
+  });
+
+  // PR-43: the blank leg has no killer-row figure, so only the marker check is in play.
+  test("PR-43: a timeout-killed v3-cpu-stop kill needs no killReproduced; a timeout kill with neither marker fails", () => {
+    const cpu = fixture([
+      { code: "M0001", verdict: "timeout-killed", stopEvidence: "v3-cpu-stop", rows: 1 },
+    ]);
+    expect(killReproductionFailures("blank", cpu.report, cpu.store, cpu.runId, {}, TABLE)).toEqual(
+      [],
+    );
+    const bare = fixture([{ code: "M0001", verdict: "timeout-killed", rows: 1 }]);
+    const f = killReproductionFailures("blank", bare.report, bare.store, bare.runId, {}, TABLE);
+    expect(f).toHaveLength(1);
+    expect(f[0]).toContain("0/M0001 is timeout-killed without killReproduced");
+    // The exemption is for the timeout verdict only: a `killed` with that evidence still fails.
+    const killed = fixture([
+      { code: "M0001", verdict: "killed", stopEvidence: "v3-cpu-stop", rows: 1 },
+    ]);
+    expect(
+      killReproductionFailures("blank", killed.report, killed.store, killed.runId, {}, TABLE),
+    ).toHaveLength(1);
   });
 
   test("a kill-not-reproduced mutant fails by name", () => {

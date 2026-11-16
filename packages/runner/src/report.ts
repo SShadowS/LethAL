@@ -2138,6 +2138,8 @@ export interface MutantOutcome {
    * `stop-answer-400`). A kill that ran twice (kill, then reproduction) shows the weaker of the
    * two. Absent on every other verdict, and on a `timeout-killed` carried from a store written
    * before the field: absent means unknown there, never `bc-named-stop`.
+   * PR-43: `v3-cpu-stop` marks an al-runner v3 timeout kill with a provable CPU-time stop and a
+   * quick passing unmutated confirm, deliberately NOT reproduced; count them by this field.
    */
   readonly stopEvidence?: StopEvidence;
   /**
@@ -2147,7 +2149,8 @@ export interface MutantOutcome {
    * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
    * carried no message still says so. Set only on a backend with the rule on
    * (`ExecutionBackend.killsMustReproduce`: al-runner, al-runner-v3 and bcdev); absent elsewhere and on a kill
-   * recorded before the rule existed.
+   * recorded before the rule existed. PR-43: also absent, by design, on a `timeout-killed` with
+   * `stopEvidence` `v3-cpu-stop`, which was deliberately not reproduced.
    */
   readonly killReproduced?: true;
   /**

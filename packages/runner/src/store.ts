@@ -142,7 +142,8 @@ export interface MutantRow {
    *  verdict and on a row recorded before the column existed: never read as `bc-named-stop`. */
   readonly stopEvidence?: StopEvidence;
   /** R577 — see `MutantOutcome.killReproduced` (report.ts). Absent on every non-kill, on a kill
-   *  scored with the rule off, and on a row recorded before the column existed. */
+   *  scored with the rule off, on a row recorded before the column existed, and (PR-43) on a
+   *  `timeout-killed` with `stopEvidence` `v3-cpu-stop`, which was deliberately not reproduced. */
   readonly killReproduced?: true;
   /** R577 — see `MutantOutcome.reproducedFailure` (report.ts). */
   readonly reproducedFailure?: string;
@@ -1519,11 +1520,12 @@ export class ResultsStore {
     value: string,
     row: { astHash: string; codeunitName: string; operatorName: string; operatorMajor: number },
   ): StopEvidence {
-    if (value === "bc-named-stop" || value === "begin-transaction-world") return value;
+    if (value === "bc-named-stop" || value === "begin-transaction-world" || value === "v3-cpu-stop")
+      return value;
     throw new Error(
       `store.ts: mutant row (astHash=${row.astHash}, codeunitName=${row.codeunitName}, ` +
         `operatorName=${row.operatorName}, operatorMajor=${row.operatorMajor}) has a corrupt ` +
-        `"stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", or NULL`,
+        `"stop_evidence" column value ${JSON.stringify(value)} — expected "bc-named-stop", "begin-transaction-world", "v3-cpu-stop", or NULL`,
     );
   }
 

@@ -2294,6 +2294,38 @@ describe("§5 the row decoder", () => {
     );
     expect([ref1.outcome, ref1.runnerRow]).toEqual(["error", "runner-refused"]);
   });
+  // PR-43: cpuStop only for clock "cpu" AND durationMs below 10 x the stop (3 s -> 30000 ms).
+  const stopRow = (o: Partial<Parameters<typeof v3RowVerdict>[1]>) =>
+    v3RowVerdict(
+      r,
+      row({ status: "error", notRun: true, message: "Test exceeded 3s timeout.", ...o }),
+      3,
+      10,
+      undefined,
+    );
+  test("PR-43: a timeout row is a cpuStop only with clock cpu and durationMs below 10 x the stop", () => {
+    expect(stopRow({ clock: "cpu", durationMs: 3100 }).cpuStop).toBe(true);
+    expect(stopRow({ clock: "cpu", durationMs: 29999 }).cpuStop).toBe(true);
+    // each condition alone
+    expect(stopRow({ durationMs: 3100 }).cpuStop).toBeUndefined();
+    expect(stopRow({ clock: "virtual", durationMs: 3100 }).cpuStop).toBeUndefined();
+    expect(stopRow({ clock: "cpu" }).cpuStop).toBeUndefined();
+    expect(stopRow({ clock: "cpu", durationMs: 30000 }).cpuStop).toBeUndefined();
+    expect(stopRow({ clock: "cpu", durationMs: 31000 }).cpuStop).toBeUndefined();
+  });
+  test("PR-43: a clock that is not a string is a contract error in both decoders", () => {
+    const line = { name: `Codeunit${CU}.A`, status: "pass", clock: 5 };
+    expect(typeof serveRow(line)).toBe("string");
+    const doc = (clock: unknown) =>
+      JSON.stringify({
+        tests: [{ codeunit: CU, method: "A", name: `Codeunit${CU}.A`, status: "pass", clock }],
+      });
+    expect("why" in decodeV3Rows(doc(5), CU)).toBe(true);
+    const ok = decodeV3Rows(doc("cpu"), CU);
+    expect("rows" in ok && ok.rows[0]?.clock).toBe("cpu");
+    const served = serveRow({ ...line, clock: "cpu" });
+    expect(typeof served === "string" ? served : served.clock).toBe("cpu");
+  });
   test("without notRun: fail is a kill, pass a pass, error an unclassified non-verdict", () => {
     expect(
       v3RowVerdict(r, row({ status: "fail", message: "boom" }), 3, 10, undefined).outcome,
