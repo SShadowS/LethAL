@@ -59,3 +59,19 @@ texts share 60 leading characters get two files; with the index removed, that te
 ## Predictions
 - P1: no existing test's expectation moves, except the exit-code tables and the export help text.
 - P2: the v3 gate is untouched by these paths and passes on the final head.
+
+## Addendum 1 (2026-11-16, after the Opus build review)
+
+These changes were made after review and before any live step. The text above is left as it was committed.
+- **Exit 8 is narrower than written above (review M1).** Lines whose sites LethAL REFUSED are not "nothing to mutate":
+  hang-capable sites, a file that cannot carry the selector, or a file left out for an undecided `#if`. Those lines give a plain
+  error, exit 1, which names what was refused. Otherwise CI would pass code nobody measured.
+- **`--dry-run` exits 8 too (review L1).** The premise above, "it refuses nothing", was wrong: a dry run builds the same
+  mutation set with the lines.
+- **With `--operator` or `--exclude-operator`, an earlier check can still exit 1** on a pull request with no site (review L2).
+  This is documented, not moved.
+- **Azure (review H1, H2).** The task is `PublishMutationReport@2`, not `@1`: the task's own task.json on its repository's master
+  says Major 2. It runs only when the HTML page was written, because on exit 8 there is no report and the task would fail with
+  "No reports found".
+- **The `--json` part of the stderr/envelope claim:** `lethal run` does not take `--json`. The envelope code
+  `NO_MUTABLE_LINES` is set on the error and tested through `cliError`, for any caller that renders an envelope.

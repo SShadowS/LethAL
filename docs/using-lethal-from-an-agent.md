@@ -321,7 +321,7 @@ The `instead` column is guidance.
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
 | `7` | **Time budget reached.** `--time-budget` ran out; the report is partial, so run with `--resume` to continue. |
-| `8` | **No mutable lines.** `--lines` or `--changed-since` kept no mutation site; nothing ran and no report is written. A CI can treat it as a pass. |
+| `8` | **No mutable lines.** `--lines` or `--changed-since` kept no mutation site; nothing ran and no report is written (`--dry-run` exits `8` too). A CI can treat it as a pass. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit `1`, not `8`. With `--operator` or `--exclude-operator` an earlier check can exit `1` first. |
 
 `4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
 scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the

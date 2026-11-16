@@ -7,8 +7,8 @@
  * tab (`PublishTestResults@2`) takes JUnit/NUnit/VSTest/xUnit, and a mutant CAN be forced into a
  * `<testcase>` with killed=pass and survived=failure, but the semantics fight it: a survivor is a
  * FINDING, not a broken build, and the Tests tab adds flakiness tracking, ownership and duration
- * history that mean nothing for a mutant. The Stryker team's `PublishMutationReport@1` extension
- * adds a report TAB instead, and it is framework-agnostic: it renders whatever HTML you point it at,
+ * history that mean nothing for a mutant. The Stryker team's `PublishMutationReport@2` extension
+ * adds a report TAB instead and publishes an HTML report (how it renders one is not measured),
  * and `mutation-testing-elements` renders that HTML from this JSON. Same file also feeds the Stryker
  * dashboard and the GitLab/GitHub renderers.
  *

@@ -1071,7 +1071,10 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              line of each untracked .al file git does not ignore. Unions with
                              --lines. Pure deletions add no line. '--changed-since HEAD' selects
                              only uncommitted edits. Needs git and a history that shares a commit
-                             with <ref>
+                             with <ref>. A filter that keeps no site exits ${NO_MUTABLE_LINES_EXIT_CODE}
+                             (also with --dry-run); lines whose sites were refused (hang-capable,
+                             undecided #if) exit 1. With --operator/--exclude-operator, an earlier
+                             check can exit 1 first
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'

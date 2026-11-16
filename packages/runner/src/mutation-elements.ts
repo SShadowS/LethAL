@@ -15,8 +15,8 @@ import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
  * killed=pass and survived=failure, but the semantics fight it: a survivor is a FINDING, not a
  * broken build; the tab adds flakiness tracking, ownership and duration history that mean nothing
  * for a mutant; and mutation scores move for honest reasons, so it would redden builds when the code
- * improved. `PublishMutationReport@1` adds a report TAB instead and renders whatever HTML it is
- * given, and `mutation-testing-elements` renders that HTML from this JSON. The same file feeds the
+ * improved. `PublishMutationReport@2` adds a report TAB instead and publishes an HTML report (how
+ * it renders one is not measured), and `mutation-testing-elements` renders that HTML from this JSON. The same file feeds the
  * Stryker dashboard and the GitLab/GitHub renderers, so one projection buys every ecosystem.
  *
  * **THE PROJECTION IS LOSSY, and that is the whole design problem.** The schema carries one `status`

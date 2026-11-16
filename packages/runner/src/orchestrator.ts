@@ -1505,6 +1505,23 @@ export async function generateMutationSet(
   // run would otherwise publish and baseline to report a null score for lines that hold no mutant.
   if (lineRanges !== undefined) {
     if (files.length === 0) {
+      // Exit 8 says "nothing to mutate", which CI reads as a pass. It must not cover lines whose
+      // sites LethAL refused: `hangRefused` and `skipped` are already cut to the given lines; an
+      // undecided `#if` file is cut to the files the ranges name.
+      const refusedOnLines: string[] = [];
+      const hangSites = hangRefused.reduce((n, h) => n + h.sites, 0);
+      if (hangSites > 0) refusedOnLines.push(`${hangSites} hang-capable site(s) refused`);
+      for (const s of skipped) refusedOnLines.push(`${s.file} cannot carry the selector`);
+      for (const f of preprocExcluded) {
+        if (f.reason === "preproc-undecided" && spanTouches(lineRanges, f.file, 1, 1e9)) {
+          refusedOnLines.push(`${f.file} left out for an undecided #if`);
+        }
+      }
+      if (refusedOnLines.length > 0) {
+        throw new Error(
+          `the line filter (${lineRanges.length} range(s)) kept no deployable mutation site, but LethAL refused code on those lines: ${refusedOnLines.join("; ")}. These lines were NOT measured, so this is not "nothing to mutate".`,
+        );
+      }
       // R1079: exit 8 and its own envelope code, so CI can read "nothing to mutate" as a pass.
       throw classify(
         new NoMutableLinesError(

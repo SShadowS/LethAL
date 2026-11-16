@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCliConfig } from "../packages/runner/src/cli";
 
 // PR-70: the CI templates under docs/ci are examples, but every `lethal` command in them must parse with the CLI's own
 // argument table, so a renamed or removed flag fails here, not in a user's pipeline.
-const DIR = join(import.meta.dir, "../docs/ci");
+const DIR = process.env.LETHAL_CI_TEMPLATES_DIR ?? join(import.meta.dir, "../docs/ci");
 const TEMPLATES = ["github-actions.yml", "azure-pipelines.yml"];
 
 /**
@@ -32,6 +33,48 @@ function lethalCommands(text: string): string[][] {
     );
   }
   return out;
+}
+
+/** The block scalar (`run: |` or `- bash: |`) that holds the `lethal run` command, dedented. */
+function runBlock(text: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.includes("lethal run --project"));
+  let head = at;
+  while (head >= 0 && !/\|\s*$/.test(lines[head] ?? "")) head--;
+  if (at < 0 || head < 0) throw new Error("no block holds the lethal run command");
+  const indent = (s: string) => s.length - s.trimStart().length;
+  const bodyIndent = indent(lines[head + 1] ?? "");
+  const body: string[] = [];
+  for (const l of lines.slice(head + 1)) {
+    if (l.trim() !== "" && indent(l) < bodyIndent) break;
+    body.push(l.slice(bodyIndent));
+  }
+  return body.join("\n");
+}
+
+/** Runs the template's run block with a stub `lethal` that exits `n`; returns the block's own exit code. */
+function exitOfRunBlock(block: string, n: number): number {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-ci-stub-"));
+  try {
+    const stub = join(dir, "lethal");
+    writeFileSync(stub, '#!/bin/sh\nexit "$LETHAL_STUB_EXIT"\n');
+    chmodSync(stub, 0o755);
+    const r = Bun.spawnSync(["bash", "-c", block], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH ?? ""}`,
+        LETHAL_STUB_EXIT: String(n),
+        TARGET: "main", // Azure
+        BASE: "main", // GitHub
+      },
+    });
+    return r.exitCode;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** The labels of the `case "$rc"` block's branches, e.g. ["0", "3", "4", "7", "*"]. */
@@ -74,6 +117,17 @@ describe("PR-70: the CI templates' lethal commands", () => {
         expect(arg(exp, "--format")).toStartWith("mutation-elements");
       }
     });
+
+    // The stub needs `sh` and an executable named `lethal`: not on Windows.
+    test.skipIf(process.platform === "win32")(
+      `${t}: the run block passes for exit 0 and 8 only (stub lethal, exits 0..9)`,
+      () => {
+        const block = runBlock(text);
+        for (let n = 0; n <= 9; n++) {
+          expect(exitOfRunBlock(block, n) === 0, `lethal exit ${n}`).toBe(n === 0 || n === 8);
+        }
+      },
+    );
 
     test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, 8, else); only 0 and 8 pass`, () => {
       expect(caseLabels(text)).toEqual(["0", "8", "3", "4", "7", "*"]);

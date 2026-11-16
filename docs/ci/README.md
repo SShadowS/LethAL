@@ -21,7 +21,7 @@ pipeline.
    | `3` | Quarantined: the run refused to vouch for its verdicts. | fail |
    | `4` | Nothing scored: every mutant errored. | fail |
    | `7` | Time budget or a signal: the report is partial (`--resume` continues it). | fail |
-   | `8` | No mutable lines: the line filter kept no mutation site (a pull request with no `.al` change, a comment-only edit). Nothing ran and no report is written. | pass |
+   | `8` | No mutable lines: the line filter kept no mutation site (a pull request with no `.al` change, a comment-only edit). Nothing ran and no report is written. `--dry-run` exits 8 too. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit 1, not 8. With `--operator` or `--exclude-operator`, an earlier check can exit 1 first, so a pull request with no site fails there. | pass |
 
    LethAL does not fail a run because mutants survived. There is no score threshold: see
    [`threshold-options.md`](threshold-options.md).
@@ -30,7 +30,7 @@ pipeline.
    - `--format mutation-elements-html` writes one HTML page that holds that JSON and loads the Stryker elements bundle from
      jsDelivr (pinned version, integrity-checked). Opening it needs network access; LethAL writes no bundle.
 
-   The GitHub template uploads both as an artifact. The Azure template shows the HTML with `PublishMutationReport@1`. Whether
+   The GitHub template uploads both as an artifact. The Azure template shows the HTML with `PublishMutationReport@2` (only when the export step wrote the page, so exit 8 does not fail it). Whether
    Azure DevOps' report tab loads a script from a CDN is not measured; check it in your organisation.
 
 ## Before you copy them

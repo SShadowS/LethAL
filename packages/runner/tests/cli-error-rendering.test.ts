@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeScratchDir } from "./helpers/scratch";
 
 /**
  * How a REFUSAL reaches a user.
@@ -26,14 +29,17 @@ const SPAWN_TEST_TIMEOUT_MS = 60_000;
 async function runCli(
   args: readonly string[],
   env: Record<string, string> = {},
-): Promise<{ code: number; stderr: string }> {
+): Promise<{ code: number; stderr: string; stdout: string }> {
   const proc = Bun.spawn(["bun", CLI, ...args], {
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, ...env },
   });
-  const stderr = await new Response(proc.stderr).text();
-  return { code: await proc.exited, stderr };
+  const [stderr, stdout] = await Promise.all([
+    new Response(proc.stderr).text(),
+    new Response(proc.stdout).text(),
+  ]);
+  return { code: await proc.exited, stderr, stdout };
 }
 
 describe("how the CLI renders a refusal", () => {
@@ -78,6 +84,49 @@ describe("how the CLI renders a refusal", () => {
       });
       expect(code).toBe(1);
       expect(stderr).toMatch(/^\s+at /m);
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a line filter that keeps no site exits 8 through the real CLI",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "lethal-exit8-"));
+      try {
+        await Bun.write(
+          join(root, "app", "app.json"),
+          JSON.stringify({
+            id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1028",
+            name: "Exit8",
+            publisher: "LethAL",
+            version: "1.0.0.0",
+            idRanges: [{ from: 79000, to: 79199 }],
+          }),
+        );
+        await Bun.write(
+          join(root, "app", "Logic.Codeunit.al"),
+          'codeunit 79000 "Logic"\n{\n    procedure IsOver(A: Decimal; B: Decimal): Boolean\n    begin\n        exit(A > B);\n    end;\n}\n',
+        );
+        await Bun.write(join(root, "tests", "T.Codeunit.al"), 'codeunit 79100 "T"\n{\n}\n');
+        const args = [
+          "run",
+          "--dry-run",
+          "--project",
+          join(root, "app"),
+          "--tests",
+          join(root, "tests"),
+          "--backend",
+          "bcdev",
+          "--lines",
+          ["Logic.Codeunit.al", "1"].join(":"), // not written as a citation: line-citations.test.ts
+        ];
+        const plain = await runCli(args);
+        expect(plain.code).toBe(8);
+        expect(plain.stderr).toContain("kept no deployable mutation site");
+        // `run` refuses --json, so the envelope code is covered by line-filter.test.ts (cliError).
+      } finally {
+        removeScratchDir(root);
+      }
     },
     SPAWN_TEST_TIMEOUT_MS,
   );
