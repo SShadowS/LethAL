@@ -590,8 +590,8 @@ that ordering is the priority.
 - **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (cc9d602e)
 - **R1084** · CI threshold, first step (owner ruling: option 3, advisory first): survivors on the changed lines are listed, and --fail-on-survivors exits 9; v3-caveated survivors never fail · [R1084.md](docs/roadmap/R1084.md) · done (77b657a5)
 - **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
-- **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (PENDING)
-- **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (PENDING)
+- **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (e7244b10)
+- **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
 
 ## Backends and tooling
 
