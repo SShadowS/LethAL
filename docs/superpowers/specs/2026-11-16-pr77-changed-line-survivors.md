@@ -67,3 +67,29 @@ pilot's numbers.
 - P2: the v3 gate passes on the final head. The console section prints only on line-narrowed runs, and the gate's legs are
   not line-narrowed, except any leg the gate narrows by `--lines`. If such a leg exists, its console gains the section and
   its verdicts do not move.
+
+## Addendum 1 (2026-11-16, after the Opus build review; orchestrator's decision)
+
+The text above is left as it was committed. These changes were made after review and before any merge.
+
+**Reason (b) is dropped. This NARROWS the owner's "al-runner-v3 caveat" to POSITIVE signals only.** A survivor is listed apart
+only for (a) a flagged baseline, (c) coverage off, or (d) the restrictive-default at-risk list. "Flag unknown"
+(`baselineFlaggedUnknown`) and "flag not recorded" are treated alike: both count. Why:
+- **The review's M3:** on the serve-entries transport, al-runner's default where proven, every baseline pass is
+  `baselineFlaggedUnknown`, because serve rows carry no flag (R949, upstream #7954). With (b), almost every covered survivor
+  went apart, so the counted list read about 0. The owner's ruling waits for the DO pilot's counted numbers, and those would
+  have said nothing.
+- **The review's H1:** a resumed run that reuses its baseline records no flag at all (absent means "says nothing"). With (b),
+  "unknown" went apart while "not recorded" counted, so the same scope flipped. A fresh run gave about 0 counted; the same run
+  resumed after exit 7 counted every survivor and exited 9.
+
+Treating "unknown" and "not recorded" alike removes the flip. The cost: a survivor whose covering test WOULD have been flagged
+counts, if serve reported flags. The flag stays opt-in and the default advisory. **The section prints one line** naming how
+many survivors' covering tests ran with unknown al-runner flags (#7954), so a reader sees how far the counted list rests on
+that. The owner can object to this narrowing here.
+
+**Also changed:**
+- `known-survivor` rows (`--skip-known-survivors`) are survivors too, as in `SURVIVING_VERDICTS` (review M1).
+- Carried `survived` rows are listed and counted (review M2). The sentence above that leaves out "carried verdicts" was wrong:
+  a resume after exit 7 must not drop the survivors measured before the stop.
+- When exit 3 or 7 wins, the section is marked partial (review L1).
