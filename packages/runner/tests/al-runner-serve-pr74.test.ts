@@ -25,7 +25,8 @@ describe("PR-74 keep entries", () => {
       for (const t of c.texts) {
         expect([t, keeps(P + t)]).toEqual([t, true]);
         const by = names.filter((n) => V3_SERVE_SAFE_REFUSALS[n]?.test(P + t));
-        expect([t, by]).toEqual([t, [c.entry]]);
+        expect(c.entry).not.toBeNull();
+        expect([t, by]).toEqual([t, c.entry === null ? [] : [c.entry]]);
       }
   });
 
