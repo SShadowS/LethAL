@@ -22,10 +22,9 @@
     ]
   },
   {
-    "cls": "a parameters string without the XML declaration ..., given to Report.*",
+    "cls": "a parameters string without the XML declaration ..., given to Report.SaveAs",
     "entry": "report-parameters-no-xml-declaration",
     "texts": [
-      "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
       "a parameters string without the XML declaration in this form, given to Report.SaveAs (which character BC's filter error names is not pinned)"
     ]
   },

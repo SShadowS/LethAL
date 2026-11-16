@@ -25,8 +25,7 @@ describe("PR-74 keep entries", () => {
       for (const t of c.texts) {
         expect([t, keeps(P + t)]).toEqual([t, true]);
         const by = names.filter((n) => V3_SERVE_SAFE_REFUSALS[n]?.test(P + t));
-        expect(c.entry).not.toBeNull();
-        expect([t, by]).toEqual([t, c.entry === null ? [] : [c.entry]]);
+        expect([t, by]).toEqual([t, [c.entry ?? "(no entry)"]]);
       }
   });
 
@@ -48,7 +47,8 @@ describe("PR-74 keep entries", () => {
         false,
       ]);
     expect(k("Evaluate of `>100` into Integer (form not pinned by the corpus)")).toBe(false);
-    for (const r of ["Run", "RunModal", "Print", "Execute", "SaveAsPdf"])
+    // review H1: RunRequestPage was measured only after a Commit(), so it closes
+    for (const r of ["RunRequestPage", "Run", "RunModal", "Print", "Execute", "SaveAsPdf"])
       expect([
         r,
         k(
@@ -76,9 +76,10 @@ describe("PR-74 keep entries", () => {
   test("the JSON writer entries: t9's paths are kept; other states, methods and exceptions close", () => {
     const start = (path: string) =>
       `${P}DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path '${path}'.; the text AL would see is not pinned (ADR-014 section 7)`;
-    for (const p of ["a", "message", "message.ccRecipients[0]", ""])
+    for (const p of ["a", "message", "message.ccRecipients[0]", "message.toRecipients[0]"])
       expect([p, keeps(start(p))]).toEqual([p, true]);
-    for (const p of ["a'b", "a b", "a\nb", "x".repeat(61)])
+    // review M2: only those paths; the empty path and any other close
+    for (const p of ["", "b", "message.ccRecipients[1]", "messages", "a'b", "a\nb"])
       expect([p, keeps(start(p))]).toEqual([p, false]);
     // WritePropertyName was produced but not driven by the census: not kept
     expect(

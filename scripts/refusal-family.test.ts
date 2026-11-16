@@ -929,7 +929,8 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
 
 describe("PR-74: the t9-refusals family", () => {
   const f = T9_REFUSALS;
-  // the texts al-runner `current` gave for each cell, measured by running the family; the cell order is the codeunit order
+  // each cell's text as al-runner `current` gave it, some as a leading part only; the cell order is the codeunit
+  // order. The full measured texts are pinned by packages/runner/tests/pr74-measured-refusals.json.
   const TEXTS = [
     "SetFilter: value expected after ..",
     "SetFilter: value expected after @",

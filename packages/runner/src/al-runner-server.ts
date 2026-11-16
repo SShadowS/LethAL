@@ -762,9 +762,12 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-74: the measured variants only, each by name.
   SETOP: String.raw`(?:\.\.|@)`,
   CMP: "(?:>100|>1000|<1000)",
-  REPORTM: "(?:RunRequestPage|SaveAs)",
-  // PR-74: a JSON path as Newtonsoft prints it (measured `a`; t9 met `message` and `message.ccRecipients[0]`).
-  JSONPATH: String.raw`[A-Za-z0-9_.\[\]]{0,60}`,
+  // PR-74 review H1: SaveAs only. RunRequestPage was measured after a Commit(), never inside an open write
+  // transaction, which is where t9's mutants reach it.
+  REPORTM: "SaveAs",
+  // PR-74 review M2: the measured path `a`, plus t9's three paths by name (the path is the writer's own
+  // nesting, not engine state; a widening by name, not a measurement).
+  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\])`,
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1030,7 +1033,7 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   [
     "dotnet-json-writer-start-object-in-object",
     "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path '%JSONPATH%'.; the text AL would see is not pinned (ADR-014 section 7)",
-  ], // PR-54 class "DotNet * raised the .NET exception *"; WritePropertyName was not driven, so it is not kept
+  ], // PR-54 class "DotNet * raised the .NET exception *"; WritePropertyName and WriteEndArray were not driven, so they are not kept
   ["boolean-false-to-biginteger", "conversion of Boolean false to BigInteger"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
