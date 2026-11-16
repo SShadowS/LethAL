@@ -66,9 +66,10 @@ the families' cells on BC:
 ## Coverage (PR-57)
 
 `u8181-tablemetadata-relation` (179 tests in all): a field whose `TableRelation` targets `Table Metadata` is refused when validated
-("relation target `Table Metadata.ID` is not declared in the workspace"); a direct read of `Table Metadata` runs. It is the refusal
-that stops every Base Application test on al-runner v3 today (System Initialization Impl.InitCompany at company open), so when it
-flips, PR-57's step 2 (a BaseApp baseline) can run. BC's results are inferred, not measured on a server.
+("relation target `Table Metadata.ID` is not declared in the workspace"); a direct read of `Table Metadata` runs. Without demo data
+it stops every Base Application test on al-runner v3 (System Initialization Impl.InitCompany at company open); with the CRONUS demo
+data loaded, PR-57's one Fixed Asset test ran and passed, so how many BaseApp tests it still stops is for PR-57's step 2 (a BaseApp
+baseline) to measure. BC's results are inferred, not measured on a server.
 
 ## Coverage (R-997)
 
