@@ -6883,6 +6883,8 @@ describe("R895: stop a request at its first timeout row", () => {
         expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
         const atA = r.b.cutState("M0001");
         expect((await r.b.run(B, OPTS)).outcome).toBe("timeout");
+        // the alone run of B really recorded a second cut, so the restore below has something to undo
+        expect((r.b.cutState("M0001") as Set<string>).size).toBe((atA as Set<string>).size + 1);
         r.b.restoreCutState("M0001", atA);
         await r.b.activate("M0001");
         const n0 = r.serve.requests.length;

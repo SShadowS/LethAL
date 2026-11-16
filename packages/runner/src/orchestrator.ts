@@ -13037,7 +13037,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         heldNote = `the timeout of ${heldName} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`;
         break;
       }
-      if (wasFirst && args.safety.isUnsafe && verdict === "survived") {
+      if (args.safety.isUnsafe && verdict === "survived") {
         // Nothing was scored on a latched session: the held timeout's confirm would have thrown here.
         args.safety.assertSafe(`confirming the held timeout of ${heldName} (mutant ${m.mutantId})`);
       }
