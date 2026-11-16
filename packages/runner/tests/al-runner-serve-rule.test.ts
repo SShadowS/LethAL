@@ -472,6 +472,21 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}GoToKey on a list in a key other than the primary key, after a move or a GoToKey (not pinned)`,
     ],
   };
+  // PR-53: DO t7's SetFilter-Boolean refusal, measured clean (`/coord/handoff/PR-53/`). Any digits are kept.
+  R945["setfilter-boolean-language-words"] = {
+    keeps: [
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words of that language are not pinned)`,
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage 1 (the words of that language are not pinned)`,
+    ],
+    closes: [
+      // reworded, a non-number, no number, an extra tail, another filter type
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words are not pinned)`,
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage abc (the words of that language are not pinned)`,
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage (the words of that language are not pinned)`,
+      `${P}SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words of that language are not pinned) (timeout)`,
+      `${P}SetFilter: a Date filter value under GlobalLanguage 1030 (the words of that language are not pinned)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
