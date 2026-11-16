@@ -827,6 +827,17 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "stale-buffer-after-lock":
     /^NotRun: out-of-scope: a stale [^\n]{1,30} buffer from its own write, after a lock other than LockTable or a ReadIsolation read in the open transaction \(not pinned\)$/,
   /**
+   * PR-47: DO t6's 64 closes. Measured clean with R-967's kit on edge-5a58a0f16 (`/coord/handoff/PR-47/`):
+   * one-shot text equal to DO's; on one kept daemon 27 readers equal to the control, 20 fresh daemons one
+   * answer equal to it, the pid unchanged, no panic text. The shape: a modal list sorted descending by a
+   * key other than the primary key, with OnAfterGetRecord and OnAfterGetCurrRecord, opened on a blank
+   * record (so on the last row of its view) over more rows than a window, then one GoToKey. The text is
+   * kept whole, no variable part. NOT kept: the sibling texts (for example "GoToKey on a list in a key
+   * other than the primary key, after a move or a GoToKey"), the ascending wording, any other tail.
+   */
+  "gotokey-desc-last-row-above-window":
+    /^NotRun: out-of-scope: GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window \(not pinned\)$/,
+  /**
    * R1019 (coord PR-14): the cascade after a test that failed while it held a manual event subscription
    * (a BindSubscription whose UnbindSubscription it never reached): the next test's bind is refused.
    * Filter Tokens closed its daemon 424 times on it (466 daemons for 343 mutants, edge-5a58a0f16).

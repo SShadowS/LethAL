@@ -459,6 +459,19 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}the caption of a page with DataCaptionExpression and no source table (not pinned) (timeout)`,
     ],
   };
+  // PR-47: DO t6's GoToKey refusal, measured clean (`/coord/handoff/PR-47/`). The sibling is not kept.
+  R945["gotokey-desc-last-row-above-window"] = {
+    keeps: [
+      `${P}GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window (not pinned)`,
+    ],
+    closes: [
+      `${P}GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window (not pinned) again`,
+      `${P}GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window`,
+      `${P}GoToKey on a list that opened on the last row of its ascending view, with more rows above the rows it holds than a window (not pinned)`,
+      // the sibling: a key other than the primary key, after a move or a GoToKey
+      `${P}GoToKey on a list in a key other than the primary key, after a move or a GoToKey (not pinned)`,
+    ],
+  };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {
     test(`R945 ${entry}: keeps on each measured text; closes on a tail, a prefix, a timeout word or an unmeasured sibling`, () => {
       for (const m of k) expect([m, keeps(m)]).toEqual([m, true]);
