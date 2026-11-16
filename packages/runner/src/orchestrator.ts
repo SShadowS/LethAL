@@ -5921,10 +5921,27 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (reused !== undefined) {
         const inScope = new Set(tests.map(testKeyOf));
         const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
-        reused =
-          new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
-            ? { ...reused, baseline: kept }
-            : undefined;
+        const have = new Set(kept.map((b) => testKeyOf(b.ref))).size;
+        if (have === inScope.size) {
+          reused = { ...reused, baseline: kept };
+        } else {
+          // PR-47: the drop was silent. Named now; the decision is unchanged.
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: the stored baseline (run ${reused.runId} batch ${reused.batchIndex}) lacks ${inScope.size - have} of this session's ${inScope.size} tests, so batch ${batchIdx}'s baseline runs again (R-236c).`,
+          });
+          reused = undefined;
+        }
+      }
+      // PR-47: a resume with a proven test app found no stored baseline for this batch's tree.
+      // (A test app that differs from the proven one is R492's own report, so it is left out.)
+      if (allowReuse && runsWhatWasRead && reusable === null) {
+        emit({
+          type: "warning",
+          code: "resume-baseline-not-reused",
+          message: `[lethal] resume-baseline-not-reused: no stored baseline matches this batch's instrumented tree and test app (the emitted AL or the test app changed); batch ${batchIdx}'s baseline runs again.`,
+        });
       }
       snapshotKey = { batchHash, testAppHash };
       // PR-21 (L5): a backend that needs its own baseline state (serve-entries, R1008) reuses a

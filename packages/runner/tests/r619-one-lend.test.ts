@@ -433,6 +433,8 @@ async function snapshotCase(c: {
   };
   /** Ruling (b): the store answers that the snapshot's run row is missing. */
   readonly missingRow?: boolean;
+  /** PR-47: the stored baseline lacks one of the session's tests. */
+  readonly dropTest?: boolean;
   readonly spy?: boolean;
   /** R857: run 1 stays default; a stopped run under `--isolate-tests` is what today resumes. */
   readonly isolate?: boolean;
@@ -482,6 +484,21 @@ async function snapshotCase(c: {
   if (c.snap.coverageMode !== undefined)
     reshape(store, other, { coverageMode: c.snap.coverageMode });
   store.db.run("UPDATE baseline_snapshots SET run_id = ? WHERE run_id = ?", [other, runId]);
+  // PR-47: the stored baseline loses its last test (a run with a narrower --tests-only).
+  let testCount = 0;
+  {
+    const row = store.db
+      .query("SELECT payload FROM baseline_snapshots WHERE run_id = ?")
+      .get(other);
+    const payload = JSON.parse((row as { payload: string }).payload) as unknown[];
+    testCount = payload.length;
+    if (c.dropTest === true) {
+      store.db.run("UPDATE baseline_snapshots SET payload = ? WHERE run_id = ?", [
+        JSON.stringify(payload.slice(0, -1)),
+        other,
+      ]);
+    }
+  }
   if (c.missingRow === true) {
     const getRun = store.getRun.bind(store);
     store.getRun = (id: number) => (id === other ? null : getRun(id));
@@ -514,7 +531,17 @@ async function snapshotCase(c: {
   const isolateSnapshots = snapshotsOf(isolateRun).n;
   const defaultSnapshots = snapshotsOf(other).n;
   store.close();
-  return { events, other, today, error, log, isolateSnapshots, defaultSnapshots, recheckCalls };
+  return {
+    events,
+    other,
+    today,
+    error,
+    log,
+    isolateSnapshots,
+    defaultSnapshots,
+    recheckCalls,
+    testCount,
+  };
 }
 const reusedOf = (events: readonly RunEvent[]) => warned(events, "resume-baseline-reused");
 
@@ -619,13 +646,49 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     expect(why).toHaveLength(1);
     expect(why[0]).toContain("because the seed (stored 1, this session 2)");
   });
-  test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
+  test("order: a same-build snapshot under another coverage mode is not found (SQL); PR-47 names it", async () => {
     const s = await snapshotCase({
       snap: { backend: "al-runner-v3", runnerBuild: B1, coverageMode: "al-runner" },
     });
     expect(s.error).toBeUndefined();
     expect(reusedOf(s.events)).toEqual([]);
     expect(warned(s.events, "snapshot-backend-build-changed")).toEqual([]);
+    // PR-47 (a): no stored baseline matches, and the line says so.
+    const why = warned(s.events, "resume-baseline-not-reused");
+    expect(why).toHaveLength(1);
+    expect(why[0]).toContain(
+      "no stored baseline matches this batch's instrumented tree and test app (the emitted AL or the test app changed)",
+    );
+  });
+  test("PR-47 (b): a stored baseline lacking one of the session's tests is dropped, by name, with counts", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      dropTest: true,
+    });
+    expect(s.error).toBeUndefined();
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    const why = warned(s.events, "resume-baseline-not-reused");
+    expect(why).toHaveLength(1);
+    expect(why[0]).toContain(`lacks 1 of this session's ${s.testCount} tests`);
+    expect(why[0]).toContain(`run ${s.other} batch 0`);
+  });
+  test("PR-47: a found and reused snapshot warns nothing; a session without --resume warns nothing", async () => {
+    const s = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: B1 } });
+    expect(reusedOf(s.events)).toHaveLength(1);
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+    const store = new ResultsStore(":memory:");
+    const { events, emit } = collect(store, false);
+    try {
+      await runSession({
+        ...base(store, await project()),
+        backend: new Stub(),
+        emit: [emit],
+      });
+    } finally {
+      store.close();
+    }
+    expect(warned(events, "resume-baseline-not-reused")).toEqual([]);
   });
 });
 
