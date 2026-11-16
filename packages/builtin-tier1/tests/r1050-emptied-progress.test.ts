@@ -176,6 +176,43 @@ describe("R1050: empty-block that freezes a loop's progress", () => {
     expect(refused(src, ALNodeKind.block, "begin\n        P := P + 1", EMPTY)).toBe(true);
   });
 
+  // R1053 (PR-48): the transitive step follows only names Q moves toward the outer exit.
+  const scratchSrc = (outerArg: string) => `codeunit 50120 "Scratch"
+{
+    procedure Caller(N: Integer)
+    var
+        Pos: Integer;
+        Tail: Integer;
+    begin
+        while Pos < N do begin
+            StepG(Pos, ${outerArg});
+            Tail := 0;
+        end;
+    end;
+
+    local procedure StepG(var P: Integer; var Scratch: Integer)
+    begin
+        P := P + 1;
+        FillG(Scratch);
+    end;
+
+    local procedure FillG(var S: Integer)
+    begin
+        S := 7;
+    end;
+}`;
+  const FILL_BODY = "begin\n        S := 7";
+
+  it("G: gives back a helper called with a var the loop overwrites after the call", () => {
+    // revert: seed every var parameter of Q into the transitive step (the pre-R1053 qNames)
+    expect(refused(scratchSrc("Tail"), ALNodeKind.block, FILL_BODY, EMPTY)).toBe(false);
+  });
+
+  it("H: keeps refusing a helper whose var parameter is bound to an exit-read name", () => {
+    // revert: drop the bind() of a live argument in the first hop
+    expect(refused(scratchSrc("Pos"), ALNodeKind.block, FILL_BODY, EMPTY)).toBe(true);
+  });
+
   it("C: refuses a function whose result is assigned to the exit's name", () => {
     // revert: remove the return-value seed
     const src = `codeunit 50105 "Assigned"

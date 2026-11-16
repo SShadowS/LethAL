@@ -1193,55 +1193,104 @@ function exitsOnDefault(loop: ALSyntaxNode, c: ALSyntaxNode, p: ALSyntaxNode): b
  */
 function r1050Progress(obj: ALSyntaxNode, ctx: SemanticContext): Set<number> {
   return cached(ctx, obj, "r1050Progress", () => {
-    const set = new Set<number>();
+    // R1053 (PR-48): per member, the names it moves TOWARD the outer exit: `names` (its var
+    // parameters the caller binds to a live name, and chain writes that are live), `ret` (its
+    // result is live), `all` (a parameter we could not read, so every var parameter).
+    interface Toward {
+      names: Set<string>;
+      ret: boolean;
+      all: boolean;
+    }
+    const toward = new Map<number, Toward>();
+    const entry = (p: ALSyntaxNode): Toward => {
+      let t = toward.get(p.startIndex);
+      if (t === undefined) {
+        t = { names: new Set(), ret: false, all: false };
+        toward.set(p.startIndex, t);
+      }
+      return t;
+    };
+    /** Add to `t` the names of `p` that the call `site` binds to a name `isLive` accepts. */
+    const bind = (
+      t: Toward,
+      site: CallSite,
+      p: ALSyntaxNode,
+      isLive: (k: string) => boolean,
+    ): boolean => {
+      let grew = false;
+      const add = (k: string): void => {
+        if (!t.names.has(k)) {
+          t.names.add(k);
+          grew = true;
+        }
+      };
+      for (const w of chainEffect(site.name, obj, ctx).writes) if (isLive(w)) add(w);
+      argumentList(site.n).forEach((a, i) => {
+        const k = baseNameOf(a);
+        if (k === null || !isLive(k)) return;
+        const prm = r531Param(p, i);
+        if (prm === null) {
+          grew ||= !t.all;
+          t.all = true;
+        } else if (prm[1]) add(prm[0]);
+      });
+      return grew;
+    };
     const sites = r1050Sites(obj, ctx);
     for (const site of sites) {
       const loops = loopsAround(site.n);
       if (loops.length === 0) continue;
       const targets = assignedTargets(site.n);
       for (const p of r1050Candidates(site, obj, ctx)) {
-        const moved = r1050Moved(site, p, obj, ctx);
-        const hit = loops.some((loop) => {
+        for (const loop of loops) {
           const { read, steps } = exitEffect(loop, ctx);
           const live = (k: string): boolean => read.has(k) && !steps.has(k);
-          if ([...moved].some(live)) return true;
-          if (!returnsValue(p)) return false;
-          const inExit = loopExitParts(loop, ctx).some(
-            (e) => e.startIndex <= site.n.startIndex && site.n.endIndex <= e.endIndex,
-          );
-          return (inExit && !exitsOnDefault(loop, site.n, p)) || targets.some(live);
-        });
-        if (hit) set.add(p.startIndex);
+          const t = entry(p);
+          bind(t, site, p, live);
+          if (returnsValue(p)) {
+            const inExit = loopExitParts(loop, ctx).some(
+              (e) => e.startIndex <= site.n.startIndex && site.n.endIndex <= e.endIndex,
+            );
+            if ((inExit && !exitsOnDefault(loop, site.n, p)) || targets.some(live)) t.ret = true;
+          }
+        }
       }
     }
+    // An entry made for a call that is no progress at all is not a member.
+    const member = (p: ALSyntaxNode): boolean => {
+      const t = toward.get(p.startIndex);
+      return t !== undefined && (t.ret || t.all || t.names.size > 0);
+    };
     for (let changed = true; changed; ) {
       changed = false;
       for (const site of sites) {
         const q = site.owner;
-        if (q === null || !set.has(q.startIndex)) continue;
-        const qNames = new Set<string>();
-        for (let i = 0; i < paramCount(q); i++) {
-          const prm = r531Param(q, i);
-          if (prm?.[1]) qNames.add(prm[0]);
+        if (q === null || !member(q)) continue;
+        const tq = entry(q);
+        const qNames = new Set(tq.names);
+        if (tq.all)
+          for (let i = 0; i < paramCount(q); i++) {
+            const prm = r531Param(q, i);
+            if (prm?.[1]) qNames.add(prm[0]);
+          }
+        if (tq.ret) {
+          const rv = q.childForFieldName("return_value");
+          if (rv !== null) qNames.add(normalizeAlName(rv.text));
         }
-        for (const k of procNames(q))
-          for (const w of chainEffect(k, obj, ctx).writes) qNames.add(w);
-        const rv = q.childForFieldName("return_value");
-        if (rv !== null) qNames.add(normalizeAlName(rv.text));
         const targets = assignedTargets(site.n);
-        const exited = returnsValue(q) && inExitStatement(site.n);
+        const exited = tq.ret && returnsValue(q) && inExitStatement(site.n);
         for (const p of r1050Candidates(site, obj, ctx)) {
-          if (set.has(p.startIndex)) continue;
-          const flows =
-            [...r1050Moved(site, p, obj, ctx)].some((k) => qNames.has(k)) ||
-            (returnsValue(p) && (exited || targets.some((k) => qNames.has(k))));
-          if (flows) {
-            set.add(p.startIndex);
+          const t = entry(p);
+          if (bind(t, site, p, (k) => qNames.has(k))) changed = true;
+          if (!t.ret && returnsValue(p) && (exited || targets.some((k) => qNames.has(k)))) {
+            t.ret = true;
             changed = true;
           }
         }
       }
     }
+    const set = new Set<number>();
+    for (const [i, t] of toward) if (t.ret || t.all || t.names.size > 0) set.add(i);
     return set;
   });
 }
