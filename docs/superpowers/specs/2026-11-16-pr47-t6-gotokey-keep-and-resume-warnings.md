@@ -69,3 +69,29 @@ catches the error.
 So item 1 goes ahead as written: the keep entry anchors exactly that text, and leg C's `serve-keep-reasons` gains the invented
 case. The texts of the same function that were not measured stay off the list ("in a key other than the primary key, after a move
 or a GoToKey", "for a key the view does not have", "whose top row held is gone").
+
+## Addendum 2 (2026-11-16, after the Opus build review, before any gate)
+
+**Case (a) is narrowed.** As built, it warned whenever `findBaselineSnapshot` found nothing. That lookup also finds nothing for
+reasons that are expected and already pinned:
+- a new server generation after a lease reset: `itest:lend`'s RL leg pins its warning set exactly (`GATE_WARNINGS["lend/RL"]`),
+  and the new line would fail it;
+- a resumed run that never reached this batch;
+- another coverage mode or dependency fingerprint.
+In those cases its text, "the emitted AL or the test app changed", was also false.
+
+Case (a) now warns only when the RESUMED run stored a baseline for this batch whose instrumented tree hash differs from this
+batch's. That is t6's case: PR-37 changed the emitted AL. The text then names that cause: "run N stored batch B's baseline for
+another instrumented tree (the emitted AL changed)". Every other miss stays silent as before. So no gate's warning set moves, and
+`itest:lend` is not on this change's path. Case (b) (R-236c) is unchanged.
+
+**Predictions, replacing 1's warning half.** Unit tests, red both ways:
+- the resumed run's baseline under another tree hash warns and names the run and batch;
+- a miss for another coverage mode, another server generation, or a batch the resumed run never stored does not warn;
+- (b) warns with its counts;
+- a reused snapshot, and a session without `--resume`, do not warn.
+
+**Page state after the refusal (review, not measured).** The kit's reader uses no pages. The pinned source runs each test codeunit
+on a new session, and page and handler state lives in that session. The refusal reads ahead on a copy of the record before any
+page state changes. So a kept daemon cannot carry page state into another codeunit's test. Within one codeunit, serve and one-shot
+take the same path.
