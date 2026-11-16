@@ -1,0 +1,10 @@
+{
+  "id": "92781900-0000-4000-8000-000000081771",
+  "name": "Upstream Repro 8084 SaveAsXml OnPreReport Error",
+  "publisher": "LethAL Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 51770, "to": 51779 }],
+  "features": ["NoImplicitWith"]
+}
