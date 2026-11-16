@@ -3756,6 +3756,646 @@ export const DATES_FORMULAS: Family = {
   testPermissions: "Disabled",
 };
 
+/**
+ * PR-87: JSON objects, arrays, tokens and values; TextBuilder; text functions and text comparison on Danish letters.
+ * No tables. Every cell reports `V:[...]`; an error the call raises IS the answer. A cell whose text holds a non-ASCII
+ * letter is marked `locale` (case mapping and text order follow the session language). `FORMAT_EVALUATE` already has the
+ * ASCII text-function cells and `äöüßé` case mapping, so these use other inputs. AsDateTime cells are `tz`.
+ */
+const NON_ASCII = /[^ -~]/;
+const jx = (
+  type: string,
+  method: string,
+  state: string,
+  vars: string[],
+  setup: string[],
+  answer: string,
+  depends?: Cell["depends"],
+): Cell => {
+  const c = dfc(type, method, state, vars, setup, answer, depends);
+  return depends === undefined && NON_ASCII.test([...vars, ...setup, answer].join(" "))
+    ? { ...c, depends: "locale" }
+    : c;
+};
+const JO_VARS = ["O: JsonObject;", "P: JsonObject;", "T: JsonToken;", "Ok: Boolean;", "S: Text;"];
+const JO_DOC =
+  '{"a":1,"b":"x","c":null,"d":{"e":[10,20,{"f":"deep"}],"g h":7},"a b":5,"arr":[[1,2],[3]]}';
+const joc = (
+  method: string,
+  state: string,
+  json: string,
+  stmts: string[],
+  answer: string,
+  type = "JsonObject",
+): Cell => jx(type, method, state, JO_VARS, [`Ok := O.ReadFrom(${al(json)});`, ...stmts], answer);
+const JO_WT = "O.WriteTo(S);";
+/** Gets the token at `path` of O and writes it. */
+const tokenOf = (path: string) => `Ok := O.SelectToken(${al(path)}, T); if Ok then T.WriteTo(S);`;
+const OK_S = `${n9("Ok")} + '|' + S`;
+const keyLabel = (k: string) => `key ${k === "" ? "empty" : k.replace(/ /g, "_")}`;
+const JO_ADDS: readonly (readonly [string, string])[] = [
+  ["new text", "O.Add('k', 'v');"],
+  ["new integer", "O.Add('k', 5);"],
+  ["new decimal 1.50", "O.Add('k', 1.50);"],
+  ["new boolean", "O.Add('k', true);"],
+  ["new date", `O.Add('k', ${dt(15, 3, 2024)});`],
+  ["text with quote", `O.Add('k', 'x"y');`],
+  ["empty key", "O.Add('', 1);"],
+  ["key aeoeaa", "O.Add('æøå', 1);"],
+  ["existing key", "O.Add('a', 2);"],
+  ["existing key other case", "O.Add('A', 2);"],
+  ["same key twice", "O.Add('k', 1); O.Add('k', 2);"],
+  ["object value", `P.ReadFrom('{"x":1}'); O.Add('k', P);`],
+];
+const JO_PATHS: readonly (readonly [string, string])[] = [
+  ["plain key", "a"],
+  ["dollar dot key", "$.a"],
+  ["nested", "d.e"],
+  ["array index 0", "d.e[0]"],
+  ["array then key", "d.e[2].f"],
+  ["index past end", "d.e[3]"],
+  ["negative index", "d.e[-1]"],
+  ["quoted key in brackets", "['a']"],
+  ["quoted key with space", "['a b']"],
+  ["dollar quoted key", "$['a b']"],
+  ["nested quoted key", "d['g h']"],
+  ["double quoted key", 'd["g h"]'],
+  ["array of arrays", "arr[1][0]"],
+  ["missing key", "x"],
+  ["into a value", "a.b"],
+  ["null value", "c"],
+  ["dollar only", "$"],
+  ["empty path", ""],
+  ["wildcard", "d.e[*]"],
+  ["recursive", "$..f"],
+  ["key case differs", "A"],
+];
+const JV_VARS = ["O: JsonObject;", "T: JsonToken;", "Ok: Boolean;"];
+const JV_CONV = [
+  "AsInteger",
+  "AsDecimal",
+  "AsBigInteger",
+  "AsBoolean",
+  "AsText",
+  "AsCode",
+  "AsDate",
+  "AsTime",
+  "AsDateTime",
+];
+const JV_ALL = ["1.50", "1e3", '"12"', '"abc"', "null"];
+const JV_SOME: readonly (readonly [string, readonly string[]])[] = [
+  ["true", ["AsBoolean", "AsInteger", "AsText"]],
+  ['"2024-03-15"', ["AsDate", "AsDateTime", "AsText"]],
+  ['"10:20:30"', ["AsTime", "AsDate", "AsText"]],
+  ["-0", ["AsInteger", "AsDecimal", "AsText"]],
+  ["12345678901234567890", ["AsInteger", "AsBigInteger", "AsDecimal", "AsText"]],
+  ['"2024-03-15T10:20:30Z"', ["AsDateTime", "AsDate", "AsText"]],
+  ['"true"', ["AsBoolean", "AsText"]],
+  ['""', ["AsInteger", "AsText", "AsBoolean", "AsDate"]],
+  ['"æøå"', ["AsText", "AsCode", "AsInteger"]],
+  ['{"a":1}', ["AsText"]],
+  ["[1]", ["AsText"]],
+];
+const jvSetup = (lit: string) => [`Ok := O.ReadFrom(${al(`{"v":${lit}}`)});`, "Ok := O.Get('v', T);"];
+const jvCell = (lit: string, conv: string): Cell =>
+  jx(
+    "JsonValue",
+    conv,
+    lit.replace(/"/g, "'"),
+    JV_VARS,
+    jvSetup(lit),
+    n9(`T.AsValue().${conv}()`),
+    conv === "AsDateTime" ? "tz" : conv === "AsDate" || conv === "AsTime" ? "locale" : undefined,
+  );
+const JT_OBJECT: readonly (readonly [string, string])[] = [
+  ["spaces around", '{ "a" : 1 }'],
+  ["unicode escape", '{"a":"\\u00e6\\u00f8"}'],
+  ["literal aeoeaa", '{"a":"æøå"}'],
+  ["escaped quote", '{"a":"x\\"y"}'],
+  ["escaped backslash", '{"a":"x\\\\y"}'],
+  ["escaped newline", '{"a":"x\\ny"}'],
+  ["number 1e3", '{"a":1e3}'],
+  ["number minus zero", '{"a":-0}'],
+  ["number 1.50", '{"a":1.50}'],
+  ["number very large", '{"a":123456789012345678901234567890}'],
+  ["number many digits", '{"a":0.1234567890123456789}'],
+  ["number overflow", '{"a":1e400}'],
+  ["number leading zero", '{"a":007}'],
+  ["number NaN", '{"a":NaN}'],
+  ["duplicate keys", '{"a":1,"a":2}'],
+  ["empty object", "{}"],
+  ["null value", '{"a":null}'],
+  ["empty text", ""],
+  ["missing close", '{"a":1'],
+  ["unquoted key", "{a:1}"],
+  ["trailing comma", '{"a":1,}'],
+  ["top-level array", "[1,2]"],
+  ["top-level text", '"s"'],
+  ["trailing garbage", "{} x"],
+];
+const JT_ARRAY: readonly (readonly [string, string])[] = [
+  ["array plain", "[1,2]"],
+  ["array trailing comma", "[1,]"],
+  ["array of objects", '[{"a":1},{"b":2}]'],
+  ["array from object text", '{"a":1}'],
+  ["array empty text", ""],
+  ["array nested", "[[1],[2,[3]]]"],
+];
+const JT_TOKEN: readonly (readonly [string, string])[] = [
+  ["token number", "1.50"],
+  ["token text", '"s"'],
+  ["token true", "true"],
+  ["token null", "null"],
+  ["token object", '{"a":1}'],
+  ["token array", "[1]"],
+  ["token empty", ""],
+  ["token bare word", "abc"],
+  ["token escaped text", '"x\\u00e6y"'],
+];
+const JA_VARS = ["A: JsonArray;", "B: JsonArray;", "T: JsonToken;", "Ok: Boolean;", "S: Text;"];
+const jac = (
+  method: string,
+  state: string,
+  stmts: string[],
+  answer: string,
+  json = '[10,20,30,"x"]',
+): Cell =>
+  jx("JsonArray", method, state, JA_VARS, [`Ok := A.ReadFrom(${al(json)});`, ...stmts], answer);
+const JA_WT = "A.WriteTo(S);";
+const JA_GET = "if Ok then T.WriteTo(S);";
+const flags = `${n9("T.IsValue()")} + ${n9("T.IsObject()")} + ${n9("T.IsArray()")}`;
+
+const TB_VARS = ["TB: TextBuilder;", "CR: Char;", "LF: Char;", "S: Text;"];
+const TB_INIT = "CR := 13; LF := 10;";
+/** Shows CR and LF as `\r` and `\n`, so the answer is one line. */
+const vis = (e: string) => `${e}.Replace(Format(CR), '\\r').Replace(Format(LF), '\\n')`;
+const tbc = (method: string, state: string, stmts: string[], answer: string): Cell =>
+  jx("TextBuilder", method, state, TB_VARS, [TB_INIT, ...stmts], answer);
+const TB_TEXT = vis("TB.ToText()");
+const tbBase = "TB.Append('abcdef');";
+
+/** A text-function cell: the name is the type and the label is the method. */
+const tfc = (
+  type: string,
+  label: string,
+  expr: string,
+  vars: string[] = [],
+  setup: string[] = [],
+  text = true,
+): Cell => jx(type, label, "", vars, setup, text ? expr : n9(expr));
+const sIs = (v: string) => [`S := ${al(v)};`];
+const DK = "æøåÆØÅ";
+
+const TC_PAIRS: readonly (readonly [string, string, string])[] = [
+  ["a vs A", "a", "A"],
+  ["ae letter vs capital", "æ", "Æ"],
+  ["e vs e acute", "e", "é"],
+  ["A ring vs AA", "Å", "AA"],
+  ["a ring vs aa", "å", "aa"],
+  ["a vs B", "a", "B"],
+  ["z vs ae letter", "z", "æ"],
+  ["o slash vs a ring", "ø", "å"],
+  ["a vs a space", "a", "a "],
+];
+const TC_OPS: readonly (readonly [string, string])[] = [
+  ["equals", "="],
+  ["less", "<"],
+  ["greater", ">"],
+];
+const tcCell = (method: string, state: string, a: string, b: string, e: string): Cell =>
+  jx(
+    "TextCompare",
+    method,
+    state,
+    ["X: Text;", "Y: Text;"],
+    [`X := ${al(a)};`, `Y := ${al(b)};`],
+    n9(e),
+  );
+
+const JSON_TEXT_CELLS: Cell[] = [
+  // JsonObject
+  ...JO_ADDS.map(([s, st]) => joc("Add", s, "{}", [st, JO_WT], "S")),
+  joc("Replace", "existing key", '{"a":1}', ["O.Replace('a', 'new');", JO_WT], "S"),
+  joc("Replace", "missing key", '{"a":1}', ["O.Replace('zz', 1);", JO_WT], "S"),
+  joc("Replace", "to object", '{"a":1}', ["P.ReadFrom('{}'); O.Replace('a', P);", JO_WT], "S"),
+  joc("Replace", "to boolean", '{"a":1}', ["O.Replace('a', false);", JO_WT], "S"),
+  joc("Replace", "key case differs", '{"a":1}', ["O.Replace('A', 2);", JO_WT], "S"),
+  ...(
+    [
+      ["existing", "a"],
+      ["missing", "zz"],
+      ["case differs", "A"],
+      ["key with space", "a b"],
+      ["null valued", "c"],
+    ] as const
+  ).map(([s, k]) =>
+    joc("Remove", s, '{"a":1,"c":null,"a b":2}', [`Ok := O.Remove(${al(k)});`, JO_WT], OK_S),
+  ),
+  joc("Remove", "twice", '{"a":1}', ["O.Remove('a'); Ok := O.Remove('a');", JO_WT], OK_S),
+  ...["a", "c", "d", "a b", "zz", "A"].map((k) =>
+    joc(
+      "Get",
+      keyLabel(k),
+      JO_DOC,
+      [
+        `Ok := O.Get(${al(k)}, T); if Ok then begin T.WriteTo(S); S := S + '|' + ${flags}; end;`,
+      ],
+      OK_S,
+    ),
+  ),
+  ...["a", "a b", "A", "zz", "", "æ"].map((k) =>
+    joc("Contains", keyLabel(k), JO_DOC, [], n9(`O.Contains(${al(k)})`)),
+  ),
+  joc("Keys", "count", JO_DOC, [], n9("O.Keys().Count()")),
+  joc("Keys", "first", JO_DOC, [], "O.Keys().Get(1)"),
+  joc("Keys", "last", JO_DOC, [], "O.Keys().Get(6)"),
+  joc("Keys", "past end", JO_DOC, [], "O.Keys().Get(7)"),
+  joc("Keys", "insertion order", "{}", ["O.Add('z', 1); O.Add('a', 2);"], "O.Keys().Get(1)"),
+  joc("Keys", "duplicate keys", '{"a":1,"a":2}', [], n9("O.Keys().Count()")),
+  joc("Keys", "empty object", "{}", [], n9("O.Keys().Count()")),
+  // JsonObject has no Count: the key count is Keys().Count()
+  joc("Keys count", "DOC", JO_DOC, [], n9("O.Keys().Count()")),
+  joc("Keys count", "after add", "{}", ["O.Add('k', 1);"], n9("O.Keys().Count()")),
+  joc("Keys count", "after remove", '{"a":1}', ["O.Remove('a');"], n9("O.Keys().Count()")),
+  joc("Keys count", "after replace", '{"a":1}', ["O.Replace('a', 2);"], n9("O.Keys().Count()")),
+  joc(
+    "Clone",
+    "add object then change it",
+    "{}",
+    [`P.ReadFrom('{"x":1}'); O.Add('q', P); P.Add('y', 2);`, JO_WT],
+    "S",
+  ),
+  joc(
+    "Clone",
+    "add clone then change original",
+    "{}",
+    [`P.ReadFrom('{"x":1}'); O.Add('q', P.Clone()); P.Add('y', 2);`, JO_WT],
+    "S",
+  ),
+  joc("Clone", "assign then change", '{"a":1}', ["P := O; P.Add('b', 2);", JO_WT], "S"),
+  joc(
+    "Clone",
+    "clone then change",
+    '{"a":1}',
+    ["P := O.Clone().AsObject(); P.Add('b', 2);", JO_WT],
+    "S",
+  ),
+  joc(
+    "Clone",
+    "AsToken then change",
+    '{"a":1}',
+    ["T := O.AsToken(); T.AsObject().Add('b', 2);", JO_WT],
+    "S",
+  ),
+  joc(
+    "Clone",
+    "get nested then change",
+    '{"d":{"x":1}}',
+    ["O.Get('d', T); T.AsObject().Add('y', 2);", JO_WT],
+    "S",
+  ),
+  // SelectToken on an object
+  ...JO_PATHS.map(([s, p]) => joc("SelectToken", s, JO_DOC, [tokenOf(p)], OK_S)),
+  ...(
+    [
+      ["path of nested array item", "d.e[2].f"],
+      ["path of quoted key", "['a b']"],
+      ["path of array of arrays", "arr[1][0]"],
+    ] as const
+  ).map(([s, p]) =>
+    joc(
+      "SelectToken Path",
+      s,
+      JO_DOC,
+      [`Ok := O.SelectToken(${al(p)}, T); if Ok then S := T.Path();`],
+      OK_S,
+    ),
+  ),
+  // JsonToken
+  ...(
+    [
+      ["number", "a"],
+      ["text", "b"],
+      ["null", "c"],
+      ["object", "d"],
+      ["array", "d.e"],
+      ["object in array", "d.e[2]"],
+    ] as const
+  ).map(([s, p]) =>
+    joc(
+      "kind flags",
+      s,
+      JO_DOC,
+      [`Ok := O.SelectToken(${al(p)}, T); if Ok then S := ${flags};`],
+      OK_S,
+      "JsonToken",
+    ),
+  ),
+  ...(
+    [
+      ["AsObject on array", "d.e", "T.AsObject().WriteTo(S);"],
+      ["AsArray on object", "d", "T.AsArray().WriteTo(S);"],
+      ["AsValue on object", "d", "S := T.AsValue().AsText();"],
+      ["AsObject on number", "a", "T.AsObject().WriteTo(S);"],
+      ["AsValue on array", "d.e", "S := T.AsValue().AsText();"],
+      ["AsArray on null", "c", "T.AsArray().WriteTo(S);"],
+    ] as const
+  ).map(([s, p, st]) =>
+    joc("mismatch", s, JO_DOC, [`Ok := O.SelectToken(${al(p)}, T); ${st}`], OK_S, "JsonToken"),
+  ),
+  joc(
+    "Clone",
+    "clone token then change",
+    '{"d":{"x":1}}',
+    ["O.Get('d', T); T.Clone().AsObject().Add('y', 2); O.WriteTo(S);"],
+    "S",
+    "JsonToken",
+  ),
+  joc("Path", "root", '{"a":1}', ["T := O.AsToken(); S := T.Path();"], "S", "JsonToken"),
+  // JsonValue conversions
+  ...JV_ALL.flatMap((lit) => JV_CONV.map((conv) => jvCell(lit, conv))),
+  ...JV_SOME.flatMap(([lit, convs]) => convs.map((conv) => jvCell(lit, conv))),
+  ...JV_ALL.slice(2, 7).map((lit) =>
+    jx("JsonValue", "IsNull", lit.replace(/"/g, "'"), JV_VARS, jvSetup(lit), n9("T.AsValue().IsNull()")),
+  ),
+  ...(
+    [
+      ["SetValueToNull then IsNull", "V.SetValueToNull();", n9("V.IsNull()")],
+      ["SetValueToNull then AsText", "V.SetValueToNull();", "V.AsText()"],
+      ["SetValue text then AsInteger", "V.SetValue('12');", n9("V.AsInteger()")],
+      ["SetValue integer then AsText", "V.SetValue(12);", "V.AsText()"],
+      ["SetValue decimal then AsText", "V.SetValue(1.50);", "V.AsText()"],
+      ["SetValue boolean then AsInteger", "V.SetValue(true);", n9("V.AsInteger()")],
+      ["SetValue text then AsBoolean", "V.SetValue('true');", n9("V.AsBoolean()")],
+      ["SetValue date then AsText", `V.SetValue(${dt(15, 3, 2024)});`, n9("V.AsText()")],
+      ["fresh value IsNull", "", n9("V.IsNull()")],
+      ["fresh value IsUndefined", "", n9("V.IsUndefined()")],
+      ["fresh value AsText", "", "V.AsText()"],
+    ] as const
+  ).map(([s, st, a]) => jx("JsonValue", "SetValue", s, ["V: JsonValue;"], [st], a)),
+  // ReadFrom / WriteTo
+  ...JT_OBJECT.map(([s, t]) =>
+    joc("ReadFrom object", s, t, [`if Ok then ${JO_WT}`], OK_S, "JsonText"),
+  ),
+  ...JT_ARRAY.map(([s, t]) =>
+    jx(
+      "JsonText",
+      "ReadFrom array",
+      s,
+      JA_VARS,
+      [`Ok := A.ReadFrom(${al(t)});`, `if Ok then ${JA_WT}`],
+      OK_S,
+    ),
+  ),
+  ...JT_TOKEN.map(([s, t]) =>
+    jx(
+      "JsonText",
+      "ReadFrom token",
+      s,
+      JA_VARS,
+      [`Ok := T.ReadFrom(${al(t)});`, "if Ok then T.WriteTo(S);"],
+      OK_S,
+    ),
+  ),
+  // JsonArray
+  ...(
+    [
+      ["text", "A.Add('v');"],
+      ["integer", "A.Add(5);"],
+      ["decimal 1.50", "A.Add(1.50);"],
+      ["boolean", "A.Add(false);"],
+      ["array value", "B.ReadFrom('[1]'); A.Add(B);"],
+      ["same array into itself", "A.Add(A);"],
+    ] as const
+  ).map(([s, st]) => jac("Add", s, [st, JA_WT], "S")),
+  ...[0, 1, 4, 5, -1].map((i) => jac("Insert", `index ${i}`, [`A.Insert(${i}, 99);`, JA_WT], "S")),
+  ...[0, 3, 4, -1].map((i) => jac("Set", `index ${i}`, [`A.Set(${i}, 99);`, JA_WT], "S")),
+  ...[0, 3, 4, -1].map((i) => jac("RemoveAt", `index ${i}`, [`A.RemoveAt(${i});`, JA_WT], "S")),
+  ...(
+    [
+      ["integer 20", "20"],
+      ["text x", "'x'"],
+      ["missing 99", "99"],
+      ["text 20", "'20'"],
+      ["decimal 20.0", "20.0"],
+      ["first", "10"],
+    ] as const
+  ).map(([s, v]) => jac("IndexOf", s, [], n9(`A.IndexOf(${v})`))),
+  ...[0, 1, 3, 4, -1].map((i) =>
+    jac("Get", `index ${i}`, [`Ok := A.Get(${i}, T); ${JA_GET}`], OK_S),
+  ),
+  jac("Count", "four items", [], n9("A.Count()")),
+  jac("Count", "empty", [], n9("A.Count()"), "[]"),
+  jac("Clone", "clone then change", ["B := A.Clone().AsArray(); B.Add(1);", JA_WT], "S"),
+  jac("Clone", "assign then change", ["B := A; B.Add(1);", JA_WT], "S"),
+  jac("Clone", "add array then change it", ["B.ReadFrom('[1]'); A.Add(B); B.Add(2);", JA_WT], "S"),
+  jac("Clone", "AsToken then change", ["T := A.AsToken(); T.AsArray().Add(5);", JA_WT], "S"),
+  jac(
+    "SelectToken",
+    "index",
+    [`Ok := A.SelectToken('[1].a', T); ${JA_GET}`],
+    OK_S,
+    '[{"a":1},{"a":2}]',
+  ),
+  jac(
+    "SelectToken",
+    "dollar index",
+    [`Ok := A.SelectToken('$[0]', T); ${JA_GET}`],
+    OK_S,
+    "[[1,2],[3]]",
+  ),
+  jac("SelectToken", "index past end", [`Ok := A.SelectToken('[5]', T); ${JA_GET}`], OK_S, "[1]"),
+  jac("SelectToken", "key on array", [`Ok := A.SelectToken('a', T); ${JA_GET}`], OK_S, "[1]"),
+  // TextBuilder
+  tbc("Append", "once", [tbBase], TB_TEXT),
+  tbc("Append", "twice", [tbBase, "TB.Append('gh');"], TB_TEXT),
+  tbc("Append", "empty", [tbBase, "TB.Append('');"], TB_TEXT),
+  tbc("Append", "letters", ["TB.Append('æøå');"], TB_TEXT),
+  tbc(
+    "Append",
+    "line break char",
+    ["TB.Append('a'); TB.Append(Format(CR)); TB.Append(Format(LF)); TB.Append('b');"],
+    TB_TEXT,
+  ),
+  tbc("AppendLine", "empty", ["TB.AppendLine();"], TB_TEXT),
+  tbc("AppendLine", "text", ["TB.AppendLine('x');"], TB_TEXT),
+  tbc("AppendLine", "twice", ["TB.AppendLine('x'); TB.AppendLine('y');"], TB_TEXT),
+  tbc("AppendLine", "after Append", ["TB.Append('a'); TB.AppendLine('b'); TB.Append('c');"], TB_TEXT),
+  tbc("AppendLine", "length", ["TB.AppendLine('x');"], n9("TB.Length()")),
+  ...[0, 1, 3, 6, 7, -1].map((i) =>
+    tbc("Insert", `index ${i}`, [tbBase, `TB.Insert(${i}, 'XY');`], TB_TEXT),
+  ),
+  tbc("Insert", "empty text", [tbBase, "TB.Insert(2, '');"], TB_TEXT),
+  tbc("Replace", "one letter", [tbBase, "TB.Replace('b', 'X');"], TB_TEXT),
+  tbc("Replace", "not found", [tbBase, "TB.Replace('z', 'X');"], TB_TEXT),
+  tbc("Replace", "to empty", [tbBase, "TB.Replace('b', '');"], TB_TEXT),
+  tbc("Replace", "empty old", [tbBase, "TB.Replace('', 'X');"], TB_TEXT),
+  tbc("Replace", "all matches", ["TB.Append('abab'); TB.Replace('a', 'XX');"], TB_TEXT),
+  tbc("Replace", "case differs", [tbBase, "TB.Replace('B', 'X');"], TB_TEXT),
+  ...(
+    [
+      [0, 1],
+      [1, 2],
+      [2, 0],
+      [5, 1],
+      [6, 1],
+      [-1, 1],
+      [0, 9],
+      [3, -1],
+    ] as const
+  ).map(([s, n]) =>
+    tbc("Remove", `start ${s} length ${n}`, [tbBase, `TB.Remove(${s}, ${n});`], TB_TEXT),
+  ),
+  tbc("Length", "empty", [], n9("TB.Length()")),
+  tbc("Length", "after append", [tbBase], n9("TB.Length()")),
+  tbc("Length", "letters", ["TB.Append('æøå');"], n9("TB.Length()")),
+  tbc("Length", "after clear", [tbBase, "TB.Clear();"], n9("TB.Length()")),
+  tbc("Capacity", "empty", [], n9("TB.Capacity()")),
+  tbc("Capacity", "after append", [tbBase], n9("TB.Capacity()")),
+  tbc("EnsureCapacity", "100", [], n9("TB.EnsureCapacity(100)")),
+  tbc("EnsureCapacity", "0", [], n9("TB.EnsureCapacity(0)")),
+  tbc("EnsureCapacity", "negative", [], n9("TB.EnsureCapacity(-1)")),
+  tbc("EnsureCapacity", "then Capacity", ["TB.EnsureCapacity(100);"], n9("TB.Capacity()")),
+  tbc("MaxCapacity", "default", [], n9("TB.MaxCapacity()")),
+  ...(
+    [
+      [0, 2],
+      [1, 2],
+      [3, 0],
+      [2, 9],
+      [-1, 1],
+      [9, 1],
+      [0, 6],
+      [6, 0],
+      [5, 1],
+    ] as const
+  ).map(([s, n]) =>
+    tbc("ToText", `start ${s} count ${n}`, [tbBase], vis(`TB.ToText(${s}, ${n})`)),
+  ),
+  tbc("ToText", "empty", [], vis("TB.ToText()")),
+  // text functions on Danish letters
+  tfc("UpperCase", "Danish lower", `UpperCase(${al(DK.slice(0, 3))})`),
+  tfc("UpperCase", "mixed", "UpperCase('Blåbærgrød')"),
+  tfc("UpperCase", "e acute", "UpperCase('é')"),
+  tfc("UpperCase", "y diaeresis", "UpperCase('ÿ')"),
+  tfc("LowerCase", "Danish upper", `LowerCase(${al(DK.slice(3))})`),
+  tfc("LowerCase", "A ring first", "LowerCase('Ålborg')"),
+  tfc("LowerCase", "E acute", "LowerCase('É')"),
+  tfc("ToUpper", "Danish lower", "S.ToUpper()", ["S: Text;"], sIs(DK.slice(0, 3))),
+  tfc("ToLower", "Danish upper", "S.ToLower()", ["S: Text;"], sIs(DK.slice(3))),
+  tfc("StrPos", "A ring found", "StrPos('Blåbær', 'å')", [], [], false),
+  tfc("StrPos", "ae found", "StrPos('Blåbær', 'æ')", [], [], false),
+  tfc("StrPos", "case differs", "StrPos('æøå', 'Å')", [], [], false),
+  tfc("StrPos", "aa vs a ring", "StrPos('Århus', 'aa')", [], [], false),
+  tfc("StrPos", "ae vs ae letter", "StrPos('æ', 'ae')", [], [], false),
+  tfc("IncStr", "a ring nine", "IncStr('å9')"),
+  tfc("IncStr", "ae 99", "IncStr('æ99')"),
+  tfc("IncStr", "letter only", "IncStr('ø')"),
+  tfc("IncStr", "digit then letter", "IncStr('1å')"),
+  tfc("PadStr", "pad", "PadStr('æøå', 6)"),
+  tfc("PadStr", "pad with letter", "PadStr('æøå', 6, 'ø')"),
+  tfc("PadStr", "cut", "PadStr('æøå', 2)"),
+  tfc("PadStr", "two letter filler", "PadStr('æøå', 6, 'åæ')"),
+  tfc("ConvertStr", "to ASCII", "ConvertStr('bærgrød', 'æø', 'ae')"),
+  tfc("ConvertStr", "capitals", "ConvertStr('ÆØÅ', 'ÆØÅ', 'AOA')"),
+  tfc("ConvertStr", "to letter", "ConvertStr('aeoeaa', 'a', 'å')"),
+  tfc("ConvertStr", "case differs", "ConvertStr('æ', 'Æ', 'x')"),
+  ...["<", ">", "="].map((w) => tfc("DelChr", `where ${w} ae`, `DelChr('ææxææ', '${w}', 'æ')`)),
+  tfc("DelChr", "several letters", "DelChr('åæøåæø', '=', 'æå')"),
+  tfc("DelChr", "case differs", "DelChr('Ææ', '=', 'æ')"),
+  tfc("SelectStr", "second", "SelectStr(2, 'æ,ø,å')"),
+  tfc("SelectStr", "third", "SelectStr(3, 'æ,ø,å')"),
+  tfc("SelectStr", "long first", "SelectStr(1, 'æøå,ab')"),
+  tfc("SelectStr", "no comma", "SelectStr(2, 'æ;ø')"),
+  tfc("CopyStr", "middle", "CopyStr('æøåÆØÅ', 2, 3)"),
+  tfc("CopyStr", "to end", "CopyStr('æøåÆØÅ', 5)"),
+  tfc("CopyStr", "last", "CopyStr('æøåÆØÅ', 6, 1)"),
+  tfc("CopyStr", "past end", "CopyStr('æøåÆØÅ', 7)"),
+  tfc("StrLen", "Danish", "StrLen('æøå')", [], [], false),
+  tfc("StrLen", "Japanese", "StrLen('日本語')", [], [], false),
+  tfc("StrLen", "emoji", "StrLen('😀')", [], [], false),
+  tfc("StrLen", "e plus combining accent", "StrLen('é')", [], [], false),
+  tfc("StrLen", "e acute", "StrLen('é')", [], [], false),
+  tfc("Text[5]", "StrLen fits", "StrLen(C)", ["C: Text[5];"], ["C := 'æøåÆØ';"], false),
+  tfc("Text[5]", "MaxStrLen", "MaxStrLen(C)", ["C: Text[5];"], ["C := 'æø';"], false),
+  tfc("Text[5]", "too long", "StrLen(C)", ["C: Text[5];"], ["C := 'æøåÆØÅ';"], false),
+  tfc("Code[5]", "StrLen fits", "StrLen(C)", ["C: Code[5];"], ["C := 'æøå';"], false),
+  tfc("Code[5]", "assigned value", "C", ["C: Code[5];"], ["C := 'æøå';"]),
+  tfc("Code[5]", "MaxStrLen", "MaxStrLen(C)", ["C: Code[5];"], ["C := 'æ';"], false),
+  tfc("Code[5]", "too long", "C", ["C: Code[5];"], ["C := 'æøåÆØÅ';"]),
+  tfc("Code[5]", "lower e acute", "C", ["C: Code[5];"], ["C := 'é';"]),
+  tfc("Contains", "letter found", "S.Contains('å')", ["S: Text;"], sIs("Blåbærgrød"), false),
+  tfc("Contains", "capital differs", "S.Contains('Å')", ["S: Text;"], sIs("Blåbærgrød"), false),
+  tfc("StartsWith", "capital", "S.StartsWith('Æ')", ["S: Text;"], sIs("æøå"), false),
+  tfc("StartsWith", "same case", "S.StartsWith('æ')", ["S: Text;"], sIs("æøå"), false),
+  tfc("EndsWith", "capital", "S.EndsWith('Å')", ["S: Text;"], sIs("æøå"), false),
+  tfc("EndsWith", "same case", "S.EndsWith('å')", ["S: Text;"], sIs("æøå"), false),
+  tfc("IndexOf", "o slash", "S.IndexOf('ø')", ["S: Text;"], sIs("Blåbærgrød"), false),
+  tfc("IndexOf", "capital", "S.IndexOf('Ø')", ["S: Text;"], sIs("Blåbærgrød"), false),
+  tfc("LastIndexOf", "o slash", "S.LastIndexOf('ø')", ["S: Text;"], sIs("grødgrød"), false),
+  tfc("LastIndexOf", "not found", "S.LastIndexOf('x')", ["S: Text;"], sIs("grødgrød"), false),
+  tfc("Split", "on a ring count", "S.Split('å').Count()", ["S: Text;"], sIs("åaåbå"), false),
+  tfc("Split", "on ae first", "S.Split('æ').Get(1)", ["S: Text;"], sIs("xæyæz")),
+  tfc("Trim", "no-break space", "S.Trim()", ["S: Text;"], sIs(" æ ")),
+  tfc("PadLeft", "letter filler", "S.PadLeft(5, 'å')", ["S: Text;"], sIs("æ")),
+  tfc("Replace", "ae letter", "S.Replace('æ', 'ae')", ["S: Text;"], sIs("bærgrød")),
+  tfc("Replace", "capital differs", "S.Replace('Æ', 'ae')", ["S: Text;"], sIs("bærgrød")),
+  tfc("Substring", "middle", "S.Substring(2, 3)", ["S: Text;"], sIs(DK)),
+  // text comparison
+  ...TC_PAIRS.flatMap(([s, a, b]) => TC_OPS.map(([m, op]) => tcCell(m, s, a, b, `X ${op} Y`))),
+  ...(
+    [
+      ["Code vs Text same letters", "abc", "abc"],
+      ["Code vs Text upper", "abc", "ABC"],
+      ["Code ae letter vs capital", "æ", "Æ"],
+      ["Code a ring vs aa", "å", "AA"],
+    ] as const
+  ).map(([s, a, b]) =>
+    jx(
+      "TextCompare",
+      "Code equals Text",
+      s,
+      ["Cd: Code[10];", "Tx: Text;"],
+      [`Cd := ${al(a)};`, `Tx := ${al(b)};`],
+      n9("Cd = Tx"),
+    ),
+  ),
+  ...(
+    [
+      ["Code less Text", "<"],
+      ["Code greater Text", ">"],
+    ] as const
+  ).map(([m, op]) =>
+    jx(
+      "TextCompare",
+      m,
+      "ae letter vs z",
+      ["Cd: Code[10];", "Tx: Text;"],
+      ["Cd := 'æ';", "Tx := 'z';"],
+      n9(`Cd ${op} Tx`),
+    ),
+  ),
+  ...(
+    [
+      ["ae letter", "æ", "Æ"],
+      ["e acute", "é", "É"],
+      ["a ring vs aa", "å", "AA"],
+    ] as const
+  ).map(([s, a, b]) => tcCell("lowercased equal", s, a, b, "X.ToLower() = Y.ToLower()")),
+  tcCell("ordered", "a before B", "a", "B", "X < Y"),
+];
+
+export const JSON_TEXT: Family = {
+  name: "json-text",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
+  known: [],
+  support: "",
+  handles: {},
+  cells: JSON_TEXT_CELLS,
+  // as dates-formulas: no table write, but the option is the family's from the start
+  testPermissions: "Disabled",
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -3780,6 +4420,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [RECORD_FILTERS.name]: RECORD_FILTERS,
   // PR-86: appended (BC-check number 15): date formulas, date and time arithmetic, for a per-cell BC differential
   [DATES_FORMULAS.name]: DATES_FORMULAS,
+  // PR-87: appended (BC-check number 16): JSON, TextBuilder, Danish-letter text functions and comparison, for a per-cell BC differential
+  [JSON_TEXT.name]: JSON_TEXT,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
