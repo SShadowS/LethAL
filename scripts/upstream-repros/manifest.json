@@ -628,6 +628,30 @@
       }
     },
     {
+      "id": "u8182-boolean-words-nordic",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8182",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-63's per-cell differential, LethAL's web-service path, en-US region; /coord/handoff/PR-63/joined.tsv, cells 51399, 51413, 51435, 51449): under GlobalLanguage 1044 and 1053 Format(true) gives Ja and Evaluate(B, 'Ja') succeeds with true. The repro's B starts false where the cells' sentinel was true",
+      "rerun": ["the corpus mutants whose tests format or evaluate a Boolean under a Norwegian or Swedish GlobalLanguage (none known)"],
+      "tests": {
+        "Codeunit51730.FormatTrue": { "status": "fail", "messageIncludes": "V:[Ja]" },
+        "Codeunit51731.EvaluateJa": { "status": "fail", "messageIncludes": "V:[true|true]" },
+        "Codeunit51732.FormatTrue": { "status": "fail", "messageIncludes": "V:[Ja]" },
+        "Codeunit51733.EvaluateJa": { "status": "fail", "messageIncludes": "V:[true|true]" }
+      }
+    },
+    {
+      "id": "u8183-month-weekday-names",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8183",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-63's per-cell differential, LethAL's web-service path, en-US region; /coord/handoff/PR-63/joined.tsv, cells 51479, 51506, 51524, 51491): month and weekday names under GlobalLanguage 1030, 1036, 1053 and 1031. v3 refuses these",
+      "rerun": ["the corpus mutants whose tests format a month or weekday name under a GlobalLanguage other than English (none known)"],
+      "tests": {
+        "Codeunit51740.MonthText": { "status": "fail", "messageIncludes": "V:[marts]" },
+        "Codeunit51741.WeekdayText": { "status": "fail", "messageIncludes": "V:[mardi]" },
+        "Codeunit51742.MonthText": { "status": "fail", "messageIncludes": "V:[augusti]" },
+        "Codeunit51743.WeekdayText": { "status": "fail", "messageIncludes": "V:[Freitag]" }
+      }
+    },
+    {
       "id": "u8084-gettable-empty-text",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8084",
       "bcEvidence": "inferred from the issue: RecordRef.GetTable of a Variant holding an empty Text fails on BC (a Text is not a record). Cause 3 of the issue; fixed in edge bd44b20ea per the maintainer",

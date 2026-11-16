@@ -1,0 +1,10 @@
+{
+  "id": "51740000-0000-4000-8000-000000051740",
+  "name": "Upstream Repro Month Weekday Names",
+  "publisher": "Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 51740, "to": 51749 }],
+  "dependencies": []
+}

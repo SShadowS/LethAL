@@ -5953,11 +5953,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       // silent. (A test app that differs from the proven one is R492's own report.)
       if (allowReuse && runsWhatWasRead && reusable === null && resumedRunId !== undefined) {
         const stored = store.snapshotBatchHash(resumedRunId, batchIdx);
-        if (stored !== null && stored !== batchHash) {
+        if (stored !== null && stored.batchHash !== batchHash) {
+          // PR-66: the resumed run may have reused an earlier run's snapshot and stored none.
+          const reuse =
+            stored.runId === resumedRunId ? "" : `; resumed run ${resumedRunId} reused it`;
           emit({
             type: "warning",
             code: "resume-baseline-not-reused",
-            message: `[lethal] resume-baseline-not-reused: run ${resumedRunId} stored batch ${batchIdx}'s baseline for another instrumented tree (the emitted AL changed); batch ${batchIdx}'s baseline runs again.`,
+            message: `[lethal] resume-baseline-not-reused: run ${stored.runId} stored batch ${batchIdx}'s baseline for another instrumented tree (the emitted AL changed)${reuse}; batch ${batchIdx}'s baseline runs again.`,
           });
         }
       }
@@ -5991,6 +5994,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         }
       }
       if (reused !== undefined) {
+        // PR-66: remember which snapshot this batch ran on, for a later resume's tree-changed warning.
+        store.recordSnapshotReuse(runId, batchIdx, reused.runId, reused.batchIndex);
         emit({
           type: "warning",
           code: "resume-baseline-reused",
