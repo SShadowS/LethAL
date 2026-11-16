@@ -140,3 +140,26 @@ and the cost question goes back to the orchestrator before merge.
   timeout-killed-vs-kill when an error sits between the hang and the fail) stays order-dependent there. Filed as R1066.
 - A first kill measured alone keeps today's in-context confirm. Filed as R1067.
 - Which test kills (R197) stays order-dependent by design.
+
+## Addendum 1 (2026-11-16, after the build review, before any fix for it and before any gate)
+The Opus review of the build (dfb1ca6c) found two places where the held walk does not give what the walk gave before:
+- **A flaky first hang.** Hang T1 does not reproduce, hang T3 later does. Before: R577's I4 walks on from T1 and T3 scores
+  `timeout-killed`. Built as specified: T3 is only noted, T1's replay fails, and the mutant is `error` (`kill-not-reproduced`);
+  with T3 first it is `timeout-killed`, so the class depends on order again. **Changed:** every noted later timeout keeps its
+  step. When the replayed held timeout does not reproduce, the next noted timeout, in walk order, is replayed the same way
+  (today's path, with its own `chunkPrefix`), and so on; only when none is left does the end-of-walk logic run. This is what
+  the walk did before for the same steps, so it confirms a noted timeout exactly as before (in context, R1067's existing risk,
+  no new one).
+- **v3 cut state on the replay.** A noted later timeout in the same codeunit records a cut (`timedOutMutants`), so the replay's
+  reproduction is routed ALONE where before it ran live (`cutElsewhere`). **Changed:** the v3 backend's per-mutant cut set is
+  read when a timeout step is held or noted (`cutState(mutantId)`), and put back as it was then before that step's replay
+  (`restoreCutState(mutantId, state)`); both are optional backend hooks, absent on bcdev (no such state).
+- **A latched session with nothing scored.** When the walk ends with the session latched unsafe (the terminal check) and no
+  verdict was set, the held timeout's confirm would have thrown at `assertSafe` before; it still does (`assertSafe` is called
+  there), so no `survived` stands on an unsafe session.
+- Tests added: flaky first hang then a real later hang -> `timeout-killed` by the later one (red if noted timeouts are not
+  replayed); the replay's reproduction on v3 is live, not alone, after a noted cut in the same codeunit (red without the
+  restore); a warm held replay whose reproduction fails; the unsafe-latched end throws. The v3 "alone answer is never cached"
+  test is corrected to run both requests in one activation; the one-shot forced alone branch and the R897 `aloneAfterStop`
+  marking get tests.
+- Predictions unchanged: no hang-fixture mutant has a flaky hang, and no v3-gate mutant meets a timeout.
