@@ -214,3 +214,17 @@ Ready-to-Run list is the cause (adversary L6). `lethal doctor` and `lethal run` 
 ## Predictions
 - P1: R443, `lethal.equivalent.json`, `lethal explain`, the report schema and every sample report are unchanged.
 - P2: the v3 gate passes on the final head.
+
+## Addendum 1 (2026-11-16, the build's three readings of the spec)
+
+The text above is left as it was committed. These are the three points the build had to decide.
+1. **The per-row checks (offsets inside the text, and `originalText` equal to the slice) do not abort the run.** A failing row
+   gets no entry and cannot be accepted, and it is named in the section. This is the safe direction: the row then counts.
+   Review 3 found carried rows use the current manifest's offsets, so such a row is not expected. A re-parsed member whose lines
+   differ from the row's still throws, as "The mechanism" item 4 says.
+2. **For a trigger inside nested declarations, the entry's `tuple` carries the enclosing headers.** They are inserted before the
+   trigger name, the "full scope, the parent-declaration prefix included" of review 3, M-c. Without that prefix, field A's and
+   field B's `OnValidate` would share one tuple, and A's entry would read as re-opened when B is edited. Procedures and
+   top-level triggers keep `identityTupleOf` exactly.
+3. **A report that records no build symbols** prints "cannot be accepted" for its counted survivors, plus one note line for
+   the file's entries. Nothing is accepted.

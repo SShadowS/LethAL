@@ -48,8 +48,8 @@ until the owner rules.
 - Measure, then gate: principle 4.
 - On al-runner-v3, a survivor whose site carries a v3 caveat is listed apart and never fails the pipeline.
 - Option 2 is the cheapest to build, but the most likely to be noisy on small pull requests.
-- The cost of option 3 is the accept list's anchoring (see its cons): building it means extending R443's proof rules to
-  accepted survivors, not only to equivalence marks.
+- The cost of option 3 is the accept list's anchoring (see its cons). Part 2 (below) builds it with its own anchor, not R443's
+  proof rules.
 
 ## Ruling and first step (PR-77, 2026-11-16)
 The owner chose option 3, advisory first: "Decide on gating from the DO pilot's measured numbers."
@@ -59,8 +59,29 @@ The owner chose option 3, advisory first: "Decide on gating from the DO pilot's 
   that covers. A quarantined or time-budget run marks the section partial.
 - Built: `lethal run --fail-on-survivors` exits 9 when a counted survivor remains. Off by default; the templates carry it
   commented out.
-- Not built: the accept list and its anchoring (the cons of option 3). Every survivor on the changed lines is "new" until then.
+- Not built in PR-77: the accept list and its anchoring (the cons of option 3). Part 2 below builds it.
 - Spec: `docs/superpowers/specs/2026-11-16-pr77-changed-line-survivors.md`.
+
+## Part 2: the accept list (PR-79, 2026-11-16)
+Part 2 of the ruling. Spec: `docs/superpowers/specs/2026-11-16-pr79-accept-list.md`.
+
+**A deviation from the ruling's wording, for the owner to object to.** The task said to anchor the list by extending R443's
+proof rules (the equivalence marks). This design does not. It leaves R443 and `lethal.equivalent.json` unchanged and gives the
+accept list its own file and its own anchor, for two measured reasons:
+- On a `--changed-since` run the report withholds every mark whose coarse tuple (astHash, operator, major) is shared with a site on
+  another line. A probe counted those: 73.8% of the deployed sites in a large private project, 26% in gift-card. About three in
+  four reviewed survivors would never be accepted, and `--fail-on-survivors` would exit 9 on them forever.
+- R443's key does not change when a line is rewritten in place (`x > 0` becomes `y > 0`), so a mark would keep a rewritten
+  survivor accepted. The ruling says a changed site re-opens.
+
+**What was built.**
+- `lethal.accepted.json` in the `--project` folder. An entry is anchored to the site's text, the whole member that holds it
+  (attributes included, and for a trigger every enclosing declaration header), the site's place in that member, and the build's
+  preprocessor symbols. Any change to one of those re-opens the survivor.
+- `lethal run` prints a ready entry under each counted survivor, computed from the source the run measured.
+- Accepted survivors are listed with their reasons and never count toward `--fail-on-survivors` (exit 9). Equivalence marks do
+  not exempt a survivor. The default stays advisory until the DO pilot's numbers decide.
+- The workflow, what keeps an entry and what re-opens it, and the stated limits: [README.md](README.md), "Accepting a survivor".
 
 ## Asked
 Filed to the owner through kraken, naming this file.
