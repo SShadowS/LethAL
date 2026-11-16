@@ -16,6 +16,7 @@ import {
   PUBAPP_FLOWFIELD,
   READ_TEST,
   SET_TEST,
+  T9_REFUSALS,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
@@ -923,5 +924,91 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
     swapped[0] = b;
     swapped[1] = a;
     expect(() => checkReportCells(swapped)).toThrow("is not the family's cell 0");
+  });
+});
+
+describe("PR-74: the t9-refusals family", () => {
+  const f = T9_REFUSALS;
+  // the texts al-runner `current` gave for each cell, measured by running the family; the cell order is the codeunit order
+  const TEXTS = [
+    "SetFilter: value expected after ..",
+    "SetFilter: value expected after @",
+    "Evaluate of `>100` into Decimal (form not pinned by the corpus)",
+    "Evaluate of `>1000` into Decimal (form not pinned by the corpus)",
+    "Evaluate of `<1000` into Decimal (form not pinned by the corpus)",
+    "RecordRef.Duplicate on a RecordRef that is not open: ",
+    "a parameters string without the XML declaration in this form, given to Report.RunRequestPage ",
+    "a parameters string without the XML declaration in this form, given to Report.SaveAs ",
+    "DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. ",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndObject raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'a'.",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state ArrayStart would result in an invalid JSON object. Path 'a'.",
+    "conversion of Boolean false to BigInteger",
+    "RecordRef.ClearMarks on a RecordRef that is not open: ",
+    "FieldRef.SetFilter on a FieldRef that was never assigned: ",
+  ];
+
+  test("one cell per measured text, in order, each a distinct cell name, on an OnPrem app", () => {
+    expect(f.cells).toHaveLength(TEXTS.length);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    expect(f.cells.map((c) => `${c.type}.${c.method}`)).toEqual([
+      "Filter.SetFilterDots",
+      "Filter.SetFilterAt",
+      "Evaluate.Gt100",
+      "Evaluate.Gt1000",
+      "Evaluate.Lt1000",
+      "RecordRef.Duplicate",
+      "Report.RunRequestPage",
+      "Report.SaveAs",
+      "ZipArchive.Ctor",
+      "JsonTextWriter.WriteEndObject",
+      "JsonTextWriter.WriteStartObject",
+      "JsonTextWriter.WritePropertyName",
+      "Conversion.FieldValue",
+      "RecordRef.ClearMarks",
+      "FieldRef.SetFilter",
+    ]);
+  });
+
+  test("the app declares what the cells call: a table, both reports, the DotNet types; cells start at BASE_ID + 1", () => {
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    for (const s of [
+      'table 51000 "T9 Row"',
+      'report 51000 "T9 Report"',
+      'report 51001 "T9 Print Report"',
+      "T9JsonTextWriter",
+      "T9ZipArchive",
+      `codeunit ${BASE_ID + 1} "C0 Filter SetFilterDots t9"`,
+    ])
+      expect(al).toContain(s);
+    // the JSON cells reach the writer's state through setup, so the call under test is the one that raises
+    const start = f.cells.find((c) => c.method === "WriteStartObject");
+    expect(start?.setup?.at(-1)).toBe("JW.WriteValue('v');");
+    expect(start?.call).toBe("JW.WriteStartObject();");
+  });
+
+  test("a run that gives the measured texts makes 10 refusal classes, none of them known", () => {
+    const rows = f.cells.map((_, i) => ({
+      name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+      status: "error",
+      notRun: true,
+      message: `NotRun: out-of-scope: ${TEXTS[i]}`,
+    }));
+    const results = classify(f, rows);
+    expect(results.every((r) => r.outcome === "refused")).toBe(true);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    // SetFilter x2, the four .NET exceptions and the two RecordRef cells fold; the rest stand alone
+    expect(classes).toHaveLength(10);
+    expect(
+      classes.find((c) => c.text === "DotNet * raised the .NET exception *")?.cells,
+    ).toHaveLength(4);
+  });
+
+  test("last of FAMILIES (place 12, BC-check number 13, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(11);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051013");
   });
 });

@@ -1891,6 +1891,143 @@ export const FORMAT_EVALUATE: Family = {
   cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS, ...LANGUAGE_CELLS],
 };
 
+/**
+ * PR-74: the refusal texts DO window t9 met that PR-56 does not keep, each driven by an invented cell (no corpus source text).
+ * Cell i is codeunit BASE_ID + 1 + i; the support objects (a table and a report) share id 51000 as in the other families.
+ */
+const t9 = (
+  type: string,
+  method: string,
+  state: string,
+  call: string,
+  extra: Partial<Cell> = {},
+): Cell => ({
+  type,
+  method,
+  state,
+  call,
+  ...extra,
+});
+const JSON_VARS = ["SW: DotNet T9StringWriter;", "JW: DotNet T9JsonTextWriter;"];
+const JSON_SETUP = ["SW := SW.StringWriter();", "JW := JW.JsonTextWriter(SW);"];
+export const T9_REFUSALS: Family = {
+  name: "t9-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "T9 Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Amount; Decimal) { }
+        field(3; Count; BigInteger) { }
+        field(4; Blob; Blob) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+report 51000 "T9 Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "T9 Row") { } }
+    requestpage { layout { area(Content) { } } }
+}
+
+report 51001 "T9 Print Report"
+{
+    dataset { dataitem(Row; "T9 Row") { column(CodeCol; "Code") { } } }
+}
+
+dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.IO.MemoryStream; T9MemoryStream) { }
+        type(System.IO.StringWriter; T9StringWriter) { }
+    }
+    assembly(System.IO.Compression)
+    {
+        type(System.IO.Compression.ZipArchive; T9ZipArchive) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.JsonTextWriter; T9JsonTextWriter) { }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9("Filter", "SetFilterDots", "t9", "R.SetFilter(Amount, '..');", {
+      vars: ['R: Record "T9 Row";'],
+    }),
+    t9("Filter", "SetFilterAt", "t9", "R.SetFilter(Amount, '@');", {
+      vars: ['R: Record "T9 Row";'],
+    }),
+    t9("Evaluate", "Gt100", "t9", "if Evaluate(D, '>100') then;", { vars: ["D: Decimal;"] }),
+    t9("Evaluate", "Gt1000", "t9", "if Evaluate(D, '>1000') then;", { vars: ["D: Decimal;"] }),
+    t9("Evaluate", "Lt1000", "t9", "if Evaluate(D, '<1000') then;", { vars: ["D: Decimal;"] }),
+    t9("RecordRef", "Duplicate", "closed", "R2 := RR.Duplicate();", {
+      vars: ["RR: RecordRef;", "R2: RecordRef;"],
+    }),
+    t9(
+      "Report",
+      "RunRequestPage",
+      "t9",
+      "T := Report.RunRequestPage(Report::\"T9 Report\", '<a/>');",
+      {
+        vars: ["T: Text;"],
+        // a write before the call leaves a transaction open, and then the run stops before the refusal (the census kit writes first)
+        setup: ["Commit();"],
+      },
+    ),
+    t9(
+      "Report",
+      "SaveAs",
+      "t9",
+      "Report.SaveAs(Report::\"T9 Print Report\", '<a/>', ReportFormat::Xml, OutS);",
+      {
+        vars: ["OutS: OutStream;", 'R: Record "T9 Row";'],
+        setup: ["R.Blob.CreateOutStream(OutS);"],
+      },
+    ),
+    t9("ZipArchive", "Ctor", "t9", "ZA := ZA.ZipArchive(MS);", {
+      vars: ["MS: DotNet T9MemoryStream;", "ZA: DotNet T9ZipArchive;"],
+      setup: ["MS := MS.MemoryStream();"],
+    }),
+    t9("JsonTextWriter", "WriteEndObject", "t9", "JW.WriteEndObject();", {
+      vars: JSON_VARS,
+      setup: JSON_SETUP,
+    }),
+    t9("JsonTextWriter", "WriteStartObject", "t9", "JW.WriteStartObject();", {
+      vars: JSON_VARS,
+      setup: [
+        ...JSON_SETUP,
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('a');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('b');",
+        "JW.WriteValue('v');",
+      ],
+    }),
+    t9("JsonTextWriter", "WritePropertyName", "t9", "JW.WritePropertyName('b');", {
+      vars: JSON_VARS,
+      setup: [
+        ...JSON_SETUP,
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('a');",
+        "JW.WriteStartArray();",
+      ],
+    }),
+    t9("Conversion", "FieldValue", "t9", "RR.Field(3).Value := false;", {
+      vars: ["RR: RecordRef;"],
+      setup: ['RR.Open(Database::"T9 Row");'],
+    }),
+    t9("RecordRef", "ClearMarks", "untouched", "RR.ClearMarks();", { vars: ["RR: RecordRef;"] }),
+    t9("FieldRef", "SetFilter", "untouched", "FR.SetFilter('%1', 5);", { vars: ["FR: FieldRef;"] }),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -1909,6 +2046,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [PUBAPP_FLOWFIELD.name]: PUBAPP_FLOWFIELD,
   // PR-52: appended (BC-check number 12): Format, Evaluate and the text functions, for a per-cell BC differential
   [FORMAT_EVALUATE.name]: FORMAT_EVALUATE,
+  // PR-74: appended (BC-check number 13): t9's refusal texts, for a keep census
+  [T9_REFUSALS.name]: T9_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
