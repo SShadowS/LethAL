@@ -2,7 +2,7 @@ FROM kraken/tentacle-base
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl \
+      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl sqlite3 time \
     && rm -rf /var/lib/apt/lists/*
 # Node (newest LTS) for the MCP siblings
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
