@@ -1509,6 +1509,37 @@ describe("C02-07: the hardening loop, run from the documents", () => {
 
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
 
+describe("PR-71: docs/first-week.md is the code's", () => {
+  const FIRST_WEEK = join(REPO_ROOT, "docs", "first-week.md");
+
+  test("every lethal command and flag it shows parses, and it has no em dashes", () => {
+    const text = read(FIRST_WEEK);
+    const cmds = documentedCommands(text);
+    for (const sub of ["init", "doctor", "run", "explain", "verify"]) {
+      expect(
+        cmds.some((c) => c[0] === sub),
+        `first-week shows no \`lethal ${sub}\``,
+      ).toBe(true);
+    }
+    for (const argv of cmds) {
+      // al-runner-v3 is refused off Linux by design; the page documents it for Linux.
+      if (process.platform !== "linux" && argv.includes("al-runner-v3") && argv[0] === "run")
+        continue;
+      expect(() => parseCliConfig(argv), `lethal ${argv.join(" ")}`).not.toThrow();
+    }
+    const known = new Set([...Object.keys(RUN_FLAGS).map((f) => `--${f}`), ...NON_TABLE_FLAGS]);
+    const named = [...new Set(text.match(/--[a-z][a-z0-9-]+/g) ?? [])];
+    expect(named.filter((f) => !known.has(f))).toEqual([]);
+    expect(text.includes("—")).toBe(false);
+  });
+
+  test("the survivor ids in its verify example are a request verify accepts", () => {
+    const verify = documentedCommands(read(FIRST_WEEK)).filter((c) => c[0] === "verify");
+    expect(verify.length).toBeGreaterThan(0);
+    for (const argv of verify) expect(() => verifyRequestOf(argv)).not.toThrow();
+  });
+});
+
 describe("C02-07: README and --help state the contract's exit codes and rules", () => {
   test("help lists every promised exit code, in the right block", () => {
     const help = helpText("0.0.0");

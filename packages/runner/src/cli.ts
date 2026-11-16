@@ -44,7 +44,11 @@ import {
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
-import { chooseV3Environment, describeV3Environment } from "./al-runner-v3-environment";
+import {
+  chooseV3Environment,
+  describeV3Environment,
+  readLaunchEnvironment,
+} from "./al-runner-v3-environment";
 import { checkGated, resolveV3Binary, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
@@ -748,6 +752,8 @@ export interface InitCliConfig {
   readonly outPath?: string;
   /** Overwrite an existing file. Off by default: a config holds credentials someone typed. */
   readonly force?: boolean;
+  /** Which config section to write: `bcdev` (the default when absent) or `al-runner-v3`. */
+  readonly backendKind?: BackendKind;
 }
 
 export interface DoctorCliConfig {
@@ -1005,7 +1011,7 @@ export function helpText(version: string): string {
 USAGE
   lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner-v3> [options]
   lethal run               --project <dir> --dry-run
-  lethal init              --project <dir> [--out <path>] [--force]
+  lethal init              --project <dir> [--out <path>] [--force] [--backend <bcdev|al-runner-v3>]
   lethal clear-quarantine  (--server <url> --instance <name> | --config <path>)
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
@@ -1182,6 +1188,11 @@ INIT — write a lethal.config.json this project can actually run with
   --out <path>               where to write (default: <project>/lethal.config.json)
   --force                    overwrite an existing file. Off by default: a config holds
                              credentials someone typed
+  --backend <name>           which section to write: bcdev (default) or al-runner-v3. For
+                             al-runner-v3 it writes an "alRunnerV3" section with packagesDir and a
+                             bcVersion placeholder that 'run' and 'doctor' refuse by name until you
+                             type your BC build. "environment" is left out when your
+                             .vscode/launch.json names environmentType, else it is a placeholder.
   Server, company and credentials are left as placeholders and named in the printed next steps,
   because nothing here can know them. Follow with 'lethal doctor --config <path>'.
 
@@ -1447,7 +1458,6 @@ export const RUN_FLAGS = {
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
 const RUN_ONLY_FLAGS = [
-  "backend",
   "skip-known-survivors",
   "dry-run",
   "workers",
@@ -1576,6 +1586,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     flag: "force",
     owners: ["init"],
     instead: "It lets `lethal init` overwrite an existing config.",
+  },
+  {
+    flag: "backend",
+    owners: ["run", "init"],
+    instead: "It is a `lethal run` flag, and picks the config section `lethal init` writes.",
   },
   {
     flag: "artifact",
@@ -1926,6 +1941,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       projectDir: project,
       ...(out !== undefined && out !== "" ? { outPath: out } : {}),
       ...(values.force === true ? { force: true } : {}),
+      ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
     };
   }
 
@@ -5371,6 +5387,47 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
     );
   }
   validateSelectorIds(picked, idRanges, existingCodeunits, dependencies);
+
+  if (parsed.backendKind === "al-runner-v3") {
+    // Never guess a setting that decides a verdict: bcVersion is a placeholder `validateAlRunnerV3Config`
+    // refuses by name. environment is left out when launch.json answers (the run reads it there).
+    const launch = await readLaunchEnvironment(parsed.projectDir);
+    const envFromLaunch = launch.value !== undefined;
+    const v3Config = {
+      alRunnerV3: {
+        packagesDir: join(parsed.projectDir, ".alpackages"),
+        bcVersion: "<your BC build, four numbers, e.g. 28.4.53241.56646>",
+        ...(envFromLaunch ? {} : { environment: "<onprem or saas>" }),
+      },
+      selectorIds: picked,
+    };
+    await writeFile(outPath, `${JSON.stringify(v3Config, null, 2)}\n`, "utf8");
+    console.log(`init: wrote ${outPath} for ${appName} (al-runner-v3)`);
+    console.log(
+      `  selectorIds ${picked.selectorId}/${picked.controlId}/${picked.tableId} — inside this app's own idRanges, so the objects LethAL injects will compile`,
+    );
+    console.log("\nStill yours to fill in, because nothing here can know them:");
+    console.log(
+      "  alRunnerV3.bcVersion                      your BC build, four numbers (the placeholder is refused by name until you replace it)",
+    );
+    console.log(
+      "  alRunnerV3.packagesDir                    must hold the BC symbols: Microsoft's System Application at exactly bcVersion (bun scripts/fetch-ms-symbols.ts <bc-major> <dir> writes them and prints the bcVersion)",
+    );
+    console.log(
+      "  alc (the AL compiler)                     found in the AL Language VS Code extension; with no extension run scripts/fetch-alc.ts and set alRunnerV3.alcPath (README, al-runner-v3 section)",
+    );
+    console.log(
+      envFromLaunch
+        ? "  alRunnerV3.environment                    left out: your .vscode/launch.json gives environmentType"
+        : `  alRunnerV3.environment                    onprem or saas (the placeholder is refused by name; ${launch.note ?? "launch.json names no environmentType"})`,
+    );
+    console.log(
+      "  alRunnerV3.path                           not written: the default al-runner applies. Run 'lethal doctor' to see whether that build is a gated one",
+    );
+    console.log("  Fill in both placeholders: the validator refuses them one at a time.");
+    console.log(`\nThen: lethal doctor --config ${outPath}`);
+    return 0;
+  }
 
   const config = {
     bcdev: {
