@@ -375,7 +375,7 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // docs/superpowers/specs/2026-10-25-r782-serve-row-fields-precommitment-addendum-1.md).
   "al-runner-v3/N1E": [],
   // PR-55 addendum 1 (master 7d4f2688): X (d)'s sleep-mutant cuts run SleeperDoubles alone, so its kills are confirmed alone
-  "al-runner-v3/xd-d": [...XD_NARROWED, "alone-confirm"],
+  "al-runner-v3/xd-d": ["alone-confirm", ...XD_NARROWED],
   "al-runner-v3/xd-e": XD_NARROWED,
   "al-runner-v3/xd-f1": XD_NARROWED,
   "al-runner-v3/xd-f2": XD_NARROWED,
