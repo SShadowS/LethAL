@@ -27,6 +27,7 @@ import {
   closeSync,
   existsSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -86,6 +87,7 @@ import {
   makeProcPeakProbe,
   memoryBoundBytes,
   readCgroupMemory,
+  readProcessRssAnonBytes,
   readProcessRssBytes,
 } from "./al-runner-v3-baseline-check";
 import {
@@ -1656,6 +1658,11 @@ export interface V3LaneView extends ExecutionBackend {
 export const LANE_MIN_AVAILABLE_BYTES = 10 * 2 ** 30;
 /** R766 (b): one serve daemon peaks about 2.2 GB RSS on D1 (measured); 2.3 GB is budgeted per lane. */
 export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
+/** PR-98: the cgroup reserve kept free, and LethAL's own process charged up to this (R988 measured 3.9 GiB). */
+export const LANE_RESERVE_BYTES = 4 * 2 ** 30;
+export const LANE_LETHAL_BYTES = 4 * 2 ** 30;
+/** PR-98: heavy-slot's default peak for the `other` class, used when no class file names one. */
+export const LANE_DEFAULT_DECLARED_GIB = 8;
 
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
@@ -2078,6 +2085,18 @@ class Lane {
     return [...this.daemons.values()].some((d) => d.baselineStop !== undefined);
   }
 
+  /** PR-98: true while this lane holds any daemon (of any mode). */
+  holdsDaemon(): boolean {
+    return this.daemons.size > 0;
+  }
+
+  /** PR-98: the pids of this lane's daemons (the cgroup lane gate subtracts their resident RSS). */
+  daemonPids(): number[] {
+    return [...this.daemons.values()].flatMap((d) =>
+      d.server.pid !== undefined ? [d.server.pid] : [],
+    );
+  }
+
   dropPair(): void {
     this.pair = undefined;
     this.pairVerdict = undefined;
@@ -2493,6 +2512,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
      * set and no probe, a request is read by the sampler alone (tests never read `/proc`).
      */
     peakProbe?: PeakProbe;
+    /** PR-98: replaces the `RssAnon` reader of the lane gate (tests never read `/proc`). */
+    anonReader?: (pid: number) => number;
+    /** PR-98: replaces LethAL's own resident size in the lane gate. */
+    lethalRss?: () => number;
+    /** PR-98: replaces the env read of `LETHAL_HEAVY_CLASS_FILE` (tests never read the real env). */
+    classFilePath?: () => string | undefined;
+    /** PR-98: replaces the read of the class file. */
+    readTextFile?: (path: string) => string;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
@@ -2511,8 +2538,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly speculateOn: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
-  /** R766 (b): the `resume` fact `decideTransport` was given. */
-  private resumeSession = false;
+  /** PR-98: the highest peak reading (PR-88) any serve request of this session gave, and where it came from. */
+  private peakReading: { bytes: number; source: "hwm" | "sampled" } | undefined;
+  /** PR-98: the latest refusal of the lane gate and its parts, for the lane notices. */
+  private laneLimit: { rule: string; detail: string } | undefined;
+  private laneParts: string | undefined;
   /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
   private entriesRefused: string | undefined;
   /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
@@ -3172,7 +3202,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async pickTransport(facts: { readonly resume: boolean }): Promise<void> {
-    this.resumeSession = facts.resume; // R766 (b): `parallelRefusal` reads it, whatever the transport
     if (this.cfg.transportSource === undefined) return; // an internal caller's own transport
     if (this.cfg.transportSource === "explicit") {
       if (this.cfg.transport === "serve-entries") {
@@ -5050,14 +5079,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * and the available GB. The per-lane hold (`laneMayStart`) still applies to each lane.
    */
   affordableLanes(n: number): number {
-    const avail = (this.seams.availableBytes ?? freemem)();
+    this.laneLimit = undefined; // the notice of `noteLanes` speaks for this call only
     let k = n;
-    while (k > 1 && k * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES > avail) k -= 1;
+    while (k > 1 && !this.decideLanes(Math.max(k - 1, this.lanesHoldingDaemon()) + 1).ok) k -= 1;
     if (k < n && !this.fitNoticed) {
       this.fitNoticed = true;
+      const why = this.laneLimitNow();
       this.notify(
         "al-runner-v3-lane-memory-fit",
-        `[lethal] al-runner-v3-lane-memory-fit: ${(avail / 2 ** 30).toFixed(1)} GB available; ${n} lanes asked, ${k} started (each lane needs ${(LANE_RSS_BYTES / 2 ** 30).toFixed(1)} GB, and ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB must stay free) (R766).`,
+        `[lethal] al-runner-v3-lane-memory-fit: ${n} lanes asked, ${k} started (rule: ${why?.rule ?? "?"}; ${why?.detail ?? ""}) (PR-98).`,
       );
     }
     return k;
@@ -5080,29 +5110,131 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R785: the one-line notice of how many lanes started. */
   noteLanes(message: string): void {
+    // PR-98: the lane gate's part: bytes per lane and its parts, and the rule that limited the count.
+    const gate =
+      this.laneParts === undefined
+        ? ""
+        : `; lane gate: ${this.laneParts}; limited by: ${this.laneLimit?.rule ?? "--workers"}`;
     this.notify(
       "al-runner-v3-lanes-started",
-      `[lethal] al-runner-v3-lanes-started: ${message} (R785).`,
+      `[lethal] al-runner-v3-lanes-started: ${message}${gate} (R785).`,
     );
   }
 
   /**
-   * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
-   * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the
-   * kernel's available figure on Linux (libuv reads MemAvailable).
+   * PR-98: the lane gate. Lane `k` (> 0) may start only while the lanes charged (every lane that holds a
+   * daemon, or `k`, whichever is more, plus this one) fit; see `decideLanes`. One notice says so, once.
    */
   laneMayStart(k: number): boolean {
     if (k === 0) return true;
-    const avail = (this.seams.availableBytes ?? freemem)();
-    if (avail >= LANE_MIN_AVAILABLE_BYTES) return true;
+    const v = this.decideLanes(Math.max(k, this.lanesHoldingDaemon()) + 1);
+    if (v.ok) return true;
     if (!this.memoryHoldNoticed) {
       this.memoryHoldNoticed = true;
       this.notify(
         "al-runner-v3-lane-memory-hold",
-        `[lethal] al-runner-v3-lane-memory-hold: ${(avail / 2 ** 30).toFixed(1)} GB available, under the ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB needed to start lane ${k}; this session stays at the lanes already running (R766).`,
+        `[lethal] al-runner-v3-lane-memory-hold: lane ${k} does not start (rule: ${v.rule}); ${v.detail}; this session stays at the lanes already running (PR-98).`,
       );
     }
     return false;
+  }
+
+  private laneLimitNow(): { rule: string; detail: string } | undefined {
+    return this.laneLimit;
+  }
+
+  private lanesHoldingDaemon(): number {
+    return this.laneList.filter((l) => l.holdsDaemon()).length;
+  }
+
+  /**
+   * PR-98: the ONE lane decision. `charged` lanes (lane 0 and the asker included) each cost `bytes per lane`:
+   * the distinct request modes of this batch x the highest peak reading of the session, plus one one-shot
+   * process when the batch has one-shot codeunits. No reading yet: no lane above 0 ("unmeasured").
+   * Where the cgroup names a limit: (used less our daemons' RssAnon) + charged lanes + LethAL's own 4 GiB
+   * (less its RSS) must fit under memory.max less 4 GiB, and charged lanes + 4 GiB under the declared peak
+   * of the heavy-slot job (re-read each time). Elsewhere: charged lanes + 10 GB under `os.freemem()`.
+   * Limits (stated): the .NET sidecar is in neither term; R948's guard is the backstop between groups.
+   */
+  private decideLanes(charged: number): {
+    readonly ok: boolean;
+    readonly rule: "unmeasured" | "cgroup" | "declared peak" | "free memory";
+    readonly detail: string;
+  } {
+    const gib = (n: number) => (n / 2 ** 30).toFixed(1);
+    const peak = this.peakReading;
+    const modes = Math.max(
+      1,
+      new Set([...this.union].map((id) => modeKey(this.modeOfCall(id)))).size,
+    );
+    const oneShot = this.oneShotCodeunits.size > 0 ? this.memoryEstimate() : 0;
+    const bpl = peak === undefined ? 0 : modes * peak.bytes + oneShot;
+    const parts =
+      peak === undefined
+        ? "no peak reading yet"
+        : `${gib(bpl)} GiB per lane = ${modes} mode(s) x ${gib(peak.bytes)} GiB ${peak.source} peak${oneShot > 0 ? ` + ${gib(oneShot)} GiB one-shot` : ""}`;
+    const verdict = (
+      ok: boolean,
+      rule: "unmeasured" | "cgroup" | "declared peak" | "free memory",
+      more: string,
+    ) => {
+      const detail = `${charged} lanes charged; ${parts}${more}`;
+      if (!ok) this.laneLimit = { rule, detail };
+      this.laneParts = parts;
+      return { ok, rule, detail };
+    };
+    if (peak === undefined) return verdict(false, "unmeasured", "");
+    const sample = (this.seams.memoryReader ?? (() => readCgroupMemory()))();
+    if (sample === undefined || sample.maxBytes === undefined) {
+      const avail = (this.seams.availableBytes ?? freemem)();
+      const need = charged * bpl + LANE_MIN_AVAILABLE_BYTES;
+      return verdict(
+        need <= avail,
+        "free memory",
+        `; no cgroup limit, so ${gib(avail)} GB free must cover ${gib(need)} GB`,
+      );
+    }
+    const own = this.laneList
+      .flatMap((l) => l.daemonPids())
+      .reduce((s, pid) => s + (this.seams.anonReader ?? readProcessRssAnonBytes)(pid), 0);
+    const lethalRss = (this.seams.lethalRss ?? (() => process.memoryUsage().rss))();
+    const lethalTerm = Math.max(0, LANE_LETHAL_BYTES - lethalRss);
+    const room = sample.maxBytes - LANE_RESERVE_BYTES;
+    const cg = sample.usedBytes - own + charged * bpl + lethalTerm;
+    if (cg > room)
+      return verdict(
+        false,
+        "cgroup",
+        `; ${gib(cg)} GiB would be in use, over ${gib(room)} GiB (${sample.source} less ${gib(LANE_RESERVE_BYTES)} reserve)`,
+      );
+    const declared = this.declaredPeakGib();
+    const need = charged * bpl + LANE_LETHAL_BYTES;
+    if (need > declared.gib * 2 ** 30)
+      return verdict(
+        false,
+        "declared peak",
+        `; ${gib(need)} GiB needed (with LethAL's ${gib(LANE_LETHAL_BYTES)}), over the declared ${declared.gib} GiB (${declared.source})`,
+      );
+    return verdict(true, "cgroup", "");
+  }
+
+  /** PR-98: the heavy-slot job's declared peak, re-read from `LETHAL_HEAVY_CLASS_FILE` each time. */
+  private declaredPeakGib(): { readonly gib: number; readonly source: string } {
+    const path = (this.seams.classFilePath ?? (() => process.env.LETHAL_HEAVY_CLASS_FILE))();
+    if (path !== undefined && path !== "") {
+      try {
+        const m = /^\S+\s+\d+\s+(\d+(?:\.\d+)?)/.exec(
+          (this.seams.readTextFile ?? ((p) => readFileSync(p, "utf8")))(path),
+        );
+        if (m?.[1] !== undefined && Number(m[1]) > 0) return { gib: Number(m[1]), source: path };
+      } catch {
+        // an unreadable class file falls to the default below, named
+      }
+    }
+    return {
+      gib: LANE_DEFAULT_DECLARED_GIB,
+      source: "no class file: heavy-slot's default for the other class",
+    };
   }
 
   /**
@@ -5110,9 +5242,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * parallel. Asked after `decideTransport`.
    */
   parallelRefusal(): string | undefined {
-    if (this.resumeSession) {
-      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a resumed session's lanes were never measured on a re-run baseline (R766; a resume with --workers 1 runs on serve, R1008)";
-    }
+    // PR-98: a resume is allowed (R766's refusal is lifted; `splitBackend` forwards the resume hooks).
     if (!this.entries) {
       return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
     }
@@ -6308,7 +6438,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     storedCoverage: ReadonlyMap<string, string>,
     timeoutMs: number,
   ): Promise<string | undefined> {
-    const lane = this.soleLane("recheckReusedBaseline");
+    // PR-98 (PR-89 fix 2): an owner method of the baseline phase, so it runs on lane 0 also once lanes exist
+    // (`soleLane` threw then). `deploy` closes every daemon first, so no other lane holds one here.
+    const busy = this.laneList.findIndex((l, k) => k > 0 && l.holdsDaemon());
+    if (busy > 0) {
+      throw new Error(
+        `al-runner-v3-lane-misuse: recheckReusedBaseline() was called while lane ${busy} holds a daemon; the re-check runs in the baseline phase, on lane 0, before any lane beyond it starts (PR-98)`,
+      );
+    }
+    const lane = this.lane;
     const s = parseL5State(state);
     if (s === undefined) return "no backend state (the snapshot was stored before PR-21)";
     if (!this.entries) return "the transport (this session does not run on serve-entries)";
@@ -7157,6 +7295,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     daemon.keptRefusal = this.firstKeptRefusal(sent, rows);
+    // PR-98: the lane gate's per-daemon peak is the highest reading of the session.
+    if (
+      peakRss !== undefined &&
+      (this.peakReading === undefined || peakRss > this.peakReading.bytes)
+    )
+      this.peakReading = { bytes: peakRss, source: peakSource };
     this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent, {
       source: peakSource,
       sampledPeak,

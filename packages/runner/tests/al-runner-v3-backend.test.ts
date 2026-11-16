@@ -48,7 +48,7 @@ import {
   v3RowVerdict,
   v3TestDataOffNote,
 } from "../src/al-runner-v3-backend";
-import { readProcessRssBytes } from "../src/al-runner-v3-baseline-check";
+import { readProcessRssAnonBytes, readProcessRssBytes } from "../src/al-runner-v3-baseline-check";
 import {
   V3_DAEMON_MAX_RSS_GB_DEFAULT,
   V3_DOWNLOAD_DEMO_DATA_DEFAULT,
@@ -1478,6 +1478,19 @@ describe("R885: demo data, on the one-shot path", () => {
         throw new Error("ENOENT");
       }),
     ).toBeUndefined();
+  });
+
+  test("PR-98 readProcessRssAnonBytes: RssAnon, not VmRSS; unreadable or without the line, 0", () => {
+    const status = "Name:\tal-runner\nVmRSS:\t 9000 kB\nRssAnon:\t 2048 kB\nRssFile:\t 6000 kB\n";
+    expect(readProcessRssAnonBytes(42, (p) => (p === "/proc/42/status" ? status : ""))).toBe(
+      2048 * 1024,
+    );
+    expect(readProcessRssAnonBytes(42, () => "Name:\tx\nVmRSS:\t 9000 kB\n")).toBe(0);
+    expect(
+      readProcessRssAnonBytes(42, () => {
+        throw new Error("ENOENT");
+      }),
+    ).toBe(0);
   });
 
   test("R907 --no-client: v3CallArgv adds it after --bc-version when on, never when off", () => {

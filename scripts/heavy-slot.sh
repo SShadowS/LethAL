@@ -183,7 +183,8 @@ try_once() {
       "${BUN:-bun}" "$(dirname "$0")/heavy-slot-peak.ts" "$$" "$peakfile" "${LETHAL_HEAVY_SAMPLE_S:-5}" &
       sampler=$!
       job_started=$(date -u +%FT%TZ)
-      "$@"
+      # PR-98: the job (not this shell) learns its slot's class file; LethAL re-reads its declared peak at each lane decision.
+      LETHAL_HEAVY_CLASS_FILE="$class" "$@"
       exit $?
     fi
     rm -f "$class" # refused: the slot is released and the command does not run

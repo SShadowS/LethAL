@@ -1,6 +1,7 @@
 // R766 step (b): the ordered commit, the stop rule and the pull queue of `--workers N` on al-runner v3.
 // Pure fakes: the "lanes" are scripted calls, so the order of events is the test's, never a clock's.
 import { describe, expect, test } from "bun:test";
+import type { ExecutionBackend } from "../src/backend";
 import {
   type LaneReason,
   type Latch,
@@ -8,6 +9,7 @@ import {
   ParallelStopError,
   lanesNotice,
   runScopeQueue,
+  splitBackend,
 } from "../src/parallel-queue";
 
 const CODES = ["M0", "M1", "M2", "M3", "M4", "M5"];
@@ -575,5 +577,45 @@ describe("runScopeQueue: R785 lanes start by the queued live work", () => {
     expect(held.reason).toBe("memory");
     const short = await run({ live: [1, 1, 1], lanes: 4, warm: 1000 });
     expect(short.reason).toBe("cost"); // the queue then drained, but cost was the cause
+  });
+});
+
+// PR-98 (PR-89 fix 1): the resume hooks are the owner's.
+describe("splitBackend forwards the resume hooks to the owner", () => {
+  const stub = (o: Record<string, unknown>): ExecutionBackend => o as unknown as ExecutionBackend;
+  const lane = stub({});
+
+  test("the four hooks reach the owner, with their arguments, and lane 0's answers are not used", async () => {
+    const calls: unknown[][] = [];
+    const owner = stub({
+      resumeRunsBaseline: true,
+      isolatesTests: true,
+      baselineState: async () => {
+        calls.push(["state"]);
+        return { s: 1 };
+      },
+      recheckReusedBaseline: async (
+        state: unknown,
+        cov: ReadonlyMap<string, string>,
+        t: number,
+      ) => {
+        calls.push(["recheck", state, [...cov.entries()], t]);
+        return "why";
+      },
+    });
+    const split = splitBackend(owner, stub({ resumeRunsBaseline: false, isolatesTests: false }));
+    expect(split.resumeRunsBaseline).toBe(true);
+    expect(split.isolatesTests).toBe(true);
+    expect(await split.baselineState?.()).toEqual({ s: 1 });
+    expect(await split.recheckReusedBaseline?.({ a: 1 }, new Map([["k", "v"]]), 7)).toBe("why");
+    expect(calls).toEqual([["state"], ["recheck", { a: 1 }, [["k", "v"]], 7]]);
+  });
+
+  test("an owner without the optional two leaves them absent; the getters read false", () => {
+    const split = splitBackend(stub({}), lane);
+    expect(split.baselineState).toBeUndefined();
+    expect(split.recheckReusedBaseline).toBeUndefined();
+    expect(split.resumeRunsBaseline).toBe(false);
+    expect(split.isolatesTests).toBe(false);
   });
 });
