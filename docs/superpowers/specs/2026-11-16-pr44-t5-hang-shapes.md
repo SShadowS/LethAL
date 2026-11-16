@@ -51,3 +51,20 @@ most loop bounds set before a loop end the loop when left at their default.
 3. DO's mutation set loses M11468's, M11934's and (rule B kept) M7544's sites, plus the others the corpus diff lists.
    `itest:alrunner-v3` passes every leg.
 4. From t8 on, DO's mutant phase has no timeout close from these shapes.
+
+## Addendum 1 (2026-11-16, the measurement; the orchestrator's ruling: rule A alone)
+
+Measured (`/coord/handoff/PR-44/measure.md`; corpus before = PR-37's `corpus-after2`, unchanged since; DO against t6's report,
+t5's for sites t6 never reached):
+- **Rule A** removes 1 corpus site (killed) and 6 DO sites (3 timeout-killed: M11468's, M11934's and a third t6 timeout, at line
+  247 of the same table; 1 killed, 1 no-coverage, 1 never reached). That is **3 hangs per 5 scored sites lost**, far above PR-37's
+  1 per 8. No fixture site moves and no golden moves. **Kept.**
+- **Rule B** removes 11 corpus sites (1 timeout-killed, 1 killed, 4 survived, 3 error, 3 no-coverage) and 15 DO sites (1
+  timeout-killed: M7544; 1 survived, 1 error, 7 no-coverage, 5 never reached). That is 2 hangs per 8, just at the bar. But it also
+  removes 3 sites of `fixtures/sandbox-hang` (rows of `hang.single.baseline.json`, so `itest:hang` would BLOCK) and 1 of
+  `sandbox-optin`, moving 6 emit goldens. All 4 are false positives: their loops progress through an event subscriber that the body
+  analysis cannot see (R830's blind spot), and removing an initial `Counter := 0` does not hang. **Dropped** by ruling, filed as
+  R1061 with the narrowing it needs.
+
+So prediction 2 holds with no moved site. Prediction 3 loses M11468's and M11934's sites and the third, but not M7544's: R1061
+covers it.
