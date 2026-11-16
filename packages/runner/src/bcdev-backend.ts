@@ -266,6 +266,19 @@ export interface BcDevDeployment {
 }
 
 /**
+ * PR-51 (F1): `RunOpts.alone` reached bcdev. Only a verdict marked `selection: "alone"` asks for
+ * it, and bcdev never sets that (every call is a fresh session), so reaching here is a bug.
+ */
+export class BcDevAloneUnsupportedError extends Error {
+  constructor(readonly ref: TestMethodRef) {
+    super(
+      `bcdev-alone-unsupported: RunOpts.alone was passed for ${ref.codeunitName}.${ref.method}, but the bcdev backend never marks a verdict as run alone and cannot run one (PR-51)`,
+    );
+    this.name = "BcDevAloneUnsupportedError";
+  }
+}
+
+/**
  * A publish attempt that demonstrably failed: `deployment.deployer.publish()` threw AND identity
  * verification found nothing to redeem it (`decidePublishOutcome`'s `"failed"` outcome — see
  * deploy() below). Deliberately NOT `DeploymentError` (CLAUDE.md's typed-error separation rule:
@@ -1325,6 +1338,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
    * session it exists to stop using, and every gate would still have passed.
    */
   async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    if (opts.alone === true) throw new BcDevAloneUnsupportedError(ref);
     const v =
       opts.coverage === "procedure" || opts.coverage === "line"
         ? await this.runOnHub(ref, opts)

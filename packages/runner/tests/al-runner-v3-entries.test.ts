@@ -6786,6 +6786,124 @@ describe("R895: stop a request at its first timeout row", () => {
         await r.b.run(B, OPTS);
         expect(sentFor(r, n0, "M0001").map((s) => s.alone)).toEqual([false, true]);
       });
+
+      // PR-51 (F1): RunOpts.alone runs exactly one test alone, whatever the routing state says.
+      const ALONE = { ...OPTS, alone: true as const };
+
+      test("5 (F1): alone at the CUT test itself is an alone request, not the live whole-codeunit call 1b shows", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        const n0 = r.serve.requests.length;
+        await r.b.activate("M0001");
+        const v = await r.b.run(A, ALONE);
+        expect(v.selection).toBe("alone");
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.A`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("6 (F1): alone with no cut anywhere is still an alone request (test 2 shows the live whole-codeunit default)", async () => {
+        const r = await readyRig({
+          serve: { rows: killsM1 },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        const n0 = r.serve.requests.length;
+        const v = await r.b.run(A, ALONE);
+        expect(v.selection).toBe("alone");
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.A`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("7 (F1): alone under NONE (the confirm) is an alone request for NONE", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        await r.b.run(B, OPTS);
+        const n0 = r.serve.requests.length;
+        await r.b.activate(null);
+        const v = await r.b.run(B, ALONE);
+        expect(v.selection).toBe("alone");
+        expect(sentFor(r, n0, "NONE")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.B`], mutants: ["NONE"] },
+        ]);
+      });
+
+      test("8 (F1): an alone answer is never cached as the codeunit's call, and a plain run carries no selection", async () => {
+        const r = await readyRig({
+          serve: { rows: killsM1 },
+          suite: SUITE2,
+          // M0001 is not prefetched, so its plain run is a live request unless the alone answer
+          // was cached as the codeunit's call.
+          mutants: ["M0002"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        const n0 = r.serve.requests.length;
+        expect((await r.b.run(A, ALONE)).selection).toBe("alone");
+        const plain = await r.b.run(A, OPTS);
+        expect(plain.selection).toBeUndefined();
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.A`], mutants: ["M0001"] },
+          { alone: false, tests: [`Codeunit${CU}.`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("10 (Addendum 1): cutState/restoreCutState put the cut set back, so a replayed timeout's reproduction is live, not alone", async () => {
+        // A and B both hang under M0001. A is held, B (alone, after A's cut) is noted: its cut now
+        // sits in the same codeunit. The reproduction of A runs after `restoreCutState` of the state
+        // met at A: live, as in the old walk. Without the restore, B's cut routes it alone.
+        const hangsAB: RowsFn = (m, cu, d, n) =>
+          m === "M0001" && cu === CU
+            ? [
+                { method: "A", status: "error", notRun: true, message: TIMEOUT_1S },
+                { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
+              ]
+            : allPass(m, cu, d, n);
+        const r = await readyRig({
+          serve: { rows: hangsAB },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        const atA = r.b.cutState("M0001");
+        expect((await r.b.run(B, OPTS)).outcome).toBe("timeout");
+        // the alone run of B really recorded a second cut, so the restore below has something to undo
+        expect((r.b.cutState("M0001") as Set<string>).size).toBe((atA as Set<string>).size + 1);
+        r.b.restoreCutState("M0001", atA);
+        await r.b.activate("M0001");
+        const n0 = r.serve.requests.length;
+        await r.b.run(A, OPTS);
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: false, tests: [`Codeunit${CU}.`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("9 (F1): a verdict R895's own routing answered alone is marked, so the orchestrator can confirm it alone", async () => {
+        const r = await readyRig({
+          serve: { rows: hangsA },
+          suite: SUITE2,
+          mutants: ["M0001"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        expect((await r.b.run(B, OPTS)).selection).toBe("alone");
+      });
     });
 
     test("a cut with rows only after the cut entry in the answer is a protocol error: the prefetch is dropped", async () => {

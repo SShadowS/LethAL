@@ -98,7 +98,11 @@ export const HANG_FIGURES = {
   coldConfirmsSingle: 5,
   /** R582: the ON leg's grouped calls BC stopped, which answer no session id: the 5 first
    *  timeouts plus line 145's warm timeout re-run (the 4 position-1 re-runs are single calls). */
-  stoppedCallsOn: 6,
+  stoppedCallsOn: 8,
+  /** PR-51: the ON leg's timeout-killed mutants whose walk met a SECOND hang (M0008, M0009: the
+   *  `Advance` subscriber, covered by two hanging tests). The held walk runs the second one in a new
+   *  call, so each adds one grouped call and one stopped call. */
+  heldSecondHangs: 2,
   /** R-658: the BASELINE leg's `--baseline-timeout-ms`; `SleepsPastTheBaselineBudget` runs past it. */
   baselineBudgetMs: 10_000,
   /** R-658: that test's `Sleep`, which ends by itself (R164 untouched) and passes at the 120 s default. */

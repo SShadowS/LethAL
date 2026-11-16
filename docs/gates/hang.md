@@ -80,7 +80,8 @@ it exists. The method undercounts a path that runs through a third app. See R634
     "HANG_FIGURES.warmKills": 4,
     "HANG_FIGURES.coldConfirmsOn": 4,
     "HANG_FIGURES.coldConfirmsSingle": 5,
-    "HANG_FIGURES.stoppedCallsOn": 6,
+    "HANG_FIGURES.stoppedCallsOn": 8,
+    "HANG_FIGURES.heldSecondHangs": 2,
     "HANG_FIGURES.baselineBudgetMs": 10000,
     "HANG_FIGURES.baselineSleepMs": 25000,
     "HANG_FIGURES.baselineLegMutants": 5,
@@ -104,10 +105,19 @@ it exists. The method undercounts a path that runs through a third app. See R634
   [20 000, 50 000) ms. On the ON leg the re-run of line 145's warm timeout is a group call;
   the other four re-run as single calls.
 - The ON leg's group calls are `scored + 2 x warmKills` (one replay and one re-run per warm kill),
-  42 before R582 and 46 since. 6 of them are stopped and answer no session id
-  (`stoppedCallsOn`): the 5 first timeouts and line 145's re-run. So the distinct grouped session
-  ids are 46 - 6 = 40. The re-runs add about ten 20-25 s stops, which took the gate to about
-  15 minutes.
+  42 before R582, 46 after it and 48 since PR-51 (see the next item). 8 of them are stopped and
+  answer no session id (`stoppedCallsOn`): the 5 first timeouts, line 145's re-run and the 2 held
+  second hangs. So the distinct grouped session ids are 48 - 8 = 40. The re-runs add about ten
+  20-25 s stops, which took the gate to about 15 minutes.
+- PR-51 (R1057) holds a timeout while the covering walk looks for a kill, and scores it only if no
+  later test fails and reproduces. Two mutants, M0008 (line 43) and M0009 (line 44) in the
+  `Advance` subscriber, are covered by two tests that both hang under them
+  (`CountUpToReachesTheLimit` and `SpinUntilReachesTheTarget`). The first hang is held, the walk
+  sends a new call for the second, which hangs and is stopped, and the first hang is then scored
+  as before. Each adds one grouped call and one stopped call, pinned as the number
+  `heldSecondHangs` (2), never read back from the report. No verdict and no killing test moves; the
+  other three timeout kills have no second test to run. Predicted from
+  `docs/superpowers/specs/2026-11-16-pr51-timeout-class-stable.md`; not yet run live.
 - The BASELINE leg (R-658) uses a 10 s baseline budget (`baselineBudgetMs`) against a 25 s
   `Sleep` (`baselineSleepMs`). It has 5 `conditional-boundary` mutants (`baselineLegMutants`) and
   exactly one kill (`baselineLegKilled`), the line-103 `DrainQueue` mutant by
