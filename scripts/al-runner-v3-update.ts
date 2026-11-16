@@ -1107,6 +1107,10 @@ export function countHeavyJobs(
  * to the gate too. Undefined when the cgroup names no limit. The gate holds no slot, so it marks none;
  * an admission by the allowance goes to the small-admits ledger under the name `al-runner-v3-update`.
  * Seams: `readSample`, `psText`, `appendLedger` (tests stub them; none may touch /coord).
+ * Accepted ceiling: the update holds no heavy slot, so while its gate runs it is not counted toward
+ * R992's two-small-job cap, and a third small job may be admitted. That is bounded at about the
+ * update's 2 GiB peak above the declared sum, once a day, and each job still passed used + peak +
+ * reserve. A marker that counts the update would close this if wanted.
  */
 export function gateMemoryVerdict(
   dir: string,

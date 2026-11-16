@@ -87,15 +87,25 @@ describe("PR-60 gateMemoryVerdict", () => {
     expect(heldInputs(dir, process.pid, PS_HEAD).smallHeld).toBeUndefined();
   });
 
-  test("counts an unslotted heavy process, and it can turn an admission into a refusal", async () => {
+  test("the ps text reaches heldInputs: an unslotted BaseApp job's default peak (12) is in the held sum", async () => {
     const dir = mk();
     await hold(dir, 1, `other ${process.pid} 8\n`);
     const ps = `${PS_HEAD}200 1 200 bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
     expect(heldInputs(dir, process.pid, PS_HEAD).heldPeaks).toEqual([8]);
     expect(heldInputs(dir, process.pid, ps).heldPeaks).toEqual([8, 12]);
-    // 8 + 12 + 2 + 4 = 26 fits; with another 8 held it does not, but the allowance still admits
-    // (used is low); the unslotted job is what the declared-sum check saw.
     expect(run(dir, 3, ps).v?.message).toContain("held slots' peaks 20.0 (2)");
+  });
+
+  test("the unslotted 12 GiB job flips an admission to a refusal", async () => {
+    const dir = mk();
+    await hold(dir, 1, `other ${process.pid} 8 small\n`);
+    await hold(dir, 2, `other ${process.pid} 8 small\n`);
+    const ps = `${PS_HEAD}200 1 200 bun scripts/corpus-snapshot.ts snapshot --root /work/src/BC.History/BaseApp\n`;
+    // 16 + 2 + 4 = 22 fits; with the unslotted 12, 28 + 6 = 34 > 32 and 2 small are held: no allowance.
+    expect(run(dir, 3).v?.message).toContain("admitted");
+    expect(run(dir, 3).v?.refuse).toBe(false);
+    expect(run(dir, 3, ps).v?.refuse).toBe(true);
+    expect(run(dir, 3, ps).v?.message).toContain("REFUSED");
   });
 
   test("no cgroup limit: undefined", () => {
