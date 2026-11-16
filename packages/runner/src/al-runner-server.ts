@@ -763,7 +763,7 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   KEYREFM: "(?:FieldCount|FieldIndex)",
   KIND: "(?:a Decimal|an Integer)",
   // PR-74: the measured variants only, each by name. PR-93 added `<>` (its text quotes it).
-  SETOP: String.raw`(?:\.\.|@|` + "`<>`)",
+  SETOP: "(?:\\.\\.|@|`<>`)",
   CMP: "(?:>100|>1000|<1000|<300)",
   // PR-93: the Date filter texts and the BigInteger codes t10/t11 closed on, each measured, by name.
   DATETEXT: "(?:-1M|-2026-09-01)",
