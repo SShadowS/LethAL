@@ -5,7 +5,8 @@
  *   bun scripts/upstream-fixed-scan.ts [--repros <report.json>] [--candidate <commit>] [--json]
  *
  * A comment that names a build is not a fix: it may say "first step", "related fix" or "your repro still refuses". So the
- * classes only say which builds a comment names (`build-named-in-current`, `-in-candidate`, `-not-pinned`, `no-build-named`),
+ * classes only say which builds a comment names (`build-named-in-current`, `-in-candidate`, `-not-pinned`, `no-build-named`,
+ * and R1083's `latest-comment-names-no-build`: an older comment named a build but the newest names none, a plan or a reply),
  * with an excerpt of the comment, and no keyword rule reads the text. "Fixed" is decided by the regression entry's repro
  * result (`--repros`, or the daily run's own run of the set on current: the rows describe CURRENT), never by the comment.
  * Only comments by OWNER/MEMBER/COLLABORATOR (not SShadowS) count; quoted lines (`>`) are dropped before ids are read;
@@ -49,6 +50,9 @@ export type FixClass =
   | "build-named-in-current"
   | "build-named-in-candidate"
   | "build-named-not-pinned"
+  // R1083: an older maintainer comment named a build, but the newest names none (a plan or a reply, not a fix); the row
+  // shows the newest comment's excerpt, which tells the two apart (no keyword rules)
+  | "latest-comment-names-no-build"
   | "no-build-named";
 
 export interface ScanRow {
@@ -164,7 +168,8 @@ export async function scan(deps: ScanDeps, issues: readonly GhIssue[]): Promise<
     // The newest maintainer comment that names a commit the clone knows: a later "thanks" hides nothing.
     let comment: GhComment | undefined;
     let builds: string[] = [];
-    for (const c of maintainerComments(issue.comments ?? [])) {
+    const ordered = maintainerComments(issue.comments ?? []);
+    for (const c of ordered) {
       const known: string[] = [];
       for (const b of extractBuilds(c.body ?? "")) if (await isCommit(b)) known.push(b);
       if (known.length > 0) {
@@ -174,7 +179,12 @@ export async function scan(deps: ScanDeps, issues: readonly GhIssue[]): Promise<
       }
     }
     let cls: FixClass = "no-build-named";
-    if (builds.length > 0) {
+    // R1083: a newer maintainer comment that names no build; the row reports it, not the older build's class.
+    const newest = ordered[0];
+    if (builds.length > 0 && newest !== undefined && newest !== comment) {
+      cls = "latest-comment-names-no-build";
+      comment = newest;
+    } else if (builds.length > 0) {
       cls = "build-named-not-pinned";
       if (await allAncestors(deps, builds, current)) cls = "build-named-in-current";
       else if (deps.candidate !== undefined && (await allAncestors(deps, builds, deps.candidate)))
