@@ -11,6 +11,7 @@ import {
   FORMAT_EVALUATE,
   type Family,
   GET_URL,
+  JSON_TEXT,
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
@@ -1103,8 +1104,8 @@ describe("PR-83: the record-filters family", () => {
 describe("PR-86: the dates-formulas family", () => {
   const f = DATES_FORMULAS;
 
-  test("last of FAMILIES: place 14, BC-check number 15", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("dates-formulas");
+  test("place 14 of FAMILIES: BC-check number 15", () => {
+    expect(Object.keys(FAMILIES).indexOf("dates-formulas")).toBe(13);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051015");
   });
 
@@ -1177,5 +1178,95 @@ describe("PR-86: the dates-formulas family", () => {
     expect(ev?.depends).toBe("locale");
     expect(f.cells.find((c) => c.method === "Evaluate 9")?.depends).toBeUndefined();
     expect(f.cells.find((c) => c.state === "Format 9 evening")?.depends).toBe("tz");
+  });
+});
+
+describe("PR-87: the json-text family", () => {
+  const f = JSON_TEXT;
+
+  test("last of FAMILIES: place 15, BC-check number 16", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("json-text");
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051016");
+  });
+
+  test("every test codeunit has TestPermissions = Disabled", () => {
+    const cells = emitApp(bcCheckFamily(f))["src/Cells.al"] ?? "";
+    const tests = cells.match(/Subtype = Test;/g)?.length ?? 0;
+    expect(tests).toBe(f.cells.length);
+    expect(cells.match(/Subtype = Test;\n {4}TestPermissions = Disabled;/g)?.length ?? 0).toBe(
+      tests,
+    );
+  });
+
+  test("250 to 420 cells; unique keys, unique names (no quote), unique codeunits", () => {
+    expect(f.cells.length).toBeGreaterThan(250);
+    expect(f.cells.length).toBeLessThan(420);
+    const types = new Set(f.cells.map((c) => c.type));
+    for (const t of [
+      "JsonObject",
+      "JsonArray",
+      "JsonToken",
+      "JsonValue",
+      "JsonText",
+      "TextBuilder",
+    ])
+      expect(types.has(t)).toBe(true);
+    expect(types.has("TextCompare")).toBe(true);
+    const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    for (const n of names) expect(n).not.toContain('"');
+    const ids = [...(emitApp(f)["src/Cells.al"] ?? "").matchAll(/^codeunit (\d+) /gm)].map(
+      (m) => m[1],
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(f.cells.length);
+  });
+
+  test("answers use V:[...]", () => {
+    for (const c of f.cells) expect(c.call).toMatch(/^Error\('V:\[%1\]', .*\);$/);
+  });
+
+  test("a cell whose text holds a non-ASCII letter is flagged locale (case mapping and order follow the language)", () => {
+    const nonAscii = f.cells.filter((c) =>
+      /[^\u0020-\u007e]/.test([...(c.vars ?? []), ...(c.setup ?? []), c.call].join(" ")),
+    );
+    expect(nonAscii.length).toBeGreaterThan(80);
+    for (const c of nonAscii)
+      expect(`${c.type}|${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+    // an ASCII-only cell stays unflagged, and AsDateTime is a time-zone cell
+    expect(
+      f.cells.find((c) => c.type === "TextBuilder" && c.state === "once")?.depends,
+    ).toBeUndefined();
+    expect(f.cells.find((c) => c.method === "AsDateTime")?.depends).toBe("tz");
+  });
+
+  test("every text compare, and AsDate/AsTime/AsDecimal of JSON text, is flagged locale, ASCII or not", () => {
+    const compares = f.cells.filter((c) => c.type === "TextCompare");
+    expect(compares.length).toBeGreaterThan(30);
+    for (const c of compares) expect(`${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+    const textConv = f.cells.filter(
+      (c) => /^As(Date|Time|Decimal)$/.test(c.method) && c.state.startsWith("'"),
+    );
+    expect(textConv.length).toBeGreaterThan(5);
+    for (const c of textConv) expect(`${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+  });
+
+  test("only the two measured pairs share their AL", () => {
+    const body = (c: (typeof f.cells)[number]) =>
+      JSON.stringify([c.vars, c.setup, c.call, c.reader]);
+    const seen = new Map<string, string>();
+    const dups: string[] = [];
+    for (const c of f.cells) {
+      const k = body(c);
+      const first = seen.get(k);
+      if (first !== undefined) dups.push(`${first} = ${c.method} ${c.state}`);
+      else seen.set(k, `${c.method} ${c.state}`);
+    }
+    expect(dups.sort()).toEqual([
+      "Keys count = Keys count DOC",
+      "less a vs B = ordered a before B",
+    ]);
   });
 });
