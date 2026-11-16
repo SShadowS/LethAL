@@ -1,0 +1,125 @@
+[
+  {
+    "cls": "FieldRef.* on a FieldRef that was never assigned",
+    "entry": "fieldref-method-never-assigned",
+    "texts": [
+      "FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "FieldRef.EnumValueCount on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "RecordRef.* on a RecordRef that is not open",
+    "entry": "recordref-method-not-open",
+    "texts": [
+      "RecordRef.KeyIndex on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "RecordRef.GetFilters on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "RecordRef.FindFirst on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "KeyRef.* on a KeyRef that was never assigned",
+    "entry": "keyref-method-never-assigned",
+    "texts": [
+      "KeyRef.FieldCount on a KeyRef that was never assigned",
+      "KeyRef.FieldIndex on a KeyRef that was never assigned"
+    ]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-value-expected",
+    "texts": ["SetFilter: value expected after `<>`"]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-unexpected-gt-date-range",
+    "texts": ["SetFilter: unexpected `>` in filter `<-1M>..<CM>`"]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-date-text-no-form",
+    "texts": [
+      "SetFilter: text filter value `-1M` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)",
+      "SetFilter: text filter value `-2026-09-01` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-not-a-biginteger",
+    "texts": [
+      "SetFilter: `GL00000000` is not a BigInteger",
+      "SetFilter: `GU00000001` is not a BigInteger"
+    ]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-empty-term",
+    "texts": ["SetFilter: empty filter term"]
+  },
+  {
+    "cls": "Evaluate of `<op>` into Decimal",
+    "entry": "evaluate-decimal-comparison",
+    "texts": ["Evaluate of `<300` into Decimal (form not pinned by the corpus)"]
+  },
+  {
+    "cls": "Page.Run with RecordRef as the record",
+    "entry": "page-run-recordref",
+    "texts": ["Page.Run with RecordRef as the record"]
+  },
+  {
+    "cls": "Page.Run with an unassigned Variant as the record",
+    "entry": "page-run-unassigned-variant",
+    "texts": ["Page.Run with an unassigned Variant as the record"]
+  },
+  {
+    "cls": "RecordRef.GetTable of Text 'Not a record'",
+    "entry": "recordref-gettable-text-not-a-record",
+    "texts": ["RecordRef.GetTable of Text 'Not a record'"]
+  },
+  {
+    "cls": "Report.SaveAs#2 of id 0, which no report declares (error text not pinned)",
+    "entry": "report-saveas-id-zero",
+    "texts": ["Report.SaveAs#2 of id 0, which no report declares (error text not pinned)"]
+  },
+  {
+    "cls": "XmlDocument.ReadFrom of something that is not an InStream",
+    "entry": "xmldocument-readfrom-not-instream",
+    "texts": ["XmlDocument.ReadFrom of something that is not an InStream"]
+  },
+  {
+    "cls": "an OutStream was expected, got an untouched handle",
+    "entry": "outstream-untouched-handle",
+    "texts": ["an OutStream was expected, got an untouched handle"]
+  },
+  {
+    "cls": "conversion of Code 'GL00000000' to BigInteger",
+    "entry": "code-gl-to-biginteger",
+    "texts": ["conversion of Code 'GL00000000' to BigInteger"]
+  },
+  {
+    "cls": "CalcDate result outside 0001-9999 (error text not pinned)",
+    "entry": "calcdate-outside-range",
+    "texts": ["CalcDate result outside 0001-9999 (error text not pinned)"]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception *",
+    "entry": "dotnet-json-writer-end-array-no-token",
+    "texts": [
+      "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception *",
+    "entry": "dotnet-json-writer-property-in-array",
+    "texts": [
+      "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state Array would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state ArrayStart would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
+    "entry": null,
+    "texts": [
+      "a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)"
+    ]
+  }
+]

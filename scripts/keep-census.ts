@@ -3,8 +3,11 @@
  * PR-54: a keep census. For each class of al-runner refusal, is a `serve` daemon still clean after the refused test?
  * "Clean" means a reader test that runs next sees what it sees after a plain passing setter, on every round.
  *
- *   bun scripts/keep-census.ts --family <name> --out <dir> [--bin <al-runner>]
- *   bun scripts/keep-census.ts --repros --out <dir> [--bin <al-runner>]
+ *   bun scripts/keep-census.ts --family <name> --out <dir> [--bin <al-runner>] [--refusers <n>]
+ *   bun scripts/keep-census.ts --repros --out <dir> [--bin <al-runner>] [--refusers <n>]
+ *
+ * PR-93: `--refusers <n>` (default 3) is how many refusers per class are measured, different full texts first. Raise it so
+ * every distinct text of a class with more texts is a measured refuser (a keep entry covers measured texts only).
  *
  * Run it under `scripts/heavy-slot.sh --wait --peak serve other`. Invented AL only: every family cell and upstream repro is
  * invented. R-967's kit (state, setter and reader, ids 50940-50999) is added to each app, and each family cell starts with the
@@ -210,6 +213,9 @@ export function groupClasses(
   });
   return groups;
 }
+
+/** PR-93: refusers measured per class (`--refusers`; 3 as PR-54 measured). */
+let refuserCount = 3;
 
 /** Up to `n` refusers: different full texts first (the sibling texts of one class), then the rest, in order. */
 export function pickRefusers<T extends { text: string }>(all: readonly T[], n = 3): T[] {
@@ -589,7 +595,9 @@ async function censusFamily(f: Family, bin: string, out: string): Promise<ClassR
       label: `C${c.index}`,
       text: refusalText(c.result.message ?? ""),
     }));
-    done.push(await measureClass(t, cls, cells.length, pickRefusers(all), done.length));
+    done.push(
+      await measureClass(t, cls, cells.length, pickRefusers(all, refuserCount), done.length),
+    );
     console.log(`${f.name} | ${cls} | ${done[done.length - 1]?.verdict}`);
   }
   return done;
@@ -640,7 +648,9 @@ async function censusRepros(bin: string, out: string, only?: string): Promise<Cl
     };
     mkdirSync(t.pkgs, { recursive: true });
     for (const [cls, list] of groups) {
-      done.push(await measureClass(t, cls, list.length, pickRefusers(list), done.length));
+      done.push(
+        await measureClass(t, cls, list.length, pickRefusers(list, refuserCount), done.length),
+      );
       console.log(`${r.id} | ${cls} | ${done[done.length - 1]?.verdict}`);
     }
   }
@@ -687,9 +697,18 @@ if (import.meta.main) {
   const out = opt("--out");
   if (out === undefined)
     throw new Error(
-      "usage: keep-census.ts (--family <name> | --repros) --out <dir> [--bin <al-runner>]",
+      "usage: keep-census.ts (--family <name> | --repros) --out <dir> [--bin <al-runner>] [--refusers <n>]",
     );
   const bin = opt("--bin") ?? "/work/tools/al-runner-v3/current/al-runner";
+  const n = opt("--refusers");
+  // a trailing --refusers with no value is refused, never read as the default (it would measure fewer texts)
+  if (args.includes("--refusers") && n === undefined) throw new Error("--refusers needs a value");
+  if (n !== undefined) {
+    const v = Number(n);
+    if (!Number.isInteger(v) || v < 1)
+      throw new Error(`--refusers needs a whole number of at least 1, got ${n}`);
+    refuserCount = v;
+  }
   mkdirSync(out, { recursive: true });
   const name = opt("--family");
   const f = name !== undefined ? FAMILIES[name] : undefined;

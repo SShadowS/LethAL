@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**40 of 1056 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**41 of 1058 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -382,6 +382,7 @@ that ordering is the priority.
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · open
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · done (274a9aac)
 - **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
+- **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · closed 2026-11-16 — measured clean (PR-95): hidden excluded tests leave a kept daemon clean; the remaining…
 
 ## Product gaps a real project hits
 
@@ -1101,6 +1102,7 @@ that ordering is the priority.
 - **R1091** · R1058's follow-up: an order-independent serve entry cost per codeunit needs per-codeunit calibration requests; probe their cost and how often entries are cut first · [R1091.md](docs/roadmap/R1091.md) · open
 - **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — measured; levers ranked, none built
 - **R1094** · On al-runner v3 serve, an entry's excludeTests hides rows but still RUNS the excluded tests; only runSelectedOnly skips them. So L4's cut (R1030) never saved test execution, and its t4 rate gain belongs elsewhere · [R1094.md](docs/roadmap/R1094.md) · open — measured; the lever (runSelectedOnly on L4's cut entries) is coord PR-94
+- **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · open
 
 ---
 
