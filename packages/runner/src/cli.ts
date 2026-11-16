@@ -90,6 +90,7 @@ import type {
   DoctorConfig,
   DoctorDeps,
   DoctorReport,
+  ServerDependenciesProbe,
 } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
@@ -114,7 +115,7 @@ import type { EventSubscriber } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
-import { HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
+import { ApiBaseUnsetError, HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { HarnessDetails, LeaseSnapshot } from "./harness";
 import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
@@ -764,6 +765,31 @@ export interface InitCliConfig {
   readonly force?: boolean;
   /** Which config section to write: `bcdev` (the default when absent) or `al-runner-v3`. */
   readonly backendKind?: BackendKind;
+  /** R1086: `--credentials-env <USER_VAR>,<PASS_VAR>`: write `bcdev.credentialsEnv` instead of credential placeholders. */
+  readonly credentialsEnv?: { readonly username: string; readonly password: string };
+}
+
+/** R1086: `--credentials-env <USER_VAR>,<PASS_VAR>`; the names only, never echoed when wrong. */
+export function parseCredentialsEnvFlag(raw: string): { username: string; password: string } {
+  const parts = raw.split(",").map((p) => p.trim());
+  const [username, password] = parts;
+  if (
+    parts.length !== 2 ||
+    username === undefined ||
+    password === undefined ||
+    !ENV_VAR_NAME.test(username) ||
+    !ENV_VAR_NAME.test(password)
+  ) {
+    throw new Error(
+      "--credentials-env must be two environment variable NAMES, comma separated: <USER_VAR>,<PASS_VAR> (letters, digits and _, not starting with a digit). Give the names, never the login itself.",
+    );
+  }
+  if (username === password) {
+    throw new Error(
+      "--credentials-env names the same variable for the user and the password. Use two different variables.",
+    );
+  }
+  return { username, password };
 }
 
 export interface DoctorCliConfig {
@@ -1211,6 +1237,11 @@ INIT — write a lethal.config.json this project can actually run with
                              bcVersion placeholder that 'run' and 'doctor' refuse by name until you
                              type your BC build. "environment" is left out when your
                              .vscode/launch.json names environmentType, else it is a placeholder.
+  --credentials-env <U>,<P>  bcdev only: write bcdev.credentialsEnv naming two environment variables
+                             (user, password) instead of typing the login into the file. The
+                             variables are read when the config is loaded; run and doctor refuse by
+                             name when one is unset or empty. A config with an envTool section is
+                             refused with credentialsEnv. The values are never printed or stored.
   Server, company and credentials are left as placeholders and named in the printed next steps,
   because nothing here can know them. Follow with 'lethal doctor --config <path>'.
 
@@ -1466,6 +1497,8 @@ export const RUN_FLAGS = {
   json: { type: "boolean", default: false },
   // `lethal init --force`: overwrite an existing config. Shared table, same strict-mode reason.
   force: { type: "boolean", default: false },
+  // R1086 `lethal init --credentials-env <USER_VAR>,<PASS_VAR>`. Owned by `init` alone in FLAG_OWNERS.
+  "credentials-env": { type: "string" },
   // C02-06 `lethal verify`: the source artifact and the survivors to prove killed. Owned by
   // `verify` alone in FLAG_OWNERS. `--survivors` repeats and each value is a comma list.
   artifact: { type: "string" },
@@ -1609,6 +1642,12 @@ export const FLAG_OWNERS: ReadonlyArray<{
     flag: "force",
     owners: ["init"],
     instead: "It lets `lethal init` overwrite an existing config.",
+  },
+  {
+    flag: "credentials-env",
+    owners: ["init"],
+    instead:
+      'It makes `lethal init` write bcdev.credentialsEnv; other commands read it from the config file ("bcdev": {"credentialsEnv": {...}}).',
   },
   {
     flag: "backend",
@@ -1965,6 +2004,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       ...(out !== undefined && out !== "" ? { outPath: out } : {}),
       ...(values.force === true ? { force: true } : {}),
       ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
+      ...(values["credentials-env"] !== undefined
+        ? { credentialsEnv: parseCredentialsEnvFlag(values["credentials-env"]) }
+        : {}),
     };
   }
 
@@ -2484,6 +2526,12 @@ export interface BcDevConfigSection {
   // { "BC_DEV_USER": "...", "BC_DEV_PASSWORD": "..." } — see BcDevConfig.env.
   readonly env?: Record<string, string>;
   /**
+   * R1086: the NAMES of the environment variables that hold the login. When present,
+   * `validateBcDevConfig` reads `username`, `password`, `env.BC_DEV_USER` and `env.BC_DEV_PASSWORD`
+   * from them; the JSON must then hold none of those four. Refused beside an `envTool` section.
+   */
+  readonly credentialsEnv?: { readonly username: string; readonly password: string };
+  /**
    * OData root, used VERBATIM when present. `odataBaseUrl` injects port 7048, which is right for a
    * container and wrong for an environment tool's `https://host/{envId}`. Set only by
    * `env-tool-session`; a hand-written bcdev section leaves it absent and keeps the derivation.
@@ -2648,15 +2696,107 @@ export function resolveExclude(
   return [...new Set([...validateExcludeGlobs(configFile.exclude), ...(cliExclude ?? [])])];
 }
 
-/** Pure validators — no I/O — so "missing config field" errors are unit-testable directly. */
+const ENV_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * R1086: the two variable names `bcdev.credentialsEnv` holds, each checked to be a plausible
+ * variable name. A bad name is NEVER echoed: a person who pasted the password into this field
+ * would otherwise see it in the error. Only the field is named.
+ */
+function credentialsEnvNames(raw: Partial<BcDevConfigSection>): { user: string; pass: string } {
+  const ce: unknown = raw.credentialsEnv;
+  if (typeof ce !== "object" || ce === null || Array.isArray(ce)) {
+    throw new Error(
+      'lethal.config.json "bcdev" section: "credentialsEnv" must be an object like {"username": "<VAR>", "password": "<VAR>"} naming two environment variables',
+    );
+  }
+  const names = ce as Record<string, unknown>;
+  const pick = (field: "username" | "password"): string => {
+    const v = names[field];
+    if (typeof v !== "string" || v === "") {
+      throw new Error(
+        `lethal.config.json "bcdev" section: "credentialsEnv.${field}" is missing or empty; it must name an environment variable`,
+      );
+    }
+    if (!ENV_VAR_NAME.test(v)) {
+      throw new Error(
+        `lethal.config.json "bcdev" section: "credentialsEnv.${field}" is not a valid environment variable name (letters, digits and _, not starting with a digit). It must hold the NAME of a variable, never the credential itself.`,
+      );
+    }
+    return v;
+  };
+  return { user: pick("username"), pass: pick("password") };
+}
+
+/**
+ * R1086: fills `username`, `password`, `env.BC_DEV_USER` and `env.BC_DEV_PASSWORD` from the
+ * environment, so every reader downstream is unchanged. Refuses by name, never with a value.
+ */
+function withCredentialsFromEnv(
+  raw: Partial<BcDevConfigSection>,
+  environment: Readonly<Record<string, string | undefined>>,
+): Partial<BcDevConfigSection> {
+  const clash = [
+    raw.username !== undefined ? "username" : undefined,
+    raw.password !== undefined ? "password" : undefined,
+    raw.env?.BC_DEV_USER !== undefined ? "env.BC_DEV_USER" : undefined,
+    raw.env?.BC_DEV_PASSWORD !== undefined ? "env.BC_DEV_PASSWORD" : undefined,
+  ].filter((f): f is string => f !== undefined);
+  if (clash.length > 0) {
+    throw new Error(
+      `lethal.config.json "bcdev" section: "credentialsEnv" cannot be combined with ${clash.map((f) => `"${f}"`).join(", ")}. Which one wins would be a guess; remove ${clash.length === 1 ? "it" : "them"}, or remove "credentialsEnv".`,
+    );
+  }
+  const { user, pass } = credentialsEnvNames(raw);
+  const read = (field: string, name: string): string => {
+    const v = environment[name];
+    if (v === undefined) {
+      throw new Error(
+        `lethal.config.json "bcdev" section: the environment variable "credentialsEnv.${field}" names is not set (the name is not printed: a pasted credential must never be echoed; check the field holds a variable name and that variable is exported)`,
+      );
+    }
+    if (v === "") {
+      throw new Error(
+        `lethal.config.json "bcdev" section: the environment variable "credentialsEnv.${field}" names is set but empty (the name is not printed)`,
+      );
+    }
+    return v;
+  };
+  const username = read("username", user);
+  const password = read("password", pass);
+  return {
+    ...raw,
+    username,
+    password,
+    env: { ...(raw.env ?? {}), BC_DEV_USER: username, BC_DEV_PASSWORD: password },
+  };
+}
+
+/** R1086: a config with both an `envTool` section and `bcdev.credentialsEnv` is refused: the tool resolves the credentials. */
+export function refuseCredentialsEnvWithEnvTool(c: LethalConfigFile): void {
+  if (c.envTool !== undefined && c.bcdev?.credentialsEnv !== undefined) {
+    throw new Error(
+      'lethal.config.json has an "envTool" section and "bcdev.credentialsEnv". An envTool config gets its credentials from the tool and would ignore "credentialsEnv"; remove one of them.',
+    );
+  }
+}
+
+/**
+ * Pure validators — no I/O — so "missing config field" errors are unit-testable directly.
+ * R1086: `environment` is where `bcdev.credentialsEnv` is read from; a parameter so the function
+ * stays pure and testable.
+ */
 export function validateBcDevConfig(
-  raw: Partial<BcDevConfigSection> | undefined,
+  rawIn: Partial<BcDevConfigSection> | undefined,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): BcDevConfigSection {
-  if (!raw) {
+  if (!rawIn) {
     throw new Error(
       'lethal.config.json is missing the "bcdev" section (required for --backend bcdev)',
     );
   }
+  const raw =
+    rawIn.credentialsEnv !== undefined ? withCredentialsFromEnv(rawIn, environment) : rawIn;
   const missing: string[] = [];
   if (!Array.isArray(raw.mcpCommand) || raw.mcpCommand.length === 0) missing.push("mcpCommand");
   if (!raw.server) missing.push("server");
@@ -2715,6 +2855,7 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   }
   refuseRetiredV2ConfigSection(parsed, path);
   refuseRetiredBcHost(parsed.bcdev);
+  refuseCredentialsEnvWithEnvTool(parsed);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
@@ -5053,6 +5194,8 @@ export async function buildDoctorDeps(
     readonly alcRunnable?: (p: string) => boolean;
     /** R834: the platform the v3 check judges; absent means this one. Injected by tests. */
     readonly platform?: NodeJS.Platform;
+    /** R1087: replaces `HarnessVerifier.fetchInstalledVersions` for `server-dependencies`. Injected by tests. */
+    readonly installedVersions?: (appId: string) => Promise<readonly string[]>;
   } = {},
 ): Promise<{
   readonly cfg: DoctorConfig;
@@ -5189,7 +5332,19 @@ export async function buildDoctorDeps(
     // No envTool, `bcdev` present: this IS exactly what `run` validates (`buildBackend`/
     // `resourceIdentityFor`/`leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail
     // here, eagerly, rather than lazily inside whichever check happens to touch it first.
-    validateBcDevConfig(configFile.bcdev);
+    // R1086: with `credentialsEnv`, structure errors, clashes and bad names stay config errors as in
+    // `run`; the REAL environment read moves into the `credentials-env` check, so an unset
+    // variable is a failed check, not an abort that hides the rest. A stub environment (both
+    // named variables set to a placeholder) lets this validation get past the environment read.
+    const ce: unknown = configFile.bcdev?.credentialsEnv;
+    const stub: Record<string, string> = {};
+    if (typeof ce === "object" && ce !== null) {
+      for (const f of ["username", "password"] as const) {
+        const n = (ce as Record<string, unknown>)[f];
+        if (typeof n === "string") stub[n] = "placeholder";
+      }
+    }
+    validateBcDevConfig(configFile.bcdev, ce === undefined ? process.env : stub);
   }
   const resolvedEnvCfg = envCfg;
 
@@ -5336,35 +5491,9 @@ export async function buildDoctorDeps(
     if (cachePath === undefined || cachePath === "") {
       return { skip: 'the config names no "bcdev.packageCachePath" to look for packages in' };
     }
-    const appJsonPath = join(projectDirForDeps, "app.json");
-    let manifest: { dependencies?: unknown };
-    try {
-      manifest = JSON.parse((await readFile(appJsonPath, "utf8")).replace(/^﻿/, ""));
-    } catch (err) {
-      throw new Error(`${appJsonPath}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    const declared = manifest.dependencies ?? [];
-    if (!Array.isArray(declared)) {
-      throw new Error(`${appJsonPath}: "dependencies" is not an array`);
-    }
-    const deps = declared.map((d: Record<string, unknown>, i) => {
-      const id = d.id ?? d.appId; // `appId` is the older spelling of `id`
-      if (typeof id !== "string" || typeof d.version !== "string") {
-        throw new Error(`${appJsonPath}: dependencies[${i}] has no string id and version`);
-      }
-      const label = typeof d.name === "string" ? d.name : id;
-      if (!/^\d+(\.\d+){3}$/.test(d.version)) {
-        throw new Error(
-          `${appJsonPath}: dependency ${JSON.stringify(label)} has version ${JSON.stringify(d.version)}, which doctor cannot compare (it needs four parts, like 1.2.0.0)`,
-        );
-      }
-      return {
-        id,
-        name: label,
-        publisher: typeof d.publisher === "string" ? d.publisher : "",
-        version: d.version,
-      };
-    });
+    const { dependencies: deps } = await readAppJsonDependencies(
+      join(projectDirForDeps, "app.json"),
+    );
     const packages: { id: string; version: string }[] = [];
     const unread: string[] = [];
     // Nothing to compare: read no package at all.
@@ -5412,6 +5541,78 @@ export async function buildDoctorDeps(
           };
         };
 
+  // R1087: each direct dependency of the target and of the test app, read by id on the server.
+  // The test app's dependency on the target is left out: LethAL publishes the target.
+  const serverDependencies = async (): Promise<ServerDependenciesProbe> => {
+    if (projectDirForDeps === undefined) {
+      return {
+        skip: "pass --project <dir> to read the target's app.json dependencies on the server",
+      };
+    }
+    if (configFile.envTool !== undefined) {
+      return {
+        skip: "this config has an envTool section; its server is reached through the tool, and doctor does not read installed extensions there",
+      };
+    }
+    const target = await readAppJsonDependencies(join(projectDirForDeps, "app.json"));
+    const wanted = [...target.dependencies];
+    if (testsDir !== undefined) {
+      const tests = await readAppJsonDependencies(join(testsDir, "app.json"));
+      const targetId = target.id?.toLowerCase();
+      wanted.push(...tests.dependencies.filter((d) => d.id.toLowerCase() !== targetId));
+    }
+    // One verifier for the whole check (it also keeps the company lookup it makes once).
+    // One verifier for the whole check (it also keeps the company lookup it makes once).
+    const verifier = opts.installedVersions === undefined ? await harnessVerifierFor() : undefined;
+    const read =
+      opts.installedVersions ??
+      (async (id: string) => (verifier as HarnessVerifier).fetchInstalledVersions(id));
+    const reads = new Map<string, readonly string[]>();
+    const dependencies: {
+      id: string;
+      name: string;
+      publisher: string;
+      version: string;
+      installed: readonly string[];
+    }[] = [];
+    for (const dep of wanted) {
+      const key = dep.id.toLowerCase();
+      let installed = reads.get(key);
+      if (installed === undefined) {
+        try {
+          installed = await read(dep.id);
+        } catch (err) {
+          if (err instanceof ApiBaseUnsetError || err instanceof UnfilteredExtensionsQueryError) {
+            throw err;
+          }
+          throw new Error(
+            `cannot read the installed versions of ${dep.name} (${dep.id}) on the server: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        reads.set(key, installed);
+      }
+      dependencies.push({ ...dep, installed });
+    }
+    return { dependencies };
+  };
+
+  // R1086: the variable NAMES and whether each is set; never a value.
+  const credentialsEnvCheck =
+    configFile.bcdev?.credentialsEnv === undefined
+      ? undefined
+      : async (): Promise<{ readonly ok: boolean; readonly details: string }> => {
+          try {
+            validateBcDevConfig(configFile.bcdev);
+          } catch (err) {
+            return { ok: false, details: err instanceof Error ? err.message : String(err) };
+          }
+          const ce = configFile.bcdev?.credentialsEnv;
+          return {
+            ok: true,
+            details: `username from ${ce?.username} (set), password from ${ce?.password} (set); values are never shown`,
+          };
+        };
+
   return {
     cfg: {
       ...doctorConfigFromEnvTool(envCfg),
@@ -5429,6 +5630,8 @@ export async function buildDoctorDeps(
       toolPaths,
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
+      serverDependencies,
+      ...(credentialsEnvCheck !== undefined ? { credentialsEnv: credentialsEnvCheck } : {}),
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
       ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
       ...probingCheck,
@@ -5497,6 +5700,11 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
   validateSelectorIds(picked, idRanges, existingCodeunits, dependencies);
 
   if (parsed.backendKind === "al-runner-v3") {
+    if (parsed.credentialsEnv !== undefined) {
+      throw new Error(
+        "init: --credentials-env writes bcdev.credentialsEnv, and --backend al-runner-v3 writes no bcdev section. Drop one of them.",
+      );
+    }
     // Never guess a setting that decides a verdict: bcVersion is a placeholder `validateAlRunnerV3Config`
     // refuses by name. environment is left out when launch.json answers (the run reads it there).
     const launch = await readLaunchEnvironment(parsed.projectDir);
@@ -5543,11 +5751,15 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
       server: "http://YourContainer",
       serverInstance: "BC",
       company: "CRONUS",
-      username: "admin",
-      password: "pw",
+      // R1086: with --credentials-env the login is read from those variables at run time.
+      ...(parsed.credentialsEnv !== undefined
+        ? { credentialsEnv: parsed.credentialsEnv }
+        : { username: "admin", password: "pw" }),
       packageCachePath: join(parsed.projectDir, ".alpackages"),
       controlSymbolPath: "C:/path/to/LethAL/extensions/lethal-control/lethal-control.app",
-      env: { BC_DEV_USER: "admin", BC_DEV_PASSWORD: "pw" },
+      ...(parsed.credentialsEnv !== undefined
+        ? {}
+        : { env: { BC_DEV_USER: "admin", BC_DEV_PASSWORD: "pw" } }),
     },
     selectorIds: picked,
   };
@@ -5560,7 +5772,9 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
   console.log("\nStill yours to fill in, because nothing here can know them:");
   console.log("  bcdev.server / serverInstance / company   your container");
   console.log(
-    "  bcdev.username / password + env.*         the same credentials, twice: bc-dev-mcp reads them from the environment, not from parameters",
+    parsed.credentialsEnv !== undefined
+      ? `  environment                               set ${parsed.credentialsEnv.username} and ${parsed.credentialsEnv.password} to the BC login before you run (bcdev.credentialsEnv names them; the login is never written to this file)`
+      : "  bcdev.username / password + env.*         the same credentials, twice: bc-dev-mcp reads them from the environment, not from parameters",
   );
   console.log("  bcdev.controlSymbolPath                   the lethal-control.app you published");
   // R253: BC on Linux serves its API on its own port, not the OData one.
@@ -5582,6 +5796,51 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
  * not require a bump.
  */
 export const DOCTOR_SCHEMA_VERSION = 1;
+
+/**
+ * An app.json's own `id` and its direct `dependencies` (the older `appId` spelling counts), each
+ * with a four-part version doctor can compare. Shared by the `dependencies` and
+ * `server-dependencies` checks, so the two read one file the same way. Throws by file name.
+ */
+async function readAppJsonDependencies(appJsonPath: string): Promise<{
+  readonly id: string | undefined;
+  readonly dependencies: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+    readonly version: string;
+  }[];
+}> {
+  let manifest: { id?: unknown; dependencies?: unknown };
+  try {
+    manifest = JSON.parse((await readFile(appJsonPath, "utf8")).replace(/^﻿/, ""));
+  } catch (err) {
+    throw new Error(`${appJsonPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const declared = manifest.dependencies ?? [];
+  if (!Array.isArray(declared)) {
+    throw new Error(`${appJsonPath}: "dependencies" is not an array`);
+  }
+  const dependencies = declared.map((d: Record<string, unknown>, i) => {
+    const id = d.id ?? d.appId; // `appId` is the older spelling of `id`
+    if (typeof id !== "string" || typeof d.version !== "string") {
+      throw new Error(`${appJsonPath}: dependencies[${i}] has no string id and version`);
+    }
+    const label = typeof d.name === "string" ? d.name : id;
+    if (!/^\d+(\.\d+){3}$/.test(d.version)) {
+      throw new Error(
+        `${appJsonPath}: dependency ${JSON.stringify(label)} has version ${JSON.stringify(d.version)}, which doctor cannot compare (it needs four parts, like 1.2.0.0)`,
+      );
+    }
+    return {
+      id,
+      name: label,
+      publisher: typeof d.publisher === "string" ? d.publisher : "",
+      version: d.version,
+    };
+  });
+  return { id: typeof manifest.id === "string" ? manifest.id : undefined, dependencies };
+}
 
 /**
  * What doctor does NOT check, as tokens rather than only as the sentence in `DOCTOR_NOT_CHECKED`.

@@ -94,6 +94,14 @@ one failed.
 - `data.notChecked` is the part that matters when doctor PASSES: those two are not covered by a green
   report, so a run can still refuse for either reason.
 - `caveat` says which checks were skipped and why.
+- `server-dependencies` (R1087) reads, by app id, the installed version of each direct dependency of
+  the target and the test app (give `--project` and `--tests`). It fails when one is missing or older
+  than its `app.json` asks, and `data.checks[].dependencies` lists each with `status` `ok`, `missing`
+  or `too-old`. It does not check the dependencies of those dependencies, or the implicit
+  `application` and `platform` ones. It is skipped, with a reason, without `--project` or on an
+  `envTool` config.
+- `credentials-env` (R1086) appears when the config has `bcdev.credentialsEnv`. It shows the variable
+  names and whether each is set, never a value.
 
 ## Running (checked)
 
@@ -257,6 +265,7 @@ has the complete set.
 | `--config` | `run`, `clear-quarantine`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
 | `--out` | `run`, `init`, `export` |
+| `--credentials-env` | `init` |
 | `--progress-out` | `run` |
 | `--json` | `doctor`, `campaign` |
 | `--top` | `explain` |
@@ -1225,7 +1234,11 @@ Full evidence for each is in [`../README.md`](../README.md) under Limits.
 `lethal.config.json` sits next to the app by default; `--config` points elsewhere. Every required
 field is checked at startup and a missing one is named rather than defaulted. The shape is in the
 README's Configuration section. Credentials live in it, so treat it as a secret: do not read it
-into a transcript and do not copy it into an issue.
+into a transcript and do not copy it into an issue. To keep the login out of the file, write
+`"credentialsEnv": {"username": "<VAR>", "password": "<VAR>"}` in the `bcdev` section (or run
+`lethal init --credentials-env <USER_VAR>,<PASS_VAR>`): LethAL reads the two environment variables
+when it loads the config. Set them in the shell, not in the file. It is refused beside `username`,
+`password`, `env.BC_DEV_USER`, `env.BC_DEV_PASSWORD` or an `envTool` section.
 
 A project that uses `DotNet` types fails every compile with AL0451 and AL0185 unless alc can find
 the assemblies. LethAL takes the folders from the config's top-level `assemblyProbingPaths`, else

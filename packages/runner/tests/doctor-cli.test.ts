@@ -388,7 +388,14 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
     const report = await runDoctor(doctorCfg, deps);
     // R654: R131's `al-runner-cache` left with the .NET al-runner.
     // Issue #29: `dependencies` is present too, as a SKIPPED check (no --project), never absent.
-    expect(report.checks.map((c) => c.name)).toEqual(["tool-paths", "alc-runtime", "dependencies"]);
+    // R1087: so is `server-dependencies` (no --project; and a create-mode config is an envTool one).
+    expect(report.checks.map((c) => c.name)).toEqual([
+      "tool-paths",
+      "alc-runtime",
+      "dependencies",
+      "server-dependencies",
+    ]);
+    expect(report.checks[3]?.skipped).toBe(true);
     expect(report.checks[2]?.skipped).toBe(true);
     expect(report.checks[0]?.ok).toBe(true);
     expect(report.ok).toBe(true);
@@ -806,8 +813,10 @@ describe("doctorFromCli (final review, Important 1)", () => {
     );
     expect(code).toBe(0);
     // Issue #29: without --project the dependencies check is skipped, and the banner says so.
-    expect(out).toMatch(/^ok: no check failed, but 1 could not be checked/);
+    // R1087: `server-dependencies` is skipped for the same reason.
+    expect(out).toMatch(/^ok: no check failed, but 2 could not be checked/);
     expect(out).toContain("[skip] dependencies");
+    expect(out).toContain("[skip] server-dependencies");
     expect(out).toContain(DOCTOR_NOT_CHECKED);
   });
 

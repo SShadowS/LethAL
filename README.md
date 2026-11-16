@@ -216,6 +216,21 @@ that are missing. The user and password are placeholders, so put your own in:
 allowlist of variables from your shell, so without this block it fails with *"Missing connection
 settings: username"*. `tenant` defaults to `default`.
 
+**Keep the login out of the file.** If you have a secrets file or a CI secret store, name the
+environment variables that hold the login instead of typing it. `lethal init --project ...
+--credentials-env BC_USER,BC_PASSWORD` writes this for you:
+
+```json
+"credentialsEnv": { "username": "BC_USER", "password": "BC_PASSWORD" }
+```
+
+Use it in place of `username`, `password` and the `env` block. LethAL reads the two variables when
+it loads the config and fills in all four itself. It refuses, by name, a config that has
+`credentialsEnv` and also `username`, `password`, `env.BC_DEV_USER` or `env.BC_DEV_PASSWORD`, a
+variable that is not set or is empty, and a config that also has an `envTool` section (the tool
+supplies the login there). `lethal doctor` shows the variable names and whether each is set. The
+values are never printed, reported or stored.
+
 `"stopHungSessions": true` in the `bcdev` section records the server owner's yes for
 `--stop-hung-sessions` (below): every `lethal run --backend bcdev` and `lethal verify` with this
 config then ends a hung mutant's session as if the flag were given. Leave it out (or `false`) and
