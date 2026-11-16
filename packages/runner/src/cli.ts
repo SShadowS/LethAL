@@ -4116,7 +4116,12 @@ export async function runFromCliWithAccept(
      *  `runSession` records into. */
     quarantineDir?: string;
   } = {},
-): Promise<{ readonly report: SessionReport; readonly accept?: AcceptResult }> {
+): Promise<{
+  readonly report: SessionReport;
+  readonly accept?: AcceptResult;
+  /** The accept list could not be applied to the finished run; nothing was accepted. */
+  readonly acceptError?: Error;
+}> {
   // R-445: a test project inside the target (or containing it) is refused by name before anything
   // reads or builds the target: the build copies every .al under the target, so its tests would be
   // mutated and published as target code. Campaign stages run through here too.
@@ -4210,11 +4215,22 @@ export async function runFromCliWithAccept(
     await removeScratchQuietly(scratchRoot);
   }
   // PR-79: from the snapshot the run parsed, never from disk.
-  const accept =
-    acceptList !== undefined
-      ? await computeAcceptResult({ report, snapshot: source, list: acceptList })
-      : undefined;
-  return { report, ...(accept !== undefined ? { accept } : {}) };
+  // An error here must not lose the finished run: it comes back beside the report, and `main`
+  // prints it and refuses to pass (exit 1 unless the report's own code is 3, 4 or 7).
+  let accept: AcceptResult | undefined;
+  let acceptError: Error | undefined;
+  if (acceptList !== undefined) {
+    try {
+      accept = await computeAcceptResult({ report, snapshot: source, list: acceptList });
+    } catch (err) {
+      acceptError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  return {
+    report,
+    ...(accept !== undefined ? { accept } : {}),
+    ...(acceptError !== undefined ? { acceptError } : {}),
+  };
 
   async function runInScratch(): Promise<SessionReport> {
     const sessionConfig = configFile;
@@ -6322,11 +6338,29 @@ async function main(): Promise<number> {
   if (parsed.mode === "init") {
     return await initFromCli(parsed);
   }
-  const { report, accept } = await runFromCliWithAccept(parsed);
+  return await runAndReport(parsed);
+}
+
+/**
+ * `lethal run`'s tail, out of `main` so it is testable: run, print, write `--out`, pick the exit
+ * code. If the accept list could not be applied, the report is still printed and written, the
+ * refusal is printed, and the code is the report's own 3, 4 or 7, else 1 (never a silent pass).
+ */
+export async function runAndReport(
+  parsed: RunCliConfig,
+  deps: Parameters<typeof runFromCliWithAccept>[1] = {},
+): Promise<number> {
+  const { report, accept, acceptError } = await runFromCliWithAccept(parsed, deps);
   console.log(renderConsole(report));
   const changed = changedLineSurvivors(report, accept);
   if (changed !== undefined) console.log(renderChangedLineSurvivors(changed, accept));
+  if (acceptError !== undefined) {
+    console.error(
+      `[lethal] the accept list could not be applied: ${acceptError.message}\nNothing was accepted, so the run does not pass.`,
+    );
+  }
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
+  if (acceptError !== undefined) return exitCodeForReport(report, false) || 1;
   return runExitCode(report, parsed, accept);
 }
 

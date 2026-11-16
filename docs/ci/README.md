@@ -56,8 +56,15 @@ the exact path it looked for.
 4. The re-run, with the same diff against the base, matches the entry and accepts the survivor.
 
 The entry is computed from the source the run measured, not from your checkout, so a different commit or CRLF line endings
-cannot give you an entry that never matches. If the section says "cannot be accepted", it gives the reason: another row has the
-same anchor (ambiguous), or the survivor has no usable procedure span.
+cannot give you an entry that never matches. If the section says "cannot be accepted", it gives one of these reasons:
+- the report records no build symbols (no entry can be shown to apply);
+- the survivor's file is not in the run's source;
+- its offsets are not in the run's source of the file, or its original text is not the text at those offsets;
+- it has no procedure span, or the span is outside the file or empty;
+- no procedure or trigger encloses it, or its site is before its member;
+- its text is empty;
+- ambiguous: another row of the run has the same anchor;
+- a twin of it (same file and tuple) could not be anchored, so the two cannot be told apart.
 
 **What keeps an entry.** The survivor's own lines, its whole procedure or trigger (its attributes included), its place in it and
 the build's preprocessor symbols are unchanged. Lines added or removed outside the procedure only shift line numbers and keep
@@ -66,10 +73,13 @@ the entry.
 **What re-opens it, while the survivor's line is in the run.**
 - any edit to the survivor's own lines, even one that leaves LethAL's mutant identity unchanged (`x > 0` becomes `y > 0`);
 - any edit elsewhere in the same procedure or trigger, or to its attributes (`[TryFunction]`, `[EventSubscriber]` and so on);
-- a move to another procedure, object or file; a trigger body moved to another field, action, dataitem or element (every
-  enclosing declaration header is part of the anchor);
-- another preprocessor symbol set. The set includes al-runner's predefined symbols, so an entry printed by a v3 run does not
-  match a bcdev run.
+- a trigger body moved to another field, action, dataitem or element (every enclosing declaration header is part of the
+  anchor); so is reformatting such a header (for example moving its `{`), which re-opens that declaration's triggers' entries;
+- another preprocessor symbol set (the build's symbols changed). The set includes al-runner's predefined symbols, so an entry
+  printed by a v3 run does not match a bcdev run.
+
+A move to another procedure, object or file is not "re-opened": the entry then matches no site of the run (or, rarely, reads
+"identity changed"), see the labels below.
 
 Equivalence marks (`lethal.equivalent.json`) do NOT take a survivor out of the counted list. To keep an equivalent mutant out of
 CI, add an accept entry for it.
@@ -78,9 +88,13 @@ CI, add an accept entry for it.
 - accepted (listed with its reason);
 - killed: a test now kills the survivor; remove the entry;
 - not measured this run (no coverage, or an error); keep the entry;
-- re-opened: the code at the site changed; re-review the survivor and replace the entry;
-- identity changed: LethAL's identity for the site changed, not the code; replace the entry's tuple;
-- ambiguous: more than one row of the run shares the entry's anchor, so it accepts none;
+- re-opened: the code at the site changed, or the build's symbol set did; re-review the survivor and replace the entry (if the
+  mutant is no longer a survivor it reads "re-review: the site changed and the mutant now <verdict>"; a survivor that another
+  entry already accepts gets no replacement named);
+- identity changed: LethAL's identity for the site changed (the hash or the operator major), not the code or the object and
+  scope names; replace the entry's tuple;
+- ambiguous: more than one row of the run shares the entry's anchor, or a twin with the same file and tuple could not be
+  anchored ("a twin could not be checked"), so it accepts none;
 - every other entry gets one summary line: "N entries match no site of this run (not on a changed line, or moved or renamed); not
   checked". They are not called stale.
 

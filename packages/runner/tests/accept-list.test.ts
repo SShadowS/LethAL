@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 // PR-79: the accept list. Spec: docs/superpowers/specs/2026-11-16-pr79-accept-list.md
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clipMutationText } from "@lethal/schemata";
+import { type MutantManifest, clipMutationText, writeInstrumentedProject } from "@lethal/schemata";
 import {
   ACCEPT_REASON_PLACEHOLDER,
   type AcceptEntry,
@@ -23,10 +23,13 @@ import {
 import {
   type RunCliConfig,
   exitCodeForReport,
+  runAndReport,
   runExitCode,
   runFromCliWithAccept,
 } from "../src/cli";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
+import { identityKeyOf } from "../src/selection";
 import { removeRunScratchAfterAll } from "./helpers/scratch";
 
 removeRunScratchAfterAll();
@@ -331,6 +334,19 @@ describe("PR-79: twins", () => {
     expect(r.accepted.get("0/M2")).toBe("b");
   });
 
+  test("L7: a twin that cannot be anchored stops its sibling from matching alone", async () => {
+    // the entry is made while B is not in the picture; in this run B has no procedure span
+    const ea = await entryFor(TWIN, [rowOf(TWIN, A)], "0/M1");
+    const alone = await accept(TWIN, [rowOf(TWIN, A)], [ea]);
+    expect(alone.accepted.has("0/M1")).toBe(true); // not vacuous
+    const rows = [rowOf(TWIN, A), rowOf(TWIN, { ...B, noSpan: true })];
+    const r = await accept(TWIN, rows, [ea]);
+    expect(r.accepted.size).toBe(0);
+    expect(lines(r)).toContain("a twin could not be checked");
+    expect(counted(report(rows), r).map((m) => m.mutantCode)).toEqual(["M1", "M2"]);
+    expect(r.ready.get("0/M1")).toEqual({ cannot: expect.stringContaining("twin") });
+  });
+
   test("A accepted, then A is killed and B survives: the entry does not accept B", async () => {
     const ea = await entryFor(TWIN, [rowOf(TWIN, A), rowOf(TWIN, B)], "0/M1");
     const rows = [rowOf(TWIN, { ...A, verdict: "killed" }), rowOf(TWIN, B)];
@@ -382,7 +398,7 @@ describe("PR-79: equivalence marks do not exempt, and the carry hide does not bl
     expect(exitCodeForReport(report(rows), true, r)).toBe(9);
   });
 
-  test("review 1 HIGH 2: the survivor's coarse tuple is in carryHidden.tuples and the entry still accepts it", async () => {
+  test("the matcher never reads carryHidden, so the coarse-tuple hide cannot block acceptance", async () => {
     const rows = [rowOf(POST, M1)];
     const e = await entryFor(POST, rows);
     const hidden = { tuples: ["h1|conditional-boundary|1"], files: [] };
@@ -498,6 +514,43 @@ describe("PR-79: labels, one per entry", () => {
     expect(r.accepted.size).toBe(0);
   });
 
+  test("L3: a renamed object is a moved site (not in run), never identity changed", async () => {
+    const e = await entryFor(POST, [rowOf(POST, M1)]);
+    const r = await accept(POST, [rowOf(POST, { ...M1, unit: "Poster2" })], [e]);
+    expect(lines(r)).not.toContain("identity changed");
+    expect(r.notInRun).toBe(1);
+    expect(r.accepted.size).toBe(0);
+  });
+
+  test("L8: the site changed and the mutant is no longer a survivor: re-review, not 'the survivor'", async () => {
+    const e = await entryFor(POST, [rowOf(POST, M1)]);
+    const edited = POST.replace("if X > 0 then", "if X > 5 then");
+    const r = await accept(
+      edited,
+      [rowOf(edited, { ...M1, needle: "X > 5", verdict: "killed" })],
+      [e],
+    );
+    expect(lines(r)).toContain("re-review: the site changed and the mutant now killed");
+    expect(lines(r)).not.toContain("the survivor");
+  });
+
+  test("L8: a re-opened entry never names a replacement for a survivor another entry accepts", async () => {
+    const TWIN = `codeunit 50100 "Poster"\n{\n    procedure Post(X: Integer)\n    begin\n        if X > 0 then\n            Foo();\n        if X > 0 then\n            Foo();\n    end;\n}\n`;
+    const rows = [
+      rowOf(TWIN, { needle: "X > 0", code: "M1" }),
+      rowOf(TWIN, { needle: "X > 0", nth: 1, code: "M2" }),
+    ];
+    const ea = await entryFor(TWIN, rows, "0/M1", "a");
+    const eb = await entryFor(TWIN, rows, "0/M2", "b");
+    // same file and tuple, but its site text matches no row: re-opened
+    const stale = { ...ea, siteText: "c".repeat(64), reason: "old" };
+    const r = await accept(TWIN, rows, [ea, eb, stale]);
+    expect(r.accepted.size).toBe(2);
+    expect(lines(r)).toContain("re-opened");
+    expect(lines(r)).not.toContain("replace the entry");
+    expect(lines(r)).toContain("already accepts");
+  });
+
   test("a row of another operator at the same site never reads as identity changed", async () => {
     const e = await entryFor(POST, [rowOf(POST, M1)]);
     const rows = [rowOf(POST, { ...M1, op: "negate-conditional", hash: "h2" })];
@@ -566,6 +619,24 @@ describe("PR-79: triggers are anchored with every enclosing declaration", () => 
       expect(counted(report(rows), r).length).toBe(1);
     });
   }
+
+  test("L6: a header re-wrapped over other lines keeps the tuple and still re-opens (the procedureText side alone)", async () => {
+    const make = (header: string) =>
+      `table 50100 "Poster"\n{\n    fields\n    {\n        ${header}\n        {\n            trigger OnValidate()\n            begin\n                if X > 0 then Foo();\n            end;\n        }\n    }\n}\n`;
+    const v1 = make('field(1;\n"No."; Code[20])');
+    const v2 = make('field(1; "No."; Code[20])');
+    const site: Site = { ...M1, trigger: "OnValidate" };
+    const r1 = rowOf(v1, site);
+    const r2 = rowOf(v2, site);
+    const e = await entryFor(v1, [r1]);
+    const ready2 = (await accept(v2, [r2], undefined)).ready.get("0/M1");
+    // the two tuples are equal: only procedureText can tell the layouts apart
+    expect(ready2 && "entry" in ready2 ? ready2.entry.tuple : "").toBe(e.tuple);
+    expect(ready2 && "entry" in ready2 ? ready2.entry.procedureText : "").not.toBe(e.procedureText);
+    const r = await accept(v2, [r2], [e]);
+    expect(r.accepted.size).toBe(0);
+    expect(lines(r)).toContain("re-opened");
+  });
 
   test("field A's accepted trigger while field B's is edited: A is not re-opened, and B's entry is never named for A", async () => {
     const field = kinds.find(([n]) => n.startsWith("a field trigger"));
@@ -664,6 +735,138 @@ describe("PR-79: the section", () => {
   });
 });
 
+// A report `renderConsole` can print (the shape cli-envtool.test.ts's FAKE_REPORT uses).
+const EMPTY_REPORT = {
+  schemaVersion: 2,
+  validity: {
+    reliability: "full",
+    caveats: ["line-narrowed"],
+    scoreDescribes: "test fixture",
+    baselineTests: { total: 0, failing: 0 },
+    scoredMutants: { scored: 0, recorded: 0 },
+    executionContexts: [
+      { runner: "fenced", guiAllowed: false, clientType: "ODataV4", basis: "t", verdictCount: 0 },
+    ],
+  },
+  survivorsByProcedure: [],
+  testFiles: {},
+  backend: "fake",
+  authoritative: true,
+  baselineGreen: true,
+  batches: 1,
+  counts: {
+    killed: 0,
+    survived: 0,
+    noCoverage: 0,
+    timeoutKilled: 0,
+    knownSurvivors: 0,
+    unstable: 0,
+    errors: 0,
+    deadlineExceeded: 0,
+  },
+  mutationScore: null,
+  mutants: [],
+  unsupportedTests: [],
+  notInstrumented: { totalFiles: 0, fileCount: 0, siteCount: 0, files: [] },
+  declarativeSites: { siteCount: 0, fileCount: 0, files: [] },
+  timings: {
+    totalMs: 0,
+    generateMutationSetMs: 0,
+    deployMs: 0,
+    baselineMs: 0,
+    mutantsMs: 0,
+    perMutant: { count: 0, meanMs: 0, medianMs: 0, p95Ms: 0, maxMs: 0 },
+  },
+  preprocessorSymbols: [],
+  unplaceableCount: 0,
+  unplaceableMutants: [],
+  untargetedTriggerCount: 0,
+};
+
+describe("PR-79: a round trip from the real generator and writer", () => {
+  // REAL: generateMutationSet over a temp AL project, writeInstrumentedProject's mutant-manifest.json
+  // (its startIndex/endIndex, procedure span, astHash, ordinal), identityKeyOf, the anchors,
+  // renderChangedLineSurvivors, parseAcceptList. HAND-BUILT: the MutantOutcome row from each manifest
+  // entry (the field mapping report.ts's buildReport does), verdict "survived", and the report wrapper.
+  const SRC = POST.replace(/\n {4}procedure Other[\s\S]*?end;\n/, "");
+  const realRun = async (source: string) => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-pr79-real-"));
+    const out = await mkdtemp(join(tmpdir(), "lethal-pr79-out-"));
+    try {
+      await mkdir(join(dir, "src"), { recursive: true });
+      await writeFile(join(dir, "app.json"), JSON.stringify({ name: "A", idRanges: [] }));
+      await writeFile(join(dir, FILE), source);
+      const set = await generateMutationSet(dir);
+      await writeInstrumentedProject({
+        targetDir: out,
+        files: set.files,
+        identityOrdinals: identityOrdinalsOf(set),
+        selectorIds: { selectorId: 79997, controlId: 79998, tableId: 79999 },
+        artifactId: "0123456789abcdef0123456789abcdef",
+        targetAppId: "df1aa9ff-6539-4c86-a9d0-ad702b61ac9a",
+        operatorTiers,
+      });
+      const manifest = JSON.parse(
+        await readFile(join(out, "mutant-manifest.json"), "utf8"),
+      ) as MutantManifest;
+      const rows = manifest.mutants.map((e) => {
+        const id = identityKeyOf(e);
+        return {
+          mutantCode: e.mutantId,
+          batchIndex: 0,
+          file: e.file,
+          line: e.startLine,
+          operatorName: e.operatorName,
+          verdict: "survived",
+          astHash: id.astHash,
+          codeunitName: id.codeunitName,
+          operatorMajor: id.operatorMajor,
+          procedureName: e.procedureName,
+          startIndex: e.startIndex,
+          endIndex: e.endIndex,
+          originalText: e.originalText,
+          mutatedText: e.mutatedText,
+          coveringTests: [],
+          ...(e.procedureStartLine !== undefined
+            ? { procedureStartLine: e.procedureStartLine }
+            : {}),
+          ...(e.procedureEndLine !== undefined ? { procedureEndLine: e.procedureEndLine } : {}),
+          ...(e.triggerName !== undefined ? { triggerName: e.triggerName } : {}),
+        } as unknown as MutantOutcome;
+      });
+      return { rows, snapshot: new Map(set.files.map((f) => [f.path, Buffer.from(f.source)])) };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(out, { recursive: true, force: true });
+    }
+  };
+  const run = async (source: string, entries: AcceptEntry[] | undefined) => {
+    const { rows, snapshot } = await realRun(source);
+    const rep = report(rows);
+    const r = await computeAcceptResult({ report: rep, snapshot, list: list(entries) });
+    return { rows, rep, r };
+  };
+
+  test("printed, filled in, accepted on the same source; the site's line edited: not accepted", async () => {
+    const first = await run(SRC, undefined);
+    expect(first.rows.length).toBeGreaterThan(0);
+    const printed = renderChangedLineSurvivors(
+      changedLineSurvivors(first.rep, first.r) as never,
+      first.r,
+    )
+      .split("\n")
+      .filter((l) => l.includes("to accept it"))
+      .map((l) => ({ ...JSON.parse(l.slice(l.indexOf("{"))), reason: "reviewed" }));
+    expect(printed).toHaveLength(first.rows.length);
+    const entries = parseAcceptList(JSON.stringify({ accepted: printed }), "pasted.json");
+    const again = await run(SRC, entries);
+    expect(again.r.accepted.size).toBe(first.rows.length);
+    const edited = await run(SRC.replace("if X > 0 then", "if X > 5 then"), entries);
+    expect(edited.rows.length).toBeGreaterThan(0);
+    expect(edited.r.accepted.size).toBe(0);
+  });
+});
+
 describe("PR-79: runFromCli", () => {
   const setup = async (accepted: string | undefined) => {
     const root = await mkdtemp(join(tmpdir(), "lethal-pr79-"));
@@ -736,16 +939,59 @@ describe("PR-79: runFromCli", () => {
       const out = await runFromCliWithAccept(parsed, {
         validateSelectorIdsForProject: async () => {},
         buildBackend: async () => ({}) as never,
-        runSession: async () => canned,
+        runSession: async () => {
+          // the file edited on disk after the snapshot changes nothing: the text is the snapshot's
+          await writeFile(
+            join(parsed.projectDir, FILE),
+            POST.replace("exit(false);", "exit(true);"),
+          );
+          return canned;
+        },
       });
       expect(out.report).toBe(canned);
       expect(out.accept?.fileFound).toBe(true);
       expect(out.accept?.accepted.get("0/M1")).toBe("fine");
-      // the file edited on disk after the snapshot changes nothing: the text is the snapshot's
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // M1: an accept step that fails (here the member-lines refusal) must not lose the finished run.
+  for (const quarantined of [true, false]) {
+    test(`M1: a failing accept step keeps the report and --out; exit ${quarantined ? 3 : 1}`, async () => {
+      const rows = [rowOf(POST, { ...M1, spanShift: 1 })];
+      const { root, parsed } = await setup(JSON.stringify({ accepted: [] }));
+      const outPath = join(root, "out.json");
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      const err = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const canned = {
+          ...EMPTY_REPORT,
+          buildSymbols: [],
+          mutants: rows,
+          ...(quarantined ? { quarantined: { reason: "test" } } : {}),
+        } as unknown as SessionReport;
+        const code = await runAndReport(
+          { ...parsed, outPath },
+          {
+            validateSelectorIdsForProject: async () => {},
+            buildBackend: async () => ({}) as never,
+            runSession: async () => canned,
+          },
+        );
+        expect(code).toBe(quarantined ? 3 : 1);
+        expect(JSON.parse(await readFile(outPath, "utf8")).mutants).toHaveLength(1);
+        const printed = err.mock.calls.map((c) => String(c[0])).join("\n");
+        expect(printed).toContain("spans lines");
+        expect(printed).toContain("Nothing was accepted");
+        expect(log.mock.calls.length).toBeGreaterThan(0); // the console report was printed
+      } finally {
+        log.mockRestore();
+        err.mockRestore();
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
 
   test("a run with no line filter reads no accept file (even a malformed one)", async () => {
     const { root, parsed } = await setup("{ not json");

@@ -315,6 +315,9 @@ function anchorOf(row: MutantOutcome, ctx: FileCtx): Anchored {
   }
   if (member.endIndex <= member.startIndex) return { cannot: "its procedure span is empty" };
   const run = attributeRun(member, false, member.endIndex, true);
+  // The header chain is in the tuple too (below), but the tuple joins a header's lines with a
+  // space, so a header re-wrapped over other lines keeps its tuple and changes only this text.
+  // For the rest it is belt-and-braces: a header change shows in both.
   const procedureText = [...headerChain(member, text).map(cut), cut(spanText(text, run))].join(
     "\n",
   );
@@ -446,6 +449,35 @@ export async function computeAcceptResult(input: {
     "anchor" in a ? [{ m, a: a.anchor }] : [],
   );
 
+  // A row that cannot be anchored may be the twin of an anchored one; its scoped tuple is unknown
+  // (the parse failed), so compare what a tuple holds that needs no parse: hash, object, operator,
+  // major. ponytail: this may refuse more than needed (a twin in another scope); never less.
+  const tupleCore = (t: string): string => {
+    const p = t.split("|");
+    return JSON.stringify([p[0], p[1], p.at(-2), p.at(-1)]);
+  };
+  const unanchoredTwins = (file: string, tuple: string): MutantOutcome[] =>
+    [...anchors].flatMap(([m, a]) =>
+      !("anchor" in a) &&
+      m.file.toLowerCase() === file.toLowerCase() &&
+      tupleCore(markTupleOfRow(m)) === tupleCore(tuple)
+        ? [m]
+        : [],
+    );
+  const entryKeys = new Set(
+    entries.map((e) =>
+      anchorKey(
+        e.file,
+        e.tuple,
+        e.lineInProcedure,
+        e.column,
+        e.siteText,
+        e.procedureText,
+        e.preprocessorSymbols,
+      ),
+    ),
+  );
+
   const accepted = new Map<string, string>();
   const entryLines: string[] = [];
   let notInRun = 0;
@@ -464,9 +496,14 @@ export async function computeAcceptResult(input: {
       ) ?? [];
     const [only] = matched;
     const name = describeEntry(e);
+    const twins = only !== undefined ? unanchoredTwins(e.file, e.tuple) : [];
     if (matched.length > 1) {
       entryLines.push(
         `entry ${name}: ambiguous: ${matched.length} rows of this run share its anchor (${matched.map(refOf).join(", ")}), so it accepts none of them`,
+      );
+    } else if (only !== undefined && twins.length > 0) {
+      entryLines.push(
+        `entry ${name}: ambiguous: a twin could not be checked (${twins.map(refOf).join(", ")} has the same file and tuple but cannot be anchored), so it accepts none of them`,
       );
     } else if (only !== undefined) {
       const ref = refOf(only);
@@ -484,28 +521,45 @@ export async function computeAcceptResult(input: {
       const sameSite = anchoredRows.filter(
         ({ a }) => a.file.toLowerCase() === e.file.toLowerCase() && a.tuple === e.tuple,
       );
-      const operator = e.tuple.split("|").at(-2);
-      const renamed = anchoredRows.filter(
-        ({ m, a }) =>
+      // Tuple: astHash|<object and scope, may hold more `|`>|operator|major. "Identity changed" means
+      // the object and scope are equal and only the hash or the major moved; a renamed object or
+      // scope is a moved site (not in run).
+      const parts = (t: string) => {
+        const p = t.split("|");
+        return { hash: p[0], middle: p.slice(1, -2).join("|"), op: p.at(-2), major: p.at(-1) };
+      };
+      const et = parts(e.tuple);
+      const renamed = anchoredRows.filter(({ m, a }) => {
+        const rt = parts(a.tuple);
+        return (
           a.file.toLowerCase() === e.file.toLowerCase() &&
           a.lineInProcedure === e.lineInProcedure &&
           a.column === e.column &&
           a.siteText === e.siteText &&
           a.procedureText === e.procedureText &&
-          m.operatorName === operator &&
-          a.tuple !== e.tuple &&
-          JSON.stringify(symbolsOf(symbols)) === JSON.stringify(symbolsOf(e.preprocessorSymbols)),
-      );
-      if (sameSite.length > 0) {
-        const fresh = sameSite
-          .filter(({ m }) => SURVIVING_VERDICTS.has(m.verdict))
-          .map(({ m }) => refOf(m));
-        entryLines.push(
-          `entry ${name}: re-opened: the site, its procedure or its build changed since it was accepted. Re-review the survivor${fresh.length > 0 ? ` (${fresh.join(", ")}) and replace the entry with the one printed under it` : ""}`,
+          m.operatorName === et.op &&
+          rt.middle === et.middle &&
+          (rt.hash !== et.hash || rt.major !== et.major) &&
+          JSON.stringify(symbolsOf(symbols)) === JSON.stringify(symbolsOf(e.preprocessorSymbols))
         );
+      });
+      if (sameSite.length > 0) {
+        const survivorsHere = sameSite.filter(({ m }) => SURVIVING_VERDICTS.has(m.verdict));
+        const fresh = survivorsHere
+          .filter(({ a }) => !entryKeys.has(rowKey(a)))
+          .map(({ m }) => refOf(m));
+        if (survivorsHere.length === 0) {
+          entryLines.push(
+            `entry ${name}: re-opened: re-review: the site changed and the mutant now ${sameSite.map(({ m }) => `${m.verdict} (${refOf(m)})`).join(", ")}`,
+          );
+        } else {
+          entryLines.push(
+            `entry ${name}: re-opened: the site, its procedure or its build changed since it was accepted. Re-review the survivor (${(fresh.length > 0 ? fresh : survivorsHere.map(({ m }) => refOf(m))).join(", ")})${fresh.length > 0 ? " and replace the entry with the one printed under it" : ", which another entry already accepts: remove this entry"}`,
+          );
+        }
       } else if (renamed.length > 0) {
         entryLines.push(
-          `entry ${name}: identity changed: LethAL's identity for this site changed, not the code (${renamed.map(({ m, a }) => `${refOf(m)} is now ${a.tuple}`).join("; ")}). Replace the entry's tuple${renamed.some(({ m }) => SURVIVING_VERDICTS.has(m.verdict)) ? " with the one printed under the survivor" : ""}`,
+          `entry ${name}: identity changed: LethAL's identity for this site changed, not the code (${renamed.map(({ m, a }) => `${refOf(m)} is now ${a.tuple}`).join("; ")}). Replace the entry's tuple${renamed.some(({ m, a }) => SURVIVING_VERDICTS.has(m.verdict) && !entryKeys.has(rowKey(a))) ? " with the one printed under the survivor" : ""}`,
         );
       } else notInRun++;
     }
@@ -525,6 +579,13 @@ export async function computeAcceptResult(input: {
     }
     if ((byKey.get(rowKey(a.anchor))?.length ?? 0) > 1) {
       ready.set(refOf(m), { cannot: "cannot be accepted: ambiguous" });
+      continue;
+    }
+    if (unanchoredTwins(a.anchor.file, a.anchor.tuple).length > 0) {
+      ready.set(refOf(m), {
+        cannot:
+          "cannot be accepted: a twin of it could not be anchored, so it cannot be told apart",
+      });
       continue;
     }
     ready.set(refOf(m), {
