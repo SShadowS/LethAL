@@ -12,7 +12,8 @@
 // The ledger (<lock dir>/heavy-peaks.tsv, written by heavy-slot.sh's cleanup, R992) cuts each command to 160 characters, and
 // heavy-slot.sh passes this script the same cut, so the shapes compare alike.
 //
-//   bun scripts/heavy-slot-advice.ts <lock dir> <class> <declared GiB> <command, cut as the ledger cuts it>
+//   <command, cut as the ledger cuts it> | bun scripts/heavy-slot-advice.ts <lock dir> <class> <declared GiB>
+// (stdin, never argv: see the note at the bottom)
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
@@ -25,6 +26,13 @@ export const MIN_ROWS = 3;
 const TIMEOUT_ARG = new Set(["-k", "--kill-after", "-s", "--signal"]);
 /** GNU time's options that take a value (`-o FILE`, `-f FORMAT`). */
 const TIME_ARG = new Set(["-o", "--output", "-f", "--format"]);
+
+/** review r1: one script, one shape, whether called repo-relative (`packages/...`) or from a worktree's absolute path
+ *  (`/work/lethal-wt/<wt>/packages/...`). */
+export function scriptPath(p: string): string {
+  const m = /(?:^|\/)((?:packages|scripts)\/.*)$/.exec(p);
+  return m?.[1] ?? p;
+}
 
 export function shapeOf(cls: string, command: string): string {
   const t = command.trim().split(/\s+/);
@@ -41,13 +49,26 @@ export function shapeOf(cls: string, command: string): string {
       wrappers.push("time");
       i++;
       while (t[i]?.startsWith("-")) i += TIME_ARG.has(t[i] ?? "") ? 2 : 1;
+    } else if (w === "env") {
+      // review r1: `env A=1 <cmd>` is a wrapper too; its assignments and options are not the program
+      wrappers.push("env");
+      i++;
+      while (
+        t[i] !== undefined &&
+        (t[i]?.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t[i] ?? ""))
+      )
+        i++;
     } else break;
   }
   const exe = basename(t[i] ?? "");
   let program = exe;
   if (exe === "bun")
-    program = t[i + 1] === "run" ? `bun run ${t[i + 2] ?? ""}` : `bun ${t[i + 1] ?? ""}`;
-  else if (exe === "bash" || exe === "sh") program = `${exe} ${t[i + 1] ?? ""}`;
+    program =
+      t[i + 1] === "run" ? `bun run ${t[i + 2] ?? ""}` : `bun ${scriptPath(t[i + 1] ?? "")}`;
+  else if (exe === "bash" || exe === "sh")
+    // review r1: `bash -c <cmd>` keeps the command's first word, so unlike `bash -c` jobs do not merge
+    program =
+      t[i + 1] === "-c" ? `${exe} -c ${t[i + 2] ?? ""}` : `${exe} ${scriptPath(t[i + 1] ?? "")}`;
   const p = t.indexOf("--project", i);
   const project = p >= 0 ? (t[p + 1] ?? "") : "";
   return `${cls} | ${[...wrappers, program].join(" > ")} | ${project}`;
@@ -58,14 +79,18 @@ export interface Row {
   readonly measuredGiB: number;
 }
 
-/** The ledger rows of the same shape that carry a measured peak (`?`, no sample, is left out). */
+/** review r1: a job that exited non-zero within this many seconds died at its start (a bad flag, a missing tool); its tiny
+ *  peak is no evidence of what the command needs. A long non-zero run (a DO window at its budget exits 7) still counts. */
+export const FAILED_START_S = 60;
+
+/** The ledger rows of the same shape that carry a measured peak (`?`, no sample, is left out, and so is a failed start). */
 export function rowsOfShape(ledger: string, cls: string, command: string): Row[] {
   const want = shapeOf(cls, command);
   const out: Row[] = [];
   for (const line of ledger.split("\n")) {
     const f = line.split("\t");
     if (f.length < 9) continue;
-    const [started, , , rowCls, , measured, , , cmd] = f;
+    const [started, ended, , rowCls, , measured, rc, , cmd] = f;
     if (
       started === undefined ||
       rowCls === undefined ||
@@ -75,6 +100,8 @@ export function rowsOfShape(ledger: string, cls: string, command: string): Row[]
       continue;
     const m = Number(measured);
     if (measured === "?" || !Number.isFinite(m)) continue;
+    const ranS = (Date.parse(ended ?? "") - Date.parse(started)) / 1000;
+    if (rc !== "0" && !(ranS >= FAILED_START_S)) continue;
     if (shapeOf(rowCls, cmd) === want) out.push({ started, measuredGiB: m });
   }
   return out;
@@ -101,9 +128,12 @@ export function advise(
 }
 
 if (import.meta.main) {
-  const [dir, cls, declared, command] = process.argv.slice(2);
-  if (dir === undefined || cls === undefined || declared === undefined || command === undefined)
-    process.exit(0);
+  // review r1: the command comes on STDIN, never as an argument. The guard's ps scan counts any process whose command line names
+  // a corpus root as an unslotted heavy job (corpus-snapshot.ts, isHeavy); with the command in argv this helper would have been
+  // one, and could have made another job's guard refuse it.
+  const [dir, cls, declared] = process.argv.slice(2);
+  if (dir === undefined || cls === undefined || declared === undefined) process.exit(0);
+  const command = readFileSync(0, "utf8").replace(/\n$/, "");
   let ledger = "";
   try {
     ledger = readFileSync(join(dir, LEDGER), "utf8");

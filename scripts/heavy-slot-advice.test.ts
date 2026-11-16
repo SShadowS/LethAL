@@ -1,7 +1,7 @@
 // R1077 (PR-72): heavy-slot's advisory on a declared --peak far above the ledger's measured peaks. Every file lives in a temp
 // folder (the lock dir is LETHAL_HEAVY_LOCK_DIR), never under /coord.
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MIN_ROWS, advise, rowsOfShape, shapeOf } from "./heavy-slot-advice.ts";
@@ -102,10 +102,56 @@ describe("advise", () => {
   });
 });
 
+describe("review r1 fixes", () => {
+  test("`env VAR=x` is a wrapper, so unlike programs behind it do not merge", () => {
+    expect(shapeOf("other", "env A=1 B=2 bun scripts/verify.ts")).toBe(
+      "other | env > bun scripts/verify.ts | ",
+    );
+    expect(shapeOf("other", "env HOME=/x /t/al-runner test /y")).toBe("other | env > al-runner | ");
+    expect(shapeOf("other", "env A=1 bun scripts/verify.ts")).not.toBe(
+      shapeOf("other", "env A=1 /t/al-runner test"),
+    );
+  });
+  test("`bash -c <cmd>` keeps the command's first word", () => {
+    expect(shapeOf("other", "timeout 16200 bash -c run")).toBe("other | timeout > bash -c run | ");
+    expect(shapeOf("other", "bash -c bash /x/dry.sh")).toBe("other | bash -c bash | ");
+    expect(shapeOf("other", "bash /coord/handoff/R-984/run.sh 9")).toBe(
+      "other | bash /coord/handoff/R-984/run.sh | ",
+    );
+  });
+  test("a worktree's absolute script path has the same shape as the repo-relative one", () => {
+    expect(
+      shapeOf(
+        "baseapp",
+        "bun /work/lethal-wt/r-984/packages/runner/src/cli.ts run --project /src/do",
+      ),
+    ).toBe(shapeOf("baseapp", "bun packages/runner/src/cli.ts run --project /src/do"));
+    expect(shapeOf("other", "bun /work/lethal-wt/pr-72/scripts/verify.ts")).toBe(
+      shapeOf("other", "bun scripts/verify.ts"),
+    );
+  });
+  test("a failed start (non-zero exit within 60 s) is no evidence; a long non-zero run is", () => {
+    const at = (start: string, end: string, rc: string, measured: string) =>
+      [start, end, "heavy.1", "baseapp", "12", measured, rc, "baseapp 1 12", SCOPED].join("\t");
+    const rows = rowsOfShape(
+      ledger(
+        at("2026-11-16T05:00:00Z", "2026-11-16T05:00:05Z", "1", "0.05"), // died at start: left out
+        at("2026-11-16T05:01:00Z", "2026-11-16T05:01:30Z", "0", "0.40"), // short but clean: kept
+        at("2026-11-16T05:02:00Z", "2026-11-16T08:32:00Z", "7", "9.31"), // a window at its budget: kept
+        at("2026-11-16T05:03:00Z", "2026-11-16T05:03:59Z", "127", "0.01"), // died at start: left out
+      ),
+      "baseapp",
+      SCOPED,
+    );
+    expect(rows.map((r) => r.measuredGiB)).toEqual([0.4, 9.31]);
+  });
+});
+
 describe("heavy-slot.sh prints it and still admits the job", () => {
   const script = join(import.meta.dir, "heavy-slot.sh");
   const GIB = 1024 ** 3;
-  const run = (dir: string, ...args: string[]) => {
+  const run = (dir: string, ...args: string[]) => runWith(dir, process.execPath, ...args);
+  const runWith = (dir: string, bun: string, ...args: string[]) => {
     const cg = mkdtempSync(join(TMP, "cg-"));
     writeFileSync(join(cg, "memory.current"), `${3 * GIB}\n`);
     writeFileSync(join(cg, "memory.max"), `${32 * GIB}\n`);
@@ -118,7 +164,7 @@ describe("heavy-slot.sh prints it and still admits the job", () => {
       env: {
         ...process.env,
         LETHAL_HEAVY_LOCK_DIR: dir,
-        BUN: process.execPath,
+        BUN: bun,
         LETHAL_HEAVY_PS_FILE: psFile,
         LETHAL_HEAVY_PEAK_PS_FILE: peakPs,
         LETHAL_HEAVY_CGROUP_DIR: cg,
@@ -147,5 +193,24 @@ describe("heavy-slot.sh prints it and still admits the job", () => {
     const r = run(seeded("3.00"), "--peak", "6", "other", ...SHAPE);
     expect(r.exitCode).toBe(0);
     expect(r.stderr.toString()).not.toContain("advisory (R1077)");
+  });
+  test("review r1: the helper never carries the job's command in its own argv (the guard's ps scan would count it)", () => {
+    const dir = seeded("1.00");
+    const log = join(dir, "bun-argv.log");
+    const wrapper = join(dir, "bun-wrapper.sh");
+    // records every bun call's arguments, then runs the real bun
+    writeFileSync(
+      wrapper,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexec '${process.execPath}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const marker = "/work/src/DO/marker-path";
+    const r = runWith(dir, wrapper, "--peak", "6", "other", "true", "--project", "/src/x", marker);
+    expect(r.exitCode).toBe(0);
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    const advice = calls.filter((c) => c.includes("heavy-slot-advice.ts"));
+    expect(advice).toHaveLength(1);
+    expect(advice[0]).not.toContain(marker);
+    expect(advice[0]).not.toContain("--project");
   });
 });
