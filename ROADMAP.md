@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1036 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1037 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1081,6 +1081,7 @@ that ordering is the priority.
 - **R1071** · Keep census over the refusal ledger (PR-54): 74 of 75 refusal classes leave a kept serve daemon clean, none unclean; coverage 72 of 272 standing ledger texts; two DO close families join the keep-list; inverting the keep-list awaits a ruling · [R1071.md](docs/roadmap/R1071.md) · done (77cb28a3)
 - **R1072** · Keep-list option (a): every census-CLEAN refusal class kept on the serve daemon (66 entries), with a drift guard that closes and re-runs on any sign of carried state · [R1072.md](docs/roadmap/R1072.md) · done (0735e693)
 - **R1073** · Upstream issues the maintainer reported fixed, verified on al-runner edge-5a58a0f16 (PR-58): 7 fixed, 4 batch issues with their reported cause fixed, 2 at step 1 only, 3 still refused, 1 not verifiable by a repro; 13 regression entries added, 17 issues commented · [R1073.md](docs/roadmap/R1073.md) · closed 2026-11-16 — measured and commented upstream; the LethAL knock-ons below are left to their own items
+- **R1074** · The al-runner update's own memory gate skipped R992's small-job allowance and the unslotted heavy jobs, so the daily update was refused at 8.2 GiB used; it now shares the heavy-slot guard's inputs · [R1074.md](docs/roadmap/R1074.md) · done (f514b32d)
 
 ---
 

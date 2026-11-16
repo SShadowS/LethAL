@@ -44,31 +44,39 @@ function holderPid(dir: string, slot: number): string {
   }
 }
 
-if (import.meta.main) {
-  const [dir, slotArg, cls, peakArg] = process.argv.slice(2);
-  const mine = Number(slotArg);
-  if (dir === undefined || !SLOTS.some((s) => s === mine) || (cls !== "baseapp" && cls !== "other"))
-    throw new Error("usage: heavy-slot-guard.ts <lockDir> <slot> <baseapp|other> [peakGiB]");
-  const peak = peakArg === undefined ? DEFAULT_PEAK_GIB[cls] : Number(peakArg);
-  if (!(peak > 0)) throw new Error(`heavy-slot-guard: bad peak ${peakArg}`);
-  const held = SLOTS.filter((s) => s !== mine && slotHeld(dir, s));
+/**
+ * PR-60: what `memoryVerdict` needs from the lock folder, for the guard and for the al-runner update.
+ * Held slots (all but `mineSlot`) count at their declared peak, or the larger default when their class
+ * cannot be read; heavy processes in no slot (not `selfPid`) at their class default. `smallHeld` is
+ * undefined when a held class is unreadable (fail closed: no allowance). Also returns the held
+ * slots' pids and classes, which the no-cgroup count verdict needs.
+ */
+export function heldInputs(
+  dir: string,
+  selfPid: number,
+  psText: string,
+  mineSlot?: number,
+): {
+  readonly heldPeaks: number[];
+  readonly smallHeld: number | undefined;
+  readonly held: number[];
+  readonly pids: number[];
+  readonly slots: ReturnType<typeof readSlot>[];
+  readonly procs: ReturnType<typeof parsePs>;
+} {
+  const held = SLOTS.filter((s) => s !== mineSlot && slotHeld(dir, s));
   const slots = held.map((s) => readSlot(dir, s));
   const pids = held
     .map((s) => Number(readFileSync(join(dir, `heavy.${s}`), "utf8").trim()))
     .filter((p) => !Number.isNaN(p));
-  const psFile = process.env.LETHAL_HEAVY_PS_FILE;
-  const ps =
-    psFile !== undefined
-      ? readFileSync(psFile, "utf8")
-      : Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString();
-  const procs = parsePs(ps);
+  const procs = parsePs(psText);
   // A held slot with no readable class (a bare flock, or a pid that died) counts at the larger default;
   // a heavy job in no slot at its class default (review r1: memory.current holds only what it uses now).
   const heldPeaks = [
     ...slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
     ...unslottedPeaks(
       procs,
-      process.pid,
+      selfPid,
       pids,
       slots.map((s) => s?.cls),
     ),
@@ -77,17 +85,45 @@ if (import.meta.main) {
   const smallHeld = slots.every((s) => s !== undefined)
     ? slots.filter((s) => s?.small === true).length
     : undefined;
+  return { heldPeaks, smallHeld, held, pids, slots, procs };
+}
+
+/** One line per admission that passed only by the R992 allowance; `who` names the slot or the update. */
+export function appendSmallAdmit(
+  dir: string,
+  who: string,
+  cls: string,
+  peak: number,
+  sample: { readonly usedBytes: number; readonly maxBytes?: number } | undefined,
+  heldPeaks: readonly number[],
+  pid: string,
+): void {
+  const gib = (b: number | undefined) => (b === undefined ? "?" : (b / 2 ** 30).toFixed(2));
+  appendFileSync(
+    join(dir, SMALL_ADMITS_LEDGER),
+    `${[new Date().toISOString(), who, cls, peak, gib(sample?.usedBytes), heldPeaks.reduce((s, p) => s + p, 0), gib(sample?.maxBytes), pid].join("\t")}\n`,
+  );
+}
+
+if (import.meta.main) {
+  const [dir, slotArg, cls, peakArg] = process.argv.slice(2);
+  const mine = Number(slotArg);
+  if (dir === undefined || !SLOTS.some((s) => s === mine) || (cls !== "baseapp" && cls !== "other"))
+    throw new Error("usage: heavy-slot-guard.ts <lockDir> <slot> <baseapp|other> [peakGiB]");
+  const peak = peakArg === undefined ? DEFAULT_PEAK_GIB[cls] : Number(peakArg);
+  if (!(peak > 0)) throw new Error(`heavy-slot-guard: bad peak ${peakArg}`);
+  const psFile = process.env.LETHAL_HEAVY_PS_FILE;
+  const ps =
+    psFile !== undefined
+      ? readFileSync(psFile, "utf8")
+      : Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString();
+  const { heldPeaks, smallHeld, held, pids, slots, procs } = heldInputs(dir, process.pid, ps, mine);
   const sample = readContainerMemory();
   const m = memoryVerdict(sample, heldPeaks, peak, MEMORY_RESERVE_GIB, smallHeld);
   console.error(m.message);
   if (m.small === true) {
     markSlotSmall(dir, mine);
-    // One line per admission that passed only by the R992 allowance.
-    const gib = (b: number | undefined) => (b === undefined ? "?" : (b / 2 ** 30).toFixed(2));
-    appendFileSync(
-      join(dir, SMALL_ADMITS_LEDGER),
-      `${[new Date().toISOString(), `heavy.${mine}`, cls, peak, gib(sample?.usedBytes), heldPeaks.reduce((s, p) => s + p, 0), gib(sample?.maxBytes), holderPid(dir, mine)].join("\t")}\n`,
-    );
+    appendSmallAdmit(dir, `heavy.${mine}`, cls, peak, sample, heldPeaks, holderPid(dir, mine));
   }
   // R991: a job that can never fit fails by name (exit 2: retrying never helps), so a --wait ticket
   // never waits for it, and never holds the queue's head for it.
