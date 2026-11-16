@@ -107,6 +107,7 @@ import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
+import { type AcceptResult, computeAcceptResult, loadAcceptList } from "./accept-list";
 import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
 import type { ReportView } from "./changed-line-survivors";
 import type { EventSubscriber } from "./events";
@@ -4080,7 +4081,19 @@ export function runOutputPaths(
   ];
 }
 
+/** `runFromCliWithAccept` for a caller that needs the report alone. */
 export async function runFromCli(
+  ...args: Parameters<typeof runFromCliWithAccept>
+): Promise<SessionReport> {
+  return (await runFromCliWithAccept(...args)).report;
+}
+
+/**
+ * PR-79: the run, and beside the report the accept result (`lethal.accepted.json` matched against
+ * this run's source snapshot). `accept` is set only on a line-narrowed run. The file is read and
+ * validated BEFORE the session starts, so a malformed one stops the run early.
+ */
+export async function runFromCliWithAccept(
   given: RunCliConfig,
   deps: {
     resolveEnvToolSession?: typeof resolveEnvToolSession;
@@ -4103,7 +4116,7 @@ export async function runFromCli(
      *  `runSession` records into. */
     quarantineDir?: string;
   } = {},
-): Promise<SessionReport> {
+): Promise<{ readonly report: SessionReport; readonly accept?: AcceptResult }> {
   // R-445: a test project inside the target (or containing it) is refused by name before anything
   // reads or builds the target: the build copies every .al under the target, so its tests would be
   // mutated and published as target code. Campaign stages run through here too.
@@ -4136,6 +4149,8 @@ export async function runFromCli(
   const source = await readTargetSource(parsed.projectDir);
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
+  // PR-79: read and validated before the session starts, only for a line-narrowed run.
+  const acceptList = lineRanges !== undefined ? await loadAcceptList(parsed.projectDir) : undefined;
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -4194,7 +4209,12 @@ export async function runFromCli(
   } else {
     await removeScratchQuietly(scratchRoot);
   }
-  return report;
+  // PR-79: from the snapshot the run parsed, never from disk.
+  const accept =
+    acceptList !== undefined
+      ? await computeAcceptResult({ report, snapshot: source, list: acceptList })
+      : undefined;
+  return { report, ...(accept !== undefined ? { accept } : {}) };
 
   async function runInScratch(): Promise<SessionReport> {
     const sessionConfig = configFile;
@@ -6146,11 +6166,12 @@ export const LETHAL_VERSION: string = rootPackageJson.version;
 export function exitCodeForReport(
   report: Pick<SessionReport, "quarantined"> & ReportView,
   failOnSurvivors = false,
+  accept?: AcceptResult,
 ): number {
   if (report.quarantined !== undefined) return QUARANTINED_EXIT_CODE;
   if (report.validity.caveats.includes("all-errors")) return NOTHING_SCORED_EXIT_CODE;
   if (report.validity.caveats.includes("time-budget-reached")) return TIME_BUDGET_EXIT_CODE;
-  if (failOnSurvivors && (changedLineSurvivors(report)?.counted.length ?? 0) > 0) {
+  if (failOnSurvivors && (changedLineSurvivors(report, accept)?.counted.length ?? 0) > 0) {
     return SURVIVORS_ON_CHANGED_LINES_EXIT_CODE;
   }
   return 0;
@@ -6301,20 +6322,24 @@ async function main(): Promise<number> {
   if (parsed.mode === "init") {
     return await initFromCli(parsed);
   }
-  const report = await runFromCli(parsed);
+  const { report, accept } = await runFromCliWithAccept(parsed);
   console.log(renderConsole(report));
-  const changed = changedLineSurvivors(report);
-  if (changed !== undefined) console.log(renderChangedLineSurvivors(changed));
+  const changed = changedLineSurvivors(report, accept);
+  if (changed !== undefined) console.log(renderChangedLineSurvivors(changed, accept));
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
-  return runExitCode(report, parsed);
+  return runExitCode(report, parsed, accept);
 }
 
-/** `main`'s exit code for a finished run: the parsed `--fail-on-survivors` reaches `exitCodeForReport`. */
+/**
+ * `main`'s exit code for a finished run: the parsed `--fail-on-survivors` reaches `exitCodeForReport`.
+ * PR-79: the same accept result the section printed, so the two cannot disagree.
+ */
 export function runExitCode(
   report: Parameters<typeof exitCodeForReport>[0],
   parsed: { readonly failOnSurvivors?: true },
+  accept?: AcceptResult,
 ): number {
-  return exitCodeForReport(report, parsed.failOnSurvivors === true);
+  return exitCodeForReport(report, parsed.failOnSurvivors === true, accept);
 }
 
 if (import.meta.main) {

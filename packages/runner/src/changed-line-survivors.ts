@@ -1,5 +1,7 @@
 // PR-77: the survivors of a line-narrowed run, split into the ones that count and the ones listed
 // apart because al-runner-v3 gives their site a caveat. Spec: docs/superpowers/specs/2026-11-16-pr77-changed-line-survivors.md
+import { ACCEPT_LIST_FILENAME } from "./accept-list";
+import type { AcceptResult } from "./accept-list";
 import { SURVIVING_VERDICTS } from "./equivalence-marks";
 import { mutantRef } from "./report";
 import type { MutantOutcome, SessionReport } from "./report";
@@ -21,8 +23,15 @@ export interface ApartSurvivor extends ChangedLineSurvivor {
   readonly reasons: readonly ApartReason[];
 }
 
+/** PR-79: a survivor an entry of `lethal.accepted.json` accepts, with the entry's reason. */
+export interface AcceptedSurvivor extends ChangedLineSurvivor {
+  readonly reason: string;
+}
+
 export interface ChangedLineSurvivors {
   readonly counted: readonly ChangedLineSurvivor[];
+  /** Taken out of `counted` and `apart` by the accept list; never counted. */
+  readonly accepted: readonly AcceptedSurvivor[];
   readonly apart: readonly ApartSurvivor[];
   /** Counted survivors with a covering test whose al-runner flag is unknown or unrecorded (v3 only). */
   readonly unknownFlagCount: number;
@@ -56,9 +65,13 @@ const byFileLineCode = (a: ChangedLineSurvivor, b: ChangedLineSurvivor): number 
 /**
  * `undefined` when the run was not line-narrowed. Otherwise every `survived` mutant, split into
  * `counted` and `apart`. Only an al-runner-v3 report (its own `backend` field) can put a survivor
- * apart; on any other backend `apart` is empty.
+ * apart; on any other backend `apart` is empty. PR-79: a survivor in `accept.accepted` is listed
+ * under `accepted` instead, whatever else it is. Equivalence marks never take a survivor out.
  */
-export function changedLineSurvivors(report: ReportView): ChangedLineSurvivors | undefined {
+export function changedLineSurvivors(
+  report: ReportView,
+  accept?: Pick<AcceptResult, "accepted">,
+): ChangedLineSurvivors | undefined {
   if (!report.validity.caveats.includes("line-narrowed")) return undefined;
   const v3 = report.backend === "al-runner-v3";
   const flagged = new Set<string>();
@@ -86,6 +99,7 @@ export function changedLineSurvivors(report: ReportView): ChangedLineSurvivors |
 
   const counted: ChangedLineSurvivor[] = [];
   const apart: ApartSurvivor[] = [];
+  const accepted: AcceptedSurvivor[] = [];
   let unknownFlagCount = 0;
   for (const m of report.mutants ?? []) {
     if (!SURVIVING_VERDICTS.has(m.verdict)) continue;
@@ -97,6 +111,11 @@ export function changedLineSurvivors(report: ReportView): ChangedLineSurvivors |
       operatorName: m.operatorName,
       procedureName: m.procedureName,
     };
+    const reason = accept?.accepted.get(mutantRef(m.batchIndex, m.mutantCode));
+    if (reason !== undefined) {
+      accepted.push({ ...row, reason });
+      continue;
+    }
     const reasons = reasonsOf(m);
     if (reasons.length === 0) {
       counted.push(row);
@@ -111,14 +130,19 @@ export function changedLineSurvivors(report: ReportView): ChangedLineSurvivors |
         : undefined;
   return {
     counted: counted.sort(byFileLineCode),
+    accepted: accepted.sort(byFileLineCode),
     apart: apart.sort(byFileLineCode),
     unknownFlagCount,
     ...(stopped !== undefined ? { partial: stopped } : {}),
   };
 }
 
-/** The console section; call only with a defined result. */
-export function renderChangedLineSurvivors(s: ChangedLineSurvivors): string {
+/**
+ * The console section; call only with a defined result. PR-79: with the run's accept result it also
+ * lists the accepted survivors, one line per entry that is not accepted, and a ready entry under
+ * each counted survivor.
+ */
+export function renderChangedLineSurvivors(s: ChangedLineSurvivors, accept?: AcceptResult): string {
   const row = (m: ChangedLineSurvivor) =>
     `  ${mutantRef(m.batchIndex, m.mutantCode)} ${m.file}:${m.line} ${m.operatorName} ${m.procedureName}`;
   const head =
@@ -126,7 +150,24 @@ export function renderChangedLineSurvivors(s: ChangedLineSurvivors): string {
       ? `SURVIVORS ON THE CHANGED LINES (partial: ${s.partial}; the counts are not a full list)`
       : "SURVIVORS ON THE CHANGED LINES";
   const lines = ["", head, `counted: ${s.counted.length}`];
-  for (const m of s.counted) lines.push(row(m));
+  for (const m of s.counted) {
+    lines.push(row(m));
+    const ready = accept?.ready.get(mutantRef(m.batchIndex, m.mutantCode));
+    if (ready === undefined) continue;
+    lines.push(
+      "entry" in ready
+        ? `    to accept it, add to ${ACCEPT_LIST_FILENAME} "accepted" (write the reason): ${JSON.stringify(ready.entry)}`
+        : `    ${ready.cannot}`,
+    );
+  }
+  if (accept !== undefined && s.counted.length > 0 && !accept.fileFound) {
+    lines.push(`no ${ACCEPT_LIST_FILENAME} at ${accept.path}`);
+  }
+  if (s.accepted.length > 0) {
+    lines.push(`accepted (never counted): ${s.accepted.length}`);
+    for (const m of s.accepted) lines.push(`${row(m)}  accepted: ${m.reason}`);
+  }
+  for (const l of accept?.entryLines ?? []) lines.push(l);
   if (s.unknownFlagCount > 0) {
     lines.push(
       `${s.unknownFlagCount} survivor(s) on the changed lines have a covering test whose al-runner flag is unknown or not recorded (serve rows carry none, upstream #7954): they are counted.`,

@@ -36,6 +36,65 @@ pipeline.
    The GitHub template uploads both as an artifact. The Azure template shows the HTML with `PublishMutationReport@2` (only when the export step wrote the page, so exit 8 does not fail it). Whether
    Azure DevOps' report tab loads a script from a CDN is not measured; check it in your organisation.
 
+## Accepting a survivor
+A survivor on a changed line may be fine: an equivalent mutant (no test can tell it from the original), or code you do not
+test on purpose. `lethal.accepted.json` lists the survivors a team has reviewed, each with a reason. An accepted survivor is
+listed in the section, with its reason, and never counts toward `--fail-on-survivors`.
+
+**The file.** `lethal.accepted.json` sits in the folder you pass as `--project` (the AL app folder, next to `app.json`), for
+example `app/lethal.accepted.json`. LethAL reads it only on a run with `--lines` or `--changed-since`. It is read and checked
+before the run starts: a malformed file, a missing field, the placeholder reason, bad hex, a negative place or two entries with
+the same anchor stops the run by name. When the section has counted survivors and the file is absent, it prints one line with
+the exact path it looked for.
+
+**The workflow (all in one pull request).**
+1. CI runs `lethal run --changed-since origin/<target branch> --fail-on-survivors` and lists a survivor.
+2. Under each counted survivor the run prints a ready entry (`to accept it, add to lethal.accepted.json ...`). A developer
+   reviews the survivor, decides it is acceptable, and pastes the entry into `"accepted": [...]` in the same pull request.
+3. The developer replaces the reason placeholder with a real reason. The parser refuses the placeholder, so pasting without
+   writing a reason fails loudly.
+4. The re-run, with the same diff against the base, matches the entry and accepts the survivor.
+
+The entry is computed from the source the run measured, not from your checkout, so a different commit or CRLF line endings
+cannot give you an entry that never matches. If the section says "cannot be accepted", it gives the reason: another row has the
+same anchor (ambiguous), or the survivor has no usable procedure span.
+
+**What keeps an entry.** The survivor's own lines, its whole procedure or trigger (its attributes included), its place in it and
+the build's preprocessor symbols are unchanged. Lines added or removed outside the procedure only shift line numbers and keep
+the entry.
+
+**What re-opens it, while the survivor's line is in the run.**
+- any edit to the survivor's own lines, even one that leaves LethAL's mutant identity unchanged (`x > 0` becomes `y > 0`);
+- any edit elsewhere in the same procedure or trigger, or to its attributes (`[TryFunction]`, `[EventSubscriber]` and so on);
+- a move to another procedure, object or file; a trigger body moved to another field, action, dataitem or element (every
+  enclosing declaration header is part of the anchor);
+- another preprocessor symbol set. The set includes al-runner's predefined symbols, so an entry printed by a v3 run does not
+  match a bcdev run.
+
+Equivalence marks (`lethal.equivalent.json`) do NOT take a survivor out of the counted list. To keep an equivalent mutant out of
+CI, add an accept entry for it.
+
+**One label per entry.** The section tells you what became of each entry:
+- accepted (listed with its reason);
+- killed: a test now kills the survivor; remove the entry;
+- not measured this run (no coverage, or an error); keep the entry;
+- re-opened: the code at the site changed; re-review the survivor and replace the entry;
+- identity changed: LethAL's identity for the site changed, not the code; replace the entry's tuple;
+- ambiguous: more than one row of the run shares the entry's anchor, so it accepts none;
+- every other entry gets one summary line: "N entries match no site of this run (not on a changed line, or moved or renamed); not
+  checked". They are not called stale.
+
+**Limits, stated.**
+- **Edits outside the procedure are not seen.** If the procedure is unchanged but its meaning changed through an edit in a
+  callee, a global, a table trigger or an event subscriber elsewhere, the entry stays. Re-opening on any edit in the file or the
+  project would re-open entries on unrelated fixes made in the same pull request after the review, and the list would become
+  unusable. The procedure is the widest anchor that stays stable through one pull request's review.
+- **After a merge.** A later pull request that edits only another line of the procedure does not list the survivor again,
+  because its line is not in that diff. The entry is re-checked the next time the survivor's own line changes.
+- **`app.json` is not part of the anchor.**
+- The file records a reviewer's decision. LethAL cannot verify it: an accepted survivor is still `survived` in the report and
+  in the score; it only leaves the CI count.
+
 ## Before you copy them
 - **Every artifact carries your AL source:** the report's mutant texts and the export's embedded files. Keep them inside your
   organisation.

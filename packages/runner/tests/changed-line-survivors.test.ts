@@ -226,6 +226,7 @@ describe("PR-77: changedLineSurvivors", () => {
           reasons: ["coverageOff"],
         },
       ],
+      accepted: [],
       unknownFlagCount: 0,
     });
     expect(text).toContain("SURVIVORS ON THE CHANGED LINES");
