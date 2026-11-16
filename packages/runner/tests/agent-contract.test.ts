@@ -11,6 +11,7 @@ import {
   DOCTOR_SCHEMA_VERSION,
   FLAG_OWNERS,
   NOTHING_SCORED_EXIT_CODE,
+  NO_MUTABLE_LINES_EXIT_CODE,
   QUARANTINED_EXIT_CODE,
   RUN_FLAGS,
   TIME_BUDGET_EXIT_CODE,
@@ -507,6 +508,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
         String(QUARANTINED_EXIT_CODE),
         String(NOTHING_SCORED_EXIT_CODE),
         String(TIME_BUDGET_EXIT_CODE),
+        String(NO_MUTABLE_LINES_EXIT_CODE),
       ].sort(),
     );
     // R912: a budget stop is partial, so it must not read as a pass; the two stronger claims win.
@@ -1515,7 +1517,14 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
     const footer = help.split("EXIT CODES")[1] ?? "";
     const runCodes = [...footer.matchAll(/(?:^|\s)(\d)\s/g)].map((m) => Number(m[1]));
     expect(new Set(runCodes)).toEqual(
-      new Set([0, 1, QUARANTINED_EXIT_CODE, NOTHING_SCORED_EXIT_CODE, TIME_BUDGET_EXIT_CODE]),
+      new Set([
+        0,
+        1,
+        QUARANTINED_EXIT_CODE,
+        NOTHING_SCORED_EXIT_CODE,
+        TIME_BUDGET_EXIT_CODE,
+        NO_MUTABLE_LINES_EXIT_CODE,
+      ]),
     );
     const lines = help.split("\n");
     const verifyStart = lines.findIndex((l) => l.startsWith("VERIFY"));

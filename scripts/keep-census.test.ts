@@ -5,6 +5,7 @@ import {
   KIT_TO,
   STATE_VAR,
   WRITES,
+  classLogName,
   emitCensusApp,
   groupClasses,
   judge,
@@ -17,6 +18,17 @@ import { BASE_ID, type CellResult, FAMILIES, type Family } from "./refusal-famil
 // PR-54: the census mode's pure parts. No al-runner runs here and nothing is written.
 const ids = (al: string) =>
   [...al.matchAll(/^(?:table|codeunit|page|report)\s+(\d+)\s/gm)].map((m) => Number(m[1]));
+
+describe("class log names (PR-76)", () => {
+  test("two classes that share their first 60 characters get two distinct file names", () => {
+    const head = "Evaluate returned a value that the request cannot keep because ";
+    const a = classLogName("report", 0, `${head}it is greater than 1000`);
+    const b = classLogName("report", 1, `${head}it is less than 1000`);
+    expect(a).not.toBe(b);
+    expect(a.startsWith("serve.report.0-")).toBe(true);
+    expect(b.startsWith("serve.report.1-")).toBe(true);
+  });
+});
 
 describe("kit ids", () => {
   test("the kit's own objects sit inside 50940-50999", () => {

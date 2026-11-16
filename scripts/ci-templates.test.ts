@@ -47,8 +47,10 @@ describe("PR-70: the CI templates' lethal commands", () => {
     const text = readFileSync(join(DIR, t), "utf8");
     const cmds = lethalCommands(text);
 
-    test(`${t}: holds one run and one export`, () => {
-      expect(cmds.map((c) => c[0])).toEqual(["run", "export"]);
+    test(`${t}: holds one run and two exports (the JSON and the HTML page)`, () => {
+      expect(cmds.map((c) => c[0])).toEqual(["run", "export", "export"]);
+      const formats = cmds.slice(1).map((c) => c[c.indexOf("--format") + 1]);
+      expect(formats).toEqual(["mutation-elements", "mutation-elements-html"]);
     });
 
     test(`${t}: every lethal command parses with the CLI's own table`, () => {
@@ -62,17 +64,20 @@ describe("PR-70: the CI templates' lethal commands", () => {
     });
 
     test(`${t}: the run is scoped to the changed lines and the export reads its report and project`, () => {
-      const [run, exp] = cmds;
-      if (run === undefined || exp === undefined) throw new Error("no run or export");
+      const [run, ...exports] = cmds;
+      if (run === undefined || exports.length === 0) throw new Error("no run or export");
       const arg = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1];
       expect(arg(run, "--changed-since")).toStartWith("origin/");
-      expect(exp[1]).toBe(arg(run, "--out"));
-      expect(arg(exp, "--project")).toBe(arg(run, "--project"));
-      expect(exp).toContain("mutation-elements");
+      for (const exp of exports) {
+        expect(exp[1]).toBe(arg(run, "--out"));
+        expect(arg(exp, "--project")).toBe(arg(run, "--project"));
+        expect(arg(exp, "--format")).toStartWith("mutation-elements");
+      }
     });
 
-    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, else) and fails on anything but 0`, () => {
-      expect(caseLabels(text)).toEqual(["0", "3", "4", "7", "*"]);
+    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, 8, else); only 0 and 8 pass`, () => {
+      expect(caseLabels(text)).toEqual(["0", "8", "3", "4", "7", "*"]);
+      expect(text).toMatch(/8\) echo "[^"]*"; rc=0 ;;/);
       expect(text).toContain('exit "$rc"');
       expect(text.indexOf("set +e")).toBeGreaterThan(-1);
       expect(text.indexOf("set +e")).toBeLessThan(text.indexOf("lethal run --project"));

@@ -34,8 +34,9 @@
  * SUPERSEDED as a converter by `lethal export --format mutation-elements`, which is the shipped
  * surface and shares one implementation in `packages/runner/src/mutation-elements.ts`. This script
  * survives for the one thing the CLI deliberately does NOT do: writing a SELF-CONTAINED HTML file
- * with the `mutation-testing-elements` renderer inlined. The CLI cannot, because it ships as a
- * signed standalone binary and that would mean embedding 238 KB of third-party JavaScript into it.
+ * with the `mutation-testing-elements` renderer inlined (no network needed to open it). The CLI's
+ * `--format mutation-elements-html` instead LOADS the bundle from jsDelivr, because it ships as a
+ * signed standalone binary and embedding 238 KB of third-party JavaScript is not its call.
  * Here node_modules exists, so it is a local convenience rather than a distribution decision.
  */
 import { readFile, writeFile } from "node:fs/promises";
