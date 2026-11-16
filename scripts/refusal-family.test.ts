@@ -20,6 +20,7 @@ import {
   RECORD_FILTERS,
   SET_TEST,
   T9_REFUSALS,
+  T10_REFUSALS,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
@@ -1017,6 +1018,83 @@ describe("PR-74: the t9-refusals family", () => {
   });
 });
 
+describe("PR-93: the t10-refusals family", () => {
+  const f = T10_REFUSALS;
+  // each cell's refusal text as al-runner `current` gave it (the cell order is the codeunit order); the RunRequestPage cell
+  // inside a write transaction (R1078) gives no refusal on the plain runner: BC's own transaction error, so it has no text
+  const TEXTS: (string | undefined)[] = [
+    "CalcDate result outside 0001-9999 (error text not pinned)",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state Array would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state ArrayStart would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+    "Evaluate of `<300` into Decimal (form not pinned by the corpus)",
+    "FieldRef.EnumValueCount on a FieldRef that was never assigned: ",
+    "FieldRef.Value on a FieldRef that was never assigned: ",
+    "KeyRef.FieldCount on a KeyRef that was never assigned",
+    "KeyRef.FieldIndex on a KeyRef that was never assigned",
+    "Page.Run with RecordRef as the record",
+    "Page.Run with an unassigned Variant as the record",
+    "RecordRef.FindFirst on a RecordRef that is not open: ",
+    "RecordRef.GetFilters on a RecordRef that is not open: ",
+    "RecordRef.GetTable of Text 'Not a record'",
+    "RecordRef.KeyIndex on a RecordRef that is not open: ",
+    "Report.SaveAs#2 of id 0, which no report declares (error text not pinned)",
+    "SetFilter: `GL00000000` is not a BigInteger",
+    "SetFilter: `GU00000001` is not a BigInteger",
+    "SetFilter: empty filter term",
+    "SetFilter: text filter value `-1M` for Date: no form pinned for this language ",
+    "SetFilter: text filter value `-2026-09-01` for Date: no form pinned for this language ",
+    "SetFilter: unexpected `>` in filter `<-1M>..<CM>`",
+    "SetFilter: value expected after `<>`",
+    "XmlDocument.ReadFrom of something that is not an InStream",
+    "a parameters string without the XML declaration in this form, given to Report.RunRequestPage ",
+    undefined,
+    "an OutStream was expected, got an untouched handle",
+    "conversion of Code 'GL00000000' to BigInteger",
+  ];
+
+  test("one cell per text, an OnPrem app, distinct cell names, and RunRequestPage both inside and after a Commit", () => {
+    expect(f.cells).toHaveLength(TEXTS.length);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const rrp = f.cells.filter((c) => c.method === "RunRequestPage");
+    expect(rrp.map((c) => c.setup?.at(-1))).toEqual(["Commit();", "R.Insert();"]);
+    expect(TEXTS.indexOf(undefined)).toBe(
+      f.cells.findIndex((c) => c.state === "in write transaction"),
+    );
+  });
+
+  test("a run that gives the measured texts makes 15 refusal classes, none of them known", () => {
+    const rows = f.cells.flatMap((_, i) => {
+      const t = TEXTS[i];
+      return t === undefined
+        ? []
+        : [
+            {
+              name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+              status: "error",
+              notRun: true,
+              message: `NotRun: out-of-scope: ${t}`,
+            },
+          ];
+    });
+    const results = classify(f, rows);
+    expect(results.filter((r) => r.outcome === "refused")).toHaveLength(TEXTS.length - 1);
+    expect(results.filter((r) => r.outcome === "missing")).toHaveLength(1);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    expect(classes).toHaveLength(15);
+    expect(classes.find((c) => c.text === "SetFilter")?.cells).toHaveLength(7);
+  });
+
+  test("last of FAMILIES (place 16, BC-check number 17, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("t10-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(15);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051017");
+  });
+});
+
 describe("PR-83: the record-filters family", () => {
   const f = RECORD_FILTERS;
 
@@ -1184,8 +1262,8 @@ describe("PR-86: the dates-formulas family", () => {
 describe("PR-87: the json-text family", () => {
   const f = JSON_TEXT;
 
-  test("last of FAMILIES: place 15, BC-check number 16", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("json-text");
+  test("place 15 of FAMILIES: BC-check number 16", () => {
+    expect(Object.keys(FAMILIES).indexOf("json-text")).toBe(14);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051016");
   });
 

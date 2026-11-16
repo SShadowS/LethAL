@@ -102,7 +102,8 @@ describe("PR-56 keep entries", () => {
           `${m} on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
         ),
       ]).toEqual([m, false]);
-    for (const m of ["Value", "Get", "CopyLinks"]) {
+    // PR-93 measured FieldRef.Value and keeps it (`al-runner-serve-pr93.test.ts`); Name stands in as unmeasured
+    for (const m of ["Name", "Get", "CopyLinks"]) {
       expect(
         k(
           `FieldRef.${m} on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,

@@ -2034,6 +2034,156 @@ dotnet
 };
 
 /**
+ * PR-93: the refusal texts DO windows t10 and t11 still closed on after PR-74, each driven by an invented cell (no corpus source
+ * text; values such as 'GL00000000' and the JSON path are names only). Cell i is codeunit BASE_ID + 1 + i; the support objects
+ * share id 51000 as in the other families.
+ */
+const T10_JSON_VARS = ["SW: DotNet T10StringWriter;", "JW: DotNet T10JsonTextWriter;"];
+const T10_JSON_SETUP = ["SW := SW.StringWriter();", "JW := JW.JsonTextWriter(SW);"];
+const T10_TO_RECIPIENTS = [
+  ...T10_JSON_SETUP,
+  "JW.WriteStartObject();",
+  "JW.WritePropertyName('message');",
+  "JW.WriteStartObject();",
+  "JW.WritePropertyName('toRecipients');",
+  "JW.WriteStartArray();",
+];
+const T10_ROW = ['R: Record "T10 Row";'];
+export const T10_REFUSALS: Family = {
+  name: "t10-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "T10 Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Amount; Decimal) { }
+        field(3; Count; BigInteger) { }
+        field(4; Blob; Blob) { }
+        field(5; "Doc Date"; Date) { }
+        field(6; Img; Media) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+page 51000 "T10 Page"
+{
+    PageType = List;
+    SourceTable = "T10 Row";
+    layout { area(Content) { repeater(Rows) { field(CodeCol; Rec."Code") { } } } }
+}
+
+report 51000 "T10 Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "T10 Row") { } }
+    requestpage { layout { area(Content) { } } }
+}
+
+dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.IO.StringWriter; T10StringWriter) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.JsonTextWriter; T10JsonTextWriter) { }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9("Date", "CalcDate", "t10", "D := CalcDate('<+2Y>', DMY2Date(1, 1, 9998));", {
+      vars: ["D: Date;"],
+    }),
+    t9("JsonTextWriter", "WriteEndArray", "t10", "JW.WriteEndArray();", {
+      vars: T10_JSON_VARS,
+      setup: T10_JSON_SETUP,
+    }),
+    t9("JsonTextWriter", "WritePropertyName", "state Array", "JW.WritePropertyName('x');", {
+      vars: T10_JSON_VARS,
+      setup: [...T10_TO_RECIPIENTS, "JW.WriteValue('a');"],
+    }),
+    t9("JsonTextWriter", "WritePropertyName", "state ArrayStart", "JW.WritePropertyName('x');", {
+      vars: T10_JSON_VARS,
+      setup: T10_TO_RECIPIENTS,
+    }),
+    t9("Evaluate", "Lt300", "t10", "if Evaluate(D, '<300') then;", { vars: ["D: Decimal;"] }),
+    t9("FieldRef", "EnumValueCount", "never assigned", "N := FR.EnumValueCount();", {
+      vars: ["FR: FieldRef;", "N: Integer;"],
+    }),
+    // a call whose result is dropped (a statement) is the form al-runner refuses; as a value it fails with .NET's own text
+    t9("FieldRef", "Value", "never assigned", "FR.Value := 1;", { vars: ["FR: FieldRef;"] }),
+    t9("KeyRef", "FieldCount", "never assigned", "KR.FieldCount();", { vars: ["KR: KeyRef;"] }),
+    t9("KeyRef", "FieldIndex", "never assigned", "KR.FieldIndex(1);", { vars: ["KR: KeyRef;"] }),
+    t9("Page", "Run", "RecordRef", 'Page.Run(Page::"T10 Page", RR);', {
+      vars: ["RR: RecordRef;"],
+    }),
+    t9("Page", "Run", "unassigned Variant", 'Page.Run(Page::"T10 Page", V);', {
+      vars: ["V: Variant;"],
+    }),
+    t9("RecordRef", "FindFirst", "closed", "RR.FindFirst();", { vars: ["RR: RecordRef;"] }),
+    t9("RecordRef", "GetFilters", "closed", "RR.GetFilters();", { vars: ["RR: RecordRef;"] }),
+    t9("RecordRef", "GetTable", "Text", "RR.GetTable(V);", {
+      vars: ["RR: RecordRef;", "V: Variant;"],
+      setup: ["V := 'Not a record';"],
+    }),
+    t9("RecordRef", "KeyIndex", "closed", "RR.KeyIndex(1);", { vars: ["RR: RecordRef;"] }),
+    t9("Report", "SaveAs", "id 0", "Report.SaveAs(0, '<a/>', ReportFormat::Xml, OutS);", {
+      vars: ["OutS: OutStream;", ...T10_ROW],
+      setup: ["R.Blob.CreateOutStream(OutS);"],
+    }),
+    t9("Filter", "SetFilterBigInt", "GL00000000", "R.SetFilter(Count, 'GL00000000');", {
+      vars: T10_ROW,
+    }),
+    t9("Filter", "SetFilterBigInt", "GU00000001", "R.SetFilter(Count, 'GU00000001');", {
+      vars: T10_ROW,
+    }),
+    t9("Filter", "SetFilterEmptyTerm", "t10", "R.SetFilter(Amount, '|');", { vars: T10_ROW }),
+    t9("Filter", "SetFilterDate", "-1M", "R.SetFilter(\"Doc Date\", '-1M');", { vars: T10_ROW }),
+    t9("Filter", "SetFilterDate", "-2026-09-01", "R.SetFilter(\"Doc Date\", '-2026-09-01');", {
+      vars: T10_ROW,
+    }),
+    t9("Filter", "SetFilterAngle", "t10", "R.SetFilter(Code, '<-1M>..<CM>');", { vars: T10_ROW }),
+    t9("Filter", "SetFilterNotEqual", "t10", "R.SetFilter(Amount, '<>');", { vars: T10_ROW }),
+    t9("XmlDocument", "ReadFrom", "not an InStream", "B := XmlDocument.ReadFrom(OutS, XD);", {
+      vars: ["OutS: OutStream;", "XD: XmlDocument;", "B: Boolean;"],
+    }),
+    t9(
+      "Report",
+      "RunRequestPage",
+      "after Commit",
+      "T := Report.RunRequestPage(Report::\"T10 Report\", '<a/>');",
+      { vars: ["T: Text;"], setup: ["Commit();"] },
+    ),
+    t9(
+      "Report",
+      "RunRequestPage",
+      "in write transaction",
+      "T := Report.RunRequestPage(Report::\"T10 Report\", '<a/>');",
+      { vars: ["T: Text;", ...T10_ROW], setup: ["R.Code := 'W1';", "R.Insert();"] },
+    ),
+    // a Media value is written out to an untouched OutStream: the text names the OutStream
+    t9("Media", "ExportStream", "untouched OutStream", "R.Img.ExportStream(OutS);", {
+      vars: ["OutS: OutStream;", "InS: InStream;", "IO: OutStream;", ...T10_ROW],
+      setup: [
+        "R.Blob.CreateOutStream(IO);",
+        "IO.WriteText('x');",
+        "R.Blob.CreateInStream(InS);",
+        "R.Img.ImportStream(InS, 'x');",
+      ],
+    }),
+    t9("Conversion", "FieldRefSetRange", "Code", "RR.Field(3).SetRange(C);", {
+      vars: ["RR: RecordRef;", "C: Code[20];"],
+      setup: ['RR.Open(Database::"T10 Row");', "C := 'GL00000000';"],
+    }),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -4441,6 +4591,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [DATES_FORMULAS.name]: DATES_FORMULAS,
   // PR-87: appended (BC-check number 16): JSON, TextBuilder, Danish-letter text functions and comparison, for a per-cell BC differential
   [JSON_TEXT.name]: JSON_TEXT,
+  // PR-93: appended (BC-check number 17): the refusal texts t10 and t11 still closed on, for a keep census
+  [T10_REFUSALS.name]: T10_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
