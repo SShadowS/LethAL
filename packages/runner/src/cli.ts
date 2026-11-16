@@ -771,7 +771,7 @@ export interface InitCliConfig {
 
 /** R1086: `--credentials-env <USER_VAR>,<PASS_VAR>`; the names only, never echoed when wrong. */
 export function parseCredentialsEnvFlag(raw: string): { username: string; password: string } {
-  const parts = raw.split(",");
+  const parts = raw.split(",").map((p) => p.trim());
   const [username, password] = parts;
   if (
     parts.length !== 2 ||
@@ -782,6 +782,11 @@ export function parseCredentialsEnvFlag(raw: string): { username: string; passwo
   ) {
     throw new Error(
       "--credentials-env must be two environment variable NAMES, comma separated: <USER_VAR>,<PASS_VAR> (letters, digits and _, not starting with a digit). Give the names, never the login itself.",
+    );
+  }
+  if (username === password) {
+    throw new Error(
+      "--credentials-env names the same variable for the user and the password. Use two different variables.",
     );
   }
   return { username, password };
@@ -2747,12 +2752,12 @@ function withCredentialsFromEnv(
     const v = environment[name];
     if (v === undefined) {
       throw new Error(
-        `lethal.config.json "bcdev" section: "credentialsEnv.${field}" names the environment variable ${name}, which is not set`,
+        `lethal.config.json "bcdev" section: the environment variable "credentialsEnv.${field}" names is not set (the name is not printed: a pasted credential must never be echoed; check the field holds a variable name and that variable is exported)`,
       );
     }
     if (v === "") {
       throw new Error(
-        `lethal.config.json "bcdev" section: "credentialsEnv.${field}" names the environment variable ${name}, which is set but empty`,
+        `lethal.config.json "bcdev" section: the environment variable "credentialsEnv.${field}" names is set but empty (the name is not printed)`,
       );
     }
     return v;
@@ -5327,9 +5332,19 @@ export async function buildDoctorDeps(
     // No envTool, `bcdev` present: this IS exactly what `run` validates (`buildBackend`/
     // `resourceIdentityFor`/`leaseSessionFor` all call this on the SAME `configFile.bcdev`) — fail
     // here, eagerly, rather than lazily inside whichever check happens to touch it first.
-    // R1086: with `credentialsEnv` the `credentials-env` check runs this same validation and
-    // reports it, so an unset variable is a failed check, not an abort that hides the rest.
-    if (configFile.bcdev?.credentialsEnv === undefined) validateBcDevConfig(configFile.bcdev);
+    // R1086: with `credentialsEnv`, structure errors, clashes and bad names stay config errors as in
+    // `run`; the REAL environment read moves into the `credentials-env` check, so an unset
+    // variable is a failed check, not an abort that hides the rest. A stub environment (both
+    // named variables set to a placeholder) lets this validation get past the environment read.
+    const ce: unknown = configFile.bcdev?.credentialsEnv;
+    const stub: Record<string, string> = {};
+    if (typeof ce === "object" && ce !== null) {
+      for (const f of ["username", "password"] as const) {
+        const n = (ce as Record<string, unknown>)[f];
+        if (typeof n === "string") stub[n] = "placeholder";
+      }
+    }
+    validateBcDevConfig(configFile.bcdev, ce === undefined ? process.env : stub);
   }
   const resolvedEnvCfg = envCfg;
 
@@ -5546,9 +5561,12 @@ export async function buildDoctorDeps(
       const targetId = target.id?.toLowerCase();
       wanted.push(...tests.dependencies.filter((d) => d.id.toLowerCase() !== targetId));
     }
+    // One verifier for the whole check (it also keeps the company lookup it makes once).
+    // One verifier for the whole check (it also keeps the company lookup it makes once).
+    const verifier = opts.installedVersions === undefined ? await harnessVerifierFor() : undefined;
     const read =
       opts.installedVersions ??
-      (async (id: string) => (await harnessVerifierFor()).fetchInstalledVersions(id));
+      (async (id: string) => (verifier as HarnessVerifier).fetchInstalledVersions(id));
     const reads = new Map<string, readonly string[]>();
     const dependencies: {
       id: string;

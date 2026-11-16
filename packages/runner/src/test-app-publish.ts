@@ -379,7 +379,7 @@ export async function publishTestApp(
   // the credentials hint follows only a refused login, the never-published one only a 404.
   if (isUnread(before)) {
     const hint = /^HTTP 40[13]\b/.test(before.unread)
-      ? ": check the dev-endpoint read credentials (BC_DEV_USER / BC_DEV_PASSWORD)"
+      ? ": check the dev-endpoint read credentials (the configured username/password, or the variables named by credentialsEnv)"
       : /^HTTP 404\b/.test(before.unread)
         ? ": check that the app has ever been published, and the dev-endpoint path"
         : "";

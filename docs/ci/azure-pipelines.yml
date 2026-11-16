@@ -11,10 +11,10 @@
 # - `al-runner-v3` runs offline on Linux x64 and is NOT authoritative; it runs only an al-runner build LethAL has gated
 #   (R814), so install the one `lethal doctor` names. For BC's own answers use `--backend bcdev` on an agent that reaches a
 #   BC sandbox (never a production tenant).
-# - With `--backend bcdev`, keep the BC login out of the config file: put `"credentialsEnv": {"username": "BC_USER",
-#   "password": "BC_PASSWORD"}` in the `bcdev` section (no `username`, `password` or `env` entries), and map the two secret
-#   variables into the run step's `env:` (`BC_USER: $(BcUser)` and `BC_PASSWORD: $(BcPassword)`; a secret variable is not
-#   passed to a script unless it is mapped). LethAL reads them when it loads the config and never prints them.
+# - This job runs al-runner-v3, which needs no login. Only for a bcdev job: set `"credentialsEnv": {"username": "BC_USER",
+#   "password": "BC_PASSWORD"}` in the `bcdev` section (no `username`, `password` or `env` entries) and map the CI secrets
+#   to those variables in the run step's `env:` (`BC_USER: $(BcUser)` and `BC_PASSWORD: $(BcPassword)`; a secret variable is
+#   not passed to a script unless it is mapped). LethAL reads them when it loads the config and never prints them.
 #   `lethal init --credentials-env BC_USER,BC_PASSWORD` writes that section.
 # - Run it as a pull-request validation build (a branch policy), with a path filter of `*.al` on that policy: the target
 #   branch is known only there.

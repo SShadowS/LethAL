@@ -847,7 +847,7 @@ test("publishTestApp refuses an unreadable resident package before the fence, cl
   );
   expect(err).toMatchObject({ reason: "resident-unreadable", confirmedTerminal: true });
   expect(log).toEqual(["read"]);
-  expect((err as Error).message).toContain("BC_DEV_USER");
+  expect((err as Error).message).toContain("credentialsEnv");
   expect((err as Error).message).not.toContain("undefined");
 });
 
@@ -874,8 +874,8 @@ test("R630 C3a: the credentials hint follows a 401, not a 500", async () => {
         (e) => e,
       )) as TestAppError
     ).detail;
-  expect(await of(HTTP_500.unread)).not.toContain("BC_DEV_USER");
-  expect(await of("HTTP 401 (the dev endpoint refused the login)")).toContain("BC_DEV_USER");
+  expect(await of(HTTP_500.unread)).not.toContain("credentialsEnv");
+  expect(await of("HTTP 401 (the dev endpoint refused the login)")).toContain("credentialsEnv");
 });
 
 // R630 C3b: a read-back that fails inside the fence names its cause, and is never accepted.

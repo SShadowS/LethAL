@@ -72,8 +72,14 @@ describe("BcDevMcpBackend.fetchPublishedAppPackage", () => {
   // own number; a 404 is not proven to mean "not resident" (review I2), so it says both readings.
   for (const [status, cause] of [
     [404, "HTTP 404 (no such app on the server, or the dev-endpoint path is wrong)"],
-    [401, "HTTP 401 (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)"],
-    [403, "HTTP 403 (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)"],
+    [
+      401,
+      "HTTP 401 (the dev endpoint refused the login: check the configured username/password, or the variables named by credentialsEnv)",
+    ],
+    [
+      403,
+      "HTTP 403 (the dev endpoint refused the login: check the configured username/password, or the variables named by credentialsEnv)",
+    ],
     [500, "HTTP 500 (a server error)"],
     [503, "HTTP 503 (a server error)"],
     [409, "HTTP 409"],

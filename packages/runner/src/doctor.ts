@@ -631,7 +631,7 @@ export function checkServerDependencies(probe: ServerDependenciesProbe): DoctorC
   const label = (r: (typeof rows)[number]) =>
     `${r.publisher} ${r.name} (${r.id}) needs ${r.requiredVersion}, ${
       r.installedVersions.length === 0
-        ? "not installed"
+        ? "not installed (absent or published but not installed)"
         : `installed ${r.installedVersions.join(", ")}`
     }`;
   const bad = rows.filter((r) => r.status !== "ok");

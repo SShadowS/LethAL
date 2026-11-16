@@ -2,11 +2,20 @@
 // R1086: `bcdev.credentialsEnv` reads the login from named environment variables.
 // Fakes only: no server, nothing under /coord.
 import { describe, expect, spyOn, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type {
+  BackendCapabilities,
+  BackendStatus,
+  ExecutionBackend,
+  TestMethodRef,
+  TestVerdict,
+} from "../src/backend";
 import {
   type BcDevConfigSection,
   type LethalConfigFile,
+  type RunCliConfig,
   buildDoctorDeps,
   doctorFromCli,
   doctorJson,
@@ -14,12 +23,15 @@ import {
   parseCliConfig,
   refuseCredentialsEnvWithEnvTool,
   renderDoctorReport,
+  runFromCli,
   validateBcDevConfig,
 } from "../src/cli";
 import { cliError } from "../src/cli-envelope";
 import { checkServerDependencies, runDoctor } from "../src/doctor";
 import { CONTROL_APP_ID, MIN_CONTROL_VERSION } from "../src/harness";
+import { runSession } from "../src/orchestrator";
 import { scratchDirs } from "./helpers/scratch";
+import { testDbPath } from "./helpers/test-db";
 
 const scratch = scratchDirs();
 
@@ -67,6 +79,24 @@ describe("R1087 checkServerDependencies", () => {
     expect(
       checkServerDependencies({ dependencies: [row("1.0.0.80000", ["1.0.0.70000"])] }).ok,
     ).toBe(false);
+  });
+
+  test("L1: numeric, not text, in the last part and with a build number", () => {
+    // as text "9000" > "70000" and "100000" < "99999"
+    expect(checkServerDependencies({ dependencies: [row("1.0.0.9000", ["1.0.0.70000"])] }).ok).toBe(
+      true,
+    );
+    expect(
+      checkServerDependencies({ dependencies: [row("1.0.0.100000", ["1.0.0.99999"])] }).ok,
+    ).toBe(false);
+    const old = checkServerDependencies({ dependencies: [row("30.0.0.35781", ["30.0.0.0"])] });
+    expect(old.ok).toBe(false);
+    expect(old.dependencies?.[0]?.status).toBe("too-old");
+  });
+
+  test("L3: missing says it may be published but not installed", () => {
+    const c = checkServerDependencies({ dependencies: [row("1.0.0.0", [])] });
+    expect(c.detail).toContain("not installed (absent or published but not installed)");
   });
 
   test("one installed version at or above is enough when two are installed", () => {
@@ -240,6 +270,50 @@ describe("R1087 server-dependencies wiring", () => {
     expect(reads).toEqual([A, B]);
   });
 
+  test("L2: one verifier per check: two dependencies make one company lookup", async () => {
+    const project = await appFolder({
+      id: TARGET,
+      dependencies: [dep(A, "Dep A", "28.0.0.0"), dep(B, "Dep B", "1.0.0.0")],
+    });
+    let companyReads = 0;
+    const fetchFn = (async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("/extensions")) {
+        return new Response(
+          JSON.stringify({
+            value: [
+              {
+                isInstalled: true,
+                versionMajor: 99,
+                versionMinor: 0,
+                versionBuild: 0,
+                versionRevision: 0,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      companyReads++;
+      return new Response(JSON.stringify({ value: [{ id: "co-1", name: "CRONUS" }] }), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const { deps } = await buildDoctorDeps(
+      { bcdev: { ...BCDEV, packageCachePath: scratch("lethal-pr85-cache-") } },
+      {
+        projectDir: project,
+        fetchFn,
+        alToolPaths: async () => ({ alcPath: "alc", altoolPath: "altool" }),
+      },
+    );
+    const sd = deps.serverDependencies;
+    if (sd === undefined) throw new Error("no dep");
+    const report = await runDoctor({}, { serverDependencies: sd });
+    expect(report.checks[0]?.ok).toBe(true);
+    expect(companyReads).toBe(1);
+  });
+
   test("the real reader: by app id (a $filter), one request per id, never a list of all extensions", async () => {
     const project = await appFolder({ id: TARGET, dependencies: [dep(A, "Dep A", "28.0.0.0")] });
     const urls: string[] = [];
@@ -381,17 +455,35 @@ describe("R1086 credentialsEnv resolution", () => {
     }
   });
 
-  test("an unset variable is refused, naming the VARIABLE and not any value", () => {
+  test("an unset variable is refused, naming the FIELD and never the variable name or a value", () => {
     const m = refusal({ ...BASE, credentialsEnv: CE }, { LETHAL_T_USER: CANARY_USER });
-    expect(m).toContain("LETHAL_T_PASS");
+    expect(m).toContain("credentialsEnv.password");
     expect(m).toContain("not set");
+    expect(m).not.toContain("LETHAL_T_PASS");
     expect(m).not.toContain(CANARY_USER);
   });
 
-  test("an empty variable is refused, naming the VARIABLE", () => {
+  test("an empty variable is refused, naming the FIELD and never the variable name", () => {
     const m = refusal({ ...BASE, credentialsEnv: CE }, { LETHAL_T_USER: "", LETHAL_T_PASS: "x" });
-    expect(m).toContain("LETHAL_T_USER");
+    expect(m).toContain("credentialsEnv.username");
     expect(m).toContain("set but empty");
+    expect(m).not.toContain("LETHAL_T_USER");
+  });
+
+  test("M1: an identifier-shaped password pasted into credentialsEnv.password is never echoed", () => {
+    // `HunterTwoSecret` passes the variable-name pattern, and is not set as a variable.
+    const pasted = "HunterTwoSecret";
+    const m = refusal(
+      { ...BASE, credentialsEnv: { username: "LETHAL_T_USER", password: pasted } },
+      { LETHAL_T_USER: "u" },
+    );
+    expect(m).toContain("credentialsEnv.password");
+    expect(m).not.toContain(pasted);
+    const empty = refusal(
+      { ...BASE, credentialsEnv: { username: "LETHAL_T_USER", password: pasted } },
+      { LETHAL_T_USER: "u", [pasted]: "" },
+    );
+    expect(empty).not.toContain(pasted);
   });
 
   test("envTool together with credentialsEnv is refused by name", () => {
@@ -472,6 +564,17 @@ describe("R1086 lethal init --credentials-env", () => {
       }
       expect(msg).toContain("--credentials-env");
       expect(msg).not.toContain(CANARY_PASS);
+    }
+  });
+
+  test("L5: spaces around the comma are trimmed; the same variable twice and blank names are refused", () => {
+    expect(
+      parseCliConfig(["init", "--project", "P", "--credentials-env", " A_USER , A_PASS "]),
+    ).toMatchObject({ credentialsEnv: { username: "A_USER", password: "A_PASS" } });
+    for (const bad of ["SAME,SAME", " ,B", "A, ", "  ,  "]) {
+      expect(() => parseCliConfig(["init", "--project", "P", "--credentials-env", bad])).toThrow(
+        /--credentials-env/,
+      );
     }
   });
 
@@ -604,7 +707,7 @@ describe("R1086 the canary never appears in an output", () => {
     }
   });
 
-  test("doctor with one variable unset: a failed check naming the variable, no abort, no value", async () => {
+  test("doctor with one variable unset: a failed check naming the field, no abort, no name, no value", async () => {
     const path = await configPath({ bcdev: bcdev() } as LethalConfigFile);
     const out = await withEnv({ LETHAL_T_USER: CANARY_USER }, () =>
       capture(() =>
@@ -615,9 +718,54 @@ describe("R1086 the canary never appears in an output", () => {
       ),
     );
     expect(out).toContain("credentials-env");
-    expect(out).toContain("LETHAL_T_PASS");
+    expect(out).toContain("credentialsEnv.password");
     expect(out).toContain("not set");
+    expect(out).not.toContain("LETHAL_T_PASS");
     expect(out).not.toContain(CANARY_USER);
+  });
+
+  test("M1: doctor text, doctor json and the envelope never hold an identifier-shaped pasted password", async () => {
+    const pasted = "HunterTwoSecret";
+    const path = await configPath({
+      bcdev: bcdev({ credentialsEnv: { username: "LETHAL_T_USER", password: pasted } }),
+    } as LethalConfigFile);
+    for (const json of [false, true]) {
+      const out = await withEnv({ LETHAL_T_USER: CANARY_USER }, () =>
+        capture(() =>
+          doctorFromCli(
+            { mode: "doctor", configPath: path, json },
+            { ...io, quarantineDir: scratch("lethal-pr85-q-") },
+          ),
+        ),
+      );
+      expect(out).toContain("credentials-env");
+      expect(out).not.toContain(pasted);
+    }
+    const env = await capture(async () =>
+      validateBcDevConfig(
+        { ...BASE, credentialsEnv: { username: "LETHAL_T_USER", password: pasted } },
+        ENV,
+      ),
+    );
+    expect(env).toContain('"status":"error"');
+    expect(env).not.toContain(pasted);
+  });
+
+  test("M2: a credentialsEnv config missing `server` is a config error, not failed checks", async () => {
+    const { server: _s, ...noServer } = bcdev();
+    const path = await configPath({ bcdev: noServer } as LethalConfigFile);
+    const out = await withEnv(ENV, () =>
+      capture(() => doctorFromCli({ mode: "doctor", configPath: path, json: true }, io)),
+    );
+    expect(out).toContain("CONFIGURATION_ERROR");
+    expect(out).toContain("server");
+    // and a clash is a config error too, with the variables UNSET
+    const clash = await configPath({ bcdev: bcdev({ username: "x" }) } as LethalConfigFile);
+    const out2 = await capture(() =>
+      doctorFromCli({ mode: "doctor", configPath: clash, json: true }, io),
+    );
+    expect(out2).toContain("CONFIGURATION_ERROR");
+    expect(out2).toContain("cannot be combined");
   });
 
   test("the error envelope of every refusal holds no value", async () => {
@@ -663,5 +811,142 @@ describe("R1086 the canary never appears in an output", () => {
     const rendered = JSON.stringify(doctorJson(report, undefined)) + renderDoctorReport(report);
     expect(rendered).not.toContain(CANARY_USER);
     expect(rendered).not.toContain(CANARY_PASS);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// M3: the run surfaces. A bcdev run through the REAL runFromCli and the REAL runSession, with a
+// fake backend (no server). The lease client and permission canary `runFromCli` builds for a bcdev
+// session would call a server, so the injected runSession strips those two and nothing else.
+// ---------------------------------------------------------------------------------------------
+describe("R1086 a fake bcdev run holds no credential in its report, events or store", () => {
+  class FakeBackend implements ExecutionBackend {
+    capabilities(): BackendCapabilities {
+      return {
+        coverage: "none",
+        deploy: "none",
+        isolation: "session",
+        kind: "al-runner-v3",
+        authoritative: false,
+      };
+    }
+    async runnerBuild(): Promise<{ version: string; binarySha256: string }> {
+      return { version: "alrunner 3.0.0-test", binarySha256: "b".repeat(64) };
+    }
+    async status(): Promise<BackendStatus> {
+      return { ok: true, details: "fake" };
+    }
+    async deploy() {
+      return null;
+    }
+    async compileCheck(): Promise<void> {}
+    async activate(): Promise<void> {}
+    async run(ref: TestMethodRef): Promise<TestVerdict> {
+      return { ref, outcome: "pass", durationMs: 1 };
+    }
+  }
+
+  test("the report, the events NDJSON and the sqlite file never contain the canaries", async () => {
+    const root = scratch("lethal-pr85-run-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Canary Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(
+      join(projectDir, "Logic.Codeunit.al"),
+      `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+        exit(Amount > Budget);
+    end;
+}
+`,
+    );
+    await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Canary Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    await writeFile(
+      join(testDir, "Tests.Codeunit.al"),
+      `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OverBudgetDetected()
+    begin
+    end;
+}
+`,
+    );
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        bcdev: {
+          ...BASE,
+          packageCachePath: scratch("lethal-pr85-cache-"),
+          credentialsEnv: CE,
+        },
+      }),
+    );
+    const dbPath = testDbPath("lethal.sqlite");
+    const progressOutPath = join(root, "events.ndjson");
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "bcdev",
+      dbPath,
+      configPath,
+      progressOutPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    for (const [k, v] of Object.entries(ENV)) process.env[k] = v;
+    let report: unknown;
+    try {
+      report = await runFromCli(parsed, {
+        validateSelectorIdsForProject: async () => {},
+        buildBackend: async () => new FakeBackend(),
+        runSession: async (cfg) => {
+          const { lease: _lease, permissionCanary: _canary, ...rest } = cfg;
+          return runSession(rest);
+        },
+      });
+    } finally {
+      for (const k of Object.keys(ENV)) Reflect.deleteProperty(process.env, k);
+    }
+    const reportJson = JSON.stringify(report);
+    const events = readFileSync(progressOutPath, "utf8");
+    // the run really ran: a report with mutants and a stream with events
+    expect(reportJson.length).toBeGreaterThan(500);
+    expect(events.length).toBeGreaterThan(50);
+    const dbBytes = [dbPath, `${dbPath}-wal`]
+      .filter((p) => existsSync(p))
+      .map((p) => readFileSync(p).toString("latin1"))
+      .join("");
+    expect(dbBytes.length).toBeGreaterThan(1000);
+    for (const [name, text] of [
+      ["report", reportJson],
+      ["events", events],
+      ["sqlite", dbBytes],
+    ] as const) {
+      expect(text.includes(CANARY_USER), `${name} holds the user canary`).toBe(false);
+      expect(text.includes(CANARY_PASS), `${name} holds the password canary`).toBe(false);
+    }
   });
 });

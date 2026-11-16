@@ -391,7 +391,7 @@ export function unreadOfStatus(status: number): PackageUnread {
   }
   if (status === 401 || status === 403) {
     return {
-      unread: `HTTP ${status} (the dev endpoint refused the login: check BC_DEV_USER / BC_DEV_PASSWORD)`,
+      unread: `HTTP ${status} (the dev endpoint refused the login: check the configured username/password, or the variables named by credentialsEnv)`,
     };
   }
   if (status >= 500 && status <= 599) return { unread: `HTTP ${status} (a server error)` };
