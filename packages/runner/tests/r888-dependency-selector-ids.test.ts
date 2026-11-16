@@ -162,6 +162,9 @@ describe("R888: dependency codeunits against the selector ids", () => {
     expect(warnings[0]).toContain("Invented Base");
     expect(warnings[0]).toContain("AL0264");
     expect(warnings[0]).toContain("NOT ruled out");
+    expect(warnings[0]).toContain("put those dependency .app packages in the folder it reads");
+    expect(warnings[0]).toContain(".alpackages");
+    expect(warnings[0]).toContain("re-run 'lethal init'");
   });
 
   test("a garbled package is reported as unread, not as declaring nothing", async () => {

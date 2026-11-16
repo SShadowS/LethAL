@@ -3640,10 +3640,18 @@ const dryRunTierOf: TierResolver = (name) => operatorTiers.get(name);
  */
 /** R48, R917: the dry run's note for a scope above the pre-flight limit. With `--allow-large-run`
  *  the real run goes ahead, so the note says so instead of telling the user to pass it. */
-export function dryRunLargeScopeNote(sites: number, allowLargeRun: boolean): string {
-  return allowLargeRun
-    ? `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit; with --allow-large-run, 'lethal run' will run this scope anyway.`
-    : `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope. Narrow it with --only <glob>, or pass --allow-large-run (to the run, or to this dry run to see the run's answer).`;
+export function dryRunLargeScopeNote(
+  sites: number,
+  allowLargeRun: boolean,
+  narrowed = false,
+): string {
+  if (allowLargeRun) {
+    return `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit; with --allow-large-run, 'lethal run' will run this scope anyway.`;
+  }
+  const head = `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope.`;
+  return narrowed
+    ? `${head} The limit counts mutation SITES, not files, so a single large file can exceed it even with --only, --lines or --changed-since. Pass --allow-large-run (to the run, or to this dry run to see the run's answer), or narrow inside the file with --lines or --exclude.`
+    : `${head} Narrow it with --only <glob>, or pass --allow-large-run (to the run, or to this dry run to see the run's answer).`;
 }
 
 async function dryRunCeiling(
@@ -3817,7 +3825,13 @@ export async function printDryRun(
   // that the answer is "too big to run". Saying it here — rather than only when `lethal run`
   // refuses — means the narrowing conversation happens before anything is published.
   if (sites.length > LARGE_RUN_MUTANT_THRESHOLD) {
-    console.log(dryRunLargeScopeNote(sites.length, paths.allowLargeRun === true));
+    console.log(
+      dryRunLargeScopeNote(
+        sites.length,
+        paths.allowLargeRun === true,
+        (only !== undefined && only.length > 0) || paths.lines !== undefined,
+      ),
+    );
   }
   if (only !== undefined && only.length > 0) {
     console.log(

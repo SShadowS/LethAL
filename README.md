@@ -29,7 +29,7 @@ the OS temp dir, changes the copy there, compiles that, and publishes it. There 
 revert. A clean run removes that directory at the end; a run that fails or is quarantined keeps it
 and prints its path, since its files name the cause. What *does* persist is on the server: the modified build stays published until you
 republish your own app (see [Restoring your app after a run](#restoring-your-app-after-a-run)),
-which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never modifies or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed.
+which is why LethAL is for a **sandbox or dev container, never a production tenant**. `lethal run` never modifies or publishes your test project. `lethal verify` compiles and publishes it once per call that runs a survivor, and leaves it installed; to put your own test app back, republish it the way you normally do (for the target app, see [Restoring your app after a run](#restoring-your-app-after-a-run)).
 
 ## Prerequisites
 
@@ -263,8 +263,9 @@ lethal run --project path/to/your-al-app \
 lethal explain report.json
 ```
 
-Start scoped. An unscoped run on a real project is refused by default: it costs days and usually
-cannot even publish (see [Limits](#limits)).
+Start scoped. A run above 1,000 mutation sites is refused by default: it costs days and usually
+cannot even publish. The limit counts sites, not scope, so one large file can exceed it even with
+`--only` (see [Limits](#limits)).
 
 **Not ready to point it at your own app?** There are two complete BC extensions to run it against,
 both of which have a green test suite that misses something real. Each runs in seconds and shows
@@ -825,8 +826,8 @@ The short version, before the evidence:
 - **Tests run without a GUI**, so code behind a `Confirm` or a dialog may be unmeasurable.
 - **A test that has a reachable call that may open a `TestPage` is refused before it is sent**,
   reported as not run; a page LethAL cannot detect can still stall a whole run.
-- **Big apps must be run in slices** (`--only`). An unscoped run on a real project is refused by
-  default.
+- **Big apps must be run in slices** (`--only`). A run above 1,000 mutation sites is refused by
+  default: the limit counts sites, so one large file can exceed it even with `--only`.
 - **One tenant per server.** LethAL cannot fence a second tenant publishing to the same instance.
 - **The `al-runner-v3` backend is not authoritative**. Use `bcdev` for any number you intend to quote.
 

@@ -190,6 +190,13 @@ describe("R912: --time-budget <seconds>", () => {
     expect(dryRunLargeScopeNote(1200, true)).toContain("will run this scope anyway");
     expect(dryRunLargeScopeNote(1200, true)).not.toContain("refuse");
   });
+  test("PR-84: a note for a run that already has --only says the limit counts sites", () => {
+    const narrowed = dryRunLargeScopeNote(1200, false, true);
+    expect(narrowed).toContain("counts mutation SITES, not files");
+    expect(narrowed).toContain("--lines or --exclude");
+    expect(narrowed).toContain("--allow-large-run");
+    expect(dryRunLargeScopeNote(1200, false)).not.toContain("counts mutation SITES");
+  });
 });
 
 describe("parseCliConfig: a shared flag the subcommand does not own is REFUSED", () => {

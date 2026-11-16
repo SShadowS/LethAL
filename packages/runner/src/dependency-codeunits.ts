@@ -102,8 +102,13 @@ export async function dependencyCodeunitsOf(
 /** The one warning line for a check that could not read every dependency, or `undefined`. */
 export function dependencyCheckWarning(unread: readonly string[]): string | undefined {
   if (unread.length === 0) return undefined;
+  const fix =
+    "To make the check possible, put those dependency .app packages in the folder it reads: the config's " +
+    "bcdev.packageCachePath or alRunnerV3.packagesDir when set, otherwise the project's .alpackages. " +
+    "Download them (\"AL: Download Symbols\" in VS Code, or 'bun scripts/fetch-ms-symbols.ts <BC major> <folder>'), " +
+    "then re-run 'lethal init' (or 'lethal doctor').";
   return (
     `[lethal] selector ids: could not check them against ${unread.length} dependency package(s), ` +
-    `so a clash with those apps' codeunits (alc AL0264) is NOT ruled out: ${unread.join("; ")}`
+    `so a clash with those apps' codeunits (alc AL0264) is NOT ruled out: ${unread.join("; ")}. ${fix}`
   );
 }
