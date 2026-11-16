@@ -30,7 +30,20 @@ export interface Cell {
   readonly handlers?: readonly string[];
   /** PR-52: what the answer depends on besides the call: the session's language and region, or its time zone. */
   readonly depends?: "locale" | "tz";
+  /**
+   * PR-63: a second test in the same codeunit, run after the first. The cell's own body becomes `SetLanguage` (it must pass);
+   * this becomes `ReadLanguage`, and its failure message is the cell's answer.
+   */
+  readonly reader?: {
+    readonly vars?: readonly string[];
+    readonly setup?: readonly string[];
+    readonly call: string;
+  };
 }
+
+/** PR-63: the two test names of a two-test cell. */
+export const SET_TEST = "SetLanguage";
+export const READ_TEST = "ReadLanguage";
 
 export interface Family {
   readonly name: string;
@@ -1683,17 +1696,17 @@ const FORMAT_EVALUATE_CELLS: Cell[] = [
 ];
 
 /** The same cell under Danish (GlobalLanguage 1030), set before the one call; each is its own codeunit, so nothing is restored. */
-const inLang = (c: Cell): Cell => ({
+const inLang = (c: Cell, code = 1030): Cell => ({
   ...c,
-  state: `lang1030 ${c.state}`.trim(),
-  setup: ["GlobalLanguage(1030);", ...(c.setup ?? [])],
+  state: `lang${code} ${c.state}`.trim(),
+  setup: [`GlobalLanguage(${code});`, ...(c.setup ?? [])],
   depends: "locale",
 });
-const fmtIn = (type: string, state: string, method: string, expr: string): Cell => {
+const fmtIn = (type: string, state: string, method: string, expr: string, code = 1030): Cell => {
   const v = FMT_VALUES.find((x) => x.type === type);
   const s = v?.states.find(([n]) => n === state);
   if (v === undefined || s === undefined) throw new Error(`no value ${type} ${state}`);
-  return inLang(fmtCell(v, state, s[1], method, expr));
+  return inLang(fmtCell(v, state, s[1], method, expr), code);
 };
 const LANG_FORMATS: readonly (readonly [string, string, string])[] = [
   ["Boolean", "true", "6"],
@@ -1724,13 +1737,133 @@ const LANG_CELLS: Cell[] = [
   textCell("WindowsLanguage", "probe", "WindowsLanguage()", false, [], "locale"),
 ];
 
+/**
+ * PR-63: the same language set under German, French, Norwegian and Swedish, then what Danish lacked, then month and day names
+ * under all five and English, then the GlobalLanguage carry-over. All appended after the 326 PR-52 cells, so their ids stay.
+ */
+const LR_ENUM: FmtValue = {
+  type: "Enum",
+  decl: 'Enum "LR Color"',
+  states: [
+    ["first", 'V := "LR Color"::Red;'],
+    ["third", 'V := "LR Color"::Blue;'],
+  ],
+};
+const ENUM_SUPPORT = `enum 51000 "LR Color"
+{
+    Extensible = false;
+
+    value(0; Red) { Caption = 'Red'; }
+    value(1; Green) { Caption = 'Green'; }
+    value(2; Blue) { Caption = 'Blue'; }
+}
+`;
+const PICTURES: readonly (readonly [string, string])[] = [
+  ["precision", "<Precision,2:2><Standard Format,0>"],
+  ["thousands", "<Integer Thousand><Decimals>"],
+];
+const LANG_WORDS: Readonly<
+  Record<number, { yes: string; no: string; lower: string; upper: string }>
+> = {
+  1031: { yes: "Ja", no: "Nein", lower: "äöüßé", upper: "ÄÖÜÉ" },
+  1036: { yes: "Oui", no: "Non", lower: "éèçœ", upper: "ÉÈÇŒ" },
+  1044: { yes: "Ja", no: "Nei", lower: "æøåé", upper: "ÆØÅÉ" },
+  1053: { yes: "Ja", no: "Nej", lower: "åäöé", upper: "ÅÄÖÉ" },
+};
+/** What every language gets: Enum, the two Decimal pictures, and the Boolean text "1". */
+const langExtras = (code: number): Cell[] => [
+  ...LR_ENUM.states.flatMap(([state, setup]) => [
+    inLang(fmtCell(LR_ENUM, state, setup, "Format", "Format(V)"), code),
+    ...(state === "third"
+      ? [inLang(fmtCell(LR_ENUM, state, setup, "Format len8", "Format(V, 8)"), code)]
+      : []),
+  ]),
+  ...["negative", "large"].flatMap((state) =>
+    PICTURES.map(([name, pic]) =>
+      fmtIn("Decimal", state, `Format picture ${name}`, `Format(V, 0, '${pic}')`, code),
+    ),
+  ),
+  inLang(evalCell(["Boolean", "Boolean"], "1", "1", false), code),
+];
+/** The Danish cells' counterpart under another language. */
+const langSet = (code: number): Cell[] => {
+  const w = LANG_WORDS[code];
+  if (w === undefined) throw new Error(`no words for ${code}`);
+  return [
+    ...LANG_FORMATS.flatMap(([type, state, len]) => [
+      fmtIn(type, state, "Format", "Format(V)", code),
+      ...(len !== "" ? [fmtIn(type, state, `Format len${len}`, `Format(V, ${len})`, code)] : []),
+    ]),
+    ...[w.yes, w.no, "Yes", "true"].map((t) =>
+      inLang(evalCell(["Boolean", "Boolean"], t, t, false), code),
+    ),
+    ...["1,5", "1.5"].map((t) => inLang(evalCell(["Decimal", "Decimal"], t, t, false), code)),
+    ...["15.03.2024", "15-03-2024", "2024-03-15"].map((t) =>
+      inLang(evalCell(["Date", "Date"], t, t, false), code),
+    ),
+    inLang(textCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1234.5)"), code),
+    inLang(textCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))"), code),
+    inLang(textCell("UpperCase", "language letters", `UpperCase('${w.lower}')`), code),
+    inLang(textCell("LowerCase", "language letters", `LowerCase('${w.upper}')`), code),
+    inLang(textCell("GlobalLanguage", "probe", "GlobalLanguage()", false), code),
+    ...langExtras(code),
+  ];
+};
+const NAME_DATES: readonly (readonly [string, string])[] = [
+  ["15 March 2024", "V := DMY2Date(15, 3, 2024);"],
+  ["1 August 2024", "V := DMY2Date(1, 8, 2024);"],
+];
+const NAME_PICTURES: readonly (readonly [string, string])[] = [
+  ["month", "<Month Text>"],
+  ["month 3", "<Month Text,3>"],
+  ["weekday", "<Weekday Text>"],
+  ["weekday 2", "<Weekday Text,2>"],
+  ["day month year", "<Day,2>. <Month Text> <Year4>"],
+];
+const nameCells = (code: number): Cell[] =>
+  NAME_DATES.flatMap(([state, setup]) =>
+    NAME_PICTURES.map(([name, pic]) =>
+      inLang(
+        {
+          type: "Date",
+          method: `Format ${name}`,
+          state,
+          vars: ["V: Date;"],
+          setup: [setup],
+          call: `Error('V:[%1]', Format(V, 0, '${pic}'));`,
+        },
+        code,
+      ),
+    ),
+  );
+/** Two tests, one codeunit: Danish is set in the first; the second reads the language back and Formats a closing date. */
+const CARRY_CELL: Cell = {
+  type: "GlobalLanguage",
+  method: "carry-over",
+  state: "set 1030 then read",
+  call: "GlobalLanguage(1030);",
+  reader: {
+    vars: ["V: Date;"],
+    setup: ["V := ClosingDate(DMY2Date(31, 12, 2023));"],
+    call: "Error('V:[%1|%2]', Format(GlobalLanguage(), 0, 9), Format(V));",
+  },
+  depends: "locale",
+};
+const LANGUAGES_1031_1053 = [1031, 1036, 1044, 1053];
+const LANGUAGE_CELLS: Cell[] = [
+  ...LANGUAGES_1031_1053.flatMap(langSet),
+  ...langExtras(1030),
+  ...[1030, ...LANGUAGES_1031_1053, 1033].flatMap(nameCells),
+  CARRY_CELL,
+];
+
 export const FORMAT_EVALUATE: Family = {
   name: "format-evaluate",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
-  support: "",
+  support: ENUM_SUPPORT,
   handles: {},
-  cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS],
+  cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS, ...LANGUAGE_CELLS],
 };
 
 export const FAMILIES: Readonly<Record<string, Family>> = {
@@ -1836,16 +1969,28 @@ export function emitApp(
     const names = handlers
       .map((h) => /procedure (\w+)/.exec(h)?.[1])
       .filter((n) => n !== undefined);
+    const proc = (name: string, vs: readonly string[], b: string) =>
+      `${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
+    procedure ${name}()
+${vs.length > 0 ? `    var\n${vs.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
+${b}
+    end;
+`;
+    const t = c.reader;
+    // PR-63: a two-test cell lists SetLanguage, then ReadLanguage (declaration order is the run order)
+    const tests =
+      t === undefined
+        ? proc("Cell", vars, body)
+        : `${proc(SET_TEST, vars, body)}\n${proc(
+            READ_TEST,
+            t.vars ?? [],
+            [...(t.setup ?? []), t.call].map((s) => `        ${s}`).join("\n"),
+          )}`;
     return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
     Subtype = Test;
 
-${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
-    procedure Cell()
-${vars.length > 0 ? `    var\n${vars.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
-${body}
-    end;
-${handlers.map((h) => `\n${h}`).join("")}}
+${tests}${handlers.map((h) => `\n${h}`).join("")}}
 `;
   });
   return {
@@ -1892,8 +2037,16 @@ export function classify(
 ): CellResult[] {
   const byName = new Map(rows.map((r) => [r.name, r]));
   return f.cells.map((cell, i) => {
-    const r = byName.get(`Codeunit${BASE_ID + 1 + i}.Cell`);
+    const id = BASE_ID + 1 + i;
+    const r = byName.get(`Codeunit${id}.${cell.reader !== undefined ? READ_TEST : "Cell"}`);
     if (r === undefined) return { cell, outcome: "missing" };
+    // PR-63: the reader's answer means nothing if the setter did not pass; say so rather than score the reader
+    if (cell.reader !== undefined) {
+      const s = byName.get(`Codeunit${id}.${SET_TEST}`);
+      if (s === undefined) return { cell, outcome: "missing" };
+      if (s.status !== "pass" || s.notRun === true)
+        return { cell, outcome: "fail", message: `${SET_TEST} did not pass: ${s.message ?? ""}` };
+    }
     // A stopped test is neither a refusal nor a score.
     if (r.notRun === true && V3_TIMEOUT_MESSAGE.test(r.message ?? ""))
       return {
@@ -1971,18 +2124,37 @@ export interface BcRow {
 
 export function parseBcTsv(text: string): Map<number, BcRow> {
   const rows = new Map<number, BcRow>();
+  const seen = new Set<string>();
+  const failedSetters = new Map<number, string>();
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/\r$/, "");
     if (line.trim() === "") continue;
-    const [id, outcome, ...rest] = line.split("\t");
+    const [idText, outcome, ...rest] = line.split("\t");
+    // PR-63: a two-test codeunit may come back as `<id>.SetLanguage` and `<id>.ReadLanguage`; the reader's row is the cell's
+    // answer, the setter's row is dropped. A plain `<id>` is the cell's answer as before.
+    const [id, test, extra] = (idText ?? "").split(".");
     const n = Number(id);
-    if (!Number.isInteger(n) || (outcome !== "pass" && outcome !== "fail"))
+    if (
+      !Number.isInteger(n) ||
+      extra !== undefined ||
+      (test !== undefined && test !== SET_TEST && test !== READ_TEST) ||
+      (outcome !== "pass" && outcome !== "fail")
+    )
       throw new Error(
-        `refusal-family: bad BC row (want id, pass|fail, message): ${line.slice(0, 80)}`,
+        `refusal-family: bad BC row (want id[.SetLanguage|.ReadLanguage], pass|fail, message): ${line.slice(0, 80)}`,
       );
-    if (rows.has(n)) throw new Error(`refusal-family: BC row ${n} appears twice`);
+    const key = `${n}.${test === SET_TEST ? SET_TEST : "answer"}`;
+    if (seen.has(key)) throw new Error(`refusal-family: BC row ${idText} appears twice`);
+    seen.add(key);
+    if (test === SET_TEST) {
+      if (outcome === "fail") failedSetters.set(n, rest.join("\t"));
+      continue;
+    }
     rows.set(n, { outcome, message: rest.join("\t") });
   }
+  // a setter that failed makes the reader's answer meaningless: the cell's answer is the setter's failure
+  for (const [n, m] of failedSetters)
+    rows.set(n, { outcome: "fail", message: `${SET_TEST} did not pass: ${m}` });
   return rows;
 }
 
