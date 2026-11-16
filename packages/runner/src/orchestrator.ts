@@ -11180,6 +11180,13 @@ function stopText(stopMs: number, budgetMs: number, setFrom: string): string {
 }
 
 /**
+ * PR-55 (R1067): what a kill measured ALONE under the mutant says when the same test also fails
+ * (or hangs) alone with no mutant. The cause stays `unstable`.
+ */
+export const ALONE_UNSTABLE_NOTE =
+  "fails (or hangs) when run alone with no mutant: it ran alone under the mutant after a cut in its codeunit, and tests of a codeunit share state in order, so the failure is not attributable to the mutant";
+
+/**
  * R516 (I3 b): the note of a position-1 timeout whose unmutated confirm passed in more than half the
  * budget the run was sent (R517: or the lower stop al-runner reported it enforced). It prints both
  * durations and their ratio; the 1.25 threshold picks the wording only, never a verdict.
@@ -11244,13 +11251,6 @@ function timeoutUnconfirmedNote(
  * as the cold confirmation's is not. The R59 runner-disagreement note is never attached from a
  * replay: it states a hub-green test failed under the hub's conditions, which a warm session is not.
  */
-/**
- * PR-55 (R1067): what a kill measured ALONE under the mutant says when the same test also fails
- * (or hangs) alone with no mutant. The cause stays `unstable`.
- */
-export const ALONE_UNSTABLE_NOTE =
-  "fails (or hangs) when run alone with no mutant: it ran alone under the mutant after a cut in its codeunit, and tests of a codeunit share state in order, so the failure is not attributable to the mutant";
-
 type WarmDecision =
   | { readonly kind: "confirmed"; readonly killPosition: number }
   | {

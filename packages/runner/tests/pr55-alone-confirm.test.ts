@@ -279,13 +279,15 @@ describe("PR-55: a kill or timeout measured alone is confirmed and reproduced al
 
   test("A5: a fail NOT marked alone keeps the pair and the in-context confirm", async () => {
     const b = new AloneStub(plan("fail"));
-    const report = await session(b);
+    const events: RunEvent[] = [];
+    const report = await session(b, { emit: [createEmitter([(e) => events.push(e)])] });
     expect(m1(report)?.verdict).toBe("killed");
     expect(b.pairs).toContain("M0001 T1");
     expect(b.runs.some((r) => r.alone)).toBe(false);
+    expect(events.some((e) => e.type === "warning" && e.code === "alone-confirm")).toBe(false);
   });
 
-  test("A6: a per-test isolated (method) kill marked alone keeps its verdict: the same one-test request", async () => {
+  test("A6: the orchestrator does not branch on isolation: a kill marked alone is confirmed alone whatever isolationOf says", async () => {
     const b = new AloneStub(plan("fail"));
     b.markAlone = (m) => m === "T1";
     b.isolationOf = () => "method";
@@ -313,8 +315,10 @@ describe("PR-55: a kill or timeout measured alone is confirmed and reproduced al
         const { selection: _drop, ...rest } = v;
         return rest;
       };
-      const report = await session(b);
+      const events: RunEvent[] = [];
+      const report = await session(b, { emit: [createEmitter([(e) => events.push(e)])] });
       expect(m1(report)?.verdict).toBe(outcome === "fail" ? "killed" : "timeout-killed");
+      expect(events.some((e) => e.type === "warning" && e.code === "alone-confirm")).toBe(false);
     }
   });
 
