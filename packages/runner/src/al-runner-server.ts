@@ -838,6 +838,15 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "gotokey-desc-last-row-above-window":
     /^NotRun: out-of-scope: GoToKey on a list that opened on the last row of its descending view, with more rows above the rows it holds than a window \(not pinned\)$/,
   /**
+   * PR-53: DO t7's 35 closes. Measured CLEAN (`/coord/handoff/PR-53/README.md`, R-967's kit on
+   * edge-5a58a0f16): 47 of 47 answers carry the text, 27 of 27 readers on a kept daemon equal the
+   * control, 20 fresh daemons give one answer, no panic. The shape: `GlobalLanguage(1030);
+   * Rec.SetFilter(BooleanField, 'Ja')`. The language number is the only variable part (digits).
+   * GlobalLanguage is NOT carried to the next test (a reader reads 1033 after every refusal).
+   */
+  "setfilter-boolean-language-words":
+    /^NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage \d{1,5} \(the words of that language are not pinned\)$/,
+  /**
    * R1019 (coord PR-14): the cascade after a test that failed while it held a manual event subscription
    * (a BindSubscription whose UnbindSubscription it never reached): the next test's bind is refused.
    * Filter Tokens closed its daemon 424 times on it (466 daemons for 343 mutants, edge-5a58a0f16).
