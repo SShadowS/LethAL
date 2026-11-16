@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
+  type CellResult,
   DOTNET_EXCEPTION,
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   FAMILIES,
+  FORMAT_EVALUATE,
   type Family,
   GET_URL,
   NO_CLIENT,
@@ -20,6 +22,11 @@ import {
   classOf,
   classify,
   emitApp,
+  joinCells,
+  joinCounts,
+  joinTsv,
+  localeDependent,
+  parseBcTsv,
   refusalClasses,
   refusalText,
 } from "./refusal-family";
@@ -535,5 +542,171 @@ describe("PR-01: the refusal-family generator", () => {
     for (const c of controls)
       expect([...(c.setup ?? []), c.call].join(" ")).not.toMatch(flowFields);
     expect(classOf(f.known[0] ?? "")).not.toBe(classOf(f.known[1] ?? ""));
+  });
+});
+
+describe("PR-52: the format-evaluate family and its BC join", () => {
+  const f = FORMAT_EVALUATE;
+  const find = (type: string, method: string, state = "") => {
+    const c = f.cells.find((x) => x.type === type && x.method === method && x.state === state);
+    if (c === undefined) throw new Error(`no cell ${type} ${method} ${state}`);
+    return c;
+  };
+
+  test("cells: about 300, unique type/method/state, every one ends in Error('V:...')", () => {
+    expect(f.cells.length).toBeGreaterThan(250);
+    expect(f.cells.length).toBeLessThan(350);
+    const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const c of f.cells) expect(c.call).toMatch(/Error\('V:%1(\|%2)?', .*\);$/);
+  });
+
+  test("value encoding: text as it is, other values through Format(.., 0, 9), Evaluate as ok|value", () => {
+    expect(find("UpperCase", "ASCII").call).toBe("Error('V:%1', UpperCase('abc xyz'));");
+    expect(find("StrPos", "found").call).toBe(
+      "Error('V:%1', Format(StrPos('abcabc', 'ca'), 0, 9));",
+    );
+    expect(find("Split", "count").call).toBe("Error('V:%1', Format(S.Split(',').Count(), 0, 9));");
+    expect(find("Decimal", "Format", "zero").call).toBe("Error('V:%1', Format(V));");
+    const e = find("Integer", "Evaluate", "valid");
+    expect(e.call).toBe(
+      "Ok := Evaluate(X, '42'); Error('V:%1|%2', Format(Ok, 0, 9), Format(X, 0, 9));",
+    );
+    expect(find("Integer", "Evaluate 9", "valid").call).toContain("Evaluate(X, '42', 9)");
+    // a text-function setup statement is a setup, not a var
+    const sub = find("Substring", "from 3");
+    expect(sub.vars).toEqual(["S: Text;"]);
+    expect(sub.setup).toEqual(["S := 'abcdef';"]);
+  });
+
+  test("groups: every value type has Format cells; Evaluate covers valid, invalid and empty text per type", () => {
+    for (const t of [
+      "Decimal",
+      "Integer",
+      "BigInteger",
+      "Boolean",
+      "Date",
+      "Time",
+      "DateTime",
+      "Duration",
+      "Option",
+      "Guid",
+      "Code",
+      "Text",
+    ])
+      expect(f.cells.some((c) => c.type === t && c.method === "Format 0,9")).toBe(true);
+    for (const t of [
+      "Integer",
+      "Decimal",
+      "Boolean",
+      "Date",
+      "Time",
+      "DateTime",
+      "Duration",
+      "Guid",
+      "Option",
+      "Code",
+    ])
+      for (const s of ["invalid", "empty"])
+        expect(f.cells.some((c) => c.type === t && c.method === "Evaluate" && c.state === s)).toBe(
+          !(t === "Code" && s === "invalid"),
+        );
+  });
+
+  test("emit: own app id (place 12 of FAMILIES), range covers every cell, codeunit per cell", () => {
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051012");
+    const files = emitApp(bcCheckFamily(f), bcCheckApp(f));
+    const json = JSON.parse(files["app.json"] ?? "") as {
+      id: string;
+      idRanges: { from: number; to: number }[];
+    };
+    expect(json.id).toBe("51000000-0000-4000-8000-000000051012");
+    expect(json.idRanges).toEqual([{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length }]);
+    const al = files["src/Cells.al"] ?? "";
+    expect((al.match(/^codeunit \d+ /gm) ?? []).length).toBe(f.cells.length);
+    expect(al).toContain(`codeunit ${BASE_ID + f.cells.length} `);
+    // bcCheckFamily leaves every cell in (no table cells here), so a BC id is the v3 index + 51001
+    expect(bcCheckFamily(f).cells).toHaveLength(f.cells.length);
+  });
+
+  test("locale: default-format methods only", () => {
+    expect(localeDependent(find("Decimal", "Format", "zero"))).toBe(true);
+    expect(localeDependent(find("Decimal", "Format picture", "zero"))).toBe(true);
+    expect(localeDependent(find("Integer", "Evaluate", "valid"))).toBe(true);
+    expect(localeDependent(find("Decimal", "Format 0,9", "zero"))).toBe(false);
+    expect(localeDependent(find("Integer", "Evaluate 9", "valid"))).toBe(false);
+    expect(localeDependent(find("StrPos", "found"))).toBe(false);
+  });
+
+  test("parseBcTsv: id, pass|fail, message; a bad row or a repeated id is refused", () => {
+    const m = parseBcTsv("51001\tfail\tV:1\n51002\tpass\t\n");
+    expect(m.get(51001)).toEqual({ outcome: "fail", message: "V:1" });
+    expect(m.get(51002)).toEqual({ outcome: "pass", message: "" });
+    expect(() => parseBcTsv("51001\tmaybe\tx")).toThrow("bad BC row");
+    expect(() => parseBcTsv("51001\tpass\t\n51001\tpass\t")).toThrow("twice");
+  });
+
+  test("join: each class from a small fixture, and locale only on a differing default-format cell", () => {
+    const cell = (method: string) => ({ type: "T", method, state: "s", call: "x" });
+    const r = (method: string, outcome: CellResult["outcome"], message?: string): CellResult => ({
+      cell: cell(method),
+      outcome,
+      ...(message !== undefined ? { message } : {}),
+    });
+    const results: CellResult[] = [
+      r("Format 0,9", "fail", "V:1"), // 0 equal
+      r("Format 0,9", "refused", "reason"), // 1 v3 refused
+      r("Format 0,9", "fail", "V:1"), // 2 different value, not locale
+      r("Format", "fail", "V:1"), // 3 different value, locale
+      r("Format 0,9", "fail", "boom"), // 4 different error text
+      r("Format 0,9", "fail", "V:1"), // 5 one errors, one returns
+      r("Format 0,9", "fail", "V:1"), // 6 bc missing
+      r("Format 0,9", "fail", "boom"), // 7 equal error
+      r("Format 0,9", "timeout"), // 8 v3 not run
+    ];
+    const bc = parseBcTsv(
+      [
+        "51001\tfail\tV:1",
+        "51002\tfail\tV:1",
+        "51003\tfail\tV:2",
+        "51004\tfail\tV:2",
+        "51005\tfail\tother",
+        "51006\tfail\tboom",
+        "51008\tfail\tboom",
+        "51009\tfail\tx",
+      ].join("\n"),
+    );
+    const rows = joinCells(results, bc);
+    expect(rows.map((x) => x.cls)).toEqual([
+      "equal",
+      "v3 refused",
+      "different value",
+      "different value",
+      "different error text",
+      "one errors, one returns",
+      "bc missing",
+      "equal",
+      "v3 not run",
+    ]);
+    expect(rows.map((x) => x.locale)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(rows[0]?.id).toBe(51001);
+    expect(joinCounts(rows)).toMatchObject({
+      equal: 2,
+      "different value": 1,
+      "different value (locale?)": 1,
+    });
+    expect(joinTsv(rows).split("\n")[3]).toBe(
+      "51004\tT Format s\tdifferent value\tlocale?\tfail: V:1\tfail: V:2",
+    );
   });
 });

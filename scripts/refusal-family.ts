@@ -1184,6 +1184,460 @@ permissionset 51001 "Cell Grant Item"
   ],
 };
 
+/**
+ * PR-52: Format, Evaluate and the text functions. Every cell makes ONE call and ends in `Error('V:%1', <result>)`: a text result
+ * goes in as it is, any other value through `Format(<value>, 0, 9)` (the XML format: fixed, locale-free), and an Evaluate cell
+ * reports `V:<ok>|<value>`. So a cell's answer is its failure message (or "refused"); nothing is asserted. A message that does
+ * not start with `V:` is an error the call itself raised.
+ */
+type FmtValue = {
+  readonly type: string;
+  readonly decl: string;
+  readonly picture?: string;
+  readonly states: readonly (readonly [string, string])[];
+};
+const FMT_VALUES: readonly FmtValue[] = [
+  {
+    type: "Decimal",
+    decl: "Decimal",
+    picture: "<Precision,2:2><Standard Format,0>",
+    states: [
+      ["zero", "V := 0;"],
+      ["negative", "V := -1234.5;"],
+      ["large", "V := 123456789012.345;"],
+      ["many decimals", "V := 1.23456789;"],
+      ["half cent", "V := 0.005;"],
+    ],
+  },
+  {
+    type: "Integer",
+    decl: "Integer",
+    picture: "<Sign><Integer,6><Filler Character,0>",
+    states: [
+      ["zero", "V := 0;"],
+      ["negative", "V := -42;"],
+      ["max", "V := 2147483647;"],
+      ["min", "V := -2147483647;\nV -= 1;"],
+    ],
+  },
+  {
+    type: "BigInteger",
+    decl: "BigInteger",
+    states: [
+      ["zero", "V := 0;"],
+      // no constant above the Integer range compiles, so the limits are built (2^63 - 1 and -2^63)
+      [
+        "max",
+        "V := 2147483647;\nV := V * 65536;\nV := V * 65536;\nV += 2147483647;\nV += 2147483647;\nV += 1;",
+      ],
+      [
+        "min",
+        "V := -2147483647;\nV := V * 65536;\nV := V * 65536;\nV -= 2147483647;\nV -= 2147483647;\nV -= 2;",
+      ],
+    ],
+  },
+  {
+    type: "Boolean",
+    decl: "Boolean",
+    states: [
+      ["true", "V := true;"],
+      ["false", "V := false;"],
+    ],
+  },
+  {
+    type: "Date",
+    decl: "Date",
+    picture: "<Day,2>/<Month,2>/<Year4>",
+    states: [
+      ["undefined", "V := 0D;"],
+      ["normal", "V := DMY2Date(15, 3, 2024);"],
+      ["closing date", "V := ClosingDate(DMY2Date(31, 12, 2023));"],
+    ],
+  },
+  {
+    type: "Time",
+    decl: "Time",
+    picture: "<Hours24>:<Minutes,2>",
+    states: [
+      ["undefined", "V := 0T;"],
+      ["afternoon", "V := 143015T;"],
+    ],
+  },
+  {
+    type: "DateTime",
+    decl: "DateTime",
+    picture: "<Day,2>/<Month,2>/<Year4> <Hours24>:<Minutes,2>",
+    states: [
+      ["undefined", "V := 0DT;"],
+      ["normal", "V := CreateDateTime(DMY2Date(15, 3, 2024), 143015T);"],
+    ],
+  },
+  {
+    type: "Duration",
+    decl: "Duration",
+    states: [
+      ["zero", "V := 0;"],
+      ["day and more", "V := 90061001;"],
+    ],
+  },
+  {
+    type: "Option",
+    decl: "Option Alpha,Beta,Gamma",
+    states: [
+      ["first", "V := V::Alpha;"],
+      ["third", "V := V::Gamma;"],
+    ],
+  },
+  {
+    type: "Guid",
+    decl: "Guid",
+    states: [
+      ["null", "Evaluate(V, '{00000000-0000-0000-0000-000000000000}');"],
+      ["set", "Evaluate(V, '{12345678-1234-1234-1234-123456789ABC}');"],
+    ],
+  },
+  {
+    type: "Code",
+    decl: "Code[10]",
+    states: [
+      ["lower", "V := 'abc';"],
+      ["empty", "V := '';"],
+    ],
+  },
+  {
+    type: "Text",
+    decl: "Text",
+    states: [
+      ["plain", "V := 'Hello';"],
+      ["empty", "V := '';"],
+      ["padded", "V := '  x  ';"],
+    ],
+  },
+];
+const FMT_VARIANTS: readonly (readonly [string, string])[] = [
+  ["Format", "Format(V)"],
+  ["Format 0,9", "Format(V, 0, 9)"],
+];
+const FMT_EXTRA: readonly (readonly [string, string])[] = [
+  ["Format len6", "Format(V, 6)"],
+  ["Format 0,0", "Format(V, 0, 0)"],
+  ["Format 0,1", "Format(V, 0, 1)"],
+  ["Format 0,2", "Format(V, 0, 2)"],
+];
+
+/** Evaluate cells: the type, its declaration, and (state, text) pairs. */
+const EVAL_TYPES: readonly (readonly [string, string, readonly (readonly [string, string])[]])[] = [
+  [
+    "Integer",
+    "Integer",
+    [
+      ["valid", "42"],
+      ["padded", " 42 "],
+      ["negative", "-7"],
+      ["plus sign", "+5"],
+      ["decimal text", "4.2"],
+      ["comma text", "4,2"],
+      ["invalid", "abc"],
+      ["empty", ""],
+      ["overflow", "2147483648"],
+      ["thousands", "1,234"],
+    ],
+  ],
+  [
+    "Decimal",
+    "Decimal",
+    [
+      ["dot", "1.5"],
+      ["comma", "1,5"],
+      ["thousands", "1,234.56"],
+      ["padded", " 12.5 "],
+      ["exponent", "1e3"],
+      ["invalid", "abc"],
+      ["empty", ""],
+      ["two dots", "1.2.3"],
+    ],
+  ],
+  [
+    "Boolean",
+    "Boolean",
+    [
+      ["true", "true"],
+      ["upper", "TRUE"],
+      ["yes", "Yes"],
+      ["one", "1"],
+      ["no", "No"],
+      ["zero", "0"],
+      ["invalid", "maybe"],
+      ["empty", ""],
+    ],
+  ],
+  [
+    "Date",
+    "Date",
+    [
+      ["iso", "2024-03-15"],
+      ["dotted", "15.03.2024"],
+      ["slashed", "03/15/2024"],
+      ["short", "150324"],
+      ["invalid", "99.99.2024"],
+      ["empty", ""],
+      ["padded", " 2024-03-15 "],
+      ["text", "abc"],
+    ],
+  ],
+  [
+    "Time",
+    "Time",
+    [
+      ["hms", "14:30:15"],
+      ["hm", "14:30"],
+      ["pm", "2:30 PM"],
+      ["millis", "14:30:15.123"],
+      ["invalid", "25:00:00"],
+      ["empty", ""],
+      ["text", "abc"],
+    ],
+  ],
+  [
+    "DateTime",
+    "DateTime",
+    [
+      ["iso", "2024-03-15T14:30:15"],
+      ["iso z", "2024-03-15T14:30:15.000Z"],
+      ["date only", "15.03.2024"],
+      ["date and time", "15.03.2024 14:30:15"],
+      ["invalid", "abc"],
+      ["empty", ""],
+    ],
+  ],
+  [
+    "Duration",
+    "Duration",
+    [
+      ["millis", "1500"],
+      ["days", "1 day"],
+      ["hours", "2 hours"],
+      ["compound", "1 day 2 hours"],
+      ["invalid", "abc"],
+      ["empty", ""],
+    ],
+  ],
+  [
+    "Guid",
+    "Guid",
+    [
+      ["braced", "{12345678-1234-1234-1234-123456789ABC}"],
+      ["bare", "12345678-1234-1234-1234-123456789ABC"],
+      ["lower", "{12345678-1234-1234-1234-123456789abc}"],
+      ["short", "{1234}"],
+      ["invalid", "abc"],
+      ["empty", ""],
+    ],
+  ],
+  [
+    "Option",
+    "Option Alpha,Beta,Gamma",
+    [
+      ["name", "Beta"],
+      ["lower name", "beta"],
+      ["index", "2"],
+      ["out of range", "7"],
+      ["invalid", "Delta"],
+      ["empty", ""],
+      ["padded", " Gamma "],
+    ],
+  ],
+  [
+    "Code",
+    "Code[5]",
+    [
+      ["lower", "abc"],
+      ["too long", "abcdefgh"],
+      ["padded", " ab "],
+      ["empty", ""],
+    ],
+  ],
+];
+/** Evaluate cells that also run with format number 9 (the XML text each type reads). */
+const EVAL_XML = new Set([
+  "Decimal|dot",
+  "Decimal|comma",
+  "Boolean|true",
+  "Boolean|one",
+  "Date|iso",
+  "Date|dotted",
+  "Time|hms",
+  "DateTime|iso",
+  "DateTime|iso z",
+  "Integer|valid",
+  "Integer|decimal text",
+  "Guid|braced",
+]);
+
+const fmtCell = (
+  v: FmtValue,
+  state: string,
+  setup: string,
+  method: string,
+  expr: string,
+): Cell => ({
+  type: v.type,
+  method,
+  state,
+  vars: [`V: ${v.decl};`],
+  setup: setup.split("\n"),
+  call: `Error('V:%1', ${expr});`,
+});
+/** A text-function cell; a `vars` entry holding `:=` is a setup statement. */
+const textCell = (
+  type: string,
+  method: string,
+  expr: string,
+  text = true,
+  vars: string[] = [],
+): Cell => ({
+  type,
+  method,
+  state: "",
+  vars: vars.filter((v) => !v.includes(":=")),
+  setup: vars.filter((v) => v.includes(":=")),
+  call: `Error('V:%1', ${text ? expr : `Format(${expr}, 0, 9)`});`,
+});
+const evalCell = (
+  [type, decl]: readonly [string, string],
+  state: string,
+  text: string,
+  n9: boolean,
+): Cell => ({
+  type,
+  method: n9 ? "Evaluate 9" : "Evaluate",
+  state,
+  vars: [`X: ${decl};`, "Ok: Boolean;"],
+  call: `Ok := Evaluate(X, '${text}'${n9 ? ", 9" : ""}); Error('V:%1|%2', Format(Ok, 0, 9), Format(X, 0, 9));`,
+});
+
+const S_ABCDEF = ["S: Text;", "S := 'abcdef';"];
+const S_ABAN = ["S: Text;", "S := 'banana';"];
+const S_CSV = ["S: Text;", "S := 'a,b,,c';"];
+const FORMAT_EVALUATE_CELLS: Cell[] = [
+  ...FMT_VALUES.flatMap((v) =>
+    v.states.flatMap(([state, setup], si) => [
+      ...FMT_VARIANTS.map(([m, e]) => fmtCell(v, state, setup, m, e)),
+      ...(si === 0 ? FMT_EXTRA.map(([m, e]) => fmtCell(v, state, setup, m, e)) : []),
+      ...(v.picture !== undefined && si < 2
+        ? [fmtCell(v, state, setup, "Format picture", `Format(V, 0, '${v.picture}')`)]
+        : []),
+    ]),
+  ),
+  ...EVAL_TYPES.flatMap(([type, decl, states]) =>
+    states.flatMap(([state, text]) => [
+      evalCell([type, decl], state, text, false),
+      ...(EVAL_XML.has(`${type}|${state}`) ? [evalCell([type, decl], state, text, true)] : []),
+    ]),
+  ),
+  textCell("CopyStr", "start 0", "CopyStr('abcdef', 0, 2)"),
+  textCell("CopyStr", "start past end", "CopyStr('abcdef', 9, 2)"),
+  textCell("CopyStr", "length past end", "CopyStr('abcdef', 4, 99)"),
+  textCell("CopyStr", "negative length", "CopyStr('abcdef', 2, -1)"),
+  textCell("CopyStr", "length 0", "CopyStr('abcdef', 2, 0)"),
+  textCell("CopyStr", "no length", "CopyStr('abcdef', 3)"),
+  textCell("CopyStr", "start negative", "CopyStr('abcdef', -2, 2)"),
+  textCell("PadStr", "pad longer", "PadStr('ab', 5)"),
+  textCell("PadStr", "pad filler", "PadStr('ab', 5, 'xy')"),
+  textCell("PadStr", "cut shorter", "PadStr('abcdef', 3)"),
+  textCell("PadStr", "negative length", "PadStr('ab', -1)"),
+  textCell("PadStr", "length 0", "PadStr('ab', 0)"),
+  textCell("PadStr", "empty filler", "PadStr('ab', 5, '')"),
+  textCell("SelectStr", "second", "SelectStr(2, 'a,b,c')"),
+  textCell("SelectStr", "out of range", "SelectStr(4, 'a,b,c')"),
+  textCell("SelectStr", "zero", "SelectStr(0, 'a,b,c')"),
+  textCell("SelectStr", "negative", "SelectStr(-1, 'a,b,c')"),
+  textCell("SelectStr", "empty item", "SelectStr(2, 'a,,c')"),
+  textCell("SelectStr", "empty text", "SelectStr(1, '')"),
+  textCell("ConvertStr", "equal lengths", "ConvertStr('abcabc', 'ab', 'xy')"),
+  textCell("ConvertStr", "to shorter", "ConvertStr('abcabc', 'abc', 'x')"),
+  textCell("ConvertStr", "to longer", "ConvertStr('abcabc', 'a', 'xyz')"),
+  textCell("ConvertStr", "empty from", "ConvertStr('abc', '', '')"),
+  ...["<", ">", "="].map((w) => textCell("DelChr", `where ${w}`, `DelChr('  a b  ', '${w}', ' ')`)),
+  textCell("DelChr", "no where", "DelChr('  a b  ')"),
+  textCell("DelChr", "several chars", "DelChr('a.b-c', '=', '.-')"),
+  textCell("DelChr", "empty set", "DelChr(' a ', '<>', '')"),
+  textCell("IncStr", "no digits", "IncStr('ABC')"),
+  textCell("IncStr", "nine", "IncStr('9')"),
+  textCell("IncStr", "letter nine", "IncStr('A9')"),
+  textCell("IncStr", "Z99", "IncStr('Z99')"),
+  textCell("IncStr", "leading zeros", "IncStr('A007')"),
+  textCell("IncStr", "empty", "IncStr('')"),
+  textCell("IncStr", "digits then text", "IncStr('12AB')"),
+  textCell("IncStr", "negative", "IncStr('-5')"),
+  textCell("StrSubstNo", "missing arg", "StrSubstNo('%1 %2', 'a')"),
+  textCell("StrSubstNo", "extra arg", "StrSubstNo('%1', 'a', 'b')"),
+  textCell("StrSubstNo", "percent ten", "StrSubstNo('%10', 'a')"),
+  textCell("StrSubstNo", "hash slots", "StrSubstNo('#1###', 'ab')"),
+  textCell("StrSubstNo", "no slot", "StrSubstNo('plain', 'a')"),
+  textCell("StrSubstNo", "slot twice", "StrSubstNo('%1-%1', 'a')"),
+  textCell("StrSubstNo", "integer arg", "StrSubstNo('%1', 12)"),
+  textCell("StrSubstNo", "boolean arg", "StrSubstNo('%1', true)"),
+  textCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1.5)"),
+  textCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))"),
+  textCell("UpperCase", "non-ASCII", "UpperCase('äöüßé')"),
+  textCell("LowerCase", "non-ASCII", "LowerCase('ÄÖÜÉ')"),
+  textCell("UpperCase", "ASCII", "UpperCase('abc xyz')"),
+  textCell("LowerCase", "ASCII", "LowerCase('ABC XYZ')"),
+  textCell("StrPos", "found", "StrPos('abcabc', 'ca')", false),
+  textCell("StrPos", "not found", "StrPos('abcabc', 'zz')", false),
+  textCell("StrPos", "empty needle", "StrPos('abc', '')", false),
+  textCell("StrPos", "empty hay", "StrPos('', 'a')", false),
+  textCell("StrPos", "case differs", "StrPos('abc', 'B')", false),
+  textCell("StrLen", "padded", "StrLen('  ab  ')", false),
+  textCell("StrLen", "empty", "StrLen('')", false),
+  textCell("MaxStrLen", "text var", "MaxStrLen(C)", false, ["C: Text[7];"]),
+  textCell("Substring", "from 1", "S.Substring(1)", true, S_ABCDEF),
+  textCell("Substring", "from 3", "S.Substring(3)", true, S_ABCDEF),
+  textCell("Substring", "from 3 len 2", "S.Substring(3, 2)", true, S_ABCDEF),
+  textCell("Substring", "from 0", "S.Substring(0)", true, S_ABCDEF),
+  textCell("Substring", "past end", "S.Substring(9)", true, S_ABCDEF),
+  textCell("Substring", "length past end", "S.Substring(3, 99)", true, S_ABCDEF),
+  textCell("Split", "count", "S.Split(',').Count()", false, S_CSV),
+  textCell("Split", "second", "S.Split(',').Get(2)", true, S_CSV),
+  textCell("Split", "empty item", "S.Split(',').Get(3)", true, S_CSV),
+  textCell("Split", "no separator", "S.Split(',').Count()", false, ["S: Text;", "S := 'abc';"]),
+  textCell("Split", "empty text", "S.Split(',').Count()", false, ["S: Text;", "S := '';"]),
+  textCell("Split", "several seps", "S.Split(',', ';').Count()", false, [
+    "S: Text;",
+    "S := 'a,b;c';",
+  ]),
+  textCell("Split", "get past end", "S.Split(',').Get(9)", true, ["S: Text;", "S := 'a,b';"]),
+  textCell("Replace", "all", "S.Replace('a', 'x')", true, S_ABAN),
+  textCell("Replace", "empty old", "S.Replace('', 'x')", true, S_ABAN),
+  textCell("Trim", "both ends", "S.Trim()", true, ["S: Text;", "S := '  a b  ';"]),
+  textCell("TrimStart", "chars", "S.TrimStart('x')", true, ["S: Text;", "S := 'xxaxx';"]),
+  textCell("TrimEnd", "chars", "S.TrimEnd('x')", true, ["S: Text;", "S := 'xxaxx';"]),
+  textCell("IndexOf", "found", "S.IndexOf('na')", false, S_ABAN),
+  textCell("IndexOf", "from 4", "S.IndexOf('na', 4)", false, S_ABAN),
+  textCell("IndexOfAny", "set", "S.IndexOfAny('nb')", false, S_ABAN),
+  textCell("PadLeft", "pad", "S.PadLeft(5, '0')", true, ["S: Text;", "S := '12';"]),
+  textCell("PadRight", "pad", "S.PadRight(5, '0')", true, ["S: Text;", "S := '12';"]),
+  textCell("PadLeft", "shorter", "S.PadLeft(1, '0')", true, ["S: Text;", "S := '12';"]),
+  textCell("ToUpper", "non-ASCII", "S.ToUpper()", true, ["S: Text;", "S := 'äöüß';"]),
+  textCell("ToLower", "non-ASCII", "S.ToLower()", true, ["S: Text;", "S := 'ÄÖÜ';"]),
+  textCell("StartsWith", "case differs", "S.StartsWith('AB')", false, ["S: Text;", "S := 'abc';"]),
+  textCell("EndsWith", "empty", "S.EndsWith('')", false, ["S: Text;", "S := 'abc';"]),
+  textCell("Contains", "case differs", "S.Contains('B')", false, ["S: Text;", "S := 'abc';"]),
+  textCell("Format", "text literal", "Format('abc')"),
+  textCell("Format", "text literal len 2", "Format('abc', 2)"),
+  textCell("Format", "text literal 0,9", "Format('a<b&c', 0, 9)"),
+];
+
+export const FORMAT_EVALUATE: Family = {
+  name: "format-evaluate",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
+  known: [],
+  support: "",
+  handles: {},
+  cells: FORMAT_EVALUATE_CELLS,
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -1200,6 +1654,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [DOTNET_EXCEPTION_RSA.name]: DOTNET_EXCEPTION_RSA,
   // PR-33: appended (BC-check number 11): family 10, #8038
   [PUBAPP_FLOWFIELD.name]: PUBAPP_FLOWFIELD,
+  // PR-52: appended (BC-check number 12): Format, Evaluate and the text functions, for a per-cell BC differential
+  [FORMAT_EVALUATE.name]: FORMAT_EVALUATE,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -1412,12 +1868,142 @@ export function refusalClasses(
     .sort((a, b) => Number(a.known) - Number(b.known) || a.text.localeCompare(b.text));
 }
 
+/** PR-52: one BC answer per cell, as lethal-bugs returns it: `<codeunit id>\t<pass|fail>\t<message>` (PR-17's shape). */
+export interface BcRow {
+  readonly outcome: string;
+  readonly message: string;
+}
+
+export function parseBcTsv(text: string): Map<number, BcRow> {
+  const rows = new Map<number, BcRow>();
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    const [id, outcome, ...rest] = line.split("\t");
+    const n = Number(id);
+    if (!Number.isInteger(n) || (outcome !== "pass" && outcome !== "fail"))
+      throw new Error(
+        `refusal-family: bad BC row (want id, pass|fail, message): ${line.slice(0, 80)}`,
+      );
+    if (rows.has(n)) throw new Error(`refusal-family: BC row ${n} appears twice`);
+    rows.set(n, { outcome, message: rest.join("\t") });
+  }
+  return rows;
+}
+
+export type JoinClass =
+  | "equal"
+  | "v3 refused"
+  | "different value"
+  | "different error text"
+  | "one errors, one returns"
+  | "bc missing"
+  | "v3 not run";
+
+/** The default-format cells: their answer depends on the session's language and region (Format with n 0, 1, 2, a picture, a length; Evaluate without 9). */
+export function localeDependent(c: Cell): boolean {
+  return /^(Format( len\d+| 0,[012]| picture)?|Evaluate)$/.test(c.method);
+}
+
+export interface JoinRow {
+  readonly id: number;
+  readonly cell: Cell;
+  readonly cls: JoinClass;
+  /** A differing cell whose method is locale-dependent: a locale difference may explain it. */
+  readonly locale: boolean;
+  readonly v3: string;
+  readonly bc: string;
+}
+
+const say = (outcome: string, message: string | undefined) =>
+  outcome === "pass" ? "pass" : `${outcome}: ${(message ?? "").replace(/\s+/g, " ")}`;
+
+/** Join v3's results (`--json`, cell i is codeunit BASE_ID+1+i) with BC's rows, per cell. */
+export function joinCells(
+  results: readonly CellResult[],
+  bc: ReadonlyMap<number, BcRow>,
+): JoinRow[] {
+  return results.map((r, i) => {
+    const id = BASE_ID + 1 + i;
+    const b = bc.get(id);
+    const v3 = say(r.outcome, r.message);
+    const bcText = b === undefined ? "missing" : say(b.outcome, b.message);
+    const row = (cls: JoinClass): JoinRow => ({
+      id,
+      cell: r.cell,
+      cls,
+      locale: cls !== "equal" && localeDependent(r.cell),
+      v3,
+      bc: bcText,
+    });
+    if (b === undefined) return row("bc missing");
+    if (r.outcome === "refused") return row("v3 refused");
+    if (r.outcome !== "pass" && r.outcome !== "fail") return row("v3 not run");
+    if (r.outcome === b.outcome && (r.message ?? "") === b.message) return row("equal");
+    const returned = (o: string, m: string | undefined) =>
+      o === "fail" && (m ?? "").startsWith("V:");
+    const rv = returned(r.outcome, r.message);
+    const bv = returned(b.outcome, b.message);
+    if (rv && bv) return row("different value");
+    if (rv !== bv) return row("one errors, one returns");
+    return row("different error text");
+  });
+}
+
+export function joinTsv(rows: readonly JoinRow[]): string {
+  return `${rows
+    .map((r) =>
+      [
+        r.id,
+        `${r.cell.type} ${r.cell.method} ${r.cell.state}`.trim(),
+        r.cls,
+        r.locale ? "locale?" : "",
+        r.v3,
+        r.bc,
+      ].join("\t"),
+    )
+    .join("\n")}\n`;
+}
+
+export function joinCounts(rows: readonly JoinRow[]): Record<string, number> {
+  const n: Record<string, number> = {};
+  for (const r of rows) {
+    const k = r.locale ? `${r.cls} (locale?)` : r.cls;
+    n[k] = (n[k] ?? 0) + 1;
+  }
+  return n;
+}
+
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const opt = (k: string) => {
     const i = args.indexOf(k);
     return i >= 0 ? args[i + 1] : undefined;
   };
+  const joinAt = args.indexOf("--join");
+  if (joinAt >= 0) {
+    // PR-52: bun scripts/refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]
+    const [reportPath, bcPath] = [args[joinAt + 1], args[joinAt + 2]];
+    if (reportPath === undefined || bcPath === undefined)
+      throw new Error(
+        "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]",
+      );
+    const results = JSON.parse(await Bun.file(reportPath).text()) as CellResult[];
+    if (results.length !== FORMAT_EVALUATE.cells.length)
+      throw new Error(
+        `the report has ${results.length} cells, the family ${FORMAT_EVALUATE.cells.length}`,
+      );
+    for (const [i, r] of results.entries()) {
+      const c = FORMAT_EVALUATE.cells[i];
+      if (c?.type !== r.cell.type || c.method !== r.cell.method || c.state !== r.cell.state)
+        throw new Error(`cell ${i} of the report is not the family's cell ${i}`);
+    }
+    const rows = joinCells(results, parseBcTsv(await Bun.file(bcPath).text()));
+    const out = opt("--out");
+    if (out !== undefined) writeFileSync(out, joinTsv(rows));
+    else process.stdout.write(joinTsv(rows));
+    console.error(JSON.stringify(joinCounts(rows), null, 2));
+    process.exit(0);
+  }
   const f = FAMILIES[opt("--family") ?? ""];
   if (f === undefined)
     throw new Error(
