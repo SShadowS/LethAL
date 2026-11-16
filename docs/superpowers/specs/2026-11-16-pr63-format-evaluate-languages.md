@@ -41,3 +41,25 @@ name, or the closing-date letter is classed as a language difference. al-runner'
    cells, equal, differing, classes.
 4. Carry-over: v3 reads 1033. BC's answer is reported for the path lethal-bugs ran. If BC keeps 1030 within a codeunit run,
    that is a v3 difference only for paths that run a codeunit's tests in one session, and LethAL's bcdev path is not one.
+
+## Addendum 1 (2026-11-16, after the v3 run and the Opus review, before the BC run)
+
+**Prediction 4 was wrong on v3.** v3 reads **1030** in the carry-over reader, because the language stays within one codeunit run.
+PR-53's 1033 was across requests and codeunits, a different question. So a BC 1033 on a path that runs both tests in one session
+would be a v3 difference, and the carry cell's join class is `carry`, not `locale?`.
+
+**The carry-over cell is made readable** (review HIGH):
+- its tests are `A_SetLanguage` and `B_ReadLanguage`, so alphabetical and declaration order agree;
+- a SingleInstance counter (codeunit 51540) is raised by the setter, and the reader reports it as `V:[<lang>|<closing
+  date>|<counter>]`. With counter 1 the setter ran first in the same session; with counter 0 it did not, and the language value
+  is not carry-over evidence;
+- a two-test cell needs its setter row, or it is `missing`.
+
+**Other review fixes:**
+- the second name date is a Tuesday (6 Aug 2024), so Swedish weekday names differ from Danish and Norwegian, which are identical
+  on every day;
+- `<Month Text,3>` is noted as weak;
+- the Enum and Option language cells are marked `default caption` (no translation file), not translation evidence.
+
+**v3 refusals:** 42 new cells are refused on v3 (`Month Text` or `Weekday Text` in the language: da, fr, nb, sv, and German
+Friday). They stay as cells; BC's answer is what the run records.

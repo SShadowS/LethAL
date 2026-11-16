@@ -25,3 +25,24 @@ Every other path is unchanged: lend/RL's warning set is still not touched (its m
    - a suspect snapshot is not used.
 2. `itest:lend` is not on the path (no gate's warning set moves); `itest:alrunner-v3` passes.
 3. DO's next window that changes the tree names the non-reuse.
+
+## Addendum 1 (2026-11-16, after the Opus build review, before any gate)
+
+**"The latest snapshot at or before the resumed run" is a guess, and it can be wrong.** A run stores no snapshot for other reasons
+too: an aborted or partial baseline, a stopped test, isolation, or a snapshot dropped on a lost lease. The guess also ignores the
+filters `findBaselineSnapshot` applies (scheme, coverage mode, test app, dependencies, generation). Resuming such a run with
+nothing changed would warn, falsely, that the tree changed and that the run reused an earlier snapshot.
+
+**The change now records the lineage.** When a batch's baseline is reused, the store records it in a new table
+`baseline_snapshot_reuses(run_id, batch_index, from_run_id, from_batch_index)`. The warning compares with the resumed run's own
+snapshot, else with the snapshot it recorded reusing (suspect and lost excluded), else nothing, which stays silent. No guessing
+by run order.
+
+A store written before this change holds no reuse rows. So t8's exact case (run 8 reused run 7, recorded nowhere) stays silent in
+that store; the warning names it from the next window on.
+
+**Predictions, replacing 1:** red both ways:
+- a resumed run that recorded a reuse, onto a changed tree, warns and names both runs;
+- a resumed run that stored nothing and reused nothing (an aborted baseline), with an earlier run on another tree, is silent;
+- the same tree reaching the branch (findBaselineSnapshot misses on another filter) is silent;
+- suspect and lost snapshots are not followed.
