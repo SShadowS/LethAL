@@ -4932,9 +4932,12 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       ...(c.test !== undefined ? { test: c.test } : {}),
     }),
   );
+  // PR-56: a request that drifted from the baseline right after a kept refusal.
+  backend.setKeptDriftSink?.((d) => emit({ type: "serve-drift-after-kept-refusal", ...d }));
   return () => {
     backend.setNotify?.(undefined);
     backend.setDaemonCloseSink?.(undefined);
+    backend.setKeptDriftSink?.(undefined);
   };
 }
 

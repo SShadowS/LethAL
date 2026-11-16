@@ -325,8 +325,8 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
     ],
     closes: [
-      // another Company access, or a tail: never measured
-      `${P}FindFirst on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+      // a tail: never measured. (PR-56: FindFirst and IsEmpty are now kept by `company-table-read`.)
+      `${P}Find.First on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
       `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a) after a timeout`,
     ],
   };
@@ -360,8 +360,9 @@ describe("serveDaemonReusable, the rule alone", () => {
     `${P}RecordRef.${m} on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)`;
   R945["recordref-not-open"] = {
     keeps: ["FieldCount", "FindSet", "SetRecFilter", "SetLoadFields"].map(RR),
-    // a method never measured, and the other RecordRef "not open" wording al-runner has
-    closes: ["Get", "FindFirst", "CopyLinks", "ReadPermission"]
+    // a method that is no plain name, and the other RecordRef "not open" wording al-runner has
+    // (PR-56: any plain method name is now kept by `recordref-method-not-open`, FilterGroup measured)
+    closes: ["Get.Next", "Find First", "Copy-Links"]
       .map(RR)
       .concat([
         `${P}RecordRef.FieldCount by this overload on a RecordRef that is not open (not pinned)`,
@@ -371,8 +372,9 @@ describe("serveDaemonReusable, the rule alone", () => {
     keeps: [
       `${P}FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
     ],
+    // PR-56: any plain method name is now kept by `fieldref-method-never-assigned` (Caption, Active measured)
     closes: [
-      `${P}FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
+      `${P}FieldRef.Va.lue on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
       `${P}FieldRef.Class on a FieldRef that was never assigned`,
     ],
   };
