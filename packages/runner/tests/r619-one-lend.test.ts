@@ -562,7 +562,15 @@ async function snapshotCase(c: {
  * (run 1's). `tree` sets run 1's stored hash ("changed": another tree; "same": today's);
  * `suspect` marks it suspect.
  */
-async function lineageCase(c: { readonly tree: "changed" | "same"; readonly suspect?: boolean }) {
+async function lineageCase(c: {
+  readonly tree: "changed" | "same";
+  readonly suspect?: boolean;
+  readonly lost?: boolean;
+  /** run 2's reuse row is dropped: it aborted mid-baseline and stored/reused nothing. */
+  readonly noReuseRow?: boolean;
+  /** run 1's dependency fingerprint changes, so `findBaselineSnapshot` misses on the SAME tree. */
+  readonly missLookup?: boolean;
+}) {
   const dirs = await project();
   const store = new ResultsStore(":memory:");
   await runSession({ ...base(store, dirs), backend: new Stub(ABORT_AFTER) });
@@ -582,6 +590,23 @@ async function lineageCase(c: { readonly tree: "changed" | "same"; readonly susp
     ).n;
   if (second === first || stored(first) === 0 || stored(second) !== 0) {
     throw new Error("lineage setup: run 2 must reuse run 1's snapshot and store none");
+  }
+  const reuses = (
+    store.db
+      .query(
+        "SELECT COUNT(*) AS n FROM baseline_snapshot_reuses WHERE run_id = ? AND from_run_id = ?",
+      )
+      .get(second, first) as { n: number }
+  ).n;
+  if (reuses !== 1) throw new Error("lineage setup: run 2's reuse of run 1 was not recorded");
+  if (c.noReuseRow === true) store.db.run("DELETE FROM baseline_snapshot_reuses");
+  if (c.missLookup === true) {
+    store.db.run("UPDATE runs SET test_app_deps = 'other-deps' WHERE id = ?", [first]);
+  }
+  if (c.lost === true) {
+    store.db.run("INSERT INTO lost_batches (run_id, batch_index, note) VALUES (?, 0, 'lost')", [
+      first,
+    ]);
   }
   if (c.tree === "changed") {
     store.db.run("UPDATE baseline_snapshots SET batch_hash = 'other-tree' WHERE run_id = ?", [
@@ -750,8 +775,21 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
       `[lethal] resume-baseline-not-reused: run ${s.first} stored batch 0's baseline for another instrumented tree (the emitted AL changed); resumed run ${s.second} reused it; batch 0's baseline runs again.`,
     ]);
   });
-  test("PR-66: the same resume onto the same tree does not warn", async () => {
-    const s = await lineageCase({ tree: "same" });
+  test("PR-66: the same resume onto the SAME tree does not warn, though the lookup misses", async () => {
+    const s = await lineageCase({ tree: "same", missLookup: true });
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+  });
+  test("PR-66: a changed tree warns when the lookup misses (control for the same-tree test)", async () => {
+    const s = await lineageCase({ tree: "changed", missLookup: true });
+    expect(warned(s.events, "resume-baseline-not-reused")).toHaveLength(1);
+  });
+  test("PR-66: the resumed run recorded no snapshot and no reuse, an earlier run stored another tree: silent", async () => {
+    const s = await lineageCase({ tree: "changed", noReuseRow: true });
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+  });
+  test("PR-66: a lost batch's snapshot is not used for the warning", async () => {
+    const s = await lineageCase({ tree: "changed", lost: true });
     expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
   });
   test("PR-66: a suspect snapshot is not used for the warning", async () => {

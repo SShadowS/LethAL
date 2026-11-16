@@ -5994,6 +5994,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         }
       }
       if (reused !== undefined) {
+        // PR-66: remember which snapshot this batch ran on, for a later resume's tree-changed warning.
+        store.recordSnapshotReuse(runId, batchIdx, reused.runId, reused.batchIndex);
         emit({
           type: "warning",
           code: "resume-baseline-reused",
