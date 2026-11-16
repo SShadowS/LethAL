@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 1052 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**39 of 1053 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1097,6 +1097,7 @@ that ordering is the priority.
 - **R1083** · upstream-fixed-scan classifies an issue by an older build-naming maintainer comment when a newer maintainer comment names no build (a plan, not a fix); the row should say so instead · [R1083.md](docs/roadmap/R1083.md) · done (e7bbf98c)
 - **R1088** · Record filters, keys and FlowFields as a generated BC differential (PR-83): 270 cells, 259 equal; 2 wrong-answer classes (Æ collation, accent-insensitive @) and 1 refusal class with BC's answers measured, filed #8195-#8197 · [R1088.md](docs/roadmap/R1088.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1089** · Dates, times and date formulas as a generated BC differential (PR-86): 334 cells, 300 equal; Format length, closing dates and Danish/German date formulas measured, filed #8198-#8200 · [R1089.md](docs/roadmap/R1089.md) · closed 2026-11-16 — measured on bc2 and filed upstream
+- **R1090** · JSON and text handling as a generated BC differential (PR-87): 416 cells, every answered cell equal; 25 refusals in 3 classes with BC's answers measured, filed #8201-#8203 · [R1090.md](docs/roadmap/R1090.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 
 ---
 
