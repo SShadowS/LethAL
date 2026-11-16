@@ -29,13 +29,13 @@
   {
     "key": "NotRun: out-of-scope: a [ReportHandler] for report <x>, which is not a processing-only report with a request page (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (4 mutant sighting(s); 0 run now; apps: bd) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
     "key": "NotRun: out-of-scope: a control Caption over its source field's CaptionClass (which one BC shows is not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 refused test(s); 0 run now; apps: edoc) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -171,7 +171,7 @@
   {
     "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) under assigned permission sets that are not fully composed, so BC may allow it: the sets were assigned on top of the test runner's permiss",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (GetEffectivePermission / sets not fully composed), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: qm) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (GetEffectivePermission / sets not fully composed), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #8092",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -183,8 +183,8 @@
   },
   {
     "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a read of an empty table of a dependency app, which BC's database may fill with demo rows); the test is not",
-    "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (permission denial not pinned), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-39: fixed on edge-5a58a0f16: 14 refused test(s) re-run on the same app now run, none shows it (apps: sd; a re-score of their stored runs can count them) Read on R-982's pool, where the old run used R-975's pool-union; the cause concerns a dependency app's empty tables. (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (permission denial not pinned), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7854, #8038, #8092",
     "repro": "scripts/upstream-repros/u7854-xmlport-guid"
   },
@@ -215,7 +215,7 @@
   {
     "key": "NotRun: out-of-scope: a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (8 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -240,13 +240,13 @@
   {
     "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>)) and could draw random numbers, and this test draws random numbers: the shared sequence is not BC's; this failure is n",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (28 mutant sighting(s); 0 run now; apps: crypto, recur) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7998, #6924"
   },
   {
     "key": "NotRun: out-of-scope: a test before this one in the codeunit did not pass (<test>: failed (<failure>)) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are n",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (cascade after earlier test failed/refused), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (7 mutant sighting(s); 0 run now; apps: docshare, password, wordtpl) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (cascade after earlier test failed/refused), this instance not named in it (was: R-983: not examined))",
     "issue": "#7609"
   },
   {
@@ -271,7 +271,7 @@
   {
     "key": "NotRun: out-of-scope: an AL InStream assigned to a DotNet System.IO.MemoryStream (netstandard): only System.IO.Stream (mscorlib, netstandard) is pinned",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 refused test(s); 0 run now; apps: pdf) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7998"
   },
   {
@@ -337,7 +337,7 @@
   {
     "key": "NotRun: out-of-scope: an error in a SaveAsXml run (what the handler sees is not pinned): <error>",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (11 mutant sighting(s); 0 run now; apps: bd) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
@@ -372,7 +372,7 @@
   {
     "key": "NotRun: out-of-scope: an OutStream was expected, got an untouched handle",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#7760"
   },
   {
@@ -390,13 +390,13 @@
   {
     "key": "NotRun: out-of-scope: Blob.Length before CalcFields of a stored blob of N bytes (the stored size is not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#6896"
   },
   {
     "key": "NotRun: out-of-scope: CalcDate result outside N-N (error text not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 mutant sighting(s); 0 run now; apps: recur) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
@@ -437,7 +437,7 @@
   {
     "key": "NotRun: out-of-scope: comparison of an empty loaded Blob with a Blob that is not loaded (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 refused test(s); 0 run now; apps: shop) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -457,14 +457,14 @@
   {
     "key": "NotRun: out-of-scope: control Calculation Base % shows an expression computed when it is read, after TestField.AssistEdit, whose refresh of the page is not pinned",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: control Calculation Base Amount shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -478,14 +478,14 @@
   {
     "key": "NotRun: out-of-scope: control Service Object Quantity shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: control Service Start Date shows an expression computed when it is read, after TestPart.GoToRecord, whose refresh of the page is not pinned",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -533,13 +533,13 @@
   {
     "key": "NotRun: out-of-scope: date formula <x>: this form is not pinned by the corpus",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (8 mutant sighting(s); 0 run now; apps: filtertokens) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084, #8036"
   },
   {
     "key": "NotRun: out-of-scope: DeleteAll on virtual table <x>: its rows are computed, not stored",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (virtual table write refused), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: no standing sighting in any store (R1036 reader), so nothing to re-run (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (virtual table write refused), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#8001, #7780"
   },
   {
@@ -552,7 +552,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet AzureKeyVaultAppSecretProvider.InitializeFromCallingAppExceptSystemApplication on a variable never constructed (not pinned; only TryGetAzureKeyVaultSecret is)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet instance member on unmade object), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: secrets) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet instance member on unmade object), this instance not named in it (was: R-983: not examined))",
     "issue": "#7934, #8036",
     "repro": "scripts/upstream-repros/u7934-refusals"
   },
@@ -637,7 +637,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfConverter.ConvertPage raised the .NET exception System.TypeInitializationException: <message>; the text AL would see is not pinned (ADR-N sectio",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet exception text not pinned), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: pdf) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet exception text not pinned), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7924"
   },
   {
@@ -728,14 +728,14 @@
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GetConfigurationSetting: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 refused test(s); 0 run now; apps: edoc) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GetPPACTenantSettings: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (10 refused test(s); 0 run now; apps: edoc) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -749,7 +749,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.UseTreatmentAllocation: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 refused test(s); 0 run now; apps: edoc) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -816,14 +816,14 @@
   {
     "key": "NotRun: out-of-scope: DotNet new Newtonsoft.Json.Linq.JObject: assembly <x> could not be loaded: FileNotFoundException: Could not load file or assembly <x>. The system cannot find the file specified. Besides the .NET run",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: not observed on edge-5a58a0f16: its refused test(s) now hit another refusal (8) or are not in the re-run (4) (apps: edoc, qm, sus) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7819, #6924",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: DotNet new System.Drawing.Bitmap takes (Integer, Integer) here (ADR-N)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (System.Drawing by policy), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: image) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (System.Drawing by policy), this instance not named in it (was: R-983: not examined))",
     "issue": "#7998"
   },
   {
@@ -840,13 +840,13 @@
   {
     "key": "NotRun: out-of-scope: DotNet new System.IO.BinaryReader: an AL library value (an untouched handle) passed to .NET",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: recordlinkmana) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined))",
     "issue": "#7997"
   },
   {
     "key": "NotRun: out-of-scope: DotNet new System.IO.BinaryWriter: an AL library value (an untouched handle) passed to .NET",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: recordlinkmana) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined))",
     "issue": "#7997"
   },
   {
@@ -864,7 +864,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet new System.Text.RegularExpressions.Regex: new System.Text.RegularExpressions.Regex has no overload taking N argument(s) of the given types (String, null, TimeSpan)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 mutant sighting(s); 0 run now; apps: regex) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#7995"
   },
   {
@@ -997,7 +997,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet System.IO.BinaryReader.BaseStream: member <x> not found on <x>",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet member not found), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: not observed on edge-5a58a0f16: its mutant sighting(s) now hit another refusal (2) or were not reached or not generated in the re-run (0) (apps: recordlinkmana) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (DotNet member not found), this instance not named in it (was: R-983: not examined))",
     "issue": "#8036",
     "repro": "scripts/upstream-repros/u8036-refusals"
   },
@@ -1022,7 +1022,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet System.IO.MemoryStream.CopyTo: an AL library value (an untouched handle) passed to .NET",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: pdf) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (InStream/OutStream to DotNet stream), this instance not named in it (was: R-983: not examined))",
     "issue": "#7997"
   },
   {
@@ -1160,7 +1160,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet System.Xml.XmlAttribute.InnerText: property, field or method <x> not found on <x>",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: edoc) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1233,7 +1233,7 @@
   {
     "key": "NotRun: out-of-scope: File.CreateOutStream on a file that is not open (error text not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: pdf) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
@@ -1276,7 +1276,7 @@
   {
     "key": "NotRun: out-of-scope: GetEffectivePermission under assigned permission sets that are not fully composed, so BC may grant more: the sets were assigned on top of the test runner's permission sets, which are not composed (A",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (8 refused test(s); 0 run now; apps: qm) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1356,7 +1356,7 @@
   {
     "key": "NotRun: out-of-scope: InStream method on an unassigned Variant",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unassigned Variant/stream use), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (28 mutant sighting(s); 0 run now; apps: crypto, sftp) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unassigned Variant/stream use), this instance not named in it (was: R-983: not examined))",
     "issue": "#7819, #7995",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
@@ -1440,7 +1440,7 @@
   {
     "key": "NotRun: out-of-scope: OK of the lookup page of Page.RunModal(Id, Rec) whose row left its view while it was open (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (RunModal lookup OK), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 mutant sighting(s); 0 run now; apps: sd) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (RunModal lookup OK), this instance not named in it (was: R-983: not examined))",
     "issue": "#7760"
   },
   {
@@ -1460,19 +1460,19 @@
   {
     "key": "NotRun: out-of-scope: Open on a query that is already open and was read from (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); not filed: one sighting, only in an older run whose project PR-05 did not re-run, so it is not known to exist on this build (was: R-983: not examined)"
+    "note": "PR-39: still seen on edge-5a58a0f16 (4 mutant sighting(s); 0 run now; apps: ebh) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); not filed: one sighting, only in an older run whose project PR-05 did not re-run, so it is not known to exist on this build (was: R-983: not examined))"
   },
   {
     "key": "NotRun: out-of-scope: OutStream method on an unassigned Variant",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (21 mutant sighting(s); 0 run now; apps: crypto, sftp, sharepoint, zip) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#7819, #7995",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
   {
     "key": "NotRun: out-of-scope: page event onaftervalidateevent of control Invoice Disc. Pct.: a subscriber listens, and the test client does not raise it yet",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1499,7 +1499,7 @@
   {
     "key": "NotRun: out-of-scope: Page.SetSelectionFilter of a page on no row of a table that has rows (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 refused test(s); 0 run now; apps: qm) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1519,7 +1519,7 @@
   {
     "key": "NotRun: out-of-scope: ReadFrom with an argument that is not text",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (ReadFrom with uncreated stream), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 mutant sighting(s); 0 run now; apps: edocumentconne2, uptags) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (ReadFrom with uncreated stream), this instance not named in it (was: R-983: not examined))",
     "issue": "#7997"
   },
   {
@@ -1546,28 +1546,28 @@
   {
     "key": "NotRun: out-of-scope: RecordRef.CopyLinks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unopened RecordRef), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: recordlinkmana) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unopened RecordRef), this instance not named in it (was: R-983: not examined))",
     "issue": "#7819, #8036",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
   {
     "key": "NotRun: out-of-scope: RecordRef.FindSet on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
-    "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unopened RecordRef), this instance not named in it (was: R-983: not examined)",
+    "state": "fixed",
+    "note": "PR-39: fixed on edge-5a58a0f16: 3 mutant sighting(s) re-run on the same app now run, none shows it (apps: dataarchivetes, recordlinkmana; a re-score of their stored runs can count them) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (unopened RecordRef), this instance not named in it (was: R-983: not examined))",
     "issue": "#7819, #8036",
     "repro": "scripts/upstream-repros/u7819-refusals"
   },
   {
     "key": "NotRun: out-of-scope: RecordRef.GetTable of a RecordRef that is not open",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7586",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: RecordRef.GetTable of Text <x>",
-    "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "state": "fixed",
+    "note": "PR-39: fixed on edge-5a58a0f16: 2 mutant sighting(s) re-run on the same app now run, none shows it (apps: recordlinkmana; a re-score of their stored runs can count them) The re-run mutant (Error(NotARecordErr) removed) now fails on a conversion error from the runtime; whether BC gives that text is not measured. (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
@@ -1598,8 +1598,8 @@
   },
   {
     "key": "NotRun: out-of-scope: report <x> renders output, which the runtime does not produce: report property defaultlayout (a layout) is not supported yet",
-    "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (report property not supported), this instance not named in it (was: R-983: not examined)",
+    "state": "fixed",
+    "note": "PR-39: fixed on edge-5a58a0f16: 1 mutant sighting(s) re-run on the same app now run, none shows it (apps: bd; a re-score of their stored runs can count them) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (report property not supported), this instance not named in it (was: R-983: not examined))",
     "issue": "#7836, #8080"
   },
   {
@@ -1618,7 +1618,7 @@
   {
     "key": "NotRun: out-of-scope: Report.SaveAs of <x> as Html: only the Xml dataset is produced (a rendered format needs a layout renderer, and the Linux tier the corpus was measured on does not render them either)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: not observed on edge-5a58a0f16: its refused test(s) now hit another refusal (3) or are not in the re-run (0) (apps: edoc, pyp) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7760",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1631,14 +1631,14 @@
   {
     "key": "NotRun: out-of-scope: SetFilter: <x> is not a Decimal",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: qm) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7764",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
   {
     "key": "NotRun: out-of-scope: SetFilter: <x> is not an Integer",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 refused test(s); 0 run now; apps: qm) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7764",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1651,7 +1651,7 @@
   {
     "key": "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <value>",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8084"
   },
   {
@@ -1669,7 +1669,7 @@
   {
     "key": "NotRun: out-of-scope: SetValue on a control whose type is not known",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: still seen on edge-5a58a0f16 (4 refused test(s); 0 run now; apps: sb) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -1688,7 +1688,7 @@
   {
     "key": "NotRun: out-of-scope: store error Language Selection: the rows in session language N are not pinned (only those in N are)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "note": "PR-39: no standing sighting in any store (R1036 reader), so nothing to re-run (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7463, #5687"
   },
   {
@@ -1701,7 +1701,7 @@
   {
     "key": "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-995: met in 2026-11-14's BC.History stores (R-975, R-982, R-985, R-993), not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: guided) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-995: met in 2026-11-14's BC.History stores (R-975, R-982, R-985, R-993), not examined))",
     "issue": "#7934",
     "repro": "scripts/upstream-repros/u7934-refusals"
   },
@@ -1771,13 +1771,13 @@
   {
     "key": "NotRun: out-of-scope: the filters of the record after OK fails on a lookup with no row, for Page.RunModal(N, Rec) without a filter in another filter group or a page id with one (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (RunModal lookup OK), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: not observed on edge-5a58a0f16: its mutant sighting(s) now hit another refusal (0) or were not reached or not generated in the re-run (1) (apps: sd) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (RunModal lookup OK), this instance not named in it (was: R-983: not examined))",
     "issue": "#7760"
   },
   {
     "key": "NotRun: out-of-scope: the open read of a list on the row its OnOpenPage left Rec on, in a key other than the primary key, with one row or more rows than a window holds (not pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); not filed: one sighting, only in an older run whose project PR-05 did not re-run, so it is not known to exist on this build (was: R-983: not examined)"
+    "note": "PR-39: still seen on edge-5a58a0f16 (1 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); not filed: one sighting, only in an older run whose project PR-05 did not re-run, so it is not known to exist on this build (was: R-983: not examined))"
   },
   {
     "key": "NotRun: out-of-scope: the request page of report <x> with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>",
@@ -1799,19 +1799,19 @@
   {
     "key": "NotRun: out-of-scope: The test result of an error whose text is not pinned (probe wanted: dotnet-exception-other-class, docs/probes-needed.md)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (error text not pinned), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (4 mutant sighting(s); 0 run now; apps: encoding, uri) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (error text not pinned), this instance not named in it (was: R-983: not examined))",
     "issue": "#7924"
   },
   {
     "key": "NotRun: out-of-scope: TransferFields across fields of different types (error text not pinned): field Code of MS - PayPal Standard Template and field Primary Key of MS - PayPal Standard Account",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (4 mutant sighting(s); 0 run now; apps: pyp) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#7760, #8084"
   },
   {
     "key": "NotRun: out-of-scope: use of an InStream that was never created",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 11 run now; apps: afe, crypto, edocumentconne4, lpp, pdf, rest, sbi) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#7760, #7997, #8084"
   },
   {
@@ -1863,7 +1863,7 @@
   {
     "key": "NotRun: out-of-scope: XmlElement as XML content (only XML nodes and text are pinned)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (XML content type), this instance not named in it (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (3 mutant sighting(s); 0 run now; apps: saft) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project); family issue (XML content type), this instance not named in it (was: R-983: not examined))",
     "issue": "#7998"
   },
   {
@@ -1889,7 +1889,7 @@
   {
     "key": "NotRun: out-of-scope: XmlPort import without SetSource (a file dialog is not supported)",
     "state": "open",
-    "note": "PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)",
+    "note": "PR-39: still seen on edge-5a58a0f16 (6 mutant sighting(s); 0 run now; apps: /coord/handoff/R-975/sweep-src/sd, sd) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
     "issue": "#8024"
   },
   {
