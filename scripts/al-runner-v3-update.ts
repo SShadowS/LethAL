@@ -112,6 +112,7 @@ import {
   readSlotClass,
 } from "./heavy-slot-class";
 import { appendSmallAdmit, heldInputs } from "./heavy-slot-guard";
+import { type ReproRow, fixedScanLines, realScanDeps } from "./upstream-fixed-scan";
 import { checkBuild } from "./upstream-repros";
 
 export const ROOT = "/work/tools/al-runner-v3";
@@ -168,6 +169,12 @@ export interface UpdateDeps {
    * lines. Optional: absent (test rigs), nothing is run. It never decides the gate.
    */
   upstreamRepros?(candidate: string, current: string): Promise<readonly string[]>;
+  /**
+   * PR-59: the read-only scan of our open upstream issues whose maintainer comment names a build (`upstream-fixed-scan.ts`),
+   * with the regression set's rows on current; returns its lines. Optional: absent (test rigs), nothing is run. Run once per
+   * `dailyOnce`, outside the gate lock; it never decides anything.
+   */
+  fixedScan?(): Promise<readonly string[]>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -1515,6 +1522,25 @@ async function edgeLocked(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
 export async function dailyOnce(
   deps: UpdateDeps & EdgeDeps,
 ): Promise<{ edge: EdgeResult; releases: readonly string[] }> {
+  try {
+    return await dailyGate(deps);
+  } finally {
+    // PR-59: outside the gate lock and past the memory skip, so it runs on a busy day too. It runs once per
+    // `dailyOnce` call (cron calls that daily). Whatever it does, it changes no outcome.
+    if (deps.fixedScan !== undefined) {
+      try {
+        for (const l of await deps.fixedScan())
+          await deps.log(`${deps.now()} upstream-fixed-scan: ${l}`);
+      } catch (err) {
+        await deps.log(`${deps.now()} upstream-fixed-scan: not run: ${String(err).slice(0, 300)}`);
+      }
+    }
+  }
+}
+
+async function dailyGate(
+  deps: UpdateDeps & EdgeDeps,
+): Promise<{ edge: EdgeResult; releases: readonly string[] }> {
   if (await skippedForTheDay(deps, "daily")) return { edge: "skipped", releases: [] };
   const lock = await takeGateLock(deps, "daily");
   if (lock === undefined) return { edge: "skipped", releases: [] };
@@ -1624,6 +1650,31 @@ export function realDeps(root = ROOT): UpdateDeps {
     versionOf: async (b) => (await run([b, "--version"])).trim(),
     // R-996: the repros of this checkout, run in-process.
     upstreamRepros: async (candidate, current) => (await checkBuild(candidate, current)).lines,
+    // PR-59: read-only; our open upstream issues the maintainer reports fixed.
+    fixedScan: async () => {
+      // The regression set on current (candidate = current): its rows say which entries still differ from BC.
+      // A failed or slow run is told and the scan goes on without rows.
+      const head: string[] = [];
+      let reproRows: readonly ReproRow[] | undefined;
+      try {
+        const cur = join(await readlink(join(root, "current")), "al-runner");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const limit = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error("timed out after 30 min")), 30 * 60_000);
+        });
+        try {
+          reproRows = (await Promise.race([checkBuild(cur, cur), limit])).changes;
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch (err) {
+        head.push(`repro rows not available (scan without them): ${String(err).slice(0, 200)}`);
+      }
+      return [
+        ...head,
+        ...(await fixedScanLines(realScanDeps(reproRows !== undefined ? { reproRows } : {}))),
+      ];
+    },
     runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([

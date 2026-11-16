@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1038 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1040 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1082,7 +1082,9 @@ that ordering is the priority.
 - **R1072** · Keep-list option (a): every census-CLEAN refusal class kept on the serve daemon (66 entries), with a drift guard that closes and re-runs on any sign of carried state · [R1072.md](docs/roadmap/R1072.md) · done (0735e693)
 - **R1073** · Upstream issues the maintainer reported fixed, verified on al-runner edge-5a58a0f16 (PR-58): 7 fixed, 4 batch issues with their reported cause fixed, 2 at step 1 only, 3 still refused, 1 not verifiable by a repro; 13 regression entries added, 17 issues commented · [R1073.md](docs/roadmap/R1073.md) · closed 2026-11-16 — measured and commented upstream; the LethAL knock-ons below are left to their own items
 - **R1074** · The al-runner update's own memory gate skipped R992's small-job allowance and the unslotted heavy jobs, so the daily update was refused at 8.2 GiB used; it now shares the heavy-slot guard's inputs · [R1074.md](docs/roadmap/R1074.md) · done (f514b32d)
+- **R1075** · A resume onto a changed instrumented tree was silent when the resumed run had reused an earlier baseline (DO t8); the store now records baseline reuses, and the warning follows that lineage · [R1075.md](docs/roadmap/R1075.md) · done (8490d4f8)
 - **R1076** · Format/Evaluate family under five more languages (PR-63): 480 of 539 cells equal; Nordic Boolean words (#8182), closing-date letters (#8178) and refused month/weekday names (#8183) · [R1076.md](docs/roadmap/R1076.md) · closed 2026-11-16 — measured; two al-runner differences filed (#8182, R586 row 22; #8178 extended, row 21)…
+- **R1077** · heavy-slot: warn when a declared --peak is far above what the same kind of command measured in heavy-peaks.tsv · [R1077.md](docs/roadmap/R1077.md) · done (03240cf2)
 
 ---
 
