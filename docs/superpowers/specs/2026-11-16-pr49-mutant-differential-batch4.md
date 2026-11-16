@@ -40,3 +40,21 @@ All apps compile clean against the server's symbols.
   an upstream issue, a regression entry and an R586 row if it is al-runner's.
 - Prediction 3: the per-module agreement rate is reported, as in PR-46.
 - Prediction 4: no daemon is stranded; no server restart.
+
+## Addendum 1 (2026-11-16, after the measured v3 runs, before any bcdev run)
+
+**The v3 side** (`/coord/handoff/PR-49/v3/`, edge-5a58a0f16). The census finds loop sites in Recurrence 6 and Record Link 8, and
+none in Regex or Headlines. There is **0 timeout-killed in every module**, so each goes to bcdev whole, under coverage
+`procedure`.
+- Regex: baseline 18/18; 344 mutants (207 killed, 43 survived, 87 no-coverage, 7 error).
+- Recurrence Schedule: baseline 29/29; 272 mutants (160 killed, 46 survived, 65 no-coverage, 1 error). There are 17 hang-refused
+  sites, against R-964's 280 mutants on an older head.
+- Record Link Management: baseline 9/9; 87 mutants (44 killed, 36 survived, 2 no-coverage, 5 error).
+- Headlines: baseline 5/5; 73 mutants (53 killed, 13 survived, 7 no-coverage). Its code reads `Time()` and `CurrentDateTime()`
+  (class e is possible).
+
+**Copies beyond the plan** (`prepare.md`):
+- User Login Times is copied too (`ult`, 92230-92239, not a target). The Headlines test library writes two of its tables, which are
+  internal in the server's System Application (AL0161).
+- Every object named like a System Application one is renamed `PR49 ...` (#8171). One Recurrence test expects the table's name in
+  a "does not exist" error; it now expects the renamed one. Both backends run the same source.
