@@ -45,6 +45,28 @@ The baseline re-runs (`rerun/1`-`23`, all with baseline rows) settle only causes
 
 **Predictions (addendum 1):** of the 31 mutant-only causes, about a third fixed, half SAME, the rest not observed.
 
+## Addendum 2 (after the review, before any re-run for it): the mutant join and rules, corrected
+The review of the first result found that the mutant join and rule were wrong, and that the cascade path could not observe its
+causes. Corrected, before any new run:
+- **Join.** A sighted mutant is matched by `ast_hash` and `identity_ordinal`, not by file, procedure, operator and line (two
+  mutants can share a line).
+- **Per sighted mutant:**
+  - **SAME** when any non-passing test row of the fresh mutant carries the cause;
+  - **RUNS** only when the test that refused before (the sighting's own test) now ran (pass or fail) in the fresh mutant's run, and
+    no row carries the cause;
+  - **OTHER** when that test now shows another refusal;
+  - **NOT REACHED** when the fresh mutant was scored without running that test, or the fresh run did not finish (the time
+    budget cut it) before the mutant;
+  - **ABSENT** when no fresh mutant has the identity in a finished run.
+- **States:** fixed only when at least one sighted mutant RUNS and none is SAME; NOT REACHED and ABSENT count as not observed.
+- **Cascades:** their sightings are mutants (the reader marks a cascade only on a mutant error). The two cascade causes go
+  through this mutant path, with their files added.
+- **Unfinished runs:** every mutant re-run that the time budget cut (and every new one) is run again with `--budget-s 5400`.
+  A baseline re-run is used only when its baseline finished.
+- **The permission-denial cause read from 14 tests** ran on R-982's pool where the old run used R-975's pool-union. Its state
+  note says so, since the cause concerns a dependency app's empty tables.
+- Results of the first mutant classification are replaced, not kept.
+
 ## Predictions
 Of the 59 with a sighting: about a fifth fixed, three fifths still open (SAME), a fifth not observed. No cause becomes by-design
 (none of the 61 is a policy text today).
