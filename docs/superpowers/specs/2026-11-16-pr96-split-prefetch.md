@@ -40,7 +40,9 @@ The r2 spec must carry each of these. §1-§6 below are the r1 draft they amend.
 5. **PR-94.**
    - `runSelectedOnly` is set per REQUEST, and only when every entry qualifies. So whether a mutant's entry is flagged
      depends on its neighbours, which the split changes.
-   - An unflagged request runs its tails hidden (R1096): a second cross-entry state. State it in §3.
+   - An unflagged request runs its tails hidden. R1096 is now closed: PR-95 measured that a hidden tail leaves the daemon
+     clean (60 kept + 50 fresh readers), and that a hidden tail refusal or hang is invisible to LethAL. So the flag's
+     neighbour-dependence moves time and visibility, not state. State that in §3, and count it.
    - Report `selectedOnlyRequests` and `selectedOnlyRefusedGapped` per N.
    - Use PR-94's one-shot arbiter to diagnose a move; a move still blocks.
 6. **Memory.**
