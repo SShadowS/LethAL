@@ -587,9 +587,9 @@ that ordering is the priority.
 - **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · open
 - **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · done (fe099d4a)
 - **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
-- **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (PENDING)
+- **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (cc9d602e)
 - **R1084** · CI threshold, first step (owner ruling: option 3, advisory first): survivors on the changed lines are listed, and --fail-on-survivors exits 9; v3-caveated survivors never fail · [R1084.md](docs/roadmap/R1084.md) · done (77b657a5)
-- **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (PENDING)
+- **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
 
 ## Backends and tooling
 
