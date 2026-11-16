@@ -182,6 +182,89 @@ describe("R1061: remove-assignment of an exit-read bound set before the loop", (
     expect(refused(src, "Size :=")).toBe(false);
   });
 
+  // review fixes
+  const plain = (stmts: string, locals = "") => `codeunit 50134 "Rule B Review"
+{
+    procedure Run(C: Boolean)
+    var
+        N: Integer;
+        Size: Integer;
+        ${locals}
+    begin
+        ${stmts}
+    end;
+}`;
+  const LOOP = "repeat\n N := 0;\n N += 1;\n until N < Size;";
+
+  it("only statements of the same code block are later (an if branch has none)", () => {
+    // revert: drop the code_block check on the assignment's parent
+    expect(refused(plain(`Size := 1000;\n${LOOP}`), "Size :=")).toBe(true);
+    expect(refused(plain(`if C then\n Size := 1000\n else\n ${LOOP}`), "Size :=")).toBe(false);
+    expect(refused(plain(`if C then begin\n Size := 1000;\n ${LOOP}\n end;`), "Size :=")).toBe(
+      true,
+    );
+  });
+
+  it("keeps it when the loop body can leave by break or exit", () => {
+    // revert: drop the leaves() filter on candidate loops
+    const loop = (leave: string) => `repeat\n N := 0;\n N += 1;\n ${leave}\n until N < Size;`;
+    expect(refused(plain(`Size := 1000;\n${loop("")}`), "Size :=")).toBe(true);
+    expect(refused(plain(`Size := 1000;\n${loop("if N > 0 then break;")}`), "Size :=")).toBe(false);
+    expect(refused(plain(`Size := 1000;\n${loop("if N > 0 then exit;")}`), "Size :=")).toBe(false);
+  });
+
+  it("a global X: a helper whose chain calls out, or runs table triggers, may write it", () => {
+    // revert: drop chainCallsOut / the trigger-method check in callsOut
+    const cu = (helper: string) => `codeunit 50135 "Rule B Out"
+{
+    var
+        Size: Integer;
+        Other: Codeunit "Other Out";
+        Cust: Record "Rule B Cust";
+
+    procedure Run()
+    var
+        N: Integer;
+    begin
+        Size := 1000;
+        repeat
+            N := 0;
+            Helper();
+            N += 1;
+        until N < Size;
+    end;
+
+    local procedure Helper()
+    begin
+        ${helper}
+    end;
+}`;
+    expect(refused(cu("Cust.Init();"), "Size :=")).toBe(true);
+    expect(refused(cu("Other.Poke();"), "Size :=")).toBe(false);
+    expect(refused(cu("Cust.Validate(Name, 'x');"), "Size :=")).toBe(false);
+    expect(refused(cu("Cust.Modify(true);"), "Size :=")).toBe(false);
+    expect(refused(cu("Cust.Modify(false);"), "Size :=")).toBe(true);
+    expect(refused(cu("Cust.Modify();"), "Size :=")).toBe(true);
+  });
+
+  it("while: refuses Y >= X and X <= Y with an up-counter, keeps Y < X", () => {
+    // revert: drop the true-at-zero branch of evalAt
+    const w = (cond: string) =>
+      plain(`Size := 1000;\nwhile ${cond} do begin\n N := 0;\n N += 1;\n end;`);
+    expect(refused(w("N >= Size"), "Size :=")).toBe(true);
+    expect(refused(w("Size <= N"), "Size :=")).toBe(true);
+    expect(refused(w("N < Size"), "Size :=")).toBe(false);
+  });
+
+  it("reads a quoted counter in the Y := Y + 1 form", () => {
+    // revert: drop the optional quotes in isUpCounter's pattern
+    const src = plain(
+      `Size := 1000;\nrepeat\n "Batch Counter" := 0;\n "Batch Counter" := "Batch Counter" + 1;\n until "Batch Counter" < Size;`,
+      `"Batch Counter": Integer;`,
+    );
+    expect(refused(src, "Size :=")).toBe(true);
+  });
+
   it("keeps a parameter (condition 4)", () => {
     // revert: drop the parameter check
     const src = shape({})
