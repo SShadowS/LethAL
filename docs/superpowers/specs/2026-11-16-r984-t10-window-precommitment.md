@@ -9,6 +9,21 @@ per-mutant cross-build comparison, pre-committed on its own with PR-65's predict
 `timeout --foreground -k 900 15300`, triage first, run.sh's watchdog, peak RSS from `/usr/bin/time -v` (`t10.run.time.txt`). It never
 runs beside PR-75's BaseApp baseline.
 
+**Amendment 1 (2026-11-16, before the window starts; orchestrator): head 4ad78fa6, which adds PR-74's keep entries** (merge 4ad78fa6;
+`al-runner-server.ts`, family `t9-refusals`, pinned by `al-runner-serve-pr74.test.ts`). The sentence above that PR-74 is not in is
+superseded. The rest of 1b6ac882..4ad78fa6 is PR-70 (CI templates and docs) and roadmap files. Where this amendment and the
+predictions below disagree, the amendment wins.
+- **Dry run on 4ad78fa6** (`t6prep/dry-t10b.txt`): identical to `dry-t10.txt` (apart from the contract-probe line): 43,518 deployed.
+  So prediction 3 (baseline reused from run 10, named) stands: the keep list is not part of the tree hash, the test-app hash or the
+  recorded runner build.
+- **Prediction 4, amended:** closes whose refusal text is one of PR-74's kept forms (SetFilter `value expected after ..`/`@`;
+  RecordRef.Duplicate / ClearMarks; Evaluate of `>100`/`>1000`/`<1000` into Decimal; Report.SaveAs parameters string without the
+  XML declaration; ZipArchive Central Directory corrupt; JsonTextWriter.WriteEndObject `No token to close` and WriteStartObject in
+  state Object at the four named paths; Boolean false to BigInteger): **0**. In t9 these forms closed at most 45 of the 91. Closes in
+  the same families but in a form PR-74 did not keep (Report.RunRequestPage, JsonTextWriter.WritePropertyName / WriteEndArray,
+  another SetFilter operator or JSON path) are counted and named, not predicted. The total refusal-close count is still not
+  predicted (new code meets new families), but it is predicted to be **below t9's 91**.
+
 ## Measured before the window (`/coord/handoff/R-984/t6prep/dry-t9.txt` vs `dry-t10.txt`)
 Identical: 469 files, 45,021 sites, **43,518 deployed**, 740 hang-refused, no per-file line differs. The runner changes since c21bcbed
 are PR-66's (the changed-tree resume warning follows recorded reuse lineage; `baseline_snapshot_reuses`) and scripts only. t9 (run 10)
