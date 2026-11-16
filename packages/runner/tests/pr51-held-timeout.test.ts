@@ -651,13 +651,21 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     ]);
   });
 
-  test("P11b (F1): with no timeout held, a fail marked alone keeps today's in-context confirm and pair", async () => {
+  // PR-55 (R1067) changed this test: it pinned PR-51's "outside a held walk nothing changes" (an
+  // in-context confirm and a kill pair for a FIRST kill measured alone). The rule is now that any
+  // fail marked alone is confirmed and reproduced alone, with no pair.
+  test("P11b (F1, PR-55): with no timeout held, a first fail marked alone is also confirmed alone, with no pair", async () => {
     const b = make({ T1: "fail" });
     b.markAlone = (method) => method === "T1";
     const report = await session(b);
     expect(m1(report)?.verdict).toBe("killed");
-    expect(b.pairs).toContain("M0001 T1");
-    expect(b.aloneRuns.some((r) => r.alone)).toBe(false);
+    expect(b.pairs).toEqual([]);
+    expect(
+      b.aloneRuns
+        .filter((r) => r.method === "T1" && (r.mutant === "M0001" || r.mutant === null))
+        .map((r) => `${r.mutant ?? "null"}:${r.alone}`)
+        .slice(0, 4),
+    ).toEqual(["null:false", "M0001:false", "null:true", "M0001:true"]);
   });
 
   test("P11c (F1): a fail marked alone whose alone confirm is unstable -> the walk ends and the held timeout is scored, no pair", async () => {

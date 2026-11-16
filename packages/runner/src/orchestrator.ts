@@ -11223,6 +11223,13 @@ function stopText(stopMs: number, budgetMs: number, setFrom: string): string {
 }
 
 /**
+ * PR-55 (R1067): what a kill measured ALONE under the mutant says when the same test also fails
+ * (or hangs) alone with no mutant. The cause stays `unstable`.
+ */
+export const ALONE_UNSTABLE_NOTE =
+  "fails (or hangs) when run alone with no mutant: it ran alone under the mutant after a cut in its codeunit, and tests of a codeunit share state in order, so the failure is not attributable to the mutant";
+
+/**
  * R516 (I3 b): the note of a position-1 timeout whose unmutated confirm passed in more than half the
  * budget the run was sent (R517: or the lower stop al-runner reported it enforced). It prints both
  * durations and their ratio; the 1.25 threshold picks the wording only, never a verdict.
@@ -12535,9 +12542,15 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         }
         // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
         // which leaves every kill site exactly as it was.
-        // PR-51 (F1): inside the held walk, a fail the backend measured ALONE is confirmed and
-        // reproduced alone too. Outside it nothing changes (R1067).
-        const aloneKill = held !== undefined && v.outcome === "fail" && v.selection === "alone";
+        // PR-51 (F1), PR-55 (R1067): a fail or timeout the backend measured ALONE is confirmed and
+        // reproduced alone too, whatever the isolation; no kill pair is sent for it.
+        const aloneKill =
+          (v.outcome === "fail" || v.outcome === "timeout") && v.selection === "alone";
+        if (aloneKill && step.groupPosition > 1) {
+          throw new Error(
+            `covering loop: mutant ${m.mutantId}'s ${ref.method} is marked alone at group position ${step.groupPosition} — caller-contract violation (an alone request runs one test, so its position is 1) (PR-55)`,
+          );
+        }
         const reproduce = (): Promise<ReproDecision | undefined> =>
           args.backend.killsMustReproduce === true
             ? reproduceKill({
@@ -12780,6 +12793,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             args.safety.assertSafe(`sendKillPair(${m.mutantId})`);
             await args.backend.sendKillPair(m.mutantId, ref);
           }
+          if (aloneKill) {
+            // PR-55: one event per alone confirm, so a measured diff can attribute a moved verdict.
+            args.emit({
+              type: "warning",
+              code: "alone-confirm",
+              message: `[lethal] alone-confirm: ${ref.method} (mutant ${m.mutantId}) was measured alone under the mutant (${v.outcome}); its unmutated confirm and its reproduction run alone too, and no kill pair is sent (R1067)`,
+            });
+          }
           await activateOnce(args.backend, args.safety, null);
           // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
           // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
@@ -12932,7 +12953,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             // R963: stays the call's WALL (compile included, which the budget is checked against).
             // It runs only where `inRunStopIsBudget` (bcdev, v3 one-shot: a confirm is one test's
             // call); on serve-entries, where a batched wall could be shared, `noteMeasured` returns.
-            if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
+            // PR-55: not for an alone confirm; its wall is a one-test request's, not the codeunit call's.
+            if (timedOut && !aloneKill) noteMeasured(ref, confirm.durationMs, m.mutantId);
             // R517: the stop the run really enforced. al-runner reports it on its timeout row;
             // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
             // bcdev reports none and declares none: the stop is the budget, as before.
@@ -13059,9 +13081,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               runnerDisagreement = disagreement;
               runnerDisagreementTest = qualifiedTestName(ref);
             }
-            failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
-              refusal !== undefined ? ` — ${refusal}` : ""
-            }${disagreement !== undefined ? ` — ${disagreement}` : ""}`;
+            failureNote = `unstable test ${ref.method}: ${
+              aloneKill ? ALONE_UNSTABLE_NOTE : "fails at baseline confirmation"
+            }${refusal !== undefined ? ` — ${refusal}` : ""}${
+              disagreement !== undefined ? ` — ${disagreement}` : ""
+            }`;
             cause = "unstable";
           }
           break;
