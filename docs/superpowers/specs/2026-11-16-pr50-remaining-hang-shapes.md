@@ -39,3 +39,23 @@ Each dropped candidate gets an addendum with its figures, and R1052 or R1063 rec
 3. `itest:alrunner-v3` passes every leg; no gate's mutant set moves.
 4. The DO sites that move are listed for lethal-bugs' next window pre-commitment.
 5. Folded in: when t7 ends, its timeout-killed sites are checked against PR-48's 14 given-back sites and PR-50's give-backs.
+
+## Addendum 1 (2026-11-16, after the measurement and the Opus build review, before any gate)
+
+**Measured** (`/coord/handoff/PR-50/measure.md`): every kept candidate, alone and together, moves 0 sites on the 72 corpus modules,
+DO and the fixtures, and no golden moves.
+
+**H is narrowed.** As worded ("any call in the right side"), it removed 4 corpus and 13 DO sites (6 scored: 4 killed, 2 survived;
+none timeout-killed), because built-ins (`CopyStr`, `StrLen`, `Get`) read as progress calls. That fails the bar, so that form is
+dropped. Kept: only a call that resolves to a procedure of the same object, which covers R1052's case H (`X := AdvE(Pos)`), at 0
+sites.
+Not covered (recorded in R1052): a progress call to another object with a `var` parameter, and built-ins that write their
+arguments (`Evaluate(Pos, T)`, `Steps := Rec.Next()`).
+
+**Review fixes (before any gate):**
+- **W (BLOCK).** Giving back after any earlier non-default literal is unsound: `X := -1`, `-5`, or a value a counter steps past
+  also hang. W now gives back only when the loop provably ends at the earlier value; otherwise the site stays refused.
+- **S.** Only a GLOBAL counter is given back. A by-value parameter counter stays refused, because callers usually pass 0 or more.
+- **L.** A local copy is followed only when it is copied back into the exit name, and only between locals of the procedure.
+- **H.** It checks the operator.
+The final build is re-measured after these fixes; any move is listed before the gate.

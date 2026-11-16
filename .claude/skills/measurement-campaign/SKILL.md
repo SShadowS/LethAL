@@ -37,6 +37,13 @@ its own caveat on every invocation: it does not check the per-file publish ceili
 health, or the machine-global lease/op-marker — no read-only peek at the lease exists on the control
 app (R110). Exit 0 means every check it CAN run passed, not that the run will work.
 
+**On bc1-bc4 the hung-session stop is always on** (owner, PR-42): build a per-task config from the
+`bcdev` section `bc-linux-setup.ts` writes, which carries `"stopHungSessions": true`, or pass
+`--stop-hung-sessions`. The `--progress-out` events' `run-configured` line says `"stopHungSessions":true`
+when it is on; the report names the stop only in a caveat, and only when a mutant was `timeout-killed`
+(docs/gates/servers.md).
+On any other server the stop needs that server owner's yes.
+
 Then `scripts/campaign/compile-only.ts`, offline, before anything is published. It is the only gate
 item that exercises `validateSelectorIdsForProject` — `--dry-run` dispatches to `printDryRun` and
 returns before the run path that calls it, so a selector id colliding with the target app's own

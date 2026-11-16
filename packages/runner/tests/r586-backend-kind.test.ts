@@ -105,6 +105,9 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
+    // PR-42: the bcdev section's stopHungSessions applies on bcdev only
+    'given.backendKind === "bcdev" && configStop ? { ...given, stopHungSessions: true } : given;':
+      "bcdev",
     'if (paths.backendKind === "bcdev") {': "bcdev",
     '...(parsed.backendKind === "bcdev"': "bcdev",
     'if (highestPublished !== undefined && parsed.backendKind === "bcdev") {': "bcdev",

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**36 of 1027 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1030 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -379,6 +379,8 @@ that ordering is the priority.
 - **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (94790266)
 - **R1052** · Two hang shapes no refusal covers: an assignment whose right side is a loop's progress call (`X := Adv(Pos)` — its `remove-assignment` and the `empty-block` of its block), and the `empty-block` of a block holding a loop's only exit · [R1052.md](docs/roadmap/R1052.md) · done (8bbd371b)
 - **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · open
+- **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · open
+- **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · open
 
 ## Product gaps a real project hits
 
@@ -1071,6 +1073,7 @@ that ordering is the priority.
 - **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
 - **R1059** · The ledger's 60 open causes PR-05 could not re-run, settled on edge-5a58a0f16 (PR-39): 4 fixed (Bank Deposits, Service Declaration, Data Archive, Record Link Management), 50 still seen, 4 not observed, 2 with no sighting; Quality Management and Shopify rebuilt and cached · [R1059.md](docs/roadmap/R1059.md) · closed 2026-11-16 — measured: the 60 states are in the refusal ledger; a re-score of the four apps' stored…
 - **R1060** · DO window t6 ran ~65 s per new covered mutant (t5: 8.3 s): a mid-order baseline-refused GoToKey test closed the serve daemon on every mutant request of a newly reached region; the refusal is now kept (measured clean), and a resume that reuses no baseline says why · [R1060.md](docs/roadmap/R1060.md) · done (11605dbb)
+- **R1064** · The hung-session stop is ON for every mutant run on our own servers bc1-bc4 (a `bcdev.stopHungSessions` config field the setup scripts write); the product default stays off; no gate reads it · [R1064.md](docs/roadmap/R1064.md) · done (b4be7fc1)
 - **R1065** · Mutant-level differential, al-runner v3 vs bcdev, batch 4 (PR-49): Regex 99.6%, Recurrence Schedule 100%, Headlines 100%, Record Link Management 80% (its red BC baseline); no new al-runner difference · [R1065.md](docs/roadmap/R1065.md) · closed 2026-11-16 — measured; every difference is a known class
 
 ---
