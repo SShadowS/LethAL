@@ -697,10 +697,12 @@ if (import.meta.main) {
   const out = opt("--out");
   if (out === undefined)
     throw new Error(
-      "usage: keep-census.ts (--family <name> | --repros) --out <dir> [--bin <al-runner>]",
+      "usage: keep-census.ts (--family <name> | --repros) --out <dir> [--bin <al-runner>] [--refusers <n>]",
     );
   const bin = opt("--bin") ?? "/work/tools/al-runner-v3/current/al-runner";
   const n = opt("--refusers");
+  // a trailing --refusers with no value is refused, never read as the default (it would measure fewer texts)
+  if (args.includes("--refusers") && n === undefined) throw new Error("--refusers needs a value");
   if (n !== undefined) {
     const v = Number(n);
     if (!Number.isInteger(v) || v < 1)
