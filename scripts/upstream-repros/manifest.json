@@ -1,6 +1,76 @@
 {
   "repros": [
     {
+      "id": "u8193-page-caption-procedure",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8193",
+      "bcEvidence": "inferred, not measured on a BC server: Microsoft ships the shape (Base Application page 5911 Service Comment Sheet, procedure Caption(): Text called from OnAfterGetCurrRecord), so AL binds the unqualified Caption() to the page's own procedure. al-runner edge-4ebfe7913 refuses both Caption cells with 'too many arguments' and passes the renamed control (PR-80, lethal-bugs, 2026-11-16)",
+      "rerun": [
+        "PR-75's BaseApp x Tests-Fixed Asset baseline: ERM Fixed Assets.BlankDepreciationBookCodeOnPurchDocOpen and PreviewPostingDoesNotConsumeNumberSeries"
+      ],
+      "tests": {
+        "Codeunit51703.OpenPageWithCaptionProcedure": { "status": "pass" },
+        "Codeunit51703.OpenPageWithOtherName": { "status": "pass" },
+        "Codeunit51703.CallCaptionProcedureDirectly": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8194-request-page-queryclose",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8194",
+      "bcEvidence": "inferred, not measured on a BC server: the error is raised inside SetValue before OK().Invoke(), so the page is never asked to close; Microsoft's ERM Fixed Assets Insurance.DateCompressInsuranceLedgerDatesError asserts the error. al-runner edge-4ebfe7913 refuses the OnQueryClosePage cell ('close not pinned') and passes the control without OnQueryClosePage (PR-80, lethal-bugs, 2026-11-16)",
+      "rerun": [
+        "PR-75's BaseApp x Tests-Fixed Asset baseline: ERM Fixed Assets Insurance.DateCompressInsuranceLedgerDatesError (report 5697)"
+      ],
+      "tests": {
+        "Codeunit51822.HandlerErrorWithQueryClose": { "status": "pass" },
+        "Codeunit51823.HandlerErrorWithoutQueryClose": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8084-saveasxml-onprereport-error",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8084",
+      "bcEvidence": "inferred, not measured on a BC server: 11 of Microsoft's shipped Tests-Fixed Asset tests assert that an OnPreReport error under TestRequestPage.SaveAsXml reaches asserterror around Report.Run. al-runner edge-4ebfe7913 refuses the error cell ('an error in a SaveAsXml run (what the handler sees is not pinned)') and passes the control (PR-80, lethal-bugs, 2026-11-16; comment on #8084)",
+      "rerun": [
+        "PR-75's BaseApp x Tests-Fixed Asset baseline: 11 tests of ERM Fixed Assets Reports - II and - III"
+      ],
+      "tests": {
+        "Codeunit51772.OnPreReportErrorUnderSaveAsXml": { "status": "pass" },
+        "Codeunit51772.NoErrorUnderSaveAsXml": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8191b-relation-field-row-enum",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8191",
+      "bcEvidence": "inferred, not measured on a BC server: the AL compiler resolves the imported names through `using`, and the qualified and local controls run. al-runner edge-4ebfe7913 refuses the Field-row cell ('the TableRelation is not understood') and the imported-enum condition cell ('has a shape that is not understood yet'); #8191's other two forms (PR-80, lethal-bugs, 2026-11-16; comment on #8191)",
+      "rerun": [
+        "PR-75's BaseApp x Tests-Fixed Asset baseline: ERM Fixed Assets Journal.CreateAndModifyFixedAsset (Employee.City Field row) and ERM Dimension Fixed Assets.FALedgerEntryMoveToGenJnlCopyGlobalDimensions (Gen. Journal Line IC Account No.)"
+      ],
+      "tests": {
+        "Codeunit51804.FieldRowConditionalUsing": { "status": "pass" },
+        "Codeunit51804.FieldRowConditionalQualified": { "status": "pass" },
+        "Codeunit51805.OneArmImportedEnumBlank": { "status": "pass" },
+        "Codeunit51805.OneArmLocalEnumBlank": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8191-namespaced-relation-using",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8191",
+      "bcEvidence": "inferred, not measured on a BC server: the AL compiler resolves an unqualified TableRelation target through the file's `using` directives, so all three Validate cells name an existing row. al-runner edge-4ebfe7913 refuses ValidateUsingName with 'relation target `Repro Posting Group` is not declared in the workspace' and passes the qualified and same-namespace cells (PR-75, lethal-bugs, 2026-11-16)",
+      "rerun": [
+        "PR-75: Base Application (BC.History 28.6) x Tests-Fixed Asset baseline on al-runner v3 with CRONUS demo data: 383 of 460 tests not run by this refusal (Gen. Business Posting Group 261, Depreciation Book 61, G/L Account 24, ...)"
+      ],
+      "tests": {
+        "Codeunit51692.ValidateUsingName": {
+          "status": "pass"
+        },
+        "Codeunit51692.ValidateFullName": {
+          "status": "pass"
+        },
+        "Codeunit51692.ValidateSameNamespace": {
+          "status": "pass"
+        }
+      }
+    },
+    {
       "id": "u8181-tablemetadata-relation",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8181",
       "bcEvidence": "inferred, not measured on a BC server: the standard TableRelation check against the rows Table Metadata holds (the repro's own table 51680 exists, 1999999999 does not); the direct read is the control. al-runner edge-4ebfe7913 refuses both Validate cells with 'relation target `Table Metadata.ID` is not declared in the workspace' and passes the direct read (PR-57, lethal-bugs, 2026-11-16)",

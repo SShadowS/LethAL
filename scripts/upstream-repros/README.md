@@ -71,6 +71,30 @@ it stops every Base Application test on al-runner v3 (System Initialization Impl
 data loaded, PR-57's one Fixed Asset test ran and passed, so how many BaseApp tests it still stops is for PR-57's step 2 (a BaseApp
 baseline) to measure. BC's results are inferred, not measured on a server.
 
+## Coverage (PR-75)
+
+`u8191-namespaced-relation-using`: a `TableRelation` naming a table of another namespace through `using` is
+refused at Validate ("relation target `Repro Posting Group` is not declared in the workspace"); the namespace-qualified name and a
+target in the field's own namespace run. PR-75's Base Application x Tests-Fixed Asset baseline (CRONUS demo data loaded): 53 passed,
+0 failed, 407 not run, 383 of them by this refusal. BC's results are inferred, not measured on a server.
+
+## Coverage (PR-80)
+
+The other 24 refusals of PR-75's baseline, by family. New entries:
+- `u8191b-relation-field-row-enum` (#8191, two more forms of its cause): the `Field` row of a conditional relation to an imported
+  table ("the TableRelation is not understood"; Employee.City), and a condition on a field of an imported enum type ("has a shape
+  that is not understood yet"; Gen. Journal Line."IC Account No."). 2 tests.
+- `u8193-page-caption-procedure` (#8193): a page's own `procedure Caption()` called unqualified is refused with "too many
+  arguments" (Service Comment Sheet). 2 tests.
+- `u8194-request-page-queryclose` (#8194): a request page handler's `SetValue` that raises, under an `OnQueryClosePage` that can
+  answer false, is refused ("close not pinned"; Date Compress Insurance Ledger). 1 test.
+- `u8084-saveasxml-onprereport-error` (comment on #8084): an `OnPreReport` error under `TestRequestPage.SaveAsXml` is refused
+  ("what the handler sees is not pinned"). 11 tests.
+
+Counted on existing issues, no new entry (each is a known refusal awaiting a probe): #8066 (`m` on No. Series Line, 3 tests),
+#7854 (System.ExportEncryptionKey, 2), #8011 (AutoFormatType 1 under Amount Auto Format, 2), #8002 (number sequence under
+TestIsolation = Function, 1). All are refusals (not run), none a wrong answer; BC's results are inferred, not measured on a server.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
