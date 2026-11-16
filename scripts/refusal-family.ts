@@ -58,6 +58,11 @@ export interface Family {
   readonly cells: readonly Cell[];
   /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
   readonly target?: "OnPrem";
+  /**
+   * PR-83: `TestPermissions = Disabled` on every test codeunit, for a family whose cells write tables. On LethAL's web-service
+   * path BC runs a test without it under a restrictive default (#8160), so a cell's own Insert is refused before it runs.
+   */
+  readonly testPermissions?: "Disabled";
   /** PR-17: al-runner arguments the family's run needs (`--no-client`), put before the app. */
   readonly args?: readonly string[];
   /** PR-16: apps the cells call (Microsoft's Permissions Mock), as app.json `dependencies`. */
@@ -2028,6 +2033,1041 @@ dotnet
   ],
 };
 
+/**
+ * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
+ * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
+ * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
+ */
+const RF_SUPPORT = `enum 51000 "RF Color"
+{
+    Extensible = false;
+
+    value(0; Red) { Caption = 'Red'; }
+    value(1; Green) { Caption = 'Green'; }
+    value(2; Blue) { Caption = 'Blue'; }
+}
+
+table 51000 "RF Header"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Name; Text[50]) { }
+        field(3; Kind; Option) { OptionMembers = Alpha,Beta,Gamma; }
+        field(4; Color; Enum "RF Color") { }
+        field(5; "Doc Date"; Date) { }
+        field(6; Qty; Integer) { }
+        field(7; Amount; Decimal) { }
+        field(8; Active; Boolean) { }
+        field(9; Region; Code[10]) { }
+        field(10; "Date Filter"; Date) { FieldClass = FlowFilter; }
+        field(20; "Line Total"; Decimal)
+        {
+            FieldClass = FlowField;
+            Editable = false;
+            CalcFormula = sum("RF Line".Amount where("Header Code" = field("Code"), "Line Date" = field("Date Filter")));
+        }
+        field(21; "Line Count"; Integer)
+        {
+            FieldClass = FlowField;
+            Editable = false;
+            CalcFormula = count("RF Line" where("Header Code" = field("Code"), "Line Date" = field("Date Filter")));
+        }
+        field(22; "Has Lines"; Boolean)
+        {
+            FieldClass = FlowField;
+            Editable = false;
+            CalcFormula = exist("RF Line" where("Header Code" = field("Code"), "Line Date" = field("Date Filter")));
+        }
+        field(23; "Max Qty"; Integer)
+        {
+            FieldClass = FlowField;
+            Editable = false;
+            CalcFormula = max("RF Line".Qty where("Header Code" = field("Code"), "Line Date" = field("Date Filter")));
+        }
+        field(24; "Min Qty"; Integer)
+        {
+            FieldClass = FlowField;
+            Editable = false;
+            CalcFormula = min("RF Line".Qty where("Header Code" = field("Code"), "Line Date" = field("Date Filter")));
+        }
+    }
+    keys
+    {
+        key(PK; "Code") { Clustered = true; }
+        key(ByRegion; Region) { SumIndexFields = Amount, Qty; }
+        key(ByKindQty; Kind, Qty) { }
+    }
+}
+
+table 51001 "RF Line"
+{
+    fields
+    {
+        field(1; "Header Code"; Code[20]) { }
+        field(2; "Line No."; Integer) { }
+        field(3; Amount; Decimal) { }
+        field(4; Qty; Integer) { }
+        field(5; "Line Date"; Date) { }
+    }
+    keys
+    {
+        key(PK; "Header Code", "Line No.") { Clustered = true; SumIndexFields = Amount, Qty; }
+    }
+}
+
+codeunit 51000 "RF Seed"
+{
+    procedure Load()
+    var
+        Hd: Record "RF Header";
+        Ln: Record "RF Line";
+    begin
+        Hd.DeleteAll();
+        Ln.DeleteAll();
+        AddHeader('A001', 'Alpha', 0, "RF Color"::Red, DMY2Date(10, 1, 2024), 5, 10.5, true, 'N');
+        AddHeader('A002', 'alpha two', 1, "RF Color"::Green, DMY2Date(15, 2, 2024), 5, 20, true, 'S');
+        AddHeader('B001', 'Bravo', 2, "RF Color"::Blue, DMY2Date(15, 3, 2024), 12, -3.25, false, 'N');
+        AddHeader('B002', 'Émile', 0, "RF Color"::Red, DMY2Date(15, 3, 2024), 12, 0, true, 'S');
+        AddHeader('C001', 'Ærø', 1, "RF Color"::Green, DMY2Date(31, 12, 2024), 0, 100, false, 'E');
+        AddHeader('C002', 'Zebra', 2, "RF Color"::Blue, 0D, 7, 7, true, '');
+        AddHeader('D001', 'a*b?', 0, "RF Color"::Red, DMY2Date(1, 1, 2025), 7, 1000.123, true, 'N');
+        AddHeader('D002', '', 1, "RF Color"::Green, DMY2Date(30, 6, 2025), -1, 0.5, false, 'S');
+        AddLine('A001', 1, 10, 2, DMY2Date(5, 1, 2024));
+        AddLine('A001', 2, 20, 4, DMY2Date(5, 2, 2024));
+        AddLine('A001', 3, 5.5, 1, DMY2Date(5, 3, 2024));
+        AddLine('A002', 1, 7.25, 3, DMY2Date(20, 2, 2024));
+        AddLine('B001', 1, 100, 10, DMY2Date(1, 3, 2024));
+        AddLine('B001', 2, -40, 5, DMY2Date(1, 4, 2024));
+    end;
+
+    local procedure AddHeader(C: Code[20]; N: Text[50]; K: Integer; Col: Enum "RF Color"; D: Date; Q: Integer; A: Decimal; Act: Boolean; Reg: Code[10])
+    var
+        Hd: Record "RF Header";
+    begin
+        Hd.Init();
+        Hd.Code := C;
+        Hd.Name := N;
+        Hd.Kind := K;
+        Hd.Color := Col;
+        Hd."Doc Date" := D;
+        Hd.Qty := Q;
+        Hd.Amount := A;
+        Hd.Active := Act;
+        Hd.Region := Reg;
+        Hd.Insert();
+    end;
+
+    local procedure AddLine(HC: Code[20]; No: Integer; A: Decimal; Q: Integer; D: Date)
+    var
+        Ln: Record "RF Line";
+    begin
+        Ln.Init();
+        Ln."Header Code" := HC;
+        Ln."Line No." := No;
+        Ln.Amount := A;
+        Ln.Qty := Q;
+        Ln."Line Date" := D;
+        Ln.Insert();
+    end;
+
+    procedure Keys(var R: Record "RF Header"): Text
+    var
+        Result: Text;
+    begin
+        if R.FindSet() then
+            repeat
+                if Result <> '' then
+                    Result += ',';
+                Result += R.Code;
+            until R.Next() = 0;
+        exit(Result);
+    end;
+
+    procedure KeysBack(var R: Record "RF Header"): Text
+    var
+        Result: Text;
+    begin
+        if R.FindLast() then
+            repeat
+                if Result <> '' then
+                    Result += ',';
+                Result += R.Code;
+            until R.Next(-1) = 0;
+        exit(Result);
+    end;
+
+    procedure Rows(): Text
+    var
+        R: Record "RF Header";
+        Result: Text;
+    begin
+        if R.FindSet() then
+            repeat
+                Result += R.Code + ':' + Format(R.Qty, 0, 9) + ':' + R.Name + ':' + Format(R.Active, 0, 9) + ':' + Format(R.Color, 0, 9) + ';';
+            until R.Next() = 0;
+        exit(Result);
+    end;
+
+    procedure LRows(): Text
+    var
+        R: Record "RF Line";
+        Result: Text;
+    begin
+        if R.FindSet() then
+            repeat
+                Result += R."Header Code" + '/' + Format(R."Line No.", 0, 9) + ';';
+            until R.Next() = 0;
+        exit(Result);
+    end;
+
+    procedure FindText(var R: Record "RF Header"; Mode: Text): Text
+    begin
+        if R.Find(Mode) then
+            exit(R.Code);
+        exit('none');
+    end;
+
+    procedure FirstText(var R: Record "RF Header"): Text
+    begin
+        if R.FindFirst() then
+            exit(R.Code);
+        exit('none');
+    end;
+
+    procedure LastText(var R: Record "RF Header"): Text
+    begin
+        if R.FindLast() then
+            exit(R.Code);
+        exit('none');
+    end;
+
+    procedure NextText(var R: Record "RF Header"; Start: Code[20]; Step: Integer): Text
+    var
+        Moved: Integer;
+    begin
+        if not R.Get(Start) then
+            exit('no start');
+        Moved := R.Next(Step);
+        exit(Format(Moved, 0, 9) + '/' + R.Code);
+    end;
+}
+`;
+const RF_VARS = ['H: Record "RF Header";', 'Seed: Codeunit "RF Seed";'];
+const rf = (
+  type: string,
+  method: string,
+  state: string,
+  setup: string[],
+  answer: string,
+  o: { vars?: string[]; depends?: Cell["depends"] } = {},
+): Cell => ({
+  type,
+  method,
+  state,
+  vars: [...RF_VARS, ...(o.vars ?? [])],
+  setup: ["Seed.Load();", ...setup],
+  call: `Error('V:[%1]', ${answer});`,
+  ...withDepends(o.depends),
+});
+const al = (s: string) => `'${s.replace(/'/g, "''")}'`;
+const n9 = (e: string) => `Format(${e}, 0, 9)`;
+const KEYS = "Seed.Keys(H)";
+const dt = (d: number, m: number, y: number) => `DMY2Date(${d}, ${m}, ${y})`;
+const RF_FIELD = {
+  Code: "H.Code",
+  Text: "H.Name",
+  Option: "H.Kind",
+  Enum: "H.Color",
+  Date: 'H."Doc Date"',
+  Integer: "H.Qty",
+  Decimal: "H.Amount",
+  Boolean: "H.Active",
+} as const;
+
+/** SetRange: [field type, state, the SetRange arguments after the field]. */
+const RF_RANGES: readonly (readonly [keyof typeof RF_FIELD, string, string])[] = [
+  ["Code", "single", al("B001")],
+  ["Code", "range", `${al("A002")}, ${al("B002")}`],
+  ["Code", "upper empty", `${al("B001")}, ''`],
+  ["Code", "lower above upper", `${al("B002")}, ${al("B001")}`],
+  ["Code", "lowercase value", al("b001")],
+  ["Code", "absent value", al("Z999")],
+  ["Text", "single", al("Alpha")],
+  ["Text", "other case", al("alpha")],
+  ["Text", "no accent", al("Emile")],
+  ["Text", "accent", al("Émile")],
+  ["Text", "range", `${al("A")}, ${al("B")}`],
+  ["Text", "empty", "''"],
+  ["Text", "wildcard text", al("a*b?")],
+  ["Option", "single", "H.Kind::Beta"],
+  ["Option", "range", "H.Kind::Alpha, H.Kind::Beta"],
+  ["Enum", "single", '"RF Color"::Green'],
+  ["Enum", "range", '"RF Color"::Red, "RF Color"::Green'],
+  ["Date", "single", dt(15, 3, 2024)],
+  ["Date", "range", `${dt(1, 2, 2024)}, ${dt(31, 3, 2024)}`],
+  ["Date", "upper 0D", `${dt(1, 1, 2025)}, 0D`],
+  ["Date", "0D single", "0D"],
+  ["Date", "lower above upper", `${dt(31, 3, 2024)}, ${dt(1, 2, 2024)}`],
+  ["Integer", "single", "5"],
+  ["Integer", "range", "0, 7"],
+  ["Integer", "negative", "-1"],
+  ["Integer", "lower above upper", "7, 0"],
+  ["Integer", "zero", "0"],
+  ["Decimal", "zero", "0"],
+  ["Decimal", "fraction", "10.5"],
+  ["Decimal", "range", "0, 20"],
+  ["Decimal", "negative range", "-3.25, 0.5"],
+  ["Decimal", "five decimals", "1000.123"],
+  ["Boolean", "true", "true"],
+  ["Boolean", "false", "false"],
+];
+
+/** SetFilter: [field type, filter text, extra %1.. arguments, depends on locale]. */
+const RF_FILTERS: readonly (readonly [
+  keyof typeof RF_FIELD,
+  string,
+  (string | undefined)?,
+  boolean?,
+])[] = [
+  ["Code", "A001|B001"],
+  ["Code", "A001..B001"],
+  ["Code", "A*"],
+  ["Code", "*001"],
+  ["Code", "A00?"],
+  ["Code", "<>A001"],
+  ["Code", "<B"],
+  ["Code", ">=C"],
+  ["Code", "<>A001&<>A002"],
+  ["Code", "A001|B*"],
+  ["Code", "a001"],
+  ["Code", "@a*"],
+  ["Code", "%1", al("B001")],
+  ["Text", "Alpha"],
+  ["Text", "@alpha"],
+  ["Text", "alpha*"],
+  ["Text", "@alpha*"],
+  ["Text", "@*a"],
+  ["Text", "a*b?"],
+  ["Text", "a'*'b'?'"],
+  ["Text", "É*"],
+  ["Text", "@é*"],
+  ["Text", "@emile"],
+  ["Text", "''"],
+  ["Text", "<>''"],
+  ["Integer", "5|12"],
+  ["Integer", "5..12"],
+  ["Integer", "5.."],
+  ["Integer", "<5"],
+  ["Integer", ">5"],
+  ["Integer", "<>5&<>12"],
+  ["Integer", ">5&<12"],
+  ["Integer", "5.5"],
+  ["Integer", "abc"],
+  ["Integer", ">%1", "5"],
+  ["Integer", "%1..%2", "5, 12"],
+  ["Decimal", "10.5", undefined, true],
+  ["Decimal", ">10"],
+  ["Decimal", "10.5..100", undefined, true],
+  ["Decimal", "0"],
+  ["Decimal", "<0"],
+  ["Decimal", "<>0"],
+  ["Decimal", "%1", "10.5", true],
+  ["Date", "150324", undefined, true],
+  ["Date", "150324..", undefined, true],
+  ["Date", "..150324", undefined, true],
+  ["Date", "150324|100124", undefined, true],
+  ["Date", "2024-03-15", undefined, true],
+  ["Date", "%1", dt(15, 3, 2024), true],
+  ["Date", "%1..%2", `${dt(1, 2, 2024)}, ${dt(31, 3, 2024)}`, true],
+  ["Date", "<>%1", "0D", true],
+  ["Option", "Beta"],
+  ["Option", "Alpha|Gamma"],
+  ["Option", "Alpha..Beta"],
+  ["Option", "<>Alpha"],
+  ["Option", "1"],
+  ["Option", "Delta"],
+  ["Option", "%1", "H.Kind::Beta"],
+  ["Enum", "Green"],
+  ["Enum", "Red|Blue"],
+  ["Enum", "<>Red"],
+  ["Enum", "Purple"],
+  ["Enum", "%1", '"RF Color"::Blue'],
+  ["Boolean", "Yes"],
+  ["Boolean", "No"],
+  ["Boolean", "true"],
+  ["Boolean", "<>Yes"],
+];
+
+/** The CalcFields cells: five FlowFields, each on a header with lines, one without, under a FlowFilter. */
+const RF_FLOWS: readonly (readonly [string, (e: string) => string])[] = [
+  ["Line Total", (e) => n9(e)],
+  ["Line Count", (e) => n9(e)],
+  ["Has Lines", (e) => n9(e)],
+  ["Max Qty", (e) => n9(e)],
+  ["Min Qty", (e) => n9(e)],
+];
+const RF_SCENES: readonly (readonly [string, string[]])[] = [
+  ["A001 no filter", ["H.Get('A001');"]],
+  ["C001 no lines", ["H.Get('C001');"]],
+  [
+    "A001 February",
+    [`H.SetRange(H."Date Filter", ${dt(1, 2, 2024)}, ${dt(29, 2, 2024)});`, "H.Get('A001');"],
+  ],
+  ["B001 from April", [`H.SetRange(H."Date Filter", ${dt(1, 4, 2024)}, 0D);`, "H.Get('B001');"]],
+];
+
+// the record is the field's own prefix (`H.Qty` or `H2.Qty`)
+const sr = (f: string, a: string) => `${f.split(".")[0]}.SetRange(${f}, ${a});`;
+const RF_DANISH = (method: string, state: string, setup: string[], answer: string): Cell => ({
+  type: "Danish",
+  method,
+  state,
+  call: "GlobalLanguage(1030);",
+  // the reader sets the language itself too, so a build that does not carry it from the first test is still measured in Danish
+  reader: {
+    vars: RF_VARS,
+    setup: ["GlobalLanguage(1030);", "Seed.Load();", ...setup],
+    call: `Error('V:[%1|%2]', ${n9("GlobalLanguage()")}, ${answer});`,
+  },
+  depends: "locale",
+});
+
+const RF_ORDER_CELLS: Cell[] = [
+  ["default key", [], KEYS],
+  ["default key descending", ["H.Ascending(false);"], KEYS],
+  ["Region key", ["H.SetCurrentKey(H.Region);"], KEYS],
+  ["Region key descending", ["H.SetCurrentKey(H.Region);", "H.Ascending(false);"], KEYS],
+  ["Kind,Qty key", ["H.SetCurrentKey(H.Kind, H.Qty);"], KEYS],
+  ["Kind,Qty key descending", ["H.SetCurrentKey(H.Kind, H.Qty);", "H.Ascending(false);"], KEYS],
+  ["non-key Name", ["H.SetCurrentKey(H.Name);"], KEYS],
+  ["non-key Doc Date", ['H.SetCurrentKey(H."Doc Date");'], KEYS],
+  ["non-key Amount", ["H.SetCurrentKey(H.Amount);"], KEYS],
+  ["Region key backwards", ["H.SetCurrentKey(H.Region);"], "Seed.KeysBack(H)"],
+  ["Region key filtered", ["H.SetCurrentKey(H.Region);", sr("H.Qty", "5, 12")], KEYS],
+  ["FindFirst default", [], "Seed.FirstText(H)"],
+  ["FindLast default", [], "Seed.LastText(H)"],
+  ["FindFirst Region key", ["H.SetCurrentKey(H.Region);"], "Seed.FirstText(H)"],
+  ["FindLast Region key", ["H.SetCurrentKey(H.Region);"], "Seed.LastText(H)"],
+  [
+    "FindLast Region desc",
+    ["H.SetCurrentKey(H.Region);", "H.Ascending(false);"],
+    "Seed.LastText(H)",
+  ],
+  ["Find - Region key", ["H.SetCurrentKey(H.Region);"], "Seed.FindText(H, '-')"],
+  ["Find + Region key", ["H.SetCurrentKey(H.Region);"], "Seed.FindText(H, '+')"],
+  [
+    "Find + Region desc",
+    ["H.SetCurrentKey(H.Region);", "H.Ascending(false);"],
+    "Seed.FindText(H, '+')",
+  ],
+  ["Find - filtered", [sr("H.Kind", "H.Kind::Beta")], "Seed.FindText(H, '-')"],
+  ...["B001", "B000"].flatMap((c) =>
+    ["=", ">", "<"].map((m): [string, string[], string] => [
+      `Find ${m} ${c}`,
+      [`H.Code := ${al(c)};`],
+      `Seed.FindText(H, ${al(m)})`,
+    ]),
+  ),
+  ["Find >= B000", [`H.Code := ${al("B000")};`], "Seed.FindText(H, '>=')"],
+  ["Find <= B000", [`H.Code := ${al("B000")};`], "Seed.FindText(H, '<=')"],
+  ...(
+    [
+      ["Next 1 from A001", "A001", 1],
+      ["Next 2 from A001", "A001", 2],
+      ["Next -1 from B001", "B001", -1],
+      ["Next -1 from first", "A001", -1],
+      ["Next 99 from B001", "B001", 99],
+      ["Next -2 from D002", "D002", -2],
+    ] as const
+  ).map((x): [string, string[], string] => [x[0], [], `Seed.NextText(H, ${al(x[1])}, ${x[2]})`]),
+  ["Next -1 Region key", ["H.SetCurrentKey(H.Region);"], "Seed.NextText(H, 'B001', -1)"],
+  ["Get ignores filter", [sr("H.Kind", "H.Kind::Gamma")], "Format(H.Get('A001'), 0, 9)"],
+].map(([state, setup, answer]) =>
+  rf("Order", "order", state as string, setup as string[], answer as string),
+);
+
+const RF_FILTERGROUP_CELLS: Cell[] = [
+  rf(
+    "FilterGroup",
+    "group 2",
+    "then group 0 keys",
+    ["H.FilterGroup(2);", sr("H.Kind", "H.Kind::Beta"), "H.FilterGroup(0);"],
+    KEYS,
+  ),
+  rf(
+    "FilterGroup",
+    "group 2",
+    "and group 0 combine",
+    ["H.FilterGroup(2);", sr("H.Kind", "H.Kind::Beta"), "H.FilterGroup(0);", sr("H.Qty", "12")],
+    KEYS,
+  ),
+  rf(
+    "FilterGroup",
+    "group 2",
+    "same field both groups",
+    ["H.FilterGroup(2);", sr("H.Qty", "5"), "H.FilterGroup(0);", sr("H.Qty", "12")],
+    KEYS,
+  ),
+  rf(
+    "FilterGroup",
+    "GetFilters",
+    "group 0 hides group 2",
+    [
+      "H.FilterGroup(2);",
+      sr("H.Region", "'N'"),
+      "H.FilterGroup(0);",
+      sr("H.Kind", "H.Kind::Alpha"),
+    ],
+    "H.GetFilters()",
+  ),
+  rf(
+    "FilterGroup",
+    "GetFilters",
+    "inside group 2",
+    [
+      "H.FilterGroup(2);",
+      sr("H.Region", "'N'"),
+      "H.FilterGroup(0);",
+      sr("H.Kind", "H.Kind::Alpha"),
+      "H.FilterGroup(2);",
+    ],
+    "H.GetFilters()",
+  ),
+  rf(
+    "FilterGroup",
+    "GetFilter",
+    "group 0 of group 2 field",
+    ["H.FilterGroup(2);", sr("H.Region", "'N'"), "H.FilterGroup(0);"],
+    "H.GetFilter(H.Region)",
+  ),
+  rf(
+    "FilterGroup",
+    "GetFilter",
+    "group 2",
+    ["H.FilterGroup(2);", sr("H.Region", "'N'")],
+    "H.GetFilter(H.Region)",
+  ),
+  rf("FilterGroup", "return value", "previous group", [], n9("H.FilterGroup(2)")),
+  rf(
+    "FilterGroup",
+    "return value",
+    "current group after set",
+    ["H.FilterGroup(2);"],
+    n9("H.FilterGroup()"),
+  ),
+  rf("FilterGroup", "return value", "group 10", ["H.FilterGroup(10);"], n9("H.FilterGroup()")),
+  rf(
+    "FilterGroup",
+    "Reset",
+    "clears all groups",
+    [
+      "H.FilterGroup(2);",
+      sr("H.Kind", "H.Kind::Beta"),
+      "H.FilterGroup(0);",
+      sr("H.Qty", "12"),
+      "H.Reset();",
+    ],
+    KEYS,
+  ),
+  rf(
+    "FilterGroup",
+    "Reset",
+    "group back to 0",
+    ["H.FilterGroup(2);", "H.Reset();"],
+    n9("H.FilterGroup()"),
+  ),
+  rf("FilterGroup", "Reset", "clears the key", ["H.SetCurrentKey(H.Region);", "H.Reset();"], KEYS),
+  rf("FilterGroup", "Reset", "clears descending", ["H.Ascending(false);", "H.Reset();"], KEYS),
+  rf(
+    "FilterGroup",
+    "CopyFilters",
+    "group 0",
+    [sr("H2.Kind", "H2.Kind::Gamma"), "H.CopyFilters(H2);"],
+    KEYS,
+    { vars: ['H2: Record "RF Header";'] },
+  ),
+  rf(
+    "FilterGroup",
+    "CopyFilters",
+    "group 2 source",
+    [
+      "H2.FilterGroup(2);",
+      sr("H2.Kind", "H2.Kind::Gamma"),
+      "H2.FilterGroup(0);",
+      "H.CopyFilters(H2);",
+    ],
+    KEYS,
+    { vars: ['H2: Record "RF Header";'] },
+  ),
+  rf(
+    "FilterGroup",
+    "CopyFilters",
+    "replaces own",
+    [sr("H.Region", "'N'"), sr("H2.Kind", "H2.Kind::Gamma"), "H.CopyFilters(H2);"],
+    KEYS,
+    { vars: ['H2: Record "RF Header";'] },
+  ),
+  rf(
+    "FilterGroup",
+    "CopyFilter",
+    "one field",
+    [sr("H2.Qty", "5, 12"), "H2.CopyFilter(H2.Qty, H.Qty);"],
+    KEYS,
+    { vars: ['H2: Record "RF Header";'] },
+  ),
+  rf(
+    "FilterGroup",
+    "SetRecFilter",
+    "GetFilters",
+    ["H.Get('B001');", "H.SetRecFilter();"],
+    "H.GetFilters()",
+  ),
+  rf("FilterGroup", "SetRecFilter", "keys", ["H.Get('B001');", "H.SetRecFilter();"], KEYS),
+];
+
+const RF_GETFILTERS: [string, string[], boolean][] = [
+  ["no filter", [], false],
+  ["Code range", [sr("H.Code", "'A001', 'B001'")], false],
+  ["Code SetFilter wildcard", ["H.SetFilter(H.Code, 'A*|?002');"], false],
+  ["Text accent", [sr("H.Name", al("Émile"))], false],
+  ["Option name", [sr("H.Kind", "H.Kind::Beta")], false],
+  ["Option range", [sr("H.Kind", "H.Kind::Alpha, H.Kind::Beta")], false],
+  ["Enum", [sr("H.Color", '"RF Color"::Green')], false],
+  ["Boolean", [sr("H.Active", "true")], false],
+  ["Integer range", [sr("H.Qty", "5, 12")], false],
+  ["Integer open", [sr("H.Qty", "5, 0")], false],
+  ["Decimal", [sr("H.Amount", "10.5, 1000.123")], true],
+  ["Date single", [sr('H."Doc Date"', dt(15, 3, 2024))], true],
+  ["Date range", [sr('H."Doc Date"', `${dt(1, 2, 2024)}, ${dt(31, 3, 2024)}`)], true],
+  ["two fields", [sr("H.Qty", "5"), sr("H.Code", "'A001', 'B001'")], false],
+  ["SetFilter placeholder", ["H.SetFilter(H.Qty, '%1|%2', 5, 12);"], false],
+];
+
+const RF_CELLS: Cell[] = [
+  ...RF_RANGES.map(([t, state, a]) => rf("SetRange", t, state, [sr(RF_FIELD[t], a)], KEYS)),
+  rf("SetRange", "Code", "set then cleared", [sr("H.Code", "'B001'"), "H.SetRange(H.Code);"], KEYS),
+  rf(
+    "SetRange",
+    "Code",
+    "second call replaces first",
+    [sr("H.Code", "'B001'"), sr("H.Code", "'A001'")],
+    KEYS,
+  ),
+  rf("SetRange", "Code", "empty Region", [sr("H.Region", "''")], KEYS),
+  rf(
+    "SetRange",
+    "Code",
+    "two fields",
+    [sr("H.Region", "'N'"), sr("H.Kind", "H.Kind::Alpha")],
+    KEYS,
+  ),
+  ...RF_FILTERS.map(([t, text, args, loc]) =>
+    rf(
+      "SetFilter",
+      t,
+      args !== undefined ? `${text} with args` : text,
+      [`H.SetFilter(${RF_FIELD[t]}, ${al(text)}${args !== undefined ? `, ${args}` : ""});`],
+      KEYS,
+      loc === true ? { depends: "locale" } : {},
+    ),
+  ),
+  ...RF_ORDER_CELLS,
+  ...RF_FILTERGROUP_CELLS,
+  ...RF_GETFILTERS.map(([state, setup, loc]) =>
+    rf(
+      "GetFilters",
+      "GetFilters",
+      state,
+      setup,
+      "H.GetFilters()",
+      loc ? { depends: "locale" } : {},
+    ),
+  ),
+  rf("Count", "Count", "no filter", [], n9("H.Count()")),
+  rf("Count", "Count", "Kind filter", [sr("H.Kind", "H.Kind::Alpha")], n9("H.Count()")),
+  rf("Count", "Count", "no match", [sr("H.Code", "'Z999'")], n9("H.Count()")),
+  rf(
+    "Count",
+    "Count",
+    "after Reset",
+    [sr("H.Kind", "H.Kind::Alpha"), "H.Reset();"],
+    n9("H.Count()"),
+  ),
+  rf("Count", "Count", "FlowField filter", ['H.SetRange(H."Line Count", 2);'], n9("H.Count()")),
+  rf("Count", "IsEmpty", "no filter", [], n9("H.IsEmpty()")),
+  rf("Count", "IsEmpty", "matching filter", [sr("H.Kind", "H.Kind::Alpha")], n9("H.IsEmpty()")),
+  rf("Count", "IsEmpty", "no match", [sr("H.Code", "'Z999'")], n9("H.IsEmpty()")),
+  rf("Count", "IsEmpty", "after DeleteAll", ["H.DeleteAll();"], n9("H.IsEmpty()")),
+  rf("Count", "IsEmpty", "filter on empty text", [sr("H.Name", "''")], n9("H.IsEmpty()")),
+  ...RF_FLOWS.flatMap(([f, show]) =>
+    RF_SCENES.slice(0, f === "Line Total" || f === "Line Count" ? 4 : 3).map(([scene, setup]) =>
+      rf("CalcFields", f, scene, [...setup, `H.CalcFields(H."${f}");`], show(`H."${f}"`)),
+    ),
+  ),
+  rf("FlowField", "Get without CalcFields", "A001", ["H.Get('A001');"], n9('H."Line Count"')),
+  rf(
+    "FlowField",
+    "all at once",
+    "A001",
+    ["H.Get('A001');", 'H.CalcFields(H."Line Total", H."Line Count", H."Max Qty");'],
+    `${n9('H."Line Total"')} + '|' + ${n9('H."Line Count"')} + '|' + ${n9('H."Max Qty"')}`,
+  ),
+  rf("FlowField", "filter on FlowField", "Line Count 2", ['H.SetRange(H."Line Count", 2);'], KEYS),
+  rf("FlowField", "filter on FlowField", "Line Count 0", ['H.SetRange(H."Line Count", 0);'], KEYS),
+  rf(
+    "FlowField",
+    "filter on FlowField",
+    "Line Total > 0",
+    ["H.SetFilter(H.\"Line Total\", '>0');"],
+    KEYS,
+  ),
+  rf(
+    "FlowField",
+    "filter on FlowField",
+    "Has Lines true",
+    ['H.SetRange(H."Has Lines", true);'],
+    KEYS,
+  ),
+  rf("FlowField", "filter on FlowField", "Max Qty 10", ['H.SetRange(H."Max Qty", 10);'], KEYS),
+  rf(
+    "FlowField",
+    "filter on FlowField",
+    "Line Total with Feb",
+    [
+      `H.SetRange(H."Date Filter", ${dt(1, 2, 2024)}, ${dt(29, 2, 2024)});`,
+      "H.SetFilter(H.\"Line Total\", '>0');",
+    ],
+    KEYS,
+  ),
+  rf(
+    "FlowField",
+    "SetAutoCalcFields",
+    "then Get",
+    ['H.SetAutoCalcFields(H."Line Count");', "H.Get('A001');"],
+    n9('H."Line Count"'),
+  ),
+  rf(
+    "FlowField",
+    "FlowFilter",
+    "GetFilter",
+    [`H.SetRange(H."Date Filter", ${dt(1, 2, 2024)}, ${dt(29, 2, 2024)});`],
+    'H.GetFilter(H."Date Filter")',
+    { depends: "locale" },
+  ),
+  rf("CalcSums", "Amount", "no filter", ["H.CalcSums(H.Amount);"], n9("H.Amount")),
+  rf(
+    "CalcSums",
+    "Amount",
+    "Region key",
+    ["H.SetCurrentKey(H.Region);", "H.CalcSums(H.Amount);"],
+    n9("H.Amount"),
+  ),
+  rf(
+    "CalcSums",
+    "Amount",
+    "Kind filter",
+    [sr("H.Kind", "H.Kind::Beta"), "H.CalcSums(H.Amount);"],
+    n9("H.Amount"),
+  ),
+  rf(
+    "CalcSums",
+    "Amount",
+    "Region filter on key",
+    ["H.SetCurrentKey(H.Region);", sr("H.Region", "'N'"), "H.CalcSums(H.Amount);"],
+    n9("H.Amount"),
+  ),
+  rf(
+    "CalcSums",
+    "Amount",
+    "no match",
+    [sr("H.Code", "'Z999'"), "H.CalcSums(H.Amount);"],
+    n9("H.Amount"),
+  ),
+  rf(
+    "CalcSums",
+    "Amount and Qty",
+    "Region key",
+    ["H.SetCurrentKey(H.Region);", "H.CalcSums(H.Amount, H.Qty);"],
+    `${n9("H.Amount")} + '|' + ${n9("H.Qty")}`,
+  ),
+  rf(
+    "CalcSums",
+    "Qty",
+    "range",
+    ["H.SetCurrentKey(H.Region);", sr("H.Qty", "5, 12"), "H.CalcSums(H.Qty);"],
+    n9("H.Qty"),
+  ),
+  rf("CalcSums", "Line Amount", "no filter", ["L.CalcSums(L.Amount);"], n9("L.Amount"), {
+    vars: ['L: Record "RF Line";'],
+  }),
+  rf(
+    "CalcSums",
+    "Line Amount",
+    "header filter",
+    ["L.SetRange(L.\"Header Code\", 'A001');", "L.CalcSums(L.Amount, L.Qty);"],
+    `${n9("L.Amount")} + '|' + ${n9("L.Qty")}`,
+    { vars: ['L: Record "RF Line";'] },
+  ),
+  rf(
+    "CalcSums",
+    "Line Amount",
+    "negative amounts",
+    ["L.SetFilter(L.Amount, '<0');", "L.CalcSums(L.Amount);"],
+    n9("L.Amount"),
+    { vars: ['L: Record "RF Line";'] },
+  ),
+  rf(
+    "ModifyAll",
+    "Qty",
+    "Kind Alpha",
+    [sr("H.Kind", "H.Kind::Alpha"), "H.ModifyAll(H.Qty, 99);"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Active",
+    "Region S",
+    [sr("H.Region", "'S'"), "H.ModifyAll(H.Active, false);"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Name",
+    "case-insensitive filter",
+    ["H.SetFilter(H.Name, '@a*');", "H.ModifyAll(H.Name, 'X');"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Qty",
+    "no match",
+    [sr("H.Code", "'Z999'"), "H.ModifyAll(H.Qty, 99);"],
+    "Seed.Rows()",
+  ),
+  rf("ModifyAll", "Qty", "no filter", ["H.ModifyAll(H.Qty, 1);"], "Seed.Rows()"),
+  rf(
+    "ModifyAll",
+    "Qty",
+    "no trigger",
+    [sr("H.Qty", "5"), "H.ModifyAll(H.Qty, 6, false);"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Color",
+    "Red to Blue",
+    [sr("H.Color", '"RF Color"::Red'), 'H.ModifyAll(H.Color, "RF Color"::Blue);'],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Qty",
+    "group 2 filter",
+    [
+      "H.FilterGroup(2);",
+      sr("H.Kind", "H.Kind::Gamma"),
+      "H.FilterGroup(0);",
+      "H.ModifyAll(H.Qty, 50);",
+    ],
+    "Seed.Rows()",
+  ),
+  rf(
+    "ModifyAll",
+    "Qty",
+    "MarkedOnly",
+    ["H.Get('A001');", "H.Mark(true);", "H.MarkedOnly(true);", "H.ModifyAll(H.Qty, 77);"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "Kind Alpha",
+    [sr("H.Kind", "H.Kind::Alpha"), "H.DeleteAll();"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "no match",
+    [sr("H.Code", "'Z999'"), "H.DeleteAll();"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "empty Region",
+    [sr("H.Region", "''"), "H.DeleteAll();"],
+    "Seed.Rows()",
+  ),
+  rf("DeleteAll", "DeleteAll", "no filter", ["H.DeleteAll();"], "Seed.Rows()"),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "Qty range",
+    [sr("H.Qty", "5, 12"), "H.DeleteAll(true);"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "MarkedOnly",
+    [
+      "H.Get('A001');",
+      "H.Mark(true);",
+      "H.Get('D002');",
+      "H.Mark(true);",
+      "H.MarkedOnly(true);",
+      "H.DeleteAll();",
+    ],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "group 2 filter",
+    ["H.FilterGroup(2);", sr("H.Region", "'N'"), "H.FilterGroup(0);", "H.DeleteAll();"],
+    "Seed.Rows()",
+  ),
+  rf(
+    "DeleteAll",
+    "DeleteAll",
+    "lines of A001",
+    ["L.SetRange(L.\"Header Code\", 'A001');", "L.DeleteAll();"],
+    "Seed.LRows()",
+    { vars: ['L: Record "RF Line";'] },
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "two rows",
+    ["H.Get('A001');", "H.Mark(true);", "H.Get('C001');", "H.Mark(true);", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "set back to false",
+    ["H.Get('A001');", "H.Mark(true);", "H.MarkedOnly(true);", "H.MarkedOnly(false);"],
+    KEYS,
+  ),
+  rf("Mark", "Marked", "after Mark true", ["H.Get('A001');", "H.Mark(true);"], n9("H.Mark()")),
+  rf("Mark", "Marked", "unmarked row", ["H.Get('A001');"], n9("H.Mark()")),
+  rf(
+    "Mark",
+    "Mark false",
+    "unmarks",
+    ["H.Get('A001');", "H.Mark(true);", "H.Mark(false);", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "with a Kind filter",
+    [
+      "H.Get('A001');",
+      "H.Mark(true);",
+      "H.Get('C001');",
+      "H.Mark(true);",
+      sr("H.Kind", "H.Kind::Alpha"),
+      "H.MarkedOnly(true);",
+    ],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "mark outside the filter",
+    [sr("H.Kind", "H.Kind::Alpha"), "H.Get('C001');", "H.Mark(true);", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "ClearMarks",
+    "then MarkedOnly",
+    ["H.Get('A001');", "H.Mark(true);", "H.ClearMarks();", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "Reset",
+    "keeps marks",
+    ["H.Get('A001');", "H.Mark(true);", "H.Reset();", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "Mark in loop",
+    "Qty above 6",
+    ["if H.FindSet() then repeat H.Mark(H.Qty > 6); until H.Next() = 0;", "H.MarkedOnly(true);"],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "Region key order",
+    [
+      "H.Get('A002');",
+      "H.Mark(true);",
+      "H.Get('A001');",
+      "H.Mark(true);",
+      "H.SetCurrentKey(H.Region);",
+      "H.MarkedOnly(true);",
+    ],
+    KEYS,
+  ),
+  rf(
+    "Mark",
+    "MarkedOnly",
+    "Count",
+    ["H.Get('A001');", "H.Mark(true);", "H.MarkedOnly(true);"],
+    n9("H.Count()"),
+  ),
+  RF_DANISH("GetFilters", "Decimal range", [sr("H.Amount", "10.5, 1000.123")], "H.GetFilters()"),
+  RF_DANISH(
+    "GetFilters",
+    "Date range",
+    [sr('H."Doc Date"', `${dt(1, 2, 2024)}, ${dt(31, 3, 2024)}`)],
+    "H.GetFilters()",
+  ),
+  RF_DANISH("GetFilters", "Boolean true", [sr("H.Active", "true")], "H.GetFilters()"),
+  RF_DANISH("GetFilters", "Option name", [sr("H.Kind", "H.Kind::Beta")], "H.GetFilters()"),
+  RF_DANISH(
+    "GetFilters",
+    "SetFilter Decimal placeholder",
+    ["H.SetFilter(H.Amount, '%1', 10.5);"],
+    "H.GetFilters()",
+  ),
+  RF_DANISH(
+    "GetFilters",
+    "SetFilter Date placeholders",
+    [`H.SetFilter(H."Doc Date", '%1..%2', ${dt(1, 2, 2024)}, ${dt(31, 3, 2024)});`],
+    "H.GetFilters()",
+  ),
+  ...["10,5", "10.5", "1000,123"].map((t) =>
+    RF_DANISH("SetFilter", `Decimal ${t}`, [`H.SetFilter(H.Amount, ${al(t)});`], KEYS),
+  ),
+  ...["15.03.2024", "15-03-2024..", "150324", "2024-03-15"].map((t) =>
+    RF_DANISH("SetFilter", `Date ${t}`, [`H.SetFilter(H."Doc Date", ${al(t)});`], KEYS),
+  ),
+  ...["Ja", "Nej", "Yes"].map((t) =>
+    RF_DANISH("SetFilter", `Boolean ${t}`, [`H.SetFilter(H.Active, ${al(t)});`], KEYS),
+  ),
+  RF_DANISH("SetFilter", "Text @æ*", ["H.SetFilter(H.Name, '@æ*');"], KEYS),
+  RF_DANISH("Format", "Decimal field", ["H.Get('D001');"], "Format(H.Amount)"),
+];
+
+export const RECORD_FILTERS: Family = {
+  name: "record-filters",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
+  known: [],
+  support: RF_SUPPORT,
+  handles: {},
+  cells: RF_CELLS,
+  // bc2 run 1 was void: RF Seed's Insert was refused under BC's restrictive test default (lethal-bugs, PR-83)
+  testPermissions: "Disabled",
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -2048,6 +3088,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [FORMAT_EVALUATE.name]: FORMAT_EVALUATE,
   // PR-74: appended (BC-check number 13): t9's refusal texts, for a keep census
   [T9_REFUSALS.name]: T9_REFUSALS,
+  // PR-83: appended (BC-check number 14): record filters, keys, FlowFields, marks, for a per-cell BC differential
+  [RECORD_FILTERS.name]: RECORD_FILTERS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -2152,7 +3194,7 @@ ${b}
           )}`;
     return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
-    Subtype = Test;
+    Subtype = Test;${f.testPermissions !== undefined ? `\n    TestPermissions = ${f.testPermissions};` : ""}
 
 ${tests}${handlers.map((h) => `\n${h}`).join("")}}
 `;
@@ -2359,14 +3401,17 @@ export interface JoinRow {
 const say = (outcome: string, message: string | undefined) =>
   outcome === "pass" ? "pass" : `${outcome}: ${JSON.stringify(message ?? "")}`;
 
-/** The report's cells must be the family's cells, in order. */
-export function checkReportCells(results: readonly CellResult[]): void {
-  if (results.length !== FORMAT_EVALUATE.cells.length)
+/** The report's cells must be the family's cells, in order (PR-83: any family; format-evaluate by default, as PR-52 used it). */
+export function checkReportCells(
+  results: readonly CellResult[],
+  family: Family = FORMAT_EVALUATE,
+): void {
+  if (results.length !== family.cells.length)
     throw new Error(
-      `the report has ${results.length} cells, the family ${FORMAT_EVALUATE.cells.length}`,
+      `the report has ${results.length} cells, the family ${family.name} ${family.cells.length}`,
     );
   for (const [i, r] of results.entries()) {
-    const c = FORMAT_EVALUATE.cells[i];
+    const c = family.cells[i];
     if (c?.type !== r.cell.type || c.method !== r.cell.method || c.state !== r.cell.state)
       throw new Error(`cell ${i} of the report is not the family's cell ${i}`);
   }
@@ -2462,14 +3507,18 @@ if (import.meta.main) {
   };
   const joinAt = args.indexOf("--join");
   if (joinAt >= 0) {
-    // PR-52: bun scripts/refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]
+    // PR-52: bun scripts/refusal-family.ts --join <v3 report.json> <bc.tsv> [--family <name>] [--out <joined.tsv>]
     const [reportPath, bcPath] = [args[joinAt + 1], args[joinAt + 2]];
     if (reportPath === undefined || bcPath === undefined)
       throw new Error(
-        "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]",
+        "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--family <name>] [--out <joined.tsv>]",
       );
+    const named = opt("--family");
+    const family = named === undefined ? FORMAT_EVALUATE : FAMILIES[named];
+    if (family === undefined)
+      throw new Error(`refusal-family: --family ${named} is not a listed family`);
     const results = JSON.parse(await Bun.file(reportPath).text()) as CellResult[];
-    checkReportCells(results);
+    checkReportCells(results, family);
     const rows = joinCells(results, parseBcTsv(await Bun.file(bcPath).text()));
     const out = opt("--out");
     if (out !== undefined) writeFileSync(out, joinTsv(rows));
