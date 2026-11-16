@@ -2,10 +2,13 @@ FROM kraken/tentacle-base
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl \
+      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl sqlite3 time \
     && rm -rf /var/lib/apt/lists/*
 # Node (newest LTS) for the MCP siblings
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
+# tree-sitter CLI, pinned to the version tree-sitter-al generates with; global, so on PATH for user dev
+RUN HOME=/tmp/build-home npm install -g --cache /tmp/npm-cache tree-sitter-cli@0.27.0 \
+    && HOME=/tmp/build-home tree-sitter --version && rm -rf /tmp/npm-cache /tmp/build-home
 # LLVM/clang 23.1.2: pinned, the native parser's staleness check refuses any other clang
 # install-llvm.sh takes only the platform key and installs under ${TMPDIR}/llvm-<version>
 COPY scripts/install-llvm.sh /tmp/install-llvm.sh

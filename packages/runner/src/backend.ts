@@ -612,6 +612,19 @@ export interface ExecutionBackend {
       readonly test?: string;
     }) => void,
   ): void;
+  /**
+   * PR-56, OPTIONAL: where the backend reports a request that drifted from the baseline right after a
+   * kept refusal (al-runner-v3 only). Installed and removed with `setNotify`; each call becomes a
+   * `serve-drift-after-kept-refusal` event.
+   */
+  setKeptDriftSink?(
+    sink?: (drift: {
+      readonly refusal: string;
+      readonly test: string;
+      readonly baselineRow: string;
+      readonly row: string;
+    }) => void,
+  ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

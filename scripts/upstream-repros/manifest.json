@@ -607,6 +607,131 @@
         "Codeunit51720.ClosingDateEnglish": { "status": "fail", "messageIncludes": "V:[C12/31/23]" },
         "Codeunit51721.ClosingDateDanish": { "status": "fail", "messageIncludes": "V:[U12/31/23]" }
       }
+    },
+    {
+      "id": "u8084-gettable-empty-text",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8084",
+      "bcEvidence": "inferred from the issue: RecordRef.GetTable of a Variant holding an empty Text fails on BC (a Text is not a record). Cause 3 of the issue; fixed in edge bd44b20ea per the maintainer",
+      "rerun": ["the Record Link Management mutant met by R-986"],
+      "tests": {
+        "Codeunit80843.GetTableOfEmptyText": { "status": "fail" }
+      }
+    },
+    {
+      "id": "u8001-keyref-fieldcount",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8001",
+      "bcEvidence": "inferred from the issue: the issue says BC's outcome is not measured. Assumed here: a KeyRef that was never assigned holds no key, so FieldCount fails as the other untouched handles do (u7760-untouched-handle). Cause 2 of the issue; runs flagged in edge bd44b20ea per the maintainer",
+      "rerun": ["the Word Template Impl. GetByPrimaryKey mutant met by R-962"],
+      "tests": {
+        "Codeunit80012.FieldCountOfUnassignedKeyRef": { "status": "fail" }
+      }
+    },
+    {
+      "id": "u7997-base64-utf16",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7997",
+      "bcEvidence": "inferred from the issue: with UTF-16 the code page plays no part, so FromBase64('QQBCAA==', UTF16, 1252) answers 'AB' on BC (Microsoft's Base64 Convert Test.FromBase64UTF16StringTest passes there). Cause 2 of the issue; fixed in edge 21790a009 per the maintainer",
+      "rerun": ["Base64 Convert Test.FromBase64UTF16StringTest (R-961)"],
+      "tests": {
+        "Codeunit79972.FromBase64Utf16": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7996-instream-linebreaks",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7996",
+      "bcEvidence": "inferred from the issue: the issue did not run it on BC, but Microsoft's shipped InStreamToBase64WithLineBreaksTest expects the CRLF after 76 characters; the maintainer's corpus probe measured it on BC 27, 28 and 29. The Text-form control passes on both",
+      "rerun": ["Base64 Convert Test InStreamToBase64WithLineBreaksTest and InStreamToBase64WithLineBreaksToOutStreamTest (R-961)"],
+      "tests": {
+        "Codeunit79961.InStreamToBase64KeepsLineBreaks": { "status": "pass" },
+        "Codeunit79961.TextToBase64KeepsLineBreaks": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7935-blob-fieldref-clear",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7935",
+      "bcEvidence": "inferred from the issue: on BC, FieldRef.Value := Blob copies the value, so row 1 keeps 'alpha' (the issue's reading, not measured in the repro; the maintainer's probe measured Blob copies through FieldRef.Value on BC 27, 28 and 29). Fixed in edge ce0cc36c9 per the maintainer",
+      "rerun": ["BLOB Storage Temp Blob List Test (RemoveAtVerifyRemainingList, RemoveRange, RemoveElementsFromHead)"],
+      "tests": {
+        "Codeunit79357.SameHolderTwoAdds": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7764-recref-readpermission",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7764",
+      "bcEvidence": "inferred from the issue: RecordRef.ReadPermission on a RecordRef that is not open is a runtime error on BC (only its text is unpinned), so asserterror passes. Cause 4 of the issue; runs flagged in edge bd44b20ea per the maintainer",
+      "rerun": ["the Email FilterRemovedSourceRecords mutants met by R-962"],
+      "tests": {
+        "Codeunit77641.ReadPermissionNotOpen": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7833-dotnettype-generic",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7833",
+      "bcEvidence": "inferred from the issue and the maintainer's comments: the issue did not measure BC; the maintainer's corpus probe (BC 27, 28 and 29) says GetDotNetType of an unassigned Dictionary`2 gives the open type definition, whose Name is not empty. Fixed in edge 54280fad6 per the maintainer",
+      "rerun": ["the Late Payment Prediction tests and mutants that reach GetDotNetType"],
+      "tests": {
+        "Codeunit78331.TypeOfUnassignedDictionary": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7920-qualified-enum-receiver",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7920",
+      "bcEvidence": "inferred from the issue: alc 18.1.43.24897 compiles the same source with exit 0 (the issue's own check), so BC runs the test and it passes; the issue did not run it on a BC server. Maintainer: fixed in edge 2d19bd631",
+      "rerun": ["the Base Application build from source (ServIntegrationMgt's qualified enum receiver)"],
+      "apps": ["base", "tests"],
+      "tests": {
+        "Codeunit58110.Passes": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7914-moved-table",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7914",
+      "bcEvidence": "inferred from the issue: alc 18.1.43.24897 compiles Probe Base (ObsoleteState = Moved) against Probe Foundation's live table with exit 0, and Microsoft ships the same pair (tables 308, 309, 310, 231, 1263); the issue did not run it on a BC server. The issue gives Foundation as a built .app; here it is the --dep source folder (a source-as-APP run still gives AL0264). Maintainer: fixed in edge 2d19bd631",
+      "rerun": ["the Base Application build from source (tables 308, 309, 310, 231, 1263 declared Moved)"],
+      "args": ["--dep", "u7914-moved-table/foundation"],
+      "apps": ["base", "tests"],
+      "tests": {
+        "Codeunit58130.Passes": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7916-goto-enabled",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7916",
+      "bcEvidence": "measured on BC 29.0.56030.0 by the issue's author (not BC 28): after GoToKey the action's Enabled() answers for the row the cursor is on, e2=Yes and e4=Yes for Dimension Set Entry field 3, e1=Yes, e3=No for a field with no relation. The tests here assert those values instead of raising them as an error. Needs the application dependency (the Field table rows of Base Application). Maintainer: fixed in edge 54280fad6 for this page's shape (flagged until the corpus probe is pinned)",
+      "rerun": [],
+      "tests": {
+        "Codeunit58141.EnabledAfterGoToKey": { "status": "pass" },
+        "Codeunit58141.EnabledAfterGoToKeyNoUpdate": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7908-xml-declaration-utf16",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7908",
+      "bcEvidence": "measured on BC 29.0.56030.0 by the issue's author (not BC 28): Report.SaveAs applies both the WriteTo(Text) string and the one-line utf-16 declaration string (StartDate 2026-01-15), and the plain declaration passes (#7590). Maintainer: fixed in edge 14e5d6937 for the two layouts its corpus probe measured (one line, and the layout WriteTo writes), flagged",
+      "rerun": ["the 31 tests of the closed-source suite behind #7590 and #7908 (none of ours)"],
+      "tests": {
+        "Codeunit58152.WrittenByWriteTo": { "status": "pass" },
+        "Codeunit58152.Utf16DeclarationOneLine": { "status": "pass" },
+        "Codeunit58152.PlainDeclaration": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8011-autoformat-translate",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8011",
+      "bcEvidence": "inferred from the issue: not run on a BC server; Microsoft's shipped Auto Format Test.TestAutoFormatExtensibility asserts 3,456.7 for the same translation expression, so BC passes. Maintainer: edge 847b1fa5a only refuses an unpinned AutoFormatType (step 1); applying the event's result (step 2) is not on an edge yet",
+      "rerun": ["Microsoft's System Application Auto Format module tests (R-969)"],
+      "tests": {
+        "Codeunit58163.CustomAutoFormatTypeShowsOneDecimal": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8012-timezone-dst",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8012",
+      "bcEvidence": "inferred from the issue: not run on a BC server; BC's service on Windows reads Windows zone data, which has no daylight saving for Hawaiian and China Standard Time, so both pass (Microsoft's shipped Date and Time Test.CheckDaylightSavingTimeIndicatorForTimeZoneWithoutDST is written against it). Maintainer: edge 5c090e0b6 only refuses SupportsDaylightSavingTime off Windows (step 1); answering it from measured values is not on an edge yet",
+      "rerun": ["Microsoft's System Application Date and Time module tests (R-969)"],
+      "tests": {
+        "Codeunit58170.HawaiiHasNoDaylightSaving": { "status": "pass" },
+        "Codeunit58170.ChinaHasNoDaylightSaving": { "status": "pass" }
+      }
     }
   ]
 }

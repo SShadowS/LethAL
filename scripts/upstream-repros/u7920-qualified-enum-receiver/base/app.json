@@ -1,0 +1,10 @@
+{
+  "id": "79200000-0000-4000-8000-000000000001",
+  "name": "Probe Base 7920",
+  "publisher": "LethAL Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 58100, "to": 58109 }],
+  "features": ["NoImplicitWith"]
+}
