@@ -4258,7 +4258,7 @@ describe("R907: a ref left not run by a stopped earlier test runs alone", () => 
       ]);
     const ask = (m: string) => b.run(ref(m), { coverage: "none", timeoutMs: 1000 });
     const run = (m: string, opts: RunOpts) => b.run(ref(m), opts);
-    return { v3, ask, run };
+    return { v3, ask, run, b };
   }
   const alone = (calls: string[][]) => calls.filter((c) => c.includes("--test-exact"));
 
@@ -4324,5 +4324,20 @@ describe("R907: a ref left not run by a stopped earlier test runs alone", () => 
     expect((await run("A", { coverage: "none", timeoutMs: 1000 })).outcome).toBe("timeout");
     expect(v3.calls.length).toBe(2);
     expect(v3.calls[1]).not.toContain("--test-exact");
+  });
+
+  test("8 (PR-55): a one-shot R897 kill marked alone is confirmed by a one-test call under NONE", async () => {
+    const { v3, ask, run, b } = await setup({ help: FLAG, mutant: "M0001", aloneStatus: "fail" });
+    const killed = await ask("B");
+    expect([killed.outcome, killed.selection]).toEqual(["fail", "alone"]);
+    // The orchestrator's confirm: NONE active, RunOpts.alone.
+    await b.activate(null);
+    const confirm = await run("B", { coverage: "none", timeoutMs: 1000, alone: true });
+    expect([confirm.outcome, confirm.selection]).toEqual(["fail", "alone"]);
+    const one = alone(v3.calls);
+    expect(one.length).toBe(2);
+    const argv = one[1] ?? [];
+    expect(argv[argv.indexOf("--test-exact") + 1]).toBe(`Codeunit${ref("B").codeunitId}.B`);
+    expect(argv).not.toContain("--skip-after-timeout");
   });
 });
