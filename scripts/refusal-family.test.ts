@@ -15,6 +15,7 @@ import {
   PLATFORM_TABLE_READ,
   PUBAPP_FLOWFIELD,
   READ_TEST,
+  RECORD_FILTERS,
   SET_TEST,
   T9_REFUSALS,
   TABLE_CONNECTION,
@@ -1011,5 +1012,77 @@ describe("PR-74: the t9-refusals family", () => {
   test("last of FAMILIES (place 12, BC-check number 13, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(11);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051013");
+  });
+});
+
+describe("PR-83: the record-filters family", () => {
+  const f = RECORD_FILTERS;
+
+  test("last of FAMILIES: place 13, BC-check number 14", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("record-filters");
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051014");
+  });
+
+  test("about 250 cells in 13 groups, each with its own codeunit and a unique name", () => {
+    expect(f.cells.length).toBeGreaterThan(150);
+    expect(f.cells.length).toBeLessThan(300);
+    const groups = new Set(f.cells.map((c) => c.type));
+    expect([...groups].sort()).toEqual(
+      [
+        "CalcFields",
+        "CalcSums",
+        "Count",
+        "DeleteAll",
+        "Danish",
+        "FilterGroup",
+        "FlowField",
+        "GetFilters",
+        "Mark",
+        "ModifyAll",
+        "Order",
+        "SetFilter",
+        "SetRange",
+      ].sort(),
+    );
+    const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    // a name with a quote would cut an AL object name in two
+    for (const n of names) expect(n).not.toContain('"');
+    const al = emitApp(f)["src/Cells.al"] ?? "";
+    const ids = [...al.matchAll(/^codeunit (\d+) /gm)].map((m) => m[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    // the 51000 support codeunit plus one per cell
+    expect(ids).toHaveLength(f.cells.length + 1);
+  });
+
+  test("every cell answers as V:[...], reloads the data first, and marks locale cells", () => {
+    for (const c of f.cells) {
+      expect((c.reader ?? c).call).toMatch(/Error\('V:\[%1(\|%2)?\]', .*\);$/);
+      expect(c.reader?.setup ?? c.setup ?? []).toContain("Seed.Load();");
+    }
+    // Danish cells use the two-test form and are locale-dependent
+    const danish = f.cells.filter((c) => c.type === "Danish");
+    expect(danish.length).toBeGreaterThan(10);
+    for (const c of danish) {
+      expect(c.reader).toBeDefined();
+      expect(c.depends).toBe("locale");
+      expect(c.call).toBe("GlobalLanguage(1030);");
+      expect(c.reader?.setup?.[0]).toBe("GlobalLanguage(1030);");
+    }
+    // date-text filters read the region; an Integer SetRange does not
+    const sf = f.cells.find((c) => c.type === "SetFilter" && c.state === "150324");
+    expect(sf?.depends).toBe("locale");
+    const sr = f.cells.find((c) => c.type === "SetRange" && c.method === "Integer");
+    expect(sr?.depends).toBeUndefined();
+  });
+
+  test("the support seeds with DeleteAll and has keys with ties and a two-field key", () => {
+    expect(f.support).toContain("Hd.DeleteAll();");
+    expect(f.support).toContain("key(ByRegion; Region)");
+    expect(f.support).toContain("key(ByKindQty; Kind, Qty)");
+    expect(f.support).toContain("CalcFormula = sum(");
+    expect(f.support).toContain("FieldClass = FlowFilter;");
   });
 });
