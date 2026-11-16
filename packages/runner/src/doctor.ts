@@ -41,6 +41,16 @@ export interface DoctorCheck {
   /** R253: present (always `true`) when doctor could not ask at all, for a reason the config names
    *  (`detail` says which, and the fix). `ok` is then `true`: nothing failed, nothing was verified. */
   readonly skipped?: true;
+  /** R1087: present on `server-dependencies` (unless skipped): one row per dependency, so a CI
+   *  step can read the outcome without parsing `detail`. */
+  readonly dependencies?: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly publisher: string;
+    readonly requiredVersion: string;
+    readonly installedVersions: readonly string[];
+    readonly status: "ok" | "missing" | "too-old";
+  }[];
 }
 
 export interface DoctorReport {
@@ -160,12 +170,38 @@ export interface DoctorDeps {
    */
   readonly dependencies?: () => Promise<DependenciesProbe>;
   /**
+   * R1087: each direct dependency of the target and the test app beside the versions INSTALLED on
+   * the server, read by id (`HarnessVerifier.fetchInstalledVersions`, never a list of everything).
+   * `skip` (a reason) replaces the whole answer when doctor could not ask. A read error THROWS
+   * (naming the id), so it fails the check rather than reading as "missing".
+   */
+  readonly serverDependencies?: () => Promise<ServerDependenciesProbe>;
+  /**
+   * R1086: `bcdev.credentialsEnv` resolved: the variable NAMES and whether each is set. The details
+   * must never hold a credential value.
+   */
+  readonly credentialsEnv?: () => Promise<{ readonly ok: boolean; readonly details: string }>;
+  /**
    * R900: alc's assembly probing paths as a run resolves them (`resolveAssemblyProbingPaths`). It
    * THROWS on a listed folder that is missing, which `runCheck` turns into a failed check naming
    * it. Present only when doctor is given `--project`.
    */
   readonly assemblyProbingPaths?: () => Promise<ResolvedAssemblyProbingPaths>;
 }
+
+export type ServerDependenciesProbe =
+  | { readonly skip: string }
+  | {
+      readonly skip?: undefined;
+      readonly dependencies: readonly {
+        readonly id: string;
+        readonly name: string;
+        readonly publisher: string;
+        readonly version: string;
+        /** The versions installed on the server for this id; empty means not installed. */
+        readonly installed: readonly string[];
+      }[];
+    };
 
 export type DependenciesProbe =
   | { readonly skip: string }
@@ -539,6 +575,83 @@ export function checkDependencies(probe: DependenciesProbe): DoctorCheck {
 }
 
 /**
+ * Numeric, part by part, any number of parts (a missing part is 0). Not `compareAppVersions`: that
+ * refuses a part above 65535, and a third-party app's version may use one.
+ */
+function compareVersionParts(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  if ([...pa, ...pb].some((n) => !Number.isFinite(n))) {
+    throw new Error(`cannot compare versions ${JSON.stringify(a)} and ${JSON.stringify(b)}`);
+  }
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * R1087: each dependency's installed version on the server against the version app.json asks for.
+ * ok: some installed version is at or above it (part by part, as numbers); missing: none installed;
+ * too old: every installed version is below it. NOT checked: the dependencies of those
+ * dependencies, and the implicit `application` and `platform` ones (the server's own build answers).
+ */
+export function checkServerDependencies(probe: ServerDependenciesProbe): DoctorCheck {
+  const name = "server-dependencies";
+  if (probe.skip !== undefined) {
+    return { name, ok: true, skipped: true, detail: `not checked: ${probe.skip}` };
+  }
+  const notChecked =
+    "The dependencies of those dependencies, and the implicit application and platform ones, were not checked.";
+  if (probe.dependencies.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `the target and the test app declare no dependencies to read on the server. ${notChecked}`,
+      dependencies: [],
+    };
+  }
+  const rows = probe.dependencies.map((d) => {
+    const status: "ok" | "missing" | "too-old" =
+      d.installed.length === 0
+        ? "missing"
+        : d.installed.some((v) => compareVersionParts(v, d.version) >= 0)
+          ? "ok"
+          : "too-old";
+    return {
+      id: d.id,
+      name: d.name,
+      publisher: d.publisher,
+      requiredVersion: d.version,
+      installedVersions: d.installed,
+      status,
+    };
+  });
+  const label = (r: (typeof rows)[number]) =>
+    `${r.publisher} ${r.name} (${r.id}) needs ${r.requiredVersion}, ${
+      r.installedVersions.length === 0
+        ? "not installed (absent or published but not installed)"
+        : `installed ${r.installedVersions.join(", ")}`
+    }`;
+  const bad = rows.filter((r) => r.status !== "ok");
+  if (bad.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `all ${rows.length} direct dependencies are installed at the required version or newer: ${rows.map(label).join("; ")}. ${notChecked}`,
+      dependencies: rows,
+    };
+  }
+  return {
+    name,
+    ok: false,
+    detail: `${bad.length} of ${rows.length} dependencies are missing or too old on the server: ${bad.map((r) => `${r.status === "missing" ? "MISSING" : "TOO OLD"}: ${label(r)}`).join("; ")}. The publish after the compile will fail; install or upgrade them first. ${notChecked}`,
+    dependencies: rows,
+  };
+}
+
+/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -566,6 +679,8 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     alcRuntime,
     testApp,
     dependencies,
+    serverDependencies,
+    credentialsEnv,
     assemblyProbingPaths,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
@@ -631,6 +746,21 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
   if (dependencies !== undefined) {
     checkPromises.push(
       runCheck("dependencies", async () => checkDependencies(await dependencies())),
+    );
+  }
+  if (serverDependencies !== undefined) {
+    checkPromises.push(
+      runCheck("server-dependencies", async () =>
+        checkServerDependencies(await serverDependencies()),
+      ),
+    );
+  }
+  if (credentialsEnv !== undefined) {
+    checkPromises.push(
+      runCheck("credentials-env", async () => {
+        const s = await credentialsEnv();
+        return { name: "credentials-env", ok: s.ok, detail: s.details };
+      }),
     );
   }
   if (assemblyProbingPaths !== undefined) {

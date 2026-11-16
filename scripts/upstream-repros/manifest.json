@@ -883,6 +883,70 @@
       "tests": {
         "Codeunit77801.InsertWithContentBlobReadsBack": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8195-text-collation",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8195",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16, LethAL's web-service path, en-US, the default database collation; /coord/handoff/PR-83/joined.tsv): SetRange(Name, 'A', 'B') includes 'Ærø' and SetCurrentKey(Name) sorts 'Ærø' before 'Alpha' (as 'AErø'), so both tests pass",
+      "rerun": ["PR-83's record-filters cells 51011 and 51112", "corpus tests that filter or sort on text holding Æ (Danish data)"],
+      "tests": {
+        "Codeunit58301.AeIsInsideAToB": { "status": "pass" },
+        "Codeunit58301.AeSortsBeforeAlpha": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8196-at-filter-accents",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8196",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16; /coord/handoff/PR-83/joined.tsv): SetFilter(Name, '@emile') finds 'Émile', so the test passes",
+      "rerun": ["PR-83's record-filters cell 51061"],
+      "tests": {
+        "Codeunit58311.AtIgnoresAccents": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8197-filter-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8197",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16, en-US region; /coord/handoff/PR-83/joined.tsv): SetFilter of a non-member Option value raises 'The filter \"Delta\" is not valid ... The existing options are: Alpha,Beta,Gamma'; under GlobalLanguage 1030 'Ja' filters to true and 'Yes' raises (Danish text); a Danish date text '15.03.2024' raises under the en-US region; so all three tests pass",
+      "rerun": ["PR-83's record-filters cells 51095, 51100, 51262-51264, 51266-51268"],
+      "tests": {
+        "Codeunit58321.OptionNotAMember": { "status": "pass" },
+        "Codeunit58321.DanishBooleanWords": { "status": "pass" },
+        "Codeunit58321.DanishDateTextUnderEnUsRegion": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8198-format-length",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8198",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-86's dates-formulas BC check, 2026-11-16; /coord/handoff/PR-86/joined.tsv): Format(DF, 4) of 1Y+1M+1D is '1Y+1', so the test passes",
+      "rerun": ["PR-86's dates-formulas cell 51141"],
+      "tests": {
+        "Codeunit58330.FormatLengthTruncatesDateFormula": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8199-closing-dates",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8199",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-86's dates-formulas BC check, 2026-11-16; /coord/handoff/PR-86/joined.tsv): ClosingDate(31.12.2023) - 31.12.2023 raises 'The operation cannot be performed on a closing date value.'; after WorkDate(ClosingDate(31.12.2023)), NormalDate(WorkDate()) is 2023-12-31; so both tests pass",
+      "rerun": ["PR-86's dates-formulas cells 51278, 51293"],
+      "tests": {
+        "Codeunit58340.SubtractFromClosingDateRaises": { "status": "pass" },
+        "Codeunit58340.WorkDateTakesClosingDate": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8200-language-date-formulas",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8200",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-86's dates-formulas BC check, 2026-11-16, en-US region, UTC; /coord/handoff/PR-86/joined.tsv): under 1030 Evaluate '1K' is true and reads 1Q, Evaluate '1Y' is false, Format of CM+1D is 'LM+1D', CalcDate('<1U>') raises in Danish; under 1031 Evaluate '1T' is true and reads 1D, Format of 1Y+1M+1D is '1J+1M+1T', CalcDate('<1T>') raises in German; so all seven tests pass",
+      "rerun": ["PR-86's dates-formulas cells 51297, 51299-51300, 51302-51305, 51308-51314, 51316-51332"],
+      "tests": {
+        "Codeunit58350.DanishQuarterLetter": { "status": "pass" },
+        "Codeunit58350.DanishEnglishLetterFails": { "status": "pass" },
+        "Codeunit58350.DanishFormatCurrent": { "status": "pass" },
+        "Codeunit58350.DanishCalcDateMessage": { "status": "pass" },
+        "Codeunit58350.GermanDayLetter": { "status": "pass" },
+        "Codeunit58350.GermanFormat": { "status": "pass" },
+        "Codeunit58350.GermanCalcDateMessage": { "status": "pass" }
+      }
     }
   ]
 }

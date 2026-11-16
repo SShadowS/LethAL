@@ -1193,7 +1193,7 @@ export class HarnessVerifier {
       if (res.status === 401 || res.status === 403) {
         throw new HarnessAuthError(
           `HarnessInfo failed: HTTP ${res.status}${bodyText ? `: ${bodyText}` : ""}
-This is an AUTHENTICATION failure, not a missing or stale control app: the request was rejected before HarnessInfo ran, so it says nothing about which build is deployed. Check the configured bcdev username/password/tenant and that the user exists on this server. LethAL deliberately does NOT republish the control app for this — republishing runs its install/upgrade codeunits and would disturb a concurrent session's lease.`,
+This is an AUTHENTICATION failure, not a missing or stale control app: the request was rejected before HarnessInfo ran, so it says nothing about which build is deployed. Check the configured bcdev username/password (or the variables named by credentialsEnv), the tenant, and that the user exists on this server. LethAL deliberately does NOT republish the control app for this — republishing runs its install/upgrade codeunits and would disturb a concurrent session's lease.`,
         );
       }
       if (isStaleControlAppRejection(res.status, bodyText)) {

@@ -3519,6 +3519,8 @@ const VALUE: Readonly<Record<string, string>> = {
   "table-id": "50102",
   format: "mutation-elements",
   "max-new-tests": "60",
+  // R1086: two environment variable NAMES.
+  "credentials-env": "BC_USER,BC_PASSWORD",
   // R654: valid on every platform, so the dry-run invocation (no --backend) reads it everywhere.
   backend: "bcdev",
 };
