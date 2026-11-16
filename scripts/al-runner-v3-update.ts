@@ -103,7 +103,6 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { checkBuild } from "./upstream-repros";
 import {
   DEFAULT_PEAK_GIB,
   PEAK_GIB,
@@ -113,6 +112,8 @@ import {
   readSlot,
   readSlotClass,
 } from "./heavy-slot-class";
+import { fixedScanLines } from "./upstream-fixed-scan";
+import { checkBuild } from "./upstream-repros";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -168,6 +169,11 @@ export interface UpdateDeps {
    * lines. Optional: absent (test rigs), nothing is run. It never decides the gate.
    */
   upstreamRepros?(candidate: string, current: string): Promise<readonly string[]>;
+  /**
+   * PR-59: the read-only scan of our open upstream issues the maintainer reports fixed (`upstream-fixed-scan.ts`); returns
+   * its lines. Optional: absent (test rigs), nothing is run. Logged once per daily run; it never decides anything.
+   */
+  fixedScan?(): Promise<readonly string[]>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -1496,6 +1502,15 @@ export async function dailyOnce(
       ? ["skipped"]
       : await guarded<readonly string[]>("release", () => updateLocked(deps, {}), ["infra-fail"]);
     await publishPending(deps);
+    // PR-59: once per day (the daily skip above), whether or not a candidate came. Never changes an outcome.
+    if (deps.fixedScan !== undefined) {
+      try {
+        for (const l of await deps.fixedScan())
+          await deps.log(`${deps.now()} upstream-fixed-scan: ${l}`);
+      } catch (err) {
+        await deps.log(`${deps.now()} upstream-fixed-scan: not run: ${String(err).slice(0, 300)}`);
+      }
+    }
     return { edge, releases };
   } finally {
     await lock.release();
@@ -1586,6 +1601,8 @@ export function realDeps(root = ROOT): UpdateDeps {
     versionOf: async (b) => (await run([b, "--version"])).trim(),
     // R-996: the repros of this checkout, run in-process.
     upstreamRepros: async (candidate, current) => (await checkBuild(candidate, current)).lines,
+    // PR-59: read-only; our open upstream issues the maintainer reports fixed.
+    fixedScan: () => fixedScanLines(),
     runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([

@@ -30,15 +30,15 @@ import {
   type PublishResult,
   type UpdateDeps,
   V3_CDO_DEFAULT,
-  candidates,
   argv0FromCmdline,
+  candidates,
   countHeavyJobs,
-  movesUnder,
   dailyOnce,
   edgeOnce,
   edgeRejudge,
   expectedSha,
   gateOne,
+  movesUnder,
   parseGateLegs,
   pinDigests,
   publishPending,
@@ -1857,6 +1857,38 @@ linuxOnly("R814: the two tracks", () => {
     expect(await dailyOnce(deps)).toEqual({ edge: "infra-fail", releases: ["pass"] });
     expect(f.seen.published).toEqual(["alpha.3-c893e3633"]);
     expect(f.seen.logs.join("\n")).toContain("the edge track failed");
+  });
+
+  test("PR-59: the fixed scan runs once per daily run and its lines are logged", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS });
+    let calls = 0;
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        calls++;
+        return ["#1 t | fixed-in-current"];
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "pass", releases: ["pass"] });
+    expect(calls).toBe(1);
+    expect(f.seen.logs.join("\n")).toContain("upstream-fixed-scan: #1 t | fixed-in-current");
+  });
+
+  test("PR-59: a throwing fixed scan changes no outcome and is logged", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS });
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        throw new Error("gh is down");
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "pass", releases: ["pass"] });
+    expect(f.seen.published).toEqual(["edge-c893e3633", "alpha.3-c893e3633"]);
+    expect(f.seen.logs.join("\n")).toContain("upstream-fixed-scan: not run: Error: gh is down");
   });
 
   test("the ledger: a torn line is logged and skipped; a repeated id goes once", async () => {
