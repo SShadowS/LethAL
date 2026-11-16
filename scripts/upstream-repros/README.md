@@ -71,6 +71,13 @@ it stops every Base Application test on al-runner v3 (System Initialization Impl
 data loaded, PR-57's one Fixed Asset test ran and passed, so how many BaseApp tests it still stops is for PR-57's step 2 (a BaseApp
 baseline) to measure. BC's results are inferred, not measured on a server.
 
+## Coverage (PR-75)
+
+`u8191-namespaced-relation-using`: a `TableRelation` naming a table of another namespace through `using` is
+refused at Validate ("relation target `Repro Posting Group` is not declared in the workspace"); the namespace-qualified name and a
+target in the field's own namespace run. PR-75's Base Application x Tests-Fixed Asset baseline (CRONUS demo data loaded): 53 passed,
+0 failed, 407 not run, 383 of them by this refusal. BC's results are inferred, not measured on a server.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
