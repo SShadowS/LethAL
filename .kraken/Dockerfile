@@ -3,12 +3,19 @@ USER root
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl sqlite3 time \
+      libglib2.0-0t64 libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libdbus-1-3 libx11-6 libxcomposite1 libxdamage1 \
+      libxext6 libxfixes3 libxrandr2 libgbm1 libxcb1 libxkbcommon0 libasound2t64 libatspi2.0-0t64 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 # Node (newest LTS) for the MCP siblings
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && apt-get install -y nodejs && rm -rf /var/lib/apt/lists/*
 # tree-sitter CLI, pinned to the version tree-sitter-al generates with; global, so on PATH for user dev
 RUN HOME=/tmp/build-home npm install -g --cache /tmp/npm-cache tree-sitter-cli@0.27.0 \
     && HOME=/tmp/build-home tree-sitter --version && rm -rf /tmp/npm-cache /tmp/build-home
+# Headless Chromium (Chrome Headless Shell) for page checks: Playwright pinned at 1.65.1 (1.56 hangs on Node 26 and refuses
+# Ubuntu 26.04), installed into the image so a fresh volume has it; its system libraries are on the first apt line
+RUN HOME=/tmp/build-home PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx -y --cache /tmp/npm-cache playwright@1.65.1 \
+      install chromium-headless-shell && rm -rf /tmp/npm-cache /tmp/build-home
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 # LLVM/clang 23.1.2: pinned, the native parser's staleness check refuses any other clang
 # install-llvm.sh takes only the platform key and installs under ${TMPDIR}/llvm-<version>
 COPY scripts/install-llvm.sh /tmp/install-llvm.sh
