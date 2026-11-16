@@ -5074,14 +5074,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
-   * R766 (b): how many of `n` lanes to start. The largest k with k x 2.3 GB + 10 GB <= available, at
-   * least 1 (lane 0's own floor is the per-lane hold's business). One notice names N asked, k started
-   * and the available GB. The per-lane hold (`laneMayStart`) still applies to each lane.
+   * R766 (b), PR-98: how many of `n` lanes to start: the largest k (at least 1) whose lanes charged fit the
+   * lane gate (`decideLanes`). Before any peak reading it caps nothing: the per-lane hold (`laneMayStart`)
+   * refuses each lane until a reading exists. One notice names N asked, k started and the limiting rule.
    */
   affordableLanes(n: number): number {
     this.laneLimit = undefined; // the notice of `noteLanes` speaks for this call only
+    // PR-98 review (build, #1): asked before the batch's first prefetch, when no serve request has been read
+    // yet. Unmeasured is then no cap here: each lane's own `laneMayStart` refuses until a reading exists.
+    if (this.peakReading === undefined) return n;
     let k = n;
-    while (k > 1 && !this.decideLanes(Math.max(k - 1, this.lanesHoldingDaemon()) + 1).ok) k -= 1;
+    while (k > 1 && !this.decideLanes(this.lanesCharged(k - 1)).ok) k -= 1;
     if (k < n && !this.fitNoticed) {
       this.fitNoticed = true;
       const why = this.laneLimitNow();
@@ -5111,10 +5114,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R785: the one-line notice of how many lanes started. */
   noteLanes(message: string): void {
     // PR-98: the lane gate's part: bytes per lane and its parts, and the rule that limited the count.
+    // Review (build, #3): "limited by" only when the gate itself refused; a pacing limit is the message's own.
     const gate =
       this.laneParts === undefined
         ? ""
-        : `; lane gate: ${this.laneParts}; limited by: ${this.laneLimit?.rule ?? "--workers"}`;
+        : `; lane gate: ${this.laneParts}${this.laneLimit !== undefined ? `; limited by: ${this.laneLimit.rule}` : ""}`;
     this.notify(
       "al-runner-v3-lanes-started",
       `[lethal] al-runner-v3-lanes-started: ${message}${gate} (R785).`,
@@ -5122,12 +5126,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
-   * PR-98: the lane gate. Lane `k` (> 0) may start only while the lanes charged (every lane that holds a
-   * daemon, or `k`, whichever is more, plus this one) fit; see `decideLanes`. One notice says so, once.
+   * PR-98: the lane gate. Lane `k` (> 0) may start only while the lanes charged (lanes 0..k, and every lane
+   * that holds a daemon, each counted once: `lanesCharged`) fit; see `decideLanes`. One notice says so, once.
    */
   laneMayStart(k: number): boolean {
     if (k === 0) return true;
-    const v = this.decideLanes(Math.max(k, this.lanesHoldingDaemon()) + 1);
+    const v = this.decideLanes(this.lanesCharged(k));
     if (v.ok) return true;
     if (!this.memoryHoldNoticed) {
       this.memoryHoldNoticed = true;
@@ -5143,8 +5147,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.laneLimit;
   }
 
-  private lanesHoldingDaemon(): number {
-    return this.laneList.filter((l) => l.holdsDaemon()).length;
+  /**
+   * PR-98 (review H2; build review #2): the lanes charged when lanes 0..`upto` run: those lanes, and every lane
+   * that holds a daemon (a lane of an earlier window stays resident), each ONCE. A resident lane k is not
+   * counted twice when it asks again in a later window, and a lane launched this window before its first
+   * daemon is still charged.
+   */
+  private lanesCharged(upto: number): number {
+    const charged = new Set<number>();
+    for (let i = 0; i <= upto; i++) charged.add(i);
+    this.laneList.forEach((l, i) => {
+      if (l.holdsDaemon()) charged.add(i);
+    });
+    return charged.size;
   }
 
   /**
@@ -5230,6 +5245,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       } catch {
         // an unreadable class file falls to the default below, named
       }
+      return {
+        gib: LANE_DEFAULT_DECLARED_GIB,
+        source: `class file ${path} unreadable or without a peak: heavy-slot's default for the other class`,
+      };
     }
     return {
       gib: LANE_DEFAULT_DECLARED_GIB,

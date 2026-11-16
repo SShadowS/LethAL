@@ -316,7 +316,7 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 `lethal run --backend al-runner-v3 --workers N` (N 2 to 8) runs the mutants on N serve lanes of one backend. No gate
 leg uses it: every figure on this page is N = 1 (no `--workers`). A run refuses `--workers > 1` by name when the
-transport is not serve-entries, under `--resume`, when the build's pin does not retire the §6 Sleep rule (R768's
+transport is not serve-entries, when the build's pin does not retire the §6 Sleep rule (R768's
 `sleepRuleRetired`), or above 8; a new build needs its own pin before it is allowed. **Parallel pays on large
 projects; each lane pays its own warm-up** (R781: four lanes' warm-ups cost about 62 s against 7 s for one, so a
 small run is slower at N = 4; whole apps such as CDO and DC have thousands of procedure scopes and spread fully). Since R785 `--workers N` is an upper bound: after each finished unit one more lane starts only while the queued live mutants (prefetched ones do not count) times lane 0's wall per live mutant exceed lane 0's own warm-up, and one `al-runner-v3-lanes-started` notice says how many of N started and why. Since PR-98 `--workers N` is allowed with `--resume`, and a lane beyond lane 0 starts only when the container's cgroup and the declared peak of the heavy-slot job (`LETHAL_HEAVY_CLASS_FILE`) have room for it, charged at the session's highest peak reading (no reading yet: no extra lane); with no cgroup limit, 10 GB of free host memory must stay free. The `al-runner-v3-lanes-started` notice names bytes per lane and the rule that limited the count. Under N > 1 the first latch

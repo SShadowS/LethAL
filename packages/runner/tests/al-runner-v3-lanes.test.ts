@@ -504,7 +504,10 @@ describe("the parallel gate: refusals and the memory hold", () => {
     const g = gated({ usedGiB: 1, maxGiB: 32 });
     expect(g.b.laneMayStart(1)).toBe(false);
     expect(g.notices[0]).toContain("unmeasured");
-    expect(g.b.affordableLanes(4)).toBe(1);
+    // build review #1: asked before the batch's first prefetch, unmeasured caps nothing (or batch 0 could
+    // never run lanes); each lane's laneMayStart still refuses until a reading exists, as above.
+    expect(g.b.affordableLanes(4)).toBe(4);
+    expect(g.b.laneMayStart(1)).toBe(false);
     g.p.peakReading = { bytes: 1 * G, source: "sampled" };
     expect(g.b.laneMayStart(1)).toBe(true);
     expect(g.b.affordableLanes(4)).toBe(4);
@@ -539,17 +542,39 @@ describe("the parallel gate: refusals and the memory hold", () => {
       await v.activate("M0001");
       await v.run(A, OPTS);
     }
-    const priv = r.b as unknown as Priv & { lanesHoldingDaemon(): number };
-    expect(priv.lanesHoldingDaemon()).toBe(3);
+    const priv = r.b as unknown as Priv & { lanesCharged(upto: number): number };
+    expect(priv.lanesCharged(1)).toBe(4); // lanes 0 and 1, plus resident 2 and 3
     priv.peakReading = { bytes: 2 * G, source: "hwm" };
     r.b.seams.memoryReader = () => ({ usedBytes: 22 * G, maxBytes: 32 * G, source: "cg" });
     r.b.seams.lethalRss = () => 4 * G;
     r.b.seams.anonReader = () => 0;
     r.b.seams.availableBytes = () => 90 * G;
-    // charged = max(1, 3) + 1 = 4 lanes x 2 GiB: 22 + 8 = 30 > 28. (Charging k + 1 = 2 lanes would fit.)
+    // charged = {0, 1, 2, 3} = 4 lanes x 2 GiB: 22 + 8 = 30 > 28. (Charging k + 1 = 2 lanes would fit.)
     r.b.seams.classFilePath = () => "/fake/class";
     r.b.seams.readTextFile = () => "other 1 30\n";
     expect(r.b.laneMayStart(1)).toBe(false);
+  });
+
+  test("build review #2: a lane that is itself resident and asks again in a later window is charged once", async () => {
+    const r = await lanesRig({ lanes: 2 });
+    await laneBaseline(r);
+    for (const k of [0, 1]) {
+      const v = r.views[k];
+      if (v === undefined) throw new Error(`no lane ${k}`);
+      await v.activate("M0001");
+      await v.run(A, OPTS);
+    }
+    const priv = r.b as unknown as Priv & { lanesCharged(upto: number): number };
+    expect(priv.lanesCharged(1)).toBe(2); // lanes 0 and 1, each once (max(k, holders) + 1 gave 3)
+    priv.peakReading = { bytes: 2 * G, source: "hwm" };
+    // used 24, room 28: 2 lanes x 2 GiB = 28 fits; 3 lanes (the double count) = 30 would not.
+    r.b.seams.memoryReader = () => ({ usedBytes: 24 * G, maxBytes: 32 * G, source: "cg" });
+    r.b.seams.lethalRss = () => 4 * G;
+    r.b.seams.anonReader = () => 0;
+    r.b.seams.availableBytes = () => 90 * G;
+    r.b.seams.classFilePath = () => "/fake/class";
+    r.b.seams.readTextFile = () => "other 1 30\n";
+    expect(r.b.laneMayStart(1)).toBe(true);
   });
 
   test("M4: the lane's daemons' RssAnon is subtracted from the used memory, read per pid; unreadable counts 0", async () => {
@@ -577,7 +602,7 @@ describe("the parallel gate: refusals and the memory hold", () => {
     // 26 + 2 x 2 = 30 > 28 with nothing subtracted (an unreadable pid counts 0).
     expect(r.b.laneMayStart(1)).toBe(false);
     expect(asked).toContain(4000); // lane 1's daemon (the baseline ran one-shot) was read by pid
-    anon = 3 * G; // each of the daemons holds 3 GiB anonymous: 26 - 6 + 4 = 24 <= 28
+    anon = 3 * G; // lane 1's daemon holds 3 GiB anonymous: 26 - 3 + 4 = 27 <= 28
     expect(r.b.laneMayStart(1)).toBe(true);
   });
 
@@ -647,9 +672,10 @@ describe("the parallel gate: refusals and the memory hold", () => {
     const free = gated({ peakGiB: 2, usedGiB: 1, maxGiB: 32 });
     free.b.affordableLanes(3);
     free.b.noteLanes("3 of 3 lanes started: y (lane 0's warm-up 1.0 s)");
-    expect(free.notices.find((n) => n.startsWith("al-runner-v3-lanes-started"))).toContain(
-      "limited by: --workers",
-    );
+    // build review #3: with no gate refusal there is no "limited by" (a pacing limit is the message's own text)
+    const freeSaid = free.notices.find((n) => n.startsWith("al-runner-v3-lanes-started"));
+    expect(freeSaid).toContain("lane gate: 2.0 GiB per lane");
+    expect(freeSaid).not.toContain("limited by");
   });
 
   test("the session's peak reading is the highest a serve request gave, with its source", async () => {
