@@ -5411,13 +5411,20 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
       "  alRunnerV3.bcVersion                      your BC build, four numbers (the placeholder is refused by name until you replace it)",
     );
     console.log(
+      "  alRunnerV3.packagesDir                    must hold the BC symbols: Microsoft's System Application at exactly bcVersion (bun scripts/fetch-ms-symbols.ts <bc-major> <dir> writes them and prints the bcVersion)",
+    );
+    console.log(
+      "  alc (the AL compiler)                     found in the AL Language VS Code extension; with no extension run scripts/fetch-alc.ts and set alRunnerV3.alcPath (README, al-runner-v3 section)",
+    );
+    console.log(
       envFromLaunch
         ? "  alRunnerV3.environment                    left out: your .vscode/launch.json gives environmentType"
-        : "  alRunnerV3.environment                    onprem or saas (the placeholder is refused by name; launch.json names no environmentType)",
+        : `  alRunnerV3.environment                    onprem or saas (the placeholder is refused by name; ${launch.note ?? "launch.json names no environmentType"})`,
     );
     console.log(
       "  alRunnerV3.path                           not written: the default al-runner applies. Run 'lethal doctor' to see whether that build is a gated one",
     );
+    console.log("  Fill in both placeholders: the validator refuses them one at a time.");
     console.log(`\nThen: lethal doctor --config ${outPath}`);
     return 0;
   }

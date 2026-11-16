@@ -186,6 +186,21 @@ describe("lethal init --backend (PR-71)", () => {
     expect(w.alRunnerV3).not.toHaveProperty("path");
     expect(out).toContain("alRunnerV3.bcVersion");
     expect(out).toContain("lethal doctor --config");
+    expect(out).toContain("must hold the BC symbols");
+    expect(out).toContain("fetch-ms-symbols");
+    expect(out).toContain("alc (the AL compiler)");
+    expect(out).toContain("fetch-alc");
+    expect(out).toContain("Fill in both placeholders");
+  });
+
+  test("an unusable launch.json is named in the next steps, not called 'no environmentType'", async () => {
+    const dir = await project(RANGE);
+    await mkdir(join(dir, ".vscode"));
+    await writeFile(join(dir, ".vscode", "launch.json"), "{ not json", "utf8");
+    const { out } = await runInit(dir, { backendKind: "al-runner-v3" });
+    expect(out).toContain("could not be parsed");
+    expect(out).not.toContain("names no environmentType");
+    expect((await writtenOf(dir)).alRunnerV3?.environment).toBe("<onprem or saas>");
   });
 
   test("the bcVersion placeholder is refused by name, and a real build passes", async () => {
