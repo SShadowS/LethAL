@@ -3,13 +3,16 @@
  * R992's small-job allowance applies. Every lock folder here is a temp folder; nothing is written
  * under /coord (the ledger writer is a stub).
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, test as bunTest, describe, expect } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gateMemoryVerdict } from "./al-runner-v3-update";
 import { slotHeld } from "./corpus-snapshot";
 import { heldInputs } from "./heavy-slot-guard";
+
+// Real flock holders need Linux's flock(1); the Windows CI job has none (as heavy-slot-class.test.ts).
+const test = process.platform === "win32" ? bunTest.skip : bunTest;
 
 const GIB = 2 ** 30;
 const sample = (usedGiB: number) => ({
