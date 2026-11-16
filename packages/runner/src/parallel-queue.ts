@@ -74,6 +74,8 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     dependencyPackageDirs: () => owner.dependencyPackageDirs?.() ?? [],
     dependencyArtifactAppsDir: () => owner.dependencyArtifactAppsDir?.(),
     useCoveringBudgets: (id, budgets) => lane0.useCoveringBudgets?.(id, budgets),
+    cutState: (id) => lane0.cutState?.(id),
+    restoreCutState: (id, state) => lane0.restoreCutState?.(id, state),
     sendKillPair: (id, ref) => lane0.sendKillPair?.(id, ref) ?? Promise.resolve(),
     survivorNote: (covering) => lane0.survivorNote?.(covering),
     baselineNote: () => owner.baselineNote?.(),

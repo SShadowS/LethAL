@@ -63,7 +63,7 @@ import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "../src/assertion-screen";
-import type { TestMethodRef } from "../src/backend";
+import type { RunOpts, TestMethodRef } from "../src/backend";
 import { noGreenBaselineNote, runOnce } from "../src/orchestrator";
 import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import type { SpawnFn } from "../src/publisher";
@@ -4257,7 +4257,8 @@ describe("R907: a ref left not run by a stopped earlier test runs alone", () => 
         { ref: ref("B"), budgetMs: 1000 },
       ]);
     const ask = (m: string) => b.run(ref(m), { coverage: "none", timeoutMs: 1000 });
-    return { v3, ask };
+    const run = (m: string, opts: RunOpts) => b.run(ref(m), opts);
+    return { v3, ask, run };
   }
   const alone = (calls: string[][]) => calls.filter((c) => c.includes("--test-exact"));
 
@@ -4302,5 +4303,26 @@ describe("R907: a ref left not run by a stopped earlier test runs alone", () => 
     await ask("B");
     await ask("B");
     expect(alone(v3.calls).length).toBe(1);
+  });
+
+  test("6 (PR-51 F1): the alone-after-stop answer is marked selection alone; the stopped ref's own is not", async () => {
+    const { ask } = await setup({ help: FLAG, mutant: "M0001", aloneStatus: "fail" });
+    expect((await ask("B")).selection).toBe("alone");
+    expect((await ask("A")).selection).toBeUndefined();
+  });
+
+  test("7 (PR-51 F1): RunOpts.alone on the one-shot path runs exactly that test alone, with no stop before it, and marks it", async () => {
+    const { v3, run } = await setup({ help: FLAG, mutant: "M0001", aloneStatus: "fail" });
+    const v = await run("B", { coverage: "none", timeoutMs: 1000, alone: true });
+    expect([v.outcome, v.selection]).toEqual(["fail", "alone"]);
+    // The first and only call is the alone one: no whole-codeunit call came before it.
+    expect(v3.calls.length).toBe(1);
+    const argv = v3.calls[0] ?? [];
+    expect(argv[argv.indexOf("--test-exact") + 1]).toBe(`Codeunit${ref("B").codeunitId}.B`);
+    expect(argv).not.toContain("--skip-after-timeout");
+    // Never cached as the codeunit's call: a plain run of A makes its own whole-codeunit call.
+    expect((await run("A", { coverage: "none", timeoutMs: 1000 })).outcome).toBe("timeout");
+    expect(v3.calls.length).toBe(2);
+    expect(v3.calls[1]).not.toContain("--test-exact");
   });
 });

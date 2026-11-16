@@ -279,6 +279,13 @@ export interface TestVerdict {
    * `SessionReport` field.
    */
   readonly refusedAfterStop?: string;
+  /**
+   * PR-51 (F1): set on a verdict whose row came from an ALONE request (v3: one test selected by
+   * itself, in a fresh daemon request). Such a row was not measured in its codeunit's context, so
+   * its unmutated confirm and its reproduction must run it alone too (`RunOpts.alone`). Internal
+   * only (v3); never a `SessionReport` field.
+   */
+  readonly selection?: "alone";
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -386,6 +393,12 @@ export interface BackendStatus {
 export interface RunOpts {
   readonly coverage: CoverageMode;
   readonly timeoutMs: number;
+  /**
+   * PR-51 (F1): run exactly this one test alone, under the currently activated selection (NONE
+   * after `activate(null)`), whatever the backend's routing state says, and never cache the answer
+   * as its codeunit's call. A backend that cannot do this refuses it by name; none ignores it.
+   */
+  readonly alone?: true;
 }
 
 /**
@@ -748,6 +761,16 @@ export interface ExecutionBackend {
     mutantId: string,
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
   ): void;
+
+  /**
+   * PR-51 (Addendum 1), OPTIONAL: the backend's per-mutant state that a timeout leaves behind and
+   * that routes later runs (v3: the set of tests its calls were cut at). The covering loop reads it
+   * when it holds or notes a timeout step and puts it back (`restoreCutState`) before that step's
+   * replay, so the replay's reproduction routes as it did when the step was met. Opaque to the
+   * loop. bcdev has no such state and implements neither.
+   */
+  cutState?(mutantId: string): unknown;
+  restoreCutState?(mutantId: string, state: unknown): void;
 
   /**
    * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests

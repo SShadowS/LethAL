@@ -3050,7 +3050,7 @@ async function runFenced(
   backend: ExecutionBackend,
   safety: SessionSafety,
   ref: TestMethodRef,
-  opts: { coverage: CoverageMode; timeoutMs: number },
+  opts: { coverage: CoverageMode; timeoutMs: number; alone?: true },
   leaseSession: LeaseSession | undefined,
   emit: RunEmitter,
   resyncOpSeq?: () => Promise<void>,
@@ -3322,13 +3322,15 @@ async function singleStep(
   },
   ref: TestMethodRef,
   budget: TestBudget,
+  // PR-51 (F1): run the test alone (see `RunOpts.alone`).
+  alone?: true,
 ): Promise<CoveringStep> {
   const { ms, source } = budget;
   const out = await runFenced(
     ctx.backend,
     ctx.safety,
     ref,
-    { coverage: "none", timeoutMs: ms },
+    { coverage: "none", timeoutMs: ms, ...(alone === true ? { alone } : {}) },
     ctx.leaseSession,
     ctx.emit,
     ctx.resyncOpSeq,
@@ -11280,6 +11282,8 @@ async function confirmWarm(p: {
     opKind?: "single" | "many";
     sessionId?: number;
   }>;
+  /** PR-51 (F1): `reproduceKill` runs the (single, position 1) killer alone. Unused by the warm replay. */
+  readonly alone?: true;
 }): Promise<WarmDecision> {
   const { args, m, step, leaseSession, resyncOpSeq, testResultBuffer } = p;
   const k = step.groupPosition;
@@ -11634,6 +11638,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
       { backend: args.backend, safety: args.safety, leaseSession, emit: args.emit, resyncOpSeq },
       killer,
       { ms: step.testBudgetMs, source: step.testBudgetSource },
+      p.alone,
     );
     push(r.verdict, "single", killer);
     const nonVerdict = await classifyNonVerdictStep(r, classifyCtx);
@@ -12359,7 +12364,37 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // test must not manufacture a survivor. On the sequential path it is trivially complete.
     const attempted = new Set<string>();
     const ranRefs: TestMethodRef[] = []; // R926: the covering tests that ran, in run order
-    for await (const step of coveringRuns({
+    // PR-51 (R1057): a timeout step is HELD, not scored, and the walk goes on. A later test that
+    // fails, confirmed and reproduced, makes the mutant `killed`; otherwise the held step is replayed
+    // through the timeout path below, unchanged, with the mutant-level fields as they were when it
+    // was held. So the class does not depend on which covering test is met first.
+    // Addendum 1: a later timeout keeps its step too (`noted`, in walk order). When the held one's
+    // reproduction fails, the next is replayed the same way, as R577's I4 walk did before.
+    // `cut` is the backend's per-mutant cut state when the step was met (v3 only).
+    type HeldTimeout = {
+      readonly step: CoveringStep;
+      readonly cut: unknown;
+      readonly snap: {
+        readonly verdict: SessionVerdict;
+        readonly cause: MutantErrorCause | undefined;
+        readonly failureNote: string | undefined;
+        readonly permissionRefusedTest: string | undefined;
+        readonly runnerDisagreement: string | undefined;
+        readonly runnerDisagreementTest: string | undefined;
+        readonly notReproduced: KillErrorDecision | undefined;
+        readonly refusedPending: string | undefined;
+        readonly transportErrorRef: TestMethodRef | undefined;
+        readonly abortAfterRecord: string | undefined;
+      };
+    };
+    let held: HeldTimeout | undefined;
+    const noted: HeldTimeout[] = [];
+    const afterHeld: string[] = []; // the tests a later step answered, names only
+    let replayStep: CoveringStep | undefined;
+    let replaying = false;
+    let walkClosed = false;
+    let heldNote: string | undefined;
+    const walker = coveringRuns({
       backend: args.backend,
       safety: args.safety,
       ordered,
@@ -12370,190 +12405,285 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       group: args.groupRuns,
       mutantId: m.mutantId,
       skip,
-    })) {
-      // Layer 5C-B2: `runFenced` (or R198's `runFencedMany`), not `runOnce` — a lost ack that
-      // reconciliation PROVES completed earns one fresh attempt, and `v` is then that attempt's
-      // verdict. Only the final verdict is buffered/attested/classified below, exactly as
-      // `runOnce`'s own pre-dispatch-rejected retry already behaves. `budget` is the per-TEST
-      // budget the operator-facing notes quote; `groupBudgetMs` is what a refused retry is
-      // classified against (a chunk legitimately runs for minutes).
-      const {
-        ref,
-        verdict: v,
-        lostAck,
-        retried,
-        retryAfter,
-        original,
-        testBudgetMs: budget,
-        groupBudgetMs,
-      } = step;
-      testResultBuffer.push({
-        mutantCode: m.mutantId,
-        ref,
-        outcome: v.outcome,
-        durationMs: v.durationMs,
-        ...(v.measuredDurationMs !== undefined ? { ownDurationMs: v.measuredDurationMs } : {}),
-        failureMessage: v.failureMessage,
-        opKind: step.opKind,
-        ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
-      });
-      if (v.outcome === "pass" || v.outcome === "fail") {
-        attempted.add(testKeyOf(ref));
-        ranRefs.push(ref);
+    });
+    const feed = async function* (): AsyncGenerator<CoveringStep, void, undefined> {
+      if (replayStep !== undefined) {
+        const again = replayStep;
+        replayStep = undefined;
+        yield again;
+        return;
       }
-      // R934: the test's own time where the backend measured it. On al-runner `durationMs` is the whole
-      // call's (the whole request on serve), so summing it per covering test multiplied it. A row with
-      // no own figure is charged its call's wall ONCE per call, not once per row (R963).
-      spent += ownTimeCharge(v, chargedWalls);
-      // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
-      if (step.discoveryRefused === true) continue;
-      // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
-      // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
-      feedAttestation(args.attestation, v.attestation);
-      // Per-mutant, not just per-artifact: OR-ed across this mutant's covering runs so a survivor
-      // can say whether any guarded code ran at all. `undefined` stays `undefined` on a backend
-      // that cannot attest — see `MutantOutcome.guardObserved`.
-      if (v.attestation !== undefined) {
-        guardObserved = (guardObserved ?? false) || v.attestation.observedAny;
+      while (!walkClosed) {
+        const next = await walker.next();
+        if (next.done === true) return;
+        yield next.value;
       }
-      // GH-24: per-test reach. Unmeasured, never false: a run without an answer (timeout, a
-      // stopped 408, transport error, in-flight, al-runner) leaves the mutant unmeasured unless
-      // another run reached. Only statement-grain mutants are ever decided (after the loop).
-      if (v.reachedActive === undefined) reachUnanswered = true;
-      else {
-        reachAnswered = true;
-        if (v.reachedActive) reachedBy.push(qualifiedTestName(ref));
-      }
-      // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording LethAL does not
-      // know. Scored `runner-test-error` below; said once per session, so a moved wording is loud.
-      if (v.timeoutWordingUnknown === true && args.sessionReuse.wordingWarned !== true) {
-        args.sessionReuse.wordingWarned = true;
-        args.emit({
-          type: "warning",
-          code: "alrunner-timeout-wording-unrecognised",
-          message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
-        });
-      }
-      // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
-      // which leaves every kill site exactly as it was.
-      const reproduce = (): Promise<ReproDecision | undefined> =>
-        args.backend.killsMustReproduce === true
-          ? reproduceKill({ args, m, step, leaseSession, resyncOpSeq, testResultBuffer })
-          : Promise.resolve(undefined);
-      // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
-      const notKilled = (r: KillErrorDecision): boolean => {
-        if (r.cause === "kill-not-reproduced") {
-          notReproduced ??= r;
-          return true;
-        }
-        verdict = "error";
-        cause = r.cause;
-        failureNote = r.failureNote;
-        if (r.transportError) transportErrorRef = ref;
-        return false;
-      };
-      // R639: v3's refusal that follows a timeout in the same call is a cascade of that stop. The
-      // next covering test's row is one it would get were it first in the order, so the loop goes
-      // on; the refusal stays pending and ends the mutant as an error if nothing else decides it.
-      // Here and not in `classifyNonVerdictStep`: a refused row in a reproduction or a confirm
-      // (which share it) must still end the mutant.
-      if (step.cause === "runner-refused" && v.refusedAfterStop !== undefined) {
-        refusedPending ??= v.failureMessage ?? `${step.cause} running ${ref.method}`;
-        continue;
-      }
-      // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
-      // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
-      // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
-      const nonVerdict = await classifyNonVerdictStep(step, {
-        m,
-        leaseSession,
-        safety: args.safety,
-        quarantineStore: args.quarantineStore,
-        resourceKey: args.resourceKey,
-        nowIso: args.nowIso,
-      });
-      if (nonVerdict !== null) {
-        // R688: BC's suite discovery listed no methods for this test under the mutant. Confirm it
-        // with no mutant active; a pass makes it a non-run of that codeunit, and the loop goes on.
-        if (
-          step.opKind === "single" &&
-          nonVerdict.transportError &&
-          nonVerdict.cause === undefined &&
-          step.cause === undefined &&
-          v.operation === undefined &&
-          isRunMutantFoundNone(v.failureMessage)
-        ) {
-          const d = await confirmFoundNone({
-            args,
-            m,
-            step,
-            leaseSession,
-            resyncOpSeq,
-            testResultBuffer,
+    };
+    for (;;) {
+      for await (const step of feed()) {
+        // Layer 5C-B2: `runFenced` (or R198's `runFencedMany`), not `runOnce` — a lost ack that
+        // reconciliation PROVES completed earns one fresh attempt, and `v` is then that attempt's
+        // verdict. Only the final verdict is buffered/attested/classified below, exactly as
+        // `runOnce`'s own pre-dispatch-rejected retry already behaves. `budget` is the per-TEST
+        // budget the operator-facing notes quote; `groupBudgetMs` is what a refused retry is
+        // classified against (a chunk legitimately runs for minutes).
+        const {
+          ref,
+          verdict: v,
+          lostAck,
+          retried,
+          retryAfter,
+          original,
+          testBudgetMs: budget,
+          groupBudgetMs,
+        } = step;
+        // PR-51: the replay of the held step was counted when it was first met.
+        if (!replaying) {
+          if (held !== undefined) afterHeld.push(qualifiedTestName(ref));
+          testResultBuffer.push({
+            mutantCode: m.mutantId,
+            ref,
+            outcome: v.outcome,
+            durationMs: v.durationMs,
+            ...(v.measuredDurationMs !== undefined ? { ownDurationMs: v.measuredDurationMs } : {}),
+            failureMessage: v.failureMessage,
+            opKind: step.opKind,
+            ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
           });
-          if (d.kind === "confirmed") {
-            skip.add(ref.codeunitId);
-            discoveryFailed.push(ref);
-            // MANDATORY, as in `reproduceKill`: the confirm cleared the activation.
-            await activateOnce(args.backend, args.safety, m.mutantId);
-            continue;
+          if (v.outcome === "pass" || v.outcome === "fail") {
+            attempted.add(testKeyOf(ref));
+            ranRefs.push(ref);
+          }
+          // R934: the test's own time where the backend measured it. On al-runner `durationMs` is the whole
+          // call's (the whole request on serve), so summing it per covering test multiplied it. A row with
+          // no own figure is charged its call's wall ONCE per call, not once per row (R963).
+          spent += ownTimeCharge(v, chargedWalls);
+        }
+        // R688: a chunk refused whole for a found-0; the generator runs its methods singly next.
+        if (step.discoveryRefused === true) continue;
+        // Layer 5C-A Task 8, Task 10 (design §G): this covering run went through the coverage:
+        // "none" transport path (the only path that ever attests) — feed the artifact's ledger.
+        if (!replaying) {
+          feedAttestation(args.attestation, v.attestation);
+          // Per-mutant, not just per-artifact: OR-ed across this mutant's covering runs so a survivor
+          // can say whether any guarded code ran at all. `undefined` stays `undefined` on a backend
+          // that cannot attest — see `MutantOutcome.guardObserved`.
+          if (v.attestation !== undefined) {
+            guardObserved = (guardObserved ?? false) || v.attestation.observedAny;
+          }
+          // GH-24: per-test reach. Unmeasured, never false: a run without an answer (timeout, a
+          // stopped 408, transport error, in-flight, al-runner) leaves the mutant unmeasured unless
+          // another run reached. Only statement-grain mutants are ever decided (after the loop).
+          if (v.reachedActive === undefined) reachUnanswered = true;
+          else {
+            reachAnswered = true;
+            if (v.reachedActive) reachedBy.push(qualifiedTestName(ref));
+          }
+        }
+        // R534 (D1b): al-runner proved it stopped this row at its timeout, in wording LethAL does not
+        // know. Scored `runner-test-error` below; said once per session, so a moved wording is loud.
+        if (v.timeoutWordingUnknown === true && args.sessionReuse.wordingWarned !== true) {
+          args.sessionReuse.wordingWarned = true;
+          args.emit({
+            type: "warning",
+            code: "alrunner-timeout-wording-unrecognised",
+            message: `[lethal] alrunner-timeout-wording-unrecognised: al-runner stopped ${ref.method} (mutant ${m.mutantId}) at its timeout but the row's message is neither known timeout wording (${v.failureMessage ?? "no message"}); such hangs are scored runner-test-error, not timeout-killed, until RUNNER_TIMEOUT_MESSAGE / RUNNER_ONRUN_TIMEOUT_MESSAGE learn it (R534)`,
+          });
+        }
+        // R577: the reproduction, after a kill's confirmation passed; `undefined` with the rule off,
+        // which leaves every kill site exactly as it was.
+        // PR-51 (F1): inside the held walk, a fail the backend measured ALONE is confirmed and
+        // reproduced alone too. Outside it nothing changes (R1067).
+        const aloneKill = held !== undefined && v.outcome === "fail" && v.selection === "alone";
+        const reproduce = (): Promise<ReproDecision | undefined> =>
+          args.backend.killsMustReproduce === true
+            ? reproduceKill({
+                args,
+                m,
+                step,
+                leaseSession,
+                resyncOpSeq,
+                testResultBuffer,
+                ...(aloneKill ? { alone: true as const } : {}),
+              })
+            : Promise.resolve(undefined);
+        // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
+        const notKilled = (r: KillErrorDecision): boolean => {
+          if (r.cause === "kill-not-reproduced") {
+            notReproduced ??= r;
+            return true;
           }
           verdict = "error";
-          if (d.kind === "abort") {
-            failureNote = d.message;
-            abortAfterRecord = d.message;
-          } else {
-            cause = d.cause;
-            failureNote = d.failureNote;
-            if (d.transportError) transportErrorRef = ref;
+          cause = r.cause;
+          failureNote = r.failureNote;
+          if (r.transportError) transportErrorRef = ref;
+          return false;
+        };
+        // R639: v3's refusal that follows a timeout in the same call is a cascade of that stop. The
+        // next covering test's row is one it would get were it first in the order, so the loop goes
+        // on; the refusal stays pending and ends the mutant as an error if nothing else decides it.
+        // Here and not in `classifyNonVerdictStep`: a refused row in a reproduction or a confirm
+        // (which share it) must still end the mutant.
+        if (step.cause === "runner-refused" && v.refusedAfterStop !== undefined) {
+          refusedPending ??= v.failureMessage ?? `${step.cause} running ${ref.method}`;
+          continue;
+        }
+        // R206: every non-verdict ending (a lease answer, a lost ack, a group cause, our own
+        // deadline, a transport error) is classified by `classifyNonVerdictStep`, the same branches
+        // the warm confirmation's replay is classified by. `null` means a real outcome, decided below.
+        const nonVerdict = await classifyNonVerdictStep(step, {
+          m,
+          leaseSession,
+          safety: args.safety,
+          quarantineStore: args.quarantineStore,
+          resourceKey: args.resourceKey,
+          nowIso: args.nowIso,
+        });
+        if (nonVerdict !== null) {
+          // R688: BC's suite discovery listed no methods for this test under the mutant. Confirm it
+          // with no mutant active; a pass makes it a non-run of that codeunit, and the loop goes on.
+          if (
+            step.opKind === "single" &&
+            nonVerdict.transportError &&
+            nonVerdict.cause === undefined &&
+            step.cause === undefined &&
+            v.operation === undefined &&
+            isRunMutantFoundNone(v.failureMessage)
+          ) {
+            const d = await confirmFoundNone({
+              args,
+              m,
+              step,
+              leaseSession,
+              resyncOpSeq,
+              testResultBuffer,
+            });
+            if (d.kind === "confirmed") {
+              skip.add(ref.codeunitId);
+              discoveryFailed.push(ref);
+              // MANDATORY, as in `reproduceKill`: the confirm cleared the activation.
+              await activateOnce(args.backend, args.safety, m.mutantId);
+              continue;
+            }
+            verdict = "error";
+            if (d.kind === "abort") {
+              failureNote = d.message;
+              abortAfterRecord = d.message;
+            } else {
+              cause = d.cause;
+              failureNote = d.failureNote;
+              if (d.transportError) transportErrorRef = ref;
+            }
+            break;
           }
+          verdict = "error";
+          failureNote = nonVerdict.failureNote;
+          cause = nonVerdict.cause;
+          if (nonVerdict.transportError) transportErrorRef = ref;
           break;
         }
-        verdict = "error";
-        failureNote = nonVerdict.failureNote;
-        cause = nonVerdict.cause;
-        if (nonVerdict.transportError) transportErrorRef = ref;
-        break;
-      }
-      // R206 §2.1, the session guard: the server's own per-session count of test methods run
-      // BEFORE this call. Anything but 0 means the platform handed this call a session another
-      // call had run tests in, so the state at the call's start was that call's, possibly another
-      // mutant's. A failure or a timeout measured there is not attributable: an error, never a
-      // kill. A pass stands (a reused session can hide a kill, never manufacture one). A 408
-      // carries no keys, so a `timeout` is not asserted here; a warm one is, through its replay.
-      const reused = sessionWasReused(v);
-      if (reused && !args.sessionReuse.warned) {
-        args.sessionReuse.warned = true;
-        args.emit({
-          type: "warning",
-          code: "session-reuse-observed",
-          message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
-        });
-      }
-      // R517 (M-a): al-runner enforced a stop other than the --test-timeout it was started with
-      // (a build that ignores the flag). The confirm already judges against the reported one.
-      const configuredStop = args.backend.inRunStopMs;
-      if (
-        v.reportedStopMs !== undefined &&
-        configuredStop !== undefined &&
-        v.reportedStopMs !== configuredStop &&
-        args.sessionReuse.stopWarned !== true
-      ) {
-        args.sessionReuse.stopWarned = true;
-        args.emit({
-          type: "warning",
-          code: "alrunner-stop-mismatch",
-          message: `[lethal] alrunner-stop-mismatch: al-runner reported a ${v.reportedStopMs / 1000}s stop although it was started with --test-timeout ${configuredStop / 1000} (${ref.method}, mutant ${m.mutantId}); a timeout is judged against the stop it reported (R517)`,
-        });
-      }
-      if (reused && v.outcome !== "pass") {
-        verdict = "error";
-        cause = "session-reused";
-        failureNote = `session-reused running ${ref.method}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before this call started, so its state was another call's; a ${v.outcome} measured there is not attributable to this mutant (R206)`;
-        break;
-      }
-      if (v.outcome === "timeout") {
-        if (step.groupPosition > 1) {
+        // R206 §2.1, the session guard: the server's own per-session count of test methods run
+        // BEFORE this call. Anything but 0 means the platform handed this call a session another
+        // call had run tests in, so the state at the call's start was that call's, possibly another
+        // mutant's. A failure or a timeout measured there is not attributable: an error, never a
+        // kill. A pass stands (a reused session can hide a kill, never manufacture one). A 408
+        // carries no keys, so a `timeout` is not asserted here; a warm one is, through its replay.
+        const reused = sessionWasReused(v);
+        if (reused && !args.sessionReuse.warned) {
+          args.sessionReuse.warned = true;
+          args.emit({
+            type: "warning",
+            code: "session-reuse-observed",
+            message: `[lethal] session-reuse-observed: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the call for ${ref.method} (mutant ${m.mutantId}) started — this environment hands LethAL sessions other calls have used; a failure or timeout measured in such a session is recorded as \`session-reused\`, never as a kill (R206)`,
+          });
+        }
+        // R517 (M-a): al-runner enforced a stop other than the --test-timeout it was started with
+        // (a build that ignores the flag). The confirm already judges against the reported one.
+        const configuredStop = args.backend.inRunStopMs;
+        if (
+          v.reportedStopMs !== undefined &&
+          configuredStop !== undefined &&
+          v.reportedStopMs !== configuredStop &&
+          args.sessionReuse.stopWarned !== true
+        ) {
+          args.sessionReuse.stopWarned = true;
+          args.emit({
+            type: "warning",
+            code: "alrunner-stop-mismatch",
+            message: `[lethal] alrunner-stop-mismatch: al-runner reported a ${v.reportedStopMs / 1000}s stop although it was started with --test-timeout ${configuredStop / 1000} (${ref.method}, mutant ${m.mutantId}); a timeout is judged against the stop it reported (R517)`,
+          });
+        }
+        if (reused && v.outcome !== "pass") {
+          verdict = "error";
+          cause = "session-reused";
+          failureNote = `session-reused running ${ref.method}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before this call started, so its state was another call's; a ${v.outcome} measured there is not attributable to this mutant (R206)`;
+          break;
+        }
+        if (v.outcome === "timeout" && !replaying) {
+          // PR-51: hold the first timeout; a later one is only noted (confirmed and scored only if
+          // every timeout before it fails to reproduce).
+          const entry: HeldTimeout = {
+            step,
+            cut: args.backend.cutState?.(m.mutantId),
+            snap: {
+              verdict,
+              cause,
+              failureNote,
+              permissionRefusedTest,
+              runnerDisagreement,
+              runnerDisagreementTest,
+              notReproduced,
+              refusedPending,
+              transportErrorRef,
+              abortAfterRecord,
+            },
+          };
+          if (held === undefined) held = entry;
+          else noted.push(entry);
+          continue;
+        }
+        if (v.outcome === "timeout") {
+          if (step.groupPosition > 1) {
+            const warm = await confirmWarm({
+              args,
+              m,
+              step,
+              leaseSession,
+              resyncOpSeq,
+              testResultBuffer,
+            });
+            if (warm.kind === "confirmed") {
+              // PR-43: always reproduced here; the warm replay has no unmutated confirm of this
+              // test's own time, so the v3-cpu-stop skip (cold site below) cannot apply.
+              const repro = await reproduce();
+              if (repro?.kind === "error") {
+                if (notKilled(repro)) continue;
+                break;
+              }
+              reproduction = repro?.reproduction;
+              stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
+              verdict = "timeout-killed";
+              killingTest = ref.method;
+              killingTestRef = ref;
+              killingTestFailure = v.failureMessage;
+              killPosition = warm.killPosition;
+              recordKill(args.killLedger, m, ref);
+            } else {
+              verdict = "error";
+              cause = warm.cause;
+              failureNote = warm.failureNote;
+              if (warm.permissionRefusedTest !== undefined)
+                permissionRefusedTest = warm.permissionRefusedTest;
+              if (warm.transportError) transportErrorRef = ref;
+            }
+            break;
+          }
+          // R516: every position-1 timeout, fresh batch or reused (R514), falls through to the
+          // unmutated confirm below, on this worker's own backend, instead of being scored here.
+        }
+        if (v.outcome === "fail" && step.groupPosition > 1) {
+          // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
+          // methods 1..k of the SAME call unmutated, in another fresh session.
           const warm = await confirmWarm({
             args,
             m,
@@ -12563,18 +12693,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             testResultBuffer,
           });
           if (warm.kind === "confirmed") {
-            // PR-43: always reproduced here; the warm replay has no unmutated confirm of this
-            // test's own time, so the v3-cpu-stop skip (cold site below) cannot apply.
             const repro = await reproduce();
             if (repro?.kind === "error") {
               if (notKilled(repro)) continue;
               break;
             }
             reproduction = repro?.reproduction;
-            stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
-            verdict = "timeout-killed";
+            verdict = "killed";
             killingTest = ref.method;
             killingTestRef = ref;
+            // R86: the MUTATED run's text, never the replay's (which passed).
             killingTestFailure = v.failureMessage;
             killPosition = warm.killPosition;
             recordKill(args.killLedger, m, ref);
@@ -12588,347 +12716,369 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           }
           break;
         }
-        // R516: every position-1 timeout, fresh batch or reused (R514), falls through to the
-        // unmutated confirm below, on this worker's own backend, instead of being scored here.
-      }
-      if (v.outcome === "fail" && step.groupPosition > 1) {
-        // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
-        // methods 1..k of the SAME call unmutated, in another fresh session.
-        const warm = await confirmWarm({
-          args,
-          m,
-          step,
-          leaseSession,
-          resyncOpSeq,
-          testResultBuffer,
-        });
-        if (warm.kind === "confirmed") {
-          const repro = await reproduce();
-          if (repro?.kind === "error") {
-            if (notKilled(repro)) continue;
-            break;
+        // The cold kill confirmation: a `fail` at position 1, and (R514, R516) every position-1
+        // `timeout`, the only timeout that reaches here.
+        if (v.outcome === "fail" || v.outcome === "timeout") {
+          const timedOut = v.outcome === "timeout";
+          // R514: a timeout's confirm runs at the baseline's deadline when that is longer, and judges
+          // the duration against the budget the timed-out run was SENT (`budget`, R516 M2) with R53's
+          // 2x margin. With the default floor (above the baseline deadline) it runs at the budget.
+          // R658: an unmutated run has the stop on bcdev, so a confirm slower than that is stopped:
+          // BC's 408 gives `confirm-stopped`, a stop with no 408 a strand; never a kill.
+          const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
+          // R653: a fail kill's confirm and its R577 reproduction may travel as ONE request (al-runner
+          // v3 serve-entries, confirm first); the two reads below are unchanged.
+          if (
+            !timedOut &&
+            !aloneKill &&
+            args.backend.killsMustReproduce === true &&
+            args.backend.sendKillPair !== undefined
+          ) {
+            args.safety.assertSafe(`sendKillPair(${m.mutantId})`);
+            await args.backend.sendKillPair(m.mutantId, ref);
           }
-          reproduction = repro?.reproduction;
-          verdict = "killed";
-          killingTest = ref.method;
-          killingTestRef = ref;
-          // R86: the MUTATED run's text, never the replay's (which passed).
-          killingTestFailure = v.failureMessage;
-          killPosition = warm.killPosition;
-          recordKill(args.killLedger, m, ref);
-        } else {
-          verdict = "error";
-          cause = warm.cause;
-          failureNote = warm.failureNote;
-          if (warm.permissionRefusedTest !== undefined)
-            permissionRefusedTest = warm.permissionRefusedTest;
-          if (warm.transportError) transportErrorRef = ref;
-        }
-        break;
-      }
-      // The cold kill confirmation: a `fail` at position 1, and (R514, R516) every position-1
-      // `timeout`, the only timeout that reaches here.
-      if (v.outcome === "fail" || v.outcome === "timeout") {
-        const timedOut = v.outcome === "timeout";
-        // R514: a timeout's confirm runs at the baseline's deadline when that is longer, and judges
-        // the duration against the budget the timed-out run was SENT (`budget`, R516 M2) with R53's
-        // 2x margin. With the default floor (above the baseline deadline) it runs at the budget.
-        // R658: an unmutated run has the stop on bcdev, so a confirm slower than that is stopped:
-        // BC's 408 gives `confirm-stopped`, a stop with no 408 a strand; never a kill.
-        const confirmMs = timedOut ? Math.max(budget, args.fallbackTimeoutMs) : budget;
-        // R653: a fail kill's confirm and its R577 reproduction may travel as ONE request (al-runner
-        // v3 serve-entries, confirm first); the two reads below are unchanged.
-        if (
-          !timedOut &&
-          args.backend.killsMustReproduce === true &&
-          args.backend.sendKillPair !== undefined
-        ) {
-          args.safety.assertSafe(`sendKillPair(${m.mutantId})`);
-          await args.backend.sendKillPair(m.mutantId, ref);
-        }
-        await activateOnce(args.backend, args.safety, null);
-        // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
-        // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
-        // confirmation costs a kill verdict no more than it costs a covering run's.
-        const {
-          verdict: confirmRaw,
-          lostAck: confirmLostAck,
-          retried: confirmRetried,
-          retryAfter: confirmRetryAfter,
-          original: confirmOriginal,
-        } = await runFenced(
-          args.backend,
-          args.safety,
-          ref,
-          { coverage: "none", timeoutMs: confirmMs },
-          leaseSession,
-          args.emit,
-          resyncOpSeq,
-        );
-        // R658 (D6): our stop's `op-stopped` and `stopped-after-completion` on the confirm are the
-        // timeout they are, so they reach `confirm-stopped` below, never a lease branch.
-        const confirm = ownStopAsTimeout(confirmRaw);
-        const confirmRefusal =
-          classifyLeaseVerdict(confirm) === "lost" &&
-          confirmRetryAfter === "not-started" &&
-          confirmOriginal !== undefined &&
-          leaseSession !== undefined
-            ? await leaseSession.classifyRetryRefusal(confirmOriginal, confirmMs)
-            : "genuine";
-        testResultBuffer.push({
-          mutantCode: null,
-          ref,
-          outcome: confirm.outcome,
-          durationMs: confirm.durationMs,
-          ...(confirm.measuredDurationMs !== undefined
-            ? { ownDurationMs: confirm.measuredDurationMs }
-            : {}),
-          failureMessage: confirm.failureMessage,
-          ...(confirm.sessionId !== undefined ? { sessionId: confirm.sessionId } : {}),
-        });
-        // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
-        // null-activation run that ALSO goes through the coverage:"none" transport path (see
-        // the covering-run feed above) — it attests too, so it must feed the same ledger.
-        feedAttestation(args.attestation, confirm.attestation);
-        const confirmLease = classifyLeaseVerdict(confirm);
-        if (confirmLease !== "none") {
-          // Same design §5/§6 split as the covering run above, applied to the confirmation rerun:
-          // a genuine loss latches `lease-lost` (no durable quarantine — the container is fine);
-          // an op-in-flight duplicate is polled out, never re-dispatched, and never latched.
-          const detail = `confirming ${ref.method} (mutant ${m.mutantId}): ${confirm.failureMessage ?? "RunMutant lease-invalid"}`;
-          verdict = "error";
-          if (confirmLease === "lost" && confirmRefusal !== "genuine") {
-            // R194 (second half), rule 2c on the confirmation rerun: the late original ran the
-            // baseline confirmation and its answer was lost, or it is stuck. The kill stays
-            // unconfirmed either way; only the second is a strand.
-            if (confirmRefusal === "original-stuck") {
-              failureNote = `${STRANDED_NOTE_PREFIX}confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget (R194)`;
-              cause = "stranded";
-              await quarantineInFlight({
-                safety: args.safety,
-                quarantineStore: args.quarantineStore,
-                resourceKey: args.resourceKey,
-                nowIso: args.nowIso,
-                detail: `late original still executing after a never-claimed reconciliation and retry, confirming ${ref.method} (mutant ${m.mutantId})`,
-              });
-            } else {
-              failureNote = `lost ack confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and completed — the retry was refused as it should be, the original's answer went to a closed socket, so the kill could not be confirmed; the lease was NOT lost (R194)`;
-              cause = "result-lost";
-            }
-          } else if (confirmLease === "lost") {
-            noteLeaseLostOrThrow(leaseSession, detail);
-            failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
-          } else if (confirmLease === "op-stopped") {
-            // R203 on the confirmation rerun. Since R658 the confirm has the stop, and
-            // `ownStopAsTimeout` maps our own `op-stopped` (it carries a `stopState`) to
-            // `confirm-stopped`; this is left for an `op-stopped` with no stop state recorded.
-            failureNote = `op-stopped while ${detail} — the fence refused to record the confirmation because our own stop had tombstoned its op; the kill could not be confirmed and the lease was NOT lost (R203)`;
-            cause = "op-stopped";
-          } else {
-            const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
-            // R122(a), confirmation-side twin of the covering-run branch above — same reasoning,
-            // and the `STRANDED_NOTE_PREFIX` must ride on the same condition as the cause so
-            // `--resume` and `explain` cannot disagree about which mutants are stranded.
-            failureNote = `${cleared ? "" : STRANDED_NOTE_PREFIX}op-in-flight while ${detail} — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was not returned" : "never cleared"}`;
-            if (!cleared) {
-              cause = "stranded";
-              await quarantineInFlight({
-                safety: args.safety,
-                quarantineStore: args.quarantineStore,
-                resourceKey: args.resourceKey,
-                nowIso: args.nowIso,
-                detail: `operation never cleared after an op-in-flight refusal confirming ${ref.method} (mutant ${m.mutantId})`,
-              });
-            }
-          }
-        } else if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
-          // Layer 5C-B2 (design §5): `runFenced` already reconciled this answer and, when the op
-          // was proven complete, already spent its one fresh attempt. The kill is unconfirmable
-          // either way (`error`, never `killed`); what differs is whether the tier is condemned.
-          // The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
-          verdict = "error";
-          // Covers `runFenced`'s `stop-outcome-unconfirmed` (that cause is only ever set on such a
-          // verdict) and an unresolved reconcile after a stop, which gets the tombstone sentence.
-          if (confirm.operation === "in-flight-unknown" && !stopIsRetrySafe(confirm.stopState)) {
-            // R658 (I1, D4): our stop was sent, not refused, and BC never sent its 408. A
-            // `completed` reconciliation then proves nothing, because our own stop writes that
-            // tombstone while the AL session may still run. Before `result-lost`, never after it.
-            await quarantineInFlight({
-              safety: args.safety,
-              quarantineStore: args.quarantineStore,
-              resourceKey: args.resourceKey,
-              nowIso: args.nowIso,
-              detail: `confirm stopped without BC's 408, confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}${tombstoneSentence(confirm.stopState)}`,
-            });
-            failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm ran past its ${confirmMs} ms budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`;
-            cause = "stranded";
-          } else if (confirmLostAck === "completed") {
-            failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
-            // R122(b), confirmation-side twin — the op provably finished, only its answer was lost.
-            cause = "result-lost";
-          } else {
-            await quarantineInFlight({
-              safety: args.safety,
-              quarantineStore: args.quarantineStore,
-              resourceKey: args.resourceKey,
-              nowIso: args.nowIso,
-              detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirmRetried ? " — a first, proven-complete attempt had already been retried once" : ""}${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
-            });
-            failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
-            // R114, the confirmation-side twin of the covering-run strand above — same reasoning,
-            // and it must be set here too or the two `STRANDED_NOTE_PREFIX` sites would disagree
-            // about whether a strand has a cause.
-            cause = "stranded";
-          }
-        } else if (sessionWasReused(confirm)) {
-          // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
-          // did not measure the killer cold. Not a kill.
-          verdict = "error";
-          cause = "session-reused";
-          failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
-        } else if (confirm.outcome === "pass") {
-          // R515: a passing timeout confirm measured the test on this worker's backend today;
-          // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
-          // which must therefore read the budget the timed-out run was SENT (`budget`), never a
-          // recomputed one (R516 M2): recomputed now, it would already include this measurement.
-          // R963: stays the call's WALL (compile included, which the budget is checked against).
-          // It runs only where `inRunStopIsBudget` (bcdev, v3 one-shot: a confirm is one test's
-          // call); on serve-entries, where a batched wall could be shared, `noteMeasured` returns.
-          if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
-          // R517: the stop the run really enforced. al-runner reports it on its timeout row;
-          // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
-          // bcdev reports none and declares none: the stop is the budget, as before.
-          const reported = v.reportedStopMs;
-          const stopUnreported = args.backend.inRunStopMs !== undefined && reported === undefined;
-          const stopMs = Math.min(
-            budget,
-            reported ?? Number.POSITIVE_INFINITY,
-            args.backend.inRunStopMs ?? Number.POSITIVE_INFINITY,
+          await activateOnce(args.backend, args.safety, null);
+          // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
+          // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
+          // confirmation costs a kill verdict no more than it costs a covering run's.
+          const {
+            verdict: confirmRaw,
+            lostAck: confirmLostAck,
+            retried: confirmRetried,
+            retryAfter: confirmRetryAfter,
+            original: confirmOriginal,
+          } = await runFenced(
+            args.backend,
+            args.safety,
+            ref,
+            {
+              coverage: "none",
+              timeoutMs: confirmMs,
+              ...(aloneKill ? { alone: true as const } : {}),
+            },
+            leaseSession,
+            args.emit,
+            resyncOpSeq,
           );
-          // The test's own duration, on the stop's clock (al-runner's per-test figure, not the
-          // suite's or the process's wall clock); bcdev's is its wall clock. R534 (I1): only when
-          // the stop fired in the test BODY. An OnRun-trigger timeout, or one that does not say
-          // where it fired, is judged on the wall clock, which includes the OnRun (no pass row
-          // reports its time): fail-closed, it can only over-state the unmutated run.
-          const confirmMs =
-            v.timeoutIn === "body"
-              ? (confirm.measuredDurationMs ?? confirm.durationMs)
-              : confirm.durationMs;
-          if (timedOut && (stopUnreported || 2 * confirmMs > stopMs)) {
-            // R514, R516: the test passes unmutated but takes more than half the stop it ran
-            // under, so a budget measured now would be larger: the timeout is not the mutant's. The
-            // cause follows where that budget came from (I3 c).
+          // R658 (D6): our stop's `op-stopped` and `stopped-after-completion` on the confirm are the
+          // timeout they are, so they reach `confirm-stopped` below, never a lease branch.
+          const confirm = ownStopAsTimeout(confirmRaw);
+          const confirmRefusal =
+            classifyLeaseVerdict(confirm) === "lost" &&
+            confirmRetryAfter === "not-started" &&
+            confirmOriginal !== undefined &&
+            leaseSession !== undefined
+              ? await leaseSession.classifyRetryRefusal(confirmOriginal, confirmMs)
+              : "genuine";
+          testResultBuffer.push({
+            mutantCode: null,
+            ref,
+            outcome: confirm.outcome,
+            durationMs: confirm.durationMs,
+            ...(confirm.measuredDurationMs !== undefined
+              ? { ownDurationMs: confirm.measuredDurationMs }
+              : {}),
+            failureMessage: confirm.failureMessage,
+            ...(confirm.sessionId !== undefined ? { sessionId: confirm.sessionId } : {}),
+          });
+          // Layer 5C-A Task 8, Task 10 (design §G): the kill-confirmation rerun is a
+          // null-activation run that ALSO goes through the coverage:"none" transport path (see
+          // the covering-run feed above) — it attests too, so it must feed the same ledger.
+          feedAttestation(args.attestation, confirm.attestation);
+          const confirmLease = classifyLeaseVerdict(confirm);
+          if (confirmLease !== "none") {
+            // Same design §5/§6 split as the covering run above, applied to the confirmation rerun:
+            // a genuine loss latches `lease-lost` (no durable quarantine — the container is fine);
+            // an op-in-flight duplicate is polled out, never re-dispatched, and never latched.
+            const detail = `confirming ${ref.method} (mutant ${m.mutantId}): ${confirm.failureMessage ?? "RunMutant lease-invalid"}`;
             verdict = "error";
-            const source = step.testBudgetSource;
-            const judged = { confirmMs, wallMs: confirm.durationMs, stopMs };
-            // R517: the in-run stop failed it, not the budget: a re-measured baseline would not
-            // help, so never `reused-budget-stale`.
-            const stopBound = stopMs < budget && 2 * confirmMs <= budget;
-            if (stopUnreported) {
-              cause = "timeout-unconfirmed";
-              failureNote = `timeout-unconfirmed ${ref.method}: timed out at position 1 under the mutant, but al-runner did not say which stop it enforced (its row has no "Test exceeded <N>s timeout."), so the timeout cannot be weighed against the ${confirmMs} ms the test took unmutated and is not attributed to the mutant (R517)`;
-            } else if (
-              args.baselineReused !== undefined &&
-              source.kind !== "confirm" &&
-              !stopBound
-            ) {
-              cause = "reused-budget-stale";
-              failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${durationsText(judged)}, more than half the ${stopText(stopMs, budget, `set from run ${args.baselineReused.runId}'s reused baseline (R192)`)}, so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
+            if (confirmLease === "lost" && confirmRefusal !== "genuine") {
+              // R194 (second half), rule 2c on the confirmation rerun: the late original ran the
+              // baseline confirmation and its answer was lost, or it is stuck. The kill stays
+              // unconfirmed either way; only the second is a strand.
+              if (confirmRefusal === "original-stuck") {
+                failureNote = `${STRANDED_NOTE_PREFIX}confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and is still executing after the budget (R194)`;
+                cause = "stranded";
+                await quarantineInFlight({
+                  safety: args.safety,
+                  quarantineStore: args.quarantineStore,
+                  resourceKey: args.resourceKey,
+                  nowIso: args.nowIso,
+                  detail: `late original still executing after a never-claimed reconciliation and retry, confirming ${ref.method} (mutant ${m.mutantId})`,
+                });
+              } else {
+                failureNote = `lost ack confirming ${ref.method}: the first confirmation attempt was reconciled as never claimed and retried, but the abandoned original arrived late and completed — the retry was refused as it should be, the original's answer went to a closed socket, so the kill could not be confirmed; the lease was NOT lost (R194)`;
+                cause = "result-lost";
+              }
+            } else if (confirmLease === "lost") {
+              noteLeaseLostOrThrow(leaseSession, detail);
+              failureNote = `lease-lost while ${detail} — the kill could not be confirmed under a provable lease`;
+            } else if (confirmLease === "op-stopped") {
+              // R203 on the confirmation rerun. Since R658 the confirm has the stop, and
+              // `ownStopAsTimeout` maps our own `op-stopped` (it carries a `stopState`) to
+              // `confirm-stopped`; this is left for an `op-stopped` with no stop state recorded.
+              failureNote = `op-stopped while ${detail} — the fence refused to record the confirmation because our own stop had tombstoned its op; the kill could not be confirmed and the lease was NOT lost (R203)`;
+              cause = "op-stopped";
             } else {
-              cause = "timeout-unconfirmed";
-              failureNote = timeoutUnconfirmedNote(ref.method, judged, budget, source);
+              const cleared = (await leaseSession?.pollUntilOpClears()) ?? false;
+              // R122(a), confirmation-side twin of the covering-run branch above — same reasoning,
+              // and the `STRANDED_NOTE_PREFIX` must ride on the same condition as the cause so
+              // `--resume` and `explain` cannot disagree about which mutants are stranded.
+              failureNote = `${cleared ? "" : STRANDED_NOTE_PREFIX}op-in-flight while ${detail} — polled instead of re-dispatched (design §5); the operation ${cleared ? "cleared, but its result was not returned" : "never cleared"}`;
+              if (!cleared) {
+                cause = "stranded";
+                await quarantineInFlight({
+                  safety: args.safety,
+                  quarantineStore: args.quarantineStore,
+                  resourceKey: args.resourceKey,
+                  nowIso: args.nowIso,
+                  detail: `operation never cleared after an op-in-flight refusal confirming ${ref.method} (mutant ${m.mutantId})`,
+                });
+              }
             }
-            if (v.timeoutIn === "onrun") {
-              failureNote = `${failureNote ?? ""} The stop fired in the test codeunit's OnRun trigger, and al-runner does not report the OnRun's own time, so the confirm's wall clock was judged; it includes the OnRun and, on one-shot, the compile (R534).`;
+          } else if (confirm.operation !== undefined && requiresUnsafeLatch(confirm.operation)) {
+            // Layer 5C-B2 (design §5): `runFenced` already reconciled this answer and, when the op
+            // was proven complete, already spent its one fresh attempt. The kill is unconfirmable
+            // either way (`error`, never `killed`); what differs is whether the tier is condemned.
+            // The post-loop `safety.isUnsafe` check (below) stops scheduling only if it is.
+            verdict = "error";
+            // Covers `runFenced`'s `stop-outcome-unconfirmed` (that cause is only ever set on such a
+            // verdict) and an unresolved reconcile after a stop, which gets the tombstone sentence.
+            if (confirm.operation === "in-flight-unknown" && !stopIsRetrySafe(confirm.stopState)) {
+              // R658 (I1, D4): our stop was sent, not refused, and BC never sent its 408. A
+              // `completed` reconciliation then proves nothing, because our own stop writes that
+              // tombstone while the AL session may still run. Before `result-lost`, never after it.
+              await quarantineInFlight({
+                safety: args.safety,
+                quarantineStore: args.quarantineStore,
+                resourceKey: args.resourceKey,
+                nowIso: args.nowIso,
+                detail: `confirm stopped without BC's 408, confirming ${ref.method} (mutant ${m.mutantId})${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}${tombstoneSentence(confirm.stopState)}`,
+              });
+              failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm ran past its ${confirmMs} ms budget and LethAL stopped it, but BC never sent its 408, so the session may still run on the server — container may be stranded (R658)`;
+              cause = "stranded";
+            } else if (confirmLostAck === "completed") {
+              failureNote = `lost ack confirming ${ref.method}: RunMutant's response was unreadable${confirm.failureMessage !== undefined ? ` (${confirm.failureMessage})` : ""}, but GetOperationStatus confirms the operation COMPLETED server-side — the confirmation was retried once and that attempt was unreadable too, so the kill could not be confirmed; the container is not stranded (design §5)`;
+              // R122(b), confirmation-side twin — the op provably finished, only its answer was lost.
+              cause = "result-lost";
+            } else {
+              await quarantineInFlight({
+                safety: args.safety,
+                quarantineStore: args.quarantineStore,
+                resourceKey: args.resourceKey,
+                nowIso: args.nowIso,
+                detail: `test in-flight-unknown confirming ${ref.method} (mutant ${m.mutantId})${confirmRetried ? " — a first, proven-complete attempt had already been retried once" : ""}${confirm.failureMessage !== undefined ? `: ${confirm.failureMessage}` : ""}`,
+              });
+              failureNote = `${STRANDED_NOTE_PREFIX}${ref.method} confirm returned no readable result and its operation could not be confirmed complete — container may be stranded`;
+              // R114, the confirmation-side twin of the covering-run strand above — same reasoning,
+              // and it must be set here too or the two `STRANDED_NOTE_PREFIX` sites would disagree
+              // about whether a strand has a cause.
+              cause = "stranded";
             }
-            break;
+          } else if (sessionWasReused(confirm)) {
+            // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
+            // did not measure the killer cold. Not a kill.
+            verdict = "error";
+            cause = "session-reused";
+            failureNote = `session-reused confirming ${ref.method}: the server reported ${confirm.testRunsBefore} test method(s) had already run in session ${confirm.sessionId ?? "?"} before the confirmation started, so the killer was not re-run cold; the kill is unconfirmed (R206)`;
+          } else if (confirm.outcome === "pass") {
+            // R515: a passing timeout confirm measured the test on this worker's backend today;
+            // later mutants of this call are budgeted from it. Recorded BEFORE the judgement below,
+            // which must therefore read the budget the timed-out run was SENT (`budget`), never a
+            // recomputed one (R516 M2): recomputed now, it would already include this measurement.
+            // R963: stays the call's WALL (compile included, which the budget is checked against).
+            // It runs only where `inRunStopIsBudget` (bcdev, v3 one-shot: a confirm is one test's
+            // call); on serve-entries, where a batched wall could be shared, `noteMeasured` returns.
+            if (timedOut) noteMeasured(ref, confirm.durationMs, m.mutantId);
+            // R517: the stop the run really enforced. al-runner reports it on its timeout row;
+            // `--server` (which declares `inRunStopMs`) must, or the timeout stays unconfirmed.
+            // bcdev reports none and declares none: the stop is the budget, as before.
+            const reported = v.reportedStopMs;
+            const stopUnreported = args.backend.inRunStopMs !== undefined && reported === undefined;
+            const stopMs = Math.min(
+              budget,
+              reported ?? Number.POSITIVE_INFINITY,
+              args.backend.inRunStopMs ?? Number.POSITIVE_INFINITY,
+            );
+            // The test's own duration, on the stop's clock (al-runner's per-test figure, not the
+            // suite's or the process's wall clock); bcdev's is its wall clock. R534 (I1): only when
+            // the stop fired in the test BODY. An OnRun-trigger timeout, or one that does not say
+            // where it fired, is judged on the wall clock, which includes the OnRun (no pass row
+            // reports its time): fail-closed, it can only over-state the unmutated run.
+            const confirmMs =
+              v.timeoutIn === "body"
+                ? (confirm.measuredDurationMs ?? confirm.durationMs)
+                : confirm.durationMs;
+            if (timedOut && (stopUnreported || 2 * confirmMs > stopMs)) {
+              // R514, R516: the test passes unmutated but takes more than half the stop it ran
+              // under, so a budget measured now would be larger: the timeout is not the mutant's. The
+              // cause follows where that budget came from (I3 c).
+              verdict = "error";
+              const source = step.testBudgetSource;
+              const judged = { confirmMs, wallMs: confirm.durationMs, stopMs };
+              // R517: the in-run stop failed it, not the budget: a re-measured baseline would not
+              // help, so never `reused-budget-stale`.
+              const stopBound = stopMs < budget && 2 * confirmMs <= budget;
+              if (stopUnreported) {
+                cause = "timeout-unconfirmed";
+                failureNote = `timeout-unconfirmed ${ref.method}: timed out at position 1 under the mutant, but al-runner did not say which stop it enforced (its row has no "Test exceeded <N>s timeout."), so the timeout cannot be weighed against the ${confirmMs} ms the test took unmutated and is not attributed to the mutant (R517)`;
+              } else if (
+                args.baselineReused !== undefined &&
+                source.kind !== "confirm" &&
+                !stopBound
+              ) {
+                cause = "reused-budget-stale";
+                failureNote = `reused-budget-stale ${ref.method}: completed unmutated in ${durationsText(judged)}, more than half the ${stopText(stopMs, budget, `set from run ${args.baselineReused.runId}'s reused baseline (R192)`)}, so the timeout at position 1 is not attributed to the mutant; a run without --resume re-measures the baseline (R514)`;
+              } else {
+                cause = "timeout-unconfirmed";
+                failureNote = timeoutUnconfirmedNote(ref.method, judged, budget, source);
+              }
+              if (v.timeoutIn === "onrun") {
+                failureNote = `${failureNote ?? ""} The stop fired in the test codeunit's OnRun trigger, and al-runner does not report the OnRun's own time, so the confirm's wall clock was judged; it includes the OnRun and, on one-shot, the compile (R534).`;
+              }
+              break;
+            }
+            // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
+            // is a kill and before R197's ledger learns from it.
+            // PR-43: a provable v3 CPU-time stop (the backend's `cpuStop`, from the row's clock and
+            // duration) whose unmutated confirm just passed in at most a quarter of the stop is not
+            // reproduced: load cannot cause it. Any condition failing reproduces as before.
+            // al-runner omits `durationMs` on a row whose time is zero (alrunner-cli output.rs
+            // `test_row`: `if !time.is_zero()`), so a 0 ms test has no `measuredDurationMs`. Then the
+            // call's wall (`confirm.durationMs`), an upper bound of the test's own time, is the bound:
+            // the rule stays conservative.
+            const confirmBoundMs =
+              typeof confirm.measuredDurationMs === "number"
+                ? confirm.measuredDurationMs
+                : confirm.durationMs;
+            const cpuStopSkip =
+              timedOut && v.cpuStop === true && confirmBoundMs <= (v.reportedStopMs ?? 0) / 4;
+            const repro = cpuStopSkip ? undefined : await reproduce();
+            if (repro?.kind === "error") {
+              if (notKilled(repro)) continue;
+              break;
+            }
+            reproduction = repro?.reproduction;
+            if (timedOut) {
+              stopEvidence = cpuStopSkip
+                ? "v3-cpu-stop"
+                : weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
+            }
+            verdict = timedOut ? "timeout-killed" : "killed";
+            killingTest = ref.method;
+            killingTestRef = ref;
+            killPosition = 1;
+            // R586 (I1): the backend's tagged note on this kill (v3's shared-codeunit run).
+            if (v.backendNote !== undefined) failureNote = v.backendNote;
+            recordKill(args.killLedger, m, ref);
+            // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
+            // `killingTestFailure` declaration above for why the distinction is the whole point.
+            killingTestFailure = v.failureMessage;
+          } else if (confirm.outcome === "deadline-exceeded") {
+            // Our timer, not the runner's, fired during confirmation — infrastructure,
+            // not evidence the test is flaky. Must not inflate counts.unstable.
+            verdict = "error";
+            failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
+            cause = "deadline-exceeded";
+          } else if (stoppedByUs(confirm)) {
+            // R658 (I3): our stop ended the unmutated run cleanly (BC's 408, or phase 3 refused an op
+            // our stop had tombstoned). It says the test is slow or hangs with no mutant, which is not
+            // `unstable` and not a kill; no quarantine.
+            verdict = "error";
+            cause = "confirm-stopped";
+            failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or on BC 29 its exact 400 after our confirmed stop, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
+          } else {
+            // Fails under the mutant AND at baseline: by construction this says nothing about the
+            // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).
+            // But "unstable" is a guess about flakiness, and one specific cause is deterministic and
+            // fully explicable: a test codeunit that omits `TestPermissions = Disabled` is stripped
+            // of write permission and refused on BOTH runs, every time (ROADMAP R26, measured A/B —
+            // see `describeTestPermissionsRefusal`). When BC's own refusal text is in either run's
+            // message, NAME it here rather than leave the user with "unstable" for a one-line fix.
+            // Strictly additive: the diagnosis is appended to the note, never substituted for the
+            // failure, and this branch is only reachable once the outcome is already decided.
+            verdict = "error";
+            const refusal =
+              describeTestPermissionsRefusal(confirm.failureMessage) ??
+              describeTestPermissionsRefusal(v.failureMessage);
+            // R35: record it session-wide too, so the report's `permissionsRefused` field and this
+            // note cannot disagree about whether the run hit a permissions refusal.
+            if (refusal !== undefined) {
+              permissionRefusedTest = qualifiedTestName(ref);
+            }
+            // R59: in a HUB coverage mode this test was hub-GREEN by construction — a covering test
+            // comes from the green set, and the green set came from bc-dev-mcp — and it has just
+            // failed unmutated on the FENCE. That is the runner disagreement itself, observed at no
+            // extra cost, and reporting it only as "unstable" sends the reader to debug flakiness.
+            // Strictly a diagnosis: the verdict is already `error cause=unstable` and does not move.
+            const disagreement = describeRunnerDisagreement(args.backend.capabilities().coverage);
+            if (disagreement !== undefined) {
+              runnerDisagreement = disagreement;
+              runnerDisagreementTest = qualifiedTestName(ref);
+            }
+            failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
+              refusal !== undefined ? ` — ${refusal}` : ""
+            }${disagreement !== undefined ? ` — ${disagreement}` : ""}`;
+            cause = "unstable";
           }
-          // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
-          // is a kill and before R197's ledger learns from it.
-          // PR-43: a provable v3 CPU-time stop (the backend's `cpuStop`, from the row's clock and
-          // duration) whose unmutated confirm just passed in at most a quarter of the stop is not
-          // reproduced: load cannot cause it. Any condition failing reproduces as before.
-          // al-runner omits `durationMs` on a row whose time is zero (alrunner-cli output.rs
-          // `test_row`: `if !time.is_zero()`), so a 0 ms test has no `measuredDurationMs`. Then the
-          // call's wall (`confirm.durationMs`), an upper bound of the test's own time, is the bound:
-          // the rule stays conservative.
-          const confirmBoundMs =
-            typeof confirm.measuredDurationMs === "number"
-              ? confirm.measuredDurationMs
-              : confirm.durationMs;
-          const cpuStopSkip =
-            timedOut && v.cpuStop === true && confirmBoundMs <= (v.reportedStopMs ?? 0) / 4;
-          const repro = cpuStopSkip ? undefined : await reproduce();
-          if (repro?.kind === "error") {
-            if (notKilled(repro)) continue;
-            break;
-          }
-          reproduction = repro?.reproduction;
-          if (timedOut) {
-            stopEvidence = cpuStopSkip
-              ? "v3-cpu-stop"
-              : weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
-          }
-          verdict = timedOut ? "timeout-killed" : "killed";
-          killingTest = ref.method;
-          killingTestRef = ref;
-          killPosition = 1;
-          // R586 (I1): the backend's tagged note on this kill (v3's shared-codeunit run).
-          if (v.backendNote !== undefined) failureNote = v.backendNote;
-          recordKill(args.killLedger, m, ref);
-          // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
-          // `killingTestFailure` declaration above for why the distinction is the whole point.
-          killingTestFailure = v.failureMessage;
-        } else if (confirm.outcome === "deadline-exceeded") {
-          // Our timer, not the runner's, fired during confirmation — infrastructure,
-          // not evidence the test is flaky. Must not inflate counts.unstable.
-          verdict = "error";
-          failureNote = `deadline exceeded confirming ${ref.method} (infrastructure, not a kill)`;
-          cause = "deadline-exceeded";
-        } else if (stoppedByUs(confirm)) {
-          // R658 (I3): our stop ended the unmutated run cleanly (BC's 408, or phase 3 refused an op
-          // our stop had tombstoned). It says the test is slow or hangs with no mutant, which is not
-          // `unstable` and not a kill; no quarantine.
-          verdict = "error";
-          cause = "confirm-stopped";
-          failureNote = `confirming ${ref.method}: unmutated, the test also ran past its ${confirmMs} ms budget and LethAL stopped it (BC's 408, or on BC 29 its exact 400 after our confirmed stop, or the op was already tombstoned by that stop), so the ${v.outcome} under the mutant is not attributed to it (R658)`;
-        } else {
-          // Fails under the mutant AND at baseline: by construction this says nothing about the
-          // mutant, so it stays `error cause=unstable` (the verdict is NOT reconsidered below).
-          // But "unstable" is a guess about flakiness, and one specific cause is deterministic and
-          // fully explicable: a test codeunit that omits `TestPermissions = Disabled` is stripped
-          // of write permission and refused on BOTH runs, every time (ROADMAP R26, measured A/B —
-          // see `describeTestPermissionsRefusal`). When BC's own refusal text is in either run's
-          // message, NAME it here rather than leave the user with "unstable" for a one-line fix.
-          // Strictly additive: the diagnosis is appended to the note, never substituted for the
-          // failure, and this branch is only reachable once the outcome is already decided.
-          verdict = "error";
-          const refusal =
-            describeTestPermissionsRefusal(confirm.failureMessage) ??
-            describeTestPermissionsRefusal(v.failureMessage);
-          // R35: record it session-wide too, so the report's `permissionsRefused` field and this
-          // note cannot disagree about whether the run hit a permissions refusal.
-          if (refusal !== undefined) {
-            permissionRefusedTest = qualifiedTestName(ref);
-          }
-          // R59: in a HUB coverage mode this test was hub-GREEN by construction — a covering test
-          // comes from the green set, and the green set came from bc-dev-mcp — and it has just
-          // failed unmutated on the FENCE. That is the runner disagreement itself, observed at no
-          // extra cost, and reporting it only as "unstable" sends the reader to debug flakiness.
-          // Strictly a diagnosis: the verdict is already `error cause=unstable` and does not move.
-          const disagreement = describeRunnerDisagreement(args.backend.capabilities().coverage);
-          if (disagreement !== undefined) {
-            runnerDisagreement = disagreement;
-            runnerDisagreementTest = qualifiedTestName(ref);
-          }
-          failureNote = `unstable test ${ref.method}: fails at baseline confirmation${
-            refusal !== undefined ? ` — ${refusal}` : ""
-          }${disagreement !== undefined ? ` — ${disagreement}` : ""}`;
-          cause = "unstable";
+          break;
         }
+      }
+      // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
+      const h: HeldTimeout | undefined =
+        held ?? (replaying && verdict === "survived" ? noted.shift() : undefined);
+      if (h === undefined) break;
+      const carried = replaying ? notReproduced : undefined;
+      const heldName = qualifiedTestName(h.step.ref);
+      const wasFirst = h === held;
+      held = undefined;
+      if (verdict === "killed") {
+        // A later test failed, was confirmed and reproduced: the mutant is killed, the timeout dropped.
+        heldNote = `the timeout of ${heldName} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`;
         break;
       }
+      if (args.safety.isUnsafe && verdict === "survived") {
+        // Nothing was scored on a latched session: the held timeout's confirm would have thrown here.
+        args.safety.assertSafe(`confirming the held timeout of ${heldName} (mutant ${m.mutantId})`);
+      }
+      if (
+        args.safety.isUnsafe ||
+        transportErrorRef !== undefined ||
+        abortAfterRecord !== undefined ||
+        cause === "stranded" ||
+        cause === "result-lost" ||
+        cause === "deadline-exceeded"
+      ) {
+        // A terminal answer keeps its handling; no call goes out over a session or transport that
+        // just failed. The held timeout is only named, after any strand prefix `--resume` reads.
+        heldNote = `a timeout of ${heldName} was held earlier in this walk and not scored`;
+        break;
+      }
+      // No kill found: score the held step through the timeout path above, as it would have been.
+      verdict = h.snap.verdict;
+      cause = h.snap.cause;
+      failureNote = h.snap.failureNote;
+      permissionRefusedTest = h.snap.permissionRefusedTest;
+      runnerDisagreement = h.snap.runnerDisagreement;
+      runnerDisagreementTest = h.snap.runnerDisagreementTest;
+      // The first reproduction that failed stays the earliest `kill-not-reproduced` of the walk.
+      notReproduced = carried ?? h.snap.notReproduced;
+      refusedPending = h.snap.refusedPending;
+      transportErrorRef = h.snap.transportErrorRef;
+      abortAfterRecord = h.snap.abortAfterRecord;
+      if (wasFirst) {
+        heldNote =
+          afterHeld.length > 0
+            ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
+            : undefined;
+      }
+      // v3: the cut state this step met, so its reproduction routes as it did in the old walk.
+      args.backend.restoreCutState?.(m.mutantId, h.cut);
+      walkClosed = true;
+      replaying = true;
+      replayStep = h.step;
     }
+    await walker.return(undefined);
     // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
     // mutant is that error, never `survived`. Before R198's check below, which guards survivors
     // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
@@ -12941,6 +13091,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       verdict = "error";
       cause = "runner-refused";
       failureNote = refusedPending;
+    }
+    // PR-51: names only, after any strand prefix (`--resume` reads it) and any other note.
+    if (heldNote !== undefined) {
+      failureNote = failureNote !== undefined ? `${failureNote} ${heldNote}` : heldNote;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
@@ -13876,7 +14030,7 @@ export async function runOnce(
   backend: ExecutionBackend,
   safety: SessionSafety,
   ref: TestMethodRef,
-  opts: { coverage: CoverageMode; timeoutMs: number },
+  opts: { coverage: CoverageMode; timeoutMs: number; alone?: true },
   resyncOpSeq?: () => Promise<void>,
   emit?: RunEmitter,
 ): Promise<TestVerdict> {

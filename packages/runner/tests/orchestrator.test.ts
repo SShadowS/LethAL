@@ -24058,7 +24058,7 @@ describe("R577: a kill must reproduce under the mutant", () => {
     store.close();
   });
 
-  test("T10c: on the group path, a warm timeout that does not reproduce does not end the walk either: the next call's kill stands", async () => {
+  test("T10c: on the group path, a warm timeout is held (PR-51), the next call's kill stands and the timeout is dropped unreproduced", async () => {
     let stopped = 0;
     const backend = new ReproWarmStub(
       CAPS_NST,
@@ -24079,7 +24079,6 @@ describe("R577: a kill must reproduce under the mutant", () => {
     // I2: after the call-level timeout at position 2 the walk resumes at T3, skipping none.
     expect(backend.callsUnder("M0001")).toEqual([
       ["T1", "T2", "T3", "T4", "T5"],
-      ["T1", "T2"],
       ["T3", "T4", "T5"],
       ["T3", "T4"],
     ]);
