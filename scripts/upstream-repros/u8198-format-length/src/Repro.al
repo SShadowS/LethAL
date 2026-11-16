@@ -8,7 +8,7 @@ codeunit 58330 "Fmt Len Test"
     var
         DF: DateFormula;
     begin
-        Evaluate(DF, '<1Y+1M+1D>');
+        Evaluate(DF, '1Y+1M+1D');
         if Format(DF, 4) <> '1Y+1' then
             Error('BC gives 1Y+1 for Format(DF, 4); got %1', Format(DF, 4));
     end;

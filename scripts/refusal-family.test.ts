@@ -1149,6 +1149,18 @@ describe("PR-86: the dates-formulas family", () => {
     expect(ids).toHaveLength(f.cells.length);
   });
 
+  test("a cell that evaluates an unbracketed formula without format 9 is flagged locale (letters follow the session language)", () => {
+    // '<1Y>' reads as 1Y under 1030 and 1031 on BC, so the bracketed form is language-free.
+    const languageBound = f.cells.filter((c) =>
+      [...(c.setup ?? []), c.call, ...(c.reader?.setup ?? []), c.reader?.call ?? ""].some((s) =>
+        /Evaluate\(DF, '(?!<)[^']*'\)/.test(s),
+      ),
+    );
+    expect(languageBound.length).toBeGreaterThan(40);
+    for (const c of languageBound)
+      expect(`${c.type}|${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+  });
+
   test("answers use V:[...]; language cells are two-test and locale; WorkDate cells set WorkDate first", () => {
     for (const c of f.cells)
       expect((c.reader ?? c).call).toMatch(/Error\('V:\[%1(\|%2)?\]', .*\);$/);

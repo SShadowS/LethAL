@@ -3229,8 +3229,22 @@ const tmCell = (method: string, state: string, setup: string[], answer: string):
     setup,
     answer,
   );
-const wdCell = (method: string, state: string, setup: string[], answer: string): Cell =>
-  dfc("WorkDate", method, state, ["DF: DateFormula;"], [`WorkDate(${D15});`, ...setup], answer);
+const wdCell = (
+  method: string,
+  state: string,
+  setup: string[],
+  answer: string,
+  depends?: Cell["depends"],
+): Cell =>
+  dfc(
+    "WorkDate",
+    method,
+    state,
+    ["DF: DateFormula;"],
+    [`WorkDate(${D15});`, ...setup],
+    answer,
+    depends,
+  );
 const clCell = (method: string, state: string, setup: string[], answer: string): Cell =>
   dfc("ClosingDate", method, state, ["D: Date;", "E: Date;"], setup, answer);
 /** Two-test language cell: the setter sets the language; the reader sets it too (so a build that does not carry it still measures it). */
@@ -3286,6 +3300,7 @@ const DATES_CELLS: Cell[] = [
     ["DF: DateFormula;"],
     ["Evaluate(DF, '1M+1D');"],
     n9(`CalcDate(DF, ${D15})`),
+    "locale",
   ),
   dfc(
     "CalcDate",
@@ -3317,6 +3332,7 @@ const DATES_CELLS: Cell[] = [
       DF_VARS,
       [`Ok := Evaluate(DF, ${al(t)});`],
       "Format(DF, 0, 9)",
+      "locale", // the setup's Evaluate reads letters in the session language
     ),
   ]),
   dfc(
@@ -3710,7 +3726,13 @@ const DATES_CELLS: Cell[] = [
     [`WorkDate(${dt(31, 1, 2024)});`],
     n9("CalcDate('<1M>', 0D)"),
   ),
-  wdCell("CalcDate", "DateFormula variable on 0D", ["Evaluate(DF, '1W');"], n9("CalcDate(DF, 0D)")),
+  wdCell(
+    "CalcDate",
+    "DateFormula variable on 0D",
+    ["Evaluate(DF, '1W');"],
+    n9("CalcDate(DF, 0D)"),
+    "locale",
+  ),
   wdCell("Date2DMY", "of WorkDate", [], n9("Date2DMY(WorkDate(), 1)")),
   wdCell("Date2DWY", "week of WorkDate", [], n9("Date2DWY(WorkDate(), 2)")),
   wdCell(
