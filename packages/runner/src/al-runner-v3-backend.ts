@@ -3209,6 +3209,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.suitePerCodeunit = m;
   }
 
+  /** PR-51 (Addendum 1): a copy of the tests `mutantId`'s calls were cut at (`timedOutMutants`). */
+  cutState(mutantId: string): unknown {
+    return new Set(this.timedOutMutants.get(mutantId) ?? []);
+  }
+
+  restoreCutState(mutantId: string, state: unknown): void {
+    if (!(state instanceof Set)) {
+      throw new Error(
+        `al-runner-v3: restoreCutState for ${mutantId} was given ${typeof state}, not the Set cutState returned`,
+      );
+    }
+    this.timedOutMutants.set(mutantId, new Set(state as Set<string>));
+  }
+
   /** F5: the covering refs of `mutantId` and the budget each will be sent. */
   useCoveringBudgets(
     mutantId: string,
@@ -4932,6 +4946,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
+      cutState: (id) => b.cutState(id),
+      restoreCutState: (id, state) => b.restoreCutState(id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
@@ -5416,7 +5432,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.runOn(this.soleLane("run"), ref, opts);
   }
 
+  /**
+   * PR-51 (F1): `runRow`, with every verdict whose row came from an ALONE request marked
+   * `selection: "alone"`, so the orchestrator confirms and reproduces such a kill alone too.
+   */
   private async runOn(lane: Lane, ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+    const seen = { alone: false };
+    const v = await this.runRow(lane, ref, opts, seen);
+    return seen.alone ? { ...v, selection: "alone" } : v;
+  }
+
+  private async runRow(
+    lane: Lane,
+    ref: TestMethodRef,
+    opts: RunOpts,
+    seen: { alone: boolean },
+  ): Promise<TestVerdict> {
     // R652: no bound check here; each send checks (`checkBound`).
     if (this.proof === undefined || lane.deployedDir === undefined) {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
@@ -5430,7 +5461,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       lane.pairVerdict = undefined;
       return { ...served, ref };
     }
-    let call = lane.rowsByCodeunit.get(this.callId(ref));
+    // PR-51 (F1): an explicit alone request ignores every stored call and every routing state.
+    const forced = opts.alone === true;
+    let call = forced ? undefined : lane.rowsByCodeunit.get(this.callId(ref));
     if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
     let alone = false;
     if (call === undefined) {
@@ -5448,15 +5481,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         [...(this.timedOutMutants.get(lane.lastActivated) ?? [])].some(
           (t) => t.startsWith(`codeunit${ref.codeunitId}.`) && t !== self,
         );
-      const toAlone = live && cutElsewhere;
+      const toAlone = live && (forced || cutElsewhere);
       const made = toAlone
         ? await this.aloneCall(lane, ref)
-        : live
-          ? await this.liveCall(lane, ref)
-          : await this.callCodeunit(lane, ref, opts.timeoutMs, opts.coverage !== "none");
+        : forced
+          ? await this.callCodeunit(
+              lane,
+              ref,
+              opts.timeoutMs,
+              opts.coverage !== "none",
+              `Codeunit${ref.codeunitId}.${ref.method}`,
+            )
+          : live
+            ? await this.liveCall(lane, ref)
+            : await this.callCodeunit(lane, ref, opts.timeoutMs, opts.coverage !== "none");
+      seen.alone = toAlone || forced;
       if ("verdict" in made) return made.verdict;
       call = made.call;
-      alone = toAlone;
+      alone = toAlone || forced;
     }
     // R764: a call made without coverage must never serve a caller who wants it (its coverage
     // would read as undefined, so mutants would read no-coverage). Fail loudly.
@@ -5476,6 +5518,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       )
     ) {
       const made = await this.aloneCall(lane, ref);
+      seen.alone = true;
       if ("verdict" in made) return made.verdict;
       call = made.call;
       alone = true;
@@ -5543,12 +5586,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             opts.coverage !== "none",
             `Codeunit${ref.codeunitId}.${ref.method}`,
           );
-          if ("verdict" in made) return made.verdict;
+          if ("verdict" in made) {
+            seen.alone = true;
+            return made.verdict;
+          }
           cached = made.call;
           lane.aloneAfterStop.set(refKey(ref), cached);
         }
         call = cached;
         alone = true;
+        seen.alone = true;
       }
     }
     if (call.refusal !== undefined) return refusalVerdict(ref, call.refusal, call.wallMs);

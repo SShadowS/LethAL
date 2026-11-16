@@ -855,8 +855,9 @@ function assertOnLeg(leg: LegResult): void {
     report.counts.killed +
       report.counts.survived +
       report.counts.timeoutKilled +
-      2 * EXPECTED_WARM_KILLS,
-    `R198/R206/R582: expected one RunMutantMany call per scored mutant plus one replay and one re-run per warm kill; got groupedCalls=${report.groupedCalls}`,
+      2 * EXPECTED_WARM_KILLS +
+      HANG_FIGURES.heldSecondHangs,
+    `R198/R206/R582/PR-51: expected one RunMutantMany call per scored mutant plus one replay and one re-run per warm kill, plus one call per held second hang (${HANG_FIGURES.heldSecondHangs}); got groupedCalls=${report.groupedCalls}`,
   );
   assert.ok(
     report.validity.caveats.includes("session-warm"),
@@ -887,12 +888,15 @@ function assertOnLeg(leg: LegResult): void {
   assert.ok(live.answered > 0, "the store must hold answered rows to check");
   // R582: the stopped grouped calls are the 5 first timeouts plus line 145's warm timeout re-run,
   // pinned as a NUMBER (`HANG_FIGURES.stoppedCallsOn`), never read back from the report. The
-  // cross-check below says the same 6 from the verdicts.
+  // cross-check below says the same from the verdicts. PR-51: plus one per held second hang (the
+  // pinned number `HANG_FIGURES.heldSecondHangs`, also never read back): 6 + 2 = 8.
   const STOPPED_CALLS_ON = HANG_FIGURES.stoppedCallsOn;
   assert.equal(
-    timeoutKilled.length + timeoutKilled.filter((m) => (m.killPosition ?? 1) > 1).length,
+    timeoutKilled.length +
+      timeoutKilled.filter((m) => (m.killPosition ?? 1) > 1).length +
+      HANG_FIGURES.heldSecondHangs,
     STOPPED_CALLS_ON,
-    `R582: ${STOPPED_CALLS_ON} stopped grouped calls expected: one per timeout kill plus one per warm timeout kill's re-run`,
+    `R582/PR-51: ${STOPPED_CALLS_ON} stopped grouped calls expected: one per timeout kill, one per warm timeout kill's re-run, one per held second hang`,
   );
   assert.equal(
     live.manyDistinct,

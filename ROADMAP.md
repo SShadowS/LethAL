@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 1033 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1034 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -378,7 +378,7 @@ that ordering is the priority.
 - **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · done (2affd336)
 - **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (94790266)
 - **R1052** · Two hang shapes no refusal covers: an assignment whose right side is a loop's progress call (`X := Adv(Pos)` — its `remove-assignment` and the `empty-block` of its block), and the `empty-block` of a block holding a loop's only exit · [R1052.md](docs/roadmap/R1052.md) · done (8bbd371b)
-- **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · open
+- **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · done (31b9c761)
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · open
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · open
 - **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
@@ -1078,6 +1078,7 @@ that ordering is the priority.
 - **R1065** · Mutant-level differential, al-runner v3 vs bcdev, batch 4 (PR-49): Regex 99.6%, Recurrence Schedule 100%, Headlines 100%, Record Link Management 80% (its red BC baseline); no new al-runner difference · [R1065.md](docs/roadmap/R1065.md) · closed 2026-11-16 — measured; every difference is a known class
 - **R1068** · Format/Evaluate/text-function generator family with a per-cell BC differential (PR-52): 325 of 326 cells equal; the one difference is the closing-date letter under GlobalLanguage (#8178) · [R1068.md](docs/roadmap/R1068.md) · closed 2026-11-16 — measured; one al-runner difference filed (#8178, R586 row 21)
 - **R1070** · DO t7's new close family (SetFilter on a Boolean under GlobalLanguage 1030, 35 closes from one baseline-refused test) is kept on the daemon, measured clean; t7's new hang (X := '' under a blank-needing exit) is refused · [R1070.md](docs/roadmap/R1070.md) · done (0127aef5)
+- **R1071** · Keep census over the refusal ledger (PR-54): 74 of 75 refusal classes leave a kept serve daemon clean, none unclean; coverage 72 of 272 standing ledger texts; two DO close families join the keep-list; inverting the keep-list awaits a ruling · [R1071.md](docs/roadmap/R1071.md) · done (77cb28a3)
 
 ---
 

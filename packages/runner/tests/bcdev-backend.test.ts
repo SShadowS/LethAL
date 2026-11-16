@@ -24,6 +24,7 @@ import type { ArtifactIo, CompileInput, CompiledArtifact } from "../src/artifact
 import type { BoundArtifact, TestMethodRef } from "../src/backend";
 import { hashPackage } from "../src/baseline-snapshot";
 import {
+  BcDevAloneUnsupportedError,
   PublishFailedError,
   BcDevMcpBackend as RealBcDevMcpBackend,
   controlLeftoverWarning,
@@ -1101,6 +1102,18 @@ describe("BcDevMcpBackend.run", () => {
     const v = await backend.run(ref, { coverage: "procedure", timeoutMs: 5000 });
     expect(v.outcome).toBe("fail");
     expect(v.failureMessage).toBe("expected 2, got 1");
+  });
+
+  test("PR-51 (F1): RunOpts.alone is refused by name, never ignored, and no call goes out", async () => {
+    let calls = 0;
+    const backend = makeBackend(() => {
+      calls += 1;
+      return { results: [] };
+    });
+    await expect(
+      backend.run(ref, { coverage: "none", timeoutMs: 5000, alone: true }),
+    ).rejects.toBeInstanceOf(BcDevAloneUnsupportedError);
+    expect(calls).toBe(0);
   });
 
   test("bcdev has no runner-confirmed timeout, so its deadline is deadline-exceeded", async () => {
