@@ -68,3 +68,21 @@ t5's for sites t6 never reached):
 
 So prediction 2 holds with no moved site. Prediction 3 loses M11468's and M11934's sites and the third, but not M7544's: R1061
 covers it.
+
+## Addendum 2 (2026-11-16, after the Opus build review, before any gate): rule A follows the exit's polarity
+
+Rule A as built climbed any `and`/`or` and accepted `=` and `<>` alike, so it also refused exits a toggle cannot hang. Examples:
+- `until X <> ''` or `while X = ''`: the toggle ends the loop sooner;
+- `until (X = '') or (N > 10)`: the other side still ends the loop;
+- one of the six DO sites it removed was such an exit (`... <> '') or (... Next() = 0)`).
+
+Once X has emptied, the toggled comparison is fixed: `=` is false, `<>` is true. A `not` flips it. Rule A now follows that value
+up to the loop, as R572's walk does:
+- it continues through `and` only while the value is false, and through `or` only while it is true;
+- it refuses a `repeat ... until` only when the exit stays false, and a `while` only when it stays true.
+The three measured hangs and the corpus site keep their refusal. The false positive stays mutated. That makes 3 hangs per 4 scored
+sites lost. The call-wrapped operand (`until DelChr(X) = ''`) stays out of scope: no measured hang has it.
+
+**Predictions, added to 1.** Each red both ways:
+- refuse `until (X = '') and (N > 0)`, `while (X <> '') or (N < 3)` and `until not (X <> '')`;
+- keep `until (X = '') or (N > 10)`, `while (X <> '') and (N < 3)`, `until X <> ''` and `while X = ''`.
