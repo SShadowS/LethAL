@@ -9581,4 +9581,70 @@ describe("PR-56: drift after a kept refusal", () => {
     await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
     expect(events).toEqual([]);
   });
+
+  test("review M1: a NONE confirm run alone after a kept refusal is not compared", async () => {
+    const { r, events } = await driftRig((m, x, d, n) =>
+      keptsIn(m, m === "NONE" && d === 0 && n >= 2 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.activate(null);
+    // red without the skip: the alone row of A differs from the codeunit run's baseline row, as it may
+    const v = await r.b.run(ref("A"), { ...OPTS, alone: true });
+    expect(v.outcome).toBe("fail");
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("review L1: a drift re-run counts the request once (requests, entries, the bound invariant)", async () => {
+    const { r } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(r.serve.daemons.length).toBe(2);
+    const s = r.b.entriesStats();
+    expect(s.prefetchRequests).toBe(2); // red if the drifted send also counts: 3
+    // the drifted request is the third the fake saw (warm-up, M0001, M0002); the rest were counted
+    const idsOf = r.serve.requests.map((q) => q.ids.length);
+    expect(s.entriesSent).toBe(idsOf.reduce((a, b) => a + b, 0) - (idsOf[2] ?? 0));
+    expect(s.boundChecks).toBe(
+      s.warmups + s.prefetchRequests + s.liveRequests + s.coverageRequests,
+    );
+  });
+
+  test("review L2: a timeout row is not drift, and a request cut at a timeout is not re-run", async () => {
+    const timeout = (x: FakeRow): FakeRow => ({
+      ...x,
+      status: "error",
+      notRun: true,
+      message: TIMEOUT_1S,
+    });
+    // default seams: the timeout row is read to the end, before the first covering test
+    const t = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "A" ? timeout(x) : x),
+    );
+    await t.r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await t.r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(t.events).toEqual([]);
+    expect(driftStats(t.r).keptDrifts).toBe(0);
+    // a build that retires the Sleep rule cuts at the timeout row (B): A differs before it, yet no re-run
+    const c = await driftRig((m, x, d) =>
+      keptsIn(
+        m,
+        m === "M0002" && d === 0
+          ? x.method === "A"
+            ? failed(x)
+            : x.method === "B"
+              ? timeout(x)
+              : x
+          : x,
+      ),
+    );
+    Object.assign(c.r.b.seams, { sleepRuleRetired: true });
+    await c.r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await c.r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(c.r.b.entriesStats().timeoutCuts).toBe(1);
+    expect(c.events).toEqual([]);
+    expect(driftStats(c.r).keptDrifts).toBe(0);
+  });
 });

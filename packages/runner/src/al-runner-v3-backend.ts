@@ -7013,6 +7013,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
+    // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
+    const before = { ...this.stats };
+    const batchBefore =
+      this.prefetchBatch === undefined
+        ? undefined
+        : { size: this.prefetchBatch.size, ran: this.prefetchBatch.ran };
     let answer: Awaited<ReturnType<AlRunnerV3Backend["send"]>>;
     try {
       answer = await lane.timed(phase, () =>
@@ -7035,10 +7041,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const { sent, rows, cut: partial } = answer;
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
     // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
+    // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
+    // is re-sent (review L2).
     const prior = daemon.keptRefusal;
-    if (prior !== undefined) {
-      const drift = this.keptRefusalDrift(sent, rows);
+    if (prior !== undefined && partial === undefined) {
+      const drift = this.keptRefusalDrift(sent, rows, alone);
       if (drift !== undefined) {
+        // Review L1: the drifted send is not a request of the batch; the re-run counts in its place.
+        for (const k of [
+          "entriesSent",
+          "prefetchRequests",
+          "liveRequests",
+          "boundChecks",
+          "cachedFalse",
+          "timeoutCuts",
+        ] as const)
+          this.stats[k] = before[k];
+        if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
+          this.prefetchBatch.size = batchBefore.size;
+          this.prefetchBatch.ran = batchBefore.ran;
+        }
         this.stats.keptDrifts += 1;
         const event: V3KeptDrift = { refusal: prior.text, ...drift };
         this.driftSink?.(event);
@@ -7181,9 +7203,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private keptRefusalDrift(
     sent: readonly SentEntry[],
     rows: ReadonlyMap<string, readonly V3Row[]>,
+    /** A test run alone (R857/R896) starts from other state than the codeunit's run: not compared (review M1). */
+    alone?: { readonly call: number },
   ): { readonly test: string; readonly baselineRow: string; readonly row: string } | undefined {
     for (const e of sent) {
       if (e.echo) continue;
+      if (alone !== undefined && callOf(e) === alone.call) continue;
       const cu = callOf(e);
       const order = this.baselineOrder(cu);
       let limit = order.length;
@@ -7202,8 +7227,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const b = base.get(key);
         const i = order.indexOf(key);
         if (b === undefined || i < 0 || i >= limit) continue;
-        if (b.notRun || (b.status === "error" && V3_TIMEOUT_MESSAGE.test(b.message ?? "")))
-          continue;
+        // a timeout row, in the baseline or in this answer, is not drift (review L2)
+        const timedOut = (x: V3Row) =>
+          x.status === "error" && V3_TIMEOUT_MESSAGE.test(x.message ?? "");
+        if (b.notRun || timedOut(b) || timedOut(r)) continue;
         const want = rowsClass([b]);
         const got = rowsClass([r]);
         if (got !== want) return { test: r.name, baselineRow: want, row: got };

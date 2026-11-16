@@ -60,31 +60,72 @@ describe("PR-56 keep entries", () => {
     const ledger = JSON.parse(
       readFileSync(join(import.meta.dir, "../../../docs/measurements/refusal-ledger.json"), "utf8"),
     ) as { key: string }[];
-    const own = new Map(measured.flatMap((c) => c.texts.map((t) => [t, c.entry] as const)));
+    // Frozen from PR-54's coverage.tsv: a ledger key -> its measured class (`cls`), and the measured raw
+    // text that the ledger's normaliser maps to it (`raw`; the key itself has digits as N). A key not in
+    // it is unmeasured.
+    const frozen = JSON.parse(
+      readFileSync(join(import.meta.dir, "pr56-ledger-classes.json"), "utf8"),
+    ) as Record<string, { cls?: string; raw?: string }>;
+    const entryOf = new Map(measured.map((c) => [c.cls, c.entry] as const));
     let hits = 0;
+    let exactHits = 0;
     for (const { key } of ledger) {
       if (!key.startsWith(P)) continue;
-      const raw = key.replace(/<x>/g, "'x.y'").replace(/\(N\)/g, "(1)").replace(/\bN\b/g, "1");
+      const exact = frozen[key]?.raw;
+      const raw =
+        exact ?? key.replace(/<x>/g, "'x.y'").replace(/\(N\)/g, "(1)").replace(/\bN\b/g, "1");
       const matched = NEW.filter((n) => V3_SERVE_SAFE_REFUSALS[n]?.test(raw));
-      expect([key, matched.length <= 1]).toEqual([key, true]);
+      const cls = frozen[key]?.cls;
+      const own = cls === undefined ? null : (entryOf.get(cls) ?? null);
+      // a key matched by a new entry belongs to that entry's own class
+      expect([key, matched.filter((n) => n !== own)]).toEqual([key, []]);
       hits += matched.length;
+      if (exact !== undefined && matched.length > 0) exactHits += 1;
     }
-    expect(own.size).toBeGreaterThan(100);
+    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(84);
     expect(hits).toBeGreaterThan(0);
+    expect(exactHits).toBeGreaterThan(5); // the Company keys etc. are really tested, not only the guesses
   });
 
   test("a pattern is bounded: a long or multi-line variable part, or a ':' where none was measured, closes", () => {
     const k = (m: string) => keeps(P + m);
     expect(
       k(
-        "Foo on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+        "IsEmpty on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
       ),
     ).toBe(true);
+    // review M3: only the measured methods; Insert, Delete, any other name and a dotted one close
+    for (const m of ["Insert", "Delete", "Foo", "Foo.Bar"])
+      expect([
+        m,
+        k(
+          `${m} on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+        ),
+      ]).toEqual([m, false]);
+    for (const m of ["Value", "Get", "CopyLinks"]) {
+      expect(
+        k(
+          `FieldRef.${m} on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
+        ),
+      ).toBe(false);
+      expect(
+        k(
+          `RecordRef.${m} on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)`,
+        ),
+      ).toBe(false);
+    }
+    // review L4: a carriage return never fits a name, a quoted name or a filter
     expect(
       k(
-        "Foo.Bar on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+        "store error a\rb: permission set 'x': `table * = X` grants a whole object type (not listed row by row)",
       ),
     ).toBe(false);
+    expect(
+      k(
+        "store error ab: permission set 'x\ry': `table * = X` grants a whole object type (not listed row by row)",
+      ),
+    ).toBe(false);
+    expect(k("SetFilter: `a\rb` is not a Decimal")).toBe(false);
     expect(
       k(
         `${"F".repeat(31)} on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,

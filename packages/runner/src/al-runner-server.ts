@@ -747,10 +747,16 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   IDENT: "[A-Za-z][A-Za-z0-9]{0,29}",
   NUM: String.raw`\d{1,2}`,
   OBJID: String.raw`\d{1,10}`,
-  NAME: String.raw`[^:'\n]{1,40}`,
-  QUOTED: String.raw`[^'\n]{1,60}`,
+  NAME: String.raw`[^:'\r\n]{1,40}`,
+  QUOTED: String.raw`[^'\r\n]{1,60}`,
   STORE: "(?:store error )?",
-  FILTER: "[^`\\n]{1,40}",
+  FILTER: "[^`\\r\\n]{1,40}",
+  // The measured methods only, each by name (review M3): a table read the census measured, and the
+  // FieldRef and RecordRef methods it refused on a never-assigned or unopened handle.
+  READ: "(?:IsEmpty|FindFirst)",
+  COMPANYM: "(?:IsEmpty|FindFirst|FindSet)",
+  FIELDREFM: "(?:Active|Caption|Class)",
+  RECORDREFM: "FilterGroup",
   KIND: "(?:a Decimal|an Integer)",
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
@@ -789,7 +795,7 @@ const PBI =
 const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   [
     "company-table-read",
-    "%IDENT% on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+    "%COMPANYM% on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
   ], // PR-54 class "* on the Company table"
   [
     "license-permission",
@@ -803,8 +809,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "page-action-promoted-area",
     "Page Action: page 'AL Test Tool': the rows of its Promoted area other than its actionrefs are not pinned (their ids, types and which exist)",
   ],
-  ["power-bi-blob", `%IDENT% on Power BI Blob${PBI}`], // PR-54 class "* on Power BI Blob"
-  ["power-bi-default-selection", `%IDENT% on Power BI Default Selection${PBI}`], // PR-54 class "* on Power BI Default Selection"
+  ["power-bi-blob", `%READ% on Power BI Blob${PBI}`], // PR-54 class "* on Power BI Blob"
+  ["power-bi-default-selection", `%READ% on Power BI Default Selection${PBI}`], // PR-54 class "* on Power BI Default Selection"
   [
     "media-read",
     "%STORE%Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
@@ -835,11 +841,11 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   ], // PR-54 class "a permission denial (modify ...)"
   [
     "fieldref-method-never-assigned",
-    "FieldRef.%IDENT% on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+    "FieldRef.%FIELDREFM% on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
   ], // PR-54 class "FieldRef.* on a FieldRef that was never assigned"
   [
     "recordref-method-not-open",
-    "RecordRef.%IDENT% on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "RecordRef.%RECORDREFM% on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
   ], // PR-54 class "RecordRef.* on a RecordRef that is not open"
   [
     "geturl-unpinned-object-type",
