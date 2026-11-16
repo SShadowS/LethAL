@@ -4065,10 +4065,11 @@ export async function runFromCli(
   const configFile = await loadLethalConfigFile(given.configPath);
   // PR-42: the bcdev section's standing yes turns the stop on for the whole run (backend, report,
   // resume), exactly as `--stop-hung-sessions` does; a non-boolean is refused by validateBcDevConfig.
+  // Not with an envTool section: the environment it provisions is not the server the yes was for.
+  const configStop =
+    configFile.bcdev?.stopHungSessions === true && configFile.envTool === undefined;
   const parsed: RunCliConfig =
-    given.backendKind === "bcdev" && configFile.bcdev?.stopHungSessions === true
-      ? { ...given, stopHungSessions: true }
-      : given;
+    given.backendKind === "bcdev" && configStop ? { ...given, stopHungSessions: true } : given;
   // R674 (R18's warning, which R654 S3 deleted with the .NET al-runner's branch): a configured
   // `envTool` section is silently unused on a local runner, since `resolveEnvToolSession` returns
   // early for every backend but bcdev. Warned, not refused: a config file is often shared across
@@ -5705,7 +5706,13 @@ export async function verifyFromCli(
         "the config has an envTool section; lethal verify runs only against a directly configured bcdev container",
       );
     }
-    const inputs: BackendInputs = { backendKind: "bcdev", projectDir, testDir: parsed.testDir };
+    // PR-42: verify runs mutants too, so the bcdev section's standing yes turns the stop on here.
+    const inputs: BackendInputs = {
+      backendKind: "bcdev",
+      projectDir,
+      testDir: parsed.testDir,
+      ...(configFile.bcdev?.stopHungSessions === true ? { stopHungSessions: true } : {}),
+    };
     // R261: the ids the installed build was made with, from its hash-checked manifest, so a source
     // run given --selector-id overrides verifies with those. Never the config's current defaults.
     // buildBackend validates them against app.json; the bcdev backend has no other use for them.

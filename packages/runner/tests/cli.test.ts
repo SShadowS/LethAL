@@ -2470,6 +2470,7 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       backendKind: RunCliConfig["backendKind"],
       stop: boolean | undefined,
       flag: boolean,
+      envTool = false,
     ): Promise<[boolean | undefined, boolean | undefined]> => {
       const root = scratch("lethal-cli-stop-");
       const projectDir = join(root, "app");
@@ -2495,6 +2496,9 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
         configPath,
         JSON.stringify({
           bcdev: { ...bcdev, ...(stop !== undefined ? { stopHungSessions: stop } : {}) },
+          ...(envTool
+            ? { envTool: { toolPath: "tool.exe", publish: { command: ["publish"] } } }
+            : {}),
         }),
       );
       const parsed: RunCliConfig = {
@@ -2516,6 +2520,8 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       await expect(
         runFromCli(parsed, {
           validateSelectorIdsForProject: async () => {},
+          // the environment tool is never started; the config passes through unchanged
+          resolveEnvToolSession: async (_p, cfg) => ({ effectiveConfig: cfg }),
           buildBackend: async (p) => {
             backendSaw = p.stopHungSessions;
             return new PassingBackend();
@@ -2535,6 +2541,8 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(await seen("bcdev", false, true)).toEqual([true, true]);
     // another backend ignores the bcdev section
     expect(await seen("al-runner-v3", true, false)).toEqual([undefined, undefined]);
+    // an envTool config provisions another environment: the section's yes does not reach it
+    expect(await seen("bcdev", true, false, true)).toEqual([undefined, undefined]);
   });
 
   // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.
@@ -2899,6 +2907,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
   /** Verify through the REAL id check against app.json, recording the ids it was handed. */
   async function verifyOnce(ctx: Awaited<ReturnType<typeof runThenArtifact>>) {
     let reachedWith: string | undefined;
+    let stop: boolean | undefined;
     const handed: SelectorConfig[] = [];
     let printed = "";
     const outcome = await verifyFromCli(
@@ -2916,6 +2925,7 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         },
         buildBackend: async (inputs, _config, _dir, _deploy, _deps, selectorIds) => {
           if (selectorIds === undefined) throw new Error("verify passed no selector ids");
+          stop = inputs.stopHungSessions;
           handed.push(selectorIds);
           await validateSelectorIdsForProject(inputs.projectDir, selectorIds);
           return verifyBackendFake((id) => {
@@ -2924,8 +2934,23 @@ describe("lethal run then lethal verify on one store (R358)", () => {
         },
       },
     ).catch((err: unknown) => (err instanceof Error ? err.message : String(err)));
-    return { outcome, printed, handed, reachedWith };
+    return { outcome, printed, handed, reachedWith, stop };
   }
+
+  // PR-42: verify runs mutants on bcdev, so the bcdev section's standing yes reaches its backend.
+  test("PR-42: verify's backend gets the stop when the bcdev section says stopHungSessions true, not otherwise", async () => {
+    const ctx = await runThenArtifact();
+    const off = await verifyOnce(ctx);
+    expect(off.outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(off.stop).toBeUndefined();
+    await writeFile(
+      ctx.configPath,
+      JSON.stringify({ bcdev: { ...ctx.bcdev, stopHungSessions: true } }),
+    );
+    const on = await verifyOnce(ctx);
+    expect(on.outcome).toBe("R358 fake: verify reached compileTestApp");
+    expect(on.stop).toBe(true);
+  });
 
   test("verify reads the installed batch's files from the store after the run removed its folder (R360)", async () => {
     const before = runFolders();

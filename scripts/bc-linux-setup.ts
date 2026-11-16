@@ -72,6 +72,7 @@ import {
   type AppManifest,
   type Conn,
   type ConnServer,
+  DEMO_SERVER,
   type Decided,
   HOST,
   type ResidentPair,
@@ -342,11 +343,6 @@ export function buildLaunch(server: ServerName): object {
  * under the OData root answers 404 "Resource not found for the segment 'BC'".
  *
  * `configDir` adds that fixture's `selectorIds` (`FIXTURE_SELECTOR_IDS`, R596).
- *
- * PR-42: `stopHungSessions: true`, the owner's standing yes for our own servers
- * (q-20261115T202541-baaa349b), so every `lethal run` with this config, or with a copy of its
- * `bcdev` section, has the hung-session stop. No gate reads it: the gates build their backend
- * from named fields and set the stop per leg. Not in `bcdevSection`, which bc-demo shares.
  */
 export function buildConfig(
   server: ServerName,
@@ -357,11 +353,18 @@ export function buildConfig(
   const selectorIds = FIXTURE_SELECTOR_IDS[configDir];
   return {
     ...(selectorIds !== undefined ? { selectorIds } : {}),
-    bcdev: { ...bcdevSection(server, login, paths), stopHungSessions: true },
+    bcdev: bcdevSection(server, login, paths),
   };
 }
 
-/** `buildConfig`'s `bcdev` section; R663's `bc-demo-setup.ts` builds its config from it too. */
+/**
+ * `buildConfig`'s `bcdev` section; R663's `bc-demo-setup.ts` builds its config from it too.
+ *
+ * PR-42: `stopHungSessions: true` for bc1-bc4, the owner's standing yes for our own servers
+ * (q-20261115T202541-baaa349b), so every `lethal run` or `lethal verify` with such a config, or a
+ * copy of its `bcdev` section, has the hung-session stop. No gate reads it: the gates build their
+ * backend from named fields and set the stop per leg. bc-demo's section does not get it.
+ */
 export function bcdevSection(
   server: ConnServer,
   login: BcLogin,
@@ -387,6 +390,7 @@ export function bcdevSection(
       BC_DEV_PASSWORD: login.password,
       BC_DEV_API_PORT: String(p.api),
     },
+    ...(server !== DEMO_SERVER ? { stopHungSessions: true } : {}),
   };
 }
 

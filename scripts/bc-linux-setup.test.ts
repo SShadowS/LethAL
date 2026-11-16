@@ -17,7 +17,7 @@ import type { FetchFn } from "../packages/runner/src/activation.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { CONTROL_SELECTOR_FILENAME } from "../packages/schemata/src/project.ts";
-import { type Conn, type ServerOps, sha256Of } from "./bc-app-content.ts";
+import { type Conn, DEMO_SERVER, type ServerOps, sha256Of } from "./bc-app-content.ts";
 import {
   GATE_FIXTURES,
   HOST,
@@ -252,8 +252,13 @@ describe("config writer", () => {
         expect(cfg.bcdev.stopHungSessions).toBe(true);
       }
     }
+    // the shared section carries it for our servers (r560c's bc1 config uses it directly) ...
+    expect((bcdevSection("bc1", login, paths) as Record<string, unknown>).stopHungSessions).toBe(
+      true,
+    );
+    // ... and not for bc-demo
     expect(
-      (bcdevSection("bc1", login, paths) as Record<string, unknown>).stopHungSessions,
+      (bcdevSection(DEMO_SERVER, login, paths) as Record<string, unknown>).stopHungSessions,
     ).toBeUndefined();
   });
 

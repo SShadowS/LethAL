@@ -1070,7 +1070,7 @@ that ordering is the priority.
 - **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
 - **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
 - **R1060** · DO window t6 ran ~65 s per new covered mutant (t5: 8.3 s): a mid-order baseline-refused GoToKey test closed the serve daemon on every mutant request of a newly reached region; the refusal is now kept (measured clean), and a resume that reuses no baseline says why · [R1060.md](docs/roadmap/R1060.md) · done (11605dbb)
-- **R1064** · The hung-session stop is ON for every mutant run on our own servers bc1-bc4 (a `bcdev.stopHungSessions` config field the setup script writes); the product default stays off; no gate reads it · [R1064.md](docs/roadmap/R1064.md) · open
+- **R1064** · The hung-session stop is ON for every mutant run on our own servers bc1-bc4 (a `bcdev.stopHungSessions` config field the setup scripts write); the product default stays off; no gate reads it · [R1064.md](docs/roadmap/R1064.md) · open
 
 ---
 
