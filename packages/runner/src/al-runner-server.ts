@@ -847,6 +847,24 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "setfilter-boolean-language-words":
     /^NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage \d{1,5} \(the words of that language are not pinned\)$/,
   /**
+   * PR-54: DO closes of `File.DownloadFromStream` (11 in t5-t7, all this text). Measured CLEAN in the
+   * keep census (`/coord/handoff/PR-54/census.md`, R-967's kit on edge-5a58a0f16): 1 refuser,
+   * 4 kept + 3 fresh readers equal the control, pid constant, no panic. No variable part: DO's 11
+   * events carry one text. The refusal is made before any download; the session is the headless one.
+   */
+  "download-from-stream-needs-client":
+    /^NotRun: out-of-scope: File\.DownloadFromStream needs a client \(a browser round trip\), which a headless run has not$/,
+  /**
+   * PR-54: DO closes of `DotNet new System.IO.Compression.ZipArchive` on a stream that holds no zip
+   * (6 in t4-t8, all this text, message included). Measured CLEAN in the keep census
+   * (`/coord/handoff/PR-54/census.md`, repro u8036-refusals' shape: 1 refuser, 4 kept + 3 fresh
+   * readers equal the control, pid constant, no panic). The .NET message is pinned whole: another
+   * exception type or message was not measured and closes. (`System.IO.InvalidDataException` is not
+   * in DOTNET_CLEAN_EXCEPTIONS, so the general dotnet-exception entry does not keep it.)
+   */
+  "zip-archive-invalid-data":
+    /^NotRun: out-of-scope: DotNet new System\.IO\.Compression\.ZipArchive raised the \.NET exception System\.IO\.InvalidDataException: End of Central Directory record could not be found\.; the text AL would see is not pinned \(ADR-014 section 7\)$/,
+  /**
    * R1019 (coord PR-14): the cascade after a test that failed while it held a manual event subscription
    * (a BindSubscription whose UnbindSubscription it never reached): the next test's bind is refused.
    * Filter Tokens closed its daemon 424 times on it (466 daemons for 343 mutants, edge-5a58a0f16).

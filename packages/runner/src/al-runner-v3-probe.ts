@@ -29,6 +29,8 @@ export function baseAppJson(overrides: {
   idFrom: number;
   idTo: number;
   dependencies?: readonly { id: string; name: string; publisher: string; version: string }[];
+  /** PR-54: a probe app that declares a `dotnet` type needs the OnPrem target. */
+  target?: "OnPrem";
 }): string {
   return JSON.stringify(
     {
@@ -52,6 +54,7 @@ export function baseAppJson(overrides: {
         includeSourceInSymbolFile: true,
       },
       runtime: "13.0",
+      ...(overrides.target !== undefined ? { target: overrides.target } : {}),
       features: [],
     },
     null,

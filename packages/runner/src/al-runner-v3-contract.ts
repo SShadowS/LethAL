@@ -1062,6 +1062,66 @@ codeunit 50696 "Serve Flag Words"
         Row.SetFilter(Flag, 'Ja');
     end;
 }
+
+dotnet
+{
+    assembly(System.IO.Compression)
+    {
+        type(System.IO.Compression.ZipArchive; ServeZipArchive) { }
+        type(System.IO.Compression.ZipArchiveMode; ServeZipArchiveMode) { }
+    }
+}
+
+table 50698 "Serve Blob Row"
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(2; Data; Blob) { }
+    }
+    keys
+    {
+        key(PK; "No.") { Clustered = true; }
+    }
+}
+
+codeunit 50697 "Serve Download"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        Row: Record "Serve Blob Row" temporary;
+        InS: InStream;
+        FileName: Text;
+    begin
+        Row.Data.CreateInStream(InS);
+        FileName := 'a.txt';
+        File.DownloadFromStream(InS, '', '', '', FileName);
+    end;
+}
+
+codeunit 50699 "Serve Zip Invalid"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Refuses()
+    var
+        Row: Record "Serve Blob Row" temporary;
+        OutS: OutStream;
+        InS: InStream;
+        Z: DotNet ServeZipArchive;
+        Mode: DotNet ServeZipArchiveMode;
+    begin
+        Row.Data.CreateOutStream(OutS);
+        OutS.WriteText('this is not a zip file');
+        Row.Insert();
+        Row.Data.CreateInStream(InS);
+        asserterror Z := Z.ZipArchive(InS, Mode.Read);
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -1156,6 +1216,9 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   ["gotokey-desc-last-row-above-window", "Codeunit50694.Refuses", false, false],
   // PR-53: DO t7's SetFilter-on-a-Boolean refusal, measured once on edge-5a58a0f16 (`/coord/handoff/PR-53/`).
   ["setfilter-boolean-language-words", "Codeunit50696.Refuses", false, false],
+  // PR-54: DO's File.DownloadFromStream and ZipArchive-on-no-zip refusals, measured once on edge-5a58a0f16 (`/coord/handoff/PR-54/`).
+  ["download-from-stream-needs-client", "Codeunit50697.Refuses", false, false],
+  ["zip-archive-invalid-data", "Codeunit50699.Refuses", false, false],
 ];
 
 /**
@@ -1202,6 +1265,8 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
       name: "LethAL R612 Serve Probe Tests",
       idFrom: 50650,
       idTo: 50699,
+      // PR-54: the ZipArchive case declares a dotnet type
+      target: "OnPrem",
       dependencies: [{ id: TARGET_ID, name: TARGET_NAME, publisher: "LethAL", version: "1.0.0.0" }],
     }),
   );
@@ -1215,7 +1280,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-two codeunits, a report, two pages and three tables (twenty-three tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-four codeunits, a report, two pages and four tables (twenty-five tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
