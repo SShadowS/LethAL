@@ -244,9 +244,10 @@ export function encodeGroups(
 
 /**
  * PR-94: which positions of `order` (a codeunit's baseline test names, lower-case, in order) v3 would
- * leave out for `excludeTests`. v3 matches by a lower-cased `contains` over `codeunit<id>.<name>`, so
- * an excluded name also takes every test whose name it starts (#8059). One flag per POSITION, so a
- * duplicated name cannot hide a gap.
+ * leave out for `excludeTests`. v3 matches by a lower-cased `contains`: a pattern with a dot over
+ * `codeunit<id>.<name>`, a pattern without a dot over the method name only. So an excluded name also
+ * takes every test whose name it starts (#8059). One flag per POSITION, so a duplicated name cannot
+ * hide a gap.
  */
 export function effectiveExclusion(
   codeunit: number,
@@ -254,15 +255,38 @@ export function effectiveExclusion(
   excludeTests: readonly string[] | undefined,
 ): boolean[] {
   const ex = (excludeTests ?? []).map((n) => n.toLowerCase());
-  return order.map((name) => ex.some((x) => `codeunit${codeunit}.${name}`.includes(x)));
+  return order.map((name) =>
+    ex.some((x) => (x.includes(".") ? `codeunit${codeunit}.${name}` : name).includes(x)),
+  );
+}
+
+/**
+ * PR-94: the tests of `order` that a FLAGGED entry must have run (not effectively excluded) and that
+ * have no row, or more than their count in `order`, in `rowMethods`. v3's discovery scan is shallow
+ * (a `[Test]` with another attribute on the same line is missed), so under `runSelectedOnly` a test
+ * LethAL knows can fail to run; the caller then re-sends the request unflagged.
+ */
+export function missingKeptTests(
+  codeunit: number,
+  order: readonly string[],
+  excludeTests: readonly string[] | undefined,
+  rowMethods: readonly string[],
+): string[] {
+  const gone = effectiveExclusion(codeunit, order, excludeTests);
+  const want = new Map<string, number>();
+  for (const [i, name] of order.entries()) if (!gone[i]) want.set(name, (want.get(name) ?? 0) + 1);
+  const got = new Map<string, number>();
+  for (const m of rowMethods) got.set(m.toLowerCase(), (got.get(m.toLowerCase()) ?? 0) + 1);
+  return [...want].filter(([name, n]) => got.get(name) !== n).map(([name]) => name);
 }
 
 /**
  * PR-94: may this request carry `runSelectedOnly: true`? Only when every non-echo entry runs a prefix of
  * its codeunit's baseline order (the excluded tests are a suffix, by position) and at least one entry
  * leaves something out. `testsOf` gives a codeunit's baseline order and its discovered names, both
- * lower-case. `refused`: some entry left tests out but the request cannot be flagged. A request with an
- * isolated or alone entry (`call`) keeps its own flag and is neither flagged nor refused here.
+ * lower-case. `refused`: an entry's exclusion is not a suffix by position (a gap); a discovered/baseline
+ * mismatch is not counted. A request with an isolated or alone entry (`call`), or with a codeunit in
+ * `neverFlag` (PR-94: its flagged answer missed a kept test), is neither flagged nor refused here.
  */
 export function selectedOnlyDecision(
   sent: readonly SentEntry[],
@@ -270,15 +294,16 @@ export function selectedOnlyDecision(
     readonly baseline: readonly string[];
     readonly discovered: readonly string[];
   },
+  neverFlag: ReadonlySet<number> = new Set(),
 ): { readonly flag: boolean; readonly refused: boolean; readonly skipped: number } {
-  let cutIntended = false;
   let ok = true;
+  let gapped = false;
   let skipped = 0;
   let anyEffective = false;
   for (const e of sent) {
     if (e.echo) continue;
-    if (e.call !== undefined) return { flag: false, refused: false, skipped: 0 };
-    if ((e.excludeTests?.length ?? 0) > 0) cutIntended = true;
+    if (e.call !== undefined || neverFlag.has(e.codeunit))
+      return { flag: false, refused: false, skipped: 0 };
     const { baseline, discovered } = testsOf(e.codeunit);
     const base = new Set(baseline);
     const disc = new Set(discovered);
@@ -287,12 +312,12 @@ export function selectedOnlyDecision(
     const first = gone.indexOf(true);
     if (first >= 0) {
       anyEffective = true;
-      if (gone.slice(first).some((g) => !g)) ok = false;
+      if (gone.slice(first).some((g) => !g)) gapped = true;
       skipped += gone.filter(Boolean).length;
     }
   }
-  const flag = ok && anyEffective;
-  return { flag, refused: cutIntended && !flag, skipped: flag ? skipped : 0 };
+  const flag = ok && !gapped && anyEffective;
+  return { flag, refused: gapped, skipped: flag ? skipped : 0 };
 }
 
 /**

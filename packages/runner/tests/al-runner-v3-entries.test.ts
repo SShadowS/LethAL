@@ -69,6 +69,7 @@ import {
   emitSelectorEcho,
   encodeGroups,
   groupsThatFit,
+  missingKeptTests,
   selectedOnlyDecision,
   assertEntriesWellFormed as wellFormed,
 } from "../src/al-runner-v3-entries";
@@ -6837,8 +6838,22 @@ describe("R895: stop a request at its first timeout row", () => {
       });
       await r.b.activate("M0001");
       const n0 = r.serve.requests.length;
+      const so = () =>
+        (r.b as unknown as { stats: Record<string, number> }).stats as Record<string, number>;
+      const soBefore = [
+        so().selectedOnlyRequests,
+        so().selectedOnlyTestsSkipped,
+        so().selectedOnlyRefusedGapped,
+      ];
       const v = await r.b.run(B, OPTS);
       expect(v.outcome).toBe("pass");
+      // PR-94: the alone request keeps its own flag (below) and is neither counted nor refused as a
+      // selected-only request
+      expect([
+        so().selectedOnlyRequests,
+        so().selectedOnlyTestsSkipped,
+        so().selectedOnlyRefusedGapped,
+      ]).toEqual(soBefore);
       const sent = r.serve.requests.slice(n0);
       // PR-24 (L2): the cut killed its daemon; the restarted one proves CU on itself (a NONE warm-up of
       // exactly that codeunit) before the alone request runs one of its tests there.
@@ -9584,10 +9599,14 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
   const decide = (
     sent: SentEntry[],
     of: ReturnType<typeof tests> | Record<number, ReturnType<typeof tests>> = tests(ABCD),
-  ) => selectedOnlyDecision(sent, (cu) => ("baseline" in of ? of : (of[cu] ?? tests([]))));
+    never: ReadonlySet<number> = new Set(),
+  ) => selectedOnlyDecision(sent, (cu) => ("baseline" in of ? of : (of[cu] ?? tests([]))), never);
 
   test("effectiveExclusion: v3's lower-cased contains, per position (a prefix name takes the longer test)", () => {
     expect(effectiveExclusion(1, ["a", "b"], ["Codeunit1.B"])).toEqual([false, true]);
+    // L1: a pattern without a dot matches the method name only, never the `codeunit<id>.` text
+    expect(effectiveExclusion(1, ["a", "codeunit1x"], ["codeunit1"])).toEqual([false, true]);
+    expect(effectiveExclusion(1, ["a", "b"], ["unit1."])).toEqual([true, true]);
     expect(effectiveExclusion(1, ["ab", "a", "c"], ["Codeunit1.A"])).toEqual([true, true, false]);
     expect(effectiveExclusion(1, ["a"], ["Codeunit2.A"])).toEqual([false]);
     expect(effectiveExclusion(1, ["a", "a"], undefined)).toEqual([false, false]);
@@ -9625,9 +9644,30 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
 
   test("a gapped entry beside a clean cut one refuses the whole request", () => {
     const of = { 1: tests(ABCD), 2: tests(["bx", "x", "b"]) };
-    expect(decide([echo, entry(1, ["Codeunit1.D"]), entry(2, ["Codeunit2.B"])], of).flag).toBe(
-      false,
-    );
+    expect(decide([echo, entry(1, ["Codeunit1.D"]), entry(2, ["Codeunit2.B"])], of)).toMatchObject({
+      flag: false,
+      refused: true,
+    });
+  });
+
+  test("a codeunit in the never-flag set gives no flag and is not counted refused (H1)", () => {
+    expect(decide([echo, entry(1, ["Codeunit1.D"])], tests(ABCD), new Set([1]))).toEqual({
+      flag: false,
+      refused: false,
+      skipped: 0,
+    });
+    // another codeunit in the set does not matter
+    expect(decide([echo, entry(1, ["Codeunit1.D"])], tests(ABCD), new Set([2])).flag).toBe(true);
+  });
+
+  test("missingKeptTests: every kept test needs exactly its rows; excluded ones need none", () => {
+    const order = ["a", "b", "c", "d"];
+    const ex = ["Codeunit1.D"];
+    expect(missingKeptTests(1, order, ex, ["A", "B", "C"])).toEqual([]);
+    expect(missingKeptTests(1, order, ex, ["A", "C"])).toEqual(["b"]);
+    expect(missingKeptTests(1, order, ex, ["A", "B", "C", "C"])).toEqual(["c"]);
+    expect(missingKeptTests(1, order, ex, ["A", "B"])).toEqual(["c"]);
+    expect(missingKeptTests(1, order, undefined, ["A", "B", "C"])).toEqual(["d"]);
   });
 
   test("a duplicated name cannot hide a gap", () => {
@@ -9638,9 +9678,10 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
   test("a codeunit whose discovered set differs from its baseline gives no flag, for a cut or an uncut entry", () => {
     const of = { 1: tests(ABCD), 2: tests(["a", "b"], ["a", "b", "extra"]) };
     expect(decide([echo, entry(1, ["Codeunit1.D"]), entry(2)], of).flag).toBe(false);
+    // L2: a mismatch is not a gap, so it is not counted as refused
     expect(decide([echo, entry(2, ["Codeunit2.B"])], of)).toMatchObject({
       flag: false,
-      refused: true,
+      refused: false,
     });
     expect(decide([echo, entry(1, ["Codeunit1.D"])], tests(ABCD, ["a", "b", "c"])).flag).toBe(
       false,
@@ -9812,6 +9853,108 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
     expect((r.b as unknown as { stats: { keptDrifts: number } }).stats.keptDrifts).toBe(1);
     // M0001 skipped B and C; M0002 skipped C once. Red without the restore: 2 requests for M0002 -> 3 and 4
     expect(sstats(r)).toMatchObject({ selectedOnlyRequests: 2, selectedOnlyTestsSkipped: 3 });
+  });
+
+  // H1: al-runner's test scan is shallow, so under the flag a test LethAL knows may not run. The fake drops
+  // B's row from every flagged answer, as v3 would for `[Test][HandlerFunctions('H')]` on one line.
+  const ABCD_NAMES = ["A", "B", "C", "D"];
+  const withABCD = async (run: () => Promise<void>) => {
+    const saved = SUITE_METHODS[CU];
+    SUITE_METHODS[CU] = ABCD_NAMES;
+    try {
+      await run();
+    } finally {
+      SUITE_METHODS[CU] = saved ?? ["A", "B"];
+    }
+  };
+  const dropBUnderFlag = (
+    req: { body: Record<string, unknown> },
+    lines: Record<string, unknown>[],
+  ) => {
+    if (req.body.runSelectedOnly !== true) return undefined;
+    const dropped = lines.filter((l) => l.type === "test" && String(l.name).endsWith(".B"));
+    const per = (id: unknown) => dropped.filter((l) => l.entry === id).length;
+    return {
+      lines: lines
+        .filter((l) => !dropped.includes(l))
+        .map((l) => {
+          const n =
+            l.type === "entrySummary" ? per(l.entry) : l.type === "summary" ? dropped.length : 0;
+          return n === 0 ? l : { ...l, passed: Number(l.passed) - n, total: Number(l.total) - n };
+        }),
+    };
+  };
+  const neverFlagOf = (r: Rig) => (r.b as unknown as { neverFlag: Set<number> }).neverFlag;
+
+  test("H1: a kept row dropped under the flag: the answer is discarded, re-sent unflagged, the codeunit is never flagged again", async () => {
+    await withABCD(async () => {
+      const suite = ABCD_NAMES.map((m) => ref(m));
+      const r = await rig({
+        suite,
+        serve: { rows: rowsIn(ABCD_NAMES), answer: (req, _n, lines) => dropBUnderFlag(req, lines) },
+      });
+      const warned: string[] = [];
+      r.b.setNotify((code) => warned.push(code));
+      await baseline(r.b, suite);
+      await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("B"), ref("C")]));
+      // red without the re-send: B has no row and the mutant's verdict reads missing
+      expect(mutantReq(r, "M0001").map((q) => q.body.runSelectedOnly)).toEqual([true, undefined]);
+      expect(warned.filter((c) => c === "al-runner-v3-selected-only-scan-gap")).toHaveLength(1);
+      expect([...neverFlagOf(r)]).toEqual([CU]);
+      // the discarded send is not counted
+      expect(sstats(r)).toMatchObject({ selectedOnlyRequests: 0, selectedOnlyTestsSkipped: 0 });
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+      // red without the never-flag set: the next mutant's request is flagged again
+      await r.b.prefetchMutants(plans(["M0002"], [ref("A"), ref("B"), ref("C")]));
+      expect(mutantReq(r, "M0002").map((q) => q.body.runSelectedOnly)).toEqual([undefined]);
+      expect(warned.filter((c) => c === "al-runner-v3-selected-only-scan-gap")).toHaveLength(1);
+    });
+  });
+
+  test("H1: a flagged answer that drops nothing stands: no re-send, no warning, no never-flag", async () => {
+    await withABCD(async () => {
+      const suite = ABCD_NAMES.map((m) => ref(m));
+      const r = await rig({ suite, serve: { rows: rowsIn(ABCD_NAMES) } });
+      const warned: string[] = [];
+      r.b.setNotify((code) => warned.push(code));
+      await baseline(r.b, suite);
+      await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("B"), ref("C")]));
+      expect(mutantReq(r, "M0001").map((q) => q.body.runSelectedOnly)).toEqual([true]);
+      expect(warned).toEqual([]);
+      expect(neverFlagOf(r).size).toBe(0);
+      expect(sstats(r).selectedOnlyRequests).toBe(1);
+    });
+  });
+
+  test("L4: an unflagged R998-only entry keeps the order check OFF (it is a hidden tail, not a prefix cut)", async () => {
+    const cRefused: RowsFn = (m, cu, d, n) => {
+      const rs = rowsIn(ABC, (_m, x) =>
+        x.method === "C" ? { ...x, status: "error" as const, notRun: true, message: REFUSAL } : x,
+      )(m, cu, d, n);
+      return m === "M0001" && cu === CU ? [...rs].reverse() : rs;
+    };
+    const r = asSource(await rig({ suite: SUITE_ABC, serve: { rows: cRefused } }), "default");
+    await baseline(r.b, SUITE_ABC);
+    neverFlagOf(r).add(CU); // so the request goes out unflagged
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A"), ref("B")]));
+    expect(mutantReq(r, "M0001")[0]?.body.runSelectedOnly).toBeUndefined();
+    await r.b.activate("M0001");
+    // red if the order check is forced on: the reversed rows are refused as out of order
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("L4: a kill pair request (NONE and the mutant) is flagged when the mutant's entry is cut", async () => {
+    const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
+    await baseline(r.b, SUITE_ABC);
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.activate("M0001");
+    const n0 = r.serve.requests.length;
+    await r.b.sendKillPair("M0001", ref("A"));
+    const pair = r.serve.requests.slice(n0);
+    expect(pair.length).toBeGreaterThan(0);
+    expect(pair.some((q) => q.ids.some((i) => i.startsWith("NONE")))).toBe(true);
+    expect(pair.every((q) => q.body.runSelectedOnly === true)).toBe(true);
   });
 
   test("the stats line names the three counters", async () => {

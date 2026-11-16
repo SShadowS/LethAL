@@ -118,6 +118,7 @@ import {
   encodeGroups,
   groupsThatFit,
   isolatedSelection,
+  missingKeptTests,
   selectedOnlyDecision,
   serveRow,
 } from "./al-runner-v3-entries";
@@ -2418,6 +2419,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private entries: boolean;
   /** R761: true once `decideTransport` ran or a v3 process started; `entries` never changes after. */
   private transportFrozen = false;
+  /** PR-94 (L5): each codeunit's discovered test names, lower-case, set with `discovered`. */
+  private discoveredNames: ReadonlyMap<number, readonly string[]> = new Map();
+  /** PR-94 (H1): codeunits whose flagged answer missed a kept test (v3's shallow scan); never flagged again. */
+  private neverFlag = new Set<number>();
   /** R857: why the default transport fell back, for `--isolate-tests`' refusal. */
   private fallbackReasons: readonly string[] = [];
   /**
@@ -3150,6 +3155,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
     this.discovered = [...tests];
+    // PR-94 (L5): grouped once here, not per entry per request
+    const names = new Map<number, string[]>();
+    for (const t of tests)
+      names.set(t.codeunitId, [...(names.get(t.codeunitId) ?? []), t.method.toLowerCase()]);
+    this.discoveredNames = names;
   }
 
   /**
@@ -6890,12 +6900,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // coverage windows can leave a gap), and an alone or isolated request keeps its own flag.
     const selectedOnly =
       kind !== "warmup" && alone === undefined && !mode.runSelectedOnly
-        ? selectedOnlyDecision(sent, (cu) => ({
-            baseline: this.baselineOrder(cu),
-            discovered: this.discovered
-              .filter((t) => t.codeunitId === cu)
-              .map((t) => t.method.toLowerCase()),
-          }))
+        ? selectedOnlyDecision(
+            sent,
+            (cu) => ({
+              baseline: this.baselineOrder(cu),
+              discovered: this.discoveredNames.get(cu) ?? [],
+            }),
+            this.neverFlag,
+          )
         : { flag: false, refused: false, skipped: 0 };
     const body = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
@@ -7153,6 +7165,54 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     const { sent, rows, cut: partial } = answer;
+    // Review L1: a discarded send is not a request of the batch; the re-run counts in its place.
+    const uncount = () => {
+      for (const k of [
+        "entriesSent",
+        "prefetchRequests",
+        "liveRequests",
+        "boundChecks",
+        "cachedFalse",
+        "timeoutCuts",
+        "selectedOnlyRequests",
+        "selectedOnlyTestsSkipped",
+        "selectedOnlyRefusedGapped",
+      ] as const)
+        this.stats[k] = before[k];
+      if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
+        this.prefetchBatch.size = batchBefore.size;
+        this.prefetchBatch.ran = batchBefore.ran;
+      }
+    };
+    // PR-94 (H1): v3's test scan is shallow (a `[Test]` with another attribute on its line is missed), so
+    // under `runSelectedOnly` a test LethAL knows can fail to run, and the kept tests after it start from
+    // other state. Every kept test of a flagged entry needs its row; on a miss the answer is discarded,
+    // the codeunit is never flagged again, and the request is re-sent unflagged. An answer cut at a
+    // timeout has no rows to compare.
+    if (answer.selectedOnly && partial === undefined) {
+      const gaps = new Map<number, string[]>();
+      for (const e of sent) {
+        if (e.echo) continue;
+        const miss = missingKeptTests(
+          e.codeunit,
+          this.baselineOrder(e.codeunit),
+          e.excludeTests,
+          (rows.get(e.id) ?? []).map((r) => r.method),
+        );
+        if (miss.length > 0) gaps.set(e.codeunit, [...(gaps.get(e.codeunit) ?? []), ...miss]);
+      }
+      if (gaps.size > 0) {
+        uncount();
+        for (const [cu, miss] of gaps) {
+          this.neverFlag.add(cu);
+          this.notify(
+            "al-runner-v3-selected-only-scan-gap",
+            `[lethal] al-runner-v3-selected-only-scan-gap: with runSelectedOnly, codeunit ${cu}'s entry gave no row for ${[...new Set(miss)].join(", ")}, tests LethAL knows. al-runner's test scan is shallow and missed them. The answer was discarded, the request re-sent without the flag, and this codeunit is never flagged again this session (PR-94)`,
+          );
+        }
+        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
+      }
+    }
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
     // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
     // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
@@ -7161,23 +7221,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (prior !== undefined && partial === undefined) {
       const drift = this.keptRefusalDrift(sent, rows, alone);
       if (drift !== undefined) {
-        // Review L1: the drifted send is not a request of the batch; the re-run counts in its place.
-        for (const k of [
-          "entriesSent",
-          "prefetchRequests",
-          "liveRequests",
-          "boundChecks",
-          "cachedFalse",
-          "timeoutCuts",
-          "selectedOnlyRequests",
-          "selectedOnlyTestsSkipped",
-          "selectedOnlyRefusedGapped",
-        ] as const)
-          this.stats[k] = before[k];
-        if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
-          this.prefetchBatch.size = batchBefore.size;
-          this.prefetchBatch.ran = batchBefore.ran;
-        }
+        uncount();
         this.stats.keptDrifts += 1;
         const event: V3KeptDrift = { refusal: prior.text, ...drift };
         this.driftSink?.(event);
