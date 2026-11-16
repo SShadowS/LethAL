@@ -605,8 +605,9 @@ A build can have a PIN: the exact readings that differ from alpha.2's expectatio
 - **Why:** X (d)'s sleep mutants are cut at their timeout, so `SleeperDoubles` runs alone for M0001 and M0005, and their
   kills are now confirmed alone (R1067). PR-55 emits one `alone-confirm` warning per such confirm.
 - **Seen:** on the first gate run at 64100794 on edge-4ebfe7913, which failed on that mismatch before its verdict checks.
-- **Predicted, to be confirmed by the re-run:** every verdict, killing test and count of X (d) and of every other leg is
-  unchanged, and only `al-runner-v3/xd-d` changes.
+- **Predicted and confirmed:** every verdict, killing test and count of X (d) and of every other leg is unchanged, and only
+  `al-runner-v3/xd-d` changes. The re-run at a1aae539 passed every leg, X (d)'s per-mutant checks included: M0001 and M0005
+  are killed by `SleeperDoubles`, and M0002-M0004 survive.
 
 Leg T is judged against the committed alpha.2 baseline with the pinned keys overridden (`applyTPin`, S4).
 - If a pinned key is absent, repeated, or its committed row is not the pin's `from`, the leg reads at least `held`.
