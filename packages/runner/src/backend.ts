@@ -279,6 +279,13 @@ export interface TestVerdict {
    * `SessionReport` field.
    */
   readonly refusedAfterStop?: string;
+  /**
+   * PR-51 (F1): set on a verdict whose row came from an ALONE request (v3: one test selected by
+   * itself, in a fresh daemon request). Such a row was not measured in its codeunit's context, so
+   * its unmutated confirm and its reproduction must run it alone too (`RunOpts.alone`). Internal
+   * only (v3); never a `SessionReport` field.
+   */
+  readonly selection?: "alone";
 }
 
 /** R-204b: see `TestVerdict.stopState`. */
@@ -386,6 +393,12 @@ export interface BackendStatus {
 export interface RunOpts {
   readonly coverage: CoverageMode;
   readonly timeoutMs: number;
+  /**
+   * PR-51 (F1): run exactly this one test alone, under the currently activated selection (NONE
+   * after `activate(null)`), whatever the backend's routing state says, and never cache the answer
+   * as its codeunit's call. A backend that cannot do this refuses it by name; none ignores it.
+   */
+  readonly alone?: true;
 }
 
 /**
