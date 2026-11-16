@@ -111,8 +111,8 @@ lethal run --project <app-dir> \
 A run keeps its state in `<project>/lethal.sqlite` unless `--db` names another file.
 
 A run is refused by default above 1,000 mutation sites. The limit counts sites, not scope, so one
-large file can exceed it even with `--only`; pass `--allow-large-run`, or narrow with `--lines` or
-`--exclude`.
+large file can exceed it even with `--only`; pass `--allow-large-run`, or narrow inside the file with
+`--lines`, or `--operator` / `--exclude-operator`.
 
 A narrowed run carries `narrowed`, `operator-narrowed`, `line-narrowed` or `tests-narrowed` in
 `validity.caveats`.
@@ -681,8 +681,8 @@ ids are checked when verify runs, not when the argv is parsed, so a wrong id is 
 `malformed-request` rather than a usage error (exit `1`). Each call that runs at least one survivor
 publishes the test app once. **The test project IS published, and it stays installed afterwards**:
 verify does not put back the one that was there before. A refused or all-skipped call publishes
-nothing. To put your own test app back, republish it the way you normally do (for the target app,
-see [Restoring your app after a run](../README.md#restoring-your-app-after-a-run)).
+nothing. To put your own test app back, republish it the way you normally do (verify publishes it at its own `app.json` version, so a
+normal republish is not refused; for the target app, see [Restoring your app after a run](../README.md#restoring-your-app-after-a-run)).
 
 ### Reading a verify result (checked)
 

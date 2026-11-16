@@ -189,7 +189,7 @@ describe("assertRunSizeAcceptable (R48)", () => {
     }
     expect(message).toContain("Narrow --only or --operator further");
     expect(message).toContain("counts mutation SITES, not files");
-    expect(message).toContain("--lines or --exclude");
+    expect(message).toContain("--operator / --exclude-operator");
   });
 
   test("runSession refuses before deploying anything", async () => {

@@ -193,7 +193,7 @@ describe("R912: --time-budget <seconds>", () => {
   test("PR-84: a note for a run that already has --only says the limit counts sites", () => {
     const narrowed = dryRunLargeScopeNote(1200, false, true);
     expect(narrowed).toContain("counts mutation SITES, not files");
-    expect(narrowed).toContain("--lines or --exclude");
+    expect(narrowed).toContain("--operator / --exclude-operator");
     expect(narrowed).toContain("--allow-large-run");
     expect(dryRunLargeScopeNote(1200, false)).not.toContain("counts mutation SITES");
   });
@@ -2650,6 +2650,36 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     const lines = new Set(listing.batches.flatMap((b) => b.sites.map((x) => x.line)));
     expect(lines.has(6)).toBe(true);
     expect(lines.has(8)).toBe(false);
+  });
+
+  test("PR-84: --dry-run with --only above the site limit says the limit counts sites", async () => {
+    const { root, projectDir } = await r214Project();
+    const body = Array.from({ length: 700 }, (_, i) => `        exit(Amount > Budget + ${i});`);
+    await writeFile(
+      join(projectDir, "Logic.Codeunit.al"),
+      `codeunit 79000 "Sandbox Logic"
+{
+    procedure IsOverBudget(Amount: Decimal; Budget: Decimal): Boolean
+    begin
+${body.join("\n")}
+    end;
+}
+`,
+    );
+    const paths = { dbPath: testDbPath("lethal.sqlite"), configPath: join(root, "none.json") };
+    const printed: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      printed.push(args.map(String).join(" "));
+    });
+    try {
+      await printDryRun(projectDir, ["Logic.Codeunit.al"], {
+        ...paths,
+        outPath: join(root, "dry-run.json"),
+      });
+    } finally {
+      log.mockRestore();
+    }
+    expect(printed.join("\n")).toContain("counts mutation SITES");
   });
 
   test("R205: --dry-run lists the source snapshot, not an edit made after it", async () => {

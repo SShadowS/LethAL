@@ -404,7 +404,10 @@ async function readDependencyCodeunits(
       ? options.packageDirs
       : [join(projectDir, ".alpackages")];
   const { codeunits, unread } = await dependencyCodeunitsOf(manifest, dirs);
-  const warning = dependencyCheckWarning(unread);
+  const warning = dependencyCheckWarning(unread, {
+    caller: options === undefined ? "init" : "run",
+    dirs,
+  });
   if (warning !== undefined) (options?.warn ?? console.warn)(warning);
   return codeunits;
 }
@@ -3650,7 +3653,7 @@ export function dryRunLargeScopeNote(
   }
   const head = `NOTE: ${sites} sites is above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit, so 'lethal run' will refuse this scope.`;
   return narrowed
-    ? `${head} The limit counts mutation SITES, not files, so a single large file can exceed it even with --only, --lines or --changed-since. Pass --allow-large-run (to the run, or to this dry run to see the run's answer), or narrow inside the file with --lines or --exclude.`
+    ? `${head} The limit counts mutation SITES, not files, so a single large file can exceed it even with --only, --lines or --changed-since. Pass --allow-large-run (to the run, or to this dry run to see the run's answer), or narrow inside the file with --lines, or --operator / --exclude-operator.`
     : `${head} Narrow it with --only <glob>, or pass --allow-large-run (to the run, or to this dry run to see the run's answer).`;
 }
 
@@ -3829,7 +3832,10 @@ export async function printDryRun(
       dryRunLargeScopeNote(
         sites.length,
         paths.allowLargeRun === true,
-        (only !== undefined && only.length > 0) || paths.lines !== undefined,
+        (only !== undefined && only.length > 0) ||
+          paths.lines !== undefined ||
+          operators !== undefined ||
+          excludeOperators !== undefined,
       ),
     );
   }
