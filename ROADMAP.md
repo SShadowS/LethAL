@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1023 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1024 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -580,6 +580,7 @@ that ordering is the priority.
 - **R1055** · v3: a mutant whose call was cut at a timeout on another test of a codeunit re-sent that hang on every later whole-codeunit run (R577's reproduction, then another alone call); those runs now go alone · [R1055.md](docs/roadmap/R1055.md) · done (bdc83e4d)
 - **R1056** · v3: a timeout kill that is provably a CPU-time stop (row clock cpu, under 10 x N wall, unmutated confirm within N/4) skips R577's reproduction; stop evidence v3-cpu-stop · [R1056.md](docs/roadmap/R1056.md) · done (a7b736fc)
 - **R1061** · Removing a loop bound set before the loop can hang (DO M7544: a batch size left at 0 is never above the count), but a plain rule refuses non-hanging sites too; narrow it before building · [R1061.md](docs/roadmap/R1061.md) · open
+- **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
 
 ## Backends and tooling
 
