@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**37 of 1022 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1026 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -575,10 +575,13 @@ that ordering is the priority.
 - **R924** · XMLports cannot carry the selector, so their code is never mutated: PEPPOL's two PEPPOL 3.0 XMLports hold 1,112 of its 2,567 sites (43%) · [R924.md](docs/roadmap/R924.md) · done (d09c00b7; wrapped-XMLport refusal e3f9866f)
 - **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
 - **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · done (6ba7c956) — shift-integer sets compared-value on a comparison operand (by parse); 208 of 448 distinct…
-- **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · open
+- **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · done (4e7d2cb9)
 - **R1054** · An object header with no space between the id and a quoted name (`codeunit 50100"Name"`) compiles with alc and parses with tree-sitter-al, but LethAL's discovery regex needs whitespace there and refuses the file · [R1054.md](docs/roadmap/R1054.md) · done (2affd336)
 - **R1055** · v3: a mutant whose call was cut at a timeout on another test of a codeunit re-sent that hang on every later whole-codeunit run (R577's reproduction, then another alone call); those runs now go alone · [R1055.md](docs/roadmap/R1055.md) · done (bdc83e4d)
 - **R1056** · v3: a timeout kill that is provably a CPU-time stop (row clock cpu, under 10 x N wall, unmutated confirm within N/4) skips R577's reproduction; stop evidence v3-cpu-stop · [R1056.md](docs/roadmap/R1056.md) · done (a7b736fc)
+- **R1061** · Removing a loop bound set before the loop can hang (DO M7544: a batch size left at 0 is never above the count), but a plain rule refuses non-hanging sites too; narrow it before building · [R1061.md](docs/roadmap/R1061.md) · done (4e7d2cb9)
+- **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
+- **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · open
 
 ## Backends and tooling
 
@@ -1066,7 +1069,8 @@ that ordering is the priority.
 - **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 111 passing baselines and 384 kills rest on tests with an Insert or Modify before lowering (PR-35, recounted by PR-36; at most 127 and 476 counting DeleteAll-only and read-only tests); PR-36 labels them in v3 reports · [R1048.md](docs/roadmap/R1048.md) · open
 - **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
 - **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
-- **R1059** · The ledger's 60 open causes PR-05 could not re-run, settled on edge-5a58a0f16 (PR-39): 7 fixed (Bank Deposits, Service Declaration, Data Archive, Record Link Management), 43 still seen, 8 not observed, 2 with no sighting; Quality Management and Shopify rebuilt and cached · [R1059.md](docs/roadmap/R1059.md) · closed 2026-11-16 — measured: the 60 states are in the refusal ledger; a re-score of the four apps' stored…
+- **R1059** · The ledger's 60 open causes PR-05 could not re-run, settled on edge-5a58a0f16 (PR-39): 4 fixed (Bank Deposits, Service Declaration, Data Archive, Record Link Management), 50 still seen, 4 not observed, 2 with no sighting; Quality Management and Shopify rebuilt and cached · [R1059.md](docs/roadmap/R1059.md) · closed 2026-11-16 — measured: the 60 states are in the refusal ledger; a re-score of the four apps' stored…
+- **R1060** · DO window t6 ran ~65 s per new covered mutant (t5: 8.3 s): a mid-order baseline-refused GoToKey test closed the serve daemon on every mutant request of a newly reached region; the refusal is now kept (measured clean), and a resume that reuses no baseline says why · [R1060.md](docs/roadmap/R1060.md) · done (11605dbb)
 
 ---
 
