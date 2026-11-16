@@ -65,3 +65,20 @@ same procedure is hang-refused only when all of these hold:
 1 hang per 8 scored sites lost) AND moves no fixture site and no emit golden. M7544's site (DO `CDOeDocsSendCodeMigration`:285,
 `until BatchCounter < CommitBatchSize`) must be refused, and sandbox-hang's 3 and sandbox-optin's 1 (PR-44) must not. Otherwise it
 is dropped by an addendum, with its figures. Unit tests are red both ways per condition.
+
+## Addendum 2 (2026-11-16): part 2 measured, KEEP
+
+Measured alone, with part 1 in (`/coord/handoff/PR-48/measure2.md`; built at lethal/pr-48 51441fd3):
+- Corpus: 72 of 72 modules, 0 sites removed.
+- DO: 1 site removed, M7544's (`CDOeDocsSendCodeMigration`:285). It was timeout-killed in t2b, t3, t4, t5 and t6.
+- Fixtures byte-identical: sandbox-hang's 3 sites and sandbox-optin's 1 stay mutated. No golden moves.
+- So 1 hang per 1 scored site lost: kept. It rests on one site; t7 and t8 are the check.
+
+Two differences from addendum 1's wording, both noted here:
+- **Narrower:** `Y <> X` is not read. A counter can step past a non-default bound, so it cannot be judged stuck.
+- **Where the loop is:** the loop may be any later statement of the assignment's block, nested inside it too, up to the first
+  statement that can write X. M7544's loop sits inside a `foreach`, and the first build, which read only sibling loops, removed
+  nothing. A reset of X inside the `foreach` stops the search (tested).
+
+The field condition (4) has no red-going test: a field resolves to no variable, so it has no default and the rule cannot reach it.
+It is kept as a guard.
