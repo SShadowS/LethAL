@@ -70,3 +70,12 @@ causes. Corrected, before any new run:
 ## Predictions
 Of the 59 with a sighting: about a fifth fixed, three fifths still open (SAME), a fifth not observed. No cause becomes by-design
 (none of the 61 is a policy text today).
+
+## Addendum 3 (2026-11-16, after the addendum-2 re-runs, before the ledger is written): the join key, completed
+Addendum 2's join by `ast_hash` and `identity_ordinal` alone is not a mutant's identity. `ast_hash` is the hash of the mutated
+node (every `true` literal shares one), and the ordinal counts twins only within one identity. The repo's identity
+(`identityKeyOf`, `selection.ts`) is astHash, codeunit, procedure, operator, operator major and ordinal. In one Bank Deposits store
+the two-field key collided for 47 identities, so a sighted mutant was joined to another mutant.
+- **Join, corrected:** file, procedure, operator, `ast_hash` and `identity_ordinal` (the file stands for the codeunit within one
+  app; every run here has one operator major). `mutclassify2.ts` now refuses a store where two mutants share that key; none does.
+- No re-run: the stores are the addendum-2 ones. Only the classification is redone, and its first result is replaced.
