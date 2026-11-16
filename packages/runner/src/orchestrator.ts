@@ -5071,6 +5071,8 @@ interface ScoreBatchInput {
     readonly batchDir: string;
     readonly testDir: string;
     readonly allowReuse: boolean;
+    /** PR-47: the run `--resume` reuses, for the warning when its stored tree differs. */
+    readonly resumedRunId?: number;
     /** R389: the session's closed-world answer, bound into the snapshot key like the run's. */
     readonly closedWorld: ClosedWorld;
     /** R492 (sol run 001), R495: the session's PROVEN test app (`undefined`: unproven). Reuse
@@ -5854,8 +5856,15 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
-      const { batchDir, testDir, allowReuse, closedWorld, provenTestApp, serverGeneration } =
-        input.snapshot;
+      const {
+        batchDir,
+        testDir,
+        allowReuse,
+        closedWorld,
+        provenTestApp,
+        serverGeneration,
+        resumedRunId,
+      } = input.snapshot;
       const batchHash = await hashAlTree(batchDir);
       hashTestApp = await batchTestAppReader(backend, testDir, closedWorld);
       const read = await hashTestApp();
@@ -5921,10 +5930,31 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       if (reused !== undefined) {
         const inScope = new Set(tests.map(testKeyOf));
         const kept = reused.baseline.filter((b) => inScope.has(testKeyOf(b.ref)));
-        reused =
-          new Set(kept.map((b) => testKeyOf(b.ref))).size === inScope.size
-            ? { ...reused, baseline: kept }
-            : undefined;
+        const have = new Set(kept.map((b) => testKeyOf(b.ref))).size;
+        if (have === inScope.size) {
+          reused = { ...reused, baseline: kept };
+        } else {
+          // PR-47: the drop was silent. Named now; the decision is unchanged.
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: the stored baseline (run ${reused.runId} batch ${reused.batchIndex}) lacks ${inScope.size - have} of this session's ${inScope.size} tests, so batch ${batchIdx}'s baseline runs again (R-236c).`,
+          });
+          reused = undefined;
+        }
+      }
+      // PR-47: warn only when the RESUMED run stored this batch's baseline for another tree. Any
+      // other miss (coverage mode, server generation, dependencies, a batch never stored) is
+      // silent. (A test app that differs from the proven one is R492's own report.)
+      if (allowReuse && runsWhatWasRead && reusable === null && resumedRunId !== undefined) {
+        const stored = store.snapshotBatchHash(resumedRunId, batchIdx);
+        if (stored !== null && stored !== batchHash) {
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: run ${resumedRunId} stored batch ${batchIdx}'s baseline for another instrumented tree (the emitted AL changed); batch ${batchIdx}'s baseline runs again.`,
+          });
+        }
       }
       snapshotKey = { batchHash, testAppHash };
       // PR-21 (L5): a backend that needs its own baseline state (serve-entries, R1008) reuses a
@@ -9027,6 +9057,7 @@ async function runSessionBody(
               cfg.backend.recheckReusedBaseline !== undefined) &&
             !manifest.mutants.some((m) => m.coverageArmNames !== undefined),
           closedWorld: sessionClosedWorld,
+          ...(resumeState !== undefined ? { resumedRunId: resumeState.runId } : {}),
           ...(historyTestApp !== undefined ? { provenTestApp: historyTestApp } : {}),
           ...(sessionGeneration !== undefined ? { serverGeneration: sessionGeneration } : {}),
           lendingSession,

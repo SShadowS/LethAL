@@ -956,6 +956,85 @@ codeunit 50690 "Serve Stale Buffer"
         R.Delete(false);
     end;
 }
+
+table 50692 "Serve Desc Doc"
+{
+    LookupPageId = "Serve Desc Docs";
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+        field(3; Grp; Code[10]) { }
+    }
+    keys
+    {
+        key(PK; "No.") { Clustered = true; }
+        key(ByGrp; Grp) { }
+    }
+}
+
+page 50693 "Serve Desc Docs"
+{
+    PageType = List;
+    SourceTable = "Serve Desc Doc";
+    SourceTableView = sorting(Grp) order(descending);
+    Editable = false;
+    UsageCategory = None;
+    layout
+    {
+        area(Content)
+        {
+            repeater(Rows)
+            {
+                field("No."; Rec."No.") { ApplicationArea = All; }
+                field(Grp; Rec.Grp) { ApplicationArea = All; }
+            }
+        }
+    }
+
+    var
+        Seen: Integer;
+
+    trigger OnAfterGetRecord()
+    begin
+        Seen += 1;
+    end;
+
+    trigger OnAfterGetCurrRecord()
+    begin
+        Seen += 1;
+    end;
+}
+
+codeunit 50694 "Serve GoToKey Desc"
+{
+    Subtype = Test;
+
+    [Test]
+    [HandlerFunctions('DocsHandler')]
+    procedure Refuses()
+    var
+        Doc: Record "Serve Desc Doc";
+        V: Variant;
+        i: Integer;
+    begin
+        for i := 1 to 60 do begin
+            Doc.Init();
+            Doc."No." := 'D' + Format(1000 + i);
+            Doc.Grp := 'G' + Format(1000 + i);
+            Doc.Insert();
+        end;
+        Clear(Doc);
+        V := Doc;
+        Page.RunModal(0, V);
+    end;
+
+    [ModalPageHandler]
+    procedure DocsHandler(var Docs: TestPage "Serve Desc Docs")
+    begin
+        Docs.GoToKey('D1030');
+        Docs.OK().Invoke();
+    end;
+}
 `;
 
 /** R667: one `Assert.AreEqual` failure, in its own tests app (only it depends on Library Assert). */
@@ -1046,6 +1125,8 @@ const SERVE_CASES: ReadonlyArray<readonly [string, string, boolean, boolean]> = 
   ["caption-no-source-table", "Codeunit50689.Refuses", false, false],
   // R1009 (coord PR-29): the stale-buffer refusal, measured once on edge-5a58a0f16.
   ["stale-buffer-after-lock", "Codeunit50690.Refuses", false, false],
+  // PR-47: DO t6's GoToKey refusal, measured once on edge-5a58a0f16 (`/coord/handoff/PR-47/`).
+  ["gotokey-desc-last-row-above-window", "Codeunit50694.Refuses", false, false],
 ];
 
 /**
@@ -1105,7 +1186,7 @@ async function serveKeepReasons(env: V3ProbeEnv, app: string, root: string): Pro
     });
   const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
   const pinned = env.serveKeepMoved === true;
-  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty codeunits, a report, a page and a table (twenty-one tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
+  const expected = `one serve daemon (--test-timeout ${SERVE_TEST_TIMEOUT_S}, testIsolation test): twenty-one codeunits, a report, two pages and two tables (twenty-two tests), each judged row notRun, error, and its V3_SERVE_SAFE_REFUSALS entry (${SERVE_CASES.map(([e]) => e).join(", ")}); the localhost http test and cascade also accepted as a plain trusted fail (R705), and the RecordRef and GetTable cases as one with BC's error (R1026); the public-host http test must be a refusal (R808); the two cascade-existing-state rows also accepted as a plain pass; a refused row no entry accepts is unkept, a gate-fail (R1000)${pinned ? "; this build's pin (R808): commit a plain pass, and no row at all for Codeunit50673.Never (onrun-failed: since #5859 a test codeunit whose OnRun raises gives no row)" : ""}`;
   let rows: readonly ServerTestLine[];
   try {
     await server.start(
