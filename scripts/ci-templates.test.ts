@@ -52,7 +52,13 @@ describe("PR-70: the CI templates' lethal commands", () => {
     });
 
     test(`${t}: every lethal command parses with the CLI's own table`, () => {
-      for (const argv of cmds) expect(() => parseCliConfig(argv), argv.join(" ")).not.toThrow();
+      // The templates run al-runner-v3 on Linux; Windows refuses that backend at parse time (R586), so there the same flags
+      // are parsed under bcdev, which keeps every flag checked by the strict table.
+      const onWindows = process.platform === "win32";
+      for (const argv of cmds) {
+        const parsed = onWindows ? argv.map((a) => (a === "al-runner-v3" ? "bcdev" : a)) : argv;
+        expect(() => parseCliConfig(parsed), parsed.join(" ")).not.toThrow();
+      }
     });
 
     test(`${t}: the run is scoped to the changed lines and the export reads its report and project`, () => {
