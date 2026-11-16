@@ -83,6 +83,10 @@ case "$1" in --wait | --peak)
 esac
 dir="${LETHAL_HEAVY_LOCK_DIR:-/coord/locks}"
 mkdir -p "$dir" || exit 2
+# R1077: an advisory, never a refusal, when the declared peak is over 2x what the same shape of command measured in
+# heavy-peaks.tsv (the same 160-character cut the ledger keeps). Its exit code is ignored on purpose. The command goes on STDIN,
+# never as an argument: the guard's ps scan counts a process whose command line names a corpus root as a heavy job.
+printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-160 | "${BUN:-bun}" "$(dirname "$0")/heavy-slot-advice.ts" "$dir" "$cls" "$peak" || true
 qdir="$dir/heavy-queue"
 mkdir -p "$qdir" || exit 2
 poll="${LETHAL_HEAVY_POLL_S:-5}"

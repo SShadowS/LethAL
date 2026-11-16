@@ -14,6 +14,8 @@ import {
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   PUBAPP_FLOWFIELD,
+  READ_TEST,
+  SET_TEST,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
@@ -556,10 +558,12 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
 
   test("cells: about 300, unique type/method/state, every one ends in Error('V:...')", () => {
     expect(f.cells.length).toBeGreaterThan(250);
-    expect(f.cells.length).toBeLessThan(350);
+    expect(f.cells.length).toBeLessThan(600);
     const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
     expect(new Set(keys).size).toBe(keys.length);
-    for (const c of f.cells) expect(c.call).toMatch(/Error\('V:\[%1(\|%2)?\]', .*\);$/);
+    // a two-test cell answers in its second test
+    for (const c of f.cells)
+      expect((c.reader ?? c).call).toMatch(/Error\('V:\[%1(\|%2)?(\|%3)?\]', .*\);$/);
   });
 
   test("value encoding: text as it is, other values through Format(.., 0, 9), Evaluate as [ok|value], all inside a closing marker", () => {
@@ -636,7 +640,8 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
     expect(json.id).toBe("51000000-0000-4000-8000-000000051012");
     expect(json.idRanges).toEqual([{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length }]);
     const al = files["src/Cells.al"] ?? "";
-    expect((al.match(/^codeunit \d+ /gm) ?? []).length).toBe(f.cells.length);
+    // one per cell, plus PR-63's `LR Carry Mark` support codeunit
+    expect((al.match(/^codeunit \d+ /gm) ?? []).length).toBe(f.cells.length + 1);
     expect(al).toContain(`codeunit ${BASE_ID + f.cells.length} `);
     // bcCheckFamily leaves every cell in (no table cells here), so a BC id is the v3 index + 51001
     expect(bcCheckFamily(f).cells).toHaveLength(f.cells.length);
@@ -785,7 +790,7 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
   });
 
   test("lang1030: 28 cells set Danish first, each locale-flagged and labelled; the Windows-language probe is not one of them", () => {
-    const lang = f.cells.filter((c) => c.state.startsWith("lang1030"));
+    const lang = f.cells.slice(0, 326).filter((c) => c.state.startsWith("lang1030"));
     expect(lang).toHaveLength(28);
     for (const c of lang) {
       expect((c.setup ?? [])[0]).toBe("GlobalLanguage(1030);");
@@ -797,6 +802,115 @@ describe("PR-52: the format-evaluate family and its BC join", () => {
     expect(w.setup).toEqual([]);
     // the lang cells come last, so the earlier cells keep their ids
     expect(f.cells.slice(0, 297).some((c) => c.state.startsWith("lang1030"))).toBe(false);
+  });
+
+  test("PR-63: the new language cells are appended after the 326, per language and group", () => {
+    const added = f.cells.slice(326);
+    const per = (code: number) => added.filter((c) => c.state.startsWith(`lang${code} `));
+    const isName = (c: { call: string }) => /Month Text|Weekday Text/.test(c.call);
+    for (const code of [1031, 1036, 1044, 1053]) {
+      const set = per(code).filter((c) => !isName(c));
+      expect(set.filter((c) => c.type === "Enum")).toHaveLength(3);
+      expect(set.filter((c) => c.method.startsWith("Format picture"))).toHaveLength(4);
+      expect(set.filter((c) => c.type === "Boolean" && c.method === "Evaluate")).toHaveLength(5);
+      expect(set.some((c) => c.type === "Date" && c.state.endsWith("closing date"))).toBe(true);
+    }
+    // 1030 gets only what it lacked: Enum (3), pictures (4), Boolean "1" (1)
+    expect(per(1030).filter((c) => !isName(c))).toHaveLength(3 + 4 + 1);
+    // month and day names: 5 pictures x 2 dates under each of the five languages and English
+    for (const code of [1030, 1031, 1036, 1044, 1053, 1033]) {
+      expect(per(code).filter(isName)).toHaveLength(10);
+      for (const c of per(code)) expect((c.setup ?? [])[0]).toBe(`GlobalLanguage(${code});`);
+      expect(per(code).every((c) => c.depends === "locale")).toBe(true);
+    }
+    expect(f.support).toContain('enum 51000 "LR Color"');
+  });
+
+  test("PR-63: the carry-over cell is one two-test codeunit, A_SetLanguage then B_ReadLanguage", () => {
+    const i = f.cells.findIndex((c) => c.reader !== undefined);
+    expect(i).toBe(f.cells.length - 1);
+    expect(f.cells.filter((c) => c.reader !== undefined)).toHaveLength(1);
+    const src = emitApp(f)["src/Cells.al"] ?? "";
+    const unit = src.slice(src.indexOf(`codeunit ${BASE_ID + 1 + i} `));
+    expect(unit.match(/\[Test\]/g)).toHaveLength(2);
+    const [a, b] = [
+      unit.indexOf("procedure A_SetLanguage()"),
+      unit.indexOf("procedure B_ReadLanguage()"),
+    ];
+    // declaration order AND alphabetical order agree
+    expect(a).toBeGreaterThan(-1);
+    expect(a).toBeLessThan(b);
+    expect(SET_TEST < READ_TEST).toBe(true);
+    expect([SET_TEST, READ_TEST]).toEqual(["A_SetLanguage", "B_ReadLanguage"]);
+    expect(unit).toContain("GlobalLanguage(1030); Mark.Increment();");
+    expect(unit).toContain(
+      "Error('V:[%1|%2|%3]', Format(GlobalLanguage(), 0, 9), Format(V), Format(Mark.Count(), 0, 9));",
+    );
+    expect(src).toContain('codeunit 51540 "LR Carry Mark"');
+    expect(src).toContain("SingleInstance = true;");
+    expect(f.cells.at(-1)?.depends).toBe("carry");
+    // every other cell stays a single `Cell` test
+    expect(src.match(/procedure Cell\(\)/g)).toHaveLength(f.cells.length - 1);
+  });
+
+  test("PR-63: classify reads the reader's row; a setter that did not pass or is missing is no answer", () => {
+    const i = f.cells.findIndex((c) => c.reader !== undefined);
+    const id = BASE_ID + 1 + i;
+    const rows = (...rs: { n: string; status: string; message?: string }[]) =>
+      rs.map(({ n, ...rest }) => ({ name: `Codeunit${id}.${n}`, ...rest }));
+    const last = (rs: ReturnType<typeof rows>) => classify(f, rs).at(-1);
+    const ok = last(
+      rows(
+        { n: "A_SetLanguage", status: "pass" },
+        { n: "B_ReadLanguage", status: "fail", message: "V:[1033|x|1]" },
+      ),
+    );
+    expect(ok).toMatchObject({ outcome: "fail", message: "V:[1033|x|1]" });
+    expect(last(rows({ n: "B_ReadLanguage", status: "fail", message: "V:[1]" }))?.outcome).toBe(
+      "missing",
+    );
+    const bad = last(
+      rows(
+        { n: "A_SetLanguage", status: "fail", message: "no 1030" },
+        { n: "B_ReadLanguage", status: "fail", message: "V:[1033|x|0]" },
+      ),
+    );
+    expect(bad?.message).toBe("A_SetLanguage did not pass: no 1030");
+  });
+
+  test("PR-63: a two-test cell still joins to exactly one BC answer, keyed by the reader's test", () => {
+    const results = [{ ...r("a", "fail", "V:[1]"), cell: { ...cell("a"), reader: { call: "x" } } }];
+    const two = (...l: string[]) => joinCells(results, bcOf(...l));
+    const S = "51001.A_SetLanguage";
+    const R = "51001.B_ReadLanguage";
+    expect(two(`${S}\tpass\t`, `${R}\tfail\tV:[1]`)[0]?.cls).toBe("equal");
+    expect(parseBcTsv(`${S}\tpass\t\n${R}\tfail\tV:[1]`).size).toBe(1);
+    expect(() => bcOf(`${R}\tfail\tV:[1]`, "51001\tfail\tV:[1]")).toThrow("twice");
+    expect(() => bcOf(`${R}\tfail\tV:[1]`, `${R}\tfail\tV:[1]`)).toThrow("twice");
+    expect(() => bcOf("51001.Other\tfail\tV:[1]")).toThrow("bad BC row");
+    // a two-test cell needs both rows: the setter's pass only, the reader without a setter, and the bare id are all refused
+    expect(() => two(`${S}\tpass\t`)).toThrow("no B_ReadLanguage row");
+    expect(() => two(`${R}\tfail\tV:[1]`)).toThrow("no A_SetLanguage row");
+    expect(() => two("51001\tfail\tV:[1]")).toThrow("has two tests");
+    // a one-test cell refuses a test suffix
+    const one = [r("a", "fail", "V:[1]")];
+    expect(() => joinCells(one, bcOf(`${R}\tfail\tV:[1]`))).toThrow("has one test");
+    expect(() => joinCells(one, bcOf(`${S}\tpass\t`))).toThrow("has one test");
+    expect(joinCells(one, bcOf("51001\tfail\tV:[1]"))[0]?.cls).toBe("equal");
+    // a failed setter is the cell's answer, not the reader's value
+    const failed = two(`${S}\tfail\tno 1030`, `${R}\tfail\tV:[1]`);
+    expect(failed[0]?.cls).toBe("one errors, one returns");
+    expect(failed[0]?.bc).toContain("A_SetLanguage did not pass: no 1030");
+  });
+
+  test("PR-63: the carry cell's difference is flagged carry, not locale", () => {
+    const c = { ...cell("a", "locale"), depends: "carry" as const, reader: { call: "x" } };
+    const rows = joinCells(
+      [{ cell: c, outcome: "fail", message: "V:[1030|x|1]" }],
+      bcOf("51001.A_SetLanguage\tpass\t", "51001.B_ReadLanguage\tfail\tV:[1033|x|0]"),
+    );
+    expect(rows[0]?.depends).toBe("carry");
+    expect(joinTsv(rows)).toContain("carry?");
   });
 
   test("L6: a report whose cells are not the family's cells, in order, is refused", () => {
