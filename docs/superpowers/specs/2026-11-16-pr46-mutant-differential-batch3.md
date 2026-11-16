@@ -49,3 +49,26 @@ All apps compile clean with alc against the server's symbols.
    regression entry and an R586 row.
 3. The report gives the per-module agreement rate: the mutants both backends scored with the same verdict, of those both scored.
 4. No daemon is left stranded; no server needs a restart.
+
+## Addendum 1 (2026-11-16, after the measured v3 runs, before any bcdev run)
+
+**The v3 side** (`/coord/handoff/PR-46/v3/`, edge-5a58a0f16; packagesDir `/coord/handoff/PR-46/pkgs`). The census tags one site
+each in Telemetry and AppSource, with no operator still at risk. **0 timeout-killed in every module**, so each module goes to bcdev
+with its whole mutant set.
+- Document Sharing: baseline 17/17; 167 mutants (97 killed, 48 survived, 22 no-coverage).
+- Telemetry: baseline 9/9; 386 mutants (104 killed, 85 survived, 197 no-coverage).
+- AppSource Product Gallery: baseline 7/7; 344 mutants (35 killed, 71 survived, 232 no-coverage, 6 error).
+
+**The copies needed renames beyond namespace and ids** (`prepare.md`). The first v3 baselines were red: Document Sharing 4/17,
+Telemetry 4/9. v3 bound the tests' references to System Application objects of the same names (codeunits "Document Sharing",
+"Telemetry Loggers", "Telemetry Custom Dimensions"; table "Feature Uptake": "more than one table is named"), though the copies sit
+in their own namespace and alc binds them to the copies.
+- Those objects are renamed `PR46 ...`.
+- Two permission sets and one page-extension action are renamed, for clashes BC would refuse.
+- One Telemetry test filters custom dimensions by publisher; it allows the copies' publisher, "LethAL Scratch", in place of
+  "Microsoft".
+Both backends run the same renamed source. The name binding is a candidate al-runner difference. An invented repro decides it; if
+confirmed, it is filed as prediction 2 says.
+
+**bcdev modes.** Document Sharing and Telemetry run under `coverageMode: "procedure"`. AppSource runs under `"none"`, because 5 of
+its mutants sit in its `[NonDebuggable]` procedure (`SetCommonHeaders`, R1049).
