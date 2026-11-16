@@ -1,6 +1,25 @@
 {
   "repros": [
     {
+      "id": "u8181-tablemetadata-relation",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8181",
+      "bcEvidence": "inferred, not measured on a BC server: the standard TableRelation check against the rows Table Metadata holds (the repro's own table 51680 exists, 1999999999 does not); the direct read is the control. al-runner edge-4ebfe7913 refuses both Validate cells with 'relation target `Table Metadata.ID` is not declared in the workspace' and passes the direct read (PR-57, lethal-bugs, 2026-11-16)",
+      "rerun": [
+        "PR-57 step 2: Base Application (BC.History 28.6) baseline-only on al-runner v3; every test is refused today at Company Triggers OnCompanyOpen, System Initialization Impl.InitCompany"
+      ],
+      "tests": {
+        "Codeunit51681.ValidateExistingTableId": {
+          "status": "pass"
+        },
+        "Codeunit51681.ValidateMissingTableId": {
+          "status": "pass"
+        },
+        "Codeunit51681.ReadTableMetadata": {
+          "status": "pass"
+        }
+      }
+    },
+    {
       "id": "u8160-restrictive-default",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8160",
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, Permissions Mock installed, through LethAL's web-service path; this app itself, /coord/handoff/PR-33/ws-run/result.md): InsertUnderRestrictiveDefault fails with 'Sorry, the current permissions prevented the action. (TableData 51600 URD Row Insert: Upstream Repro Restrictive Default)'; InsertWithTestPermissionsDisabled passes",

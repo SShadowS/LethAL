@@ -63,6 +63,13 @@ the families' cells on BC:
 - New: `u8157-xml-asxmlnode` (#8157: `XmlElement.AsXmlNode()` on an untouched element passes on BC) and `u8158-session-read`
   (#8158: a Session read under Permissions Mock fails on BC in a web-service session; run with `--no-client`).
 
+## Coverage (PR-57)
+
+`u8181-tablemetadata-relation` (179 tests in all): a field whose `TableRelation` targets `Table Metadata` is refused when validated
+("relation target `Table Metadata.ID` is not declared in the workspace"); a direct read of `Table Metadata` runs. It is the refusal
+that stops every Base Application test on al-runner v3 today (System Initialization Impl.InitCompany at company open), so when it
+flips, PR-57's step 2 (a BaseApp baseline) can run. BC's results are inferred, not measured on a server.
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
