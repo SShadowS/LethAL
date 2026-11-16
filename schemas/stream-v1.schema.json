@@ -1215,6 +1215,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "nonDebuggable": {
+              "const": true
+            },
             "procedureOverloadIndex": {
               "type": "number"
             },
@@ -1473,6 +1476,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "nonDebuggable": {
+              "const": true
+            },
             "procedureOverloadIndex": {
               "type": "number"
             },
@@ -1683,6 +1689,9 @@
             },
             "procedureEndLine": {
               "type": "number"
+            },
+            "nonDebuggable": {
+              "const": true
             },
             "procedureOverloadIndex": {
               "type": "number"

@@ -633,3 +633,37 @@ describe("discoverTests — discovered paths use `/` (R421)", () => {
     ]);
   });
 });
+
+// R1054: alc accepts `codeunit 50100"Name"`; discovery used to need a space there.
+describe("discoverTests — a glued object header (R1054)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+  const suite = (header: string) => `${header}
+{
+    Subtype = Test;
+
+    [Test]
+    procedure GluedTest()
+    begin
+    end;
+}
+`;
+
+  test("a test codeunit with no space before its quoted name is discovered", async () => {
+    const refs = await discoverSource("Glued.Codeunit.al", suite('codeunit 79500"Glued Suite"'));
+    expect(refs.map((r) => [r.codeunitId, r.codeunitName, r.method])).toEqual([
+      [79500, "Glued Suite", "GluedTest"],
+    ]);
+    expect(
+      testsInAlSource("G.al", suite('codeunit 79500"Glued Suite"')).map((r) => r.method),
+    ).toEqual(["GluedTest"]);
+  });
+
+  test("a bare name glued to the id (`50100Bare`) is not a header", () => {
+    // Not a header, so its test lies outside every section: the R79 guard refuses it by name.
+    expect(() => testsInAlSource("B.al", suite("codeunit 79501Bare"))).toThrow(
+      /outside every codeunit section/,
+    );
+  });
+});

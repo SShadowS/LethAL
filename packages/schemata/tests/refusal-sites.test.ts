@@ -152,6 +152,7 @@ const COMPOSITION_MODULES: Readonly<Record<string, readonly string[]>> = {
   "packages/engine/src/ast/printer.ts": ["printWithRewrites"],
   "packages/schemata/src/compile.ts": ["compileSchemataForFile"],
   "packages/schemata/src/project.ts": [
+    "isNonDebuggable",
     "gapIdOf",
     "identityTupleOf",
     "coarseIdentityTupleOf",

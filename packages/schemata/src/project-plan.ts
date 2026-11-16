@@ -65,7 +65,7 @@ export function planOneFile(
 // Extension kinds first: alternation is tried left to right, so a bare `page`/`table` would
 // engage on `pageextension`/`tableextension`/`reportextension` before failing its `\s+\d+`.
 const OBJECT_HEADER =
-  /^\s*(codeunit|tableextension|pageextension|reportextension|table|page|report|query|xmlport|enum)\s+(\d+)\s+("([^"]+)"|(\w+))/gim;
+  /^\s*(codeunit|tableextension|pageextension|reportextension|table|page|report|query|xmlport|enum)\s+(\d+)(?=\s|")\s*("([^"]+)"|(\w+))/gim;
 
 /**
  * Blanks out AL comments, preserving length (so any index computed against the result still

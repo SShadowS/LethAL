@@ -242,8 +242,9 @@ describe("Caveat union", () => {
       "al-runner-v3-serve-default-fallback-warmup": true,
       "al-runner-v3-coverage-off": true,
       "time-budget-reached": true,
+      "nondebuggable-no-coverage": true,
     };
-    expect(Object.keys(all).length).toBe(33);
+    expect(Object.keys(all).length).toBe(34);
   });
 });
 
@@ -1156,5 +1157,88 @@ describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the
     const rows = new Map(r.mutants.map((m) => [m.mutantCode, m]));
     expect(rows.get("M0001")).toMatchObject({ killReproduced: true, reproducedFailure: "again" });
     expect(rows.get("M0002")?.killReproduced).toBe(true);
+  });
+});
+
+// R1049: BC records no coverage line inside a [NonDebuggable] member, so a no-coverage mutant there
+// is not shown to be untested. The flag is a manifest (site) property; no report field carries it.
+describe("buildReport: nondebuggable-no-coverage (R1049)", () => {
+  const caveatsOf = (
+    coverage: "none" | "procedure",
+    verdict: "no-coverage" | "survived",
+    nonDebuggable: boolean,
+  ): readonly Caveat[] => {
+    const statics: FoldStatics = {
+      caps: {
+        kind: "bcdev",
+        authoritative: true,
+        coverage,
+        deploy: "publish",
+        isolation: "session",
+      },
+      buildSymbols: [],
+    };
+    const events = (
+      [
+        {
+          type: "mutation-set-generated",
+          siteCount: 1,
+          deployedCount: 1,
+          hangCapableCount: 0,
+          totalFiles: 1,
+          instrumentableFiles: 1,
+          notInstrumentedFiles: [],
+          declarativeSiteFiles: [],
+          preprocExcludedFiles: [],
+          excludedByOnly: 0,
+          excludedByExclude: 0,
+          excludedByOperator: 0,
+        },
+        { type: "baseline-batch-finished", batchIndex: 0, verdicts: [] },
+        {
+          type: "mutant-scored",
+          mutant: {
+            mutantId: "M0001",
+            file: "Secrets.Codeunit.al",
+            startIndex: 100,
+            endIndex: 140,
+            startLine: 10,
+            operatorName: "lethal.remove-assignment",
+            operatorVersion: "1.0.0",
+            astHash: "hash-M0001",
+            objectType: "codeunit",
+            codeunitId: 50100,
+            codeunitName: "Secrets",
+            procedureName: "Store",
+            procedureScope: "public",
+            originalText: "X := 1;",
+            mutatedText: "",
+            ...(nonDebuggable ? { nonDebuggable: true as const } : {}),
+          },
+          verdict,
+          batchIndex: 0,
+          durationMs: 1,
+          coveringTests: [],
+        },
+        { type: "session-finished", elapsedMs: 1 },
+      ] satisfies RunEventInput[]
+    ).map((e, i) => ({ ...e, seq: i + 1 }) as RunEvent);
+    return buildReport(statics, events).validity.caveats;
+  };
+
+  test("raised for a no-coverage mutant in a [NonDebuggable] member under procedure coverage", () => {
+    expect(caveatsOf("procedure", "no-coverage", true)).toContain("nondebuggable-no-coverage");
+  });
+
+  test("not raised under coverageMode none", () => {
+    expect(caveatsOf("none", "no-coverage", true)).not.toContain("nondebuggable-no-coverage");
+  });
+
+  test("not raised for a no-coverage mutant outside such a member", () => {
+    expect(caveatsOf("procedure", "no-coverage", false)).not.toContain("nondebuggable-no-coverage");
+  });
+
+  test("not raised for a [NonDebuggable] mutant that has another verdict", () => {
+    expect(caveatsOf("procedure", "survived", true)).not.toContain("nondebuggable-no-coverage");
   });
 });

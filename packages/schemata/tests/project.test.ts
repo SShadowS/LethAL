@@ -9,6 +9,7 @@ import {
   findFirst,
   initParser,
   parseAL,
+  procedureLikeNameNode,
   visit,
   wrapRoot,
 } from "@lethal/engine";
@@ -27,6 +28,7 @@ import {
   identityEntriesOf,
   identitySiteKey,
   identityTupleOf,
+  isNonDebuggable,
   runIdentityOrdinals,
   scanDeclaredObjects,
   stripAlComments,
@@ -34,6 +36,7 @@ import {
   writeInstrumentedProject,
 } from "../src/project";
 import type { ObjectHeader, WriteInput } from "../src/project";
+import { objectHeadersOf } from "../src/project-plan";
 
 // The target project's own app.json `id` — threaded into the delegating selector and the
 // register-install codeunit so the control extension keys state on the full identity tuple.
@@ -1544,6 +1547,15 @@ page 51053 "Not Injectable"
       expect(thrown.objects).toBeUndefined();
       expect(thrown.lines).toBeUndefined();
     });
+
+    // R1054: alc accepts a quoted name glued to the id; a bare name still needs a space.
+    it("lists an object whose quoted name is glued to its id, and not a glued bare name", () => {
+      const glued = objectHeadersOf('codeunit 50100"Glued Name"\n{\n}\n', "src/G.al");
+      expect(glued.map((h) => [h.type, h.id, h.name])).toEqual([["codeunit", 50100, "Glued Name"]]);
+      expect(() => objectHeadersOf("codeunit 50100Bare\n{\n}\n", "src/B.al")).toThrow(
+        /no AL object header/,
+      );
+    });
   });
 });
 
@@ -1829,6 +1841,81 @@ describe("gap ids (C02-09)", () => {
       await expect(
         writeInstrumentedProject({ ...input, gapIdOf: () => "G000000000000" }),
       ).rejects.toThrow(/two blocks share gap id G000000000000/);
+    } finally {
+      await rm(input.targetDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R1049: a member's own `[NonDebuggable]` is read from the parse (its attribute run).
+describe("isNonDebuggable (R1049)", () => {
+  beforeAll(async () => {
+    await initParser();
+  });
+
+  const SRC = `codeunit 51960 "ND"
+{
+    [NonDebuggable]
+    procedure Secret()
+    begin
+        X := 1;
+    end;
+
+    [Obsolete('x', '1.0')]
+    [NonDebuggable]
+    procedure Both()
+    begin
+        X := 2;
+    end;
+
+    [Obsolete('x', '1.0')]
+    procedure OtherOnly()
+    begin
+        X := 3;
+    end;
+
+    procedure Plain()
+    var
+        [NonDebuggable]
+        Key: Text;
+    begin
+        X := 4;
+    end;
+}
+`;
+  const flagsByName = () => {
+    const root = wrapRoot(parseAL(SRC));
+    const out: Record<string, boolean> = {};
+    for (const p of findAll(root, ALNodeKind.procedure)) {
+      const name = procedureLikeNameNode(p)?.text;
+      // The `procedure` keyword token is a node of the same kind, with no name.
+      if (name !== undefined) out[name] = isNonDebuggable(p);
+    }
+    return out;
+  };
+
+  it("reads the attribute from the member's own run only", () => {
+    expect(flagsByName()).toEqual({
+      Secret: true,
+      Both: true,
+      OtherOnly: false,
+      Plain: false,
+    });
+  });
+
+  it("writes nonDebuggable on the manifest entry of a mutant inside such a member, and only there", async () => {
+    const input = twoProcedureInput(
+      'codeunit 51961 "ND2"\n{\n[NonDebuggable]\nprocedure A()\nbegin\nX := 1;\nend;\nprocedure B()\nbegin\nY := 2;\nend;\n}\n',
+    );
+    try {
+      await writeInstrumentedProject(input);
+      const manifest = JSON.parse(
+        await readFile(join(input.targetDir, "mutant-manifest.json"), "utf8"),
+      ) as { mutants: { procedureName: string; nonDebuggable?: boolean }[] };
+      expect(manifest.mutants.map((m) => [m.procedureName, m.nonDebuggable])).toEqual([
+        ["A", true],
+        ["B", undefined],
+      ]);
     } finally {
       await rm(input.targetDir, { recursive: true, force: true });
     }

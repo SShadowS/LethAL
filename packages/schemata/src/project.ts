@@ -6,6 +6,7 @@ import {
   type ALSyntaxNode,
   type MutationSpec,
   astSubtreeHash,
+  attributeRun,
   gapBlockOf,
   isObjectContainer,
   isProcedureLike,
@@ -26,6 +27,14 @@ import {
   emitRegisterInstall,
   emitRegisterUpgrade,
 } from "./selector";
+
+/** R1049: whether `member` carries `[NonDebuggable]` in its own attribute run. An attribute on a
+ *  variable inside the body is not in that run, so it does not count. */
+export function isNonDebuggable(member: ALSyntaxNode): boolean {
+  return attributeRun(member, false, member.endIndex, true).attributes.some((a) =>
+    /^\[\s*NonDebuggable\s*\]$/i.test(a.text),
+  );
+}
 
 export const CONTROL_SELECTOR_FILENAME = "MutationSelector.Codeunit.al";
 export const CONTROL_REGISTER_FILENAME = "MutationRegister.Codeunit.al";
@@ -500,6 +509,11 @@ export interface MutantManifestEntry {
   readonly procedureStartLine?: number;
   readonly procedureEndLine?: number;
   /**
+   * R1049: `true` only when the enclosing member carries `[NonDebuggable]` (BC records no Code
+   * Coverage line inside it). Absent otherwise, and on manifests written before R1049.
+   */
+  readonly nonDebuggable?: true;
+  /**
    * R965: set ONLY when the enclosing procedure shares its name with another procedure of the
    * object (an overload): its 0-based source-order position among them. Coverage names a member by
    * name alone, so without it a test that ran one overload would cover every overload's mutants.
@@ -962,6 +976,7 @@ export async function writeInstrumentedProject(input: WriteInput): Promise<void>
               procedureEndLine: lineOfIndex(starts, member.endIndex),
             }
           : {}),
+        ...(member !== null && isNonDebuggable(member) ? { nonDebuggable: true as const } : {}),
         ...(triggerName !== undefined ? { triggerName } : {}),
         ...(overloadIndex !== undefined ? { procedureOverloadIndex: overloadIndex } : {}),
         ...(spec.platformKillMechanism !== undefined
