@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1030 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1031 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1075,6 +1075,7 @@ that ordering is the priority.
 - **R1060** · DO window t6 ran ~65 s per new covered mutant (t5: 8.3 s): a mid-order baseline-refused GoToKey test closed the serve daemon on every mutant request of a newly reached region; the refusal is now kept (measured clean), and a resume that reuses no baseline says why · [R1060.md](docs/roadmap/R1060.md) · done (11605dbb)
 - **R1064** · The hung-session stop is ON for every mutant run on our own servers bc1-bc4 (a `bcdev.stopHungSessions` config field the setup scripts write); the product default stays off; no gate reads it · [R1064.md](docs/roadmap/R1064.md) · done (b4be7fc1)
 - **R1065** · Mutant-level differential, al-runner v3 vs bcdev, batch 4 (PR-49): Regex 99.6%, Recurrence Schedule 100%, Headlines 100%, Record Link Management 80% (its red BC baseline); no new al-runner difference · [R1065.md](docs/roadmap/R1065.md) · closed 2026-11-16 — measured; every difference is a known class
+- **R1068** · Format/Evaluate/text-function generator family with a per-cell BC differential (PR-52): 325 of 326 cells equal; the one difference is the closing-date letter under GlobalLanguage (#8178) · [R1068.md](docs/roadmap/R1068.md) · closed 2026-11-16 — measured; one al-runner difference filed (#8178, R586 row 21)
 
 ---
 

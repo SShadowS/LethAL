@@ -597,6 +597,16 @@
       "tests": {
         "Codeunit51641.RowsBelowOwnTable": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8178-closing-date",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8178",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-52's second run, 2026-11-16, LethAL's web-service path, en-US region): cell 51059 (default language) gives C12/31/23 and cell 51305 (GlobalLanguage 1030) gives U12/31/23 for the same call; /coord/handoff/PR-52/joined2.tsv. BC's letter under German was not measured, so no German test here",
+      "rerun": ["the corpus mutants whose tests format a closing date under a GlobalLanguage other than English (none known)"],
+      "tests": {
+        "Codeunit51720.ClosingDateEnglish": { "status": "fail", "messageIncludes": "V:[C12/31/23]" },
+        "Codeunit51721.ClosingDateDanish": { "status": "fail", "messageIncludes": "V:[U12/31/23]" }
+      }
     }
   ]
 }
