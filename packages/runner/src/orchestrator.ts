@@ -4417,7 +4417,7 @@ export function assertRunSizeAcceptable(input: {
   if (input.allowLargeRun) return;
   if (input.mutantCount <= LARGE_RUN_MUTANT_THRESHOLD) return;
   const scoped = input.narrowed
-    ? "Narrow --only or --operator further, or pass --allow-large-run to run it anyway."
+    ? "Narrow --only or --operator further, or pass --allow-large-run to run it anyway. The limit counts mutation SITES, not files, so a single large file can exceed it even with --only, --lines or --changed-since; narrow inside the file with --lines, or --operator / --exclude-operator."
     : 'Scope it with --only <glob> (e.g. --only "Al/Codeunit/**") or --operator <name> (R127), or pass --allow-large-run to run it anyway.';
   throw new Error(
     `this run would schedule ${input.mutantCount} mutation site(s) across ${input.fileCount} file(s), above the ${LARGE_RUN_MUTANT_THRESHOLD} pre-flight limit. ${scoped}\nWhy this refuses instead of warning: measured against a hosted BC environment, a real project costs ~19.5 s per mutant (p95 43 s), so this run is measured in hours to days — and the artifact carrying every guard is itself often unpublishable (a 11,777-guard publish was severed by the hosting proxy at 362 s). The failure would land long after the warning scrolled past.\nLevers: --only <glob> narrows which files contribute mutants (cannot change a verdict); --operator <name> narrows which operators contribute mutants (cannot change a verdict either — R127); --tests-only <glob> narrows the baseline, which dominates a first run (CAN change a verdict — an excluded killing test manufactures a survivor); --max-guards-per-batch <n> bounds each published artifact.`,

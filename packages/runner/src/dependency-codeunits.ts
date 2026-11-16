@@ -100,10 +100,20 @@ export async function dependencyCodeunitsOf(
 }
 
 /** The one warning line for a check that could not read every dependency, or `undefined`. */
-export function dependencyCheckWarning(unread: readonly string[]): string | undefined {
+export function dependencyCheckWarning(
+  unread: readonly string[],
+  where: { readonly caller: "init" | "run"; readonly dirs: readonly string[] },
+): string | undefined {
   if (unread.length === 0) return undefined;
+  const how =
+    'Get them with "AL: Download Symbols" in VS Code (it needs a server and writes to VS Code\'s package cache folder, usually .alpackages). ' +
+    "'bun scripts/fetch-ms-symbols.ts <BC major> <folder>' (from a LethAL checkout) fetches Microsoft's apps only; a third-party dependency's .app must come from its publisher.";
+  const fix =
+    where.caller === "init"
+      ? `To make the check possible, put those dependency .app packages in ${where.dirs.join(", ")}, then run 'lethal init --force' (it rewrites the config) or rely on the next 'lethal run', which repeats the check. ${how}`
+      : `To make the check possible, put those dependency .app packages in the folder(s) this run read: ${where.dirs.join(", ")}. The next 'lethal run' repeats the check. ${how}`;
   return (
     `[lethal] selector ids: could not check them against ${unread.length} dependency package(s), ` +
-    `so a clash with those apps' codeunits (alc AL0264) is NOT ruled out: ${unread.join("; ")}`
+    `so a clash with those apps' codeunits (alc AL0264) is NOT ruled out: ${unread.join("; ")}. ${fix}`
   );
 }
