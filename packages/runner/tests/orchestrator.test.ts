@@ -4506,6 +4506,43 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(events.some((e) => e.type === "warning" && e.code.includes("daemon"))).toBe(false);
     expect(backend.sink).toBeUndefined();
   });
+  // PR-88: the session installs a request-sized sink; a reading the backend gives it is exactly one
+  // `serve-request-sized` event, and the sink is removed at the session's end.
+  test("PR-88: a backend's request-sized reading becomes one serve-request-sized event; the sink is removed at the end", async () => {
+    const sized = {
+      calls: [{ call: 79100, entries: 2, cost: 1024 }],
+      floor: 100,
+      start: 100,
+      sampledPeak: 300,
+      hwm: 400,
+      g: 300,
+      peakSource: "hwm",
+    } as const;
+    class SizingBackend extends RecordingBackend {
+      sink: ((s: typeof sized) => void) | undefined;
+      setRequestSizedSink(sink?: (s: typeof sized) => void) {
+        this.sink = sink;
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (ref.method === "UnsupportedTest") this.sink?.(sized);
+        return super.run(ref, opts);
+      }
+    }
+    const dirs = await project();
+    const backend = new SizingBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const got = events.filter((e) => e.type === "serve-request-sized");
+    expect(got.length).toBe(1);
+    expect(got[0]).toMatchObject(sized);
+    expect(backend.sink).toBeUndefined();
+  });
   // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
   // only when that frame is a page call in the test app's source; the same text at any other
   // statement is an ordinary failure.

@@ -106,9 +106,13 @@ import {
   dirtyFromStatus,
   failsClosedRefusal,
   judgeLegT,
+  judgeServePins,
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
+  observePinsEnd,
+  observePinsRequested,
+  observePinsWithReceiptRefusal,
   observeWithReceiptRefusal,
   recordRefusal,
   v3GateBackendCfg,
@@ -185,6 +189,7 @@ import { prepareFixtureSymbols } from "./fixture-symbols";
 import { GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  WarningsObservedError,
   assertGateWarnings,
   checkGateWarnings,
   collectWarnings,
@@ -308,6 +313,21 @@ const ORACLE_BC_BUILD: Record<string, string> = {
 const LegFailure = V3LegFailure;
 const must = (cond: boolean, what: string): void => {
   if (!cond) throw new LegFailure(what);
+};
+/**
+ * PR-88: a leg's serve pins. With `LETHAL_ITEST_V3_OBSERVE_PINS=1` each pin is printed beside the actual
+ * figure and none fails; verdicts and killing tests are never compared here and still fail the leg.
+ */
+const servePins = (
+  label: string,
+  got: Readonly<Record<string, unknown>>,
+  pins: Readonly<Record<string, number>>,
+  failure: (key: string, got: unknown, pinned: number) => string,
+): void => {
+  const j = judgeServePins(label, got, pins, observePinsRequested(), failure);
+  for (const l of j.lines) console.log(l);
+  const [first] = j.failures;
+  if (first !== undefined) throw new LegFailure(first);
 };
 
 /** The Microsoft apps of sandbox-tests' `.alpackages` (no LethAL copy): `<deps>` for names and the probes. */
@@ -694,10 +714,12 @@ async function legS1(
     console.log(
       `  ${leg}: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
-    for (const [k, v] of Object.entries(S1E_PINS)) {
-      const g = got[k as keyof typeof got];
-      must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`);
-    }
+    servePins(
+      leg,
+      got,
+      S1E_PINS,
+      (k, g, v) => `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`,
+    );
     must(s.echoMismatches === 0, `${leg}: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
   if (leg === "DB") {
@@ -989,10 +1011,7 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   assertCounts(serve.r, "N1S", 44, 0, 4, 48);
   const s = serve.b.entriesStats();
   console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
-  for (const [k, v] of Object.entries(N1S_PINS)) {
-    const g = s[k as keyof typeof N1S_PINS];
-    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
-  }
+  servePins("N1S", s, N1S_PINS, (k, g, v) => `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
 }
 
@@ -1550,8 +1569,12 @@ function logServeCounters(b: AlRunnerV3Backend, leg: "MOE" | "WRE"): void {
     echoMismatches: s.echoMismatches,
   };
   console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
-  for (const [k, v] of Object.entries(MOE_WRE_PINS[leg]))
-    must(got[k] === v, `${leg}: serve counter ${k} ${got[k]}, pre-committed ${v}`);
+  servePins(
+    leg,
+    got,
+    MOE_WRE_PINS[leg],
+    (k, g, v) => `${leg}: serve counter ${k} ${g}, pre-committed ${v}`,
+  );
 }
 
 /**
@@ -2505,6 +2528,9 @@ async function main(): Promise<void> {
     process.env.LETHAL_V3_GATE_RECEIPT,
   );
   if (observeRefused !== undefined) throw new Error(observeRefused);
+  // PR-88: the pins switch is validated and refused beside a receipt before any leg runs.
+  const pinsRefused = observePinsWithReceiptRefusal();
+  if (pinsRefused !== undefined) throw new Error(pinsRefused);
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   // R654 S2: refused before any leg runs while a baseline is missing (R332).
   if (LEGS.includes("L1")) preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
@@ -2770,9 +2796,10 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true }).catch(() => {});
   }
-  const outcome = v3ReceiptOutcome(legs, observeRequested());
+  const observing = observeRequested() || observePinsRequested();
+  const outcome = v3ReceiptOutcome(legs, observing);
   console.log(
-    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observeRequested() ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
+    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observing ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
   );
   const nonce = process.env.LETHAL_V3_GATE_NONCE;
   const receipt = process.env.LETHAL_V3_GATE_RECEIPT;
@@ -2811,6 +2838,12 @@ async function main(): Promise<void> {
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
   const bad = v3ItestFailures(legs, CANDIDATE, LEGS, K_ON_CANDIDATE);
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
+  // PR-88: an observe-pins run is never a pass: its closing line says so and the gate exits 3.
+  const pinsEnd = observePinsEnd();
+  if (pinsEnd !== undefined) {
+    console.log(pinsEnd.line);
+    throw new WarningsObservedError(pinsEnd.message);
+  }
   // R913: a PASS that skipped legs of the full set names them on the PASS line itself.
   console.log(
     gateEndLine(
