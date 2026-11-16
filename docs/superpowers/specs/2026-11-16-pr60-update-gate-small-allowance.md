@@ -32,3 +32,11 @@ limit, and that path never runs inside the container.
    - `freeGb` is not consulted where the cgroup names a limit.
 2. No other caller's verdict changes: `heavy-slot-guard.ts`'s tests are unchanged and green.
 3. The next daily update, with 8.2 GiB used and the same held slots, is admitted by the allowance and logs the small-admits line.
+
+## Addendum 1 (2026-11-16, after the Opus build review, before CI)
+
+**An accepted ceiling, stated.** The update holds no heavy slot, so while its gate runs, `smallHeld` in other guards does not
+count it toward R992's two-small-job cap, and a third small job may be admitted. This is bounded: about the update's 2 GiB peak
+above the declared sum, once a day, and every job still passes used + peak + reserve. A marker the guard counts while the update
+runs would close it. It is not built; the comment on `gateMemoryVerdict` says so. Tests also gained a flip case: an unslotted
+12 GiB job turns an admission into a refusal, red when the unslotted peaks are dropped.
