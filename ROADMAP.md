@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**36 of 1020 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1021 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1065,6 +1065,7 @@ that ordering is the priority.
 - **R1047** · Refusal family pubapp-flowfield (#8038, family 10, 133 standing sightings): 30 cells; with Published Application R, BC needs no grant for its FlowFields over NAV App Extra (8 refused cells pass on BC), while CalcFields(Installed) needs IndirectRead on Installed Application; BC-check app measured · [R1047.md](docs/roadmap/R1047.md) · closed 2026-11-15 — measured on BC: per-cell answers posted on #8038, regression entry…
 - **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 111 passing baselines and 384 kills rest on tests with an Insert or Modify before lowering (PR-35, recounted by PR-36; at most 127 and 476 counting DeleteAll-only and read-only tests); PR-36 labels them in v3 reports · [R1048.md](docs/roadmap/R1048.md) · open
 - **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
+- **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
 
 ---
 
