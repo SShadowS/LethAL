@@ -46,3 +46,25 @@ No verdict is read from a drifting request.
 3. DO, the next window carrying it: the CLEAN classes close no daemon in a mutant request. The expected saving over t1-t8's
    pattern is about 15.6k s (301 of 413 refusal closes). The guard fires 0 times; any firing is reported by name, and the
    class is then taken off the list.
+
+## Addendum 1 (2026-11-16, after the Opus build review, before any gate)
+
+**The pattern slots are narrowed to the measured methods.** As built, the `*` of three class keys kept any method name. That
+reopened ledger texts that R945 deliberately keeps closing as never measured: `FieldRef.Value`, `RecordRef.Get`, `CopyLinks` and
+`ReadPermission`. They are real corpus texts. Now:
+- FieldRef keeps Active, Caption and Class;
+- RecordRef keeps FilterGroup;
+- the Company table keeps only its measured read methods.
+The original closes cases come back. Section 1's rule is read as: a `*` stands for the measured variants only, unless a slot
+needs a free part (an object id, a name, a filter).
+
+**Drift-guard fixes:**
+- a confirm run alone is not compared, because its baseline is the whole-codeunit run;
+- a timeout row is not drift, and a request cut at a timeout is not re-run;
+- a re-run does not count its batch twice;
+- the slots exclude `\r`.
+
+**Known gaps of the guard (recorded, not built):**
+- it checks the next request only, not the entries of the same request after the kept refusal;
+- a kept refusal in the warm-up or a §6 coverage window does not arm it.
+Both are backstop gaps around evidence that is already clean (PR-54). Before the inversion (#8180), they are to be closed.
