@@ -775,6 +775,44 @@
         "Codeunit58170.HawaiiHasNoDaylightSaving": { "status": "pass" },
         "Codeunit58170.ChinaHasNoDaylightSaving": { "status": "pass" }
       }
+    },
+    {
+      "id": "u7832-withevents-timer",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7832",
+      "bcEvidence": "inferred from the issue: not measured by the issue (\"On a service tier the variable is created like any other DotNet variable\"). Maintainer: the corpus probe measured a WithEvents System.Timers.Timer on BC 27, 28 and 29 (codeunit, page, table, report), none raises an error; fixed in edge 54280fad6 (no trigger declared) and c8fe56e05 (Elapsed trigger only), flagged. The repro uses the no-argument constructor and Interval, as the issue's Timer(1000) is ambiguous (AL0196)",
+      "rerun": ["Microsoft's Late Payment Prediction app (5 mutants), Sales and Inventory Forecast (1 test) (R-953)"],
+      "tests": {
+        "Codeunit78323.WithEventsTimerWithElapsedTrigger": { "status": "pass" },
+        "Codeunit78323.WithEventsTimerWithoutTrigger": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7827-query-reopen",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7827",
+      "bcEvidence": "inferred from the issue: not measured by the issue (our reading: BC closes and restarts the query with the same filters, so the second Read returns the first row again; the repro asserts only that both opens and reads succeed). Maintainer: edge 21790a009 runs only the corpus-pinned second-Open shape, not this repro (it uses the result of the second Open and reads after it); corpus PR 1400 is to measure it",
+      "rerun": ["Microsoft's Essential Business Headlines, mutant in TryHandleSalesIncreaseHeadline (12 covering tests) (R-986)"],
+      "tests": {
+        "Codeunit78271.ReopenAfterSetFilter": { "status": "pass" },
+        "Codeunit78271.ReopenWithoutSetFilter": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7780-tenant-media-description",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7780",
+      "bcEvidence": "measured on BC 27.5, 28.5 and 29.0 by artkashin (in the issue thread, disposable service tiers, synthetic data): the description-only Insert(false), Get by key, TestField passes in My Company on all three. Maintainer: fixed in edge 2d19bd631 (reads by key and the measured Insert(false)), flagged",
+      "rerun": ["Microsoft's Master Data Management tests (1 of 24 baseline tests), Data Administration tests (R-953 family)"],
+      "tests": {
+        "Codeunit77811.InsertDescriptionOnlyReadsBack": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u7780-tenant-media-insert",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7780",
+      "bcEvidence": "inferred from the issue: not measured on BC; a Microsoft test (Master Data Management) inserts a Tenant Media row, writes Content, reads it back with Get and checks the content, so BC is expected to pass. Maintainer: the blob-content case stays open; edge 2d19bd631 refuses an Insert other than the measured Insert(false)",
+      "rerun": ["Microsoft's Master Data Management tests (1 of 24 baseline tests), Data Administration tests (3 refused Inserts)"],
+      "tests": {
+        "Codeunit77801.InsertWithContentBlobReadsBack": { "status": "pass" }
+      }
     }
   ]
 }
