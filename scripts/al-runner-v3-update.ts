@@ -103,16 +103,16 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { checkBuild } from "./upstream-repros";
 import {
-  DEFAULT_PEAK_GIB,
+  MEMORY_RESERVE_GIB,
   PEAK_GIB,
   type SlotClass,
   memoryVerdict,
   readContainerMemory,
-  readSlot,
   readSlotClass,
 } from "./heavy-slot-class";
+import { appendSmallAdmit, heldInputs } from "./heavy-slot-guard";
+import { checkBuild } from "./upstream-repros";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -1102,6 +1102,38 @@ export function countHeavyJobs(
 }
 
 /**
+ * PR-60: the gate's memory verdict from the same inputs the heavy-slot guard uses (`heldInputs`:
+ * held slots, unslotted heavy processes, R992's small count), so R992's small-job allowance applies
+ * to the gate too. Undefined when the cgroup names no limit. The gate holds no slot, so it marks none;
+ * an admission by the allowance goes to the small-admits ledger under the name `al-runner-v3-update`.
+ * Seams: `readSample`, `psText`, `appendLedger` (tests stub them; none may touch /coord).
+ */
+export function gateMemoryVerdict(
+  dir: string,
+  seams: {
+    readonly readSample: typeof readContainerMemory;
+    readonly psText: () => string;
+    readonly appendLedger: typeof appendSmallAdmit;
+  },
+): { readonly refuse: boolean; readonly message: string } | undefined {
+  const sample = seams.readSample();
+  if (sample?.maxBytes === undefined) return undefined;
+  const { heldPeaks, smallHeld } = heldInputs(dir, process.pid, seams.psText());
+  const m = memoryVerdict(sample, heldPeaks, PEAK_GIB.gate, MEMORY_RESERVE_GIB, smallHeld);
+  if (m.small === true)
+    seams.appendLedger(
+      dir,
+      "al-runner-v3-update",
+      "other",
+      PEAK_GIB.gate,
+      sample,
+      heldPeaks,
+      String(process.pid),
+    );
+  return m;
+}
+
+/**
  * R633 I2: a `--regate` (R639: or an `--edge-rejudge`) that was skipped exits 2, so a `&&` chain
  * stops.
  */
@@ -1133,7 +1165,9 @@ async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean
   }
   const free = await deps.freeGb();
   if (free < 10) {
-    await deps.log(`${deps.now()} ${what}: skipped for the day: ${free} GB available (needs 10)`);
+    await deps.log(
+      `${deps.now()} ${what}: skipped for the day: ${free} GB available (needs 10; \`free -g\` reads the host, used only when the cgroup names no limit)`,
+    );
     return true;
   }
   return false;
@@ -1646,21 +1680,15 @@ export function realDeps(root = ROOT): UpdateDeps {
         held.map((n) => readSlotClass(lockDir(), n)),
       );
     },
-    gateMemory: async () => {
-      const sample = readContainerMemory();
-      if (sample?.maxBytes === undefined) return undefined;
-      const held = SLOTS.filter(
-        (n) =>
-          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
-            .exitCode === SLOT_BUSY,
-      );
-      const unclassed = Math.max(...Object.values(DEFAULT_PEAK_GIB));
-      return memoryVerdict(
-        sample,
-        held.map((n) => readSlot(lockDir(), n)?.peakGiB ?? unclassed),
-        PEAK_GIB.gate,
-      );
-    },
+    gateMemory: async () =>
+      gateMemoryVerdict(lockDir(), {
+        readSample: readContainerMemory,
+        psText: () =>
+          Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString(),
+        appendLedger: appendSmallAdmit,
+      }),
+    // PR-60: `free -g` reads the HOST, not the container. `skippedForTheDay` calls this only when
+    // `gateMemory` is undefined, i.e. the cgroup names no limit; under a limit the cgroup decides.
     freeGb: async () => {
       const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
       const out = await new Response(p.stdout).text();

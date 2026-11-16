@@ -83,6 +83,7 @@
     "line-citations.test.ts",
     "measure-gui-guarded.ts",
     "measure-testpage-exclusive.ts",
+    "pr60-gate-memory.test.ts",
     "probe-5cb1.ts",
     "probe-grammar-corpus.ts",
     "probe-grammar-crosscheck.ts",
