@@ -14,7 +14,9 @@ import type { TestMethodRef } from "./backend";
 import { discoveredRelPaths } from "./line-filter";
 import { walkFiles } from "./walk";
 
-const CODEUNIT_HEADER_GLOBAL = /codeunit\s+(\d+)\s+("([^"]+)"|(\w+))/gi;
+// R1054: alc accepts `codeunit 50100"Name"` (no space before a quoted name). The lookahead keeps a
+// bare name needing whitespace: `codeunit 50100Bare` is not a header.
+const CODEUNIT_HEADER_GLOBAL = /^\s*codeunit\s+(\d+)(?=\s|")\s*("([^"\r\n]+)"|(\w+))/gim;
 const SUBTYPE_TEST = /Subtype\s*=\s*Test\s*;/i;
 // `d`: R272 reads the name group's offset for the test's line.
 const TEST_METHOD = /\[Test\]\s*(?:\[[^\]]*\]\s*)*procedure\s+("([^"]+)"|(\w+))\s*\(/dgi;

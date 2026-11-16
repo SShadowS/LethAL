@@ -1215,6 +1215,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "nonDebuggable": {
+              "const": true
+            },
             "procedureOverloadIndex": {
               "type": "number"
             },
@@ -1309,7 +1312,8 @@
           "type": "string",
           "enum": [
             "bc-named-stop",
-            "begin-transaction-world"
+            "begin-transaction-world",
+            "v3-cpu-stop"
           ]
         },
         "killReproduced": {
@@ -1472,6 +1476,9 @@
             "procedureEndLine": {
               "type": "number"
             },
+            "nonDebuggable": {
+              "const": true
+            },
             "procedureOverloadIndex": {
               "type": "number"
             },
@@ -1543,7 +1550,8 @@
           "type": "string",
           "enum": [
             "bc-named-stop",
-            "begin-transaction-world"
+            "begin-transaction-world",
+            "v3-cpu-stop"
           ]
         },
         "killReproduced": {
@@ -1681,6 +1689,9 @@
             },
             "procedureEndLine": {
               "type": "number"
+            },
+            "nonDebuggable": {
+              "const": true
             },
             "procedureOverloadIndex": {
               "type": "number"

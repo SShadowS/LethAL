@@ -1016,8 +1016,270 @@ export function openItemHangRefuses(
     r896ValueSwap(node, ctx, op) ||
     r896InvisibleProgress(node, ctx) ||
     r896TestFieldOnlyExit(node, op) ||
-    deletedCallHangs(node, ctx)
+    deletedCallHangs(node, ctx) ||
+    (op === "lethal.empty-block" &&
+      (emptiedProgressCalleeHangs(node, ctx) || emptiedRefusedBlockHangs(node, ctx)))
   );
+}
+
+/** The `while`/`repeat` loops around `n`, inside its own procedure or trigger. */
+function loopsAround(n: ALSyntaxNode): ALSyntaxNode[] {
+  const loops: ALSyntaxNode[] = [];
+  for (let cur = n.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (LOOP_KINDS.has(cur.kind)) loops.push(cur);
+  }
+  return loops;
+}
+
+/**
+ * R1050 (PR-37): `empty-block` on a procedure's own body, when a same-object caller's loop only
+ * progresses through it. The shape: `while Length <> 0 do begin ReadUntil('|', Text, Position); ...
+ * Length := StrLen(Text); end` where `ReadUntil` moves its `var Position`. Emptying `ReadUntil`
+ * freezes Position, so Text and Length never change and the caller spins. Refused when, in some
+ * loop around a call to the procedure, a name the call moves (its arguments' base names, and what
+ * the callee chain writes) is read by the loop's exit and not stepped by it. The exit's reads
+ * already include what feeds them inside the loop (R818, `loopExitParts`: Length <- Text <-
+ * Position), so no extra closure is needed. This is `callIsProgress`'s test, asked of a call that
+ * emptying the callee removes. Not covered: sites INSIDE the callee ([[R837]]) and other objects'
+ * callers.
+ */
+function emptiedProgressCalleeHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const proc = node.parent;
+  if (node.kind !== ALNodeKind.block || proc === null || !isProcedureLike(proc)) return false;
+  const obj = objectOf(proc);
+  if (obj === null) return false;
+  return r1050Progress(obj, ctx).has(proc.startIndex);
+}
+
+interface CallSite {
+  readonly n: ALSyntaxNode;
+  readonly name: string;
+  /** The procedure the call sits in, or null (a trigger or a field). */
+  readonly owner: ALSyntaxNode | null;
+}
+
+/** Every same-object call of an object, once (a site is then a lookup, not a whole-object walk). */
+function r1050Sites(obj: ALSyntaxNode, ctx: SemanticContext): CallSite[] {
+  return cached(ctx, obj, "r1050Sites", () => {
+    const names = procedureNamesOf(obj, ctx);
+    const out: CallSite[] = [];
+    visitAll(obj, (n) => {
+      const name = calleeOf(n, names, ctx);
+      if (name === null) return;
+      let owner: ALSyntaxNode | null = null;
+      for (let p = n.parent; p !== null && owner === null; p = p.parent) {
+        if (isProcedureLike(p)) owner = p;
+      }
+      out.push({ n, name, owner });
+    });
+    return out;
+  });
+}
+
+/** Does the procedure return a value (a plain `: Integer` or a named return)? */
+const returnsValue = (p: ALSyntaxNode): boolean =>
+  p.childForFieldName("return_type") !== null || p.childForFieldName("return_value") !== null;
+
+const paramCount = (p: ALSyntaxNode): number =>
+  p.namedChildren
+    .find((c) => c.rawKind === "parameter_list")
+    ?.namedChildren.filter((c) => c.rawKind === "parameter").length ?? 0;
+
+/** The overloads a call can mean: those of its arity, else all of that name (the safe direction). */
+function r1050Candidates(site: CallSite, obj: ALSyntaxNode, ctx: SemanticContext): ALSyntaxNode[] {
+  const all = procsByName(obj, ctx).get(site.name) ?? [];
+  const arity = all.filter((p) => paramCount(p) === argumentList(site.n).length);
+  return arity.length > 0 ? arity : all;
+}
+
+/** Base names of the arguments bound to `var` parameters of `p` (unreadable counts as var). */
+function r1050Moved(site: CallSite, p: ALSyntaxNode, obj: ALSyntaxNode, ctx: SemanticContext) {
+  const moved = new Set(chainEffect(site.name, obj, ctx).writes);
+  argumentList(site.n).forEach((a, i) => {
+    const k = baseNameOf(a);
+    if (k !== null && (r531Param(p, i)?.[1] ?? true)) moved.add(k);
+  });
+  return moved;
+}
+
+/** Base names of the targets of the assignments the call sits in the right-hand side of. */
+function assignedTargets(n: ALSyntaxNode): string[] {
+  const out: string[] = [];
+  for (let cur = n.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.kind !== ALNodeKind.assignment_statement) continue;
+    const left = cur.childForFieldName("left") ?? cur.namedChildren[0] ?? null;
+    const k = baseNameOf(left);
+    if (k !== null && left !== null && n.startIndex > left.endIndex) out.push(k);
+  }
+  return out;
+}
+
+/** The value an emptied `p` returns: 0, false or '' by its return type, else undefined (unknown). */
+function defaultReturn(p: ALSyntaxNode): number | boolean | string | undefined {
+  const t = (p.childForFieldName("return_type") ?? p.childForFieldName("return_value"))?.text
+    .replace(/^[^:]*:/, "")
+    .trim()
+    .toLowerCase();
+  if (t === undefined) return undefined;
+  if (/^(integer|biginteger|decimal|duration)$/.test(t)) return 0;
+  if (t === "boolean") return false;
+  if (/^(text|code)\b/.test(t)) return "";
+  return undefined;
+}
+
+/** A plain integer/decimal/boolean/string literal's value, else undefined. */
+function literalValue(n: ALSyntaxNode): number | boolean | string | undefined {
+  const t = n.text.trim();
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  if (/^true$/i.test(t)) return true;
+  if (/^false$/i.test(t)) return false;
+  const s = /^'((?:[^']|'')*)'$/.exec(t);
+  return s?.[1]?.replace(/''/g, "'");
+}
+
+/**
+ * R1050 (PR-37, the sandbox-hang `NextRow` case): does the loop leave at once when the call `c` to
+ * `p` (value-returning, emptied) returns its default? E is the loop's whole exit condition and must
+ * be `c`, `not c`, or `c <op> lit` / `lit <op> c` (`= <> < <= > >=`, parentheses allowed). With the
+ * default put in for `c`, a repeat-until exits when E is true, a while when E is false. Anything
+ * else (a bigger and/or, a deeper call, an unknown default) answers false: the safe direction (R829).
+ */
+function exitsOnDefault(loop: ALSyntaxNode, c: ALSyntaxNode, p: ALSyntaxNode): boolean {
+  const cond = conditionOf(loop);
+  const d = defaultReturn(p);
+  if (cond === null || d === undefined) return false;
+  const isC = (n: ALSyntaxNode): boolean => {
+    const u = r572Unparen(n);
+    return u.startIndex === c.startIndex && u.endIndex === c.endIndex;
+  };
+  const e = r572Unparen(cond);
+  let value: boolean | undefined;
+  if (isC(e)) value = typeof d === "boolean" ? d : undefined;
+  else if (e.rawKind === "unary_expression" && /^not\b/i.test(e.text.trim())) {
+    const o = e.childForFieldName("operand");
+    value = o !== null && isC(o) && typeof d === "boolean" ? !d : undefined;
+  } else if (e.rawKind === "comparison_expression") {
+    const l = e.childForFieldName("left");
+    const r = e.childForFieldName("right");
+    const op = e.childForFieldName("operator")?.text.trim();
+    if (l === null || r === null || op === undefined) return false;
+    const flip = isC(r);
+    const lit = literalValue(flip ? l : r);
+    if (!(flip ? isC(r) : isC(l)) || lit === undefined || typeof lit !== typeof d) return false;
+    const [a, b] = flip ? [lit, d] : [d, lit];
+    const ops: Record<string, boolean> = {
+      "=": a === b,
+      "<>": a !== b,
+      "<": a < b,
+      "<=": a <= b,
+      ">": a > b,
+      ">=": a >= b,
+    };
+    value = ops[op];
+  }
+  if (value === undefined) return false;
+  return loop.rawKind === "repeat_statement" ? value : !value;
+}
+
+/**
+ * R1050 (PR-37): the procedures whose emptied body can freeze a loop, as `startIndex`es. Seed: a
+ * procedure with a call site that is progress for an enclosing loop: it moves a name the loop's
+ * exit reads and does not step (`var` argument, what the chain writes), or it returns a value and
+ * the call sits in the loop's exit parts (`until IsDone(C)`) or is assigned to a name the exit
+ * reads (`Pos := Next(Pos)`). Then to a fixpoint: a procedure a member calls, when the call moves
+ * one of the member's `var` parameters or writes, or its result reaches one of them or the member's
+ * result (`exit(Inc(P))`). By name, the safe direction.
+ */
+function r1050Progress(obj: ALSyntaxNode, ctx: SemanticContext): Set<number> {
+  return cached(ctx, obj, "r1050Progress", () => {
+    const set = new Set<number>();
+    const sites = r1050Sites(obj, ctx);
+    for (const site of sites) {
+      const loops = loopsAround(site.n);
+      if (loops.length === 0) continue;
+      const targets = assignedTargets(site.n);
+      for (const p of r1050Candidates(site, obj, ctx)) {
+        const moved = r1050Moved(site, p, obj, ctx);
+        const hit = loops.some((loop) => {
+          const { read, steps } = exitEffect(loop, ctx);
+          const live = (k: string): boolean => read.has(k) && !steps.has(k);
+          if ([...moved].some(live)) return true;
+          if (!returnsValue(p)) return false;
+          const inExit = loopExitParts(loop, ctx).some(
+            (e) => e.startIndex <= site.n.startIndex && site.n.endIndex <= e.endIndex,
+          );
+          return (inExit && !exitsOnDefault(loop, site.n, p)) || targets.some(live);
+        });
+        if (hit) set.add(p.startIndex);
+      }
+    }
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const site of sites) {
+        const q = site.owner;
+        if (q === null || !set.has(q.startIndex)) continue;
+        const qNames = new Set<string>();
+        for (let i = 0; i < paramCount(q); i++) {
+          const prm = r531Param(q, i);
+          if (prm?.[1]) qNames.add(prm[0]);
+        }
+        for (const k of procNames(q))
+          for (const w of chainEffect(k, obj, ctx).writes) qNames.add(w);
+        const rv = q.childForFieldName("return_value");
+        if (rv !== null) qNames.add(normalizeAlName(rv.text));
+        const targets = assignedTargets(site.n);
+        const exited = returnsValue(q) && inExitStatement(site.n);
+        for (const p of r1050Candidates(site, obj, ctx)) {
+          if (set.has(p.startIndex)) continue;
+          const flows =
+            [...r1050Moved(site, p, obj, ctx)].some((k) => qNames.has(k)) ||
+            (returnsValue(p) && (exited || targets.some((k) => qNames.has(k))));
+          if (flows) {
+            set.add(p.startIndex);
+            changed = true;
+          }
+        }
+      }
+    }
+    return set;
+  });
+}
+
+/** Is `n` inside an `exit(...)` statement? */
+function inExitStatement(n: ALSyntaxNode): boolean {
+  for (let cur = n.parent; cur !== null && !isScope(cur); cur = cur.parent) {
+    if (cur.rawKind === "exit_statement") return true;
+  }
+  return false;
+}
+
+/**
+ * R1050 (PR-37): `empty-block` on a block that holds a statement the dispatch already refuses on
+ * its own, inside a loop that block sits in. Either an assignment to a name the loop's exit reads
+ * (and does not step), or a progress call (`callIsProgress`, R830). Emptying the block removes that
+ * statement just the same, so it hangs the same way. Any descendant counts, nested loops included:
+ * the safe direction.
+ */
+function emptiedRefusedBlockHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (node.kind !== ALNodeKind.block) return false;
+  const loops = loopsAround(node);
+  if (loops.length === 0) return false;
+  let hangs = false;
+  visitAll(node, (n) => {
+    if (hangs) return;
+    if (n.kind === ALNodeKind.assignment_statement) {
+      const k = baseNameOf(n.childForFieldName("left") ?? n.namedChildren[0] ?? null);
+      hangs =
+        k !== null &&
+        loops.some((l) => {
+          const { read, steps } = exitEffect(l, ctx);
+          return read.has(k) && !steps.has(k);
+        });
+    } else if (n.kind === ALNodeKind.procedure_call && isStatementSlot(n)) {
+      hangs = callIsProgress(n, ctx);
+    }
+  });
+  return hangs;
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */

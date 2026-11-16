@@ -89,7 +89,8 @@
               "al-runner-v3-serve-default-fallback",
               "al-runner-v3-serve-default-fallback-warmup",
               "al-runner-v3-coverage-off",
-              "time-budget-reached"
+              "time-budget-reached",
+              "nondebuggable-no-coverage"
             ]
           }
         },
@@ -448,7 +449,8 @@
             "type": "string",
             "enum": [
               "bc-named-stop",
-              "begin-transaction-world"
+              "begin-transaction-world",
+              "v3-cpu-stop"
             ]
           },
           "killReproduced": {

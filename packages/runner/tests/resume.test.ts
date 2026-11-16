@@ -460,6 +460,27 @@ describe("buildResumeIndex — a kill without killReproduced under the reproduct
     expect(buildResumeIndex(preRule, true).carryable.size).toBe(2);
     expect(buildResumeIndex(preRule, true, false).carryableBySite.size).toBe(2);
   });
+
+  // PR-43: a v3 CPU-stop timeout kill is deliberately not reproduced, so it has no marker.
+  test("PR-43: with the rule on, a v3-cpu-stop timeout kill carries without killReproduced; a timeout kill with neither marker is re-executed", () => {
+    const cpu = row({
+      verdict: "timeout-killed",
+      astHash: "c",
+      memberHash: "mh-c",
+      killingTest: "T",
+      stopEvidence: "v3-cpu-stop",
+    });
+    const neither = row({
+      verdict: "timeout-killed",
+      astHash: "n",
+      memberHash: "mh-n",
+      killingTest: "T",
+    });
+    const index = buildResumeIndex([cpu, neither], true, true);
+    expect([...index.carryable.values()].map((c) => c.stopEvidence)).toEqual(["v3-cpu-stop"]);
+    expect([...index.carryableBySite.values()].map((c) => c.stopEvidence)).toEqual(["v3-cpu-stop"]);
+    expect(index.unreproducedKills).toBe(1);
+  });
 });
 
 /**
@@ -5379,7 +5400,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(28);
+    expect(out.explainSchemaVersion).toBe(29);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

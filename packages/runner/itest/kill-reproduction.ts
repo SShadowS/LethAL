@@ -137,7 +137,9 @@ export function killReproductionFailures(
     (m) => m.verdict === "killed" || m.verdict === "timeout-killed",
   );
   for (const m of kills) {
-    if (m.killReproduced !== true) {
+    // PR-43: a v3 CPU-stop timeout kill is deliberately not reproduced, so it has no marker.
+    const cpuStop = m.verdict === "timeout-killed" && m.stopEvidence === "v3-cpu-stop";
+    if (m.killReproduced !== true && !cpuStop) {
       out.push(
         `R577 ${leg}: ${m.batchIndex}/${m.mutantCode} is ${m.verdict} without killReproduced, so the reproduction did not run (or its marker was lost)`,
       );

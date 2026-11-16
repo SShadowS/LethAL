@@ -1325,10 +1325,11 @@ const onlyRow = (c: Call, method: string): V3Row | undefined => {
 const rowCount = (c: Call, method: string): number =>
   c.rows?.filter((r) => r.method === method).length ?? 0;
 
-/** F4: a row fact's measured text, the rows first. Without `stackTrace` (kept on rows since R925):
- *  the pinned texts are a row's status and message, so a stack must not move them. */
+/** F4: a row fact's measured text, the rows first. Without `stackTrace` (kept on rows since R925)
+ *  or `clock` (kept since PR-43): the pinned texts are a row's status and message, so neither may
+ *  move them. */
 const rowsText = (c: Call, method: string): string =>
-  `${JSON.stringify(c.rows?.filter((r) => r.method === method).map(({ stackTrace: _, ...r }) => r) ?? null)} exit ${c.exitCode}`;
+  `${JSON.stringify(c.rows?.filter((r) => r.method === method).map(({ stackTrace: _, clock: _clock, ...r }) => r) ?? null)} exit ${c.exitCode}`;
 
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
@@ -2004,7 +2005,9 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
               ? "unmeasurable"
               : "diverged",
         "codeunit 50660 with N=3 and with no flag: call under 1 s, Sleep rows durationMs under 100, and LongSleepThenAssert PASSES (the AL clock advanced >= 600000 ms): a virtual clock",
-        `N=3: ${sleepN.wallMs} ms ${JSON.stringify(sleepN.rows ?? null).slice(0, 250)}; no flag: ${sleepFree.wallMs} ms`,
+        // PR-43: rows now carry `clock`; it is left out here so the measured text keeps the shape
+        // the build pins match (R586c), which predate the field.
+        `N=3: ${sleepN.wallMs} ms ${JSON.stringify(sleepN.rows?.map(({ clock: _clock, ...r }) => r) ?? null).slice(0, 250)}; no flag: ${sleepFree.wallMs} ms`,
       ),
     );
     const sc = sleepN.coverage as

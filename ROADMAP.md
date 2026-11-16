@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1016 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1021 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -375,9 +375,10 @@ that ordering is the priority.
 - **R999** · LethAL Control's 'LC Control State' declares no `InherentPermissions = X`, so on BC the Mutation Selector's call into it is denied under an exact permission set, even with R979's fix · [R999.md](docs/roadmap/R999.md) · done (060e037d)
 - **R1014** · On al-runner v3 serve a spent time budget (or a SIGTERM) is not acted on while a request of hanging mutants is re-sent after each timeout: R-998's DO window ran 54 min past its budget and SIGTERM, until a second signal ended it with no report · [R1014.md](docs/roadmap/R1014.md) · done (ffcbeda0)
 - **R1018** · One `lethal run` can use two al-runner builds: the R786 warm-up-fallback retry builds a new backend, which resolves the configured `current` link again, so a move of `current` between the attempts silently switches the build · [R1018.md](docs/roadmap/R1018.md) · done (51c9da08)
-- **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · open
-- **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · open
+- **R1049** · bcdev reads every mutant inside a [NonDebuggable] procedure as no-coverage, with no word about why: BC records no Code Coverage line there, so a real project's untested-looking code may be covered · [R1049.md](docs/roadmap/R1049.md) · done (2affd336)
+- **R1050** · empty-block on a procedure whose var-parameter write a caller's loop needs can hang the run: R830 refuses deleting the CALL, not emptying the CALLEE (PR-34 M0332 stranded bc2) · [R1050.md](docs/roadmap/R1050.md) · done (94790266)
 - **R1052** · Two hang shapes no refusal covers: an assignment whose right side is a loop's progress call (`X := Adv(Pos)` — its `remove-assignment` and the `empty-block` of its block), and the `empty-block` of a block holding a loop's only exit · [R1052.md](docs/roadmap/R1052.md) · open
+- **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · open
 
 ## Product gaps a real project hits
 
@@ -575,6 +576,9 @@ that ordering is the priority.
 - **R983** · A blank toggle inside a comparison is listed under its own equivalence risk, compared-value: the value-rewrite hint ('nothing downstream reads it') cannot be why a compared value survives · [R983.md](docs/roadmap/R983.md) · done (2acd08c1)
 - **R984** · shift-integer's comparison operands are still listed under value-rewrite ('nothing downstream reads it'), the misfit R983 fixed for the blank toggles · [R984.md](docs/roadmap/R984.md) · done (6ba7c956) — shift-integer sets compared-value on a comparison operand (by parse); 208 of 448 distinct…
 - **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · open
+- **R1054** · An object header with no space between the id and a quoted name (`codeunit 50100"Name"`) compiles with alc and parses with tree-sitter-al, but LethAL's discovery regex needs whitespace there and refuses the file · [R1054.md](docs/roadmap/R1054.md) · done (2affd336)
+- **R1055** · v3: a mutant whose call was cut at a timeout on another test of a codeunit re-sent that hang on every later whole-codeunit run (R577's reproduction, then another alone call); those runs now go alone · [R1055.md](docs/roadmap/R1055.md) · done (bdc83e4d)
+- **R1056** · v3: a timeout kill that is provably a CPU-time stop (row clock cpu, under 10 x N wall, unmutated confirm within N/4) skips R577's reproduction; stop evidence v3-cpu-stop · [R1056.md](docs/roadmap/R1056.md) · done (a7b736fc)
 
 ## Backends and tooling
 
@@ -1054,13 +1058,14 @@ that ordering is the priority.
 - **R1040** · #8013's causes split: each reduced to an invented repro (six regression entries), each posted to #8013 as its own comment; on edge-5a58a0f16 all seven are still refused, two YAML ones under new wordings · [R1040.md](docs/roadmap/R1040.md) · closed 2026-11-15 — reduced and filed; each cause's fix is upstream's, tracked by its regression entry
 - **R1041** · DO speed lever L1 (PR-18): keep the serve daemon after DO's ZipArchive.Dispose and FormatRegion refusals (measured clean); in DO window t4 they closed it 0 times (t3: 33), but the restart prediction missed: a third family, the DataCaptionExpression caption refusal, closed it 63 times · [R1041.md](docs/roadmap/R1041.md) · done (e753afba)
 - **R1042** · Refusal family table-connection (#7837, family 8): 22 cells on edge-5a58a0f16; only the exact '@@test@@' connection string runs, so an app's string built around the marker (Field Service and Sustainability ESG integration, 322 refused test rows) is refused, and so is an Insert with its trigger on a CRM table (58); BC-check app for lethal-bugs · [R1042.md](docs/roadmap/R1042.md) · closed 2026-11-15 — measured on BC: all 22 cells pass, so the 13 al-runner refuses are BC passes…
-- **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · open
+- **R1043** · DO's dominant serve restart cause after L1: the TestPage caption refusal for a page with DataCaptionExpression and no source table closed the daemon 63 times in window t4 (~88 s each); measured clean and kept · [R1043.md](docs/roadmap/R1043.md) · done (50de4829)
 - **R1044** · Refusal family dotnet-exception (#7924, family 9): 31 cells on edge-5a58a0f16; 12 of 13 throwing .NET members are refused even under asserterror alone, where the outcome cannot depend on the text (265 standing sightings, 18 ledger keys); BC-check app for lethal-bugs · [R1044.md](docs/roadmap/R1044.md) · closed 2026-11-15 — measured on BC: 22 of the 24 refused cells pass guarded, and BC's text per member is on…
 - **R1045** · PR-17's BC answers folded into the upstream-repro set (six entries now measured, u8028-run-request-page flipped to fail), two new al-runner differences filed (#8157 XmlElement.AsXmlNode, #8158 Session read), per-table BC answers posted on #7415, #7854 and #8028 · [R1045.md](docs/roadmap/R1045.md) · done (4df2adc5)
 - **R1046** · The OpenSSL RSA form of #7924 (R1044's gap, 81 standing sightings): 16 cells on edge-5a58a0f16, all 14 site cells refused; on BC every guarded cell passes and the text is 'A call to <Type>.<Member> failed with this message: <OpenSSL message>', the message al-runner's refusal already prints · [R1046.md](docs/roadmap/R1046.md) · closed 2026-11-15 — measured on BC: all 7 guarded cells pass, BC's text per site is on #7924 and two repros…
 - **R1047** · Refusal family pubapp-flowfield (#8038, family 10, 133 standing sightings): 30 cells; with Published Application R, BC needs no grant for its FlowFields over NAV App Extra (8 refused cells pass on BC), while CalcFields(Installed) needs IndirectRead on Installed Application; BC-check app measured · [R1047.md](docs/roadmap/R1047.md) · closed 2026-11-15 — measured on BC: per-cell answers posted on #8038, regression entry…
 - **R1048** · al-runner lets a test codeunit without TestPermissions read and write table data before any permission set, where BC (Permissions Mock installed) refuses every write and every read of a table with rows under the Restrictive default, in any app's code: a wrong verdict, not a refusal (#8160); in stored results 111 passing baselines and 384 kills rest on tests with an Insert or Modify before lowering (PR-35, recounted by PR-36; at most 127 and 476 counting DeleteAll-only and read-only tests); PR-36 labels them in v3 reports · [R1048.md](docs/roadmap/R1048.md) · open
 - **R1051** · Mutant-level differential, al-runner v3 vs bcdev (PR-34): Secrets 67 of 68 equal; Filter Tokens 2 verdict differences from v3's noon clock (#8161), 13 v3 refusals that BC scores, 68 killing tests that differ only by LethAL's per-backend test order · [R1051.md](docs/roadmap/R1051.md) · done (b06ae377)
+- **R1058** · R987's serve entries cap is one value per window, taken from the first large prefetch: DO's six windows measured 119, 41, 208, 230, 201 and 38 entries per request · [R1058.md](docs/roadmap/R1058.md) · open
 
 ---
 

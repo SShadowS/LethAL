@@ -10,6 +10,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
+import { isBcdev } from "./backend";
 import type { BackendCapabilities, CoverageMode, StopEvidence, TestMethodRef } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
@@ -261,7 +262,8 @@ export type Caveat =
   | "al-runner-v3-serve-default-fallback"
   | "al-runner-v3-serve-default-fallback-warmup"
   | "al-runner-v3-coverage-off"
-  | "time-budget-reached";
+  | "time-budget-reached"
+  | "nondebuggable-no-coverage";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -712,6 +714,17 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "prefetch request's deadline is shortened to the time left, and a prefetch that cannot finish " +
       "is dropped, so its mutants run as live requests with their usual deadline.",
     basis: "R912",
+  },
+  "nondebuggable-no-coverage": {
+    meaning:
+      "At least one `no-coverage` mutant sits inside a procedure or trigger that carries " +
+      "`[NonDebuggable]`, on a bcdev run. BC records no Code Coverage line inside such a member, so its code may " +
+      "have run while coverage shows nothing: these mutants are not shown to be untested. A run " +
+      'with coverageMode "none" runs every mutant against every green test and scores them.',
+    entailedNegative:
+      "Not a statement that the tests cover these mutants, and not a gap in the tests: the " +
+      "coverage record cannot tell. Not a wrong verdict on any other mutant.",
+    basis: "R1049",
   },
 };
 
@@ -2138,6 +2151,8 @@ export interface MutantOutcome {
    * `stop-answer-400`). A kill that ran twice (kill, then reproduction) shows the weaker of the
    * two. Absent on every other verdict, and on a `timeout-killed` carried from a store written
    * before the field: absent means unknown there, never `bc-named-stop`.
+   * PR-43: `v3-cpu-stop` marks an al-runner v3 timeout kill with a provable CPU-time stop and a
+   * quick passing unmutated confirm, deliberately NOT reproduced; count them by this field.
    */
   readonly stopEvidence?: StopEvidence;
   /**
@@ -2147,7 +2162,8 @@ export interface MutantOutcome {
    * the same budget for a timeout kill. A marker rather than text, so a reproduced kill whose run
    * carried no message still says so. Set only on a backend with the rule on
    * (`ExecutionBackend.killsMustReproduce`: al-runner, al-runner-v3 and bcdev); absent elsewhere and on a kill
-   * recorded before the rule existed.
+   * recorded before the rule existed. PR-43: also absent, by design, on a `timeout-killed` with
+   * `stopEvidence` `v3-cpu-stop`, which was deliberately not reproduced.
    */
   readonly killReproduced?: true;
   /**
@@ -3150,6 +3166,14 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if ((input.caps.coverageOffFiles ?? []).length > 0) caveats.push("al-runner-v3-coverage-off");
   // R912 - see CAVEAT_INTERPRETATIONS["time-budget-reached"].
   if (input.timeBudget !== undefined) caveats.push("time-budget-reached");
+  // R1049 - see CAVEAT_INTERPRETATIONS["nondebuggable-no-coverage"]. The flag is a SITE property
+  // off the manifest entry, so no report field is needed.
+  if (
+    isBcdev(input.caps.kind) &&
+    input.caps.coverage !== "none" &&
+    input.outcomes.some((o) => o.verdict === "no-coverage" && o.mutant.nonDebuggable === true)
+  )
+    caveats.push("nondebuggable-no-coverage");
   // See CAVEAT_INTERPRETATIONS["runner-disagreement"] for what this caveat means to a reader.
   const runnerDisagreementTests = input.runnerDisagreementTests ?? [];
   if (runnerDisagreementTests.length > 0) caveats.push("runner-disagreement");
