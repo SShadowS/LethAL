@@ -661,6 +661,20 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(host.seen.logs.join("\n")).toContain("3 heavy jobs are running");
   });
 
+  test("PR-60: under a cgroup limit freeGb is never called; with none it is, and the log says it reads the host", async () => {
+    await setup();
+    const limited = fake({ outcome: "pass", mem: { refuse: false, message: "admitted" } });
+    const boom = async (): Promise<number> => {
+      throw new Error("freeGb must not be called under a cgroup limit");
+    };
+    expect(await updateOnce({ ...limited.deps, freeGb: boom })).toEqual(["pass"]);
+    const refused = fake({ outcome: "pass", mem: { refuse: true, message: "memory: REFUSED" } });
+    expect(await updateOnce({ ...refused.deps, freeGb: boom })).toEqual(["skipped"]);
+    const host = fake({ outcome: "pass", free: 2, mem: "no-limit" });
+    expect(await updateOnce(host.deps)).toEqual(["skipped"]);
+    expect(host.seen.logs.join("\n")).toContain("reads the host");
+  });
+
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
     await setup();
     const i = fake({
