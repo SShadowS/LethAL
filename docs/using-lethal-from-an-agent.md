@@ -1238,7 +1238,9 @@ folders also reach al-runner's .NET sidecar (al-runner's own assembly-folder opt
 - Your source tree is never modified. LethAL copies the project to a scratch directory and mutates
   the copy.
 - `--stop-hung-sessions` lets LethAL END a BC session on your server. It is off by default and needs
-  the user's yes; ask once, up front, and recommend it on a sandbox. A mutant that makes a loop
+  the user's yes; ask once, up front, and recommend it on a sandbox. The yes can be recorded once
+  per server as `"stopHungSessions": true` in the config's `bcdev` section, which turns the stop on
+  for every `run` and `verify` with that config (not with an `envTool` section). A mutant that makes a loop
   infinite is ordinary on real code, and without the flag each one costs the mutant budget, a
   quarantine, and a full redeploy-and-baseline on `--resume` (measured 2026-09-02: about ten
   minutes per hang on a hosted sandbox). With it the mutant is stopped and scored `timeout-killed`.
