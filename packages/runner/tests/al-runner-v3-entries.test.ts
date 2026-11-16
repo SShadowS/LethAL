@@ -42,6 +42,7 @@ import {
   MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
   UniformRefusalWatch,
+  type V3KeptDrift,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
   V3_UNIFORM_REFUSAL_CODEUNITS,
@@ -9456,5 +9457,194 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
     expect(why).toBeUndefined();
     for (const rs of rowsOf(r2).values())
       for (const r of rs as Record<string, unknown>[]) expect(r.stored).toBeUndefined();
+  });
+});
+
+// PR-56: after a request whose rows hold a KEPT refusal (V3_SERVE_SAFE_REFUSALS), the NEXT request on the same
+// daemon is checked against the baseline: a NONE row, or a row of a test before the first one covering the
+// mutant, must equal it. On a difference the daemon closes, the request runs again on a fresh daemon, and
+// those rows stand. The fake's `d` is the daemon number: daemon 0 drifts, daemon 1 (the fresh one) does not.
+describe("PR-56: drift after a kept refusal", () => {
+  const KEPT = "NotRun: out-of-scope: conversion of Blob to Integer";
+  const ABC = ["A", "B", "C"];
+  const SUITE_ABC = ABC.map((m) => ref(m));
+  type Over = (m: string, x: FakeRow, d: number, n: number) => FakeRow;
+  const refused = (x: FakeRow): FakeRow => ({
+    ...x,
+    status: "error",
+    notRun: true,
+    message: KEPT,
+  });
+  const failed = (x: FakeRow): FakeRow => ({ ...x, status: "fail", message: "boom" });
+  const driftRig = async (over: Over) => {
+    const rows: RowsFn = (m, cu, d, n) =>
+      cu === CU
+        ? ABC.map((method) => over(m, { method, status: "pass" }, d, n))
+        : allPass(m, cu, d, n);
+    const r = await rig({ suite: SUITE_ABC, serve: { rows }, oneShotRows: rows });
+    const events: V3KeptDrift[] = [];
+    const warned: string[] = [];
+    r.b.setKeptDriftSink((e) => events.push(e));
+    r.b.setNotify((code) => warned.push(code));
+    await baseline(r.b, SUITE_ABC);
+    return { r, events, warned };
+  };
+  const keptsIn = (m: string, x: FakeRow) => (m === "M0001" && x.method === "A" ? refused(x) : x);
+  const driftStats = (r: Rig) => (r.b as unknown as { stats: { keptDrifts: number } }).stats;
+  const CODE = "al-runner-v3-serve-drift-after-kept-refusal";
+
+  test("a row before the first covering test differs: the daemon closes, the request re-runs fresh and the fresh rows stand", async () => {
+    const { r, events, warned } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method !== "C" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    expect(r.serve.daemons.length).toBe(1);
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    // red without the guard: one daemon, and the drifted rows are used
+    expect(r.serve.daemons.length).toBe(2);
+    expect(events).toEqual([
+      {
+        refusal: KEPT,
+        test: `Codeunit${CU}.A`,
+        baselineRow: "a=pass",
+        row: "a=fail",
+      },
+    ]);
+    expect(warned.filter((c) => c === CODE)).toEqual([CODE]);
+    expect(driftStats(r).keptDrifts).toBe(1);
+    expect(r.b.daemonCloses().byReason.get("kept-refusal-drift")).toBe(1);
+    await r.b.activate("M0002");
+    // B differed on daemon 0 too: the drifted rows would be a kill, the fresh daemon's are a pass
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("the covering test's own row differs: that is a kill, not drift", async () => {
+    const { r, events } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "B" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+    await r.b.activate("M0002");
+    expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+  });
+
+  test("a later non-covering test differs: state flows forward, so that is not drift", async () => {
+    const { r, events } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "B" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    // covering A and C: B lies after the first covering test and is not covering
+    await r.b.prefetchMutants(plans(["M0002"], [ref("A"), ref("C")]));
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("a NONE row differs (a kill pair): same close, fresh re-run, the fresh NONE rows stand", async () => {
+    const { r, events } = await driftRig((m, x, d, n) =>
+      m === "M0002" && x.method === "A"
+        ? refused(keptsIn(m, x))
+        : keptsIn(m, m === "NONE" && d === 0 && n >= 3 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("A")]));
+    expect(events).toEqual([]);
+    await r.b.activate("M0002");
+    await r.b.sendKillPair("M0002", ref("A"));
+    expect(events.map((e) => [e.test, e.baselineRow, e.row])).toEqual([
+      [`Codeunit${CU}.A`, "a=pass", "a=fail"],
+    ]);
+    expect(r.serve.daemons.length).toBe(2);
+    await r.b.activate(null);
+    // red if the drifted NONE rows were used: A would read fail
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+  });
+
+  test("only the request right after a kept refusal is checked", async () => {
+    const { r, events } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0003" && d === 0 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")])); // kept refusal
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")])); // checked, clean, no refusal
+    await r.b.prefetchMutants(plans(["M0003"], [ref("B"), ref("C")])); // would drift, not checked
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("a test the baseline refused is not compared", async () => {
+    // A is a kept refusal in the baseline and everywhere else, except under M0002 on daemon 0 (a pass)
+    const { r, events } = await driftRig((m, x, d) =>
+      x.method === "A" && !(m === "M0002" && d === 0) ? refused(x) : x,
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("B")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(events).toEqual([]);
+  });
+
+  test("review M1: a NONE confirm run alone after a kept refusal is not compared", async () => {
+    const { r, events } = await driftRig((m, x, d, n) =>
+      keptsIn(m, m === "NONE" && d === 0 && n >= 2 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.activate(null);
+    // red without the skip: the alone row of A differs from the codeunit run's baseline row, as it may
+    const v = await r.b.run(ref("A"), { ...OPTS, alone: true });
+    expect(v.outcome).toBe("fail");
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("review L1: a drift re-run counts the request once (requests, entries, the bound invariant)", async () => {
+    const { r } = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "A" ? failed(x) : x),
+    );
+    await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(r.serve.daemons.length).toBe(2);
+    const s = r.b.entriesStats();
+    expect(s.prefetchRequests).toBe(2); // red if the drifted send also counts: 3
+    // the drifted request is the third the fake saw (warm-up, M0001, M0002); the rest were counted
+    const idsOf = r.serve.requests.map((q) => q.ids.length);
+    expect(s.entriesSent).toBe(idsOf.reduce((a, b) => a + b, 0) - (idsOf[2] ?? 0));
+    expect(s.boundChecks).toBe(
+      s.warmups + s.prefetchRequests + s.liveRequests + s.coverageRequests,
+    );
+  });
+
+  test("review L2: a timeout row is not drift, and a request cut at a timeout is not re-run", async () => {
+    const timeout = (x: FakeRow): FakeRow => ({
+      ...x,
+      status: "error",
+      notRun: true,
+      message: TIMEOUT_1S,
+    });
+    // default seams: the timeout row is read to the end, before the first covering test
+    const t = await driftRig((m, x, d) =>
+      keptsIn(m, m === "M0002" && d === 0 && x.method === "A" ? timeout(x) : x),
+    );
+    await t.r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await t.r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(t.events).toEqual([]);
+    expect(driftStats(t.r).keptDrifts).toBe(0);
+    // a build that retires the Sleep rule cuts at the timeout row (B): A differs before it, yet no re-run
+    const c = await driftRig((m, x, d) =>
+      keptsIn(
+        m,
+        m === "M0002" && d === 0
+          ? x.method === "A"
+            ? failed(x)
+            : x.method === "B"
+              ? timeout(x)
+              : x
+          : x,
+      ),
+    );
+    Object.assign(c.r.b.seams, { sleepRuleRetired: true });
+    await c.r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+    await c.r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(c.r.b.entriesStats().timeoutCuts).toBe(1);
+    expect(c.events).toEqual([]);
+    expect(driftStats(c.r).keptDrifts).toBe(0);
   });
 });

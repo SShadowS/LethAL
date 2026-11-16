@@ -1,0 +1,541 @@
+[
+  {
+    "cls": "platform table *: has no provider",
+    "entry": null,
+    "texts": [
+      "platform table 'Api Web Service' (2000000193) has no provider",
+      "platform table 'Drive' (2000000020) has no provider",
+      "platform table 'Object Metadata' (2000000071) has no provider",
+      "platform table 'Object' (2000000001) has no provider",
+      "platform table 'Performance Profile Scheduler' (2000000265) has no provider",
+      "platform table 'Tenant Media Set' (2000000183) has no provider",
+      "store error platform table 'Api Web Service' (2000000193) has no provider",
+      "store error platform table 'Object' (2000000001) has no provider"
+    ]
+  },
+  {
+    "cls": "* on the Company table",
+    "entry": "company-table-read",
+    "texts": [
+      "FindFirst on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      "IsEmpty on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)"
+    ]
+  },
+  {
+    "cls": "License Permission",
+    "entry": "license-permission",
+    "texts": [
+      "License Permission: only a count that names one object by type and number, or one object type with a license loaded, is served"
+    ]
+  },
+  {
+    "cls": "API Webhook Entity",
+    "entry": "api-webhook-entity",
+    "texts": [
+      "API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them",
+      "store error API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them"
+    ]
+  },
+  {
+    "cls": "Page Action",
+    "entry": "page-action-promoted-area",
+    "texts": [
+      "Page Action: page 'AL Test Tool': the rows of its Promoted area other than its actionrefs are not pinned (their ids, types and which exist)"
+    ]
+  },
+  {
+    "cls": "* on Power BI Blob",
+    "entry": "power-bi-blob",
+    "texts": [
+      "FindFirst on Power BI Blob: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "IsEmpty on Power BI Blob: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)"
+    ]
+  },
+  {
+    "cls": "* on Power BI Default Selection",
+    "entry": "power-bi-default-selection",
+    "texts": [
+      "FindFirst on Power BI Default Selection: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)",
+      "IsEmpty on Power BI Default Selection: BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)"
+    ]
+  },
+  {
+    "cls": "Media",
+    "entry": "media-read",
+    "texts": [
+      "Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+      "store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not"
+    ]
+  },
+  {
+    "cls": "Application Object Metadata",
+    "entry": "application-object-metadata",
+    "texts": [
+      "Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)",
+      "store error Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)"
+    ]
+  },
+  {
+    "cls": "*: permission set *: grants a whole object type (not listed row by row)",
+    "entry": "permission-set-whole-object-type",
+    "texts": [
+      "Expanded Permission: permission set 'BaseSystemPermissionSet': `table * = X` grants a whole object type (not listed row by row)",
+      "Metadata Permission: permission set 'BaseSystemPermissionSet': `table * = X` grants a whole object type (not listed row by row)",
+      "Metadata Permission: permission set 'REPRO WILDCARD': `table * = X` grants a whole object type (not listed row by row)",
+      "Permission: permission set 'All Objects': `table * = X` grants a whole object type (not listed row by row)",
+      "store error Metadata Permission: permission set 'BaseSystemPermissionSet': `table * = X` grants a whole object type (not listed row by row)",
+      "store error Permission: permission set 'All Objects': `table * = X` grants a whole object type (not listed row by row)"
+    ]
+  },
+  {
+    "cls": "a permission denial (read permission on object type * id *) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+    "entry": "denial-read-system-table",
+    "texts": [
+      "a permission denial (read permission on object type 0 id 2000000004) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000005) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000009) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000120) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000206) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run"
+    ]
+  },
+  {
+    "cls": "a permission denial (read permission on object type * id *) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media writes only); the test is not run",
+    "entry": "denial-read-system-table-writes",
+    "texts": [
+      "a permission denial (read permission on object type 0 id 2000000184) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media writes only); the test is not run"
+    ]
+  },
+  {
+    "cls": "use of an OutStream that was never created",
+    "entry": null,
+    "texts": ["use of an OutStream that was never created"]
+  },
+  {
+    "cls": "FieldRef.* on a FieldRef that was never assigned",
+    "entry": "fieldref-method-never-assigned",
+    "texts": [
+      "FieldRef.Active on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "FieldRef.Caption on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+      "FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "GetUrl(*): (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)",
+    "entry": "geturl-unpinned-object-type",
+    "texts": [
+      "GetUrl(ClientType::Default or Windows) of object type Codeunit with 4 arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)",
+      "GetUrl(ClientType::Default or Windows) of object type Query with 4 arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)",
+      "GetUrl(ClientType::Default or Windows) of object type Table with 4 arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)"
+    ]
+  },
+  {
+    "cls": "GetUrl(*): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned",
+    "entry": "geturl-phone-tablet-desktop",
+    "texts": [
+      "GetUrl(Option member 'Tablet'; the call had 4 arguments): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned",
+      "GetUrl(Option member 'Tablet'; the call had 5 arguments): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned",
+      "GetUrl(Option member 'Tablet'; the call had 6 arguments): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned"
+    ]
+  },
+  {
+    "cls": "GetUrl(*): a company of other characters than letters, digits and space",
+    "entry": "geturl-company-characters",
+    "texts": [
+      "GetUrl(ClientType::OData; the call had 2 arguments): a company of other characters than letters, digits and space",
+      "GetUrl(ClientType::ODataV4; the call had 2 arguments): a company of other characters than letters, digits and space",
+      "GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters than letters, digits and space"
+    ]
+  },
+  {
+    "cls": "GetUrl(*): this object type or argument list",
+    "entry": "geturl-object-type-or-arguments",
+    "texts": [
+      "GetUrl(ClientType::OData; the call had 4 arguments): this object type or argument list",
+      "GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list",
+      "GetUrl(ClientType::SOAP; the call had 4 arguments): this object type or argument list",
+      "GetUrl(ClientType::SOAP; the call had 5 arguments): this object type or argument list"
+    ]
+  },
+  {
+    "cls": "CurrentClientType in a session without a client (--no-client)",
+    "entry": "no-client-current-client-type",
+    "texts": [
+      "CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+    ]
+  },
+  {
+    "cls": "Page.Run with a record or a page name in a session without a client (--no-client)",
+    "entry": "no-client-page-run",
+    "texts": [
+      "Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+    ]
+  },
+  {
+    "cls": "Page.RunModal with a record or a page name in a session without a client (--no-client)",
+    "entry": "no-client-page-runmodal",
+    "texts": [
+      "Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+    ]
+  },
+  {
+    "cls": "the request page of report \"Cell Report\" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client)",
+    "entry": "no-client-report-request-page-handler",
+    "texts": [
+      "the request page of report \"Cell Report\" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+    ]
+  },
+  {
+    "cls": "Report.RunRequestPage in a session without a client (--no-client)",
+    "entry": "no-client-run-request-page",
+    "texts": [
+      "Report.RunRequestPage in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+    ]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception *",
+    "entry": "dotnet-exception",
+    "texts": [
+      "DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: Cannot find column 0.; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position 0.; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position 1.; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000072:rsa routines::padding check failed; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000079:rsa routines::oaep decoding error; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000093:rsa routines::value missing; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value ('-5') must be greater than or equal to '-1'. (Parameter 'value')",
+      "DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: Invalid URI: The URI scheme is not valid. (Parameter 'value'); the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)",
+      "DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: Invalid port specified.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "a permission denial (read permission on object type * id *) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+    "entry": "denial-read-flowfield-system-table",
+    "texts": [
+      "a permission denial (read permission on object type 0 id 2000000157) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000206) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+      "a permission denial (read permission on object type 0 id 2000000212) whose error is not pinned yet (a FlowField over a system table); the test is not run"
+    ]
+  },
+  {
+    "cls": "DotNet *: is an instance member and the variable holds no object",
+    "entry": null,
+    "texts": [
+      "DotNet Newtonsoft.Json.Linq.JArray.ToString: 'Newtonsoft.Json.Linq.JArray.ToString' is an instance member and the variable holds no object",
+      "DotNet System.IO.MemoryStream.Length: 'System.IO.MemoryStream.Length' is an instance member and the variable holds no object",
+      "DotNet System.Text.Encoding.WebName: 'System.Text.Encoding.WebName' is an instance member and the variable holds no object",
+      "DotNet System.Text.StringBuilder.Append: 'System.Text.StringBuilder.Append' is an instance member and the variable holds no object",
+      "DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object",
+      "DotNet System.Uri.Host: 'System.Uri.Host' is an instance member and the variable holds no object",
+      "DotNet System.Uri.Port: 'System.Uri.Port' is an instance member and the variable holds no object",
+      "DotNet System.UriBuilder.Query: 'System.UriBuilder.Query' is an instance member and the variable holds no object"
+    ]
+  },
+  {
+    "cls": "DotNet System.Text.RegularExpressions.Regex.IsMatch",
+    "entry": null,
+    "texts": [
+      "DotNet System.Text.RegularExpressions.Regex.IsMatch: System.Text.RegularExpressions.Regex.IsMatch has no overload taking 1 argument(s) of the given types (String)"
+    ]
+  },
+  {
+    "cls": "DotNet System.Text.RegularExpressions.Regex.Replace",
+    "entry": null,
+    "texts": [
+      "DotNet System.Text.RegularExpressions.Regex.Replace: System.Text.RegularExpressions.Regex.Replace has no overload taking 2 argument(s) of the given types (String, String)"
+    ]
+  },
+  {
+    "cls": "DotNet System.TimeZoneInfo.DisplayName",
+    "entry": "dotnet-timezone-display-name",
+    "texts": [
+      "DotNet System.TimeZoneInfo.DisplayName: refused by policy: member 'System.TimeZoneInfo.DisplayName' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host)"
+    ]
+  },
+  {
+    "cls": "DotNet System.TimeZoneInfo.GetUtcOffset",
+    "entry": "dotnet-timezone-get-utc-offset",
+    "texts": [
+      "DotNet System.TimeZoneInfo.GetUtcOffset: refused by policy: member 'System.TimeZoneInfo.GetUtcOffset' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host); off Windows it runs only for one DateTime of the session clock's year, or on the zone of the id UTC made in process"
+    ]
+  },
+  {
+    "cls": "RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
+    "entry": "register-table-connection-other-string",
+    "texts": [
+      "RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)"
+    ]
+  },
+  {
+    "cls": "Insert on a TableType = CRM table through a table connection",
+    "entry": "crm-insert-through-table-connection",
+    "texts": [
+      "Insert on a TableType = CRM table through a table connection: whether the table's triggers run is not pinned"
+    ]
+  },
+  {
+    "cls": "ReadFromYaml of a mapping item in a list at another indent than 4",
+    "entry": "yaml-list-indent",
+    "texts": ["ReadFromYaml of a mapping item in a list at another indent than 4"]
+  },
+  {
+    "cls": "ReadFromYaml of a null form or a number other than `null` and a whole number",
+    "entry": "yaml-null-or-number",
+    "texts": ["ReadFromYaml of a null form or a number other than `null` and a whole number"]
+  },
+  {
+    "cls": "ReadFromYaml of a carriage return or a blank line in a nested, list or flow form",
+    "entry": "yaml-blank-line-nested",
+    "texts": ["ReadFromYaml of a carriage return or a blank line in a nested, list or flow form"]
+  },
+  {
+    "cls": "Company Triggers OnCompanyOpen(Completed) subscriber codeunit \"U8013 Open Subscriber\".OnOpen writes the database in the test session before the first test, and this test can read table U8013 Open Row",
+    "entry": "company-open-subscriber-writes",
+    "texts": [
+      "Company Triggers OnCompanyOpen(Completed) subscriber codeunit \"U8013 Open Subscriber\".OnOpen writes the database in the test session before the first test, and this test can read table U8013 Open Row: what the test runner does with the writes is not pinned (ADR-046 amendment 1, A4 item 10)"
+    ]
+  },
+  {
+    "cls": "Find on an empty set of table 'U8013 Find Row' without using the result and without a filter",
+    "entry": "find-empty-set-u8013",
+    "texts": [
+      "Find on an empty set of table 'U8013 Find Row' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "Find on an empty set of table 'Time Zone' without using the result and without a filter",
+    "entry": "find-empty-set-time-zone",
+    "texts": [
+      "Find on an empty set of table 'Time Zone' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "a file name, got Guid",
+    "entry": "file-name-got-guid",
+    "texts": ["a file name, got Guid"]
+  },
+  {
+    "cls": "storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead)",
+    "entry": "sql-counter-stored",
+    "texts": [
+      "storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinned operations, never a count"
+    ]
+  },
+  {
+    "cls": "XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
+    "entry": "xmlport-unbound-text-element",
+    "texts": [
+      "XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)"
+    ]
+  },
+  {
+    "cls": "a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
+    "entry": "feature-key-rollback",
+    "texts": [
+      "a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)"
+    ]
+  },
+  {
+    "cls": "File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
+    "entry": null,
+    "texts": [
+      "File.DownloadFromStream needs a client (a browser round trip), which a headless run has not"
+    ]
+  },
+  {
+    "cls": "an earlier test of this codeunit was refused while it ran (FeatureKeyRollback",
+    "entry": null,
+    "texts": [
+      "an earlier test of this codeunit was refused while it ran (FeatureKeyRollback: did not run (a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspec): it can write the table Feature Key that this test reads, so the state it would have left is not BC's; this failure is not trusted: The record in table Refusal Probe already exists. Identification fields and values: Id='1'"
+    ]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-not-a-number",
+    "texts": [
+      "SetFilter: `not a number` is not a Decimal",
+      "SetFilter: `not an integer` is not an Integer"
+    ]
+  },
+  {
+    "cls": "DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery",
+    "entry": "dotnet-mock-graph-query",
+    "texts": [
+      "DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class 'Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery' is neither registered nor classified pure"
+    ]
+  },
+  {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields",
+    "entry": "dotnet-page-summary-get-summary-fields",
+    "texts": [
+      "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure"
+    ]
+  },
+  {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields",
+    "entry": "dotnet-page-summary-get-available-table-fields",
+    "texts": [
+      "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure"
+    ]
+  },
+  {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport",
+    "entry": "dotnet-learn-has-in-geo-support",
+    "texts": [
+      "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class 'Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions' is neither registered nor classified pure"
+    ]
+  },
+  {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount",
+    "entry": "dotnet-copilot-gpt-token-count",
+    "texts": [
+      "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1)"
+    ]
+  },
+  {
+    "cls": "DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments",
+    "entry": "dotnet-copilot-platform-authorization",
+    "texts": [
+      "DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments"
+    ]
+  },
+  {
+    "cls": "conversion of Blob to Integer",
+    "entry": "blob-to-integer",
+    "texts": ["conversion of Blob to Integer"]
+  },
+  {
+    "cls": "a permission denial (modify permission on object type * id *) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run",
+    "entry": "denial-modify-missing-row",
+    "texts": [
+      "a permission denial (modify permission on object type 0 id 50440) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run"
+    ]
+  },
+  {
+    "cls": "a User with a Windows Security ID",
+    "entry": "user-windows-sid",
+    "texts": [
+      "a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned"
+    ]
+  },
+  {
+    "cls": "DeleteAll on a record of a table with a filter in filter group 1 (the global group) that another record set",
+    "entry": "deleteall-filter-group-1",
+    "texts": [
+      "DeleteAll on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not"
+    ]
+  },
+  {
+    "cls": "Consistent on a record of a table with a filter in filter group 1 (the global group) that another record set",
+    "entry": "consistent-filter-group-1",
+    "texts": [
+      "Consistent on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not"
+    ]
+  },
+  {
+    "cls": "a control over table field Amount whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+    "entry": "autoformat-expression-procedure",
+    "texts": [
+      "a control over table field Amount whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)"
+    ]
+  },
+  {
+    "cls": "Database.SID without a user name (whose SID it answers is not pinned)",
+    "entry": "database-sid-no-user",
+    "texts": ["Database.SID without a user name (whose SID it answers is not pinned)"]
+  },
+  {
+    "cls": "GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part",
+    "entry": "gotokey-statement-no-row",
+    "texts": [
+      "GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part"
+    ]
+  },
+  {
+    "cls": "Clear of a XmlWriteOptions value",
+    "entry": "clear-xmlwriteoptions",
+    "texts": ["Clear of a XmlWriteOptions value"]
+  },
+  {
+    "cls": "RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)",
+    "entry": "removecookie-last",
+    "texts": [
+      "RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)"
+    ]
+  },
+  {
+    "cls": "Error with an ErrorInfo nobody created",
+    "entry": "error-errorinfo-not-created",
+    "texts": ["Error with an ErrorInfo nobody created"]
+  },
+  {
+    "cls": "RecordRef.* on a RecordRef that is not open",
+    "entry": "recordref-method-not-open",
+    "texts": [
+      "RecordRef.FilterGroup on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "the value of field 'AL Namespace' of platform table 'Query Metadata' is not known for any row",
+    "entry": "query-metadata-al-namespace",
+    "texts": [
+      "the value of field 'AL Namespace' of platform table 'Query Metadata' is not known for any row: no corpus test pins it (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "ReadFromYaml of a flow mapping entry with this quoted key",
+    "entry": "yaml-flow-quoted-key",
+    "texts": ["ReadFromYaml of a flow mapping entry with this quoted key"]
+  },
+  {
+    "cls": "an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened)",
+    "entry": "part-visible-other-shape",
+    "texts": [
+      "an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one"
+    ]
+  },
+  {
+    "cls": "XmlPort import",
+    "entry": "xmlport-import-header",
+    "texts": [
+      "XmlPort import: the row of table element Header stored before its child rows is gone after them"
+    ]
+  },
+  {
+    "cls": "XML name `` (only plain names without a prefix are pinned)",
+    "entry": "xml-name-empty",
+    "texts": ["XML name `` (only plain names without a prefix are pinned)"]
+  },
+  {
+    "cls": "Evaluate of `11..NOW` into Date (form not pinned by the corpus)",
+    "entry": "evaluate-now-date",
+    "texts": ["Evaluate of `11..NOW` into Date (form not pinned by the corpus)"]
+  },
+  {
+    "cls": "Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)",
+    "entry": "evaluate-now-time",
+    "texts": ["Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)"]
+  },
+  {
+    "cls": "AsDecimal of a Text control whose text has digits but is no number",
+    "entry": "asdecimal-text-control",
+    "texts": ["AsDecimal of a Text control whose text has digits but is no number"]
+  },
+  {
+    "cls": "a page opened without a record whose OnOpenPage left Rec where its view has no row",
+    "entry": "page-no-record-onopenpage",
+    "texts": ["a page opened without a record whose OnOpenPage left Rec where its view has no row"]
+  },
+  {
+    "cls": "HttpClient with the relative request path `relative/path` and no base address",
+    "entry": "httpclient-relative-path",
+    "texts": [
+      "HttpClient with the relative request path `relative/path` and no base address: which error it raises is not measured (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "Evaluate with format number 2 (not pinned by the corpus)",
+    "entry": "evaluate-format-2",
+    "texts": ["Evaluate with format number 2 (not pinned by the corpus)"]
+  }
+]

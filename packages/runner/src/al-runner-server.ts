@@ -732,10 +732,277 @@ const DOTNET_CLEAN_EXCEPTIONS = [
   "System.Security.Cryptography.CryptographicException",
   "Interop+Crypto+OpenSslCryptographicException",
   "System.Xml.XPath.XPathException",
+  // PR-56: measured clean in PR-54's keep census (class "DotNet * raised the .NET exception *"): System.UriBuilder
+  // (new, a bad port) and System.Data.DataRowCollection/DataColumnCollection.Item (no such row or column).
+  "System.UriFormatException",
+  "System.IndexOutOfRangeException",
 ]
   .map((t) => t.replace(/[.+]/g, "\\$&"))
   .join("|");
+/**
+ * PR-56: the placeholders of a `PR56_KEPT` text. Each is one line, bounded (the longest measured variant plus
+ * about 50%), and holds no `:` unless a measured variant has one.
+ */
+const PR56_SLOTS: Readonly<Record<string, string>> = {
+  IDENT: "[A-Za-z][A-Za-z0-9]{0,29}",
+  NUM: String.raw`\d{1,2}`,
+  OBJID: String.raw`\d{1,10}`,
+  NAME: String.raw`[^:'\r\n]{1,40}`,
+  QUOTED: String.raw`[^'\r\n]{1,60}`,
+  STORE: "(?:store error )?",
+  FILTER: "[^`\\r\\n]{1,40}",
+  // The measured methods only, each by name (review M3): a table read the census measured, and the
+  // FieldRef and RecordRef methods it refused on a never-assigned or unopened handle.
+  READ: "(?:IsEmpty|FindFirst)",
+  COMPANYM: "(?:IsEmpty|FindFirst|FindSet)",
+  FIELDREFM: "(?:Active|Caption|Class)",
+  RECORDREFM: "FilterGroup",
+  KIND: "(?:a Decimal|an Integer)",
+};
+/** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
+const pr56Entry = (template: string): RegExp =>
+  new RegExp(
+    `^NotRun: out-of-scope: ${template
+      .split(/%([A-Z]+)%/)
+      .map((part, i) => {
+        if (i % 2 === 0) return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const slot = PR56_SLOTS[part];
+        if (slot === undefined) throw new Error(`PR-56 keep entry: unknown slot %${part}%`);
+        return slot;
+      })
+      .join("")}$`,
+  );
+const DENIAL = "a permission denial (";
+const DENIAL_TAIL = ") whose error is not pinned yet (";
+const NO_CLIENT =
+  " in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)";
+const POLICY_TAIL = "' is neither registered nor classified pure";
+const GETURL = "GetUrl(";
+const PBI =
+  ": BC holds rows here that an install trigger or Company-Initialize creates, and the install baseline could not create them (ADR-013 decision 5)";
+/**
+ * PR-56 (coord PR-56, the ruling of 2026-11-16): every CLEAN class of PR-54's keep census
+ * (`/coord/handoff/PR-54/census.md`, strict re-run: 74 of 74 measured classes CLEAN; R-967's kit on
+ * edge-5a58a0f16; the control is weak: CLEAN means nothing crossed requests) that no earlier entry kept in
+ * full. One row per class: the entry name, then the text. A text without a `%SLOT%` is exact, anchored at
+ * both ends and kept whole; a `%SLOT%` stands for the `*` of the class key (see `PR56_SLOTS`). A reworded
+ * text closes the daemon as before. Not kept: `R975 Login Subscriber` and the classes the census could not
+ * measure. The classes whose key holds an object name ('U8013 Find Row', "Cell Report") are exact to the
+ * measured name. Each row's comment is its class key where the text does not start with it. The drift guard in
+ * `al-runner-v3-backend.ts` backs every entry. Pinned by `al-runner-serve-rule.test.ts` against
+ * `tests/pr56-measured-refusals.json`; not in leg C (most need the .NET helper or a platform table).
+ */
+const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
+  [
+    "company-table-read",
+    "%COMPANYM% on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+  ], // PR-54 class "* on the Company table"
+  [
+    "license-permission",
+    "License Permission: only a count that names one object by type and number, or one object type with a license loaded, is served",
+  ],
+  [
+    "api-webhook-entity",
+    "%STORE%API Webhook Entity: the entities of the API pages are listed by the platform and no corpus test pins them",
+  ],
+  [
+    "page-action-promoted-area",
+    "Page Action: page 'AL Test Tool': the rows of its Promoted area other than its actionrefs are not pinned (their ids, types and which exist)",
+  ],
+  ["power-bi-blob", `%READ% on Power BI Blob${PBI}`], // PR-54 class "* on Power BI Blob"
+  ["power-bi-default-selection", `%READ% on Power BI Default Selection${PBI}`], // PR-54 class "* on Power BI Default Selection"
+  [
+    "media-read",
+    "%STORE%Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not",
+  ],
+  [
+    "application-object-metadata",
+    "%STORE%Application Object Metadata: the Application Object Metadata row of table 'Object' (only a query's Metadata is pinned)",
+  ],
+  [
+    "permission-set-whole-object-type",
+    "%STORE%%NAME%: permission set '%QUOTED%': `table * = X` grants a whole object type (not listed row by row)",
+  ], // PR-54 class "*: permission set *: grants a whole object type ..."
+  [
+    "denial-read-system-table",
+    `${DENIAL}read permission on object type %NUM% id %OBJID%${DENIAL_TAIL}on a system table; probe P13 pins Tenant Media only); the test is not run`,
+  ], // PR-54 class "a permission denial (read ...) (on a system table; probe P13 pins Tenant Media only)"
+  [
+    "denial-read-system-table-writes",
+    `${DENIAL}read permission on object type %NUM% id %OBJID%${DENIAL_TAIL}on a system table; probe P13 pins Tenant Media writes only); the test is not run`,
+  ], // PR-54 class "... Tenant Media writes only"
+  [
+    "denial-read-flowfield-system-table",
+    `${DENIAL}read permission on object type %NUM% id %OBJID%${DENIAL_TAIL}a FlowField over a system table); the test is not run`,
+  ], // PR-54 class "... a FlowField over a system table"
+  [
+    "denial-modify-missing-row",
+    `${DENIAL}modify permission on object type %NUM% id %OBJID%${DENIAL_TAIL}on a row that does not exist (which error comes first is not pinned)); the test is not run`,
+  ], // PR-54 class "a permission denial (modify ...)"
+  [
+    "fieldref-method-never-assigned",
+    "FieldRef.%FIELDREFM% on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+  ], // PR-54 class "FieldRef.* on a FieldRef that was never assigned"
+  [
+    "recordref-method-not-open",
+    "RecordRef.%RECORDREFM% on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+  ], // PR-54 class "RecordRef.* on a RecordRef that is not open"
+  [
+    "geturl-unpinned-object-type",
+    `${GETURL}ClientType::Default or Windows) of object type %IDENT% with %NUM% arguments (only a page or a report, and a page with a record and UseFilters false, or true for Default, are pinned)`,
+  ], // PR-54 class "GetUrl(*): (only a page or a report, ...)"
+  [
+    "geturl-phone-tablet-desktop",
+    `${GETURL}Option member '%IDENT%'; the call had %NUM% arguments): for Phone, Tablet and Desktop only a company, a page or report with a positive id, and a page with a record and UseFilters false are pinned`,
+  ], // PR-54 class "GetUrl(*): for Phone, Tablet and Desktop ..."
+  [
+    "geturl-company-characters",
+    `${GETURL}ClientType::%IDENT%; the call had %NUM% arguments): a company of other characters than letters, digits and space`,
+  ], // PR-54 class "GetUrl(*): a company of other characters ..."
+  [
+    "geturl-object-type-or-arguments",
+    `${GETURL}ClientType::%IDENT%; the call had %NUM% arguments): this object type or argument list`,
+  ], // PR-54 class "GetUrl(*): this object type or argument list"
+  ["no-client-current-client-type", `CurrentClientType${NO_CLIENT}`],
+  ["no-client-page-run", `Page.Run with a record or a page name${NO_CLIENT}`],
+  ["no-client-page-runmodal", `Page.RunModal with a record or a page name${NO_CLIENT}`],
+  [
+    "no-client-report-request-page-handler",
+    `the request page of report "Cell Report" with a RequestPageHandler or ReportHandler bound${NO_CLIENT}`,
+  ],
+  ["no-client-run-request-page", `Report.RunRequestPage${NO_CLIENT}`],
+  [
+    "dotnet-timezone-display-name",
+    "DotNet System.TimeZoneInfo.DisplayName: refused by policy: member 'System.TimeZoneInfo.DisplayName' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host)",
+  ],
+  [
+    "dotnet-timezone-get-utc-offset",
+    "DotNet System.TimeZoneInfo.GetUtcOffset: refused by policy: member 'System.TimeZoneInfo.GetUtcOffset' (the Windows zone data BC reads differs from the IANA data of a non-Windows .NET host); off Windows it runs only for one DateTime of the session clock's year, or on the zone of the id UTC made in process",
+  ],
+  [
+    "dotnet-mock-graph-query",
+    `DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class 'Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery${POLICY_TAIL}`,
+  ],
+  [
+    "dotnet-page-summary-get-summary-fields",
+    `DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions${POLICY_TAIL}`,
+  ],
+  [
+    "dotnet-page-summary-get-available-table-fields",
+    `DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions${POLICY_TAIL}`,
+  ],
+  [
+    "dotnet-learn-has-in-geo-support",
+    `DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class 'Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions${POLICY_TAIL}`,
+  ],
+  [
+    "dotnet-copilot-gpt-token-count",
+    "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1)",
+  ],
+  [
+    "dotnet-copilot-platform-authorization",
+    "DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments",
+  ],
+  [
+    "register-table-connection-other-string",
+    "RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
+  ],
+  [
+    "crm-insert-through-table-connection",
+    "Insert on a TableType = CRM table through a table connection: whether the table's triggers run is not pinned",
+  ],
+  ["yaml-list-indent", "ReadFromYaml of a mapping item in a list at another indent than 4"],
+  [
+    "yaml-null-or-number",
+    "ReadFromYaml of a null form or a number other than `null` and a whole number",
+  ],
+  [
+    "yaml-blank-line-nested",
+    "ReadFromYaml of a carriage return or a blank line in a nested, list or flow form",
+  ],
+  ["yaml-flow-quoted-key", "ReadFromYaml of a flow mapping entry with this quoted key"],
+  [
+    "company-open-subscriber-writes",
+    `Company Triggers OnCompanyOpen(Completed) subscriber codeunit "U8013 Open Subscriber".OnOpen writes the database in the test session before the first test, and this test can read table U8013 Open Row: what the test runner does with the writes is not pinned (ADR-046 amendment 1, A4 item 10)`,
+  ],
+  [
+    "find-empty-set-u8013",
+    "Find on an empty set of table 'U8013 Find Row' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
+  ],
+  [
+    "find-empty-set-time-zone",
+    "Find on an empty set of table 'Time Zone' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)",
+  ],
+  ["file-name-got-guid", "a file name, got Guid"],
+  [
+    "sql-counter-stored",
+    "storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinned operations, never a count",
+  ],
+  [
+    "xmlport-unbound-text-element",
+    "XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
+  ],
+  [
+    "feature-key-rollback",
+    "a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
+  ],
+  ["setfilter-not-a-number", "SetFilter: `%FILTER%` is not %KIND%"], // PR-54 class "SetFilter"
+  ["blob-to-integer", "conversion of Blob to Integer"],
+  [
+    "user-windows-sid",
+    "a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned",
+  ],
+  [
+    "deleteall-filter-group-1",
+    "DeleteAll on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not",
+  ],
+  [
+    "consistent-filter-group-1",
+    "Consistent on a record of a table with a filter in filter group 1 (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not",
+  ],
+  [
+    "autoformat-expression-procedure",
+    "a control over table field Amount whose AutoFormatExpression calls a procedure (BC runs it when the row is fetched; not modelled)",
+  ],
+  ["database-sid-no-user", "Database.SID without a user name (whose SID it answers is not pinned)"],
+  [
+    "gotokey-statement-no-row",
+    "GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part",
+  ],
+  ["clear-xmlwriteoptions", "Clear of a XmlWriteOptions value"],
+  [
+    "removecookie-last",
+    "RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)",
+  ],
+  ["error-errorinfo-not-created", "Error with an ErrorInfo nobody created"],
+  [
+    "query-metadata-al-namespace",
+    "the value of field 'AL Namespace' of platform table 'Query Metadata' is not known for any row: no corpus test pins it (docs/probes-needed.md)",
+  ],
+  [
+    "part-visible-other-shape",
+    "an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one",
+  ],
+  [
+    "xmlport-import-header",
+    "XmlPort import: the row of table element Header stored before its child rows is gone after them",
+  ],
+  ["xml-name-empty", "XML name `` (only plain names without a prefix are pinned)"],
+  ["evaluate-now-date", "Evaluate of `11..NOW` into Date (form not pinned by the corpus)"],
+  ["evaluate-now-time", "Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)"],
+  ["evaluate-format-2", "Evaluate with format number 2 (not pinned by the corpus)"],
+  ["asdecimal-text-control", "AsDecimal of a Text control whose text has digits but is no number"],
+  [
+    "page-no-record-onopenpage",
+    "a page opened without a record whose OnOpenPage left Rec where its view has no row",
+  ],
+  [
+    "httpclient-relative-path",
+    "HttpClient with the relative request path `relative/path` and no base address: which error it raises is not measured (docs/probes-needed.md)",
+  ],
+];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
+  ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
   http: /^NotRun: out-of-scope: (?:an outbound HTTP request with no \[HttpClientHandler\] bound to the test: the runtime never opens a connection \(ADR-027\)|an outbound HTTP request that a test handler does not answer: the runtime never opens a connection \(ADR-027\)\. To run the test, bind an \[HttpClientHandler\] that answers the request, or set TestHttpRequestPolicy = BlockOutboundRequests on the test codeunit to get BC's error for it)$/,
   commit:
     /^NotRun: out-of-scope: Commit inside a test under TestIsolation = Function(?:: what the runner keeps is not pinned| is not supported yet: no corpus test pins whether BC keeps the committed rows for the next test \(corpus issue 645\)\. Run this codeunit with TestIsolation = Codeunit \(al-runner: --isolation codeunit, the default\))$/,
