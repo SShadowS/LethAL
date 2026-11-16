@@ -3209,6 +3209,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.suitePerCodeunit = m;
   }
 
+  /** PR-51 (Addendum 1): a copy of the tests `mutantId`'s calls were cut at (`timedOutMutants`). */
+  cutState(mutantId: string): unknown {
+    return new Set(this.timedOutMutants.get(mutantId) ?? []);
+  }
+
+  restoreCutState(mutantId: string, state: unknown): void {
+    if (!(state instanceof Set)) {
+      throw new Error(
+        `al-runner-v3: restoreCutState for ${mutantId} was given ${typeof state}, not the Set cutState returned`,
+      );
+    }
+    this.timedOutMutants.set(mutantId, new Set(state as Set<string>));
+  }
+
   /** F5: the covering refs of `mutantId` and the budget each will be sent. */
   useCoveringBudgets(
     mutantId: string,
@@ -4932,6 +4946,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
+      cutState: (id) => b.cutState(id),
+      restoreCutState: (id, state) => b.restoreCutState(id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like

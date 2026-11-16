@@ -6846,15 +6846,47 @@ describe("R895: stop a request at its first timeout row", () => {
         const r = await readyRig({
           serve: { rows: killsM1 },
           suite: SUITE2,
+          // M0001 is not prefetched, so its plain run is a live request unless the alone answer
+          // was cached as the codeunit's call.
+          mutants: ["M0002"],
+          seams: retired,
+        });
+        await r.b.activate("M0001");
+        const n0 = r.serve.requests.length;
+        expect((await r.b.run(A, ALONE)).selection).toBe("alone");
+        const plain = await r.b.run(A, OPTS);
+        expect(plain.selection).toBeUndefined();
+        expect(sentFor(r, n0, "M0001")).toEqual([
+          { alone: true, tests: [`Codeunit${CU}.A`], mutants: ["M0001"] },
+          { alone: false, tests: [`Codeunit${CU}.`], mutants: ["M0001"] },
+        ]);
+      });
+
+      test("10 (Addendum 1): cutState/restoreCutState put the cut set back, so a replayed timeout's reproduction is live, not alone", async () => {
+        // A and B both hang under M0001. A is held, B (alone, after A's cut) is noted: its cut now
+        // sits in the same codeunit. The reproduction of A runs after `restoreCutState` of the state
+        // met at A: live, as in the old walk. Without the restore, B's cut routes it alone.
+        const hangsAB: RowsFn = (m, cu, d, n) =>
+          m === "M0001" && cu === CU
+            ? [
+                { method: "A", status: "error", notRun: true, message: TIMEOUT_1S },
+                { method: "B", status: "error", notRun: true, message: TIMEOUT_1S },
+              ]
+            : allPass(m, cu, d, n);
+        const r = await readyRig({
+          serve: { rows: hangsAB },
+          suite: SUITE2,
           mutants: ["M0001"],
           seams: retired,
         });
         await r.b.activate("M0001");
-        expect((await r.b.run(A, ALONE)).selection).toBe("alone");
-        const n0 = r.serve.requests.length;
+        expect((await r.b.run(A, OPTS)).outcome).toBe("timeout");
+        const atA = r.b.cutState("M0001");
+        expect((await r.b.run(B, OPTS)).outcome).toBe("timeout");
+        r.b.restoreCutState("M0001", atA);
         await r.b.activate("M0001");
-        const plain = await r.b.run(A, OPTS);
-        expect(plain.selection).toBeUndefined();
+        const n0 = r.serve.requests.length;
+        await r.b.run(A, OPTS);
         expect(sentFor(r, n0, "M0001")).toEqual([
           { alone: false, tests: [`Codeunit${CU}.`], mutants: ["M0001"] },
         ]);

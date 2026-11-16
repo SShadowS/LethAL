@@ -12368,23 +12368,27 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // fails, confirmed and reproduced, makes the mutant `killed`; otherwise the held step is replayed
     // through the timeout path below, unchanged, with the mutant-level fields as they were when it
     // was held. So the class does not depend on which covering test is met first.
-    let held:
-      | {
-          readonly step: CoveringStep;
-          readonly snap: {
-            readonly verdict: SessionVerdict;
-            readonly cause: MutantErrorCause | undefined;
-            readonly failureNote: string | undefined;
-            readonly permissionRefusedTest: string | undefined;
-            readonly runnerDisagreement: string | undefined;
-            readonly runnerDisagreementTest: string | undefined;
-            readonly notReproduced: KillErrorDecision | undefined;
-            readonly refusedPending: string | undefined;
-            readonly transportErrorRef: TestMethodRef | undefined;
-            readonly abortAfterRecord: string | undefined;
-          };
-        }
-      | undefined;
+    // Addendum 1: a later timeout keeps its step too (`noted`, in walk order). When the held one's
+    // reproduction fails, the next is replayed the same way, as R577's I4 walk did before.
+    // `cut` is the backend's per-mutant cut state when the step was met (v3 only).
+    type HeldTimeout = {
+      readonly step: CoveringStep;
+      readonly cut: unknown;
+      readonly snap: {
+        readonly verdict: SessionVerdict;
+        readonly cause: MutantErrorCause | undefined;
+        readonly failureNote: string | undefined;
+        readonly permissionRefusedTest: string | undefined;
+        readonly runnerDisagreement: string | undefined;
+        readonly runnerDisagreementTest: string | undefined;
+        readonly notReproduced: KillErrorDecision | undefined;
+        readonly refusedPending: string | undefined;
+        readonly transportErrorRef: TestMethodRef | undefined;
+        readonly abortAfterRecord: string | undefined;
+      };
+    };
+    let held: HeldTimeout | undefined;
+    const noted: HeldTimeout[] = [];
     const afterHeld: string[] = []; // the tests a later step answered, names only
     let replayStep: CoveringStep | undefined;
     let replaying = false;
@@ -12616,9 +12620,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           break;
         }
         if (v.outcome === "timeout" && !replaying) {
-          // PR-51: hold the first timeout; a later one is only named (it is never confirmed or scored).
-          held ??= {
+          // PR-51: hold the first timeout; a later one is only noted (confirmed and scored only if
+          // every timeout before it fails to reproduce).
+          const entry: HeldTimeout = {
             step,
+            cut: args.backend.cutState?.(m.mutantId),
             snap: {
               verdict,
               cause,
@@ -12632,6 +12638,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               abortAfterRecord,
             },
           };
+          if (held === undefined) held = entry;
+          else noted.push(entry);
           continue;
         }
         if (v.outcome === "timeout") {
@@ -13017,14 +13025,21 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         }
       }
       // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
-      const h = held;
+      const h: HeldTimeout | undefined =
+        held ?? (replaying && verdict === "survived" ? noted.shift() : undefined);
       if (h === undefined) break;
-      held = undefined;
+      const carried = replaying ? notReproduced : undefined;
       const heldName = qualifiedTestName(h.step.ref);
+      const wasFirst = h === held;
+      held = undefined;
       if (verdict === "killed") {
         // A later test failed, was confirmed and reproduced: the mutant is killed, the timeout dropped.
-        heldNote = `the timeout of ${heldName} was not scored: ${killingTest ?? "a later test"} failed under the mutant and the failure reproduced`;
+        heldNote = `the timeout of ${heldName} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`;
         break;
+      }
+      if (wasFirst && args.safety.isUnsafe && verdict === "survived") {
+        // Nothing was scored on a latched session: the held timeout's confirm would have thrown here.
+        args.safety.assertSafe(`confirming the held timeout of ${heldName} (mutant ${m.mutantId})`);
       }
       if (
         args.safety.isUnsafe ||
@@ -13046,14 +13061,19 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       permissionRefusedTest = h.snap.permissionRefusedTest;
       runnerDisagreement = h.snap.runnerDisagreement;
       runnerDisagreementTest = h.snap.runnerDisagreementTest;
-      notReproduced = h.snap.notReproduced;
+      // The first reproduction that failed stays the earliest `kill-not-reproduced` of the walk.
+      notReproduced = carried ?? h.snap.notReproduced;
       refusedPending = h.snap.refusedPending;
       transportErrorRef = h.snap.transportErrorRef;
       abortAfterRecord = h.snap.abortAfterRecord;
-      heldNote =
-        afterHeld.length > 0
-          ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
-          : undefined;
+      if (wasFirst) {
+        heldNote =
+          afterHeld.length > 0
+            ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
+            : undefined;
+      }
+      // v3: the cut state this step met, so its reproduction routes as it did in the old walk.
+      args.backend.restoreCutState?.(m.mutantId, h.cut);
       walkClosed = true;
       replaying = true;
       replayStep = h.step;

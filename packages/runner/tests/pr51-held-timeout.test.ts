@@ -13,6 +13,7 @@ import type {
 import { runSession } from "../src/orchestrator";
 import type { SessionConfig } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
+import { SessionSafety } from "../src/session-safety";
 import { GROUP_SUITE_UNRESOLVED_HEAD, runMutantLineCountMessage } from "../src/stale-test-app";
 import { ResultsStore } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
@@ -336,6 +337,16 @@ class HeldStub extends PairStub {
   readonly aloneRuns: Array<{ mutant: string | null; method: string; alone: boolean }> = [];
   /** Marks a mutated fail as measured ALONE (`selection: "alone"`), as v3 does. */
   markAlone?: (method: string) => boolean;
+  /** Addendum 1: a v3-like cut state. `cutState` hands out 1, 2, ...; `restored` logs each put-back. */
+  private cuts = 0;
+  readonly restored: unknown[] = [];
+  cutState(_mutantId: string): unknown {
+    this.cuts += 1;
+    return this.cuts;
+  }
+  restoreCutState(_mutantId: string, state: unknown): void {
+    this.restored.push(state);
+  }
   override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
     const active = this.activations.at(-1) ?? null;
     this.aloneRuns.push({ mutant: active, method: ref.method, alone: opts.alone === true });
@@ -668,11 +679,10 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     expect(nthOf(b, "T3")).toBe(0);
   });
 
-  test("P12: a held timeout whose reproduction fails -> error with the held note, and the noted later timeout is not scored", async () => {
+  test("P12: a held timeout whose reproduction fails and no noted timeout is left -> error with the held note", async () => {
     const b = make({
       T1: (n) => (n === 1 ? "timeout" : "pass"),
       T2: (n) => (n === 1 ? "fail" : "pass"),
-      T3: "timeout",
     });
     const report = await session(b);
     expect(m1(report)?.verdict).toBe("error");
@@ -680,9 +690,75 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     // The HELD timeout's note, not the earlier-met T2 fail's (the snapshot restore).
     expect(m1(report)?.failureNote).toContain("kill-not-reproduced T1:");
     expect(m1(report)?.failureNote).not.toContain("kill-not-reproduced T2:");
-    expect(m1(report)?.failureNote).toContain(`after the timeout: ${NAME("T2")}, ${NAME("T3")}`);
-    expect(confirms(b, "T3")).toBe(0);
-    expect(nthOf(b, "T3")).toBe(1);
+    expect(m1(report)?.failureNote).toContain(`after the timeout: ${NAME("T2")}`);
+  });
+
+  test("P14 (Addendum 1): a flaky first hang, then a real later hang -> timeout-killed by the later one; the cut state is put back before each replay", async () => {
+    const b = make({ T1: (n) => (n === 1 ? "timeout" : "pass"), T3: "timeout" });
+    const report = await session(b);
+    expect(m1(report)?.verdict).toBe("timeout-killed");
+    expect(m1(report)?.killingTest).toContain("T3");
+    expect(m1(report)?.cause).toBeUndefined();
+    // T1: the walk run and its failed reproduction. T3: the walk run, the confirm, the reproduction.
+    expect(nthOf(b, "T1")).toBe(2);
+    expect(confirms(b, "T1")).toBe(1);
+    expect(nthOf(b, "T3")).toBe(2);
+    expect(confirms(b, "T3")).toBe(1);
+    // State 1 was read at T1's step, 2 at T3's; each is put back before that step's replay.
+    expect(b.restored).toEqual([1, 2]);
+  });
+
+  test("P14b: a flaky hang before and a real hang after, in the other order, give the same class", async () => {
+    const b = make({ T1: "timeout", T3: (n) => (n === 1 ? "timeout" : "pass") });
+    const report = await session(b);
+    expect(m1(report)?.verdict).toBe("timeout-killed");
+    expect(m1(report)?.killingTest).toContain("T1");
+  });
+
+  test("P15 (Addendum 1): the walk ends with the session latched unsafe and nothing scored -> it throws, no survivor stands", async () => {
+    // The last covering test (T5) passes, and the session is latched while it runs: no later call
+    // reaches `assertSafe`, so the held timeout's own check is the only one left.
+    const seen: { safety?: SessionSafety } = {};
+    const original = SessionSafety.prototype.assertSafe;
+    SessionSafety.prototype.assertSafe = function (this: SessionSafety, what: string) {
+      seen.safety = this;
+      return original.call(this, what);
+    };
+    try {
+      const b = make({ T1: "timeout" }, (method, _n, v) => {
+        if (method === "T5") seen.safety?.latchUnsafe("test: latched while T5 ran");
+        return method === "T5" ? v : undefined;
+      });
+      const report = await session(b);
+      // The throw is caught by runSession, which reports the latch; the mutant is not recorded.
+      expect(report.quarantined?.reason).toContain("latched while T5 ran");
+      expect(m1(report)).toBeUndefined();
+      expect(confirms(b, "T1")).toBe(0);
+    } finally {
+      SessionSafety.prototype.assertSafe = original;
+    }
+  });
+
+  test("P16 (Addendum 1): a held WARM timeout whose reproduction fails -> error with the held note", async () => {
+    const b: ReproWarmStub = new ReproWarmStub(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    let stops = 0;
+    // T2 is stopped under M0001 the first time only: the reproduction (second stop request) passes.
+    b.timeoutFor = (mutant, ref) => {
+      if (mutant !== "M0001" || ref.method !== "T2") return undefined;
+      stops += 1;
+      return stops === 1 ? 999_999 : undefined;
+    };
+    const report = await session(b, { groupRuns: { maxMethodsPerCall: 3 } });
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("kill-not-reproduced");
+    expect(m1(report)?.failureNote).toContain("kill-not-reproduced T2:");
+    // Walk call 1, walk call 2 (after the held timeout), then the replay's reproduction: the
+    // held call's own prefix [T1, T2].
+    expect(b.callsUnder("M0001")).toEqual([
+      ["T1", "T2", "T3"],
+      ["T3", "T4", "T5"],
+      ["T1", "T2"],
+    ]);
   });
 
   test("P13 (property): hang and fail in any order, sequential or grouped, give the same class: killed by the failing test", async () => {

@@ -763,6 +763,16 @@ export interface ExecutionBackend {
   ): void;
 
   /**
+   * PR-51 (Addendum 1), OPTIONAL: the backend's per-mutant state that a timeout leaves behind and
+   * that routes later runs (v3: the set of tests its calls were cut at). The covering loop reads it
+   * when it holds or notes a timeout step and puts it back (`restoreCutState`) before that step's
+   * replay, so the replay's reproduction routes as it did when the step was met. Opaque to the
+   * loop. bcdev has no such state and implements neither.
+   */
+  cutState?(mutantId: string): unknown;
+  restoreCutState?(mutantId: string, state: unknown): void;
+
+  /**
    * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
    * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
    */
