@@ -88,6 +88,29 @@ describe("H: a built-in call in an assignment is no progress", () => {
 }`;
     expect(assign(src, "Len :=")).toBe(false);
   });
+  it("asks only for remove-assignment: another operator on the same assignment is not refused", () => {
+    const src = `codeunit 50310 "H3"
+{
+    procedure Run(N: Integer)
+    var
+        Pos: Integer;
+        X: Integer;
+    begin
+        while Pos < N do
+            X := AdvE(Pos);
+    end;
+
+    local procedure AdvE(var P: Integer): Integer
+    begin
+        P += 1;
+        exit(P);
+    end;
+}`;
+    expect(assign(src, "X :=")).toBe(true);
+    expect(refused(src, ALNodeKind.assignment_statement, "X :=", "lethal.shift-integer")).toBe(
+      false,
+    );
+  });
 });
 
 describe("I: a block holding the loop's only exit", () => {
@@ -147,7 +170,7 @@ describe("I: a block holding the loop's only exit", () => {
 });
 
 describe("L: a local copy that feeds the exit name inside a progress procedure", () => {
-  const src = (copyIn: string) => `codeunit 50303 "L"
+  const src = (copyIn: string, back = "Pos := Next;") => `codeunit 50303 "L"
 {
     procedure Caller(T: Text)
     var
@@ -163,7 +186,7 @@ describe("L: a local copy that feeds the exit name inside a progress procedure",
     begin
         ${copyIn}
         Skip(T, Next);
-        Pos := Next;
+        ${back}
         exit(Pos <= StrLen(T));
     end;
 
@@ -174,6 +197,16 @@ describe("L: a local copy that feeds the exit name inside a progress procedure",
 }`;
   it("refuses emptying Skip when Next is copied from Pos", () => {
     expect(block(src("Next := Pos;"), "begin\n        I += 1")).toBe(true);
+  });
+  it("keeps it when the copy goes in and never back (Skip moves a throwaway)", () => {
+    expect(block(src("Next := Pos;", ""), "begin\n        I += 1")).toBe(false);
+  });
+  it("keeps it when the copied-back name is a parameter, not a local", () => {
+    const s = src("", "Pos := Other;")
+      .replace("Skip(T, Next);", "Skip(T, Other);")
+      .replace("var Pos: Integer)", "var Pos: Integer; Other: Integer)")
+      .replace("More(T, Pos)", "More(T, Pos, 0)");
+    expect(block(s, "begin\n        I += 1")).toBe(false);
   });
   it("keeps it when Skip moves a local that never meets Pos", () => {
     const s = src("Side := Spare;")
@@ -262,8 +295,8 @@ describe("E: rule B reads more", () => {
   });
 });
 
-describe("W: an earlier non-default write is given back", () => {
-  const src = (first: string) => `codeunit 50307 "W"
+describe("W: an earlier non-default write is given back only when every loop surely ends at it", () => {
+  const src = (first: string, until = "N < Size", body = "N := 0; N += 1;") => `codeunit 50307 "W"
 {
     procedure Run()
     var
@@ -273,9 +306,8 @@ describe("W: an earlier non-default write is given back", () => {
         ${first}
         Size := 1000;
         repeat
-            N := 0;
-            N += 1;
-        until N < Size;
+            ${body}
+        until ${until};
     end;
 
     local procedure Calc(): Integer
@@ -283,8 +315,20 @@ describe("W: an earlier non-default write is given back", () => {
         exit(5);
     end;
 }`;
-  it("gives back Size := 1000 after Size := 5", () => {
-    expect(assign(src("Size := 5;"), "Size := 1000")).toBe(false);
+  it("gives back Size := 1000 after Size := 5 when the loop surely ends at 5", () => {
+    expect(assign(src("Size := 5;", "Size = 5", "N += 1;"), "Size := 1000")).toBe(false);
+  });
+  it("keeps refusing when the loop does not surely end at 5 (until N < Size, unknown)", () => {
+    expect(assign(src("Size := 5;"), "Size := 1000")).toBe(true);
+  });
+  it("W1: keeps refusing after Size := -1 (until N = Size never ends)", () => {
+    expect(assign(src("Size := -1;", "N = Size", "N += 1;"), "Size := 1000")).toBe(true);
+  });
+  it("W2: keeps refusing after Size := -5 (until N < Size)", () => {
+    expect(assign(src("Size := -5;"), "Size := 1000")).toBe(true);
+  });
+  it("W3: keeps refusing after Size := 5 with a step of 10 (until N = Size)", () => {
+    expect(assign(src("Size := 5;", "N = Size", "N += 10;"), "Size := 1000")).toBe(true);
   });
   it("keeps refusing with no earlier write", () => {
     expect(assign(src(""), "Size := 1000")).toBe(true);
@@ -317,8 +361,12 @@ describe("S: the counter must start at 0 or more", () => {
   it("refuses with a local counter", () => {
     expect(assign(src("local"), "Size :=")).toBe(true);
   });
-  it("gives back a parameter counter", () => {
-    expect(assign(src("param"), "Size :=")).toBe(false);
+  it("keeps refusing a parameter counter (a caller usually passes 0 or more)", () => {
+    expect(assign(src("param"), "Size :=")).toBe(true);
+  });
+  it("keeps refusing a parameter counter under until N = Size", () => {
+    const s = src("param").replace("until N < Size", "until N = Size");
+    expect(assign(s, "Size :=")).toBe(true);
   });
   it("gives back a global counter", () => {
     expect(assign(src("global"), "Size :=")).toBe(false);

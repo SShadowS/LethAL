@@ -1017,7 +1017,7 @@ export function openItemHangRefuses(
     r896InvisibleProgress(node, ctx) ||
     r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx) ||
-    assignmentCallHangs(node, ctx) ||
+    assignmentCallHangs(node, ctx, op) ||
     toggledExitBlankHangs(node, ctx, op) ||
     removedBoundHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
@@ -1028,8 +1028,13 @@ export function openItemHangRefuses(
 }
 
 /** PR-50 H (R1052): a progress call in the right side of an assignment is that statement's call. */
-function assignmentCallHangs(node: ALSyntaxNode, ctx: SemanticContext): boolean {
-  if (node.kind !== ALNodeKind.assignment_statement) return false;
+function assignmentCallHangs(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  if (op !== "lethal.remove-assignment" || node.kind !== ALNodeKind.assignment_statement)
+    return false;
   const right = node.childForFieldName("right");
   if (right === null) return false;
   const obj = objectOf(node);
@@ -1331,7 +1336,7 @@ function r1050Progress(obj: ALSyntaxNode, ctx: SemanticContext): Set<number> {
           const rv = q.childForFieldName("return_value");
           if (rv !== null) qNames.add(normalizeAlName(rv.text));
         }
-        // PR-50 L (R1063): a local of Q copied from or into a live name is that name
+        // PR-50 L (R1063): a local of Q copied back into a live name is that name
         // (`Next := Pos; Skip(T, Next); Pos := Next`), to a fixpoint
         for (let grew = true; grew; ) {
           grew = false;
@@ -1341,9 +1346,15 @@ function r1050Progress(obj: ALSyntaxNode, ctx: SemanticContext): Set<number> {
             const r = a.childForFieldName("right");
             const rn = r !== null && isIdentifierLike(r) ? baseNameOf(r) : null;
             if (l === null || rn === null) return;
-            const [from, to] = qNames.has(rn) ? [rn, l] : qNames.has(l) ? [l, rn] : ["", ""];
-            if (from !== "" && !qNames.has(to)) {
-              qNames.add(to);
+            // copied BACK into a live name (`Pos := Next`); the copy is a local of Q, the live
+            // name a local or a parameter of Q
+            if (
+              qNames.has(l) &&
+              !qNames.has(rn) &&
+              r531Declares(q, rn, false) &&
+              r531Declares(q, l, true)
+            ) {
+              qNames.add(rn);
               grew = true;
             }
           });
@@ -1396,7 +1407,8 @@ function emptiedRefusedBlockHangs(node: ALSyntaxNode, ctx: SemanticContext): boo
             const { read, steps } = exitEffect(l, ctx);
             return read.has(k) && !steps.has(k);
           })) ||
-        assignmentCallHangs(n, ctx);
+        // emptying the block removes the assignment as `remove-assignment` would
+        assignmentCallHangs(n, ctx, "lethal.remove-assignment");
     } else if (n.kind === ALNodeKind.procedure_call && isStatementSlot(n)) {
       hangs = callIsProgress(n, ctx);
     }
@@ -1638,25 +1650,6 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
     });
     return found;
   };
-  // PR-50 W (R1063): an earlier non-default write of X in this block that nothing overwrites
-  // before the assignment: removing it leaves that value, not the default
-  for (let i = at - 1; i >= 0; i--) {
-    const s = sibs[i];
-    if (s === undefined || !canWrite(s)) continue;
-    const sl = s.childForFieldName("left");
-    const sr = s.childForFieldName("right");
-    if (s.rawKind === "assignment_statement" && sl !== null && sr !== null) {
-      const lit = literalValue(sr);
-      const plain = s.text
-        .slice(sl.endIndex - s.startIndex)
-        .trim()
-        .startsWith(":=");
-      if (plain && isIdentifierLike(sl) && normalizeAlName(sl.text) === x) {
-        if (lit !== undefined && lit !== dflt) return false;
-      }
-    }
-    break;
-  }
   const candidates: ALSyntaxNode[] = [];
   for (const s of sibs.slice(at + 1)) {
     const writes = canWrite(s);
@@ -1691,14 +1684,20 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
     }
   }
   // 1: the exit at X's default keeps a loop running
-  const check = (loop: ALSyntaxNode): boolean => {
+  // `xv` is the value X holds; `ends` asks whether the loop surely ends at it (else: stays running)
+  const check = (
+    loop: ALSyntaxNode,
+    xv: number | boolean | string = dflt,
+    ends = false,
+  ): boolean => {
     const cond = conditionOf(loop);
     if (cond === null) return false;
     const isX = (n: ALSyntaxNode): boolean =>
       isIdentifierLike(n) && xs.has(normalizeAlName(n.text));
-    // PR-50 S (R1063): a parameter or a global counter may start below 0
+    // PR-50 S (R1063): a global counter may start below 0; a local or a parameter (a caller usually
+    // passes 0 or more) stays a counter
     const counter = (y: string): boolean =>
-      isUpCounter(y, loop, proc, ctx) && r531Declares(proc, y, false);
+      isUpCounter(y, loop, proc, ctx) && r531Declares(proc, y, true);
     // PR-50 E (R1063): for `until Y = X` at X = 0, Y must be stepped for sure before the test:
     // the last write to Y is a climb at the top level of the body, and no `continue` skips it
     const climbsFirst = (y: string): boolean => {
@@ -1744,7 +1743,7 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
           return a === true || b === true ? true : a === false && b === false ? false : undefined;
         return undefined;
       }
-      if (isX(e)) return t === "boolean" ? false : undefined;
+      if (isX(e)) return typeof xv === "boolean" ? xv : undefined;
       if (e.rawKind !== "comparison_expression") return undefined;
       const l = e.childForFieldName("left");
       const r = e.childForFieldName("right");
@@ -1755,8 +1754,8 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
       const other = xLeft ? r : l;
       const lit = literalValue(other);
       if (lit !== undefined) {
-        if (typeof lit !== typeof dflt) return undefined;
-        const [a, b] = xLeft ? [dflt, lit] : [lit, dflt];
+        if (typeof lit !== typeof xv) return undefined;
+        const [a, b] = xLeft ? [xv, lit] : [lit, xv];
         const ops: Record<string, boolean> = {
           "=": a === b,
           "<>": a !== b,
@@ -1768,26 +1767,52 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
         return ops[cop];
       }
       // strict bound over a counter: `Y < X` or `X > Y`, X at 0
-      if (dflt === 0 && ((cop === "<" && !xLeft) || (cop === ">" && xLeft))) {
+      if (xv === 0 && ((cop === "<" && !xLeft) || (cop === ">" && xLeft))) {
         const y = baseNameOf(other);
         if (y !== null && isIdentifierLike(other) && counter(y)) return false;
       }
       // PR-50 E: `until Y = X`, Y climbing from >= 0 and stepped before every test
-      if (dflt === 0 && cop === "=" && loop.rawKind === "repeat_statement") {
+      if (xv === 0 && cop === "=" && loop.rawKind === "repeat_statement") {
         const y = baseNameOf(other);
         if (y !== null && isIdentifierLike(other) && counter(y) && climbsFirst(y)) return false;
       }
       // the same bound read the other way, true at X = 0: `Y >= X` / `X <= Y` (a `while` form)
-      if (dflt === 0 && ((cop === ">=" && !xLeft) || (cop === "<=" && xLeft))) {
+      if (xv === 0 && ((cop === ">=" && !xLeft) || (cop === "<=" && xLeft))) {
         const y = baseNameOf(other);
         if (y !== null && isIdentifierLike(other) && counter(y)) return true;
       }
       return undefined;
     };
     const v = evalAt(cond);
-    return loop.rawKind === "repeat_statement" ? v === false : v === true;
+    const repeat = loop.rawKind === "repeat_statement";
+    return ends ? (repeat ? v === true : v === false) : repeat ? v === false : v === true;
   };
-  return candidates.some(check);
+  if (!candidates.some((l) => check(l))) return false;
+  // PR-50 W (R1063): an earlier literal in this block that nothing overwrites is what stays when
+  // the assignment goes. Given back only if every candidate loop surely ends at that value.
+  for (let i = at - 1; i >= 0; i--) {
+    const s = sibs[i];
+    if (s === undefined || !canWrite(s)) continue;
+    const sl = s.childForFieldName("left");
+    const sr = s.childForFieldName("right");
+    if (
+      s.rawKind === "assignment_statement" &&
+      sl !== null &&
+      sr !== null &&
+      isIdentifierLike(sl) &&
+      normalizeAlName(sl.text) === x &&
+      s.text
+        .slice(sl.endIndex - s.startIndex)
+        .trim()
+        .startsWith(":=")
+    ) {
+      const lit = literalValue(sr);
+      if (lit !== undefined && lit !== dflt && candidates.every((l) => check(l, lit, true)))
+        return false;
+    }
+    break;
+  }
+  return true;
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */
