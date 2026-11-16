@@ -2251,13 +2251,24 @@ export class ResultsStore {
     };
   }
 
-  /** PR-47: the instrumented-tree hash a run stored for one batch's baseline snapshot, or null
-   *  when it stored none. Only the warning for a resume whose tree changed reads it. */
-  snapshotBatchHash(runId: number, batchIndex: number): string | null {
+  /** PR-47/PR-66: the latest baseline snapshot of one batch index at or before `runId` (the
+   *  snapshot that run ran on, or reused), with its run and tree hash; null when none. It skips
+   *  what `findBaselineSnapshot` skips (suspect snapshots, lost batches). Only the warning for a
+   *  resume whose tree changed reads it. */
+  snapshotBatchHash(
+    runId: number,
+    batchIndex: number,
+  ): { batchHash: string; runId: number } | null {
     const row = this.db
-      .query("SELECT batch_hash FROM baseline_snapshots WHERE run_id = ? AND batch_index = ?")
-      .get(runId, batchIndex) as { batch_hash: string } | null;
-    return row === null ? null : row.batch_hash;
+      .query(
+        `SELECT batch_hash, run_id FROM baseline_snapshots
+         WHERE run_id <= ?1 AND batch_index = ?2
+           AND NOT EXISTS (SELECT 1 FROM suspect_snapshots s WHERE s.run_id = baseline_snapshots.run_id AND s.batch_index = baseline_snapshots.batch_index)
+           AND NOT EXISTS (SELECT 1 FROM lost_batches l WHERE l.run_id = baseline_snapshots.run_id AND l.batch_index = baseline_snapshots.batch_index)
+         ORDER BY run_id DESC, id DESC LIMIT 1`,
+      )
+      .get(runId, batchIndex) as { batch_hash: string; run_id: number } | null;
+    return row === null ? null : { batchHash: row.batch_hash, runId: row.run_id };
   }
 
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone
