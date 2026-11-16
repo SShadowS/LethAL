@@ -883,6 +883,36 @@
       "tests": {
         "Codeunit77801.InsertWithContentBlobReadsBack": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8195-text-collation",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8195",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16, LethAL's web-service path, en-US, the default database collation; /coord/handoff/PR-83/joined.tsv): SetRange(Name, 'A', 'B') includes 'Ærø' and SetCurrentKey(Name) sorts 'Ærø' before 'Alpha' (as 'AErø'), so both tests pass",
+      "rerun": ["PR-83's record-filters cells 51011 and 51112", "corpus tests that filter or sort on text holding Æ (Danish data)"],
+      "tests": {
+        "Codeunit58301.AeIsInsideAToB": { "status": "pass" },
+        "Codeunit58301.AeSortsBeforeAlpha": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8196-at-filter-accents",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8196",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16; /coord/handoff/PR-83/joined.tsv): SetFilter(Name, '@emile') finds 'Émile', so the test passes",
+      "rerun": ["PR-83's record-filters cell 51061"],
+      "tests": {
+        "Codeunit58311.AtIgnoresAccents": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8197-filter-refusals",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8197",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-83's record-filters BC check, 2026-11-16, en-US region; /coord/handoff/PR-83/joined.tsv): SetFilter of a non-member Option value raises 'The filter \"Delta\" is not valid ... The existing options are: Alpha,Beta,Gamma'; under GlobalLanguage 1030 'Ja' filters to true and 'Yes' raises (Danish text); a Danish date text '15.03.2024' raises under the en-US region; so all three tests pass",
+      "rerun": ["PR-83's record-filters cells 51095, 51100, 51262-51264, 51266-51268"],
+      "tests": {
+        "Codeunit58321.OptionNotAMember": { "status": "pass" },
+        "Codeunit58321.DanishBooleanWords": { "status": "pass" },
+        "Codeunit58321.DanishDateTextUnderEnUsRegion": { "status": "pass" }
+      }
     }
   ]
 }

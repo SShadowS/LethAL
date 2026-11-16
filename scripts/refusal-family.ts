@@ -3401,14 +3401,17 @@ export interface JoinRow {
 const say = (outcome: string, message: string | undefined) =>
   outcome === "pass" ? "pass" : `${outcome}: ${JSON.stringify(message ?? "")}`;
 
-/** The report's cells must be the family's cells, in order. */
-export function checkReportCells(results: readonly CellResult[]): void {
-  if (results.length !== FORMAT_EVALUATE.cells.length)
+/** The report's cells must be the family's cells, in order (PR-83: any family; format-evaluate by default, as PR-52 used it). */
+export function checkReportCells(
+  results: readonly CellResult[],
+  family: Family = FORMAT_EVALUATE,
+): void {
+  if (results.length !== family.cells.length)
     throw new Error(
-      `the report has ${results.length} cells, the family ${FORMAT_EVALUATE.cells.length}`,
+      `the report has ${results.length} cells, the family ${family.name} ${family.cells.length}`,
     );
   for (const [i, r] of results.entries()) {
-    const c = FORMAT_EVALUATE.cells[i];
+    const c = family.cells[i];
     if (c?.type !== r.cell.type || c.method !== r.cell.method || c.state !== r.cell.state)
       throw new Error(`cell ${i} of the report is not the family's cell ${i}`);
   }
@@ -3504,14 +3507,18 @@ if (import.meta.main) {
   };
   const joinAt = args.indexOf("--join");
   if (joinAt >= 0) {
-    // PR-52: bun scripts/refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]
+    // PR-52: bun scripts/refusal-family.ts --join <v3 report.json> <bc.tsv> [--family <name>] [--out <joined.tsv>]
     const [reportPath, bcPath] = [args[joinAt + 1], args[joinAt + 2]];
     if (reportPath === undefined || bcPath === undefined)
       throw new Error(
-        "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--out <joined.tsv>]",
+        "usage: refusal-family.ts --join <v3 report.json> <bc.tsv> [--family <name>] [--out <joined.tsv>]",
       );
+    const named = opt("--family");
+    const family = named === undefined ? FORMAT_EVALUATE : FAMILIES[named];
+    if (family === undefined)
+      throw new Error(`refusal-family: --family ${named} is not a listed family`);
     const results = JSON.parse(await Bun.file(reportPath).text()) as CellResult[];
-    checkReportCells(results);
+    checkReportCells(results, family);
     const rows = joinCells(results, parseBcTsv(await Bun.file(bcPath).text()));
     const out = opt("--out");
     if (out !== undefined) writeFileSync(out, joinTsv(rows));
