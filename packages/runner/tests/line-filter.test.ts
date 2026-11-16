@@ -12,10 +12,22 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { parseCliConfig, resolveLineRanges } from "../src/cli";
+import {
+  NO_MUTABLE_LINES_EXIT_CODE,
+  exitCodeForError,
+  parseCliConfig,
+  refusalLine,
+  resolveLineRanges,
+} from "../src/cli";
+import { cliError } from "../src/cli-envelope";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { parseLineArg, parseUnifiedDiffAdded, spanTouches } from "../src/line-filter";
-import { generateMutationSet, operatorTiers, runSession } from "../src/orchestrator";
+import {
+  NoMutableLinesError,
+  generateMutationSet,
+  operatorTiers,
+  runSession,
+} from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
@@ -236,6 +248,30 @@ describe("generateMutationSet with a line filter", () => {
         generateMutationSet(projectDir, { lines: [{ file: FILE, start: 1, end: 2 }] }),
       ).rejects.toThrow(/kept no deployable mutation site/);
     });
+  });
+
+  // R1079: the refusal is typed, and the CLI maps exactly that class to exit 8.
+  test("the refusal is a NoMutableLinesError and exits 8; any other error exits 1", async () => {
+    await withProject(async (projectDir) => {
+      const err = await generateMutationSet(projectDir, {
+        lines: [{ file: FILE, start: 1, end: 2 }],
+      }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(NoMutableLinesError);
+      expect(exitCodeForError(err)).toBe(NO_MUTABLE_LINES_EXIT_CODE);
+      // the --json envelope names it, and the stderr line is the plain one
+      expect(cliError(err)).toMatchObject({
+        error: { code: "NO_MUTABLE_LINES", category: "validation", details: { name: "Error" } },
+      });
+      expect(refusalLine(err as Error)).toBe(refusalLine(new Error((err as Error).message)));
+    });
+    expect(NO_MUTABLE_LINES_EXIT_CODE).toBe(8);
+    expect(
+      exitCodeForError(new Error("the line filter ... kept no deployable mutation site")),
+    ).toBe(1);
+    expect(exitCodeForError("boom")).toBe(1);
   });
 });
 

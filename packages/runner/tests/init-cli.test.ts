@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import { helpText, initFromCli, parseCliConfig } from "../src/cli";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -29,7 +30,11 @@ const APP = (idRanges: unknown): Record<string, unknown> => ({
 
 async function runInit(
   dir: string,
-  extra: { outPath?: string; force?: boolean } = {},
+  extra: {
+    outPath?: string;
+    force?: boolean;
+    backendKind?: "bcdev" | "al-runner-v3";
+  } = {},
 ): Promise<{ code: number; out: string }> {
   const lines: string[] = [];
   const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
@@ -132,5 +137,121 @@ describe("lethal init", () => {
     const text = helpText("0.0.0");
     expect(text).toContain("lethal init");
     expect(text).toContain("--force");
+    expect(text).toContain("[--backend <bcdev|al-runner-v3>]");
+  });
+});
+
+describe("lethal init --backend (PR-71)", () => {
+  const RANGE = APP([{ from: 60000, to: 60099 }]);
+  const writtenOf = async (dir: string) =>
+    JSON.parse(await readFile(join(dir, "lethal.config.json"), "utf8")) as {
+      alRunnerV3?: Record<string, unknown>;
+      bcdev?: unknown;
+      selectorIds: unknown;
+    };
+
+  test("bcdev output is byte-identical to the pre-flag output, with or without --backend bcdev", async () => {
+    const dir = await project(RANGE);
+    const expected = `${JSON.stringify(
+      {
+        bcdev: {
+          mcpCommand: ["bun", "x", "bc-dev-mcp"],
+          server: "http://YourContainer",
+          serverInstance: "BC",
+          company: "CRONUS",
+          username: "admin",
+          password: "pw",
+          packageCachePath: join(dir, ".alpackages"),
+          controlSymbolPath: "C:/path/to/LethAL/extensions/lethal-control/lethal-control.app",
+          env: { BC_DEV_USER: "admin", BC_DEV_PASSWORD: "pw" },
+        },
+        selectorIds: { selectorId: 60099, controlId: 60098, tableId: 60097 },
+      },
+      null,
+      2,
+    )}\n`;
+    await runInit(dir);
+    expect(await readFile(join(dir, "lethal.config.json"), "utf8")).toBe(expected);
+    await runInit(dir, { force: true, backendKind: "bcdev" });
+    expect(await readFile(join(dir, "lethal.config.json"), "utf8")).toBe(expected);
+  });
+
+  test("al-runner-v3 writes an alRunnerV3 section and the same picked ids, no bcdev", async () => {
+    const dir = await project(RANGE);
+    const { out } = await runInit(dir, { backendKind: "al-runner-v3" });
+    const w = await writtenOf(dir);
+    expect(w.bcdev).toBeUndefined();
+    expect(w.selectorIds).toEqual({ selectorId: 60099, controlId: 60098, tableId: 60097 });
+    expect(w.alRunnerV3?.packagesDir).toBe(join(dir, ".alpackages"));
+    expect(w.alRunnerV3).not.toHaveProperty("path");
+    expect(out).toContain("alRunnerV3.bcVersion");
+    expect(out).toContain("lethal doctor --config");
+    expect(out).toContain("must hold the BC symbols");
+    expect(out).toContain("fetch-ms-symbols");
+    expect(out).toContain("alc (the AL compiler)");
+    expect(out).toContain("fetch-alc");
+    expect(out).toContain("Fill in both placeholders");
+  });
+
+  test("an unusable launch.json is named in the next steps, not called 'no environmentType'", async () => {
+    const dir = await project(RANGE);
+    await mkdir(join(dir, ".vscode"));
+    await writeFile(join(dir, ".vscode", "launch.json"), "{ not json", "utf8");
+    const { out } = await runInit(dir, { backendKind: "al-runner-v3" });
+    expect(out).toContain("could not be parsed");
+    expect(out).not.toContain("names no environmentType");
+    expect((await writtenOf(dir)).alRunnerV3?.environment).toBe("<onprem or saas>");
+  });
+
+  test("the bcVersion placeholder is refused by name, and a real build passes", async () => {
+    const dir = await project(RANGE);
+    await runInit(dir, { backendKind: "al-runner-v3" });
+    const section = (await writtenOf(dir)).alRunnerV3;
+    expect(() => validateAlRunnerV3Config({ ...section, environment: "onprem" })).toThrow(
+      /alRunnerV3\.bcVersion/,
+    );
+    expect(() =>
+      validateAlRunnerV3Config({ ...section, bcVersion: "28.4.1.2", environment: "onprem" }),
+    ).not.toThrow();
+  });
+
+  test("environment is omitted when launch.json gives it, else a placeholder the validator refuses", async () => {
+    const withLaunch = await project(RANGE);
+    await mkdir(join(withLaunch, ".vscode"));
+    await writeFile(
+      join(withLaunch, ".vscode", "launch.json"),
+      '{ "configurations": [ { "environmentType": "Sandbox" } ] }',
+      "utf8",
+    );
+    const { out } = await runInit(withLaunch, { backendKind: "al-runner-v3" });
+    expect((await writtenOf(withLaunch)).alRunnerV3).not.toHaveProperty("environment");
+    expect(out).toContain("launch.json gives environmentType");
+
+    const without = await project(RANGE);
+    await runInit(without, { backendKind: "al-runner-v3" });
+    const section = (await writtenOf(without)).alRunnerV3;
+    expect(section?.environment).toBe("<onprem or saas>");
+    expect(() => validateAlRunnerV3Config({ ...section, bcVersion: "28.4.1.2" })).toThrow(
+      /alRunnerV3\.environment/,
+    );
+  });
+
+  test("an unknown backend is refused by name; the flag parses and the config round-trips", () => {
+    expect(() => parseCliConfig(["init", "--project", "p", "--backend", "al-runner"])).toThrow(
+      /--backend/,
+    );
+    expect(() => parseCliConfig(["init", "--project", "p", "--backend", "nope"])).toThrow(
+      'unknown --backend "nope"',
+    );
+    expect(parseCliConfig(["init", "--project", "p", "--backend", "al-runner-v3"])).toEqual({
+      mode: "init",
+      projectDir: "p",
+      backendKind: "al-runner-v3",
+    });
+    expect(parseCliConfig(["init", "--project", "p", "--backend", "bcdev"])).toEqual({
+      mode: "init",
+      projectDir: "p",
+      backendKind: "bcdev",
+    });
   });
 });

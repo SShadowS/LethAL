@@ -15,8 +15,8 @@ import { type MutantOutcome, type SessionReport, mutantRef } from "./report";
  * killed=pass and survived=failure, but the semantics fight it: a survivor is a FINDING, not a
  * broken build; the tab adds flakiness tracking, ownership and duration history that mean nothing
  * for a mutant; and mutation scores move for honest reasons, so it would redden builds when the code
- * improved. `PublishMutationReport@1` adds a report TAB instead and renders whatever HTML it is
- * given, and `mutation-testing-elements` renders that HTML from this JSON. The same file feeds the
+ * improved. `PublishMutationReport@2` adds a report TAB instead and publishes an HTML report (how
+ * it renders one is not measured), and `mutation-testing-elements` renders that HTML from this JSON. The same file feeds the
  * Stryker dashboard and the GitLab/GitHub renderers, so one projection buys every ecosystem.
  *
  * **THE PROJECTION IS LOSSY, and that is the whole design problem.** The schema carries one `status`
@@ -196,6 +196,36 @@ export function lossesFor(report: SessionReport): string[] {
       "LethAL's does not.",
   );
   return losses;
+}
+
+/** R1080: the Stryker elements bundle the HTML page loads. Pinned, and checked by `integrity`. */
+export const ELEMENTS_BUNDLE_URL =
+  "https://cdn.jsdelivr.net/npm/mutation-testing-elements@3.9.0/dist/mutation-test-elements.js";
+export const ELEMENTS_BUNDLE_INTEGRITY =
+  "sha384-/dXYuoYRvO6rJ0FNtdKR+Hmq5iGrkkSDpc/TGgbSoReog26ZqhLhpSt4l+0Wwew2";
+
+/**
+ * R1080: one HTML page that shows `report` with the Stryker `<mutation-test-report-app>` element.
+ * LethAL ships no bundle: the viewer's browser fetches it from jsDelivr (pinned, integrity-checked),
+ * so opening the page needs network access. The JSON is inlined in a script, so every `<` is
+ * written as `<` (a source containing `</script>` cannot close the tag), and so are U+2028 and
+ * U+2029 (line terminators that older script parsers reject inside a string).
+ */
+export function toMutationElementsHtml(report: ElementsReport): string {
+  const json = JSON.stringify(report)
+    .replace(/</g, "\\u003c")
+    .replace(new RegExp(String.fromCharCode(0x2028), "g"), "\\u2028")
+    .replace(new RegExp(String.fromCharCode(0x2029), "g"), "\\u2029");
+  return [
+    "<!doctype html>",
+    '<html lang="en"><head><meta charset="utf-8"><title>LethAL mutation report</title>',
+    `<script src="${ELEMENTS_BUNDLE_URL}" integrity="${ELEMENTS_BUNDLE_INTEGRITY}" crossorigin="anonymous"></script>`,
+    "</head><body>",
+    '<mutation-test-report-app title-postfix="LethAL"></mutation-test-report-app>',
+    `<script>document.querySelector("mutation-test-report-app").report = ${json};</script>`,
+    "</body></html>",
+    "",
+  ].join("\n");
 }
 
 /** Project a report. Throws on an unmappable verdict rather than defaulting it. */

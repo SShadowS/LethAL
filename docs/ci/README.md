@@ -17,20 +17,23 @@ pipeline.
    | Code | Meaning | The templates |
    |---|---|---|
    | `0` | The run completed. It says nothing about survivors. | pass |
-   | `1` | Error (the message is on stderr), including "the line filter kept no deployable mutation site" (R1079). | fail |
+   | `1` | Error (the message is on stderr). | fail |
    | `3` | Quarantined: the run refused to vouch for its verdicts. | fail |
    | `4` | Nothing scored: every mutant errored. | fail |
    | `7` | Time budget or a signal: the report is partial (`--resume` continues it). | fail |
+   | `8` | No mutable lines: the line filter kept no mutation site (a pull request with no `.al` change, a comment-only edit). Nothing ran and no report is written. `--dry-run` exits 8 too. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit 1, not 8. With `--operator` or `--exclude-operator`, an earlier check can exit 1 first, so a pull request with no site fails there. | pass |
 
    LethAL does not fail a run because mutants survived. There is no score threshold: see
    [`threshold-options.md`](threshold-options.md).
-4. **Export for display.** `lethal export <report> --format mutation-elements` writes the Stryker interchange JSON, which the
-   templates keep as an artifact. LethAL does not write the HTML page that Azure DevOps' PublishMutationReport task shows,
-   and `npx mutation-testing-elements` is not a command (R1080).
+4. **Export for display.** Two formats:
+   - `lethal export <report> --format mutation-elements` writes the Stryker interchange JSON.
+   - `--format mutation-elements-html` writes one HTML page that holds that JSON and loads the Stryker elements bundle from
+     jsDelivr (pinned version, integrity-checked). Opening it needs network access; LethAL writes no bundle.
+
+   The GitHub template uploads both as an artifact. The Azure template shows the HTML with `PublishMutationReport@2` (only when the export step wrote the page, so exit 8 does not fail it). Whether
+   Azure DevOps' report tab loads a script from a CDN is not measured; check it in your organisation.
 
 ## Before you copy them
-- **Pull requests that change no mutable line fail** with exit 1 (R1079). A path filter on `*.al` avoids most; a comment-only
-  `.al` edit still fails.
 - **Every artifact carries your AL source:** the report's mutant texts and the export's embedded files. Keep them inside your
   organisation.
 - **A self-hosted runner executes the pull request's code.** Never combine one with fork pull requests on a public

@@ -7,8 +7,8 @@
  * tab (`PublishTestResults@2`) takes JUnit/NUnit/VSTest/xUnit, and a mutant CAN be forced into a
  * `<testcase>` with killed=pass and survived=failure, but the semantics fight it: a survivor is a
  * FINDING, not a broken build, and the Tests tab adds flakiness tracking, ownership and duration
- * history that mean nothing for a mutant. The Stryker team's `PublishMutationReport@1` extension
- * adds a report TAB instead, and it is framework-agnostic: it renders whatever HTML you point it at,
+ * history that mean nothing for a mutant. The Stryker team's `PublishMutationReport@2` extension
+ * adds a report TAB instead and publishes an HTML report (how it renders one is not measured),
  * and `mutation-testing-elements` renders that HTML from this JSON. Same file also feeds the Stryker
  * dashboard and the GitLab/GitHub renderers.
  *
@@ -34,8 +34,9 @@
  * SUPERSEDED as a converter by `lethal export --format mutation-elements`, which is the shipped
  * surface and shares one implementation in `packages/runner/src/mutation-elements.ts`. This script
  * survives for the one thing the CLI deliberately does NOT do: writing a SELF-CONTAINED HTML file
- * with the `mutation-testing-elements` renderer inlined. The CLI cannot, because it ships as a
- * signed standalone binary and that would mean embedding 238 KB of third-party JavaScript into it.
+ * with the `mutation-testing-elements` renderer inlined (no network needed to open it). The CLI's
+ * `--format mutation-elements-html` instead LOADS the bundle from jsDelivr, because it ships as a
+ * signed standalone binary and embedding 238 KB of third-party JavaScript is not its call.
  * Here node_modules exists, so it is a local convenience rather than a distribution decision.
  */
 import { readFile, writeFile } from "node:fs/promises";

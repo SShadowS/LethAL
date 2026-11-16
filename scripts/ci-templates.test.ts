@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCliConfig } from "../packages/runner/src/cli";
 
 // PR-70: the CI templates under docs/ci are examples, but every `lethal` command in them must parse with the CLI's own
 // argument table, so a renamed or removed flag fails here, not in a user's pipeline.
-const DIR = join(import.meta.dir, "../docs/ci");
+const DIR = process.env.LETHAL_CI_TEMPLATES_DIR ?? join(import.meta.dir, "../docs/ci");
 const TEMPLATES = ["github-actions.yml", "azure-pipelines.yml"];
 
 /**
@@ -34,6 +35,48 @@ function lethalCommands(text: string): string[][] {
   return out;
 }
 
+/** The block scalar (`run: |` or `- bash: |`) that holds the `lethal run` command, dedented. */
+function runBlock(text: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((l) => l.includes("lethal run --project"));
+  let head = at;
+  while (head >= 0 && !/\|\s*$/.test(lines[head] ?? "")) head--;
+  if (at < 0 || head < 0) throw new Error("no block holds the lethal run command");
+  const indent = (s: string) => s.length - s.trimStart().length;
+  const bodyIndent = indent(lines[head + 1] ?? "");
+  const body: string[] = [];
+  for (const l of lines.slice(head + 1)) {
+    if (l.trim() !== "" && indent(l) < bodyIndent) break;
+    body.push(l.slice(bodyIndent));
+  }
+  return body.join("\n");
+}
+
+/** Runs the template's run block with a stub `lethal` that exits `n`; returns the block's own exit code. */
+function exitOfRunBlock(block: string, n: number): number {
+  const dir = mkdtempSync(join(tmpdir(), "lethal-ci-stub-"));
+  try {
+    const stub = join(dir, "lethal");
+    writeFileSync(stub, '#!/bin/sh\nexit "$LETHAL_STUB_EXIT"\n');
+    chmodSync(stub, 0o755);
+    const r = Bun.spawnSync(["bash", "-c", block], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH ?? ""}`,
+        LETHAL_STUB_EXIT: String(n),
+        TARGET: "main", // Azure
+        BASE: "main", // GitHub
+      },
+    });
+    return r.exitCode;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** The labels of the `case "$rc"` block's branches, e.g. ["0", "3", "4", "7", "*"]. */
 function caseLabels(text: string): string[] {
   const start = text.indexOf('case "$rc" in');
@@ -47,8 +90,10 @@ describe("PR-70: the CI templates' lethal commands", () => {
     const text = readFileSync(join(DIR, t), "utf8");
     const cmds = lethalCommands(text);
 
-    test(`${t}: holds one run and one export`, () => {
-      expect(cmds.map((c) => c[0])).toEqual(["run", "export"]);
+    test(`${t}: holds one run and two exports (the JSON and the HTML page)`, () => {
+      expect(cmds.map((c) => c[0])).toEqual(["run", "export", "export"]);
+      const formats = cmds.slice(1).map((c) => c[c.indexOf("--format") + 1]);
+      expect(formats).toEqual(["mutation-elements", "mutation-elements-html"]);
     });
 
     test(`${t}: every lethal command parses with the CLI's own table`, () => {
@@ -62,17 +107,31 @@ describe("PR-70: the CI templates' lethal commands", () => {
     });
 
     test(`${t}: the run is scoped to the changed lines and the export reads its report and project`, () => {
-      const [run, exp] = cmds;
-      if (run === undefined || exp === undefined) throw new Error("no run or export");
+      const [run, ...exports] = cmds;
+      if (run === undefined || exports.length === 0) throw new Error("no run or export");
       const arg = (argv: string[], flag: string) => argv[argv.indexOf(flag) + 1];
       expect(arg(run, "--changed-since")).toStartWith("origin/");
-      expect(exp[1]).toBe(arg(run, "--out"));
-      expect(arg(exp, "--project")).toBe(arg(run, "--project"));
-      expect(exp).toContain("mutation-elements");
+      for (const exp of exports) {
+        expect(exp[1]).toBe(arg(run, "--out"));
+        expect(arg(exp, "--project")).toBe(arg(run, "--project"));
+        expect(arg(exp, "--format")).toStartWith("mutation-elements");
+      }
     });
 
-    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, else) and fails on anything but 0`, () => {
-      expect(caseLabels(text)).toEqual(["0", "3", "4", "7", "*"]);
+    // The stub needs `sh` and an executable named `lethal`: not on Windows.
+    test.skipIf(process.platform === "win32")(
+      `${t}: the run block passes for exit 0 and 8 only (stub lethal, exits 0..9)`,
+      () => {
+        const block = runBlock(text);
+        for (let n = 0; n <= 9; n++) {
+          expect(exitOfRunBlock(block, n) === 0, `lethal exit ${n}`).toBe(n === 0 || n === 8);
+        }
+      },
+    );
+
+    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, 8, else); only 0 and 8 pass`, () => {
+      expect(caseLabels(text)).toEqual(["0", "8", "3", "4", "7", "*"]);
+      expect(text).toMatch(/8\) echo "[^"]*"; rc=0 ;;/);
       expect(text).toContain('exit "$rc"');
       expect(text.indexOf("set +e")).toBeGreaterThan(-1);
       expect(text.indexOf("set +e")).toBeLessThan(text.indexOf("lethal run --project"));

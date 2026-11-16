@@ -443,12 +443,22 @@ export interface Target {
   readonly outDir: string;
 }
 
+/**
+ * The raw log's file name for one class: `serve.<source>.<index>-<class text cut to 60>.log`. The
+ * index keeps two classes that share their first 60 characters from overwriting each other's log
+ * (PR-74 lost two raw logs that way).
+ */
+export function classLogName(source: string, index: number, cls: string): string {
+  return `serve.${source}.${index}-${cls.replace(/[^\w]+/g, "_").slice(0, 60)}.log`;
+}
+
 /** Drives one class: 1 kept daemon (control, then per refuser 3 rounds + 1 two-entry request), then 3 fresh daemons per refuser. */
 export async function measureClass(
   t: Target,
   cls: string,
   refusedCells: number,
   refusers: readonly Refuser[],
+  classIndex: number,
 ): Promise<ClassResult> {
   const log: string[] = [];
   const base = {
@@ -511,10 +521,7 @@ export async function measureClass(
     };
   } finally {
     for (const d of open) if (d.alive()) d.proc.kill();
-    writeFileSync(
-      join(t.outDir, `serve.${t.source}.${cls.replace(/[^\w]+/g, "_").slice(0, 60)}.log`),
-      `${log.join("\n")}\n`,
-    );
+    writeFileSync(join(t.outDir, classLogName(t.source, classIndex, cls)), `${log.join("\n")}\n`);
   }
   const j = judge({
     control,
@@ -582,7 +589,7 @@ async function censusFamily(f: Family, bin: string, out: string): Promise<ClassR
       label: `C${c.index}`,
       text: refusalText(c.result.message ?? ""),
     }));
-    done.push(await measureClass(t, cls, cells.length, pickRefusers(all)));
+    done.push(await measureClass(t, cls, cells.length, pickRefusers(all), done.length));
     console.log(`${f.name} | ${cls} | ${done[done.length - 1]?.verdict}`);
   }
   return done;
@@ -633,7 +640,7 @@ async function censusRepros(bin: string, out: string, only?: string): Promise<Cl
     };
     mkdirSync(t.pkgs, { recursive: true });
     for (const [cls, list] of groups) {
-      done.push(await measureClass(t, cls, list.length, pickRefusers(list)));
+      done.push(await measureClass(t, cls, list.length, pickRefusers(list), done.length));
       console.log(`${r.id} | ${cls} | ${done[done.length - 1]?.verdict}`);
     }
   }

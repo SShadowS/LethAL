@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 1043 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**40 of 1046 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -585,8 +585,9 @@ that ordering is the priority.
 - **R1061** · Removing a loop bound set before the loop can hang (DO M7544: a batch size left at 0 is never above the count), but a plain rule refuses non-hanging sites too; narrow it before building · [R1061.md](docs/roadmap/R1061.md) · done (4e7d2cb9)
 - **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
 - **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · open
-- **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · open
+- **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · done (fe099d4a)
 - **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
+- **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · open
 
 ## Backends and tooling
 
@@ -1088,6 +1089,8 @@ that ordering is the priority.
 - **R1076** · Format/Evaluate family under five more languages (PR-63): 480 of 539 cells equal; Nordic Boolean words (#8182), closing-date letters (#8178) and refused month/weekday names (#8183) · [R1076.md](docs/roadmap/R1076.md) · closed 2026-11-16 — measured; two al-runner differences filed (#8182, R586 row 22; #8178 extended, row 21)…
 - **R1077** · heavy-slot: warn when a declared --peak is far above what the same kind of command measured in heavy-peaks.tsv · [R1077.md](docs/roadmap/R1077.md) · done (03240cf2)
 - **R1078** · t9's refusal families kept on the serve daemon (PR-74): 10 census classes CLEAN, 7 new entries and 2 widened; the t9 drift was a false fire on a red test · [R1078.md](docs/roadmap/R1078.md) · done (6024238e)
+- **R1082** · PR-59's first scan acted on (PR-64): of 8 issues, #7832 fixed, #7780 fixed for its measured shape (the blob case open), #7827 not fixed; #8038, #8032, #7924, #7586 had planned work only, not a fix; #7854's system-table cells still refused; 4 regression entries added, 3 issues commented · [R1082.md](docs/roadmap/R1082.md) · closed 2026-11-16 — measured on edge-4ebfe7913 and commented upstream
+- **R1083** · upstream-fixed-scan classifies an issue by an older build-naming maintainer comment when a newer maintainer comment names no build (a plan, not a fix); the row should say so instead · [R1083.md](docs/roadmap/R1083.md) · open
 
 ---
 
