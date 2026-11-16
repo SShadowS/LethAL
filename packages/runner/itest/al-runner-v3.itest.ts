@@ -97,7 +97,6 @@ import {
   type V3LegOutcome,
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
-  V3_OBSERVE_PINS_ENV,
   V3_WARN_FACTS,
   type XdBaselineVerdict,
   cdoCheckoutRefusal,
@@ -111,6 +110,9 @@ import {
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
+  observePinsEnd,
+  observePinsRequested,
+  observePinsWithReceiptRefusal,
   observeWithReceiptRefusal,
   recordRefusal,
   v3GateBackendCfg,
@@ -187,6 +189,7 @@ import { prepareFixtureSymbols } from "./fixture-symbols";
 import { GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
+  WarningsObservedError,
   assertGateWarnings,
   checkGateWarnings,
   collectWarnings,
@@ -321,7 +324,7 @@ const servePins = (
   pins: Readonly<Record<string, number>>,
   failure: (key: string, got: unknown, pinned: number) => string,
 ): void => {
-  const j = judgeServePins(label, got, pins, process.env[V3_OBSERVE_PINS_ENV] === "1", failure);
+  const j = judgeServePins(label, got, pins, observePinsRequested(), failure);
   for (const l of j.lines) console.log(l);
   const [first] = j.failures;
   if (first !== undefined) throw new LegFailure(first);
@@ -2525,6 +2528,9 @@ async function main(): Promise<void> {
     process.env.LETHAL_V3_GATE_RECEIPT,
   );
   if (observeRefused !== undefined) throw new Error(observeRefused);
+  // PR-88: the pins switch is validated and refused beside a receipt before any leg runs.
+  const pinsRefused = observePinsWithReceiptRefusal();
+  if (pinsRefused !== undefined) throw new Error(pinsRefused);
   if (LEGS.includes("T")) preflightGateBaseline(TABLES_BASELINE_PATH, "al-runner-v3 itest leg T");
   // R654 S2: refused before any leg runs while a baseline is missing (R332).
   if (LEGS.includes("L1")) preflightGateBaseline(LAYOUT_BASELINE_PATH, "al-runner-v3 itest leg L1");
@@ -2790,9 +2796,10 @@ async function main(): Promise<void> {
   } finally {
     await rm(root, { recursive: true, force: true }).catch(() => {});
   }
-  const outcome = v3ReceiptOutcome(legs, observeRequested());
+  const observing = observeRequested() || observePinsRequested();
+  const outcome = v3ReceiptOutcome(legs, observing);
   console.log(
-    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observeRequested() ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
+    `al-runner-v3 itest: legs ${JSON.stringify(legs)}; ${observing ? `observe run, receipt outcome ${outcome}, not a pass` : `update-gate outcome ${outcome}`}`,
   );
   const nonce = process.env.LETHAL_V3_GATE_NONCE;
   const receipt = process.env.LETHAL_V3_GATE_RECEIPT;
@@ -2831,6 +2838,12 @@ async function main(): Promise<void> {
   // skip there fails); only a candidate's K may read `V3_K_CANDIDATE_SKIP` (`v3ItestFailures`).
   const bad = v3ItestFailures(legs, CANDIDATE, LEGS, K_ON_CANDIDATE);
   if (bad.length > 0) throw new Error(`al-runner-v3 itest: FAIL: ${bad.join(", ")}`);
+  // PR-88: an observe-pins run is never a pass: its closing line says so and the gate exits 3.
+  const pinsEnd = observePinsEnd();
+  if (pinsEnd !== undefined) {
+    console.log(pinsEnd.line);
+    throw new WarningsObservedError(pinsEnd.message);
+  }
   // R913: a PASS that skipped legs of the full set names them on the PASS line itself.
   console.log(
     gateEndLine(

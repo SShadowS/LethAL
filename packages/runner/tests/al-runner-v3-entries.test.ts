@@ -417,6 +417,8 @@ interface ServeScript {
   stderr?: (req: Req, n: number) => string | undefined;
   /** R987: real milliseconds a request waits, after `stderr`, before it answers. */
   delayMs?: (req: Req, n: number) => number;
+  /** PR-88: daemons whose server has no pid any more (as after a cut answer, R895). The test adds to it. */
+  pidGone?: Set<number>;
 }
 const goodEcho: Echo = (m) => ({
   method: "Echo",
@@ -447,7 +449,11 @@ function fakeServe(script: ServeScript = {}) {
     const handle: ServerProcessHandle = {
       stdout: out,
       stderr: err,
-      pid: 90_000 + daemon, // R952: what the recycle bound's RSS seam is asked about (never a real /proc read)
+      // R952: what the recycle bound's RSS seam is asked about (never a real /proc read)
+      // (PR-88: undefined once the test marks the daemon gone; the cast keeps exactOptionalPropertyTypes quiet.)
+      get pid(): number {
+        return (script.pidGone?.has(daemon) === true ? undefined : 90_000 + daemon) as number;
+      },
       kill: () => {
         kills.push(daemon);
         out.end();
@@ -615,15 +621,22 @@ interface FakeProbeOpts {
 }
 
 /** PR-88: the first read after a reset is the verification, the next one is after the answer. */
-function fakeProbe(o: FakeProbeOpts, rss: () => number, log?: string[]): PeakProbe {
+function fakeProbe(
+  o: FakeProbeOpts,
+  rss: () => number,
+  log?: string[],
+  pids?: number[],
+): PeakProbe {
   let reads = 0;
   return {
-    reset() {
+    reset(pid) {
+      pids?.push(pid);
       log?.push("reset");
       reads = 0;
       return o.resetOk ?? true;
     },
-    read() {
+    read(pid) {
+      pids?.push(pid);
       log?.push("read");
       reads += 1;
       if (reads === 1) return { hwm: rss() + (o.hwmAtReset ?? 0), rss: rss() };
@@ -3071,8 +3084,13 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       messages?: string[];
       /** PR-88: collects the order of the probe calls and the fake daemon's answers. */
       log?: string[];
+      /** PR-88: the pids the fake probe was called with. */
+      pids?: number[];
+      /** PR-88: the daemon has no pid once it answered its first counted request (as after a cut, R895). */
+      exits?: boolean;
     } = {},
   ) => {
+    const gone = new Set<number>();
     const floor = 0.5 * GiB;
     const mem = { level: floor };
     const sizes: number[] = [];
@@ -3096,6 +3114,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       suite: SUITE2,
       ...(o.rows !== undefined ? { oneShotRows: o.rows, pairBatch: true } : {}),
       serve: {
+        pidGone: gone,
         ...(o.rows !== undefined ? { rows: o.rows } : {}),
         ...(o.shrink === true
           ? {
@@ -3116,6 +3135,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
               answer: (q) => {
                 o.log?.push("answer");
                 if (counted(q)) {
+                  if (o.exits === true) gone.add(q.daemon);
                   sizes.push(q.ids.length);
                   mem.level =
                     o.stack === true ? mem.level + grown(q) - floor : Math.max(mem.level, grown(q));
@@ -3126,7 +3146,9 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       },
       seams: {
         requestRssReader: () => mem.level,
-        ...(o.probe !== undefined ? { peakProbe: fakeProbe(o.probe, () => mem.level, o.log) } : {}),
+        ...(o.probe !== undefined
+          ? { peakProbe: fakeProbe(o.probe, () => mem.level, o.log, o.pids) }
+          : {}),
       },
       notify: (code, message) => {
         notes.push(code);
@@ -3238,10 +3260,14 @@ describe("R987: entries per serve request follow the daemon growth measured per 
 
   describe("PR-88: the true peak of a request", () => {
     const heavy = new Map([[CU, 0.5 * GiB]]);
-    const run = (probe: FakeProbeOpts | undefined, extra: { cu2?: boolean } = {}) => {
+    const run = (
+      probe: FakeProbeOpts | undefined,
+      extra: { cu2?: boolean; exits?: boolean } = {},
+    ) => {
       const sized: V3RequestSized[] = [];
       const messages: string[] = [];
       const log: string[] = [];
+      const pids: number[] = [];
       const planned =
         extra.cu2 === true
           ? [...onCu(mids(1, 16)), ...onCu2(mids(17, 16)), ...onCu(mids(33, 30))]
@@ -3252,8 +3278,11 @@ describe("R987: entries per serve request follow the daemon growth measured per 
         sized,
         messages,
         log,
-      }).then((r) => ({ ...r, sized, messages, log }));
+        pids,
+        ...(extra.exits === true ? { exits: true } : {}),
+      }).then((r) => ({ ...r, sized, messages, log, pids }));
     };
+    const MiB = 2 ** 20;
 
     test("the high-water mark is reset right before each send, and read after the answer", async () => {
       const r = await run({});
@@ -3305,12 +3334,41 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       expect(r.notes.filter((c) => c === "al-runner-v3-peak-unverified").length).toBe(1);
     });
 
-    test("a daemon that exited before the read gives no reading", async () => {
+    test("a process that is gone when the answer's read comes keeps the sampled reading", async () => {
       const r = await run({ exited: true });
-      expect(r.sized).toEqual([]);
-      // No reading, so no cost: requests stay at the 16 unmeasured test entries.
-      expect(r.sizes).toEqual([32, 32, 32, 24]);
-      expect(r.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+      // Never a dropped reading (a cut answer, R895): the sampler's 8.5 GiB peak raises the cost as before.
+      const first = r.sized[0];
+      expect(first?.peakSource).toBe("sampled");
+      expect(first?.hwm).toBeUndefined();
+      expect(first?.g).toBe(8 * GiB);
+      expect(r.sizes[1]).toBe(16);
+      expect(r.notes).toContain("al-runner-v3-entries-cap-lowered");
+    });
+
+    test("a daemon whose server exited before the read is not read (a reused pid), the sampled reading stands", async () => {
+      const r = await run({ spike: 4 * GiB }, { exits: true });
+      const first = r.sized[0];
+      expect(first?.peakSource).toBe("sampled");
+      expect(first?.hwm).toBeUndefined();
+      expect(first?.g).toBe(8 * GiB);
+      // Reset and verification read only: no read after the answer (nor any probe call on the pid-less daemon).
+      expect(r.log.slice(0, 4)).toEqual(["answer", "reset", "read", "answer"]);
+      expect(r.log.slice(4).every((x) => x === "answer")).toBe(true);
+    });
+
+    test("the probe is called with the fake daemon's pid", async () => {
+      const r = await run({});
+      expect(r.pids.length).toBeGreaterThan(0);
+      expect([...new Set(r.pids)]).toEqual([90_000]);
+    });
+
+    test("the reset check is exact at 64 MiB: 64 MiB is verified, 64 MiB and one byte is not", async () => {
+      const at = await run({ hwmAtReset: 64 * MiB, spike: GiB });
+      expect(at.sized[0]?.peakSource).toBe("hwm");
+      expect(at.notes).not.toContain("al-runner-v3-peak-unverified");
+      const over = await run({ hwmAtReset: 64 * MiB + 1, spike: GiB });
+      expect(over.sized[0]?.peakSource).toBe("sampled");
+      expect(over.notes).toContain("al-runner-v3-peak-unverified");
     });
 
     test("one cap line per call, once per call, in the spec's wording", async () => {

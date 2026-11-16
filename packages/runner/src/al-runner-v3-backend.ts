@@ -183,6 +183,7 @@ import type {
   RunOpts,
   TestMethodRef,
   TestVerdict,
+  V3RequestSized,
 } from "./backend";
 import {
   type OtherFile,
@@ -1470,24 +1471,8 @@ export type V3KeptDrift = {
   readonly row: string;
 };
 
-/**
- * PR-88: what the request-sized sink gets (`ExecutionBackend.setRequestSizedSink`), per request that gave a
- * reading. Bytes throughout. `g` is the peak less the floor. `calls` lists each call with its test entries in
- * the request and its highest cost per entry after the reading.
- */
-export type V3RequestSized = {
-  readonly calls: readonly {
-    readonly call: number;
-    readonly entries: number;
-    readonly cost: number;
-  }[];
-  readonly floor: number;
-  readonly start: number;
-  readonly sampledPeak: number;
-  readonly hwm?: number;
-  readonly g: number;
-  readonly peakSource: "hwm" | "sampled";
-};
+/** PR-88: what the request-sized sink gets; declared in `backend.ts`, one type for the sink, the event and here. */
+export type { V3RequestSized };
 
 /** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
 export type V3DaemonClose = {
@@ -2231,7 +2216,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       readonly source: "hwm" | "sampled";
       readonly sampledPeak: number | undefined;
       readonly hwm?: number;
-    } = { source: "sampled", sampledPeak: peakRss },
+    },
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
     const tests = sent.filter((e) => !e.echo);
@@ -7118,15 +7103,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       clearInterval(sampler);
     }
     sampleRss();
-    // PR-88: the request's peak is the larger of the high-water mark and the sampled peak; a process that
-    // exited before this read (a cut answer) gives no reading.
+    // PR-88: the request's peak is the larger of the high-water mark and the sampled peak. A daemon that
+    // exited (a cut answer, R895: its server has no pid now, and the number may be reused) or whose
+    // /proc entry is gone keeps the sampled peak alone, as before: a reading is never dropped.
     const sampledPeak = peakRss;
     let peakSource: "hwm" | "sampled" = "sampled";
     let hwmPeak: number | undefined;
-    if (probe !== undefined && pid !== undefined) {
+    if (probe !== undefined && pid !== undefined && daemon.server.pid === pid) {
       const m = probe.read(pid);
-      if (m?.rss === undefined) peakRss = undefined;
-      else if (hwmVerified && m.hwm !== undefined) {
+      if (m?.rss !== undefined && hwmVerified && m.hwm !== undefined) {
         hwmPeak = m.hwm;
         if (peakRss === undefined || m.hwm >= peakRss) {
           peakSource = "hwm";

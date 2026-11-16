@@ -27,6 +27,7 @@ import type {
   StopEvidence,
   TestMethodRef,
   TestOutcome,
+  V3RequestSized,
 } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
@@ -582,7 +583,7 @@ export type RunEventInput =
       readonly baselineRow: string;
       readonly row: string;
     }
-  | {
+  | ({
       /**
        * PR-88: one al-runner-v3 serve request that gave a memory reading (R987's sensor). Bytes
        * throughout: the daemon's `floor` and `start` resident size, the `sampledPeak` of the 200 ms
@@ -592,18 +593,7 @@ export type RunEventInput =
        * only, not the report.
        */
       readonly type: "serve-request-sized";
-      readonly calls: readonly {
-        readonly call: number;
-        readonly entries: number;
-        readonly cost: number;
-      }[];
-      readonly floor: number;
-      readonly start: number;
-      readonly sampledPeak: number;
-      readonly hwm?: number;
-      readonly g: number;
-      readonly peakSource: "hwm" | "sampled";
-    }
+    } & V3RequestSized)
   | { readonly type: "quarantined"; readonly reason: string }
   | {
       /**

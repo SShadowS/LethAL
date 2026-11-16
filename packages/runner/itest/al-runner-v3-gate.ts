@@ -18,7 +18,7 @@ import type { AlRunnerV3Config, V3EntriesStats } from "../src/al-runner-v3-backe
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
-import { GateWarningsMismatchError } from "./gate-warnings";
+import { GateWarningsMismatchError, OBSERVE_WARNINGS_ENV, gateEndLine } from "./gate-warnings";
 import { bareHashRows, compareMutants } from "./mutant-equality";
 import type { MutantComparison, NormalizedMutant } from "./mutant-equality";
 
@@ -488,6 +488,39 @@ function judgeLegTCore(
 
 /** PR-88: with this set to `1`, the gate prints every leg's serve figures next to the pinned ones and does not fail on a pin difference. */
 export const V3_OBSERVE_PINS_ENV = "LETHAL_ITEST_V3_OBSERVE_PINS";
+
+/** PR-88: true when the pins observe switch is on. Unset or empty is off; anything but `1` throws (as `observeRequested`). */
+export function observePinsRequested(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[V3_OBSERVE_PINS_ENV];
+  if (raw === undefined || raw === "") return false;
+  if (raw === "1") return true;
+  throw new Error(
+    `${V3_OBSERVE_PINS_ENV}=${JSON.stringify(raw)} is not valid. Set it to 1, or unset it.`,
+  );
+}
+
+/** PR-88: the update gate (a receipt path set) must never run in observe-pins mode (see `observeWithReceiptRefusal`). */
+export function observePinsWithReceiptRefusal(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return observePinsRequested(env) && env.LETHAL_V3_GATE_RECEIPT !== undefined
+    ? `${V3_OBSERVE_PINS_ENV}=1 with LETHAL_V3_GATE_RECEIPT set: the update gate trusts its receipt and an observe run is never a pass, so the two cannot be combined. Observe by running the gate by hand.`
+    : undefined;
+}
+
+/**
+ * PR-88: how an observe-pins run ends. `undefined` when the switch is off. Otherwise the closing line
+ * (`gateEndLine` in its observe form, never PASS) and the message of the error that makes the gate exit 3.
+ */
+export function observePinsEnd(
+  env: NodeJS.ProcessEnv = process.env,
+): { readonly line: string; readonly message: string } | undefined {
+  if (!observePinsRequested(env)) return undefined;
+  return {
+    line: gateEndLine("al-runner-v3", "", { ...env, [OBSERVE_WARNINGS_ENV]: "1" }),
+    message: `observe run (${V3_OBSERVE_PINS_ENV}=1): serve pins printed, none enforced. This is never a pass. Put the moved pins in the spec's addendum and re-run without the variable.`,
+  };
+}
 
 /**
  * PR-88: one leg's serve pins against its actual figures. `observe`: every pin gives a line
