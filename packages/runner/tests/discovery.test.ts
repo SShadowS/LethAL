@@ -660,6 +660,31 @@ describe("discoverTests — a glued object header (R1054)", () => {
     ).toEqual(["GluedTest"]);
   });
 
+  test("a procedure name that reads like a header is not one: both tests found, one id listed", async () => {
+    const src = `codeunit 79502 "Probe Suite"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure "Calls Codeunit 1"()
+    begin
+    end;
+
+    [Test]
+    procedure "Second Test"()
+    begin
+    end;
+}
+`;
+    expect(testsInAlSource("P.al", src).map((r) => r.method)).toEqual([
+      "Calls Codeunit 1",
+      "Second Test",
+    ]);
+    const dir = await testDirWith({ "P.Codeunit.al": src });
+    const out = await discoverTests(dir, { only: ["P*"], buildSymbols: [] });
+    expect([...(out.inScopeCodeunits ?? [])]).toEqual([79502]);
+  });
+
   test("a bare name glued to the id (`50100Bare`) is not a header", () => {
     // Not a header, so its test lies outside every section: the R79 guard refuses it by name.
     expect(() => testsInAlSource("B.al", suite("codeunit 79501Bare"))).toThrow(

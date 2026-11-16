@@ -1164,13 +1164,14 @@ describe("R577: killReproduced, reproducedFailure and kill-not-reproduced on the
 // is not shown to be untested. The flag is a manifest (site) property; no report field carries it.
 describe("buildReport: nondebuggable-no-coverage (R1049)", () => {
   const caveatsOf = (
-    coverage: "none" | "procedure",
+    coverage: "none" | "procedure" | "al-runner",
     verdict: "no-coverage" | "survived",
     nonDebuggable: boolean,
+    kind: "bcdev" | "al-runner-v3" = "bcdev",
   ): readonly Caveat[] => {
     const statics: FoldStatics = {
       caps: {
-        kind: "bcdev",
+        kind,
         authoritative: true,
         coverage,
         deploy: "publish",
@@ -1236,6 +1237,12 @@ describe("buildReport: nondebuggable-no-coverage (R1049)", () => {
 
   test("not raised for a no-coverage mutant outside such a member", () => {
     expect(caveatsOf("procedure", "no-coverage", false)).not.toContain("nondebuggable-no-coverage");
+  });
+
+  test("not raised on al-runner v3, which covers [NonDebuggable] code", () => {
+    expect(caveatsOf("al-runner", "no-coverage", true, "al-runner-v3")).not.toContain(
+      "nondebuggable-no-coverage",
+    );
   });
 
   test("not raised for a [NonDebuggable] mutant that has another verdict", () => {

@@ -10,6 +10,7 @@ import {
   looksLikeAssertionFailure,
   looksLikeRunnerRefusal,
 } from "./assertion-screen";
+import { isBcdev } from "./backend";
 import type { BackendCapabilities, CoverageMode, StopEvidence, TestMethodRef } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
@@ -717,7 +718,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   "nondebuggable-no-coverage": {
     meaning:
       "At least one `no-coverage` mutant sits inside a procedure or trigger that carries " +
-      "`[NonDebuggable]`. BC records no Code Coverage line inside such a member, so its code may " +
+      "`[NonDebuggable]`, on a bcdev run. BC records no Code Coverage line inside such a member, so its code may " +
       "have run while coverage shows nothing: these mutants are not shown to be untested. A run " +
       'with coverageMode "none" runs every mutant against every green test and scores them.',
     entailedNegative:
@@ -3168,6 +3169,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R1049 - see CAVEAT_INTERPRETATIONS["nondebuggable-no-coverage"]. The flag is a SITE property
   // off the manifest entry, so no report field is needed.
   if (
+    isBcdev(input.caps.kind) &&
     input.caps.coverage !== "none" &&
     input.outcomes.some((o) => o.verdict === "no-coverage" && o.mutant.nonDebuggable === true)
   )
