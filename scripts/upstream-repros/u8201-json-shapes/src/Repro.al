@@ -21,11 +21,13 @@ codeunit 58360 "Json Shapes Test"
         O: JsonObject;
         T: JsonToken;
     begin
-        O.ReadFrom('{"v":1.50,"w":1e3}');
+        O.ReadFrom('{"v":1.50}');
         O.Get('v', T);
         if not T.AsValue().AsBoolean() then
             Error('BC gives true for 1.50');
-        O.Get('w', T);
+        Clear(O);
+        O.ReadFrom('{"v":1e3}');
+        O.Get('v', T);
         if not T.AsValue().AsBoolean() then
             Error('BC gives true for 1e3');
     end;
@@ -42,6 +44,20 @@ codeunit 58360 "Json Shapes Test"
         asserterror I := T.AsValue().AsInteger();
         if GetLastErrorText() <> 'Unable to convert from Microsoft.Dynamics.Nav.Runtime.NavJsonValue to System.Int32.' then
             Error('BC raises a conversion error; got %1 (%2)', I, GetLastErrorText());
+    end;
+
+    [Test]
+    procedure TooLargeForBigIntegerRaises()
+    var
+        O: JsonObject;
+        T: JsonToken;
+        B: BigInteger;
+    begin
+        O.ReadFrom('{"v":12345678901234567890}');
+        O.Get('v', T);
+        asserterror B := T.AsValue().AsBigInteger();
+        if GetLastErrorText() <> 'Unable to convert from Microsoft.Dynamics.Nav.Runtime.NavJsonValue to Microsoft.Dynamics.Nav.Runtime.NavBigInteger.' then
+            Error('BC raises a conversion error; got %1 (%2)', B, GetLastErrorText());
     end;
 
     [Test]

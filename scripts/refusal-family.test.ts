@@ -1202,7 +1202,14 @@ describe("PR-87: the json-text family", () => {
     expect(f.cells.length).toBeGreaterThan(250);
     expect(f.cells.length).toBeLessThan(420);
     const types = new Set(f.cells.map((c) => c.type));
-    for (const t of ["JsonObject", "JsonArray", "JsonToken", "JsonValue", "JsonText", "TextBuilder"])
+    for (const t of [
+      "JsonObject",
+      "JsonArray",
+      "JsonToken",
+      "JsonValue",
+      "JsonText",
+      "TextBuilder",
+    ])
       expect(types.has(t)).toBe(true);
     expect(types.has("TextCompare")).toBe(true);
     const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
@@ -1229,7 +1236,37 @@ describe("PR-87: the json-text family", () => {
     for (const c of nonAscii)
       expect(`${c.type}|${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
     // an ASCII-only cell stays unflagged, and AsDateTime is a time-zone cell
-    expect(f.cells.find((c) => c.type === "TextBuilder" && c.state === "once")?.depends).toBeUndefined();
+    expect(
+      f.cells.find((c) => c.type === "TextBuilder" && c.state === "once")?.depends,
+    ).toBeUndefined();
     expect(f.cells.find((c) => c.method === "AsDateTime")?.depends).toBe("tz");
+  });
+
+  test("every text compare, and AsDate/AsTime/AsDecimal of JSON text, is flagged locale, ASCII or not", () => {
+    const compares = f.cells.filter((c) => c.type === "TextCompare");
+    expect(compares.length).toBeGreaterThan(30);
+    for (const c of compares) expect(`${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+    const textConv = f.cells.filter(
+      (c) => /^As(Date|Time|Decimal)$/.test(c.method) && c.state.startsWith("'"),
+    );
+    expect(textConv.length).toBeGreaterThan(5);
+    for (const c of textConv) expect(`${c.method}|${c.state}|${c.depends}`).toEndWith("|locale");
+  });
+
+  test("only the two measured pairs share their AL", () => {
+    const body = (c: (typeof f.cells)[number]) =>
+      JSON.stringify([c.vars, c.setup, c.call, c.reader]);
+    const seen = new Map<string, string>();
+    const dups: string[] = [];
+    for (const c of f.cells) {
+      const k = body(c);
+      const first = seen.get(k);
+      if (first !== undefined) dups.push(`${first} = ${c.method} ${c.state}`);
+      else seen.set(k, `${c.method} ${c.state}`);
+    }
+    expect(dups.sort()).toEqual([
+      "Keys count = Keys count DOC",
+      "less a vs B = ordered a before B",
+    ]);
   });
 });

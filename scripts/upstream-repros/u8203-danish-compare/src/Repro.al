@@ -13,6 +13,8 @@ codeunit 58380 "Danish Compare Test"
         Y := 'Æ';
         if not (X < Y) then
             Error('BC: æ < Æ is true');
+        if X > Y then
+            Error('BC: æ > Æ is false');
     end;
 
     [Test]
@@ -25,6 +27,8 @@ codeunit 58380 "Danish Compare Test"
         Y := 'æ';
         if X < Y then
             Error('BC: z < æ is false');
+        if not (X > Y) then
+            Error('BC: z > æ is true');
     end;
 
     [Test]
@@ -37,6 +41,8 @@ codeunit 58380 "Danish Compare Test"
         Y := 'å';
         if X < Y then
             Error('BC: ø < å is false');
+        if not (X > Y) then
+            Error('BC: ø > å is true');
     end;
 
     [Test]
@@ -49,5 +55,7 @@ codeunit 58380 "Danish Compare Test"
         Tx := 'z';
         if not (Cd < Tx) then
             Error('BC: Code Æ < Text z is true');
+        if Cd > Tx then
+            Error('BC: Code Æ > Text z is false');
     end;
 }

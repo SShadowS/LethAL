@@ -3759,7 +3759,9 @@ export const DATES_FORMULAS: Family = {
 /**
  * PR-87: JSON objects, arrays, tokens and values; TextBuilder; text functions and text comparison on Danish letters.
  * No tables. Every cell reports `V:[...]`; an error the call raises IS the answer. A cell whose text holds a non-ASCII
- * letter is marked `locale` (case mapping and text order follow the session language). `FORMAT_EVALUATE` already has the
+ * letter, every TextCompare cell, and AsDate/AsTime/AsDecimal of JSON text are marked `locale` (case mapping, text
+ * order and text conversion follow the session language and region). Two pairs of cells have the same AL (Keys count /
+ * Keys count DOC; less a vs B / ordered a before B): they were measured so, and cell ids are positions, so they stay. `FORMAT_EVALUATE` already has the
  * ASCII text-function cells and `äöüßé` case mapping, so these use other inputs. AsDateTime cells are `tz`.
  */
 const NON_ASCII = /[^ -~]/;
@@ -3773,7 +3775,9 @@ const jx = (
   depends?: Cell["depends"],
 ): Cell => {
   const c = dfc(type, method, state, vars, setup, answer, depends);
-  return depends === undefined && NON_ASCII.test([...vars, ...setup, answer].join(" "))
+  // every text compare is culture-ordered on BC ('a' < 'B' is true), ASCII or not
+  return depends === undefined &&
+    (type === "TextCompare" || NON_ASCII.test([...vars, ...setup, answer].join(" ")))
     ? { ...c, depends: "locale" }
     : c;
 };
@@ -3856,7 +3860,10 @@ const JV_SOME: readonly (readonly [string, readonly string[]])[] = [
   ['{"a":1}', ["AsText"]],
   ["[1]", ["AsText"]],
 ];
-const jvSetup = (lit: string) => [`Ok := O.ReadFrom(${al(`{"v":${lit}}`)});`, "Ok := O.Get('v', T);"];
+const jvSetup = (lit: string) => [
+  `Ok := O.ReadFrom(${al(`{"v":${lit}}`)});`,
+  "Ok := O.Get('v', T);",
+];
 const jvCell = (lit: string, conv: string): Cell =>
   jx(
     "JsonValue",
@@ -3865,7 +3872,11 @@ const jvCell = (lit: string, conv: string): Cell =>
     JV_VARS,
     jvSetup(lit),
     n9(`T.AsValue().${conv}()`),
-    conv === "AsDateTime" ? "tz" : conv === "AsDate" || conv === "AsTime" ? "locale" : undefined,
+    conv === "AsDateTime"
+      ? "tz"
+      : conv === "AsDate" || conv === "AsTime" || (conv === "AsDecimal" && lit.startsWith('"'))
+        ? "locale" // text read as a date, time or decimal follows the region
+        : undefined,
   );
 const JT_OBJECT: readonly (readonly [string, string])[] = [
   ["spaces around", '{ "a" : 1 }'],
@@ -3997,9 +4008,7 @@ const JSON_TEXT_CELLS: Cell[] = [
       "Get",
       keyLabel(k),
       JO_DOC,
-      [
-        `Ok := O.Get(${al(k)}, T); if Ok then begin T.WriteTo(S); S := S + '|' + ${flags}; end;`,
-      ],
+      [`Ok := O.Get(${al(k)}, T); if Ok then begin T.WriteTo(S); S := S + '|' + ${flags}; end;`],
       OK_S,
     ),
   ),
@@ -4116,7 +4125,14 @@ const JSON_TEXT_CELLS: Cell[] = [
   ...JV_ALL.flatMap((lit) => JV_CONV.map((conv) => jvCell(lit, conv))),
   ...JV_SOME.flatMap(([lit, convs]) => convs.map((conv) => jvCell(lit, conv))),
   ...JV_ALL.slice(2, 7).map((lit) =>
-    jx("JsonValue", "IsNull", lit.replace(/"/g, "'"), JV_VARS, jvSetup(lit), n9("T.AsValue().IsNull()")),
+    jx(
+      "JsonValue",
+      "IsNull",
+      lit.replace(/"/g, "'"),
+      JV_VARS,
+      jvSetup(lit),
+      n9("T.AsValue().IsNull()"),
+    ),
   ),
   ...(
     [
@@ -4220,7 +4236,12 @@ const JSON_TEXT_CELLS: Cell[] = [
   tbc("AppendLine", "empty", ["TB.AppendLine();"], TB_TEXT),
   tbc("AppendLine", "text", ["TB.AppendLine('x');"], TB_TEXT),
   tbc("AppendLine", "twice", ["TB.AppendLine('x'); TB.AppendLine('y');"], TB_TEXT),
-  tbc("AppendLine", "after Append", ["TB.Append('a'); TB.AppendLine('b'); TB.Append('c');"], TB_TEXT),
+  tbc(
+    "AppendLine",
+    "after Append",
+    ["TB.Append('a'); TB.AppendLine('b'); TB.Append('c');"],
+    TB_TEXT,
+  ),
   tbc("AppendLine", "length", ["TB.AppendLine('x');"], n9("TB.Length()")),
   ...[0, 1, 3, 6, 7, -1].map((i) =>
     tbc("Insert", `index ${i}`, [tbBase, `TB.Insert(${i}, 'XY');`], TB_TEXT),
@@ -4269,9 +4290,7 @@ const JSON_TEXT_CELLS: Cell[] = [
       [6, 0],
       [5, 1],
     ] as const
-  ).map(([s, n]) =>
-    tbc("ToText", `start ${s} count ${n}`, [tbBase], vis(`TB.ToText(${s}, ${n})`)),
-  ),
+  ).map(([s, n]) => tbc("ToText", `start ${s} count ${n}`, [tbBase], vis(`TB.ToText(${s}, ${n})`))),
   tbc("ToText", "empty", [], vis("TB.ToText()")),
   // text functions on Danish letters
   tfc("UpperCase", "Danish lower", `UpperCase(${al(DK.slice(0, 3))})`),
