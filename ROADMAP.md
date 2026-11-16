@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1048 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**39 of 1050 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -590,6 +590,8 @@ that ordering is the priority.
 - **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (cc9d602e)
 - **R1084** · CI threshold, first step (owner ruling: option 3, advisory first): survivors on the changed lines are listed, and --fail-on-survivors exits 9; v3-caveated survivors never fail · [R1084.md](docs/roadmap/R1084.md) · done (77b657a5)
 - **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
+- **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · open
+- **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · open
 
 ## Backends and tooling
 
@@ -1092,7 +1094,7 @@ that ordering is the priority.
 - **R1077** · heavy-slot: warn when a declared --peak is far above what the same kind of command measured in heavy-peaks.tsv · [R1077.md](docs/roadmap/R1077.md) · done (03240cf2)
 - **R1078** · t9's refusal families kept on the serve daemon (PR-74): 10 census classes CLEAN, 7 new entries and 2 widened; the t9 drift was a false fire on a red test · [R1078.md](docs/roadmap/R1078.md) · done (6024238e)
 - **R1082** · PR-59's first scan acted on (PR-64): of 8 issues, #7832 fixed, #7780 fixed for its measured shape (the blob case open), #7827 not fixed; #8038, #8032, #7924, #7586 had planned work only, not a fix; #7854's system-table cells still refused; 4 regression entries added, 3 issues commented · [R1082.md](docs/roadmap/R1082.md) · closed 2026-11-16 — measured on edge-4ebfe7913 and commented upstream
-- **R1083** · upstream-fixed-scan classifies an issue by an older build-naming maintainer comment when a newer maintainer comment names no build (a plan, not a fix); the row should say so instead · [R1083.md](docs/roadmap/R1083.md) · open
+- **R1083** · upstream-fixed-scan classifies an issue by an older build-naming maintainer comment when a newer maintainer comment names no build (a plan, not a fix); the row should say so instead · [R1083.md](docs/roadmap/R1083.md) · done (e7bbf98c)
 
 ---
 

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { SelectorIdDependencyClashError } from "@lethal/schemata";
@@ -162,6 +162,32 @@ describe("R888: dependency codeunits against the selector ids", () => {
     expect(warnings[0]).toContain("Invented Base");
     expect(warnings[0]).toContain("AL0264");
     expect(warnings[0]).toContain("NOT ruled out");
+    // The run caller names the folders it read and says the next run repeats the check.
+    expect(warnings[0]).toContain(
+      "put those dependency .app packages in the folder(s) this run read",
+    );
+    expect(warnings[0]).toContain(join(dir, ".alpackages"));
+    expect(warnings[0]).toContain("The next 'lethal run' repeats the check");
+    expect(warnings[0]).toContain("must come from its publisher");
+    expect(warnings[0]).not.toContain("lethal doctor");
+  });
+
+  test("init reads only <project>/.alpackages and its warning says so", async () => {
+    const dir = project(true);
+    const warned: string[] = [];
+    const spy = spyOn(console, "warn").mockImplementation((...a: unknown[]) => {
+      warned.push(a.map(String).join(" "));
+    });
+    try {
+      await initFromCli({ mode: "init", projectDir: dir, outPath: join(dir, "init.json") });
+    } finally {
+      spy.mockRestore();
+    }
+    const line = warned.find((l) => l.includes("NOT ruled out"));
+    expect(line).toContain(`put those dependency .app packages in ${join(dir, ".alpackages")}`);
+    expect(line).toContain("lethal init --force");
+    expect(line).toContain("rely on the next 'lethal run'");
+    expect(line).not.toContain("lethal doctor");
   });
 
   test("a garbled package is reported as unread, not as declaring nothing", async () => {

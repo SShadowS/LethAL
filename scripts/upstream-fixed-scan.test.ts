@@ -198,7 +198,7 @@ describe("scan", () => {
     expect(row).toMatchObject({ class: "no-build-named", builds: [] });
   });
 
-  test("a later comment that names nothing does not hide an earlier one that names a build", async () => {
+  test("R1083: a later comment that names nothing is reported, and the older build is kept, not hidden", async () => {
     const issues: GhIssue[] = [
       {
         number: 1,
@@ -210,7 +210,55 @@ describe("scan", () => {
       },
     ];
     const [row] = await scan(deps().d, issues);
-    expect(row).toMatchObject({ class: "build-named-in-current", builds: ["bd44b20ea"] });
+    expect(row).toMatchObject({
+      class: "latest-comment-names-no-build",
+      builds: ["bd44b20ea"],
+      excerpt: "Thanks for the report!",
+    });
+  });
+
+  test("R1083: a plan after a build-naming comment is no action, whatever its entry says", async () => {
+    // the #8038 shape: an older comment fixed another item in a build; the newest is a plan (a corpus probe)
+    const issues: GhIssue[] = [
+      {
+        number: 8038,
+        title: "batch",
+        comments: [
+          maint("The new edge build (`bd44b20ea`) runs one item.", "2026-11-10T00:00:00Z"),
+          maint("I'll put your cells into a corpus probe.", "2026-11-15T00:00:00Z"),
+        ],
+      },
+    ];
+    const rows = await scan(
+      deps({
+        manifest: [
+          {
+            id: "u8038-x",
+            issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8038",
+          },
+        ],
+        reproRows: [{ repro: "u8038-x", test: "t", change: "still-differs" }],
+      }).d,
+      issues,
+    );
+    expect(rows[0]?.class).toBe("latest-comment-names-no-build");
+    expect(rows[0]?.excerpt).toBe("I'll put your cells into a corpus probe.");
+    expect(actionRows(rows)).toEqual([]);
+  });
+
+  test("R1083: when the newest maintainer comment names the build, the class is as before", async () => {
+    const issues: GhIssue[] = [
+      {
+        number: 2,
+        title: "t",
+        comments: [
+          maint("Planning it.", "2026-11-01T00:00:00Z"),
+          maint("Fixed in `bd44b20ea`.", "2026-11-03T00:00:00Z"),
+        ],
+      },
+    ];
+    const [row] = await scan(deps().d, issues);
+    expect(row?.class).toBe("build-named-in-current");
   });
 
   test("a comment by someone who is no OWNER/MEMBER/COLLABORATOR names no build", async () => {
