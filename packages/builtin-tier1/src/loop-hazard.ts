@@ -1018,6 +1018,7 @@ export function openItemHangRefuses(
     r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx) ||
     toggledExitBlankHangs(node, ctx, op) ||
+    removedBoundHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
       (emptiedProgressCalleeHangs(node, ctx) || emptiedRefusedBlockHangs(node, ctx)))
   );
@@ -1388,6 +1389,200 @@ function toggledExitBlankHangs(node: ALSyntaxNode, ctx: SemanticContext, op: str
   );
   const name = baseNameOf(other ?? null);
   return name !== null && loopBodyWrites(loop, name, ctx);
+}
+
+/** A non-negative integer literal. */
+const isNonNegLiteral = (n: ALSyntaxNode): boolean => /^\d+$/.test(n.text.trim());
+
+/**
+ * R1061 (PR-48): is `y` a counter that stays >= 0 in procedure `proc`: every write to it is a
+ * non-negative literal assignment, `+= <positive literal>` or `y := y + <positive literal>`, and
+ * the loop body increments it? A `var` argument or any other write makes it unknown.
+ */
+function isUpCounter(y: string, loop: ALSyntaxNode, proc: ALSyntaxNode, ctx: SemanticContext) {
+  const names = new Set([y]);
+  let ok = true;
+  let steps = false;
+  const body = loop.childForFieldName("body");
+  visitAll(proc, (n) => {
+    if (!ok || !directWrite(n, names, ctx)) return;
+    const l = n.childForFieldName("left");
+    const r = n.childForFieldName("right");
+    if (n.rawKind !== "assignment_statement" || l === null || r === null || !isIdentifierLike(l)) {
+      ok = false;
+      return;
+    }
+    const sign = n.text.slice(l.endIndex - n.startIndex).trim();
+    const rt = r.text.trim();
+    const inc = sign.startsWith("+=")
+      ? /^[1-9]\d*$/.test(rt)
+      : sign.startsWith(":=") &&
+        new RegExp(`^${y.replace(/[^a-z0-9_]/g, "\\$&")}\\s*\\+\\s*[1-9]\\d*$`, "i").test(rt);
+    if (inc) {
+      if (body !== null && n.startIndex >= body.startIndex && n.endIndex <= body.endIndex)
+        steps = true;
+    } else if (!(sign.startsWith(":=") && isNonNegLiteral(r))) ok = false;
+  });
+  return ok && steps;
+}
+
+/** Does the same-object chain from `start` reach an event publisher? */
+function chainRaisesEvent(start: string, obj: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const byName = procsByName(obj, ctx);
+  const seen = new Set<string>();
+  const todo = [start];
+  for (let name = todo.pop(); name !== undefined; name = todo.pop()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const proc of byName.get(name) ?? []) {
+      if (attributeNamesOf(proc).some((a) => PUBLISHERS.has(a))) return true;
+      todo.push(...procEffect(proc, ctx).calls);
+    }
+  }
+  return false;
+}
+
+/**
+ * R1061 (PR-48, the narrowed rule B): `lethal.remove-assignment` of `X := <value>` in straight-line
+ * code before a loop of the same block. Refused only when all of these hold:
+ * 1. With X at its default (0, '' or false), the loop's exit keeps it running: `repeat` while the
+ *    exit is false, `while` while it is true, read with three-valued logic through `not`, `and`,
+ *    `or`. An atom counts when it compares X with a literal, is a Boolean X, or is the strict bound
+ *    `Y < X` / `X > Y` with Y a counter that only goes up from a non-negative start (X = 0 makes it
+ *    false for every Y). Anything else is unknown, and unknown keeps the mutant.
+ * 2. The value is not X's default (`X := 0` is never refused); the operator is plain `:=`.
+ * 3. Nothing in the loop writes X: no assignment, no `var` argument, no same-object call whose
+ *    chain writes it (R830's reach); for a global also no event publisher in the chain and no call
+ *    on a non-Record receiver (a subscriber or another object may write it).
+ * 4. X is a local variable or a global of the same object, not a parameter and not a field.
+ * `Y <> X` is not read: it is not stuck for a counter. Narrower than the pre-commitment; a miss
+ * here only keeps a mutant that could have been refused.
+ */
+function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string | undefined) {
+  if (op !== "lethal.remove-assignment" || node.rawKind !== "assignment_statement") return false;
+  const left = node.childForFieldName("left");
+  const right = node.childForFieldName("right");
+  if (left === null || right === null || !isIdentifierLike(left)) return false;
+  if (
+    !node.text
+      .slice(left.endIndex - node.startIndex)
+      .trim()
+      .startsWith(":=")
+  )
+    return false;
+  const x = normalizeAlName(left.text);
+  const decl = resolveVarRef(left, ctx);
+  if (decl === null || decl.node.rawKind === "parameter") return false;
+  const t = decl.typeText.trim().toLowerCase();
+  const dflt: number | boolean | string | undefined = /^(integer|biginteger|decimal)$/.test(t)
+    ? 0
+    : t === "boolean"
+      ? false
+      : /^(text|code)\b/.test(t)
+        ? ""
+        : undefined;
+  if (dflt === undefined || literalValue(right) === dflt) return false;
+  const block = node.parent;
+  let proc: ALSyntaxNode | null = node.parent;
+  while (proc !== null && !isProcedureLike(proc)) proc = proc.parent;
+  const obj = proc === null ? null : objectOf(proc);
+  if (block === null || proc === null || obj === null) return false;
+  const isGlobal = !r531Declares(proc, x, true);
+  // The loops in the statements after the assignment (in a later statement too: `foreach .. do
+  // repeat .. until`), up to the first statement that can write X. Such a statement is searched
+  // whole, so a write outside the loop but inside its `foreach` also ends the search.
+  const sibs = block.namedChildren;
+  const at = sibs.findIndex((s) => s.startIndex === node.startIndex);
+  if (at < 0) return false;
+  const xs = new Set([x]);
+  const names = procedureNamesOf(obj, ctx);
+  const canWrite = (s: ALSyntaxNode): boolean => {
+    let writes = false;
+    visitAll(s, (n) => {
+      if (writes) return;
+      if (directWrite(n, xs, ctx)) writes = true;
+      const callee = calleeOf(n, names, ctx);
+      if (callee !== null) {
+        if (chainEffect(callee, obj, ctx).writes.has(x)) writes = true;
+        if (isGlobal && chainRaisesEvent(callee, obj, ctx)) writes = true;
+      } else if (isGlobal && (n.rawKind === "call_expression" || n.rawKind === "call_statement")) {
+        const recv = n.childForFieldName("function")?.childForFieldName("object") ?? null;
+        if (recv !== null) {
+          const dt = isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+          if (dt === null || dt.kind !== "table") writes = true;
+        }
+      }
+    });
+    return writes;
+  };
+  const candidates: ALSyntaxNode[] = [];
+  for (const s of sibs.slice(at + 1)) {
+    if (canWrite(s)) break;
+    visitAll(s, (n) => {
+      if (LOOP_KINDS.has(n.kind)) candidates.push(n);
+    });
+  }
+  // 1: the exit at X's default keeps a loop running
+  const check = (loop: ALSyntaxNode): boolean => {
+    const cond = conditionOf(loop);
+    if (cond === null) return false;
+    const isX = (n: ALSyntaxNode): boolean => isIdentifierLike(n) && normalizeAlName(n.text) === x;
+    const evalAt = (e0: ALSyntaxNode): boolean | undefined => {
+      const e = r572Unparen(e0);
+      if (e.rawKind === "unary_expression" && /^not\b/i.test(e.text.trim())) {
+        const o = e.childForFieldName("operand");
+        const v = o === null ? undefined : evalAt(o);
+        return v === undefined ? undefined : !v;
+      }
+      if (e.rawKind === "logical_expression") {
+        const l = e.childForFieldName("left");
+        const r = e.childForFieldName("right");
+        if (l === null || r === null) return undefined;
+        const lop = e.text
+          .slice(l.endIndex - e.startIndex, r.startIndex - e.startIndex)
+          .trim()
+          .toLowerCase();
+        const a = evalAt(l);
+        const b = evalAt(r);
+        if (lop === "and") return a === false || b === false ? false : a && b ? true : undefined;
+        if (lop === "or")
+          return a === true || b === true ? true : a === false && b === false ? false : undefined;
+        return undefined;
+      }
+      if (isX(e)) return t === "boolean" ? false : undefined;
+      if (e.rawKind !== "comparison_expression") return undefined;
+      const l = e.childForFieldName("left");
+      const r = e.childForFieldName("right");
+      const cop = e.childForFieldName("operator")?.text.trim();
+      if (l === null || r === null || cop === undefined) return undefined;
+      if (!isX(l) && !isX(r)) return undefined;
+      const xLeft = isX(l);
+      const other = xLeft ? r : l;
+      const lit = literalValue(other);
+      if (lit !== undefined) {
+        if (typeof lit !== typeof dflt) return undefined;
+        const [a, b] = xLeft ? [dflt, lit] : [lit, dflt];
+        const ops: Record<string, boolean> = {
+          "=": a === b,
+          "<>": a !== b,
+          "<": a < b,
+          "<=": a <= b,
+          ">": a > b,
+          ">=": a >= b,
+        };
+        return ops[cop];
+      }
+      // strict bound over a counter: `Y < X` or `X > Y`, X at 0
+      if (dflt === 0 && ((cop === "<" && !xLeft) || (cop === ">" && xLeft))) {
+        const y = baseNameOf(other);
+        if (y !== null && isIdentifierLike(other) && isUpCounter(y, loop, proc, ctx)) return false;
+      }
+      return undefined;
+    };
+    const v = evalAt(cond);
+    return loop.rawKind === "repeat_statement" ? v === false : v === true;
+  };
+  return candidates.some(check);
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */
