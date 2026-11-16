@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 1055 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**40 of 1056 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1100,6 +1100,7 @@ that ordering is the priority.
 - **R1090** · JSON and text handling as a generated BC differential (PR-87): 416 cells, every answered cell equal; 25 refusals in 3 classes with BC's answers measured, filed #8201-#8203 · [R1090.md](docs/roadmap/R1090.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1091** · R1058's follow-up: an order-independent serve entry cost per codeunit needs per-codeunit calibration requests; probe their cost and how often entries are cut first · [R1091.md](docs/roadmap/R1091.md) · open
 - **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — measured; levers ranked, none built
+- **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · open
 
 ---
 

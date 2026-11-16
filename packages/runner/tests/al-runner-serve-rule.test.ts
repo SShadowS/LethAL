@@ -364,8 +364,9 @@ describe("serveDaemonReusable, the rule alone", () => {
   R945["recordref-not-open"] = {
     keeps: ["FieldCount", "FindSet", "SetRecFilter", "SetLoadFields"].map(RR),
     // a method never measured, and the other RecordRef "not open" wording al-runner has
-    // (PR-56: only FilterGroup is added, by `recordref-method-not-open`)
-    closes: ["Get", "FindFirst", "CopyLinks", "ReadPermission"]
+    // (PR-56: only FilterGroup is added, by `recordref-method-not-open`; PR-93 measured FindFirst, KeyIndex and
+    // GetFilters and keeps them there, so FindLast stands in as the unmeasured method)
+    closes: ["Get", "FindLast", "CopyLinks", "ReadPermission"]
       .map(RR)
       .concat([
         `${P}RecordRef.FieldCount by this overload on a RecordRef that is not open (not pinned)`,
@@ -375,9 +376,10 @@ describe("serveDaemonReusable, the rule alone", () => {
     keeps: [
       `${P}FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
     ],
-    // PR-56: only Active and Caption are added (`fieldref-method-never-assigned`); Value still closes
+    // PR-56: only Active and Caption are added (`fieldref-method-never-assigned`); PR-93 measured Value and keeps
+    // it there, so Name stands in as the unmeasured method
     closes: [
-      `${P}FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
+      `${P}FieldRef.Name on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
       `${P}FieldRef.Class on a FieldRef that was never assigned`,
     ],
   };

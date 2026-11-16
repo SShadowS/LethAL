@@ -756,12 +756,20 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   READ: "(?:IsEmpty|FindFirst)",
   COMPANYM: "(?:IsEmpty|FindFirst|FindSet)",
   // PR-74 added SetFilter (FieldRef) and Duplicate, ClearMarks (RecordRef): measured CLEAN in its census.
-  FIELDREFM: "(?:Active|Caption|Class|SetFilter)",
-  RECORDREFM: "(?:FilterGroup|Duplicate|ClearMarks)",
+  // PR-93 added Value, EnumValueCount (FieldRef) and KeyIndex, GetFilters, FindFirst (RecordRef): measured CLEAN.
+  FIELDREFM: "(?:Active|Caption|Class|SetFilter|Value|EnumValueCount)",
+  RECORDREFM: "(?:FilterGroup|Duplicate|ClearMarks|KeyIndex|GetFilters|FindFirst)",
+  // PR-93: the KeyRef methods measured on a never-assigned KeyRef.
+  KEYREFM: "(?:FieldCount|FieldIndex)",
   KIND: "(?:a Decimal|an Integer)",
-  // PR-74: the measured variants only, each by name.
-  SETOP: String.raw`(?:\.\.|@)`,
-  CMP: "(?:>100|>1000|<1000)",
+  // PR-74: the measured variants only, each by name. PR-93 added `<>` (its text quotes it).
+  SETOP: String.raw`(?:\.\.|@|` + "`<>`)",
+  CMP: "(?:>100|>1000|<1000|<300)",
+  // PR-93: the Date filter texts and the BigInteger codes t10/t11 closed on, each measured, by name.
+  DATETEXT: "(?:-1M|-2026-09-01)",
+  BIGCODE: "(?:GL00000000|GU00000001)",
+  // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
+  ARRAYSTATE: "(?:ArrayStart|Array)",
   // PR-74 review H1: SaveAs only. RunRequestPage was measured after a Commit(), never inside an open write
   // transaction, which is where t9's mutants reach it.
   REPORTM: "SaveAs",
@@ -1033,8 +1041,44 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   [
     "dotnet-json-writer-start-object-in-object",
     "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path '%JSONPATH%'.; the text AL would see is not pinned (ADR-014 section 7)",
-  ], // PR-54 class "DotNet * raised the .NET exception *"; WritePropertyName and WriteEndArray were not driven, so they are not kept
+  ], // PR-54 class "DotNet * raised the .NET exception *"; PR-74 did not drive WritePropertyName or WriteEndArray (PR-93 does, below)
   ["boolean-false-to-biginteger", "conversion of Boolean false to BigInteger"],
+  // PR-93 (coord PR-93, spec 2026-11-16-pr93-t10-t11-refusal-families.md): the texts DO windows t10/t11 still
+  // closed on, each driven by an invented cell of family `t10-refusals` to the exact text and measured CLEAN by
+  // PR-54's strict census with every distinct text a refuser (`--refusers 7`, `/coord/handoff/PR-93/census2/`).
+  // Not kept: Report.RunRequestPage (measured after a Commit() only; inside a write transaction v3 does not refuse,
+  // so that form cannot be measured: PR-74 review H1 stands), the SaveAs-with-layout errors and the placeholder Pdf
+  // read (no invented cell can produce them). Pinned by `al-runner-serve-pr93.test.ts`.
+  ["keyref-method-never-assigned", "KeyRef.%KEYREFM% on a KeyRef that was never assigned"], // PR-54 class "KeyRef.* on a KeyRef that was never assigned"
+  ["setfilter-unexpected-gt-date-range", "SetFilter: unexpected `>` in filter `<-1M>..<CM>`"], // PR-54 class "SetFilter"
+  [
+    "setfilter-date-text-no-form",
+    "SetFilter: text filter value `%DATETEXT%` for Date: no form pinned for this language (formulas and other region formats are not pinned, docs/probes-needed.md)",
+  ], // PR-54 class "SetFilter"
+  ["setfilter-not-a-biginteger", "SetFilter: `%BIGCODE%` is not a BigInteger"], // PR-54 class "SetFilter"
+  ["setfilter-empty-term", "SetFilter: empty filter term"], // PR-54 class "SetFilter"
+  ["page-run-recordref", "Page.Run with RecordRef as the record"],
+  ["page-run-unassigned-variant", "Page.Run with an unassigned Variant as the record"],
+  ["recordref-gettable-text-not-a-record", "RecordRef.GetTable of Text 'Not a record'"],
+  [
+    "report-saveas-id-zero",
+    "Report.SaveAs#2 of id 0, which no report declares (error text not pinned)",
+  ],
+  [
+    "xmldocument-readfrom-not-instream",
+    "XmlDocument.ReadFrom of something that is not an InStream",
+  ],
+  ["outstream-untouched-handle", "an OutStream was expected, got an untouched handle"],
+  ["code-gl-to-biginteger", "conversion of Code 'GL00000000' to BigInteger"],
+  ["calcdate-outside-range", "CalcDate result outside 0001-9999 (error text not pinned)"],
+  [
+    "dotnet-json-writer-end-array-no-token",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)",
+  ], // PR-54 class "DotNet * raised the .NET exception *"
+  [
+    "dotnet-json-writer-property-in-array",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state %ARRAYSTATE% would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
+  ], // PR-54 class "DotNet * raised the .NET exception *"
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

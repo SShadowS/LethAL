@@ -55,8 +55,9 @@ describe("PR-74 keep entries", () => {
           `a parameters string without the XML declaration in this form, given to Report.${r} (which character BC's filter error names is not pinned)`,
         ),
       ]).toEqual([r, false]);
-    // R945's closes stay closed (review M3 of PR-56): FieldRef.Value, RecordRef.Get and CopyLinks
-    for (const m of ["Value", "Get", "CopyLinks", "Mark", "Duplicates"]) {
+    // R945's closes stay closed (review M3 of PR-56): RecordRef.Get and CopyLinks, and the unmeasured methods
+    // (PR-93 measured FieldRef.Value and keeps it, `al-runner-serve-pr93.test.ts`)
+    for (const m of ["Get", "CopyLinks", "Mark", "Duplicates"]) {
       expect(
         k(
           `FieldRef.${m} on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
