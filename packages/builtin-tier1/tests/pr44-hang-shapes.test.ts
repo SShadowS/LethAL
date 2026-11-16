@@ -56,10 +56,35 @@ describe("PR-44: blank literal in an exit comparison the body feeds", () => {
     expect(refused(src, ALNodeKind.text_literal, "''", TOGGLE)).toBe(true);
   });
 
-  it("refuses the blank as an operand of a top-level and / or", () => {
-    // revert: stop the climb at the comparison (drop the logical_expression / parenthesized climb)
-    const src = unit("while (X <> '') and (N < 3) do begin X := CopyStr(X, 2); N += 1; end;");
-    expect(refused(src, ALNodeKind.text_literal, "''", TOGGLE)).toBe(true);
+  const BODY = "X := CopyStr(X, 2); N += 1;";
+  const rfl = (loop: string) => refused(unit(loop), ALNodeKind.text_literal, "''", TOGGLE);
+
+  it("refuses `until (X = '') and (N > 0)`: a false `and` operand keeps the exit false", () => {
+    // revert: drop the connective rule (continue through any logical node: still passes), so also
+    // drop the climb through logical_expression
+    expect(rfl(`repeat ${BODY} until (X = '') and (N > 0);`)).toBe(true);
+  });
+
+  it("refuses `while (X <> '') or (N < 3)`: a true `or` operand keeps the loop going", () => {
+    // revert: same as above
+    expect(rfl(`while (X <> '') or (N < 3) do begin ${BODY} end;`)).toBe(true);
+  });
+
+  it("refuses `until not (X <> '')`: the `not` flips the stuck value", () => {
+    // revert: drop the `not` flip
+    expect(rfl(`repeat ${BODY} until not (X <> '');`)).toBe(true);
+  });
+
+  it("keeps `until (X = '') or (N > 10)` and `while (X <> '') and (N < 3)`: the other side can end it", () => {
+    // revert: drop the connective rule (accept either and / or)
+    expect(rfl(`repeat ${BODY} until (X = '') or (N > 10);`)).toBe(false);
+    expect(rfl(`while (X <> '') and (N < 3) do begin ${BODY} end;`)).toBe(false);
+  });
+
+  it("keeps `until X <> ''` and `while X = ''`: the toggle ends the loop sooner or never starts it", () => {
+    // revert: drop the polarity check at the loop
+    expect(rfl(`repeat ${BODY} until X <> '';`)).toBe(false);
+    expect(rfl(`while X = '' do begin ${BODY} end;`)).toBe(false);
   });
 
   it("keeps a blank literal when the body does not write the other operand", () => {
