@@ -84,6 +84,26 @@ if (import.meta.main) {
     process.exit(2);
   }
   const dir = process.env.LETHAL_HEAVY_LOCK_DIR ?? "/coord/locks";
+  // review r1: the read, the checks and the rename run under the guard's own lock (heavy-guard.lock), so no admission decides
+  // in between and two lowerings cannot interleave (the later one, writing a higher value, would have been a raise). This
+  // process re-runs itself under flock once.
+  if (process.env.LETHAL_HEAVY_LOWER_LOCKED !== "1") {
+    const r = Bun.spawnSync(
+      [
+        "flock",
+        join(dir, "heavy-guard.lock"),
+        process.execPath,
+        import.meta.path,
+        ...process.argv.slice(2),
+      ],
+      {
+        env: { ...process.env, LETHAL_HEAVY_LOWER_LOCKED: "1" },
+        stdout: "inherit",
+        stderr: "inherit",
+      },
+    );
+    process.exit(r.exitCode ?? 2);
+  }
   const file = join(dir, `heavy.${slot}.class`);
   let text: string;
   try {
@@ -101,6 +121,18 @@ if (import.meta.main) {
     console.error(`heavy-slot-lower: pid ${holder} is not a live heavy-slot.sh; not lowered`);
     process.exit(1);
   }
+  // review r1: the slot's lock file names its holder too (heavy-slot.sh writes its pid there before the class file).
+  const lockPid = (() => {
+    try {
+      return Number(readFileSync(join(dir, `heavy.${slot}`), "utf8").trim());
+    } catch {
+      return Number.NaN;
+    }
+  })();
+  if (lockPid !== holder) {
+    console.error(`heavy-slot-lower: refused: heavy.${slot} names pid ${lockPid}, not ${holder}`);
+    process.exit(1);
+  }
   let peakKb = 0;
   try {
     peakKb = Number(readFileSync(join(dir, `heavy.${slot}.peak`), "utf8").trim()) || 0;
@@ -116,6 +148,20 @@ if (import.meta.main) {
   const why = refusal(line, holder, newGiB, measuredGiB);
   if (why !== undefined) {
     console.error(`heavy-slot-lower: refused: ${why}`);
+    process.exit(1);
+  }
+  // review r1: re-read just before the rename; a slot that changed hands since (the job ended, another took the slot and wrote
+  // its own class file, which heavy-slot.sh does outside this lock) is never overwritten.
+  let now = "";
+  try {
+    now = readFileSync(file, "utf8");
+  } catch {
+    now = "";
+  }
+  if (now !== text || !isHeavySlotSh(holder)) {
+    console.error(
+      `heavy-slot-lower: refused: slot ${slot} changed while it was being lowered; nothing written`,
+    );
     process.exit(1);
   }
   const tmp = `${file}.lower.${process.pid}`;
