@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**40 of 1056 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**41 of 1057 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -382,6 +382,7 @@ that ordering is the priority.
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · open
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · done (274a9aac)
 - **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
+- **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · open
 
 ## Product gaps a real project hits
 
