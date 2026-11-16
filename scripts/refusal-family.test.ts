@@ -3,6 +3,7 @@ import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
   type CellResult,
+  DATES_FORMULAS,
   DOTNET_EXCEPTION,
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
@@ -1018,8 +1019,8 @@ describe("PR-74: the t9-refusals family", () => {
 describe("PR-83: the record-filters family", () => {
   const f = RECORD_FILTERS;
 
-  test("last of FAMILIES: place 13, BC-check number 14", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("record-filters");
+  test("place 13 in FAMILIES, BC-check number 14", () => {
+    expect(Object.keys(FAMILIES).indexOf("record-filters")).toBe(12);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051014");
   });
 
@@ -1096,5 +1097,73 @@ describe("PR-83: the record-filters family", () => {
     expect(f.support).toContain("key(ByKindQty; Kind, Qty)");
     expect(f.support).toContain("CalcFormula = sum(");
     expect(f.support).toContain("FieldClass = FlowFilter;");
+  });
+});
+
+describe("PR-86: the dates-formulas family", () => {
+  const f = DATES_FORMULAS;
+
+  test("last of FAMILIES: place 14, BC-check number 15", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("dates-formulas");
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051015");
+  });
+
+  test("every test codeunit has TestPermissions = Disabled", () => {
+    const cells = emitApp(bcCheckFamily(f))["src/Cells.al"] ?? "";
+    const tests = cells.match(/Subtype = Test;/g)?.length ?? 0;
+    expect(tests).toBe(f.cells.length);
+    expect(cells.match(/Subtype = Test;\n {4}TestPermissions = Disabled;/g)?.length ?? 0).toBe(
+      tests,
+    );
+  });
+
+  test("about 300 cells in 13 groups; unique keys, unique names (no quote), unique codeunits", () => {
+    expect(f.cells.length).toBeGreaterThan(200);
+    expect(f.cells.length).toBeLessThan(400);
+    expect([...new Set(f.cells.map((c) => c.type))].sort()).toEqual(
+      [
+        "CalcDate",
+        "ClosingDate",
+        "DMY2Date",
+        "Date",
+        "Date2DMY",
+        "Date2DWY",
+        "DateFormula",
+        "DateTime",
+        "DWY2Date",
+        "Lang1030",
+        "Lang1031",
+        "Time",
+        "WorkDate",
+      ].sort(),
+    );
+    const keys = f.cells.map((c) => `${c.type}|${c.method}|${c.state}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    for (const n of names) expect(n).not.toContain('"');
+    const ids = [...(emitApp(f)["src/Cells.al"] ?? "").matchAll(/^codeunit (\d+) /gm)].map(
+      (m) => m[1],
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(f.cells.length);
+  });
+
+  test("answers use V:[...]; language cells are two-test and locale; WorkDate cells set WorkDate first", () => {
+    for (const c of f.cells)
+      expect((c.reader ?? c).call).toMatch(/Error\('V:\[%1(\|%2)?\]', .*\);$/);
+    const langs = f.cells.filter((c) => c.type.startsWith("Lang"));
+    expect(langs.length).toBeGreaterThan(30);
+    for (const c of langs) {
+      expect(c.reader).toBeDefined();
+      expect(c.depends).toBe("locale");
+      expect(c.reader?.setup?.[0]).toMatch(/^GlobalLanguage\(103[01]\);$/);
+    }
+    for (const c of f.cells.filter((x) => x.type === "WorkDate"))
+      expect(c.setup?.[0]).toMatch(/^WorkDate\(/);
+    const ev = f.cells.find((c) => c.type === "DateFormula" && c.method === "Evaluate");
+    expect(ev?.depends).toBe("locale");
+    expect(f.cells.find((c) => c.method === "Evaluate 9")?.depends).toBeUndefined();
+    expect(f.cells.find((c) => c.state === "Format 9 evening")?.depends).toBe("tz");
   });
 });
