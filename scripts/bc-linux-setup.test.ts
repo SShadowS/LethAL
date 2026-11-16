@@ -33,6 +33,7 @@ import {
   SERVERS,
   SecretFileError,
   UnitTestCoordWriteError,
+  bcdevSection,
   buildConfig,
   buildLaunch,
   configFileName,
@@ -236,8 +237,24 @@ describe("config writer", () => {
         packageCachePath: "/x/symbols",
         controlSymbolPath: "/x/control.app",
         env: { BC_DEV_USER: "BCRUNNER", BC_DEV_PASSWORD: SECRET, BC_DEV_API_PORT: "7152" },
+        stopHungSessions: true,
       },
     });
+  });
+
+  // PR-42: the owner's standing yes for our own servers; bc-demo's section (shared builder) stays off.
+  test("PR-42: every server's config for every fixture turns the hung-session stop on; bc-demo's does not", () => {
+    for (const server of Object.keys(SERVERS) as (keyof typeof SERVERS)[]) {
+      for (const f of GATE_FIXTURES) {
+        const cfg = buildConfig(server, login, paths, f.configDir) as {
+          bcdev: Record<string, unknown>;
+        };
+        expect(cfg.bcdev.stopHungSessions).toBe(true);
+      }
+    }
+    expect(
+      (bcdevSection("bc1", login, paths) as Record<string, unknown>).stopHungSessions,
+    ).toBeUndefined();
   });
 
   // R596: itest:agreement refuses unless the harden config's selectorIds equal its SELECTOR_IDS.

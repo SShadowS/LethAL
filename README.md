@@ -214,6 +214,11 @@ that are missing. The user and password are placeholders, so put your own in:
 allowlist of variables from your shell, so without this block it fails with *"Missing connection
 settings: username"*. `tenant` defaults to `default`.
 
+`"stopHungSessions": true` in the `bcdev` section records the server owner's yes for
+`--stop-hung-sessions` (below): every `lethal run --backend bcdev` with this config then ends a
+hung mutant's session as if the flag were given. Leave it out (or `false`) and only the flag turns
+the stop on. Set it only for a server whose owner agreed, such as your own sandbox.
+
 **2. Build and publish `LethAL Control`.** This is the one thing you install on the server. It owns
 the state a republish of your own app cannot reset, which is how LethAL knows which change is
 currently switched on:

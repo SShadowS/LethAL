@@ -157,6 +157,19 @@ checked (config-only)`, or `symbol cache empty for bcN: run setup --server bcN o
 run fails and never claims gate-ready. It never asks the server which build it runs: with more than one
 verified dir it takes the newest by its marker's `writtenAt`, and every line it prints says so.
 
+### The hung-session stop is ON for mutant runs on bc1-bc4 (owner, 2026-11-15; PR-42)
+The owner's yes for `--stop-hung-sessions` on our own servers is given (q-20261115T202541-baaa349b), while
+LethAL's product default stays off. So every config the setup script writes for `bc1`-`bc4` carries
+`"stopHungSessions": true` in its `bcdev` section, and every `lethal run --backend bcdev` with that config, or
+with a copy of its `bcdev` section (how lanes build per-task configs), has the stop. bc-demo's config does not.
+- **No gate moves.** The gates build their backend from named config fields and set the stop per leg
+  (`itest:hang` keeps its OFF leg); none reads this field, and none starts a run through `lethal run`.
+- **After this lands, rewrite your configs**: `bun scripts/bc-linux-setup.ts --write-config-only --server <bcN>`
+  in each worktree, and copy the new `bcdev` section into any per-task config. An older config without the field
+  still needs `--stop-hung-sessions` on the command line. To check a run: its `--progress-out` events'
+  `run-configured` line says `"stopHungSessions":true` (the report names the stop only in a caveat, when a mutant
+  was `timeout-killed`).
+
 ### The shared symbol cache
 
 A gate's instrumented compile reads `bcdev.packageCachePath`, and nothing on the bcdev path downloads

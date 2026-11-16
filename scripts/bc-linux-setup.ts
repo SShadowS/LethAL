@@ -342,6 +342,11 @@ export function buildLaunch(server: ServerName): object {
  * under the OData root answers 404 "Resource not found for the segment 'BC'".
  *
  * `configDir` adds that fixture's `selectorIds` (`FIXTURE_SELECTOR_IDS`, R596).
+ *
+ * PR-42: `stopHungSessions: true`, the owner's standing yes for our own servers
+ * (q-20261115T202541-baaa349b), so every `lethal run` with this config, or with a copy of its
+ * `bcdev` section, has the hung-session stop. No gate reads it: the gates build their backend
+ * from named fields and set the stop per leg. Not in `bcdevSection`, which bc-demo shares.
  */
 export function buildConfig(
   server: ServerName,
@@ -352,7 +357,7 @@ export function buildConfig(
   const selectorIds = FIXTURE_SELECTOR_IDS[configDir];
   return {
     ...(selectorIds !== undefined ? { selectorIds } : {}),
-    bcdev: bcdevSection(server, login, paths),
+    bcdev: { ...bcdevSection(server, login, paths), stopHungSessions: true },
   };
 }
 
