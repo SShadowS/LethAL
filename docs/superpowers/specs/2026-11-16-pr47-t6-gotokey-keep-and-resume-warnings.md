@@ -46,3 +46,26 @@ Evidence: `/coord/handoff/PR-47/`. Invented AL only in anything committed.
    refusal (when A lands). No pinned verdict or frozen figure moves.
 3. DO, the next window carrying it (t7): this family closes no daemon in a mutant request; warm-ups per new covered mutant fall
    back toward t5's; every mutant scored in both t6 and t7 has the same verdict and killing test (a difference is a BLOCK).
+
+## Addendum 1 (2026-11-16, the measurement, before the keep-list build)
+
+**Reduced.** The shape comes from the pinned build's source (`crates/al-vm/src/pages/rows.rs`: `opens_on_the_last_row_reading_up`,
+`go_to_key_from_the_last_row_read_up`, WINDOW = 20). Earlier attempts (R982) missed the secondary key. The invented refuser:
+- a list page with `SourceTableView = sorting(<a secondary key>) order(descending)`, declaring OnAfterGetRecord and
+  OnAfterGetCurrRecord;
+- opened modal with `Page.RunModal(0, <blank record>)` over a table of 60 rows;
+- a ModalPageHandler that calls `GoToKey` once.
+The one-shot and serve texts both equal DO's exactly.
+
+**Measured CLEAN** with R-967's kit (`/coord/handoff/PR-47/`, edge-5a58a0f16, `ALRUNNER_SEED=1`; the refuser runs R-937's
+standard writes first):
+- all 47 refuser answers refused with that text;
+- on one kept daemon, 27 readers all equal the control;
+- 20 fresh daemons give one answer, equal to it;
+- the pid is unchanged, and there is no panic text.
+Not measured: a second GoToKey or a move after the refusal (other texts, not on the list), the real DO page, and a handler that
+catches the error.
+
+So item 1 goes ahead as written: the keep entry anchors exactly that text, and leg C's `serve-keep-reasons` gains the invented
+case. The texts of the same function that were not measured stay off the list ("in a key other than the primary key, after a move
+or a GoToKey", "for a key the view does not have", "whose top row held is gone").
