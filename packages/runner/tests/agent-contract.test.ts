@@ -14,6 +14,7 @@ import {
   NO_MUTABLE_LINES_EXIT_CODE,
   QUARANTINED_EXIT_CODE,
   RUN_FLAGS,
+  SURVIVORS_ON_CHANGED_LINES_EXIT_CODE,
   TIME_BUDGET_EXIT_CODE,
   VERIFY_NOT_ALL_KILLED_EXIT_CODE,
   VERIFY_REFUSED_EXIT_CODE,
@@ -509,6 +510,7 @@ describe("C02-07: the documents' commands and tables are the code's", () => {
         String(NOTHING_SCORED_EXIT_CODE),
         String(TIME_BUDGET_EXIT_CODE),
         String(NO_MUTABLE_LINES_EXIT_CODE),
+        String(SURVIVORS_ON_CHANGED_LINES_EXIT_CODE),
       ].sort(),
     );
     // R912: a budget stop is partial, so it must not read as a pass; the two stronger claims win.
@@ -1555,6 +1557,7 @@ describe("C02-07: README and --help state the contract's exit codes and rules", 
         NOTHING_SCORED_EXIT_CODE,
         TIME_BUDGET_EXIT_CODE,
         NO_MUTABLE_LINES_EXIT_CODE,
+        SURVIVORS_ON_CHANGED_LINES_EXIT_CODE,
       ]),
     );
     const lines = help.split("\n");

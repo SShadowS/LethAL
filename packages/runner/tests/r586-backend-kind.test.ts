@@ -57,6 +57,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'return kind === "al-runner-v3";': "predicate",
   },
   "campaign-freeze.ts": { 'if (report.backend === "al-runner-v3") {': "v3" },
+  // PR-77: only an al-runner-v3 report can put a survivor apart.
+  "changed-line-survivors.ts": { 'const v3 = report.backend === "al-runner-v3";': "v3" },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
     'case "al-runner-v3":': "exhaustive-switch",

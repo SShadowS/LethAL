@@ -37,6 +37,7 @@ steps:
         echo "##vso[task.logissue type=error]not a pull-request build: the target branch is unknown"
         exit 1
       fi
+      # Advisory until the DO pilot's numbers decide: to fail on survivors on the changed lines, add --fail-on-survivors (exit 9).
       lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since "origin/$TARGET" --out lethal-report.json --progress-out lethal-events.ndjson
       rc=$?
       case "$rc" in
@@ -45,6 +46,7 @@ steps:
         3) echo "##vso[task.logissue type=error]LethAL quarantined the run: it refused to vouch for its own verdicts" ;;
         4) echo "##vso[task.logissue type=error]LethAL scored nothing: every mutant errored" ;;
         7) echo "##vso[task.logissue type=error]LethAL stopped early (time budget or a signal); the report is partial" ;;
+        9) echo "##vso[task.logissue type=error]LethAL found survivors on the changed lines (see SURVIVORS ON THE CHANGED LINES in the log)" ;;
         *) echo "##vso[task.logissue type=error]LethAL failed with exit code $rc (the message is on stderr)" ;;
       esac
       exit "$rc"
