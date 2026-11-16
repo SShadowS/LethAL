@@ -39,6 +39,7 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           set +e
+          # Advisory until the DO pilot's numbers decide: to fail on survivors on the changed lines, add --fail-on-survivors (exit 9).
           lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since "origin/$BASE" --out lethal-report.json --progress-out lethal-events.ndjson
           rc=$?
           case "$rc" in
@@ -47,6 +48,7 @@ jobs:
             3) echo "::error::LethAL quarantined the run: it refused to vouch for its own verdicts (see the report's validity)" ;;
             4) echo "::error::LethAL scored nothing: every mutant errored" ;;
             7) echo "::error::LethAL stopped early (time budget or a signal); the report is partial, rerun with --resume" ;;
+            9) echo "::error::LethAL found survivors on the changed lines (see SURVIVORS ON THE CHANGED LINES in the log)" ;;
             *) echo "::error::LethAL failed with exit code $rc (the message is on stderr)" ;;
           esac
           exit "$rc"

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**40 of 1046 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**40 of 1047 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -588,6 +588,7 @@ that ordering is the priority.
 - **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · done (fe099d4a)
 - **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
 - **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · open
+- **R1084** · CI threshold, first step (owner ruling: option 3, advisory first): survivors on the changed lines are listed, and --fail-on-survivors exits 9; v3-caveated survivors never fail · [R1084.md](docs/roadmap/R1084.md) · done (77b657a5)
 
 ## Backends and tooling
 

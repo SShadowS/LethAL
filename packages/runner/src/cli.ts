@@ -107,6 +107,8 @@ import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
+import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
+import type { ReportView } from "./changed-line-survivors";
 import type { EventSubscriber } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
@@ -438,6 +440,7 @@ export const DRY_RUN_REFUSED = [
   "stop-hung-sessions",
   "fresh-probe",
   "isolate-tests",
+  "fail-on-survivors",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -622,6 +625,8 @@ export interface RunCliConfig {
   readonly baselineProcesses?: number;
   /** R857: `--isolate-tests`, al-runner-v3 only: every test runs alone. Off by default. */
   readonly isolateTests?: boolean;
+  /** PR-77: `--fail-on-survivors`: exit `SURVIVORS_ON_CHANGED_LINES_EXIT_CODE` when a counted survivor sits on the changed lines. Needs a line filter. */
+  readonly failOnSurvivors?: true;
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -1132,6 +1137,9 @@ RUN — cost and recovery
                              per test at the baseline, four at a time, or --workers <n> at a time,
                              so allow memory for that many. Needs the serve-entries transport. A run with it and a run without
                              it never share verdicts (R857, R866)
+  --fail-on-survivors        needs --lines or --changed-since: exit ${SURVIVORS_ON_CHANGED_LINES_EXIT_CODE} when a survivor on those lines is
+                             not caveated by al-runner-v3. Advisory without it. The console ends
+                             with SURVIVORS ON THE CHANGED LINES with or without the flag
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -1341,6 +1349,7 @@ EXIT CODES
   ${NOTHING_SCORED_EXIT_CODE} nothing scored (every mutant errored; the run measured nothing)
   ${TIME_BUDGET_EXIT_CODE} time budget reached (--time-budget; the report is partial, run --resume to continue)
   ${NO_MUTABLE_LINES_EXIT_CODE} no mutable lines (--lines or --changed-since kept no mutation site; nothing ran, no report is written)
+  ${SURVIVORS_ON_CHANGED_LINES_EXIT_CODE} survivors on the changed lines (--fail-on-survivors; a survivor that al-runner-v3 caveats is listed apart and does not count; 3, 4 and 7 win)
 
 A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
 \`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;
@@ -1461,6 +1470,8 @@ export const RUN_FLAGS = {
   "max-new-tests": { type: "string" },
   // R-384: `lethal verify --no-reach-filter`. Owned by `verify` alone in FLAG_OWNERS.
   "no-reach-filter": { type: "boolean", default: false },
+  // PR-77: see `RunCliConfig.failOnSurvivors`.
+  "fail-on-survivors": { type: "boolean", default: false },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
@@ -1494,6 +1505,7 @@ const RUN_ONLY_FLAGS = [
   "fresh-probe",
   "isolate-tests",
   "progress-out",
+  "fail-on-survivors",
 ] as const;
 
 /**
@@ -2363,6 +2375,16 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--isolate-tests applies to al-runner-v3 only; ${backendArg} chooses its own calls, and BC's grouped path keeps some state between tests (R857)`,
     );
   }
+  // PR-77: a whole-app survivor count is a different quantity (docs/ci/threshold-options.md).
+  if (
+    values["fail-on-survivors"] === true &&
+    lineFilter.lines === undefined &&
+    lineFilter.changedSince === undefined
+  ) {
+    throw new Error(
+      "--fail-on-survivors needs --lines or --changed-since: it fails on survivors on the changed lines, and a whole-app survivor count is a different quantity",
+    );
+  }
   // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
@@ -2405,6 +2427,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
+    ...(values["fail-on-survivors"] === true ? { failOnSurvivors: true as const } : {}),
     ...(values["isolate-tests"] === true && values.workers !== undefined
       ? { baselineProcesses: workers }
       : {}),
@@ -4503,6 +4526,14 @@ export const TIME_BUDGET_EXIT_CODE = 7;
  */
 export const NO_MUTABLE_LINES_EXIT_CODE = 8;
 
+/**
+ * PR-77. `--fail-on-survivors` was given and a survivor on the changed lines counts (one al-runner-v3
+ * does not caveat). Opt-in and advisory by default, until the DO pilot's numbers decide. Quarantined
+ * (3), nothing scored (4) and time budget (7) win over it: their reports are not a full list. Exit 8
+ * writes no report, so 9 never applies there. Not 5 or 6 (verify's).
+ */
+export const SURVIVORS_ON_CHANGED_LINES_EXIT_CODE = 9;
+
 /** The exit code a top-level error earns: 8 for the line-filter refusal, else 1. */
 export function exitCodeForError(err: unknown): number {
   return err instanceof NoMutableLinesError ? NO_MUTABLE_LINES_EXIT_CODE : 1;
@@ -6113,13 +6144,15 @@ export const LETHAL_VERSION: string = rootPackageJson.version;
 
 /** The exit code a finished run earns — see `QUARANTINED_EXIT_CODE` and `NOTHING_SCORED_EXIT_CODE`. */
 export function exitCodeForReport(
-  report: Pick<SessionReport, "quarantined"> & {
-    readonly validity: { readonly caveats: readonly string[] };
-  },
+  report: Pick<SessionReport, "quarantined"> & ReportView,
+  failOnSurvivors = false,
 ): number {
   if (report.quarantined !== undefined) return QUARANTINED_EXIT_CODE;
   if (report.validity.caveats.includes("all-errors")) return NOTHING_SCORED_EXIT_CODE;
   if (report.validity.caveats.includes("time-budget-reached")) return TIME_BUDGET_EXIT_CODE;
+  if (failOnSurvivors && (changedLineSurvivors(report)?.counted.length ?? 0) > 0) {
+    return SURVIVORS_ON_CHANGED_LINES_EXIT_CODE;
+  }
   return 0;
 }
 
@@ -6270,8 +6303,18 @@ async function main(): Promise<number> {
   }
   const report = await runFromCli(parsed);
   console.log(renderConsole(report));
+  const changed = changedLineSurvivors(report);
+  if (changed !== undefined) console.log(renderChangedLineSurvivors(changed));
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
-  return exitCodeForReport(report);
+  return runExitCode(report, parsed);
+}
+
+/** `main`'s exit code for a finished run: the parsed `--fail-on-survivors` reaches `exitCodeForReport`. */
+export function runExitCode(
+  report: Parameters<typeof exitCodeForReport>[0],
+  parsed: { readonly failOnSurvivors?: true },
+): number {
+  return exitCodeForReport(report, parsed.failOnSurvivors === true);
 }
 
 if (import.meta.main) {

@@ -51,5 +51,16 @@ until the owner rules.
 - The cost of option 3 is the accept list's anchoring (see its cons): building it means extending R443's proof rules to
   accepted survivors, not only to equivalence marks.
 
+## Ruling and first step (PR-77, 2026-11-16)
+The owner chose option 3, advisory first: "Decide on gating from the DO pilot's measured numbers."
+- Built: after a run narrowed by `--lines` or `--changed-since`, the console ends with SURVIVORS ON THE CHANGED LINES. On
+  al-runner-v3, survivors with a positive caveat (a flagged baseline, coverage off, the restrictive-default list) are listed
+  apart. Unknown flags (serve rows carry none, #7954) and unrecorded ones count, and a summary line says how many survivors
+  that covers. A quarantined or time-budget run marks the section partial.
+- Built: `lethal run --fail-on-survivors` exits 9 when a counted survivor remains. Off by default; the templates carry it
+  commented out.
+- Not built: the accept list and its anchoring (the cons of option 3). Every survivor on the changed lines is "new" until then.
+- Spec: `docs/superpowers/specs/2026-11-16-pr77-changed-line-survivors.md`.
+
 ## Asked
 Filed to the owner through kraken, naming this file.

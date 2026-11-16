@@ -120,7 +120,7 @@ describe("PR-70: the CI templates' lethal commands", () => {
 
     // The stub needs `sh` and an executable named `lethal`: not on Windows.
     test.skipIf(process.platform === "win32")(
-      `${t}: the run block passes for exit 0 and 8 only (stub lethal, exits 0..9)`,
+      `${t}: the run block passes for exit 0 and 8 only; 9 fails (stub lethal, exits 0..9)`,
       () => {
         const block = runBlock(text);
         for (let n = 0; n <= 9; n++) {
@@ -129,8 +129,12 @@ describe("PR-70: the CI templates' lethal commands", () => {
       },
     );
 
-    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, 8, else); only 0 and 8 pass`, () => {
-      expect(caseLabels(text)).toEqual(["0", "8", "3", "4", "7", "*"]);
+    test(`${t}: maps exactly the exit codes LethAL documents (0, 3, 4, 7, 8, 9, else); only 0 and 8 pass`, () => {
+      expect(caseLabels(text)).toEqual(["0", "8", "3", "4", "7", "9", "*"]);
+      expect(text).toMatch(/9\) echo "[^"]*"/);
+      expect(text).not.toMatch(/9\) echo "[^"]*"; rc=0/);
+      expect(text).toContain("# Advisory until the DO pilot's numbers decide");
+      expect(text).toContain("--fail-on-survivors");
       expect(text).toMatch(/8\) echo "[^"]*"; rc=0 ;;/);
       expect(text).toContain('exit "$rc"');
       expect(text.indexOf("set +e")).toBeGreaterThan(-1);

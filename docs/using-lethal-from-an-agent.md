@@ -322,11 +322,13 @@ The `instead` column is guidance.
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
 | `7` | **Time budget reached.** `--time-budget` ran out; the report is partial, so run with `--resume` to continue. |
 | `8` | **No mutable lines.** `--lines` or `--changed-since` kept no mutation site; nothing ran and no report is written (`--dry-run` exits `8` too). A CI can treat it as a pass. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit `1`, not `8`. With `--operator` or `--exclude-operator` an earlier check can exit `1` first. |
+| `9` | **Survivors on the changed lines.** Only with `--fail-on-survivors`, which is refused (exit `1`) without `--lines` or `--changed-since`. Survivors that al-runner-v3 caveats are listed apart and do not count. Advisory by default. |
 
 `4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
 scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the
 mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
-scored (`4`) win over `7`. `8` is returned only for the line-filter refusal ("kept no deployable
+scored (`4`) win over `7`. `9` is returned only when `--fail-on-survivors` is given and a survivor on the
+changed lines is not caveated; `3`, `4` and `7` win over it. `8` is returned only for the line-filter refusal ("kept no deployable
 mutation site"); every other error stays `1`.
 
 Since R955 the budget bounds the baseline too. When it runs out inside the baseline, no more baseline
