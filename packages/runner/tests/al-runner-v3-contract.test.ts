@@ -336,6 +336,13 @@ const R998_ROWS: Record<string, { status: string; notRun: boolean; message: stri
     message:
       "NotRun: out-of-scope: Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
   },
+  // PR-53: the SetFilter-Boolean refusal as edge-5a58a0f16 words it (`/coord/handoff/PR-53/`).
+  "Codeunit50696.Refuses": {
+    status: "error",
+    notRun: true,
+    message:
+      "NotRun: out-of-scope: SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words of that language are not pinned)",
+  },
   // PR-47: the GoToKey refusal as edge-5a58a0f16 words it (`/coord/handoff/PR-47/`).
   "Codeunit50694.Refuses": {
     status: "error",
@@ -599,9 +606,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 18 entries");
-    // R998, R1019, R1043, R1009, PR-47: each new family judged a refusal by its own entry
+    expect(f?.measured).toContain("the keep rule accepts every row of all 19 entries");
+    // R998, R1019, R1043, R1009, PR-47, PR-53: each new family judged a refusal by its own entry
     for (const e of [
+      "setfilter-boolean-language-words",
       "gotokey-desc-last-row-above-window",
       "stale-buffer-after-lock",
       "recordref-not-open",
@@ -791,13 +799,15 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     // R1019: 50683 (publisher) and 50684 (manual subscriber) are support codeunits of 50685's cascade;
     // PR-29: 50691 is the delete subscriber of 50690's table (the measured shape has one).
     // PR-47: 50694 is the GoToKey case's test codeunit.
-    expect(SERVE_TESTS_AL.match(/^codeunit 506[789]\d /gm)).toHaveLength(21);
+    // PR-53: 50696 is the SetFilter-Boolean case's test codeunit.
+    expect(SERVE_TESTS_AL.match(/^codeunit 506[789]\d /gm)).toHaveLength(22);
     // R1043: the caption case's page; PR-47: the GoToKey case's list page.
     expect(SERVE_TESTS_AL.match(/^page 506[789]\d /gm)).toHaveLength(2);
     // PR-18: the FormatRegion case's report.
     expect(SERVE_TESTS_AL.match(/^report 506[789]\d /gm)).toHaveLength(1);
     // PR-29: the stale-buffer case's table; PR-47: the GoToKey case's table.
-    expect(SERVE_TESTS_AL.match(/^table 506[789]\d /gm)).toHaveLength(2);
+    // PR-53: the SetFilter-Boolean case's table.
+    expect(SERVE_TESTS_AL.match(/^table 506[789]\d /gm)).toHaveLength(3);
     // R1000 (R-989, measured on the gate): the serve daemon has no package cache, so no System record.
     expect(SERVE_TESTS_AL).not.toMatch(/Record Company\b/);
   });

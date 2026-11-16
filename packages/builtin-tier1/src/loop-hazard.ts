@@ -1442,9 +1442,60 @@ function toggledExitBlankHangs(node: ALSyntaxNode, ctx: SemanticContext, op: str
   if (op !== "lethal.toggle-blank-string") return false;
   const cmp = node.parent;
   if (node.rawKind !== ALNodeKind.text_literal || cmp === null) return false;
-  if (cmp.rawKind !== "comparison_expression" || node.text.trim() !== "''") return false;
+  if (node.text.trim() !== "''") return false;
+  if (cmp.rawKind === "assignment_statement") return toggledAssignedBlankHangs(node, cmp);
+  if (cmp.rawKind !== "comparison_expression") return false;
+  const pol = exitPolarity(cmp);
+  if (pol === null || pol.refuses === false) return false;
+  const { loop } = pol;
+  const other = [cmp.childForFieldName("left"), cmp.childForFieldName("right")].find(
+    (c) => c !== null && c.startIndex !== node.startIndex,
+  );
+  const name = baseNameOf(other ?? null);
+  return name !== null && loopBodyWrites(loop, name, ctx);
+}
+
+/**
+ * PR-53: `X := ''` as a statement of a loop's body (directly or in a branch), toggled: X never
+ * empties. Refused when the loop's exit, read by `exitPolarity`, needs X blank.
+ */
+function toggledAssignedBlankHangs(lit: ALSyntaxNode, asg: ALSyntaxNode): boolean {
+  if (asg.childForFieldName("right")?.startIndex !== lit.startIndex) return false;
+  const name = baseNameOf(asg.childForFieldName("left"));
+  if (name === null) return false;
+  let loop: ALSyntaxNode | null = null;
+  for (let p = asg.parent; p !== null; p = p.parent) {
+    if (LOOP_KINDS.has(p.kind)) {
+      loop = p;
+      break;
+    }
+  }
+  const cond = loop?.childForFieldName("condition");
+  if (loop === null || loop === undefined || cond === null || cond === undefined) return false;
+  // the assignment must be in the body, not the condition
+  if (asg.startIndex >= cond.startIndex && asg.endIndex <= cond.endIndex) return false;
+  let hangs = false;
+  visitAll(cond, (n) => {
+    if (hangs || n.rawKind !== "comparison_expression") return;
+    const l = n.childForFieldName("left");
+    const r = n.childForFieldName("right");
+    const blank = (c: ALSyntaxNode | null) => c !== null && c.text.trim() === "''";
+    const other = blank(l) ? r : blank(r) ? l : null;
+    if (other === null || baseNameOf(other) !== name) return;
+    const pol = exitPolarity(n);
+    hangs = pol?.refuses === true && pol.loop.startIndex === loop.startIndex;
+  });
+  return hangs;
+}
+
+/**
+ * The polarity walk shared by both PR-44 and PR-53 shapes: from an `=` / `<>` comparison to the
+ * loop it is the exit of. `refuses` is true when the comparison, stuck at its value for a name
+ * that can no longer empty (or whose blank was toggled), keeps the loop going for ever.
+ */
+function exitPolarity(cmp: ALSyntaxNode): { loop: ALSyntaxNode; refuses: boolean } | null {
   const sign = cmp.childForFieldName("operator")?.text.trim();
-  if (sign !== "=" && sign !== "<>") return false;
+  if (sign !== "=" && sign !== "<>") return null;
   let forced = sign === "<>";
   let top: ALSyntaxNode = cmp;
   for (let p = top.parent; p !== null; p = p.parent) {
@@ -1453,25 +1504,20 @@ function toggledExitBlankHangs(node: ALSyntaxNode, ctx: SemanticContext, op: str
     } else if (p.rawKind === "logical_expression") {
       const l = p.childForFieldName("left");
       const r = p.childForFieldName("right");
-      if (l === null || r === null) return false;
+      if (l === null || r === null) return null;
       const lop = p.text
         .slice(l.endIndex - p.startIndex, r.startIndex - p.startIndex)
         .trim()
         .toLowerCase();
-      if (lop !== (forced ? "or" : "and")) return false;
+      if (lop !== (forced ? "or" : "and")) return null;
     } else if (p.rawKind !== "parenthesized_expression") {
       break;
     }
     top = p;
   }
   const loop = top.parent;
-  if (loop === null || !LOOP_KINDS.has(loop.kind)) return false;
-  if (loop.rawKind === "repeat_statement" ? forced : !forced) return false;
-  const other = [cmp.childForFieldName("left"), cmp.childForFieldName("right")].find(
-    (c) => c !== null && c.startIndex !== node.startIndex,
-  );
-  const name = baseNameOf(other ?? null);
-  return name !== null && loopBodyWrites(loop, name, ctx);
+  if (loop === null || !LOOP_KINDS.has(loop.kind)) return null;
+  return { loop, refuses: loop.rawKind === "repeat_statement" ? !forced : forced };
 }
 
 /** A non-negative integer literal. */
