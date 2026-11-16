@@ -947,6 +947,42 @@
         "Codeunit58350.GermanFormat": { "status": "pass" },
         "Codeunit58350.GermanCalcDateMessage": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8201-json-shapes",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8201",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-87's json-text BC check, 2026-11-16, en-US, UTC; /coord/handoff/PR-87/joined.tsv): AsBigInteger of 1.50 is 2; AsBoolean of 1.50 and 1e3 is true; AsInteger of 12345678901234567890 raises 'Unable to convert from Microsoft.Dynamics.Nav.Runtime.NavJsonValue to System.Int32.' and AsBigInteger '... to Microsoft.Dynamics.Nav.Runtime.NavBigInteger.'; ReadFrom of duplicate keys keeps the last ({\"a\":2}, one key); 1e400 reads and writes as \"Infinity\"; IndexOf on [10,20,30,\"x\"] gives 0, 1, 3, -1, -1, -1; so all seven tests pass",
+      "rerun": ["PR-87's json-text cells 51041, 51093, 51094, 51103, 51148, 51149, 51191, 51194, 51238-51243"],
+      "tests": {
+        "Codeunit58360.NumberToBigIntegerRounds": { "status": "pass" },
+        "Codeunit58360.NonZeroNumberIsTrue": { "status": "pass" },
+        "Codeunit58360.TooLargeForIntegerRaises": { "status": "pass" },
+        "Codeunit58360.TooLargeForBigIntegerRaises": { "status": "pass" },
+        "Codeunit58360.DuplicateKeyLastWins": { "status": "pass" },
+        "Codeunit58360.NumberOverflowIsInfinity": { "status": "pass" },
+        "Codeunit58360.IndexOfAcrossTypes": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8202-textbuilder-totext",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8202",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-87's json-text BC check, 2026-11-16; /coord/handoff/PR-87/joined.tsv): after Append('abcdef'), ToText(2, 9) is 'bcdef', ToText(-1, 1) is 'a', ToText(9, 1) is empty; so the test passes",
+      "rerun": ["PR-87's json-text cells 51304-51306"],
+      "tests": {
+        "Codeunit58370.ToTextOutsideTheText": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8203-danish-compare",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8203",
+      "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, PR-87's json-text BC check, 2026-11-16, en-US language and region; /coord/handoff/PR-87/joined.tsv): 'æ' < 'Æ' is true and > false, 'z' < 'æ' is false and > true, 'ø' < 'å' is false and > true, Code 'Æ' < Text 'z' is true and > false; so all four tests pass",
+      "rerun": ["PR-87's json-text cells 51384, 51385, 51399, 51400, 51402, 51403, 51411, 51412"],
+      "tests": {
+        "Codeunit58380.LowerAeBeforeCapital": { "status": "pass" },
+        "Codeunit58380.AeBeforeZ": { "status": "pass" },
+        "Codeunit58380.OSlashAfterARing": { "status": "pass" },
+        "Codeunit58380.CodeAeBeforeTextZ": { "status": "pass" }
+      }
     }
   ]
 }
