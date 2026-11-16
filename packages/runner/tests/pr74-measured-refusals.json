@@ -1,0 +1,64 @@
+[
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-value-expected",
+    "texts": ["SetFilter: value expected after ..", "SetFilter: value expected after @"]
+  },
+  {
+    "cls": "Evaluate of `<op>` into Decimal",
+    "entry": "evaluate-decimal-comparison",
+    "texts": [
+      "Evaluate of `>100` into Decimal (form not pinned by the corpus)",
+      "Evaluate of `>1000` into Decimal (form not pinned by the corpus)",
+      "Evaluate of `<1000` into Decimal (form not pinned by the corpus)"
+    ]
+  },
+  {
+    "cls": "RecordRef.* on a RecordRef that is not open",
+    "entry": "recordref-method-not-open",
+    "texts": [
+      "RecordRef.Duplicate on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+      "RecordRef.ClearMarks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)"
+    ]
+  },
+  {
+    "cls": "a parameters string without the XML declaration ..., given to Report.SaveAs",
+    "entry": "report-parameters-no-xml-declaration",
+    "texts": [
+      "a parameters string without the XML declaration in this form, given to Report.SaveAs (which character BC's filter error names is not pinned)"
+    ]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception * (ZipArchive)",
+    "entry": "dotnet-zip-central-directory-corrupt",
+    "texts": [
+      "DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. <- System.IO.IOException: An attempt was made to move the position before the beginning of the stream.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception * (WriteEndObject)",
+    "entry": "dotnet-json-writer-no-token-to-close",
+    "texts": [
+      "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndObject raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception * (WriteStartObject)",
+    "entry": "dotnet-json-writer-start-object-in-object",
+    "texts": [
+      "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'a'.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "conversion of Boolean false to BigInteger",
+    "entry": "boolean-false-to-biginteger",
+    "texts": ["conversion of Boolean false to BigInteger"]
+  },
+  {
+    "cls": "FieldRef.* on a FieldRef that was never assigned",
+    "entry": "fieldref-method-never-assigned",
+    "texts": [
+      "FieldRef.SetFilter on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)"
+    ]
+  }
+]
