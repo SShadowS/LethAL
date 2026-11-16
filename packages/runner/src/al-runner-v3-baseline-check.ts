@@ -8,7 +8,7 @@
  * - `readCgroupMemory`, `memoryBoundBytes`: the memory guard reads the CONTAINER's cgroup, because
  *   that is what the OOM killer reads (the host is far bigger and shared by every lane).
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { V3CoverageRead } from "./al-runner-v3-sleep";
 
 /** One call's answer, as far as the comparison reads it (a `V3Row` subset, so no import cycle). */
@@ -274,6 +274,60 @@ export function readProcessRssBytes(
     return undefined;
   }
 }
+
+/** PR-88: a process's `VmHWM` (peak resident) and `VmRSS` (current resident) in bytes; a missing line is absent. */
+export interface ProcMemory {
+  readonly hwm?: number;
+  readonly rss?: number;
+}
+
+/**
+ * PR-88: the sensor of a request's TRUE peak. `reset` restarts the process's high-water mark
+ * (`/proc/<pid>/clear_refs` = "5") and returns false when the write failed; `read` gives the process's
+ * memory, or undefined when it cannot be read. Tests inject a fake and never read `/proc`.
+ */
+export interface PeakProbe {
+  reset(pid: number): boolean;
+  read(pid: number): ProcMemory | undefined;
+}
+
+/** PR-88: `VmHWM` and `VmRSS` of a `/proc/<pid>/status` text. */
+export function parseProcMemory(status: string): ProcMemory {
+  const kb = (name: string): number | undefined => {
+    const m = new RegExp(`^${name}:\\s+(\\d+)\\s+kB$`, "m").exec(status);
+    return m?.[1] === undefined ? undefined : Number(m[1]) * 1024;
+  };
+  const hwm = kb("VmHWM");
+  const rss = kb("VmRSS");
+  return { ...(hwm !== undefined ? { hwm } : {}), ...(rss !== undefined ? { rss } : {}) };
+}
+
+/** PR-88: the real probe (the file functions are injectable). */
+export function makeProcPeakProbe(
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+  write: (path: string, data: string) => void = (p, d) => writeFileSync(p, d),
+): PeakProbe {
+  return {
+    reset(pid) {
+      try {
+        write(`/proc/${pid}/clear_refs`, "5");
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    read(pid) {
+      try {
+        return parseProcMemory(read(`/proc/${pid}/status`));
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/** PR-88: after a reset, `VmHWM` must be within this of `VmRSS`, or the reset did not take. */
+export const PEAK_RESET_TOLERANCE_BYTES = 64 * 2 ** 20;
 
 /** The most bytes in use before no new call starts: the limit less the headroom. */
 export function memoryBoundBytes(maxBytes: number, headroomGb: number): number {

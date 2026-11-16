@@ -97,6 +97,7 @@ import {
   type V3LegOutcome,
   V3_DEFECT_FACTS,
   V3_LEG_C_FACTS,
+  V3_OBSERVE_PINS_ENV,
   V3_WARN_FACTS,
   type XdBaselineVerdict,
   cdoCheckoutRefusal,
@@ -106,6 +107,7 @@ import {
   dirtyFromStatus,
   failsClosedRefusal,
   judgeLegT,
+  judgeServePins,
   knownDifferencesRefusal,
   legCFactLine,
   legOutcomeOfError,
@@ -308,6 +310,21 @@ const ORACLE_BC_BUILD: Record<string, string> = {
 const LegFailure = V3LegFailure;
 const must = (cond: boolean, what: string): void => {
   if (!cond) throw new LegFailure(what);
+};
+/**
+ * PR-88: a leg's serve pins. With `LETHAL_ITEST_V3_OBSERVE_PINS=1` each pin is printed beside the actual
+ * figure and none fails; verdicts and killing tests are never compared here and still fail the leg.
+ */
+const servePins = (
+  label: string,
+  got: Readonly<Record<string, unknown>>,
+  pins: Readonly<Record<string, number>>,
+  failure: (key: string, got: unknown, pinned: number) => string,
+): void => {
+  const j = judgeServePins(label, got, pins, process.env[V3_OBSERVE_PINS_ENV] === "1", failure);
+  for (const l of j.lines) console.log(l);
+  const [first] = j.failures;
+  if (first !== undefined) throw new LegFailure(first);
 };
 
 /** The Microsoft apps of sandbox-tests' `.alpackages` (no LethAL copy): `<deps>` for names and the probes. */
@@ -694,10 +711,12 @@ async function legS1(
     console.log(
       `  ${leg}: serve counters ${JSON.stringify({ ...got, echoMismatches: s.echoMismatches })}`,
     );
-    for (const [k, v] of Object.entries(S1E_PINS)) {
-      const g = got[k as keyof typeof got];
-      must(g === v, `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`);
-    }
+    servePins(
+      leg,
+      got,
+      S1E_PINS,
+      (k, g, v) => `${leg}: ${k} ${g}, pre-committed ${v} (R761, R778)`,
+    );
     must(s.echoMismatches === 0, `${leg}: ${s.echoMismatches} echo mismatches, pre-committed 0`);
   }
   if (leg === "DB") {
@@ -989,10 +1008,7 @@ async function legN1S(scratch: string, version: string): Promise<void> {
   assertCounts(serve.r, "N1S", 44, 0, 4, 48);
   const s = serve.b.entriesStats();
   console.log(`  N1S: serve counters ${JSON.stringify({ ...s })}`);
-  for (const [k, v] of Object.entries(N1S_PINS)) {
-    const g = s[k as keyof typeof N1S_PINS];
-    must(g === v, `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
-  }
+  servePins("N1S", s, N1S_PINS, (k, g, v) => `N1S: ${k} ${g}, pre-committed ${v} (R763, R778)`);
   must(s.echoMismatches === 0, `N1S: ${s.echoMismatches} echo mismatches, expected 0`);
 }
 
@@ -1550,8 +1566,12 @@ function logServeCounters(b: AlRunnerV3Backend, leg: "MOE" | "WRE"): void {
     echoMismatches: s.echoMismatches,
   };
   console.log(`  ${leg}: serve counters ${JSON.stringify(got)}`);
-  for (const [k, v] of Object.entries(MOE_WRE_PINS[leg]))
-    must(got[k] === v, `${leg}: serve counter ${k} ${got[k]}, pre-committed ${v}`);
+  servePins(
+    leg,
+    got,
+    MOE_WRE_PINS[leg],
+    (k, g, v) => `${leg}: serve counter ${k} ${g}, pre-committed ${v}`,
+  );
 }
 
 /**

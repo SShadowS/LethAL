@@ -582,6 +582,28 @@ export type RunEventInput =
       readonly baselineRow: string;
       readonly row: string;
     }
+  | {
+      /**
+       * PR-88: one al-runner-v3 serve request that gave a memory reading (R987's sensor). Bytes
+       * throughout: the daemon's `floor` and `start` resident size, the `sampledPeak` of the 200 ms
+       * sampler, `hwm` (`VmHWM`, present only when its reset was verified) and `g` (the peak less the
+       * floor). `peakSource` says which the estimator used. `calls` lists each call with its test
+       * entries in the request and its highest cost per entry after the reading. Debug: events stream
+       * only, not the report.
+       */
+      readonly type: "serve-request-sized";
+      readonly calls: readonly {
+        readonly call: number;
+        readonly entries: number;
+        readonly cost: number;
+      }[];
+      readonly floor: number;
+      readonly start: number;
+      readonly sampledPeak: number;
+      readonly hwm?: number;
+      readonly g: number;
+      readonly peakSource: "hwm" | "sampled";
+    }
   | { readonly type: "quarantined"; readonly reason: string }
   | {
       /**

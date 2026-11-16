@@ -486,6 +486,32 @@ function judgeLegTCore(
   return { outcome: "pass", lines };
 }
 
+/** PR-88: with this set to `1`, the gate prints every leg's serve figures next to the pinned ones and does not fail on a pin difference. */
+export const V3_OBSERVE_PINS_ENV = "LETHAL_ITEST_V3_OBSERVE_PINS";
+
+/**
+ * PR-88: one leg's serve pins against its actual figures. `observe`: every pin gives a line
+ * (`actual X, pinned Y`, marked MOVED when they differ) and none fails. Otherwise a difference gives a
+ * failure, worded by `failure`. Verdict and killing-test checks never go through here.
+ */
+export function judgeServePins(
+  label: string,
+  got: Readonly<Record<string, unknown>>,
+  pins: Readonly<Record<string, number>>,
+  observe: boolean,
+  failure: (key: string, got: unknown, pinned: number) => string,
+): { readonly failures: string[]; readonly lines: string[] } {
+  const failures: string[] = [];
+  const lines: string[] = [];
+  for (const [k, v] of Object.entries(pins)) {
+    const g = got[k];
+    if (observe)
+      lines.push(`  ${label}: pin ${k}: actual ${g}, pinned ${v}${g === v ? "" : "  MOVED"}`);
+    else if (g !== v) failures.push(failure(k, g, v));
+  }
+  return { failures, lines };
+}
+
 /**
  * R651: one leg's wall-clock split, TIMING ONLY. `phases` sums the orchestrator's `phase-left`
  * events; the mutant loop is its wall (unlike `timings.mutantsMs`, a sum over mutants) and holds

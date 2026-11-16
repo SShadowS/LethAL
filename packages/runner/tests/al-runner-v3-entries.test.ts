@@ -43,6 +43,7 @@ import {
   SPECULATE_BASELINE_ENV,
   UniformRefusalWatch,
   type V3KeptDrift,
+  type V3RequestSized,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
   V3_UNIFORM_REFUSAL_CODEUNITS,
@@ -51,6 +52,7 @@ import {
   v3CallDeadlineMs,
   v3DaemonClosesText,
 } from "../src/al-runner-v3-backend";
+import type { PeakProbe } from "../src/al-runner-v3-baseline-check";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
   AlRunnerV3EntriesEncodeError,
@@ -598,6 +600,37 @@ interface RigOpts {
   notify?: (code: string, message: string) => void;
   /** R948: the session's stop state, given before the deploy. */
   stopHandle?: Parameters<AlRunnerV3Backend["useStopHandle"]>[0];
+}
+
+/** PR-88: what the fake peak probe does (it never reads `/proc`). */
+interface FakeProbeOpts {
+  /** The reset write fails. */
+  resetOk?: boolean;
+  /** Added to `VmRSS` for the `VmHWM` read right after the reset (a reset that did not take). */
+  hwmAtReset?: number;
+  /** Added to `VmRSS` for the `VmHWM` read after the answer (a spike the sampler missed; may be negative). */
+  spike?: number;
+  /** The process is gone when the answer's read comes. */
+  exited?: boolean;
+}
+
+/** PR-88: the first read after a reset is the verification, the next one is after the answer. */
+function fakeProbe(o: FakeProbeOpts, rss: () => number, log?: string[]): PeakProbe {
+  let reads = 0;
+  return {
+    reset() {
+      log?.push("reset");
+      reads = 0;
+      return o.resetOk ?? true;
+    },
+    read() {
+      log?.push("read");
+      reads += 1;
+      if (reads === 1) return { hwm: rss() + (o.hwmAtReset ?? 0), rss: rss() };
+      if (o.exited === true) return undefined;
+      return { hwm: rss() + (o.spike ?? 0), rss: rss() };
+    },
+  };
 }
 
 /** R952, R987: a backend built outside `rig` reads no daemon's RSS (the fakes' pids are made up). */
@@ -3026,7 +3059,19 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     perCu: ReadonlyMap<number, number>,
     planned: { mutantId: string; refs: readonly TestMethodRef[] }[],
     /** `stack`: each request grows the daemon on top of what earlier ones left (it keeps it all). */
-    o: { rows?: RowsFn; shrink?: boolean; stack?: boolean } = {},
+    o: {
+      rows?: RowsFn;
+      shrink?: boolean;
+      stack?: boolean;
+      /** PR-88: a fake peak probe over the fake daemon (default: none, the sampler alone). */
+      probe?: FakeProbeOpts;
+      /** PR-88: collects the `serve-request-sized` events. */
+      sized?: V3RequestSized[];
+      /** PR-88: collects the notices' messages. */
+      messages?: string[];
+      /** PR-88: collects the order of the probe calls and the fake daemon's answers. */
+      log?: string[];
+    } = {},
   ) => {
     const floor = 0.5 * GiB;
     const mem = { level: floor };
@@ -3069,6 +3114,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
             }
           : {
               answer: (q) => {
+                o.log?.push("answer");
                 if (counted(q)) {
                   sizes.push(q.ids.length);
                   mem.level =
@@ -3078,9 +3124,19 @@ describe("R987: entries per serve request follow the daemon growth measured per 
               },
             }),
       },
-      seams: { requestRssReader: () => mem.level },
-      notify: (code) => notes.push(code),
+      seams: {
+        requestRssReader: () => mem.level,
+        ...(o.probe !== undefined ? { peakProbe: fakeProbe(o.probe, () => mem.level, o.log) } : {}),
+      },
+      notify: (code, message) => {
+        notes.push(code);
+        o.messages?.push(message);
+      },
     });
+    if (o.sized !== undefined) {
+      const into = o.sized;
+      r.b.setRequestSizedSink((e) => into.push(e));
+    }
     await baseline(r.b, SUITE2);
     sizes.length = 0; // the prefetch's requests only
     await r.b.prefetchMutants(planned);
@@ -3178,6 +3234,127 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     expect(high.s.pairBatchStored).toBe(60);
     // A pair is its two test entries (NONE and M) at 0.5 GiB: 4 fit 4 GiB, so 15 requests (1 at 256).
     expect(high.s.pairBatchRequests).toBe(15);
+  });
+
+  describe("PR-88: the true peak of a request", () => {
+    const heavy = new Map([[CU, 0.5 * GiB]]);
+    const run = (probe: FakeProbeOpts | undefined, extra: { cu2?: boolean } = {}) => {
+      const sized: V3RequestSized[] = [];
+      const messages: string[] = [];
+      const log: string[] = [];
+      const planned =
+        extra.cu2 === true
+          ? [...onCu(mids(1, 16)), ...onCu2(mids(17, 16)), ...onCu(mids(33, 30))]
+          : onCu(mids(1, 60));
+      const perCu = extra.cu2 === true ? new Map([...heavy, [CU2, 0.5 * GiB]]) : heavy;
+      return prefetchOf(perCu, planned, {
+        ...(probe !== undefined ? { probe } : {}),
+        sized,
+        messages,
+        log,
+      }).then((r) => ({ ...r, sized, messages, log }));
+    };
+
+    test("the high-water mark is reset right before each send, and read after the answer", async () => {
+      const r = await run({});
+      // The warm-up answers first, unprobed. Then per request: reset, the verification read, the
+      // daemon's answer, the read after it.
+      expect(r.log.join(" ")).toMatch(/^answer( reset read answer read)+$/);
+      expect(r.log.filter((x) => x === "answer").length).toBeGreaterThan(1);
+    });
+
+    test("a verified reset: the peak is max(VmHWM, sampled peak), from the hwm", async () => {
+      const r = await run({ spike: GiB });
+      const first = r.sized[0];
+      expect(first).toBeDefined();
+      expect(first?.peakSource).toBe("hwm");
+      // The sampler saw 8.5 GiB; the daemon's own high-water mark was a GiB higher.
+      expect(first?.sampledPeak).toBe(8.5 * GiB);
+      expect(first?.hwm).toBe(9.5 * GiB);
+      expect(first?.g).toBe(9 * GiB);
+      // Charged at 9 GiB over 16 test entries, not 8: fewer entries fit 4 GiB than at the sampled cost.
+      expect(first?.calls).toEqual([{ call: CU, entries: 16, cost: (9 * GiB) / 16 }]);
+      expect(r.sizes[1]).toBe(14);
+      expect(r.notes).not.toContain("al-runner-v3-peak-unverified");
+    });
+
+    test("a sampled peak above the high-water mark still stands (the sampler is a floor)", async () => {
+      const r = await run({ spike: -GiB });
+      const first = r.sized[0];
+      expect(first?.peakSource).toBe("sampled");
+      expect(first?.g).toBe(8 * GiB);
+      expect(first?.hwm).toBe(7.5 * GiB);
+      expect(r.sizes[1]).toBe(16);
+    });
+
+    test("an unreset VmHWM far from VmRSS falls back to the sampled peak, and says so once", async () => {
+      const r = await run({ hwmAtReset: GiB, spike: 4 * GiB });
+      expect(r.sized[0]?.peakSource).toBe("sampled");
+      expect(r.sized[0]?.hwm).toBeUndefined();
+      expect(r.sized[0]?.g).toBe(8 * GiB);
+      expect(r.sizes[1]).toBe(16);
+      expect(r.notes.filter((c) => c === "al-runner-v3-peak-unverified")).toEqual([
+        "al-runner-v3-peak-unverified",
+      ]);
+    });
+
+    test("a failed reset write falls back the same way", async () => {
+      const r = await run({ resetOk: false, spike: 4 * GiB });
+      expect(r.sized[0]?.peakSource).toBe("sampled");
+      expect(r.sizes[1]).toBe(16);
+      expect(r.notes.filter((c) => c === "al-runner-v3-peak-unverified").length).toBe(1);
+    });
+
+    test("a daemon that exited before the read gives no reading", async () => {
+      const r = await run({ exited: true });
+      expect(r.sized).toEqual([]);
+      // No reading, so no cost: requests stay at the 16 unmeasured test entries.
+      expect(r.sizes).toEqual([32, 32, 32, 24]);
+      expect(r.notes).not.toContain("al-runner-v3-entries-cap-lowered");
+    });
+
+    test("one cap line per call, once per call, in the spec's wording", async () => {
+      const r = await run({}, { cu2: true });
+      const lines = r.messages.filter((m) => m.includes("hold about"));
+      expect(lines.length).toBe(2);
+      expect(lines.filter((m) => m.includes(`codeunit ${CU} `)).length).toBe(1);
+      expect(lines.filter((m) => m.includes(`codeunit ${CU2} `)).length).toBe(1);
+      for (const l of lines)
+        expect(l).toMatch(
+          /requests carrying codeunit \d+ hold about \d+ test entries \(its highest measured cost: \d+ MiB per entry, from a hwm peak\)/,
+        );
+    });
+
+    test("the event's G is read from the daemon's floor, not from a request's higher start", async () => {
+      const sized: V3RequestSized[] = [];
+      await prefetchOf(
+        new Map([
+          [CU, 0.125 * GiB],
+          [CU2, 0.25 * GiB],
+        ]),
+        [...onCu(mids(1, 16)), ...onCu2(mids(17, 30))],
+        { stack: true, sized },
+      );
+      // The second request starts at 2.5 GiB (what the first left), its floor is still 0.5 GiB.
+      const second = sized.find((e) => e.start > e.floor);
+      expect(second).toBeDefined();
+      expect(second?.g).toBe((second?.sampledPeak ?? 0) - 0.5 * GiB);
+      expect(second?.peakSource).toBe("sampled");
+    });
+
+    test("the event carries the request's figures", async () => {
+      const r = await run({ spike: GiB });
+      const e = r.sized[0];
+      expect(e).toEqual({
+        calls: [{ call: CU, entries: 16, cost: (9 * GiB) / 16 }],
+        floor: 0.5 * GiB,
+        start: 0.5 * GiB,
+        sampledPeak: 8.5 * GiB,
+        hwm: 9.5 * GiB,
+        g: 9 * GiB,
+        peakSource: "hwm",
+      });
+    });
   });
 });
 

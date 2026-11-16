@@ -4962,10 +4962,13 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   );
   // PR-56: a request that drifted from the baseline right after a kept refusal.
   backend.setKeptDriftSink?.((d) => emit({ type: "serve-drift-after-kept-refusal", ...d }));
+  // PR-88: the size of a serve request that gave a memory reading.
+  backend.setRequestSizedSink?.((s) => emit({ type: "serve-request-sized", ...s }));
   return () => {
     backend.setNotify?.(undefined);
     backend.setDaemonCloseSink?.(undefined);
     backend.setKeptDriftSink?.(undefined);
+    backend.setRequestSizedSink?.(undefined);
   };
 }
 

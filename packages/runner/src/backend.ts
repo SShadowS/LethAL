@@ -625,6 +625,26 @@ export interface ExecutionBackend {
       readonly row: string;
     }) => void,
   ): void;
+  /**
+   * PR-88, OPTIONAL: where the backend reports the size of a serve request that gave a memory reading
+   * (al-runner-v3 only). Installed and removed with `setNotify`; each call becomes a `serve-request-sized`
+   * event (events stream only, not the report). Bytes throughout.
+   */
+  setRequestSizedSink?(
+    sink?: (sized: {
+      readonly calls: readonly {
+        readonly call: number;
+        readonly entries: number;
+        readonly cost: number;
+      }[];
+      readonly floor: number;
+      readonly start: number;
+      readonly sampledPeak: number;
+      readonly hwm?: number;
+      readonly g: number;
+      readonly peakSource: "hwm" | "sampled";
+    }) => void,
+  ): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**
