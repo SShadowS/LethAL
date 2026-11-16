@@ -1,0 +1,54 @@
+# LethAL on a pull request: Azure DevOps (example; PR-70).
+#
+# What it does: mutation-tests only the AL lines the pull request changes (`--changed-since`), then exports the report in
+# the mutation-testing-elements format (`lethal export`, R178) and publishes it with the Stryker Mutator extension's
+# `PublishMutationReport` task, which shows it as a tab on the build. LethAL gates on nothing: exit 0 means the run
+# completed, whatever survived (see docs/ci/README.md for the exit codes and docs/ci/threshold-options.md).
+#
+# Assumptions, adjust them for your repository:
+# - `lethal` is on the agent's PATH: there is no published release yet, so build it once (README, "Installation") and put
+#   it on a self-hosted agent, or build it in an earlier step.
+# - The Stryker Mutator extension (it provides PublishMutationReport) is installed in your organisation.
+# - The app is in `app/` and its tests in `test/`; `lethal.config.json` is next to them (README, "Configuration").
+# - `al-runner-v3` runs offline on Linux x64 and is NOT authoritative; for BC's own answers use `--backend bcdev` on an
+#   agent that reaches a BC sandbox (never a production tenant).
+# - Run as a pull-request validation build (a branch policy): the target branch is then known.
+# - The exported JSON embeds your source, so keep it inside your organisation.
+
+trigger: none
+
+pool:
+  name: Default # a self-hosted Linux x64 pool with lethal installed
+
+steps:
+  - checkout: self
+    fetchDepth: 0 # --changed-since needs the history shared with the target branch
+
+  - bash: |
+      set +e
+      lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since origin/$(System.PullRequest.TargetBranchName) --out lethal-report.json --progress-out lethal-events.ndjson
+      rc=$?
+      case "$rc" in
+        0) echo "LethAL: run completed" ;;
+        3) echo "##vso[task.logissue type=error]LethAL quarantined the run: it refused to vouch for its own verdicts" ;;
+        4) echo "##vso[task.logissue type=error]LethAL scored nothing: every mutant errored" ;;
+        7) echo "##vso[task.logissue type=error]LethAL stopped early (time budget or a signal); the report is partial" ;;
+        *) echo "##vso[task.logissue type=error]LethAL failed with exit code $rc (the message is on stderr)" ;;
+      esac
+      exit "$rc"
+    displayName: Mutation-test the changed lines
+
+  - bash: lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+    displayName: Export the report for display
+    condition: and(always(), ne(variables['Agent.JobStatus'], 'Canceled'))
+
+  - task: PublishMutationReport@1
+    displayName: Publish the mutation report
+    condition: always()
+    inputs:
+      reportPattern: mutation-report.json
+      reportDisplayName: LethAL
+
+  - publish: lethal-report.json
+    artifact: lethal-report
+    condition: always()
