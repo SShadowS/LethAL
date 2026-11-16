@@ -18,3 +18,13 @@ killing test, one of which hangs, is met in a different order per window).
 **t6 under the rule:** vs t5, 27,014 same, 2 under the timeout rule (CDOEMailHandler:462, CDOMailMessageBuilder:137), 0 differ; vs t1,
 t2b, t3 and t4: 0 under the rule, 0 differ. So t6's BLOCK clears on (1); its slowdown is explained separately (codeunit 68984's
 baseline-refused GoToKey test sent in every mutant request, PR-47).
+
+## Amendment 1 (orchestrator ruling after t7, 2026-11-16)
+
+Condition (b) becomes: **each side either reproduced its kill (`killReproduced` true) or carries PR-43's `stopEvidence:
+"v3-cpu-stop"`**. PR-43 (master e71c6077) proves a v3 CPU-time stop instead of reproducing it, so a t7-or-later timeout kill
+carries no `killReproduced`. Any other stop evidence does not count. Tests: two more cases in `verdict-rule.test.ts` (11 in all);
+red-checked both ways (without the amendment the CPU-stop case fails; accepting any `stopEvidence` makes the other-evidence case fail).
+
+**t7 under the amended rule:** vs t5, 27,014 same, 1 under the timeout rule (CDOMailMessageBuilder:137: timeout-killed both sides,
+t7's by v3-cpu-stop), 0 differ; vs t1, t2b, t3, t4 and t6: 0 differ. Before the amendment that row read "differ" only on (b).
