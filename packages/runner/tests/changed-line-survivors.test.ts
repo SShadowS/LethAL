@@ -10,6 +10,7 @@ import {
   TIME_BUDGET_EXIT_CODE,
   exitCodeForReport,
   parseCliConfig,
+  runExitCode,
 } from "../src/cli";
 
 type Row = NonNullable<ReportView["mutants"]>[number];
@@ -83,17 +84,72 @@ describe("PR-77: changedLineSurvivors", () => {
     expect(r?.counted.map((m) => m.mutantCode)).toEqual(["M2"]);
   });
 
-  test("(b) a covering test with baselineFlaggedUnknown puts the survivor apart", () => {
+  // Addendum 1: unknown and unrecorded flags count; fresh (serve) and resumed reports agree.
+  const serveStyle = report({
+    mutants: [covered, plain],
+    testMethods: [{ name: "T.One", baselineFlaggedUnknown: true }],
+  });
+  const resumedStyle = {
+    ...report({ mutants: [covered, plain], testMethods: [{ name: "T.One" }] }),
+    resumedFrom: { runId: 1, carriedMutants: 2, skippedStranded: 0 },
+  } as ReportView;
+
+  test("a serve-style report (all flags unknown) counts the survivors and says how many", () => {
+    const r = changedLineSurvivors(serveStyle);
+    expect(r?.apart).toEqual([]);
+    expect(r?.counted.map((m) => m.mutantCode)).toEqual(["M1", "M2"]);
+    expect(r?.unknownFlagCount).toBe(1);
+    expect(renderChangedLineSurvivors(r as never)).toContain(
+      "1 survivor(s) on the changed lines have a covering test whose al-runner flag is unknown",
+    );
+  });
+
+  test("a resumed report with no flag fields agrees with the fresh serve-style one", () => {
+    const fresh = changedLineSurvivors(serveStyle);
+    const resumed = changedLineSurvivors(resumedStyle);
+    expect(resumed?.counted).toEqual(fresh?.counted);
+    expect(resumed?.apart).toEqual(fresh?.apart);
+    expect(resumed?.unknownFlagCount).toBe(fresh?.unknownFlagCount ?? -1);
+    expect(exitCodeForReport(resumedStyle, true)).toBe(exitCodeForReport(serveStyle, true));
+    expect(exitCodeForReport(resumedStyle, true)).toBe(SURVIVORS_ON_CHANGED_LINES_EXIT_CODE);
+  });
+
+  test("a fresh report whose covering test has no flag is truly unflagged: not in the unknown count", () => {
+    const r = changedLineSurvivors(
+      report({ mutants: [covered], testMethods: [{ name: "T.One" }] }),
+    );
+    expect(r?.unknownFlagCount).toBe(0);
+    expect(renderChangedLineSurvivors(r as never)).not.toContain("flag is unknown");
+  });
+
+  test("known-survivor verdicts count as survivors", () => {
+    const r = changedLineSurvivors(
+      report({ mutants: [mutant({ mutantCode: "M1", verdict: "known-survivor" })] }),
+    );
+    expect(r?.counted.map((m) => m.mutantCode)).toEqual(["M1"]);
+  });
+
+  test("carried survived rows are listed and counted", () => {
     const r = changedLineSurvivors(
       report({
-        mutants: [covered, plain],
-        testMethods: [{ name: "T.One", baselineFlaggedUnknown: true }],
+        mutants: [mutant({ mutantCode: "M1", carried: true })],
+        resumedFrom: { runId: 3, carriedMutants: 1, skippedStranded: 0 },
       }),
     );
-    expect(r?.apart.map((m) => [m.mutantCode, m.reasons])).toEqual([
-      ["M1", ["baselineFlaggedUnknown"]],
-    ]);
-    expect(r?.counted.map((m) => m.mutantCode)).toEqual(["M2"]);
+    expect(r?.counted.map((m) => m.mutantCode)).toEqual(["M1"]);
+  });
+
+  test("a quarantined or time-budget report marks the section partial", () => {
+    const q = changedLineSurvivors({
+      ...report({ mutants: [] }),
+      quarantined: { reason: "x" },
+    } as ReportView);
+    expect(renderChangedLineSurvivors(q as never)).toContain("(partial: the run was quarantined");
+    const t = changedLineSurvivors(report({ mutants: [] }, [...narrowed, "time-budget-reached"]));
+    expect(renderChangedLineSurvivors(t as never)).toContain("stopped by its time budget");
+    expect(
+      renderChangedLineSurvivors(changedLineSurvivors(report({ mutants: [] })) as never),
+    ).not.toContain("partial");
   });
 
   test("(c) a file in coverageOffFiles puts the survivor apart", () => {
@@ -130,12 +186,7 @@ describe("PR-77: changedLineSurvivors", () => {
         restrictiveDefault: { survivors: ["0/M1"] } as never,
       }),
     );
-    expect(r?.apart[0]?.reasons).toEqual([
-      "baselineFlagged",
-      "baselineFlaggedUnknown",
-      "coverageOff",
-      "restrictiveDefault",
-    ]);
+    expect(r?.apart[0]?.reasons).toEqual(["baselineFlagged", "coverageOff", "restrictiveDefault"]);
   });
 
   test("a bcdev report caveats nothing, whatever the flags say", () => {
@@ -175,6 +226,7 @@ describe("PR-77: changedLineSurvivors", () => {
           reasons: ["coverageOff"],
         },
       ],
+      unknownFlagCount: 0,
     });
     expect(text).toContain("SURVIVORS ON THE CHANGED LINES");
     // R117: the `file:line` form is built, not written, so the citation guard does not read it.
@@ -219,6 +271,14 @@ describe("PR-77: --fail-on-survivors exit code", () => {
     expect(
       exitCodeForReport(report({ mutants: m }, [...narrowed, "time-budget-reached"]), true),
     ).toBe(TIME_BUDGET_EXIT_CODE);
+  });
+});
+
+describe("PR-77: main's wiring", () => {
+  const r = report({ mutants: [mutant({ mutantCode: "M1" })] });
+  test("the parsed flag reaches the exit code: on gives 9, off gives 0, same report", () => {
+    expect(runExitCode(r, { failOnSurvivors: true })).toBe(SURVIVORS_ON_CHANGED_LINES_EXIT_CODE);
+    expect(runExitCode(r, {})).toBe(0);
   });
 });
 

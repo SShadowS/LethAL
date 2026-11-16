@@ -1139,7 +1139,7 @@ RUN — cost and recovery
                              it never share verdicts (R857, R866)
   --fail-on-survivors        needs --lines or --changed-since: exit ${SURVIVORS_ON_CHANGED_LINES_EXIT_CODE} when a survivor on those lines is
                              not caveated by al-runner-v3. Advisory without it. The console ends
-                             with SURVIVORS ON THE CHANGED LINES either way
+                             with SURVIVORS ON THE CHANGED LINES with or without the flag
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -6306,6 +6306,14 @@ async function main(): Promise<number> {
   const changed = changedLineSurvivors(report);
   if (changed !== undefined) console.log(renderChangedLineSurvivors(changed));
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
+  return runExitCode(report, parsed);
+}
+
+/** `main`'s exit code for a finished run: the parsed `--fail-on-survivors` reaches `exitCodeForReport`. */
+export function runExitCode(
+  report: Parameters<typeof exitCodeForReport>[0],
+  parsed: { readonly failOnSurvivors?: true },
+): number {
   return exitCodeForReport(report, parsed.failOnSurvivors === true);
 }
 

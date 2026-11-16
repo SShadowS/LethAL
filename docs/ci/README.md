@@ -22,7 +22,7 @@ pipeline.
    | `4` | Nothing scored: every mutant errored. | fail |
    | `7` | Time budget or a signal: the report is partial (`--resume` continues it). | fail |
    | `8` | No mutable lines: the line filter kept no mutation site (a pull request with no `.al` change, a comment-only edit). Nothing ran and no report is written. `--dry-run` exits 8 too. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit 1, not 8. With `--operator` or `--exclude-operator`, an earlier check can exit 1 first, so a pull request with no site fails there. | pass |
-   | `9` | Survivors on the changed lines. Only with `--fail-on-survivors`, which needs `--lines` or `--changed-since`. Survivors that al-runner-v3 caveats are listed apart and do not count. 3, 4 and 7 win over 9. | fail |
+   | `9` | Survivors on the changed lines. Only with `--fail-on-survivors`, which needs `--lines` or `--changed-since`. On al-runner-v3, only positive signals put a survivor apart (a flagged baseline, coverage off, the restrictive-default list); those are listed apart and do not count. An unknown flag (serve rows carry none, upstream #7954) or an unrecorded one (a resumed run) counts, and the section says how many survivors rest on that. Known survivors (`--skip-known-survivors`) and carried survivors count too. 3, 4 and 7 win over 9. | fail |
 
    Without `--fail-on-survivors`, LethAL does not fail a run because mutants survived, and there is no score threshold: see
    [`threshold-options.md`](threshold-options.md). The run still ends with a list, SURVIVORS ON THE CHANGED LINES.
