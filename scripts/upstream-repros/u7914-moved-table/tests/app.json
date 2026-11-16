@@ -1,0 +1,13 @@
+{
+  "id": "79140000-0000-4000-8000-000000000003",
+  "name": "Probe Tests 7914",
+  "publisher": "LethAL Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 58130, "to": 58139 }],
+  "features": ["NoImplicitWith"],
+  "dependencies": [
+    { "id": "79140000-0000-4000-8000-000000000002", "name": "Probe Base 7914", "publisher": "LethAL Repro", "version": "1.0.0.0" }
+  ]
+}
