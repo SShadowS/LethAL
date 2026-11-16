@@ -435,6 +435,8 @@ async function snapshotCase(c: {
   readonly missingRow?: boolean;
   /** PR-47: the stored baseline lacks one of the session's tests. */
   readonly dropTest?: boolean;
+  /** PR-47: where the snapshot ends up: on the resumed run under another tree, or nowhere. */
+  readonly retree?: "changed" | "none";
   readonly spy?: boolean;
   /** R857: run 1 stays default; a stopped run under `--isolate-tests` is what today resumes. */
   readonly isolate?: boolean;
@@ -499,6 +501,16 @@ async function snapshotCase(c: {
       ]);
     }
   }
+  // PR-47: "changed": the snapshot sits on the RESUMED run under another tree hash; "none": no
+  // run stored one.
+  if (c.retree === "changed") {
+    store.db.run(
+      "UPDATE baseline_snapshots SET run_id = ?, batch_hash = 'other-tree' WHERE run_id = ?",
+      [runId, other],
+    );
+  } else if (c.retree === "none") {
+    store.db.run("DELETE FROM baseline_snapshots");
+  }
   if (c.missingRow === true) {
     const getRun = store.getRun.bind(store);
     store.getRun = (id: number) => (id === other ? null : getRun(id));
@@ -541,6 +553,7 @@ async function snapshotCase(c: {
     defaultSnapshots,
     recheckCalls,
     testCount,
+    resumedRun: runId,
   };
 }
 const reusedOf = (events: readonly RunEvent[]) => warned(events, "resume-baseline-reused");
@@ -646,19 +659,16 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     expect(why).toHaveLength(1);
     expect(why[0]).toContain("because the seed (stored 1, this session 2)");
   });
-  test("order: a same-build snapshot under another coverage mode is not found (SQL); PR-47 names it", async () => {
+  test("order: a same-build snapshot under another coverage mode is not found (SQL), silently", async () => {
     const s = await snapshotCase({
       snap: { backend: "al-runner-v3", runnerBuild: B1, coverageMode: "al-runner" },
     });
     expect(s.error).toBeUndefined();
     expect(reusedOf(s.events)).toEqual([]);
     expect(warned(s.events, "snapshot-backend-build-changed")).toEqual([]);
-    // PR-47 (a): no stored baseline matches, and the line says so.
-    const why = warned(s.events, "resume-baseline-not-reused");
-    expect(why).toHaveLength(1);
-    expect(why[0]).toContain(
-      "no stored baseline matches this batch's instrumented tree and test app (the emitted AL or the test app changed)",
-    );
+    // PR-47: the resumed run stored nothing for this batch (its snapshot sits on another run), so
+    // this miss is not "the tree changed" and says nothing.
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
   });
   test("PR-47 (b): a stored baseline lacking one of the session's tests is dropped, by name, with counts", async () => {
     const s = await snapshotCase({
@@ -673,10 +683,44 @@ describe("R619 baseline-snapshot reuse (scoreBatch through runSession): T14's ca
     expect(why[0]).toContain(`lacks 1 of this session's ${s.testCount} tests`);
     expect(why[0]).toContain(`run ${s.other} batch 0`);
   });
-  test("PR-47: a found and reused snapshot warns nothing; a session without --resume warns nothing", async () => {
+  test("PR-47 (a): the resumed run stored this batch for another tree: warns, naming run and batch", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      retree: "changed",
+    });
+    expect(s.error).toBeUndefined();
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([
+      `[lethal] resume-baseline-not-reused: run ${s.resumedRun} stored batch 0's baseline for another instrumented tree (the emitted AL changed); batch 0's baseline runs again.`,
+    ]);
+  });
+  test("PR-47: a resume that looks at no snapshot (serve, no recheck) is silent even if the tree changed", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      serve: true,
+      retree: "changed",
+    });
+    expect(s.error).toBeUndefined();
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+  });
+  test("PR-47: a batch the resumed run never stored is silent", async () => {
+    const s = await snapshotCase({
+      snap: { backend: "al-runner-v3", runnerBuild: B1 },
+      retree: "none",
+    });
+    expect(s.error).toBeUndefined();
+    expect(reusedOf(s.events)).toEqual([]);
+    expect(s.today.baselineRuns).toBeGreaterThan(0);
+    expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+  });
+  test("PR-47: a found and reused snapshot warns nothing", async () => {
     const s = await snapshotCase({ snap: { backend: "al-runner-v3", runnerBuild: B1 } });
     expect(reusedOf(s.events)).toHaveLength(1);
     expect(warned(s.events, "resume-baseline-not-reused")).toEqual([]);
+  });
+  test("PR-47: a session without --resume warns nothing", async () => {
     const store = new ResultsStore(":memory:");
     const { events, emit } = collect(store, false);
     try {

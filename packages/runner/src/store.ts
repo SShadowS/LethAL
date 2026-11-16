@@ -2251,6 +2251,15 @@ export class ResultsStore {
     };
   }
 
+  /** PR-47: the instrumented-tree hash a run stored for one batch's baseline snapshot, or null
+   *  when it stored none. Only the warning for a resume whose tree changed reads it. */
+  snapshotBatchHash(runId: number, batchIndex: number): string | null {
+    const row = this.db
+      .query("SELECT batch_hash FROM baseline_snapshots WHERE run_id = ? AND batch_index = ?")
+      .get(runId, batchIndex) as { batch_hash: string } | null;
+    return row === null ? null : row.batch_hash;
+  }
+
   /** Returns the `mutants.id` row id SQLite assigned this insert (see I5: `mutant_code` alone
    *  is only unique within a batch, so callers need this to disambiguate test_results rows
    *  across batches). */
