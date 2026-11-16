@@ -30,3 +30,19 @@ The ripple rules for a new `Caveat` are followed (`CAVEAT_INTERPRETATIONS`, the 
 2. The emitted AL of a target with a glued header compiles with alc (an offline compile in the build's evidence, not a fixture).
 3. The schemas gain the caveat value; every committed sample report still validates; no frozen baseline or golden moves;
    `itest:alrunner-v3` passes every leg.
+
+## Addendum 1 (2026-11-16, after the build and its Opus review, before any gate)
+
+- **bcdev only.** The caveat is raised only on a bcdev run. al-runner v3 covers `[NonDebuggable]` code (PR-34: all 68 Secrets
+  mutants), so on v3 a `no-coverage` mutant there really is untested. A text saying otherwise would hide a real test gap.
+- **No count on the console.** `renderConsole` sees only the `SessionReport`, and naming a count would need a new report field,
+  with every committed sample report regenerated live. The caveat name appears in the console's `SCOPE: ... [caveats]` list and in
+  `validity.caveats`; `lethal explain` gives its interpretation. The flag lives on the manifest entry (`nonDebuggable`, in the
+  stream schema), not on the report's mutant rows.
+- **Discovery's header regex is anchored** to the start of a line, and a quoted name stops at a line break. Unanchored, the glued
+  form matched a quoted identifier ending in `codeunit <digits>` (for example `procedure "Calls Codeunit 1"()`) and refused a
+  test file that loads today (R79's guard).
+- **Explain schema v29.** A new caveat value bumps the explain schema version, as PR-36's did (R233).
+
+**Predictions, added to 1:** no caveat on an al-runner v3 run with the same mutant; the quoted-identifier shape still discovers
+both tests. Each is red both ways.
