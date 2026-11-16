@@ -42,6 +42,8 @@
 # later); 2 for a bad class, a bad lock folder or a flock failure (retrying never helps).
 # Do NOT wrap corpus-snapshot.ts or v3-timing.ts in this: they take their own slot, so the job
 # would hold two (and they do not queue).
+# PR-73: a running job's declared peak can be LOWERED (never raised, never under its measured tree plus a
+# margin) by its holder: `bun scripts/heavy-slot-lower.ts <slot> <holder pid> <GiB>`. Never edit a lock file by hand.
 set -u
 wait=0
 if [ "${1:-}" = "--wait" ]; then
