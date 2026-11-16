@@ -1,0 +1,71 @@
+# LethAL on a pull request: GitHub Actions (example; PR-70).
+#
+# What it does: mutation-tests only the AL lines the pull request changes (`--changed-since`), exports the report in the
+# mutation-testing-elements JSON format (`lethal export`, R178) and uploads the reports as an artifact. LethAL gates on
+# nothing: exit 0 means the run completed, whatever survived (see docs/ci/README.md for the exit codes and
+# docs/ci/threshold-options.md for why there is no score threshold yet).
+#
+# Assumptions, adjust them for your repository:
+# - `lethal` is on the runner's PATH: there is no published release yet, so build it once (README, "Installation").
+# - The app is in `app/` and its tests in `test/`; `app/lethal.config.json` configures the backend (README, "Configuration").
+# - `al-runner-v3` runs offline on Linux x64 and is NOT authoritative; it runs only an al-runner build LethAL has gated
+#   (R814), so install the one `lethal doctor` names. For BC's own answers use `--backend bcdev` on a runner that reaches a
+#   BC sandbox (never a production tenant).
+# - Security: a self-hosted runner executes the pull request's code. Use it only in a private repository, or require
+#   approval for workflows from forks; never a self-hosted runner with fork pull requests on a public repository (with
+#   bcdev the config holds a BC login).
+# - Every artifact below carries your AL source (the report's mutant texts, the export's embedded files): keep them inside
+#   your organisation.
+# - The HTML page (`--format mutation-elements-html`) loads the Stryker elements bundle from jsDelivr when it is opened,
+#   so opening it needs network access. LethAL writes no bundle.
+name: mutation-test
+
+on:
+  pull_request:
+    paths:
+      - "**/*.al"
+
+jobs:
+  lethal:
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --changed-since runs git merge-base against the base branch
+
+      - name: Mutation-test the changed lines
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set +e
+          # Advisory until the DO pilot's numbers decide: to fail on survivors on the changed lines, add --fail-on-survivors (exit 9).
+          lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since "origin/$BASE" --out lethal-report.json --progress-out lethal-events.ndjson
+          rc=$?
+          case "$rc" in
+            0) echo "LethAL: run completed" ;;
+            8) echo "LethAL: no changed line holds a mutation site; nothing to measure"; rc=0 ;;
+            3) echo "::error::LethAL quarantined the run: it refused to vouch for its own verdicts (see the report's validity)" ;;
+            4) echo "::error::LethAL scored nothing: every mutant errored" ;;
+            7) echo "::error::LethAL stopped early (time budget or a signal); the report is partial, rerun with --resume" ;;
+            9) echo "::error::LethAL found survivors on the changed lines (see SURVIVORS ON THE CHANGED LINES in the log)" ;;
+            *) echo "::error::LethAL failed with exit code $rc (the message is on stderr)" ;;
+          esac
+          exit "$rc"
+
+      - name: Export the report for display
+        if: ${{ always() && hashFiles('lethal-report.json') != '' }}
+        run: |
+          lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+          lethal export lethal-report.json --format mutation-elements-html --project app --out mutation-report.html
+
+      - name: Upload the reports
+        if: ${{ always() && hashFiles('lethal-report.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: lethal-mutation-report
+          path: |
+            lethal-report.json
+            mutation-report.json
+            mutation-report.html
+            lethal-events.ndjson

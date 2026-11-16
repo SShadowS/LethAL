@@ -44,7 +44,11 @@ import {
   refuseV3Platform,
   validateAlRunnerV3Config,
 } from "./al-runner-v3-config";
-import { chooseV3Environment, describeV3Environment } from "./al-runner-v3-environment";
+import {
+  chooseV3Environment,
+  describeV3Environment,
+  readLaunchEnvironment,
+} from "./al-runner-v3-environment";
 import { checkGated, resolveV3Binary, v3InstallHint } from "./al-runner-v3-pin";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { readSystemRuntime } from "./app-package";
@@ -103,6 +107,9 @@ import { watchProjectInputs } from "./source-drift";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
+import { type AcceptResult, computeAcceptResult, loadAcceptList } from "./accept-list";
+import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
+import type { ReportView } from "./changed-line-survivors";
 import type { EventSubscriber } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
@@ -113,11 +120,12 @@ import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
-import { toMutationElements } from "./mutation-elements";
+import { toMutationElements, toMutationElementsHtml } from "./mutation-elements";
 import {
   BASELINE_TIMEOUT_DEFAULT,
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
+  NoMutableLinesError,
   REQUEST_CEILING_MS,
   defaultQuarantineDir,
   generateMutationSet,
@@ -433,6 +441,7 @@ export const DRY_RUN_REFUSED = [
   "stop-hung-sessions",
   "fresh-probe",
   "isolate-tests",
+  "fail-on-survivors",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -617,6 +626,8 @@ export interface RunCliConfig {
   readonly baselineProcesses?: number;
   /** R857: `--isolate-tests`, al-runner-v3 only: every test runs alone. Off by default. */
   readonly isolateTests?: boolean;
+  /** PR-77: `--fail-on-survivors`: exit `SURVIVORS_ON_CHANGED_LINES_EXIT_CODE` when a counted survivor sits on the changed lines. Needs a line filter. */
+  readonly failOnSurvivors?: true;
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -748,6 +759,8 @@ export interface InitCliConfig {
   readonly outPath?: string;
   /** Overwrite an existing file. Off by default: a config holds credentials someone typed. */
   readonly force?: boolean;
+  /** Which config section to write: `bcdev` (the default when absent) or `al-runner-v3`. */
+  readonly backendKind?: BackendKind;
 }
 
 export interface DoctorCliConfig {
@@ -781,17 +794,15 @@ export interface DoctorCliConfig {
 export interface ExportCliConfig {
   readonly mode: "export";
   readonly reportPath: string;
-  readonly format: "mutation-elements";
+  readonly format: "mutation-elements" | "mutation-elements-html";
   readonly projectDir: string;
-  /** Where the JSON goes. */
+  /** Where the JSON (or the HTML page) goes. */
   readonly outPath: string;
   /**
-   * Deliberately NO html option. Rendering needs the `mutation-testing-elements` bundle, and this
-   * CLI ships as a standalone signed binary, so supporting it would mean EMBEDDING 238 KB of
-   * third-party JavaScript into a signed executable. That is a supply-chain decision this command
-   * should not make on a user's behalf, and the ecosystem already renders the JSON: `npx
-   * mutation-testing-elements`, or any Stryker html reporter. `scripts/export-mutation-elements.ts`
-   * still writes a self-contained file for local use, where node_modules exists.
+   * R1080. `mutation-elements-html` writes a page that LOADS the Stryker elements bundle from
+   * jsDelivr (pinned, integrity-checked) when opened. The CLI ships as a signed standalone binary,
+   * so it embeds no third-party JavaScript: the viewer's browser fetches the bundle. The JSON
+   * format is what the Stryker dashboard and other renderers read.
    */
   /** The schema requires these and LethAL has no such concept — see `ElementsOptions.thresholds`. */
   readonly thresholds: { readonly high: number; readonly low: number };
@@ -1005,7 +1016,7 @@ export function helpText(version: string): string {
 USAGE
   lethal run               --project <dir> --tests <dir> --backend <bcdev|al-runner-v3> [options]
   lethal run               --project <dir> --dry-run
-  lethal init              --project <dir> [--out <path>] [--force]
+  lethal init              --project <dir> [--out <path>] [--force] [--backend <bcdev|al-runner-v3>]
   lethal clear-quarantine  (--server <url> --instance <name> | --config <path>)
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
@@ -1020,20 +1031,24 @@ USAGE
                                          [--config <path>]
 
 EXPORT — R178. Projects a finished report into a format a CI system can DISPLAY.
-  --format <name>            required, no default. Only 'mutation-elements' today: the Stryker
-                             interchange schema that Azure DevOps' PublishMutationReport task, the
-                             Stryker dashboard and the GitLab/GitHub renderers all read. No default
-                             on purpose — one would make the next format a silent behaviour change
+  --format <name>            required, no default. 'mutation-elements' writes the Stryker
+                             interchange JSON (the Stryker dashboard and other renderers read it).
+                             'mutation-elements-html' writes one HTML page holding that JSON; the
+                             page loads the Stryker elements bundle from jsDelivr (pinned,
+                             integrity-checked), so it needs network access when opened. Azure
+                             DevOps' PublishMutationReport reads an HTML report; whether its tab
+                             renders this page is not measured. No default on purpose — one would
+                             make the next format a silent behaviour change
   --project <dir>            the project the report was produced against. REQUIRED here because the
                              schema embeds each file's SOURCE so the rendered report can highlight
                              the mutated span, which also means the output must not be published for
                              a third party's code
-  --out <path>               where the JSON goes
+  --out <path>               where the JSON or the HTML page goes
   --thresholds <high,low>    mutation-score thresholds written into the report, 0..100, default
                              80,60. They colour the rendered report; LethAL itself gates on nothing,
                              and has no threshold concept of its own
-  Render the JSON to HTML with 'npx mutation-testing-elements'; this command does not, because it
-  ships as a signed standalone binary and that would mean embedding third-party JavaScript in it.
+  LethAL writes no renderer bundle (it ships as a signed standalone binary). Either output
+  embeds the AL source of every mutated file.
 
 RUN — required
   --project <dir>            AL project to mutate (the app under test)
@@ -1068,7 +1083,10 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              line of each untracked .al file git does not ignore. Unions with
                              --lines. Pure deletions add no line. '--changed-since HEAD' selects
                              only uncommitted edits. Needs git and a history that shares a commit
-                             with <ref>
+                             with <ref>. A filter that keeps no site exits ${NO_MUTABLE_LINES_EXIT_CODE}
+                             (also with --dry-run); lines whose sites were refused (hang-capable,
+                             undecided #if) exit 1. With --operator/--exclude-operator, an earlier
+                             check can exit 1 first
   --tests-only <glob>        only these test files run at baseline (repeatable). CAN CHANGE A
                              VERDICT: exclude a killing test and its mutant is reported survived.
                              The report flags it 'tests-narrowed'
@@ -1120,6 +1138,9 @@ RUN — cost and recovery
                              per test at the baseline, four at a time, or --workers <n> at a time,
                              so allow memory for that many. Needs the serve-entries transport. A run with it and a run without
                              it never share verdicts (R857, R866)
+  --fail-on-survivors        needs --lines or --changed-since: exit ${SURVIVORS_ON_CHANGED_LINES_EXIT_CODE} when a survivor on those lines is
+                             not caveated by al-runner-v3. Advisory without it. The console ends
+                             with SURVIVORS ON THE CHANGED LINES with or without the flag
   --resume                   continue the most recent unfinished run in --db, reusing its verdicts
   --resume-run <id>          resume a specific run id
   --retry-stranded           on resume, retry mutants that left the server stuck (skipped by default:
@@ -1182,6 +1203,11 @@ INIT — write a lethal.config.json this project can actually run with
   --out <path>               where to write (default: <project>/lethal.config.json)
   --force                    overwrite an existing file. Off by default: a config holds
                              credentials someone typed
+  --backend <name>           which section to write: bcdev (default) or al-runner-v3. For
+                             al-runner-v3 it writes an "alRunnerV3" section with packagesDir and a
+                             bcVersion placeholder that 'run' and 'doctor' refuse by name until you
+                             type your BC build. "environment" is left out when your
+                             .vscode/launch.json names environmentType, else it is a placeholder.
   Server, company and credentials are left as placeholders and named in the printed next steps,
   because nothing here can know them. Follow with 'lethal doctor --config <path>'.
 
@@ -1323,6 +1349,8 @@ EXIT CODES
   0 ok   1 error   ${QUARANTINED_EXIT_CODE} quarantined (the run refused to vouch for its own verdicts)
   ${NOTHING_SCORED_EXIT_CODE} nothing scored (every mutant errored; the run measured nothing)
   ${TIME_BUDGET_EXIT_CODE} time budget reached (--time-budget; the report is partial, run --resume to continue)
+  ${NO_MUTABLE_LINES_EXIT_CODE} no mutable lines (--lines or --changed-since kept no mutation site; nothing ran, no report is written)
+  ${SURVIVORS_ON_CHANGED_LINES_EXIT_CODE} survivors on the changed lines (--fail-on-survivors; a survivor that al-runner-v3 caveats is listed apart and does not count; 3, 4 and 7 win)
 
 A score is only as good as its caveats: read \`validity\` in the JSON report before quoting
 \`mutationScore\`. A survivor is a lead, not a proven test-suite gap.`;
@@ -1443,11 +1471,12 @@ export const RUN_FLAGS = {
   "max-new-tests": { type: "string" },
   // R-384: `lethal verify --no-reach-filter`. Owned by `verify` alone in FLAG_OWNERS.
   "no-reach-filter": { type: "boolean", default: false },
+  // PR-77: see `RunCliConfig.failOnSurvivors`.
+  "fail-on-survivors": { type: "boolean", default: false },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
 const RUN_ONLY_FLAGS = [
-  "backend",
   "skip-known-survivors",
   "dry-run",
   "workers",
@@ -1477,6 +1506,7 @@ const RUN_ONLY_FLAGS = [
   "fresh-probe",
   "isolate-tests",
   "progress-out",
+  "fail-on-survivors",
 ] as const;
 
 /**
@@ -1576,6 +1606,11 @@ export const FLAG_OWNERS: ReadonlyArray<{
     flag: "force",
     owners: ["init"],
     instead: "It lets `lethal init` overwrite an existing config.",
+  },
+  {
+    flag: "backend",
+    owners: ["run", "init"],
+    instead: "It is a `lethal run` flag, and picks the config section `lethal init` writes.",
   },
   {
     flag: "artifact",
@@ -1926,6 +1961,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       projectDir: project,
       ...(out !== undefined && out !== "" ? { outPath: out } : {}),
       ...(values.force === true ? { force: true } : {}),
+      ...(values.backend !== undefined ? { backendKind: parseBackendKind(values.backend) } : {}),
     };
   }
 
@@ -1954,9 +1990,10 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
           "with --out). `lethal export` reads only that file and the project's sources.",
       );
     }
-    if (values.format !== "mutation-elements") {
+    const exportFormat = values.format;
+    if (exportFormat !== "mutation-elements" && exportFormat !== "mutation-elements-html") {
       throw new Error(
-        `--format is required and the only value today is "mutation-elements" (the Stryker interchange schema, which Azure DevOps' PublishMutationReport, the Stryker dashboard and the GitLab/GitHub renderers all read); got ${JSON.stringify(values.format ?? null)}. It has no default on purpose: a default would make the next format a silent behaviour change for everyone already scripting this.`,
+        `--format is required and the values are "mutation-elements" (the Stryker interchange JSON) and "mutation-elements-html" (one page that loads the Stryker elements bundle from jsDelivr, so it needs network access when opened); got ${JSON.stringify(values.format ?? null)}. It has no default on purpose: a default would make the next format a silent behaviour change for everyone already scripting this.`,
       );
     }
     const projectDir = values.project;
@@ -1998,7 +2035,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     return {
       mode: "export",
       reportPath,
-      format: "mutation-elements",
+      format: exportFormat,
       projectDir,
       outPath,
       thresholds,
@@ -2339,6 +2376,16 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       `--isolate-tests applies to al-runner-v3 only; ${backendArg} chooses its own calls, and BC's grouped path keeps some state between tests (R857)`,
     );
   }
+  // PR-77: a whole-app survivor count is a different quantity (docs/ci/threshold-options.md).
+  if (
+    values["fail-on-survivors"] === true &&
+    lineFilter.lines === undefined &&
+    lineFilter.changedSince === undefined
+  ) {
+    throw new Error(
+      "--fail-on-survivors needs --lines or --changed-since: it fails on survivors on the changed lines, and a whole-app survivor count is a different quantity",
+    );
+  }
   // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
@@ -2381,6 +2428,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
+    ...(values["fail-on-survivors"] === true ? { failOnSurvivors: true as const } : {}),
     ...(values["isolate-tests"] === true && values.workers !== undefined
       ? { baselineProcesses: workers }
       : {}),
@@ -4033,7 +4081,19 @@ export function runOutputPaths(
   ];
 }
 
+/** `runFromCliWithAccept` for a caller that needs the report alone. */
 export async function runFromCli(
+  ...args: Parameters<typeof runFromCliWithAccept>
+): Promise<SessionReport> {
+  return (await runFromCliWithAccept(...args)).report;
+}
+
+/**
+ * PR-79: the run, and beside the report the accept result (`lethal.accepted.json` matched against
+ * this run's source snapshot). `accept` is set only on a line-narrowed run. The file is read and
+ * validated BEFORE the session starts, so a malformed one stops the run early.
+ */
+export async function runFromCliWithAccept(
   given: RunCliConfig,
   deps: {
     resolveEnvToolSession?: typeof resolveEnvToolSession;
@@ -4056,7 +4116,12 @@ export async function runFromCli(
      *  `runSession` records into. */
     quarantineDir?: string;
   } = {},
-): Promise<SessionReport> {
+): Promise<{
+  readonly report: SessionReport;
+  readonly accept?: AcceptResult;
+  /** The accept list could not be applied to the finished run; nothing was accepted. */
+  readonly acceptError?: Error;
+}> {
   // R-445: a test project inside the target (or containing it) is refused by name before anything
   // reads or builds the target: the build copies every .al under the target, so its tests would be
   // mutated and published as target code. Campaign stages run through here too.
@@ -4089,6 +4154,8 @@ export async function runFromCli(
   const source = await readTargetSource(parsed.projectDir);
   // Issue #19: before anything is provisioned, so a bad ref fails in seconds.
   const lineRanges = await resolveLineRanges(parsed, deps.gitSpawn, source);
+  // PR-79: read and validated before the session starts, only for a line-narrowed run.
+  const acceptList = lineRanges !== undefined ? await loadAcceptList(parsed.projectDir) : undefined;
   // R221: the project's standing exclusions UNIONED with any `--exclude` from the command line,
   // resolved once here so the session and every message downstream see one list. Union, never
   // override: see `LethalConfigFile.exclude` for why a CLI flag must not be able to switch off an
@@ -4147,7 +4214,23 @@ export async function runFromCli(
   } else {
     await removeScratchQuietly(scratchRoot);
   }
-  return report;
+  // PR-79: from the snapshot the run parsed, never from disk.
+  // An error here must not lose the finished run: it comes back beside the report, and `main`
+  // prints it and refuses to pass (exit 1 unless the report's own code is 3, 4 or 7).
+  let accept: AcceptResult | undefined;
+  let acceptError: Error | undefined;
+  if (acceptList !== undefined) {
+    try {
+      accept = await computeAcceptResult({ report, snapshot: source, list: acceptList });
+    } catch (err) {
+      acceptError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
+  return {
+    report,
+    ...(accept !== undefined ? { accept } : {}),
+    ...(acceptError !== undefined ? { acceptError } : {}),
+  };
 
   async function runInScratch(): Promise<SessionReport> {
     const sessionConfig = configFile;
@@ -4470,6 +4553,27 @@ export const NOTHING_SCORED_EXIT_CODE = 4;
  * which `lethal verify` uses. Quarantine and nothing-scored both win over it.
  */
 export const TIME_BUDGET_EXIT_CODE = 7;
+
+/**
+ * R1079. A line filter (`--lines`, `--changed-since`) kept no deployable mutation site, so the run
+ * refused (Issue #19) and wrote no report. Nothing is wrong: a pull request that changes no mutable
+ * line has nothing to measure, and a CI can map this code to a pass. Kept apart from 1 (a real
+ * error) and 4 (every mutant errored, a failure). Not 5 or 6 (verify's) or 7 (the time budget).
+ */
+export const NO_MUTABLE_LINES_EXIT_CODE = 8;
+
+/**
+ * PR-77. `--fail-on-survivors` was given and a survivor on the changed lines counts (one al-runner-v3
+ * does not caveat). Opt-in and advisory by default, until the DO pilot's numbers decide. Quarantined
+ * (3), nothing scored (4) and time budget (7) win over it: their reports are not a full list. Exit 8
+ * writes no report, so 9 never applies there. Not 5 or 6 (verify's).
+ */
+export const SURVIVORS_ON_CHANGED_LINES_EXIT_CODE = 9;
+
+/** The exit code a top-level error earns: 8 for the line-filter refusal, else 1. */
+export function exitCodeForError(err: unknown): number {
+  return err instanceof NoMutableLinesError ? NO_MUTABLE_LINES_EXIT_CODE : 1;
+}
 
 /**
  * Operator-proven clear (spec §10): reads the current quarantine record's generation and calls
@@ -5372,6 +5476,47 @@ export async function initFromCli(parsed: InitCliConfig): Promise<number> {
   }
   validateSelectorIds(picked, idRanges, existingCodeunits, dependencies);
 
+  if (parsed.backendKind === "al-runner-v3") {
+    // Never guess a setting that decides a verdict: bcVersion is a placeholder `validateAlRunnerV3Config`
+    // refuses by name. environment is left out when launch.json answers (the run reads it there).
+    const launch = await readLaunchEnvironment(parsed.projectDir);
+    const envFromLaunch = launch.value !== undefined;
+    const v3Config = {
+      alRunnerV3: {
+        packagesDir: join(parsed.projectDir, ".alpackages"),
+        bcVersion: "<your BC build, four numbers, e.g. 28.4.53241.56646>",
+        ...(envFromLaunch ? {} : { environment: "<onprem or saas>" }),
+      },
+      selectorIds: picked,
+    };
+    await writeFile(outPath, `${JSON.stringify(v3Config, null, 2)}\n`, "utf8");
+    console.log(`init: wrote ${outPath} for ${appName} (al-runner-v3)`);
+    console.log(
+      `  selectorIds ${picked.selectorId}/${picked.controlId}/${picked.tableId} — inside this app's own idRanges, so the objects LethAL injects will compile`,
+    );
+    console.log("\nStill yours to fill in, because nothing here can know them:");
+    console.log(
+      "  alRunnerV3.bcVersion                      your BC build, four numbers (the placeholder is refused by name until you replace it)",
+    );
+    console.log(
+      "  alRunnerV3.packagesDir                    must hold the BC symbols: Microsoft's System Application at exactly bcVersion (bun scripts/fetch-ms-symbols.ts <bc-major> <dir> writes them and prints the bcVersion)",
+    );
+    console.log(
+      "  alc (the AL compiler)                     found in the AL Language VS Code extension; with no extension run scripts/fetch-alc.ts and set alRunnerV3.alcPath (README, al-runner-v3 section)",
+    );
+    console.log(
+      envFromLaunch
+        ? "  alRunnerV3.environment                    left out: your .vscode/launch.json gives environmentType"
+        : `  alRunnerV3.environment                    onprem or saas (the placeholder is refused by name; ${launch.note ?? "launch.json names no environmentType"})`,
+    );
+    console.log(
+      "  alRunnerV3.path                           not written: the default al-runner applies. Run 'lethal doctor' to see whether that build is a gated one",
+    );
+    console.log("  Fill in both placeholders: the validator refuses them one at a time.");
+    console.log(`\nThen: lethal doctor --config ${outPath}`);
+    return 0;
+  }
+
   const config = {
     bcdev: {
       mcpCommand: ["bun", "x", "bc-dev-mcp"],
@@ -5580,16 +5725,23 @@ export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
     thresholds: parsed.thresholds,
     version: LETHAL_VERSION,
   });
-  await writeFile(parsed.outPath, `${JSON.stringify(projected, null, 2)}${"\n"}`, "utf8");
+  await writeFile(
+    parsed.outPath,
+    parsed.format === "mutation-elements-html"
+      ? toMutationElementsHtml(projected)
+      : `${JSON.stringify(projected, null, 2)}${"\n"}`,
+    "utf8",
+  );
   const fileCount = Object.keys(projected.files).length;
   console.log(
     `wrote ${parsed.outPath}: ${report.mutants.length} mutant(s) across ${fileCount} file(s)`,
   );
 
   console.log(
-    "  Render it with `npx mutation-testing-elements` (or any Stryker html reporter) to get the " +
-      "HTML that Azure DevOps' PublishMutationReport task displays; the JSON alone is what the " +
-      "Stryker dashboard and the GitLab/GitHub renderers take.",
+    "  --format mutation-elements is the Stryker interchange JSON; --format mutation-elements-html " +
+      "is one page that loads the Stryker elements bundle from jsDelivr (pinned, integrity-checked), " +
+      "so it needs network access when opened. LethAL writes no bundle. Rendering in Azure DevOps' " +
+      "report tab is not measured.",
   );
 
   console.log(
@@ -6028,13 +6180,16 @@ export const LETHAL_VERSION: string = rootPackageJson.version;
 
 /** The exit code a finished run earns — see `QUARANTINED_EXIT_CODE` and `NOTHING_SCORED_EXIT_CODE`. */
 export function exitCodeForReport(
-  report: Pick<SessionReport, "quarantined"> & {
-    readonly validity: { readonly caveats: readonly string[] };
-  },
+  report: Pick<SessionReport, "quarantined"> & ReportView,
+  failOnSurvivors = false,
+  accept?: AcceptResult,
 ): number {
   if (report.quarantined !== undefined) return QUARANTINED_EXIT_CODE;
   if (report.validity.caveats.includes("all-errors")) return NOTHING_SCORED_EXIT_CODE;
   if (report.validity.caveats.includes("time-budget-reached")) return TIME_BUDGET_EXIT_CODE;
+  if (failOnSurvivors && (changedLineSurvivors(report, accept)?.counted.length ?? 0) > 0) {
+    return SURVIVORS_ON_CHANGED_LINES_EXIT_CODE;
+  }
   return 0;
 }
 
@@ -6183,10 +6338,42 @@ async function main(): Promise<number> {
   if (parsed.mode === "init") {
     return await initFromCli(parsed);
   }
-  const report = await runFromCli(parsed);
+  return await runAndReport(parsed);
+}
+
+/**
+ * `lethal run`'s tail, out of `main` so it is testable: run, print, write `--out`, pick the exit
+ * code. If the accept list could not be applied, the report is still printed and written, the
+ * refusal is printed, and the code is the report's own 3, 4 or 7, else 1 (never a silent pass).
+ */
+export async function runAndReport(
+  parsed: RunCliConfig,
+  deps: Parameters<typeof runFromCliWithAccept>[1] = {},
+): Promise<number> {
+  const { report, accept, acceptError } = await runFromCliWithAccept(parsed, deps);
   console.log(renderConsole(report));
+  const changed = changedLineSurvivors(report, accept);
+  if (changed !== undefined) console.log(renderChangedLineSurvivors(changed, accept));
+  if (acceptError !== undefined) {
+    console.error(
+      `[lethal] the accept list could not be applied: ${acceptError.message}\nNothing was accepted, so the run does not pass.`,
+    );
+  }
   if (parsed.outPath !== undefined) await writeJsonReport(report, parsed.outPath);
-  return exitCodeForReport(report);
+  if (acceptError !== undefined) return exitCodeForReport(report, false) || 1;
+  return runExitCode(report, parsed, accept);
+}
+
+/**
+ * `main`'s exit code for a finished run: the parsed `--fail-on-survivors` reaches `exitCodeForReport`.
+ * PR-79: the same accept result the section printed, so the two cannot disagree.
+ */
+export function runExitCode(
+  report: Parameters<typeof exitCodeForReport>[0],
+  parsed: { readonly failOnSurvivors?: true },
+  accept?: AcceptResult,
+): number {
+  return exitCodeForReport(report, parsed.failOnSurvivors === true, accept);
 }
 
 if (import.meta.main) {
@@ -6215,11 +6402,11 @@ if (import.meta.main) {
       }
       if (process.env.LETHAL_DEBUG === "1") {
         console.error(formatFailure(err));
-        process.exit(1);
+        process.exit(exitCodeForError(err));
       }
       console.error(refusalLine(err));
       console.error("(set LETHAL_DEBUG=1 for the stack trace)");
-      process.exit(1);
+      process.exit(exitCodeForError(err));
     });
 }
 

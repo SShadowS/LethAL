@@ -3,9 +3,9 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { printDryRun } from "../src/cli";
+import { exitCodeForError, printDryRun } from "../src/cli";
 import type { RunEvent, RunEventInput } from "../src/events";
-import { generateMutationSet } from "../src/orchestrator";
+import { NoMutableLinesError, generateMutationSet } from "../src/orchestrator";
 import { buildReport, renderConsole } from "../src/report";
 import { removeScratchDir } from "./helpers/scratch";
 
@@ -130,6 +130,65 @@ describe("R447: generation", () => {
       lines: [plainLine, { file: HANG, start: 6, end: 6 }],
     });
     expect(over.hangRefused).toEqual([ROW(HANG, 2)]);
+  });
+
+  test("(e2) lines holding only a hang-refused site are a plain error (exit 1), not exit 8", async () => {
+    // An OPEN report data item (R501): every operator is refused in its code, empty-block too.
+    const open = "src/Open.Report.al";
+    const dir = await project({
+      [open]: `report 50474 "Open"
+{
+    dataset
+    {
+        dataitem(Loop; Integer)
+        {
+            trigger OnAfterGetRecord()
+            begin
+                Done := true;
+            end;
+        }
+    }
+}
+`,
+    });
+    const over = await generateMutationSet(dir, {
+      emit: () => {},
+      lines: [{ file: open, start: 9, end: 9 }],
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(over).toBeInstanceOf(Error);
+    expect(over).not.toBeInstanceOf(NoMutableLinesError);
+    expect(exitCodeForError(over)).toBe(1);
+    expect((over as Error).message).toMatch(/hang-capable site\(s\) refused.*NOT measured/);
+    // lines with no site at all stay exit 8
+    const none = await generateMutationSet(dir, {
+      emit: () => {},
+      lines: [{ file: open, start: 1, end: 1 }],
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(none).toBeInstanceOf(NoMutableLinesError);
+    expect(exitCodeForError(none)).toBe(8);
+  });
+
+  test("(e3) lines in a file left out for an undecided #if are a plain error, not exit 8", async () => {
+    const undecided = "src/Undecided.Codeunit.al";
+    const dir = await project({
+      [PLAIN]: PLAIN_AL,
+      [undecided]: `#if R447A R447A\n${PLAIN_AL.replace("50471", "50473").replace('"Plain"', '"Undec"')}#endif\n`,
+    });
+    const err = await generateMutationSet(dir, {
+      emit: () => {},
+      lines: [{ file: undecided, start: 1, end: 9 }],
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).not.toBeInstanceOf(NoMutableLinesError);
+    expect((err as Error).message).toMatch(/left out for an undecided #if/);
   });
 
   test("(f) an operator whose only sites are hang-refused: the barren error says so", async () => {

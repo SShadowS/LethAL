@@ -347,6 +347,10 @@ export function validateAlRunnerV3Config(
   };
 }
 
+/** R1081: what to do when `packagesDir` holds no Microsoft symbols. */
+const FETCH_SYMBOLS_FIX = (packagesDir: string): string =>
+  `Fix: fetch the Microsoft symbols into that folder, as docs/first-week.md shows (bun scripts/fetch-ms-symbols.ts <BC major> ${packagesDir}), then set "alRunnerV3.bcVersion" to the version it prints.`;
+
 /**
  * T17: `packagesDir`'s Microsoft System Application must equal `bcVersion`
  * (`al-runner-v3-bc-version-mismatch`): v3 would otherwise run one BC build's apps while the proof
@@ -359,7 +363,18 @@ export async function assertBcVersionMatchesPackages(
 ): Promise<void> {
   let found = 0;
   const unread: string[] = [];
-  for (const name of (await readdir(packagesDir)).sort()) {
+  let names: string[];
+  try {
+    names = (await readdir(packagesDir)).sort();
+  } catch (err) {
+    // R1081: only a folder that is not there gets the fix. EACCES, ENOTDIR and the rest keep their
+    // own text, since fetching symbols would not help them.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+    throw new Error(
+      `al-runner-v3-packages-dir-missing: "alRunnerV3.packagesDir" is ${packagesDir}, and there is no such folder. ${FETCH_SYMBOLS_FIX(packagesDir)}`,
+    );
+  }
+  for (const name of names) {
     if (!name.toLowerCase().endsWith(".app")) continue;
     let id: ReturnType<typeof symbolPackageIdentity>;
     try {
@@ -381,7 +396,7 @@ export async function assertBcVersionMatchesPackages(
   }
   if (found === 0) {
     throw new Error(
-      `al-runner-v3-system-application-not-found: no readable Microsoft System Application .app in ${packagesDir}, so "alRunnerV3.bcVersion" ${bcVersion} cannot be checked against it (R586 M8).${unread.length > 0 ? ` Unreadable: ${unread.join("; ")}` : ""}`,
+      `al-runner-v3-system-application-not-found: no readable Microsoft System Application .app in ${packagesDir}, so "alRunnerV3.bcVersion" ${bcVersion} cannot be checked against it (R586 M8).${unread.length > 0 ? ` Unreadable: ${unread.join("; ")}` : ` ${FETCH_SYMBOLS_FIX(packagesDir)}`}`,
     );
   }
 }

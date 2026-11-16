@@ -1,0 +1,85 @@
+# LethAL on a pull request: Azure DevOps (example; PR-70).
+#
+# What it does: mutation-tests only the AL lines the pull request changes (`--changed-since`), exports the report in the
+# mutation-testing-elements JSON format (`lethal export`, R178) and publishes the reports as a pipeline artifact. LethAL
+# gates on nothing: exit 0 means the run completed, whatever survived (see docs/ci/README.md for the exit codes and
+# docs/ci/threshold-options.md).
+#
+# Assumptions, adjust them for your repository:
+# - `lethal` is on the agent's PATH: there is no published release yet, so build it once (README, "Installation").
+# - The app is in `app/` and its tests in `test/`; `app/lethal.config.json` configures the backend (README, "Configuration").
+# - `al-runner-v3` runs offline on Linux x64 and is NOT authoritative; it runs only an al-runner build LethAL has gated
+#   (R814), so install the one `lethal doctor` names. For BC's own answers use `--backend bcdev` on an agent that reaches a
+#   BC sandbox (never a production tenant).
+# - Run it as a pull-request validation build (a branch policy), with a path filter of `*.al` on that policy: the target
+#   branch is known only there.
+# - Every artifact below carries your AL source (the report's mutant texts, the export's embedded files): keep them inside
+#   your organisation.
+# - Showing the report as a build tab: the Stryker extension's PublishMutationReport@2 task publishes an HTML report, and
+#   `--format mutation-elements-html` writes one. The page loads the Stryker elements bundle from jsDelivr when it is
+#   opened, so it needs network access; LethAL writes no bundle. Whether the build tab loads a script from a CDN is NOT
+#   measured here (Azure DevOps' content policy): check it on your own organisation.
+
+trigger: none
+
+pool:
+  name: Default # a self-hosted Linux x64 pool with lethal installed
+
+steps:
+  - checkout: self
+    fetchDepth: 0 # --changed-since runs git merge-base against the target branch
+    clean: true # a self-hosted agent keeps files between builds; a stale report must never be published
+
+  - bash: |
+      set +e
+      rm -f lethal-report.json mutation-report.json mutation-report.html lethal-events.ndjson
+      if [ -z "$TARGET" ] || [ "$TARGET" = '$(System.PullRequest.TargetBranchName)' ]; then
+        echo "##vso[task.logissue type=error]not a pull-request build: the target branch is unknown"
+        exit 1
+      fi
+      # Advisory until the DO pilot's numbers decide: to fail on survivors on the changed lines, add --fail-on-survivors (exit 9).
+      lethal run --project app --tests test --backend al-runner-v3 --config app/lethal.config.json --changed-since "origin/$TARGET" --out lethal-report.json --progress-out lethal-events.ndjson
+      rc=$?
+      case "$rc" in
+        0) echo "LethAL: run completed" ;;
+        8) echo "LethAL: no changed line holds a mutation site; nothing to measure"; rc=0 ;;
+        3) echo "##vso[task.logissue type=error]LethAL quarantined the run: it refused to vouch for its own verdicts" ;;
+        4) echo "##vso[task.logissue type=error]LethAL scored nothing: every mutant errored" ;;
+        7) echo "##vso[task.logissue type=error]LethAL stopped early (time budget or a signal); the report is partial" ;;
+        9) echo "##vso[task.logissue type=error]LethAL found survivors on the changed lines (see SURVIVORS ON THE CHANGED LINES in the log)" ;;
+        *) echo "##vso[task.logissue type=error]LethAL failed with exit code $rc (the message is on stderr)" ;;
+      esac
+      exit "$rc"
+    displayName: Mutation-test the changed lines
+    env:
+      TARGET: $(System.PullRequest.TargetBranchName)
+
+  - bash: |
+      set -e
+      test -f lethal-report.json || { echo "no report was written"; exit 0; }
+      lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+      lethal export lethal-report.json --format mutation-elements-html --project app --out mutation-report.html
+      echo "##vso[task.setvariable variable=lethalHtml]true"
+    displayName: Export the report for display
+    condition: succeededOrFailed()
+
+  # No HTML page exists after exit 8 (no report is written), and the task fails when it finds none: publish only if the
+  # export step wrote one.
+  - task: PublishMutationReport@2 # the Stryker Mutator extension; publishes an HTML report
+    displayName: Show the mutation report
+    condition: and(succeededOrFailed(), eq(variables.lethalHtml, 'true'))
+    inputs:
+      reportPattern: mutation-report.html
+
+  - bash: |
+      mkdir -p "$(Build.ArtifactStagingDirectory)/lethal"
+      for f in lethal-report.json mutation-report.json mutation-report.html lethal-events.ndjson; do
+        test -f "$f" && cp "$f" "$(Build.ArtifactStagingDirectory)/lethal/"
+      done
+      true
+    displayName: Collect the reports
+    condition: succeededOrFailed()
+
+  - publish: $(Build.ArtifactStagingDirectory)/lethal
+    artifact: lethal-reports
+    condition: succeededOrFailed()

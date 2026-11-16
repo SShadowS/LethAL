@@ -375,6 +375,7 @@ import {
   resolveNamedMutants,
 } from "./named-mutants";
 
+import { classify } from "./cli-envelope";
 import { InstalledBundleError, readBatchBundle } from "./installed-bundle";
 
 export const BASELINE_TIMEOUT_DEFAULT = 120_000;
@@ -1504,8 +1505,35 @@ export async function generateMutationSet(
   // run would otherwise publish and baseline to report a null score for lines that hold no mutant.
   if (lineRanges !== undefined) {
     if (files.length === 0) {
-      throw new Error(
-        `the line filter (${lineRanges.length} range(s)) kept no deployable mutation site${admitted !== undefined ? " within the --only scope" : ""}: none of the given lines holds a mutant. Refusing rather than reporting a score for nothing.`,
+      // Exit 8 says "nothing to mutate", which CI reads as a pass. It must not cover lines whose
+      // sites LethAL refused: `hangRefused` and `skipped` are already cut to the given lines; an
+      // undecided `#if` file is cut to the files the ranges name.
+      const refusedOnLines: string[] = [];
+      const hangSites = hangRefused.reduce((n, h) => n + h.sites, 0);
+      if (hangSites > 0) refusedOnLines.push(`${hangSites} hang-capable site(s) refused`);
+      for (const s of skipped) refusedOnLines.push(`${s.file} cannot carry the selector`);
+      for (const f of preprocExcluded) {
+        if (f.reason === "preproc-undecided" && spanTouches(lineRanges, f.file, 1, 1e9)) {
+          refusedOnLines.push(`${f.file} left out for an undecided #if`);
+        }
+      }
+      if (refusedOnLines.length > 0) {
+        throw new Error(
+          `the line filter (${lineRanges.length} range(s)) kept no deployable mutation site, but LethAL refused code on those lines: ${refusedOnLines.join("; ")}. These lines were NOT measured, so this is not "nothing to mutate".`,
+        );
+      }
+      // R1079: exit 8 and its own envelope code, so CI can read "nothing to mutate" as a pass.
+      throw classify(
+        new NoMutableLinesError(
+          `the line filter (${lineRanges.length} range(s)) kept no deployable mutation site${admitted !== undefined ? " within the --only scope" : ""}: none of the given lines holds a mutant. Refusing rather than reporting a score for nothing.`,
+        ),
+        {
+          code: "NO_MUTABLE_LINES",
+          category: "validation",
+          nextSteps: [
+            "Nothing in the selected lines can be mutated, so there is nothing to score: in CI, treat exit 8 as a pass. To test more, widen --lines or --changed-since.",
+          ],
+        },
       );
     }
     warn(
@@ -4932,9 +4960,12 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       ...(c.test !== undefined ? { test: c.test } : {}),
     }),
   );
+  // PR-56: a request that drifted from the baseline right after a kept refusal.
+  backend.setKeptDriftSink?.((d) => emit({ type: "serve-drift-after-kept-refusal", ...d }));
   return () => {
     backend.setNotify?.(undefined);
     backend.setDaemonCloseSink?.(undefined);
+    backend.setKeptDriftSink?.(undefined);
   };
 }
 
@@ -5389,6 +5420,13 @@ function surfaceLateRefusal(
 function lostBatchNote(safety: SessionSafety): string {
   return `lease-lost: this batch's artifact was deployed under a lease this session could no longer prove it held (${safety.reason ?? "unknown"}) — verdicts discarded (design §6)`;
 }
+
+/**
+ * R1079: a line filter (`--lines`, `--changed-since`) kept no deployable mutation site. A refusal,
+ * not a failure: `lethal run` exits `NO_MUTABLE_LINES_EXIT_CODE` for it so a CI can pass a pull
+ * request that changes no mutable line. Extends `Error` directly, like every typed error here.
+ */
+export class NoMutableLinesError extends Error {}
 
 /**
  * R508: the lease was lost, and writing the lost batch's correction to the store failed, so its
@@ -5950,11 +5988,14 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
       // silent. (A test app that differs from the proven one is R492's own report.)
       if (allowReuse && runsWhatWasRead && reusable === null && resumedRunId !== undefined) {
         const stored = store.snapshotBatchHash(resumedRunId, batchIdx);
-        if (stored !== null && stored !== batchHash) {
+        if (stored !== null && stored.batchHash !== batchHash) {
+          // PR-66: the resumed run may have reused an earlier run's snapshot and stored none.
+          const reuse =
+            stored.runId === resumedRunId ? "" : `; resumed run ${resumedRunId} reused it`;
           emit({
             type: "warning",
             code: "resume-baseline-not-reused",
-            message: `[lethal] resume-baseline-not-reused: run ${resumedRunId} stored batch ${batchIdx}'s baseline for another instrumented tree (the emitted AL changed); batch ${batchIdx}'s baseline runs again.`,
+            message: `[lethal] resume-baseline-not-reused: run ${stored.runId} stored batch ${batchIdx}'s baseline for another instrumented tree (the emitted AL changed)${reuse}; batch ${batchIdx}'s baseline runs again.`,
           });
         }
       }
@@ -5988,6 +6029,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         }
       }
       if (reused !== undefined) {
+        // PR-66: remember which snapshot this batch ran on, for a later resume's tree-changed warning.
+        store.recordSnapshotReuse(runId, batchIdx, reused.runId, reused.batchIndex);
         emit({
           type: "warning",
           code: "resume-baseline-reused",

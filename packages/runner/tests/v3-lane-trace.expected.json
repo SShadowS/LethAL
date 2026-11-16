@@ -281,6 +281,7 @@
   "l4Excluded": 0,
   "l4Widened": 0,
   "l4OrderBroken": 0,
+  "keptDrifts": 0,
   "entriesSent": 50,
   "warmupMs": 14,
   "prefetchMs": 4,

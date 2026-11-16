@@ -325,8 +325,11 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
     ],
     closes: [
-      // another Company access, or a tail: never measured
-      `${P}FindFirst on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+      // a tail, or another Company access never measured. (PR-56: FindFirst and IsEmpty were measured and
+      // are kept by `company-table-read`; Insert, Delete and the like still close.)
+      `${P}Insert on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+      `${P}Delete on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
+      `${P}Find.First on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)`,
       `${P}FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a) after a timeout`,
     ],
   };
@@ -361,6 +364,7 @@ describe("serveDaemonReusable, the rule alone", () => {
   R945["recordref-not-open"] = {
     keeps: ["FieldCount", "FindSet", "SetRecFilter", "SetLoadFields"].map(RR),
     // a method never measured, and the other RecordRef "not open" wording al-runner has
+    // (PR-56: only FilterGroup is added, by `recordref-method-not-open`)
     closes: ["Get", "FindFirst", "CopyLinks", "ReadPermission"]
       .map(RR)
       .concat([
@@ -371,6 +375,7 @@ describe("serveDaemonReusable, the rule alone", () => {
     keeps: [
       `${P}FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
     ],
+    // PR-56: only Active and Caption are added (`fieldref-method-never-assigned`); Value still closes
     closes: [
       `${P}FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)`,
       `${P}FieldRef.Class on a FieldRef that was never assigned`,
@@ -485,6 +490,33 @@ describe("serveDaemonReusable, the rule alone", () => {
       `${P}SetFilter: a Boolean filter value under GlobalLanguage (the words of that language are not pinned)`,
       `${P}SetFilter: a Boolean filter value under GlobalLanguage 1030 (the words of that language are not pinned) (timeout)`,
       `${P}SetFilter: a Date filter value under GlobalLanguage 1030 (the words of that language are not pinned)`,
+    ],
+  };
+  // PR-54: DO's File.DownloadFromStream refusal, measured clean (`/coord/handoff/PR-54/census.md`). One text, no variable part.
+  R945["download-from-stream-needs-client"] = {
+    keeps: [
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not`,
+    ],
+    closes: [
+      // reworded, a tail, its sibling UploadIntoStream, a timeout word
+      `${P}File.DownloadFromStream needs a client, which a headless run has not`,
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not (not pinned)`,
+      `${P}File.UploadIntoStream needs a client (a browser round trip), which a headless run has not`,
+      `${P}File.DownloadFromStream needs a client (a browser round trip), which a headless run has not (timeout)`,
+    ],
+  };
+  // PR-54: DO's ZipArchive-on-no-zip refusal, measured clean. The exception message is pinned whole.
+  R945["zip-archive-invalid-data"] = {
+    keeps: [
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+    ],
+    closes: [
+      // another message, another exception type, another member (Dispose), no ADR tail, an extra tail
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Number of entries expected in End Of Central Directory does not correspond to number of entries in Central Directory.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.TimeoutException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet System.IO.Compression.ZipArchive.Dispose raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.`,
+      `${P}DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7) (timeout)`,
     ],
   };
   for (const [entry, { keeps: k, closes: c }] of Object.entries(R945)) {

@@ -78,6 +78,7 @@ Branch on `error.code`, never on `message`. The codes LethAL uses:
 | `INVALID_ARGUMENT` | the arguments were refused (an unknown flag, a flag another subcommand owns) |
 | `CONFIGURATION_ERROR` | the config file cannot be read, is not JSON, or cannot be used |
 | `UNCOMMITTED_PRECOMMITMENT` | LethAL's own code: `campaign compare` found the stage's pre-commitment not committed |
+| `NO_MUTABLE_LINES` | LethAL's own code: `lethal run`'s `--lines`/`--changed-since` kept no mutation site (exit `8`) |
 | `INTERNAL_ERROR` | anything else; `nextSteps` says how to get the stack trace |
 
 An argument refusal gets the envelope too, so `--json` on a subcommand that does not take it answers
@@ -320,11 +321,15 @@ The `instead` column is guidance.
 | `3` | **Quarantined.** The run refused to vouch for its own verdicts. |
 | `4` | **Nothing scored.** Every mutant errored; the run measured nothing. |
 | `7` | **Time budget reached.** `--time-budget` ran out; the report is partial, so run with `--resume` to continue. |
+| `8` | **No mutable lines.** `--lines` or `--changed-since` kept no mutation site; nothing ran and no report is written (`--dry-run` exits `8` too). A CI can treat it as a pass. Lines whose sites LethAL refused (hang-capable, an undecided `#if`) exit `1`, not `8`. With `--operator` or `--exclude-operator` an earlier check can exit `1` first. |
+| `9` | **Survivors on the changed lines.** Only with `--fail-on-survivors`, which is refused (exit `1`) without `--lines` or `--changed-since`. Survivors that al-runner-v3 caveats are listed apart and do not count. Advisory by default. |
 
 `4` is returned when `validity.caveats` carries `all-errors`. When a run is both quarantined and
 scored nothing, `3` wins. `7` is returned when `validity.caveats` carries `time-budget-reached`; the
 mutants not reached are left out of the report and are not survivors. Quarantine (`3`) and nothing
-scored (`4`) win over `7`.
+scored (`4`) win over `7`. `9` is returned only when `--fail-on-survivors` is given and a survivor on the
+changed lines is not caveated; `3`, `4` and `7` win over it. `8` is returned only for the line-filter refusal ("kept no deployable
+mutation site"); every other error stays `1`.
 
 Since R955 the budget bounds the baseline too. When it runs out inside the baseline, no more baseline
 calls are made, no mutant of that batch is scored, and the report's `timeBudget.baselineStopped` says how

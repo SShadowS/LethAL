@@ -1,0 +1,303 @@
+{
+  "NotRun: out-of-scope: a file name, got Guid": {
+    "cls": "a file name, got Guid",
+    "raw": "NotRun: out-of-scope: a file name, got Guid"
+  },
+  "NotRun: out-of-scope: a permission denial (modify permission on object type N id N) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run": {
+    "cls": "a permission denial (modify permission on object type * id *) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run",
+    "raw": "NotRun: out-of-scope: a permission denial (modify permission on object type 0 id 50440) whose error is not pinned yet (on a row that does not exist (which error comes first is not pinned)); the test is not run"
+  },
+  "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a FlowField over a system table); the test is not run": {
+    "cls": "a permission denial (read permission on object type * id *) whose error is not pinned yet (a FlowField over a system table); the test is not run",
+    "raw": "NotRun: out-of-scope: a permission denial (read permission on object type 0 id 2000000212) whose error is not pinned yet (a FlowField over a system table); the test is not run"
+  },
+  "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (on a system table; probe PN pins Tenant Media only); the test is not run": {
+    "cls": "a permission denial (read permission on object type * id *) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run",
+    "raw": "NotRun: out-of-scope: a permission denial (read permission on object type 0 id 2000000206) whose error is not pinned yet (on a system table; probe P13 pins Tenant Media only); the test is not run"
+  },
+  "NotRun: out-of-scope: a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)": {
+    "cls": "a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)",
+    "raw": "NotRun: out-of-scope: a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspect, not settled)"
+  },
+  "NotRun: out-of-scope: a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned": {
+    "cls": "a User with a Windows Security ID",
+    "raw": "NotRun: out-of-scope: a User with a Windows Security ID: the platform's uniqueness rule for it is not pinned"
+  },
+  "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a lin": {
+    "cls": "an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened)",
+    "raw": "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one"
+  },
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<test>: did not run (<refusal>": {
+    "cls": "an earlier test of this codeunit was refused while it ran (FeatureKeyRollback",
+    "raw": "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (FeatureKeyRollback: did not run (a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspec): it can write the table Feature Key that this test reads, so the state it would have left is not BC's; this failure is not trusted: The record in table Refusal Probe already exists. Identification fields and values: Id='1'"
+  },
+  "NotRun: out-of-scope: Clear of a XmlWriteOptions value": {
+    "cls": "Clear of a XmlWriteOptions value",
+    "raw": "NotRun: out-of-scope: Clear of a XmlWriteOptions value"
+  },
+  "NotRun: out-of-scope: conversion of Blob to Integer": {
+    "cls": "conversion of Blob to Integer",
+    "raw": "NotRun: out-of-scope: conversion of Blob to Integer"
+  },
+  "NotRun: out-of-scope: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)": {
+    "cls": "CurrentClientType in a session without a client (--no-client)",
+    "raw": "NotRun: out-of-scope: CurrentClientType in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+  },
+  "NotRun: out-of-scope: Database.SID without a user name (whose SID it answers is not pinned)": {
+    "cls": "Database.SID without a user name (whose SID it answers is not pinned)",
+    "raw": "NotRun: out-of-scope: Database.SID without a user name (whose SID it answers is not pinned)"
+  },
+  "NotRun: out-of-scope: DotNet Microsoft.BusinessCentral.DocumentProcessor.PdfAttachmentManager.GetInvoiceAttachment: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class <x> is neither registered nor classified pure": {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields",
+    "raw": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetAvailableTableFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure"
+  },
+  "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class <x> is neither registered nor classified pure": {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields",
+    "raw": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions.GetSummaryFields: refused by policy: server class 'Microsoft.Dynamics.Nav.Runtime.PageSummary.NavPageSummaryALFunctions' is neither registered nor classified pure"
+  },
+  "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-N section N)": {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount",
+    "raw": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotFunctions.GptTokenCount: a member the runtime does not implement for a registry type (never forwarded to .NET, ADR-014 section 1)"
+  },
+  "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class <x> is neither registered nor classified pure": {
+    "cls": "DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport",
+    "raw": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions.HasInGeoSupport: refused by policy: server class 'Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALMicrosoftLearnFunctions' is neither registered nor classified pure"
+  },
+  "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class <x> is neither registered nor classified pure": {
+    "cls": "DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery",
+    "raw": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery: refused by policy: server class 'Microsoft.Dynamics.Nav.AzureADGraphClient.MockGraphQuery' is neither registered nor classified pure"
+  },
+  "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: End of Central Directory record could not be found.; the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet new System.UriBuilder raised the .NET exception System.UriFormatException: Invalid URI: Invalid port specified.; the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JArray.ToString: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object",
+    "raw": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JArray.ToString: 'Newtonsoft.Json.Linq.JArray.ToString' is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.ToString: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.DeepClone: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JProperty.Value: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JObject.Add raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *"
+  },
+  "NotRun: out-of-scope: DotNet System.Collections.Hashtable.Add: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet System.Data.DataColumnCollection.Item raised the .NET exception System.IndexOutOfRangeException: Cannot find column 0.; the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet System.Data.DataRow.Item raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *"
+  },
+  "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet System.Data.DataRowCollection.Item raised the .NET exception System.IndexOutOfRangeException: There is no row at position 1.; the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToString: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToUnixTimeMilliseconds: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.DateTimeOffset.ToUnixTimeSeconds: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.IO.BinaryWriter.Write: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.IO.Compression.ZipArchive.Entries: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: <message>; the text AL would see is not pinned (ADR-N sec": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: error:02000093:rsa routines::value missing; the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception Interop+Crypto+OpenSslCryptographicException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *"
+  },
+  "NotRun: out-of-scope: DotNet System.Text.Encoding.GetBytes: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Text.RegularExpressions.Regex.IsMatch: System.Text.RegularExpressions.Regex.IsMatch has no overload taking N argument(s) of the given types (String, IntN)": {
+    "cls": "DotNet System.Text.RegularExpressions.Regex.IsMatch"
+  },
+  "NotRun: out-of-scope: DotNet System.TimeZoneInfo.GetUtcOffset: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.TimeZoneInfo.IsDaylightSavingTime: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object",
+    "raw": "NotRun: out-of-scope: DotNet System.Uri.AbsoluteUri: 'System.Uri.AbsoluteUri' is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Uri.Host: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object",
+    "raw": "NotRun: out-of-scope: DotNet System.Uri.Host: 'System.Uri.Host' is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: <message>": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet System.UriBuilder.Port raised the .NET exception System.ArgumentOutOfRangeException: value ('-5') must be greater than or equal to '-1'. (Parameter 'value')"
+  },
+  "NotRun: out-of-scope: DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *",
+    "raw": "NotRun: out-of-scope: DotNet System.UriBuilder.Scheme raised the .NET exception System.ArgumentException: Invalid URI: The URI scheme is not valid. (Parameter 'value'); the text AL would see is not pinned (ADR-014 section 7)"
+  },
+  "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.Schemas: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Xml.XmlElement.SelectNodes: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Xml.XmlTextWriter.WriteEndDocument raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N section N)": {
+    "cls": "DotNet * raised the .NET exception *"
+  },
+  "NotRun: out-of-scope: Evaluate of <x> into Date (form not pinned by the corpus)": {
+    "cls": "Evaluate of `11..NOW` into Date (form not pinned by the corpus)",
+    "raw": "NotRun: out-of-scope: Evaluate of `11..NOW` into Date (form not pinned by the corpus)"
+  },
+  "NotRun: out-of-scope: Evaluate of <x> into Time (form not pinned by the corpus)": {
+    "cls": "Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)",
+    "raw": "NotRun: out-of-scope: Evaluate of `11:11:11..NOW` into Time (form not pinned by the corpus)"
+  },
+  "NotRun: out-of-scope: Evaluate with format number N (not pinned by the corpus)": {
+    "cls": "Evaluate with format number 2 (not pinned by the corpus)",
+    "raw": "NotRun: out-of-scope: Evaluate with format number 2 (not pinned by the corpus)"
+  },
+  "NotRun: out-of-scope: FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
+    "cls": "FieldRef.* on a FieldRef that was never assigned"
+  },
+  "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not": {
+    "cls": "File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
+    "raw": "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not"
+  },
+  "NotRun: out-of-scope: Find on an empty set of table <x> without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)": {
+    "cls": "Find on an empty set of table 'Time Zone' without using the result and without a filter",
+    "raw": "NotRun: out-of-scope: Find on an empty set of table 'Time Zone' without using the result and without a filter: BC's error text is not pinned (docs/probes-needed.md)"
+  },
+  "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-N decision Na)": {
+    "cls": "* on the Company table",
+    "raw": "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)"
+  },
+  "NotRun: out-of-scope: GetUrl(ClientType::OData; the call had N arguments): this object type or argument list (not pinned)": {
+    "cls": "GetUrl(*): this object type or argument list"
+  },
+  "NotRun: out-of-scope: GetUrl(ClientType::ODataVN; the call had N arguments): this object type or argument list (not pinned)": {
+    "cls": "GetUrl(*): this object type or argument list"
+  },
+  "NotRun: out-of-scope: Insert on a TableType = CRM table through a table connection: whether the database trigger runs is not pinned": {
+    "cls": "Insert on a TableType = CRM table through a table connection"
+  },
+  "NotRun: out-of-scope: Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not": {
+    "cls": "Media",
+    "raw": "NotRun: out-of-scope: Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not"
+  },
+  "NotRun: out-of-scope: Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)": {
+    "cls": "Page.Run with a record or a page name in a session without a client (--no-client)",
+    "raw": "NotRun: out-of-scope: Page.Run with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+  },
+  "NotRun: out-of-scope: Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>)": {
+    "cls": "Page.RunModal with a record or a page name in a session without a client (--no-client)",
+    "raw": "NotRun: out-of-scope: Page.RunModal with a record or a page name in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+  },
+  "NotRun: out-of-scope: platform table <x> (N) has no provider": {
+    "cls": "platform table *: has no provider",
+    "raw": "NotRun: out-of-scope: platform table 'Tenant Media Set' (2000000183) has no provider"
+  },
+  "NotRun: out-of-scope: RecordRef.CopyLinks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.FindSet on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.ReadPermission on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)": {
+    "cls": "RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)",
+    "raw": "NotRun: out-of-scope: RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)"
+  },
+  "NotRun: out-of-scope: RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)": {
+    "cls": "RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)",
+    "raw": "NotRun: out-of-scope: RemoveCookie of the last cookie of a request (what its Cookie header is then is not pinned)"
+  },
+  "NotRun: out-of-scope: SetFilter: <x> is not a Decimal": {
+    "cls": "SetFilter",
+    "raw": "NotRun: out-of-scope: SetFilter: `not a number` is not a Decimal"
+  },
+  "NotRun: out-of-scope: SetFilter: <x> is not an Integer": {
+    "cls": "SetFilter",
+    "raw": "NotRun: out-of-scope: SetFilter: `not an integer` is not an Integer"
+  },
+  "NotRun: out-of-scope: SetFilter: empty filter term": {
+    "cls": "SetFilter"
+  },
+  "NotRun: out-of-scope: SetFilter: filter value not evaluated: Integer <value>": {
+    "cls": "SetFilter"
+  },
+  "NotRun: out-of-scope: store error License Permission: whether object type N number N is a row is not pinned (ADR-N: with no license file loaded, only the rows the corpus pins are served)": {
+    "cls": "License Permission"
+  },
+  "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not": {
+    "cls": "Media",
+    "raw": "NotRun: out-of-scope: store error Media: only a read of one ID is pinned (the null ID finds nothing, an app's logo its row); the rows of other media are not"
+  },
+  "NotRun: out-of-scope: store error Metadata Permission: permission set <x>: <x> grants a whole object type (not listed row by row)": {
+    "cls": "*: permission set *: grants a whole object type (not listed row by row)",
+    "raw": "NotRun: out-of-scope: store error Metadata Permission: permission set 'BaseSystemPermissionSet': `table * = X` grants a whole object type (not listed row by row)"
+  },
+  "NotRun: out-of-scope: store error platform table <x> (N) has no provider": {
+    "cls": "platform table *: has no provider",
+    "raw": "NotRun: out-of-scope: store error platform table 'Object' (2000000001) has no provider"
+  },
+  "NotRun: out-of-scope: storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinn": {
+    "cls": "storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead)",
+    "raw": "NotRun: out-of-scope: storing in a record field of a SQL counter value (SessionInformation.SqlStatementsExecuted or SqlRowsRead): the corpus pins only that a counter is not negative and the sign of its change around pinned operations, never a count"
+  },
+  "NotRun: out-of-scope: the request page of report <x> with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md <x>": {
+    "cls": "the request page of report \"Cell Report\" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client)",
+    "raw": "NotRun: out-of-scope: the request page of report \"Cell Report\" with a RequestPageHandler or ReportHandler bound in a session without a client (--no-client): what BC does there is not pinned (probe wanted, docs/probes-needed.md `no-client-session`)"
+  },
+  "NotRun: out-of-scope: use of an OutStream that was never created": {
+    "cls": "use of an OutStream that was never created",
+    "raw": "NotRun: out-of-scope: use of an OutStream that was never created"
+  },
+  "NotRun: out-of-scope: XML name <x> (only plain names without a prefix are pinned)": {
+    "cls": "XML name `` (only plain names without a prefix are pinned)",
+    "raw": "NotRun: out-of-scope: XML name `` (only plain names without a prefix are pinned)"
+  },
+  "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)": {
+    "cls": "XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)",
+    "raw": "NotRun: out-of-scope: XmlPort export of the unbound text element ColumnX (BC's export of it does not end; not pinned)"
+  },
+  "NotRun: out-of-scope: XmlPort import: the row of table element PermissionSet stored before its child rows is gone after them (not pinned)": {
+    "cls": "XmlPort import"
+  },
+  "NotRun: out-of-scope: XmlPort import: the row of table element TenantPermissionSet stored before its child rows is gone after them (not pinned)": {
+    "cls": "XmlPort import"
+  },
+  "NotRun: out-of-scope: SetFilter: value expected after @": {
+    "cls": "SetFilter"
+  },
+  "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.MoveNext: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  },
+  "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.Reset: <x> is an instance member and the variable holds no object": {
+    "cls": "DotNet *: is an instance member and the variable holds no object"
+  }
+}

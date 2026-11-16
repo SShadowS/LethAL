@@ -1840,6 +1840,38 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "refusal",
+        "test",
+        "baselineRow",
+        "row",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "serve-drift-after-kept-refusal"
+        },
+        "refusal": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "baselineRow": {
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "reason",
         "seq"
       ],

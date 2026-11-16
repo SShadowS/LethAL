@@ -1451,7 +1451,21 @@ export type V3DaemonCloseReason =
   /** R952 (R948): the daemon passed `alRunnerV3.daemonMaxRssGb` or `daemonMaxRequests`; a fresh one replaces it. */
   | "recycle"
   /** R1014: a stop signal arrived while a request ran; its answer is dropped (R955). */
-  | "stop-signal";
+  | "stop-signal"
+  /** PR-56: the request after a kept refusal gave a row that differs from the baseline where it cannot (`keptRefusalDrift`). */
+  | "kept-refusal-drift";
+
+/**
+ * PR-56: what the drift sink gets (`ExecutionBackend.setKeptDriftSink`): the kept refusal text the
+ * previous request met, the drifting test, and both rows as R612's warm-up compare reads them
+ * (`method=status`, or `method=notRun:<reason>`).
+ */
+export type V3KeptDrift = {
+  readonly refusal: string;
+  readonly test: string;
+  readonly baselineRow: string;
+  readonly row: string;
+};
 
 /** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
 export type V3DaemonClose = {
@@ -1552,6 +1566,8 @@ export interface V3EntriesStats {
   l4Excluded: number;
   l4Widened: number;
   l4OrderBroken: number;
+  /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
+  keptDrifts: number;
   echoMismatches: number;
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
@@ -1642,6 +1658,11 @@ interface Daemon {
   dirty: boolean;
   /** R939: why `dirty` was set (the first unkept row's reason), for the close count. */
   dirtyWhy?: ReturnType<typeof unkeptRowReason>;
+  /**
+   * PR-56: the first kept refusal (a `V3_SERVE_SAFE_REFUSALS` row) of the LAST `requestOne` answer on this
+   * daemon. The next request is checked for drift (`keptRefusalDrift`); each request replaces it.
+   */
+  keptRefusal?: { readonly text: string; readonly test: string } | undefined;
   /** R948: set on the baseline's own daemon: the stop (seconds) it was started with. Absent: a mutant-phase daemon. */
   baselineStop?: number;
   /** R952: entries requests sent to it through `send()` (warm-up included; not the coverage window's plain ones), for the recycle bound. */
@@ -2477,6 +2498,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   setDaemonCloseSink(sink?: (c: V3DaemonClose) => void): void {
     this.closeSink = sink;
   }
+  /** PR-56: the session's drift sink (`setKeptDriftSink`); each call becomes a `serve-drift-after-kept-refusal` event. */
+  private driftSink: ((d: V3KeptDrift) => void) | undefined;
+  /** PR-56: see `ExecutionBackend.setKeptDriftSink`. */
+  setKeptDriftSink(sink?: (d: V3KeptDrift) => void): void {
+    this.driftSink = sink;
+  }
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
    * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
@@ -2521,6 +2548,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     l4Excluded: 0,
     l4Widened: 0,
     l4OrderBroken: 0,
+    keptDrifts: 0,
     entriesSent: 0,
     boundChecks: 0,
     pairRequests: 0,
@@ -6985,6 +7013,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
+    // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
+    const before = { ...this.stats };
+    const batchBefore =
+      this.prefetchBatch === undefined
+        ? undefined
+        : { size: this.prefetchBatch.size, ran: this.prefetchBatch.ran };
     let answer: Awaited<ReturnType<AlRunnerV3Backend["send"]>>;
     try {
       answer = await lane.timed(phase, () =>
@@ -7005,6 +7039,43 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     sampleRss();
     const { sent, rows, cut: partial } = answer;
+    // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
+    // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
+    // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
+    // is re-sent (review L2).
+    const prior = daemon.keptRefusal;
+    if (prior !== undefined && partial === undefined) {
+      const drift = this.keptRefusalDrift(sent, rows, alone);
+      if (drift !== undefined) {
+        // Review L1: the drifted send is not a request of the batch; the re-run counts in its place.
+        for (const k of [
+          "entriesSent",
+          "prefetchRequests",
+          "liveRequests",
+          "boundChecks",
+          "cachedFalse",
+          "timeoutCuts",
+        ] as const)
+          this.stats[k] = before[k];
+        if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
+          this.prefetchBatch.size = batchBefore.size;
+          this.prefetchBatch.ran = batchBefore.ran;
+        }
+        this.stats.keptDrifts += 1;
+        const event: V3KeptDrift = { refusal: prior.text, ...drift };
+        this.driftSink?.(event);
+        this.notify(
+          "al-runner-v3-serve-drift-after-kept-refusal",
+          `[lethal] al-runner-v3-serve-drift-after-kept-refusal: after the kept refusal "${prior.text}" (${prior.test}) the next request on the same daemon gave ${drift.test} the row [${drift.row}], the baseline's is [${drift.baselineRow}], where it cannot differ. The daemon was closed and the request re-run on a fresh one (PR-56)`,
+        );
+        await this.closeLane(lane, "kept-refusal-drift", undefined, {
+          text: prior.text,
+          test: drift.test,
+        });
+        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
+      }
+    }
+    daemon.keptRefusal = this.firstKeptRefusal(sent, rows);
     this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent);
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
@@ -7097,6 +7168,75 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           }
         : {}),
     };
+  }
+
+  /** PR-56: the first row of this answer that `V3_SERVE_SAFE_REFUSALS` keeps, or `undefined`. */
+  private firstKeptRefusal(
+    sent: readonly SentEntry[],
+    rows: ReadonlyMap<string, readonly V3Row[]>,
+  ): { readonly text: string; readonly test: string } | undefined {
+    for (const e of sent) {
+      if (e.echo) continue;
+      for (const r of rows.get(e.id) ?? []) {
+        const m = r.message;
+        if (
+          r.notRun &&
+          r.status === "error" &&
+          m !== undefined &&
+          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(m))
+        )
+          return { text: m, test: r.name };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * PR-56: a row of `rows` that differs from this batch's baseline row of the same test where it
+   * cannot legitimately: any row of a NONE entry, and in a mutant entry a row of a test that runs BEFORE
+   * the first test covering that mutant in that codeunit (al-runner's order is fixed and state flows
+   * forward, R857, so a later non-covering test may differ). "Differs" is R612's warm-up compare
+   * (`rowsClass`: status, and for a refusal its reason; a fail's text is not compared). Not compared:
+   * a test the baseline refused or timed out, a row with no baseline row, an entry whose covering set
+   * is unknown or not in the baseline order.
+   */
+  private keptRefusalDrift(
+    sent: readonly SentEntry[],
+    rows: ReadonlyMap<string, readonly V3Row[]>,
+    /** A test run alone (R857/R896) starts from other state than the codeunit's run: not compared (review M1). */
+    alone?: { readonly call: number },
+  ): { readonly test: string; readonly baselineRow: string; readonly row: string } | undefined {
+    for (const e of sent) {
+      if (e.echo) continue;
+      if (alone !== undefined && callOf(e) === alone.call) continue;
+      const cu = callOf(e);
+      const order = this.baselineOrder(cu);
+      let limit = order.length;
+      if (e.mutantId !== SELECTOR_RESOURCE_NONE) {
+        const covering = this.coveringOf.get(e.mutantId)?.get(cu);
+        if (covering === undefined || covering.size === 0) continue;
+        const at = [...covering].map((m) => order.indexOf(m));
+        if (at.some((i) => i < 0)) continue;
+        limit = Math.min(...at);
+      }
+      const base = new Map(
+        (this.baselineRows.get(cu) ?? []).map((r) => [r.method.toLowerCase(), r]),
+      );
+      for (const r of rows.get(e.id) ?? []) {
+        const key = r.method.toLowerCase();
+        const b = base.get(key);
+        const i = order.indexOf(key);
+        if (b === undefined || i < 0 || i >= limit) continue;
+        // a timeout row, in the baseline or in this answer, is not drift (review L2)
+        const timedOut = (x: V3Row) =>
+          x.status === "error" && V3_TIMEOUT_MESSAGE.test(x.message ?? "");
+        if (b.notRun || timedOut(b) || timedOut(r)) continue;
+        const want = rowsClass([b]);
+        const got = rowsClass([r]);
+        if (got !== want) return { test: r.name, baselineRow: want, row: got };
+      }
+    }
+    return undefined;
   }
 
   /**
@@ -7878,7 +8018,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

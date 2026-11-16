@@ -30,15 +30,15 @@ import {
   type PublishResult,
   type UpdateDeps,
   V3_CDO_DEFAULT,
-  candidates,
   argv0FromCmdline,
+  candidates,
   countHeavyJobs,
-  movesUnder,
   dailyOnce,
   edgeOnce,
   edgeRejudge,
   expectedSha,
   gateOne,
+  movesUnder,
   parseGateLegs,
   pinDigests,
   publishPending,
@@ -659,6 +659,20 @@ linuxOnly("T19: the v3 update gate", () => {
     const host = fake({ outcome: "pass", heavy: 3, mem: "no-limit" });
     expect(await updateOnce(host.deps)).toEqual(["skipped"]);
     expect(host.seen.logs.join("\n")).toContain("3 heavy jobs are running");
+  });
+
+  test("PR-60: under a cgroup limit freeGb is never called; with none it is, and the log says it reads the host", async () => {
+    await setup();
+    const limited = fake({ outcome: "pass", mem: { refuse: false, message: "admitted" } });
+    const boom = async (): Promise<number> => {
+      throw new Error("freeGb must not be called under a cgroup limit");
+    };
+    expect(await updateOnce({ ...limited.deps, freeGb: boom })).toEqual(["pass"]);
+    const refused = fake({ outcome: "pass", mem: { refuse: true, message: "memory: REFUSED" } });
+    expect(await updateOnce({ ...refused.deps, freeGb: boom })).toEqual(["skipped"]);
+    const host = fake({ outcome: "pass", free: 2, mem: "no-limit" });
+    expect(await updateOnce(host.deps)).toEqual(["skipped"]);
+    expect(host.seen.logs.join("\n")).toContain("reads the host");
   });
 
   test("R633 I1: gate.log is kept beside the outcome, even with no receipt, and the gate's error is logged", async () => {
@@ -1857,6 +1871,58 @@ linuxOnly("R814: the two tracks", () => {
     expect(await dailyOnce(deps)).toEqual({ edge: "infra-fail", releases: ["pass"] });
     expect(f.seen.published).toEqual(["alpha.3-c893e3633"]);
     expect(f.seen.logs.join("\n")).toContain("the edge track failed");
+  });
+
+  test("PR-59: the fixed scan runs once per daily run and its lines are logged", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS });
+    let calls = 0;
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        calls++;
+        return ["#1 t | fixed-in-current"];
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "pass", releases: ["pass"] });
+    expect(calls).toBe(1);
+    expect(f.seen.logs.join("\n")).toContain("upstream-fixed-scan: #1 t | fixed-in-current");
+  });
+
+  test("PR-59: the fixed scan runs outside the gate lock, and on a day the gate skips for memory", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS, mem: { refuse: true, message: "no memory" } });
+    let calls = 0;
+    let lockHeld: boolean | undefined;
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        calls++;
+        lockHeld = existsSync(join(root, ".gate.lock"));
+        return [];
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "skipped", releases: [] });
+    expect(calls).toBe(1);
+    expect(lockHeld).toBe(false);
+    expect(f.seen.published).toEqual([]);
+  });
+
+  test("PR-59: a throwing fixed scan changes no outcome and is logged", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS });
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        throw new Error("gh is down");
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "pass", releases: ["pass"] });
+    expect(f.seen.published).toEqual(["edge-c893e3633", "alpha.3-c893e3633"]);
+    expect(f.seen.logs.join("\n")).toContain("upstream-fixed-scan: not run: Error: gh is down");
   });
 
   test("the ledger: a torn line is logged and skipped; a repeated id goes once", async () => {

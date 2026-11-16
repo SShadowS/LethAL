@@ -29,8 +29,22 @@ export interface Cell {
   /** PR-17: whole handler procedures the cell binds (`[HandlerFunctions]`), for a call that shows UI. */
   readonly handlers?: readonly string[];
   /** PR-52: what the answer depends on besides the call: the session's language and region, or its time zone. */
-  readonly depends?: "locale" | "tz";
+  readonly depends?: "locale" | "tz" | "carry";
+  /**
+   * PR-63: a second test in the same codeunit, run after the first. The cell's own body becomes `SetLanguage` (it must pass);
+   * this becomes `ReadLanguage`, and its failure message is the cell's answer.
+   */
+  readonly reader?: {
+    readonly vars?: readonly string[];
+    readonly setup?: readonly string[];
+    readonly call: string;
+  };
 }
+
+/** PR-63: the two test names of a two-test cell. */
+// the A_/B_ prefixes make alphabetical and declaration order agree
+export const SET_TEST = "A_SetLanguage";
+export const READ_TEST = "B_ReadLanguage";
 
 export interface Family {
   readonly name: string;
@@ -1683,17 +1697,17 @@ const FORMAT_EVALUATE_CELLS: Cell[] = [
 ];
 
 /** The same cell under Danish (GlobalLanguage 1030), set before the one call; each is its own codeunit, so nothing is restored. */
-const inLang = (c: Cell): Cell => ({
+const inLang = (c: Cell, code = 1030): Cell => ({
   ...c,
-  state: `lang1030 ${c.state}`.trim(),
-  setup: ["GlobalLanguage(1030);", ...(c.setup ?? [])],
+  state: `lang${code} ${c.state}`.trim(),
+  setup: [`GlobalLanguage(${code});`, ...(c.setup ?? [])],
   depends: "locale",
 });
-const fmtIn = (type: string, state: string, method: string, expr: string): Cell => {
+const fmtIn = (type: string, state: string, method: string, expr: string, code = 1030): Cell => {
   const v = FMT_VALUES.find((x) => x.type === type);
   const s = v?.states.find(([n]) => n === state);
   if (v === undefined || s === undefined) throw new Error(`no value ${type} ${state}`);
-  return inLang(fmtCell(v, state, s[1], method, expr));
+  return inLang(fmtCell(v, state, s[1], method, expr), code);
 };
 const LANG_FORMATS: readonly (readonly [string, string, string])[] = [
   ["Boolean", "true", "6"],
@@ -1724,13 +1738,294 @@ const LANG_CELLS: Cell[] = [
   textCell("WindowsLanguage", "probe", "WindowsLanguage()", false, [], "locale"),
 ];
 
+/**
+ * PR-63: the same language set under German, French, Norwegian and Swedish, then what Danish lacked, then month and day names
+ * under all five and English, then the GlobalLanguage carry-over. All appended after the 326 PR-52 cells, so their ids stay.
+ */
+const LR_ENUM: FmtValue = {
+  type: "Enum",
+  decl: 'Enum "LR Color"',
+  states: [
+    // the captions are the enum's default ones: no translation files, so these cells are no evidence about translated captions
+    ["first default caption", 'V := "LR Color"::Red;'],
+    ["third default caption", 'V := "LR Color"::Blue;'],
+  ],
+};
+const ENUM_SUPPORT = `enum 51000 "LR Color"
+{
+    Extensible = false;
+
+    value(0; Red) { Caption = 'Red'; }
+    value(1; Green) { Caption = 'Green'; }
+    value(2; Blue) { Caption = 'Blue'; }
+}
+
+codeunit 51540 "LR Carry Mark"
+{
+    SingleInstance = true;
+
+    var
+        Counter: Integer;
+
+    procedure Increment()
+    begin
+        Counter += 1;
+    end;
+
+    procedure Count(): Integer
+    begin
+        exit(Counter);
+    end;
+}
+`;
+const PICTURES: readonly (readonly [string, string])[] = [
+  ["precision", "<Precision,2:2><Standard Format,0>"],
+  ["thousands", "<Integer Thousand><Decimals>"],
+];
+const LANG_WORDS: Readonly<
+  Record<number, { yes: string; no: string; lower: string; upper: string }>
+> = {
+  1031: { yes: "Ja", no: "Nein", lower: "äöüßé", upper: "ÄÖÜÉ" },
+  1036: { yes: "Oui", no: "Non", lower: "éèçœ", upper: "ÉÈÇŒ" },
+  1044: { yes: "Ja", no: "Nei", lower: "æøåé", upper: "ÆØÅÉ" },
+  1053: { yes: "Ja", no: "Nej", lower: "åäöé", upper: "ÅÄÖÉ" },
+};
+/** What every language gets: Enum, the two Decimal pictures, and the Boolean text "1". */
+const langExtras = (code: number): Cell[] => [
+  ...LR_ENUM.states.flatMap(([state, setup]) => [
+    inLang(fmtCell(LR_ENUM, state, setup, "Format", "Format(V)"), code),
+    ...(state.startsWith("third")
+      ? [inLang(fmtCell(LR_ENUM, state, setup, "Format len8", "Format(V, 8)"), code)]
+      : []),
+  ]),
+  ...["negative", "large"].flatMap((state) =>
+    PICTURES.map(([name, pic]) =>
+      fmtIn("Decimal", state, `Format picture ${name}`, `Format(V, 0, '${pic}')`, code),
+    ),
+  ),
+  inLang(evalCell(["Boolean", "Boolean"], "1", "1", false), code),
+];
+/** The Danish cells' counterpart under another language. */
+const langSet = (code: number): Cell[] => {
+  const w = LANG_WORDS[code];
+  if (w === undefined) throw new Error(`no words for ${code}`);
+  return [
+    ...LANG_FORMATS.flatMap(([type, state, len]) => [
+      fmtIn(type, state, "Format", "Format(V)", code),
+      ...(len !== "" ? [fmtIn(type, state, `Format len${len}`, `Format(V, ${len})`, code)] : []),
+    ]).map((c) =>
+      // an Option variable has no captions: its cells are no evidence about translated captions
+      c.type === "Option" ? { ...c, state: `${c.state} default caption` } : c,
+    ),
+    ...[w.yes, w.no, "Yes", "true"].map((t) =>
+      inLang(evalCell(["Boolean", "Boolean"], t, t, false), code),
+    ),
+    ...["1,5", "1.5"].map((t) => inLang(evalCell(["Decimal", "Decimal"], t, t, false), code)),
+    ...["15.03.2024", "15-03-2024", "2024-03-15"].map((t) =>
+      inLang(evalCell(["Date", "Date"], t, t, false), code),
+    ),
+    inLang(textCell("StrSubstNo", "decimal arg", "StrSubstNo('%1', 1234.5)"), code),
+    inLang(textCell("StrSubstNo", "date arg", "StrSubstNo('%1', DMY2Date(15, 3, 2024))"), code),
+    inLang(textCell("UpperCase", "language letters", `UpperCase('${w.lower}')`), code),
+    inLang(textCell("LowerCase", "language letters", `LowerCase('${w.upper}')`), code),
+    inLang(textCell("GlobalLanguage", "probe", "GlobalLanguage()", false), code),
+    ...langExtras(code),
+  ];
+};
+const NAME_DATES: readonly (readonly [string, string])[] = [
+  ["15 March 2024", "V := DMY2Date(15, 3, 2024);"],
+  ["6 August 2024", "V := DMY2Date(6, 8, 2024);"],
+];
+const NAME_PICTURES: readonly (readonly [string, string])[] = [
+  ["month", "<Month Text>"],
+  ["month 3", "<Month Text,3>"],
+  ["weekday", "<Weekday Text>"],
+  ["weekday 2", "<Weekday Text,2>"],
+  ["day month year", "<Day,2>. <Month Text> <Year4>"],
+];
+const nameCells = (code: number): Cell[] =>
+  NAME_DATES.flatMap(([state, setup]) =>
+    NAME_PICTURES.map(([name, pic]) =>
+      inLang(
+        {
+          type: "Date",
+          method: `Format ${name}`,
+          state,
+          vars: ["V: Date;"],
+          setup: [setup],
+          call: `Error('V:[%1]', Format(V, 0, '${pic}'));`,
+        },
+        code,
+      ),
+    ),
+  );
+/** Two tests, one codeunit: Danish is set in the first; the second reads the language back and Formats a closing date. */
+const CARRY_CELL: Cell = {
+  type: "GlobalLanguage",
+  method: "carry-over",
+  state: "set 1030 then read",
+  // the counter says whether the setter ran first in the same session (1) or not (0)
+  vars: ['Mark: Codeunit "LR Carry Mark";'],
+  call: "GlobalLanguage(1030); Mark.Increment();",
+  reader: {
+    vars: ["V: Date;", 'Mark: Codeunit "LR Carry Mark";'],
+    setup: ["V := ClosingDate(DMY2Date(31, 12, 2023));"],
+    call: "Error('V:[%1|%2|%3]', Format(GlobalLanguage(), 0, 9), Format(V), Format(Mark.Count(), 0, 9));",
+  },
+  depends: "carry",
+};
+const LANGUAGES_1031_1053 = [1031, 1036, 1044, 1053];
+const LANGUAGE_CELLS: Cell[] = [
+  ...LANGUAGES_1031_1053.flatMap(langSet),
+  ...langExtras(1030),
+  ...[1030, ...LANGUAGES_1031_1053, 1033].flatMap(nameCells),
+  CARRY_CELL,
+];
+
 export const FORMAT_EVALUATE: Family = {
   name: "format-evaluate",
   issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues",
   known: [],
-  support: "",
+  support: ENUM_SUPPORT,
   handles: {},
-  cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS],
+  cells: [...FORMAT_EVALUATE_CELLS, ...LANG_CELLS, ...LANGUAGE_CELLS],
+};
+
+/**
+ * PR-74: the refusal texts DO window t9 met that PR-56 does not keep, each driven by an invented cell (no corpus source text).
+ * Cell i is codeunit BASE_ID + 1 + i; the support objects (a table and a report) share id 51000 as in the other families.
+ */
+const t9 = (
+  type: string,
+  method: string,
+  state: string,
+  call: string,
+  extra: Partial<Cell> = {},
+): Cell => ({
+  type,
+  method,
+  state,
+  call,
+  ...extra,
+});
+const JSON_VARS = ["SW: DotNet T9StringWriter;", "JW: DotNet T9JsonTextWriter;"];
+const JSON_SETUP = ["SW := SW.StringWriter();", "JW := JW.JsonTextWriter(SW);"];
+export const T9_REFUSALS: Family = {
+  name: "t9-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "T9 Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Amount; Decimal) { }
+        field(3; Count; BigInteger) { }
+        field(4; Blob; Blob) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+report 51000 "T9 Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "T9 Row") { } }
+    requestpage { layout { area(Content) { } } }
+}
+
+report 51001 "T9 Print Report"
+{
+    dataset { dataitem(Row; "T9 Row") { column(CodeCol; "Code") { } } }
+}
+
+dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.IO.MemoryStream; T9MemoryStream) { }
+        type(System.IO.StringWriter; T9StringWriter) { }
+    }
+    assembly(System.IO.Compression)
+    {
+        type(System.IO.Compression.ZipArchive; T9ZipArchive) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.JsonTextWriter; T9JsonTextWriter) { }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9("Filter", "SetFilterDots", "t9", "R.SetFilter(Amount, '..');", {
+      vars: ['R: Record "T9 Row";'],
+    }),
+    t9("Filter", "SetFilterAt", "t9", "R.SetFilter(Amount, '@');", {
+      vars: ['R: Record "T9 Row";'],
+    }),
+    t9("Evaluate", "Gt100", "t9", "if Evaluate(D, '>100') then;", { vars: ["D: Decimal;"] }),
+    t9("Evaluate", "Gt1000", "t9", "if Evaluate(D, '>1000') then;", { vars: ["D: Decimal;"] }),
+    t9("Evaluate", "Lt1000", "t9", "if Evaluate(D, '<1000') then;", { vars: ["D: Decimal;"] }),
+    t9("RecordRef", "Duplicate", "closed", "R2 := RR.Duplicate();", {
+      vars: ["RR: RecordRef;", "R2: RecordRef;"],
+    }),
+    t9(
+      "Report",
+      "RunRequestPage",
+      "t9",
+      "T := Report.RunRequestPage(Report::\"T9 Report\", '<a/>');",
+      {
+        vars: ["T: Text;"],
+        // a write before the call leaves a transaction open, and then the run stops before the refusal (the census kit writes first)
+        setup: ["Commit();"],
+      },
+    ),
+    t9(
+      "Report",
+      "SaveAs",
+      "t9",
+      "Report.SaveAs(Report::\"T9 Print Report\", '<a/>', ReportFormat::Xml, OutS);",
+      {
+        vars: ["OutS: OutStream;", 'R: Record "T9 Row";'],
+        setup: ["R.Blob.CreateOutStream(OutS);"],
+      },
+    ),
+    t9("ZipArchive", "Ctor", "t9", "ZA := ZA.ZipArchive(MS);", {
+      vars: ["MS: DotNet T9MemoryStream;", "ZA: DotNet T9ZipArchive;"],
+      setup: ["MS := MS.MemoryStream();"],
+    }),
+    t9("JsonTextWriter", "WriteEndObject", "t9", "JW.WriteEndObject();", {
+      vars: JSON_VARS,
+      setup: JSON_SETUP,
+    }),
+    t9("JsonTextWriter", "WriteStartObject", "t9", "JW.WriteStartObject();", {
+      vars: JSON_VARS,
+      setup: [
+        ...JSON_SETUP,
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('a');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('b');",
+        "JW.WriteValue('v');",
+      ],
+    }),
+    t9("JsonTextWriter", "WritePropertyName", "t9", "JW.WritePropertyName('b');", {
+      vars: JSON_VARS,
+      setup: [
+        ...JSON_SETUP,
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('a');",
+        "JW.WriteStartArray();",
+      ],
+    }),
+    t9("Conversion", "FieldValue", "t9", "RR.Field(3).Value := false;", {
+      vars: ["RR: RecordRef;"],
+      setup: ['RR.Open(Database::"T9 Row");'],
+    }),
+    t9("RecordRef", "ClearMarks", "untouched", "RR.ClearMarks();", { vars: ["RR: RecordRef;"] }),
+    t9("FieldRef", "SetFilter", "untouched", "FR.SetFilter('%1', 5);", { vars: ["FR: FieldRef;"] }),
+  ],
 };
 
 export const FAMILIES: Readonly<Record<string, Family>> = {
@@ -1751,6 +2046,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [PUBAPP_FLOWFIELD.name]: PUBAPP_FLOWFIELD,
   // PR-52: appended (BC-check number 12): Format, Evaluate and the text functions, for a per-cell BC differential
   [FORMAT_EVALUATE.name]: FORMAT_EVALUATE,
+  // PR-74: appended (BC-check number 13): t9's refusal texts, for a keep census
+  [T9_REFUSALS.name]: T9_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -1836,16 +2133,28 @@ export function emitApp(
     const names = handlers
       .map((h) => /procedure (\w+)/.exec(h)?.[1])
       .filter((n) => n !== undefined);
+    const proc = (name: string, vs: readonly string[], b: string) =>
+      `${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
+    procedure ${name}()
+${vs.length > 0 ? `    var\n${vs.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
+${b}
+    end;
+`;
+    const t = c.reader;
+    // PR-63: a two-test cell lists SetLanguage, then ReadLanguage (declaration order is the run order)
+    const tests =
+      t === undefined
+        ? proc("Cell", vars, body)
+        : `${proc(SET_TEST, vars, body)}\n${proc(
+            READ_TEST,
+            t.vars ?? [],
+            [...(t.setup ?? []), t.call].map((s) => `        ${s}`).join("\n"),
+          )}`;
     return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
     Subtype = Test;
 
-${names.length > 0 ? `    [HandlerFunctions('${names.join(",")}')]\n` : ""}    [Test]
-    procedure Cell()
-${vars.length > 0 ? `    var\n${vars.map((v) => `        ${v}`).join("\n")}\n` : ""}    begin
-${body}
-    end;
-${handlers.map((h) => `\n${h}`).join("")}}
+${tests}${handlers.map((h) => `\n${h}`).join("")}}
 `;
   });
   return {
@@ -1892,8 +2201,16 @@ export function classify(
 ): CellResult[] {
   const byName = new Map(rows.map((r) => [r.name, r]));
   return f.cells.map((cell, i) => {
-    const r = byName.get(`Codeunit${BASE_ID + 1 + i}.Cell`);
+    const id = BASE_ID + 1 + i;
+    const r = byName.get(`Codeunit${id}.${cell.reader !== undefined ? READ_TEST : "Cell"}`);
     if (r === undefined) return { cell, outcome: "missing" };
+    // PR-63: the reader's answer means nothing if the setter did not pass; say so rather than score the reader
+    if (cell.reader !== undefined) {
+      const s = byName.get(`Codeunit${id}.${SET_TEST}`);
+      if (s === undefined) return { cell, outcome: "missing" };
+      if (s.status !== "pass" || s.notRun === true)
+        return { cell, outcome: "fail", message: `${SET_TEST} did not pass: ${s.message ?? ""}` };
+    }
     // A stopped test is neither a refusal nor a score.
     if (r.notRun === true && V3_TIMEOUT_MESSAGE.test(r.message ?? ""))
       return {
@@ -1967,22 +2284,48 @@ export function refusalClasses(
 export interface BcRow {
   readonly outcome: string;
   readonly message: string;
+  /**
+   * PR-63: how the id came: bare (`51001`), as the reader (`51539.B_ReadLanguage`) or as the setter only
+   * (`51539.A_SetLanguage`). `joinCells` checks the form against the cell: a two-test cell needs `reader` plus `setter`.
+   */
+  readonly form?: "plain" | "reader" | "setter";
+  readonly setter?: { readonly outcome: string; readonly message: string };
 }
 
 export function parseBcTsv(text: string): Map<number, BcRow> {
-  const rows = new Map<number, BcRow>();
+  const answers = new Map<number, BcRow>();
+  const setters = new Map<number, { outcome: string; message: string }>();
+  const seen = new Set<string>();
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/\r$/, "");
     if (line.trim() === "") continue;
-    const [id, outcome, ...rest] = line.split("\t");
+    const [idText, outcome, ...rest] = line.split("\t");
+    // PR-63: a two-test codeunit may come back as `<id>.SetLanguage` and `<id>.ReadLanguage`; the reader's row is the cell's
+    // answer, the setter's row is dropped. A plain `<id>` is the cell's answer as before.
+    const [id, test, extra] = (idText ?? "").split(".");
     const n = Number(id);
-    if (!Number.isInteger(n) || (outcome !== "pass" && outcome !== "fail"))
+    if (
+      !Number.isInteger(n) ||
+      extra !== undefined ||
+      (test !== undefined && test !== SET_TEST && test !== READ_TEST) ||
+      (outcome !== "pass" && outcome !== "fail")
+    )
       throw new Error(
-        `refusal-family: bad BC row (want id, pass|fail, message): ${line.slice(0, 80)}`,
+        `refusal-family: bad BC row (want id[.${SET_TEST}|.${READ_TEST}], pass|fail, message): ${line.slice(0, 80)}`,
       );
-    if (rows.has(n)) throw new Error(`refusal-family: BC row ${n} appears twice`);
-    rows.set(n, { outcome, message: rest.join("\t") });
+    const key = `${n}.${test === SET_TEST ? SET_TEST : "answer"}`;
+    if (seen.has(key)) throw new Error(`refusal-family: BC row ${idText} appears twice`);
+    seen.add(key);
+    const row = { outcome, message: rest.join("\t") };
+    if (test === SET_TEST) setters.set(n, row);
+    else answers.set(n, test === READ_TEST ? { ...row, form: "reader" } : row);
   }
+  const rows = new Map<number, BcRow>();
+  for (const [n, a] of answers) {
+    const setter = setters.get(n);
+    rows.set(n, setter !== undefined ? { ...a, setter } : a);
+  }
+  for (const [n, s] of setters) if (!rows.has(n)) rows.set(n, { ...s, form: "setter" });
   return rows;
 }
 
@@ -2044,8 +2387,25 @@ export function joinCells(
       );
   return results.map((r, i) => {
     const id = BASE_ID + 1 + i;
-    const b = bc.get(id);
-    if (b === undefined) throw new Error(`refusal-family: no BC row for cell ${id}`);
+    const got = bc.get(id);
+    if (got === undefined) throw new Error(`refusal-family: no BC row for cell ${id}`);
+    // PR-63: the row's form must fit the cell. A two-test cell needs the reader's row AND the setter's; a one-test cell takes a bare id.
+    const form = got.form ?? "plain";
+    if (r.cell.reader !== undefined) {
+      if (form === "plain")
+        throw new Error(
+          `refusal-family: cell ${id} has two tests: give ${id}.${READ_TEST}, not ${id}`,
+        );
+      if (form === "setter") throw new Error(`refusal-family: no ${READ_TEST} row for cell ${id}`);
+      if (got.setter === undefined)
+        throw new Error(`refusal-family: no ${SET_TEST} row for cell ${id}`);
+    } else if (form !== "plain" || got.setter !== undefined)
+      throw new Error(`refusal-family: cell ${id} has one test: give ${id}, not a test suffix`);
+    // a setter that failed makes the reader's answer meaningless: the answer is the setter's failure
+    const b =
+      got.setter !== undefined && got.setter.outcome !== "pass"
+        ? { outcome: "fail", message: `${SET_TEST} did not pass: ${got.setter.message}` }
+        : got;
     const v3 = say(r.outcome, r.message);
     const row = (cls: JoinClass): JoinRow => ({
       id,

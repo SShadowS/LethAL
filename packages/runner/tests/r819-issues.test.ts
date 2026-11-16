@@ -99,6 +99,44 @@ describe("#47: a Ready-to-Run wrapper's identity", () => {
     expect(String(err)).toContain("al-runner-v3-system-application-not-found");
     expect(String(err)).not.toContain("Ready-to-Run");
     expect(String(err)).not.toContain("Unreadable:");
+    // R1081: nothing in the folder was unreadable, so the not-found refusal carries the fix.
+    expect(String(err)).toContain("fetch the Microsoft symbols into that folder");
+  });
+
+  test("R1081: a missing folder names the setting, the path and the fix", async () => {
+    const d = await folder({});
+    const missing = join(d, "no-such-folder");
+    const err = await assertBcVersionMatchesPackages(missing, "29.0.0.0").catch((e: unknown) => e);
+    expect(String(err)).toContain("al-runner-v3-packages-dir-missing");
+    expect(String(err)).toContain("alRunnerV3.packagesDir");
+    expect(String(err)).toContain(missing);
+    expect(String(err)).toContain("docs/first-week.md");
+    expect(String(err)).toContain('set "alRunnerV3.bcVersion"');
+  });
+
+  test("R1081: another read error keeps its own text, with no fetch advice", async () => {
+    const d = await folder({ "a-file": Buffer.from("x") });
+    // A path under a file: readdir fails with ENOTDIR, which fetching symbols would not fix.
+    const err = await assertBcVersionMatchesPackages(join(d, "a-file"), "29.0.0.0").catch(
+      (e: unknown) => e,
+    );
+    expect((err as NodeJS.ErrnoException).code).toBe("ENOTDIR");
+    expect(String(err)).not.toContain("al-runner-v3-packages-dir-missing");
+    expect(String(err)).not.toContain("fetch the Microsoft symbols");
+  });
+
+  test("R1081: the not-found refusal has no fetch advice when an entry was unreadable", async () => {
+    const d = await folder({
+      "Microsoft_System Application.app": wrapper(
+        SYSTEM_APP,
+        "System Application",
+        "29.0.0.0",
+        "11111111-1111-1111-1111-111111111111",
+      ),
+    });
+    const err = await assertBcVersionMatchesPackages(d, "29.0.0.0").catch((e: unknown) => e);
+    expect(String(err)).toContain("Unreadable:");
+    expect(String(err)).not.toContain("fetch the Microsoft symbols");
   });
 
   test("the package folder finds a dependency held as a wrapper, and hashes the file's own bytes", async () => {

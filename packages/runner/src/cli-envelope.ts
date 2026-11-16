@@ -27,6 +27,8 @@ export const TOOLBOX_CORE_ERROR_CODES = [
 export const LETHAL_ERROR_CODES = [
   // `campaign compare` refuses to read a stage whose pre-commitment is not committed.
   "UNCOMMITTED_PRECOMMITMENT",
+  // R1079: `lethal run`'s line filter kept no mutation site (exit 8); not a failure of the tool.
+  "NO_MUTABLE_LINES",
 ] as const;
 
 export type CliErrorCode =

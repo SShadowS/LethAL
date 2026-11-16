@@ -180,12 +180,14 @@ card demo is in [examples/gift-card/README.md](examples/gift-card/README.md#run-
 ## Quick start
 
 Four steps from a checkout to a first result. Do them against a **sandbox or dev container**, never
-a production tenant, for the reason in step 3.
+a production tenant, for the reason in step 3. A slower walk through the gift card example, written
+for a person: [Your first week with LethAL](docs/first-week.md).
 
 **1. Write `lethal.config.json` next to your AL app.** `lethal init --project path/to/your-al-app`
 writes one for you, including the three injected object ids picked from your own app.json id ranges
 (the one field nobody can guess, and the one whose absence fails at publish time). Fill in the
-server and credentials it leaves as placeholders.
+server and credentials it leaves as placeholders. `lethal init --project ... --backend al-runner-v3`
+writes the offline `alRunnerV3` section instead (its `bcVersion` is a placeholder you must replace).
 
 To write it by hand instead, every field below is required; LethAL refuses to start and names any
 that are missing. The user and password are placeholders, so put your own in:
@@ -692,7 +694,8 @@ missing, the AL0451 error says which folder to add (R951). Measured with alc onl
 measured with it.
 
 Exit codes: `0` ok, `1` error, `3` quarantined, meaning the run refused to vouch for its own verdicts,
-`4` nothing scored, meaning every mutant errored and the run measured nothing.
+`4` nothing scored, meaning every mutant errored and the run measured nothing, `7` time budget reached (or a signal), meaning
+the report is partial and `--resume` continues it. For CI, see [`docs/ci/`](docs/ci/README.md).
 
 ## How it works, in short
 

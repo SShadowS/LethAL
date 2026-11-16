@@ -103,16 +103,17 @@ import {
   lockDir,
   parsePs,
 } from "./corpus-snapshot";
-import { checkBuild } from "./upstream-repros";
 import {
-  DEFAULT_PEAK_GIB,
+  MEMORY_RESERVE_GIB,
   PEAK_GIB,
   type SlotClass,
   memoryVerdict,
   readContainerMemory,
-  readSlot,
   readSlotClass,
 } from "./heavy-slot-class";
+import { appendSmallAdmit, heldInputs } from "./heavy-slot-guard";
+import { type ReproRow, fixedScanLines, realScanDeps } from "./upstream-fixed-scan";
+import { checkBuild } from "./upstream-repros";
 
 export const ROOT = "/work/tools/al-runner-v3";
 export const REPO = "aldevtools/BusinessCentral.AL.Runner";
@@ -168,6 +169,12 @@ export interface UpdateDeps {
    * lines. Optional: absent (test rigs), nothing is run. It never decides the gate.
    */
   upstreamRepros?(candidate: string, current: string): Promise<readonly string[]>;
+  /**
+   * PR-59: the read-only scan of our open upstream issues whose maintainer comment names a build (`upstream-fixed-scan.ts`),
+   * with the regression set's rows on current; returns its lines. Optional: absent (test rigs), nothing is run. Run once per
+   * `dailyOnce`, outside the gate lock; it never decides anything.
+   */
+  fixedScan?(): Promise<readonly string[]>;
   /** `free -g`'s available column. */
   freeGb(): Promise<number>;
   /** R639 I3: `/proc/<pid>/cmdline` with NULs as spaces, or undefined when there is no such pid. */
@@ -1102,6 +1109,42 @@ export function countHeavyJobs(
 }
 
 /**
+ * PR-60: the gate's memory verdict from the same inputs the heavy-slot guard uses (`heldInputs`:
+ * held slots, unslotted heavy processes, R992's small count), so R992's small-job allowance applies
+ * to the gate too. Undefined when the cgroup names no limit. The gate holds no slot, so it marks none;
+ * an admission by the allowance goes to the small-admits ledger under the name `al-runner-v3-update`.
+ * Seams: `readSample`, `psText`, `appendLedger` (tests stub them; none may touch /coord).
+ * Accepted ceiling: the update holds no heavy slot, so while its gate runs it is not counted toward
+ * R992's two-small-job cap, and a third small job may be admitted. That is bounded at about the
+ * update's 2 GiB peak above the declared sum, once a day, and each job still passed used + peak +
+ * reserve. A marker that counts the update would close this if wanted.
+ */
+export function gateMemoryVerdict(
+  dir: string,
+  seams: {
+    readonly readSample: typeof readContainerMemory;
+    readonly psText: () => string;
+    readonly appendLedger: typeof appendSmallAdmit;
+  },
+): { readonly refuse: boolean; readonly message: string } | undefined {
+  const sample = seams.readSample();
+  if (sample?.maxBytes === undefined) return undefined;
+  const { heldPeaks, smallHeld } = heldInputs(dir, process.pid, seams.psText());
+  const m = memoryVerdict(sample, heldPeaks, PEAK_GIB.gate, MEMORY_RESERVE_GIB, smallHeld);
+  if (m.small === true)
+    seams.appendLedger(
+      dir,
+      "al-runner-v3-update",
+      "other",
+      PEAK_GIB.gate,
+      sample,
+      heldPeaks,
+      String(process.pid),
+    );
+  return m;
+}
+
+/**
  * R633 I2: a `--regate` (R639: or an `--edge-rejudge`) that was skipped exits 2, so a `&&` chain
  * stops.
  */
@@ -1133,7 +1176,9 @@ async function skippedForTheDay(deps: UpdateDeps, what: string): Promise<boolean
   }
   const free = await deps.freeGb();
   if (free < 10) {
-    await deps.log(`${deps.now()} ${what}: skipped for the day: ${free} GB available (needs 10)`);
+    await deps.log(
+      `${deps.now()} ${what}: skipped for the day: ${free} GB available (needs 10; \`free -g\` reads the host, used only when the cgroup names no limit)`,
+    );
     return true;
   }
   return false;
@@ -1477,6 +1522,25 @@ async function edgeLocked(deps: UpdateDeps & EdgeDeps): Promise<EdgeResult> {
 export async function dailyOnce(
   deps: UpdateDeps & EdgeDeps,
 ): Promise<{ edge: EdgeResult; releases: readonly string[] }> {
+  try {
+    return await dailyGate(deps);
+  } finally {
+    // PR-59: outside the gate lock and past the memory skip, so it runs on a busy day too. It runs once per
+    // `dailyOnce` call (cron calls that daily). Whatever it does, it changes no outcome.
+    if (deps.fixedScan !== undefined) {
+      try {
+        for (const l of await deps.fixedScan())
+          await deps.log(`${deps.now()} upstream-fixed-scan: ${l}`);
+      } catch (err) {
+        await deps.log(`${deps.now()} upstream-fixed-scan: not run: ${String(err).slice(0, 300)}`);
+      }
+    }
+  }
+}
+
+async function dailyGate(
+  deps: UpdateDeps & EdgeDeps,
+): Promise<{ edge: EdgeResult; releases: readonly string[] }> {
   if (await skippedForTheDay(deps, "daily")) return { edge: "skipped", releases: [] };
   const lock = await takeGateLock(deps, "daily");
   if (lock === undefined) return { edge: "skipped", releases: [] };
@@ -1586,6 +1650,31 @@ export function realDeps(root = ROOT): UpdateDeps {
     versionOf: async (b) => (await run([b, "--version"])).trim(),
     // R-996: the repros of this checkout, run in-process.
     upstreamRepros: async (candidate, current) => (await checkBuild(candidate, current)).lines,
+    // PR-59: read-only; our open upstream issues the maintainer reports fixed.
+    fixedScan: async () => {
+      // The regression set on current (candidate = current): its rows say which entries still differ from BC.
+      // A failed or slow run is told and the scan goes on without rows.
+      const head: string[] = [];
+      let reproRows: readonly ReproRow[] | undefined;
+      try {
+        const cur = join(await readlink(join(root, "current")), "al-runner");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const limit = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error("timed out after 30 min")), 30 * 60_000);
+        });
+        try {
+          reproRows = (await Promise.race([checkBuild(cur, cur), limit])).changes;
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch (err) {
+        head.push(`repro rows not available (scan without them): ${String(err).slice(0, 200)}`);
+      }
+      return [
+        ...head,
+        ...(await fixedScanLines(realScanDeps(reproRows !== undefined ? { reproRows } : {}))),
+      ];
+    },
     runGate: async (commit, env, log) => {
       if (!existsSync(GATE_WORKTREE))
         await run([
@@ -1646,21 +1735,15 @@ export function realDeps(root = ROOT): UpdateDeps {
         held.map((n) => readSlotClass(lockDir(), n)),
       );
     },
-    gateMemory: async () => {
-      const sample = readContainerMemory();
-      if (sample?.maxBytes === undefined) return undefined;
-      const held = SLOTS.filter(
-        (n) =>
-          Bun.spawnSync(["flock", "-n", "-E", String(SLOT_BUSY), `${lockDir()}/heavy.${n}`, "true"])
-            .exitCode === SLOT_BUSY,
-      );
-      const unclassed = Math.max(...Object.values(DEFAULT_PEAK_GIB));
-      return memoryVerdict(
-        sample,
-        held.map((n) => readSlot(lockDir(), n)?.peakGiB ?? unclassed),
-        PEAK_GIB.gate,
-      );
-    },
+    gateMemory: async () =>
+      gateMemoryVerdict(lockDir(), {
+        readSample: readContainerMemory,
+        psText: () =>
+          Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString(),
+        appendLedger: appendSmallAdmit,
+      }),
+    // PR-60: `free -g` reads the HOST, not the container. `skippedForTheDay` calls this only when
+    // `gateMemory` is undefined, i.e. the cgroup names no limit; under a limit the cgroup decides.
     freeGb: async () => {
       const p = Bun.spawn(["free", "-g"], { stdout: "pipe" });
       const out = await new Response(p.stdout).text();

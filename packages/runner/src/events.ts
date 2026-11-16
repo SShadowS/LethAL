@@ -567,6 +567,21 @@ export type RunEventInput =
       /** R1009: the refused row's test name (`Codeunit<id>.<method>`), so its shape can be reduced. */
       readonly test?: string;
     }
+  | {
+      /**
+       * PR-56: the request after a kept refusal (a `V3_SERVE_SAFE_REFUSALS` row) on one al-runner-v3
+       * serve daemon gave a row that differs from the baseline's where it cannot (a NONE row, or a
+       * test before the first one covering the mutant). The daemon was closed and the request re-run
+       * on a fresh one; the fresh rows stand. `refusal` is the kept text, `test` the drifting test,
+       * `baselineRow` and `row` both rows as R612's warm-up compare reads them. Local only (names a
+       * test and a refusal text).
+       */
+      readonly type: "serve-drift-after-kept-refusal";
+      readonly refusal: string;
+      readonly test: string;
+      readonly baselineRow: string;
+      readonly row: string;
+    }
   | { readonly type: "quarantined"; readonly reason: string }
   | {
       /**
