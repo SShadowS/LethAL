@@ -46,3 +46,28 @@ is classed as such, not as an al-runner defect, unless al-runner ignores a setti
    catch approximations.
 3. Each class that is al-runner's gets an invented repro, an upstream issue, a regression entry and an R586 row. The result gives
    the counts: cells, equal, differing, refused, and classes.
+
+## Addendum 1 (2026-11-16, after the first BC run and the Opus review, before the second run)
+
+**First run** (edac870a's 295 cells; BC: lethal-bugs, bc2, W1 en-US):
+- **295 of 295 equal**, compared on raw message text with padding included. Rows checked to hold real values on both sides.
+- Prediction 2 missed: no differing class under en-US.
+- Files: `/coord/handoff/PR-52/joined-prelim.tsv`, `v3-edac870a.json`, `bc/format-evaluate.bc2.tsv`.
+
+**Changes for the second run:**
+- **Review fixes:**
+  - one normalizer on both sides of the join;
+  - raw answers shown escaped;
+  - an end marker `V:[...]`, so a trimmed message reads as `transport-trimmed`;
+  - an explicit per-cell `depends` flag (`locale` or `tz`) replacing the name regex;
+  - Evaluate starting from a non-default sentinel;
+  - a control cell for Error's own `%` substitution;
+  - the join refusing ids out of range.
+- **A time-zone probe cell:** local midnight printed as UTC, reported through `V:`.
+- **A cell set under `GlobalLanguage(1030)` (Danish), about 30 cells.** It covers Format of Boolean, Decimal, Date, Time, DateTime
+  and Option; Evaluate of Boolean ('Ja', 'Nej', 'Yes', 'true'), Decimal and Date; StrSubstNo with Decimal and Date arguments; and
+  Upper/LowerCase of æøå. Also non-en-US decimal and date formats, if a test can set them without a client. The orchestrator's
+  reason: the SetFilter refusal (DO t7) shows al-runner does not pin other languages' words, so differences are likely there.
+
+**Prediction 2, restated for the second run:** the en-US cells stay equal (now with markers and sentinels). If any class differs,
+it is in the Danish set, or in what a failed Evaluate leaves in its variable.
