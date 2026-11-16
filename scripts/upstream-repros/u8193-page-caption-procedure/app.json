@@ -1,0 +1,10 @@
+{
+  "id": "92781900-0000-4000-8000-000000081701",
+  "name": "Upstream Repro 8193 Page Caption Procedure",
+  "publisher": "LethAL Repro",
+  "version": "1.0.0.0",
+  "platform": "28.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [{ "from": 51700, "to": 51709 }],
+  "features": ["NoImplicitWith"]
+}
