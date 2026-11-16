@@ -16,8 +16,8 @@
 #   bcdev the config holds a BC login).
 # - Every artifact below carries your AL source (the report's mutant texts, the export's embedded files): keep them inside
 #   your organisation.
-# - A pull request whose changed lines hold no mutation site makes `lethal run` exit 1 ("kept no deployable mutation
-#   site", R1079): the `paths` filter skips pull requests that touch no .al file, but a comment-only .al edit still fails.
+# - The HTML page (`--format mutation-elements-html`) loads the Stryker elements bundle from jsDelivr when it is opened,
+#   so opening it needs network access. LethAL writes no bundle.
 name: mutation-test
 
 on:
@@ -43,6 +43,7 @@ jobs:
           rc=$?
           case "$rc" in
             0) echo "LethAL: run completed" ;;
+            8) echo "LethAL: no changed line holds a mutation site; nothing to measure"; rc=0 ;;
             3) echo "::error::LethAL quarantined the run: it refused to vouch for its own verdicts (see the report's validity)" ;;
             4) echo "::error::LethAL scored nothing: every mutant errored" ;;
             7) echo "::error::LethAL stopped early (time budget or a signal); the report is partial, rerun with --resume" ;;
@@ -52,7 +53,9 @@ jobs:
 
       - name: Export the report for display
         if: ${{ always() && hashFiles('lethal-report.json') != '' }}
-        run: lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+        run: |
+          lethal export lethal-report.json --format mutation-elements --project app --out mutation-report.json
+          lethal export lethal-report.json --format mutation-elements-html --project app --out mutation-report.html
 
       - name: Upload the reports
         if: ${{ always() && hashFiles('lethal-report.json') != '' }}
@@ -62,4 +65,5 @@ jobs:
           path: |
             lethal-report.json
             mutation-report.json
+            mutation-report.html
             lethal-events.ndjson

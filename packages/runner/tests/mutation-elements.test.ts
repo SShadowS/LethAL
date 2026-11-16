@@ -6,6 +6,7 @@ import {
   lossesFor,
   positionOf,
   toMutationElements,
+  toMutationElementsHtml,
 } from "../src/mutation-elements";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
@@ -409,5 +410,44 @@ describe("R231: exported mutant ids are unique across batches", () => {
       "unplaceableMutants: M0001 names 2 mutants (0/M0001, 1/M0001)",
     );
     expect(warned.join(" ")).toContain("likelyEquivalentSurvivors: M0001 names 2 mutants");
+  });
+});
+
+describe("R1080: the HTML page", () => {
+  /** The object the page's inline script assigns to the element's `report`. */
+  const reportOf = (html: string): unknown => {
+    const m = html.match(/\.report = (.*);<\/script>\n/);
+    if (m === null || m[1] === undefined) throw new Error("no inline report assignment");
+    return JSON.parse(m[1]);
+  };
+
+  test("it loads the pinned bundle with its integrity hash and holds the same JSON", async () => {
+    const { report: out } = await toMutationElements(report([mutant()]), OPTS);
+    const html = toMutationElementsHtml(out);
+    expect(html.startsWith("<!doctype html>")).toBe(true);
+    expect(html).toContain('<meta charset="utf-8">');
+    expect(html).toContain(
+      '<script src="https://cdn.jsdelivr.net/npm/mutation-testing-elements@3.9.0/dist/mutation-test-elements.js" integrity="sha384-/dXYuoYRvO6rJ0FNtdKR+Hmq5iGrkkSDpc/TGgbSoReog26ZqhLhpSt4l+0Wwew2" crossorigin="anonymous"></script>',
+    );
+    expect(html).toContain('<mutation-test-report-app title-postfix="LethAL">');
+    expect(reportOf(html)).toEqual(JSON.parse(JSON.stringify(out)));
+  });
+
+  test("source holding </script> and U+2028 cannot break out of the inline script", async () => {
+    const evil = `${SOURCE}// </script><script>alert(1)</script> ${String.fromCharCode(0x2028)} ${String.fromCharCode(0x2029)}\n`;
+    const { report: out } = await toMutationElements(report([mutant()]), {
+      ...OPTS,
+      readSource: async () => evil,
+    });
+    const html = toMutationElementsHtml(out);
+    const script = html.slice(html.indexOf(".report = "));
+    // Only the page's own closing tag remains: the source's `</script>` is escaped.
+    expect(html.match(/<\/script>/g)?.length).toBe(2);
+    expect(script).not.toContain("alert(1)</script>");
+    expect(html).not.toContain(String.fromCharCode(0x2028));
+    expect(html).not.toContain(String.fromCharCode(0x2029));
+    // And it still round-trips to the exact source.
+    const back = reportOf(html) as { files: Record<string, { source: string }> };
+    expect(back.files["src/X.Codeunit.al"]?.source).toBe(evil);
   });
 });
