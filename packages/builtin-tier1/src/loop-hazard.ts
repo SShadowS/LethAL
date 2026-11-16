@@ -1018,6 +1018,7 @@ export function openItemHangRefuses(
     r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx) ||
     toggledExitBlankHangs(node, ctx, op) ||
+    removedBoundHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
       (emptiedProgressCalleeHangs(node, ctx) || emptiedRefusedBlockHangs(node, ctx)))
   );
@@ -1193,55 +1194,113 @@ function exitsOnDefault(loop: ALSyntaxNode, c: ALSyntaxNode, p: ALSyntaxNode): b
  */
 function r1050Progress(obj: ALSyntaxNode, ctx: SemanticContext): Set<number> {
   return cached(ctx, obj, "r1050Progress", () => {
-    const set = new Set<number>();
+    // R1053 (PR-48): per member, the names it moves TOWARD the outer exit: `names` (its var
+    // parameters the caller binds to a live name, and chain writes that are live), `ret` (its
+    // result is live), `all` (a parameter we could not read, so every var parameter).
+    interface Toward {
+      names: Set<string>;
+      ret: boolean;
+      all: boolean;
+    }
+    const toward = new Map<number, Toward>();
+    const entry = (p: ALSyntaxNode): Toward => {
+      let t = toward.get(p.startIndex);
+      if (t === undefined) {
+        t = { names: new Set(), ret: false, all: false };
+        toward.set(p.startIndex, t);
+      }
+      return t;
+    };
+    /** Add to `t` the names of `p` that the call `site` binds to a name `isLive` accepts. */
+    const bind = (
+      t: Toward,
+      site: CallSite,
+      p: ALSyntaxNode,
+      isLive: (k: string) => boolean,
+    ): boolean => {
+      let grew = false;
+      const add = (k: string): void => {
+        if (!t.names.has(k)) {
+          t.names.add(k);
+          grew = true;
+        }
+      };
+      for (const w of chainEffect(site.name, obj, ctx).writes) if (isLive(w)) add(w);
+      argumentList(site.n).forEach((a, i) => {
+        const k = baseNameOf(a);
+        if (k === null || !isLive(k)) return;
+        const prm = r531Param(p, i);
+        if (prm === null) {
+          grew ||= !t.all;
+          t.all = true;
+        } else if (prm[1]) add(prm[0]);
+      });
+      return grew;
+    };
     const sites = r1050Sites(obj, ctx);
     for (const site of sites) {
       const loops = loopsAround(site.n);
       if (loops.length === 0) continue;
       const targets = assignedTargets(site.n);
       for (const p of r1050Candidates(site, obj, ctx)) {
-        const moved = r1050Moved(site, p, obj, ctx);
-        const hit = loops.some((loop) => {
+        for (const loop of loops) {
           const { read, steps } = exitEffect(loop, ctx);
           const live = (k: string): boolean => read.has(k) && !steps.has(k);
-          if ([...moved].some(live)) return true;
-          if (!returnsValue(p)) return false;
-          const inExit = loopExitParts(loop, ctx).some(
-            (e) => e.startIndex <= site.n.startIndex && site.n.endIndex <= e.endIndex,
-          );
-          return (inExit && !exitsOnDefault(loop, site.n, p)) || targets.some(live);
-        });
-        if (hit) set.add(p.startIndex);
+          const t = entry(p);
+          bind(t, site, p, live);
+          if (returnsValue(p)) {
+            const inExit = loopExitParts(loop, ctx).some(
+              (e) => e.startIndex <= site.n.startIndex && site.n.endIndex <= e.endIndex,
+            );
+            if ((inExit && !exitsOnDefault(loop, site.n, p)) || targets.some(live)) t.ret = true;
+          }
+        }
       }
     }
+    // An entry made for a call that is no progress at all is not a member.
+    const member = (p: ALSyntaxNode): boolean => {
+      const t = toward.get(p.startIndex);
+      return t !== undefined && (t.ret || t.all || t.names.size > 0);
+    };
     for (let changed = true; changed; ) {
       changed = false;
       for (const site of sites) {
         const q = site.owner;
-        if (q === null || !set.has(q.startIndex)) continue;
-        const qNames = new Set<string>();
-        for (let i = 0; i < paramCount(q); i++) {
-          const prm = r531Param(q, i);
-          if (prm?.[1]) qNames.add(prm[0]);
+        if (q === null || !member(q)) continue;
+        const tq = entry(q);
+        const qNames = new Set(tq.names);
+        // A global Q's chain both writes and reads can feed Q's var parameter or result
+        // (`Advance(); P := Cursor;`), so what moves it moves toward the exit.
+        // Only globals that hold data: a Label never changes, and a codeunit variable called on is
+        // no data (Filter Tokens' `FilterTokens` and its labels, 12 sites lost without this).
+        const data = dataGlobalNames(obj);
+        for (const k of procNames(q)) {
+          const ce = chainEffect(k, obj, ctx);
+          for (const w of ce.writes) if (ce.reads.has(w) && data.has(w)) qNames.add(w);
         }
-        for (const k of procNames(q))
-          for (const w of chainEffect(k, obj, ctx).writes) qNames.add(w);
-        const rv = q.childForFieldName("return_value");
-        if (rv !== null) qNames.add(normalizeAlName(rv.text));
+        if (tq.all)
+          for (let i = 0; i < paramCount(q); i++) {
+            const prm = r531Param(q, i);
+            if (prm?.[1]) qNames.add(prm[0]);
+          }
+        if (tq.ret) {
+          const rv = q.childForFieldName("return_value");
+          if (rv !== null) qNames.add(normalizeAlName(rv.text));
+        }
         const targets = assignedTargets(site.n);
-        const exited = returnsValue(q) && inExitStatement(site.n);
+        const exited = tq.ret && returnsValue(q) && inExitStatement(site.n);
         for (const p of r1050Candidates(site, obj, ctx)) {
-          if (set.has(p.startIndex)) continue;
-          const flows =
-            [...r1050Moved(site, p, obj, ctx)].some((k) => qNames.has(k)) ||
-            (returnsValue(p) && (exited || targets.some((k) => qNames.has(k))));
-          if (flows) {
-            set.add(p.startIndex);
+          const t = entry(p);
+          if (bind(t, site, p, (k) => qNames.has(k))) changed = true;
+          if (!t.ret && returnsValue(p) && (exited || targets.some((k) => qNames.has(k)))) {
+            t.ret = true;
             changed = true;
           }
         }
       }
     }
+    const set = new Set<number>();
+    for (const [i, t] of toward) if (t.ret || t.all || t.names.size > 0) set.add(i);
     return set;
   });
 }
@@ -1339,6 +1398,257 @@ function toggledExitBlankHangs(node: ALSyntaxNode, ctx: SemanticContext, op: str
   );
   const name = baseNameOf(other ?? null);
   return name !== null && loopBodyWrites(loop, name, ctx);
+}
+
+/** A non-negative integer literal. */
+const isNonNegLiteral = (n: ALSyntaxNode): boolean => /^\d+$/.test(n.text.trim());
+
+/**
+ * R1061 (PR-48): is `y` a counter that stays >= 0 in procedure `proc`: every write to it is a
+ * non-negative literal assignment, `+= <positive literal>` or `y := y + <positive literal>`, and
+ * the loop body increments it? A `var` argument or any other write makes it unknown.
+ */
+function isUpCounter(y: string, loop: ALSyntaxNode, proc: ALSyntaxNode, ctx: SemanticContext) {
+  const names = new Set([y]);
+  let ok = true;
+  let steps = false;
+  const body = loop.childForFieldName("body");
+  visitAll(proc, (n) => {
+    if (!ok || !directWrite(n, names, ctx)) return;
+    const l = n.childForFieldName("left");
+    const r = n.childForFieldName("right");
+    if (n.rawKind !== "assignment_statement" || l === null || r === null || !isIdentifierLike(l)) {
+      ok = false;
+      return;
+    }
+    const sign = n.text.slice(l.endIndex - n.startIndex).trim();
+    const rt = r.text.trim();
+    const inc = sign.startsWith("+=")
+      ? /^[1-9]\d*$/.test(rt)
+      : sign.startsWith(":=") &&
+        new RegExp(`^"?${y.replace(/[^a-z0-9_]/g, "\\$&")}"?\\s*\\+\\s*[1-9]\\d*$`, "i").test(rt);
+    if (inc) {
+      if (body !== null && n.startIndex >= body.startIndex && n.endIndex <= body.endIndex)
+        steps = true;
+    } else if (!(sign.startsWith(":=") && isNonNegLiteral(r))) ok = false;
+  });
+  return ok && steps;
+}
+
+/** Does the same-object chain from `start` reach an event publisher? */
+function chainRaisesEvent(start: string, obj: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const byName = procsByName(obj, ctx);
+  const seen = new Set<string>();
+  const todo = [start];
+  for (let name = todo.pop(); name !== undefined; name = todo.pop()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const proc of byName.get(name) ?? []) {
+      if (attributeNamesOf(proc).some((a) => PUBLISHERS.has(a))) return true;
+      todo.push(...procEffect(proc, ctx).calls);
+    }
+  }
+  return false;
+}
+
+const TRIGGER_METHODS: ReadonlySet<string> = new Set([
+  "validate",
+  "modify",
+  "insert",
+  "delete",
+  "rename",
+]);
+
+/**
+ * Can this call run code outside the object (a subscriber, another object, a table trigger)? A call
+ * on a receiver that is not a known Record does; so does `Validate`, `Rename`, and `Modify`,
+ * `Insert` or `Delete` whose run-trigger argument is present and not `false`.
+ */
+function callsOut(n: ALSyntaxNode, ctx: SemanticContext): boolean {
+  if (n.rawKind !== "call_expression" && n.rawKind !== "call_statement") return false;
+  const f = n.childForFieldName("function");
+  const recv = f?.childForFieldName("object") ?? null;
+  if (recv === null) return false;
+  const dt = isIdentifierLike(recv) ? declaredType(recv, ctx) : null;
+  if (dt === null || dt.kind !== "table") return true;
+  const m = normalizeAlName(f?.childForFieldName("member")?.text ?? "");
+  if (!TRIGGER_METHODS.has(m)) return false;
+  if (m === "validate" || m === "rename") return true;
+  const a = argumentList(n)[0];
+  return a !== undefined && a.text.trim().toLowerCase() !== "false";
+}
+
+/** Does a call anywhere in the same-object chain from `start` `callsOut`? */
+function chainCallsOut(start: string, obj: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const byName = procsByName(obj, ctx);
+  const seen = new Set<string>();
+  const todo = [start];
+  for (let name = todo.pop(); name !== undefined; name = todo.pop()) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    for (const proc of byName.get(name) ?? []) {
+      let out = false;
+      visitAll(proc, (n) => {
+        if (callsOut(n, ctx)) out = true;
+      });
+      if (out) return true;
+      todo.push(...procEffect(proc, ctx).calls);
+    }
+  }
+  return false;
+}
+
+/**
+ * R1061 (PR-48, the narrowed rule B): `lethal.remove-assignment` of `X := <value>` in straight-line
+ * code before a loop of the same block. Refused only when all of these hold:
+ * 1. With X at its default (0, '' or false), the loop's exit keeps it running: `repeat` while the
+ *    exit is false, `while` while it is true, read with three-valued logic through `not`, `and`,
+ *    `or`. An atom counts when it compares X with a literal, is a Boolean X, or is the strict bound
+ *    `Y < X` / `X > Y` with Y a counter that only goes up from a non-negative start (X = 0 makes it
+ *    false for every Y). Anything else is unknown, and unknown keeps the mutant.
+ * 2. The value is not X's default (`X := 0` is never refused); the operator is plain `:=`.
+ * 3. Nothing in the loop writes X: no assignment, no `var` argument, no same-object call whose
+ *    chain writes it (R830's reach); for a global also no event publisher in the chain and no call
+ *    on a non-Record receiver (a subscriber or another object may write it).
+ * 4. X is a local variable or a global of the same object, not a parameter and not a field.
+ * `Y <> X` is not read: it is not stuck for a counter. Narrower than the pre-commitment; a miss
+ * here only keeps a mutant that could have been refused.
+ */
+function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string | undefined) {
+  if (op !== "lethal.remove-assignment" || node.rawKind !== "assignment_statement") return false;
+  const left = node.childForFieldName("left");
+  const right = node.childForFieldName("right");
+  if (left === null || right === null || !isIdentifierLike(left)) return false;
+  if (
+    !node.text
+      .slice(left.endIndex - node.startIndex)
+      .trim()
+      .startsWith(":=")
+  )
+    return false;
+  const x = normalizeAlName(left.text);
+  const decl = resolveVarRef(left, ctx);
+  if (decl === null || decl.node.rawKind === "parameter") return false;
+  const t = decl.typeText.trim().toLowerCase();
+  const dflt: number | boolean | string | undefined = /^(integer|biginteger|decimal)$/.test(t)
+    ? 0
+    : t === "boolean"
+      ? false
+      : /^(text|code)\b/.test(t)
+        ? ""
+        : undefined;
+  if (dflt === undefined || literalValue(right) === dflt) return false;
+  const block = node.parent;
+  // "later statements" are those of a code block; an `if` branch has no statement after it
+  if (block === null || block.rawKind !== "statement_block") return false;
+  let proc: ALSyntaxNode | null = node.parent;
+  while (proc !== null && !isProcedureLike(proc)) proc = proc.parent;
+  const obj = proc === null ? null : objectOf(proc);
+  if (block === null || proc === null || obj === null) return false;
+  const isGlobal = !r531Declares(proc, x, true);
+  // The loops in the statements after the assignment (in a later statement too: `foreach .. do
+  // repeat .. until`), up to the first statement that can write X. Such a statement is searched
+  // whole, so a write outside the loop but inside its `foreach` also ends the search.
+  const sibs = block.namedChildren;
+  const at = sibs.findIndex((s) => s.startIndex === node.startIndex);
+  if (at < 0) return false;
+  const xs = new Set([x]);
+  const names = procedureNamesOf(obj, ctx);
+  const canWrite = (s: ALSyntaxNode): boolean => {
+    let writes = false;
+    visitAll(s, (n) => {
+      if (writes) return;
+      if (directWrite(n, xs, ctx)) writes = true;
+      const callee = calleeOf(n, names, ctx);
+      if (callee !== null) {
+        if (chainEffect(callee, obj, ctx).writes.has(x)) writes = true;
+        if (isGlobal && (chainRaisesEvent(callee, obj, ctx) || chainCallsOut(callee, obj, ctx)))
+          writes = true;
+      } else if (isGlobal && callsOut(n, ctx)) writes = true;
+    });
+    return writes;
+  };
+  // a `break` or `exit` in the body ends the loop without the exit condition
+  const leaves = (loop: ALSyntaxNode): boolean => {
+    let found = false;
+    visitAll(loop, (n) => {
+      if (n.rawKind === "break_statement" || n.rawKind === "exit_statement") found = true;
+    });
+    return found;
+  };
+  const candidates: ALSyntaxNode[] = [];
+  for (const s of sibs.slice(at + 1)) {
+    if (canWrite(s)) break;
+    visitAll(s, (n) => {
+      if (LOOP_KINDS.has(n.kind) && !leaves(n)) candidates.push(n);
+    });
+  }
+  // 1: the exit at X's default keeps a loop running
+  const check = (loop: ALSyntaxNode): boolean => {
+    const cond = conditionOf(loop);
+    if (cond === null) return false;
+    const isX = (n: ALSyntaxNode): boolean => isIdentifierLike(n) && normalizeAlName(n.text) === x;
+    const evalAt = (e0: ALSyntaxNode): boolean | undefined => {
+      const e = r572Unparen(e0);
+      if (e.rawKind === "unary_expression" && /^not\b/i.test(e.text.trim())) {
+        const o = e.childForFieldName("operand");
+        const v = o === null ? undefined : evalAt(o);
+        return v === undefined ? undefined : !v;
+      }
+      if (e.rawKind === "logical_expression") {
+        const l = e.childForFieldName("left");
+        const r = e.childForFieldName("right");
+        if (l === null || r === null) return undefined;
+        const lop = e.text
+          .slice(l.endIndex - e.startIndex, r.startIndex - e.startIndex)
+          .trim()
+          .toLowerCase();
+        const a = evalAt(l);
+        const b = evalAt(r);
+        if (lop === "and") return a === false || b === false ? false : a && b ? true : undefined;
+        if (lop === "or")
+          return a === true || b === true ? true : a === false && b === false ? false : undefined;
+        return undefined;
+      }
+      if (isX(e)) return t === "boolean" ? false : undefined;
+      if (e.rawKind !== "comparison_expression") return undefined;
+      const l = e.childForFieldName("left");
+      const r = e.childForFieldName("right");
+      const cop = e.childForFieldName("operator")?.text.trim();
+      if (l === null || r === null || cop === undefined) return undefined;
+      if (!isX(l) && !isX(r)) return undefined;
+      const xLeft = isX(l);
+      const other = xLeft ? r : l;
+      const lit = literalValue(other);
+      if (lit !== undefined) {
+        if (typeof lit !== typeof dflt) return undefined;
+        const [a, b] = xLeft ? [dflt, lit] : [lit, dflt];
+        const ops: Record<string, boolean> = {
+          "=": a === b,
+          "<>": a !== b,
+          "<": a < b,
+          "<=": a <= b,
+          ">": a > b,
+          ">=": a >= b,
+        };
+        return ops[cop];
+      }
+      // strict bound over a counter: `Y < X` or `X > Y`, X at 0
+      if (dflt === 0 && ((cop === "<" && !xLeft) || (cop === ">" && xLeft))) {
+        const y = baseNameOf(other);
+        if (y !== null && isIdentifierLike(other) && isUpCounter(y, loop, proc, ctx)) return false;
+      }
+      // the same bound read the other way, true at X = 0: `Y >= X` / `X <= Y` (a `while` form)
+      if (dflt === 0 && ((cop === ">=" && !xLeft) || (cop === "<=" && xLeft))) {
+        const y = baseNameOf(other);
+        if (y !== null && isIdentifierLike(other) && isUpCounter(y, loop, proc, ctx)) return true;
+      }
+      return undefined;
+    };
+    const v = evalAt(cond);
+    return loop.rawKind === "repeat_statement" ? v === false : v === true;
+  };
+  return candidates.some(check);
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */
@@ -3046,6 +3356,24 @@ function objectGlobalNames(o: ALSyntaxNode): Set<string> {
     if (c.rawKind !== "var_section") continue;
     visitAll(c, (v) => {
       if (v.rawKind === "variable_declaration")
+        for (const nm of declaredNames(v)) out.add(normalizeAlName(nm));
+    });
+  }
+  return out;
+}
+
+/**
+ * The globals of an object that hold data a call chain can move: every global except a Label and
+ * the object and interface variables (Codeunit, Page, Report, Query, XmlPort, Interface, Enum),
+ * which hold no data a call changes. A Record, RecordRef, List or Dictionary stays (R1053 review).
+ */
+function dataGlobalNames(o: ALSyntaxNode): Set<string> {
+  const noData = /^\s*(label|codeunit|page|report|query|xmlport|interface|enum)\b/i;
+  const out = new Set<string>();
+  for (const c of o.childForFieldName("body")?.namedChildren ?? []) {
+    if (c.rawKind !== "var_section") continue;
+    visitAll(c, (v) => {
+      if (v.rawKind === "variable_declaration" && !noData.test(v.text.replace(/^[^:]*:/, "")))
         for (const nm of declaredNames(v)) out.add(normalizeAlName(nm));
     });
   }
