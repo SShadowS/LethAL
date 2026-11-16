@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**37 of 1018 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**37 of 1019 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -577,6 +577,7 @@ that ordering is the priority.
 - **R1053** · R1050's transitive step refuses more than it must: it follows any var write of an intermediate callee, so Filter Tokens' date/time helpers (11 bodies, all killed on v3) are hang-refused; narrow it to names the outer loop's exit reads · [R1053.md](docs/roadmap/R1053.md) · open
 - **R1054** · An object header with no space between the id and a quoted name (`codeunit 50100"Name"`) compiles with alc and parses with tree-sitter-al, but LethAL's discovery regex needs whitespace there and refuses the file · [R1054.md](docs/roadmap/R1054.md) · open
 - **R1055** · v3: a mutant whose call was cut at a timeout on another test of a codeunit re-sent that hang on every later whole-codeunit run (R577's reproduction, then another alone call); those runs now go alone · [R1055.md](docs/roadmap/R1055.md) · done (bdc83e4d)
+- **R1056** · v3: a timeout kill that is provably a CPU-time stop (row clock cpu, under 10 x N wall, unmutated confirm within N/4) skips R577's reproduction; stop evidence v3-cpu-stop · [R1056.md](docs/roadmap/R1056.md) · done (a7b736fc)
 
 ## Backends and tooling
 

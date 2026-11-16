@@ -359,7 +359,7 @@ function countsOf(rows: readonly V3Row[]): Counts {
  * without it the name is parsed and a dotted method never matches (today's refusal).
  */
 export function serveRow(line: Readonly<Record<string, unknown>>, fields = false): V3Row | string {
-  const { name, status, message, stackTrace, notRun, durationMs, flagged } = line;
+  const { name, status, message, stackTrace, notRun, durationMs, flagged, clock } = line;
   let m: RegExpExecArray | string[] | null = null;
   if (fields) {
     const { codeunit, method } = line;
@@ -379,7 +379,8 @@ export function serveRow(line: Readonly<Record<string, unknown>>, fields = false
     (stackTrace !== undefined && typeof stackTrace !== "string") ||
     (notRun !== undefined && typeof notRun !== "boolean") ||
     (flagged !== undefined && typeof flagged !== "boolean") ||
-    (durationMs !== undefined && typeof durationMs !== "number")
+    (durationMs !== undefined && typeof durationMs !== "number") ||
+    (clock !== undefined && typeof clock !== "string")
   ) {
     return `a test line without v3's row shape: ${JSON.stringify(line).slice(0, 200)}`;
   }
@@ -389,6 +390,7 @@ export function serveRow(line: Readonly<Record<string, unknown>>, fields = false
     name: String(name),
     status,
     ...(typeof durationMs === "number" ? { durationMs } : {}),
+    ...(typeof clock === "string" ? { clock } : {}),
     ...(typeof message === "string" ? { message } : {}),
     ...(typeof stackTrace === "string" ? { stackTrace } : {}),
     notRun: notRun === true,

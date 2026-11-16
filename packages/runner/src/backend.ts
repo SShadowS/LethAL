@@ -141,6 +141,13 @@ export interface TestVerdict {
    */
   readonly reportedStopMs?: number;
   /**
+   * PR-43: on a `timeout`, set only by al-runner v3 when the row says `clock: "cpu"` and its
+   * `durationMs` is below 10 x the stop (al-runner's wall backstop), so the stop is the test
+   * thread's CPU time, which machine load cannot cause. The orchestrator still needs the unmutated
+   * confirm to have passed quickly before it skips R577's reproduction. Absent: never set by bcdev.
+   */
+  readonly cpuStop?: true;
+  /**
    * R534: on a `timeout`, where the runner's stop fired. `body`: the test's own figure
    * (`measuredDurationMs`) is on the stop's clock. `onrun`: the test codeunit's OnRun trigger; no
    * pass row reports the OnRun's time (measured: 66 ms body beside a 4 s OnRun). Absent (bcdev,
@@ -280,9 +287,11 @@ export type StopState = "issued" | "pending" | "confirmed" | "refused" | "unknow
 /**
  * GitHub #49: what ended a held request after our confirmed stop. `bc-named-stop` is BC's 408 that
  * names the AL `StopSession` call; `begin-transaction-world` is BC 29's exact 400, which does not
- * name the stop and is the weaker of the two.
+ * name the stop and is the weaker of the two. PR-43: `v3-cpu-stop` is al-runner v3's provable
+ * CPU-time stop whose unmutated confirm passed quickly; the kill was NOT reproduced (R577),
+ * because machine load cannot cause a CPU-time stop. Count such kills by this row field.
  */
-export type StopEvidence = "bc-named-stop" | "begin-transaction-world";
+export type StopEvidence = "bc-named-stop" | "begin-transaction-world" | "v3-cpu-stop";
 
 /**
  * GitHub #49: the evidence of a kill that ran twice (the kill, then its reproduction). Mixed runs

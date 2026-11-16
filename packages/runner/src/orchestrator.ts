@@ -12532,6 +12532,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             testResultBuffer,
           });
           if (warm.kind === "confirmed") {
+            // PR-43: always reproduced here; the warm replay has no unmutated confirm of this
+            // test's own time, so the v3-cpu-stop skip (cold site below) cannot apply.
             const repro = await reproduce();
             if (repro?.kind === "error") {
               if (notKilled(repro)) continue;
@@ -12812,13 +12814,30 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           }
           // R577: the kill must reproduce under the mutant, at the budget `v` was sent, before it
           // is a kill and before R197's ledger learns from it.
-          const repro = await reproduce();
+          // PR-43: a provable v3 CPU-time stop (the backend's `cpuStop`, from the row's clock and
+          // duration) whose unmutated confirm just passed in at most a quarter of the stop is not
+          // reproduced: load cannot cause it. Any condition failing reproduces as before.
+          // al-runner omits `durationMs` on a row whose time is zero (alrunner-cli output.rs
+          // `test_row`: `if !time.is_zero()`), so a 0 ms test has no `measuredDurationMs`. Then the
+          // call's wall (`confirm.durationMs`), an upper bound of the test's own time, is the bound:
+          // the rule stays conservative.
+          const confirmBoundMs =
+            typeof confirm.measuredDurationMs === "number"
+              ? confirm.measuredDurationMs
+              : confirm.durationMs;
+          const cpuStopSkip =
+            timedOut && v.cpuStop === true && confirmBoundMs <= (v.reportedStopMs ?? 0) / 4;
+          const repro = cpuStopSkip ? undefined : await reproduce();
           if (repro?.kind === "error") {
             if (notKilled(repro)) continue;
             break;
           }
           reproduction = repro?.reproduction;
-          if (timedOut) stopEvidence = weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
+          if (timedOut) {
+            stopEvidence = cpuStopSkip
+              ? "v3-cpu-stop"
+              : weakerStopEvidence(v.stopEvidence, repro?.stopEvidence);
+          }
           verdict = timedOut ? "timeout-killed" : "killed";
           killingTest = ref.method;
           killingTestRef = ref;
