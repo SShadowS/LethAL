@@ -243,6 +243,59 @@ export function encodeGroups(
 }
 
 /**
+ * PR-94: which positions of `order` (a codeunit's baseline test names, lower-case, in order) v3 would
+ * leave out for `excludeTests`. v3 matches by a lower-cased `contains` over `codeunit<id>.<name>`, so
+ * an excluded name also takes every test whose name it starts (#8059). One flag per POSITION, so a
+ * duplicated name cannot hide a gap.
+ */
+export function effectiveExclusion(
+  codeunit: number,
+  order: readonly string[],
+  excludeTests: readonly string[] | undefined,
+): boolean[] {
+  const ex = (excludeTests ?? []).map((n) => n.toLowerCase());
+  return order.map((name) => ex.some((x) => `codeunit${codeunit}.${name}`.includes(x)));
+}
+
+/**
+ * PR-94: may this request carry `runSelectedOnly: true`? Only when every non-echo entry runs a prefix of
+ * its codeunit's baseline order (the excluded tests are a suffix, by position) and at least one entry
+ * leaves something out. `testsOf` gives a codeunit's baseline order and its discovered names, both
+ * lower-case. `refused`: some entry left tests out but the request cannot be flagged. A request with an
+ * isolated or alone entry (`call`) keeps its own flag and is neither flagged nor refused here.
+ */
+export function selectedOnlyDecision(
+  sent: readonly SentEntry[],
+  testsOf: (codeunit: number) => {
+    readonly baseline: readonly string[];
+    readonly discovered: readonly string[];
+  },
+): { readonly flag: boolean; readonly refused: boolean; readonly skipped: number } {
+  let cutIntended = false;
+  let ok = true;
+  let skipped = 0;
+  let anyEffective = false;
+  for (const e of sent) {
+    if (e.echo) continue;
+    if (e.call !== undefined) return { flag: false, refused: false, skipped: 0 };
+    if ((e.excludeTests?.length ?? 0) > 0) cutIntended = true;
+    const { baseline, discovered } = testsOf(e.codeunit);
+    const base = new Set(baseline);
+    const disc = new Set(discovered);
+    if (base.size !== disc.size || [...base].some((n) => !disc.has(n))) ok = false;
+    const gone = effectiveExclusion(e.codeunit, baseline, e.excludeTests);
+    const first = gone.indexOf(true);
+    if (first >= 0) {
+      anyEffective = true;
+      if (gone.slice(first).some((g) => !g)) ok = false;
+      skipped += gone.filter(Boolean).length;
+    }
+  }
+  const flag = ok && anyEffective;
+  return { flag, refused: cutIntended && !flag, skipped: flag ? skipped : 0 };
+}
+
+/**
  * §3: throws unless every entry has a string `test` (#5702 ignores an array), a list
  * `excludeTests` if any, a unique id (#5703), an id prefix (the group key, R778) that is its override
  * text or that text, `#` and a suffix, one override per key, and every key exactly one echo entry

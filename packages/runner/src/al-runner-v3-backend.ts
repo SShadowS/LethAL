@@ -118,6 +118,7 @@ import {
   encodeGroups,
   groupsThatFit,
   isolatedSelection,
+  selectedOnlyDecision,
   serveRow,
 } from "./al-runner-v3-entries";
 import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
@@ -1575,6 +1576,11 @@ export interface V3EntriesStats {
   l4OrderBroken: number;
   /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
   keptDrifts: number;
+  /** PR-94: prefetch and live requests sent with `runSelectedOnly` (every entry whole or a prefix cut), the
+   *  excluded tests in them, and the requests with a cut entry that could not be flagged. */
+  selectedOnlyRequests: number;
+  selectedOnlyTestsSkipped: number;
+  selectedOnlyRefusedGapped: number;
   echoMismatches: number;
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
@@ -2593,6 +2599,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     l4Widened: 0,
     l4OrderBroken: 0,
     keptDrifts: 0,
+    selectedOnlyRequests: 0,
+    selectedOnlyTestsSkipped: 0,
+    selectedOnlyRefusedGapped: 0,
     entriesSent: 0,
     boundChecks: 0,
     pairRequests: 0,
@@ -6853,6 +6862,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    /** PR-94: the request carried `runSelectedOnly`, so `suiteMissing` checks the order of every entry. */
+    readonly selectedOnly: boolean;
     /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
     readonly cut?: SentCut;
   }> {
@@ -6874,8 +6885,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
+    // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
+    // `runSelectedOnly`, so the excluded tail does not run. Never in `requestBase` (the baseline and the
+    // coverage windows can leave a gap), and an alone or isolated request keeps its own flag.
+    const selectedOnly =
+      kind !== "warmup" && alone === undefined && !mode.runSelectedOnly
+        ? selectedOnlyDecision(sent, (cu) => ({
+            baseline: this.baselineOrder(cu),
+            discovered: this.discovered
+              .filter((t) => t.codeunitId === cu)
+              .map((t) => t.method.toLowerCase()),
+          }))
+        : { flag: false, refused: false, skipped: 0 };
     const body = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
+      ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
@@ -6890,6 +6914,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.stats.entriesSent += sent.length;
     if (kind === "prefetch") this.stats.prefetchRequests += 1;
     else if (kind === "live") this.stats.liveRequests += 1;
+    if (selectedOnly.flag) {
+      this.stats.selectedOnlyRequests += 1;
+      this.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
+    } else if (selectedOnly.refused) this.stats.selectedOnlyRefusedGapped += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
     // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
@@ -6971,7 +6999,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
       );
     }
-    return { sent, rows: decoded.rows, ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}) };
+    return {
+      sent,
+      rows: decoded.rows,
+      selectedOnly: selectedOnly.flag,
+      ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}),
+    };
   }
 
   /**
@@ -7136,6 +7169,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           "boundChecks",
           "cachedFalse",
           "timeoutCuts",
+          "selectedOnlyRequests",
+          "selectedOnlyTestsSkipped",
+          "selectedOnlyRefusedGapped",
         ] as const)
           this.stats[k] = before[k];
         if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
@@ -7205,7 +7241,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
-          : this.suiteMissing(callOf(e), mine, e.excludeTests);
+          : this.suiteMissing(callOf(e), mine, e.excludeTests, answer.selectedOnly);
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -7446,6 +7482,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     cu: number,
     rows: readonly V3Row[],
     excluded: readonly string[] = [],
+    /** PR-94: the request carried `runSelectedOnly`: the order check runs on this entry whatever it left out. */
+    selectedOnly = false,
   ): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
@@ -7457,7 +7495,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n.slice(`Codeunit${cu}.`.length).toLowerCase(),
       ),
     );
-    if (one === undefined && out.size > (this.mutantLeftOutNames(cu)?.length ?? 0)) {
+    if (
+      one === undefined &&
+      (selectedOnly || out.size > (this.mutantLeftOutNames(cu)?.length ?? 0))
+    ) {
       const at = new Map(this.baselineOrder(cu).map((m, i) => [m, i] as const));
       let prev = -1;
       for (const r of rows) {
@@ -8103,7 +8144,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(
