@@ -1023,6 +1023,18 @@ describe("PR-83: the record-filters family", () => {
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051014");
   });
 
+  test("every test codeunit has TestPermissions = Disabled (BC's restrictive default refused the seed's Insert); others do not", () => {
+    const cells = emitApp(bcCheckFamily(f))["src/Cells.al"] ?? "";
+    const tests = cells.match(/Subtype = Test;/g)?.length ?? 0;
+    expect(tests).toBe(f.cells.length);
+    expect(cells.match(/Subtype = Test;\n {4}TestPermissions = Disabled;/g)?.length ?? 0).toBe(
+      tests,
+    );
+    const other = emitApp(FORMAT_EVALUATE)["src/Cells.al"] ?? "";
+    expect(other).toContain("Subtype = Test;");
+    expect(other).not.toContain("TestPermissions");
+  });
+
   test("about 250 cells in 13 groups, each with its own codeunit and a unique name", () => {
     expect(f.cells.length).toBeGreaterThan(150);
     expect(f.cells.length).toBeLessThan(300);

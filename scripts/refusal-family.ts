@@ -58,6 +58,11 @@ export interface Family {
   readonly cells: readonly Cell[];
   /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
   readonly target?: "OnPrem";
+  /**
+   * PR-83: `TestPermissions = Disabled` on every test codeunit, for a family whose cells write tables. On LethAL's web-service
+   * path BC runs a test without it under a restrictive default (#8160), so a cell's own Insert is refused before it runs.
+   */
+  readonly testPermissions?: "Disabled";
   /** PR-17: al-runner arguments the family's run needs (`--no-client`), put before the app. */
   readonly args?: readonly string[];
   /** PR-16: apps the cells call (Microsoft's Permissions Mock), as app.json `dependencies`. */
@@ -3059,6 +3064,8 @@ export const RECORD_FILTERS: Family = {
   support: RF_SUPPORT,
   handles: {},
   cells: RF_CELLS,
+  // bc2 run 1 was void: RF Seed's Insert was refused under BC's restrictive test default (lethal-bugs, PR-83)
+  testPermissions: "Disabled",
 };
 
 export const FAMILIES: Readonly<Record<string, Family>> = {
@@ -3187,7 +3194,7 @@ ${b}
           )}`;
     return `codeunit ${BASE_ID + 1 + i} "${cellName(c, i)}"
 {
-    Subtype = Test;
+    Subtype = Test;${f.testPermissions !== undefined ? `\n    TestPermissions = ${f.testPermissions};` : ""}
 
 ${tests}${handlers.map((h) => `\n${h}`).join("")}}
 `;
