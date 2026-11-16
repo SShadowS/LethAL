@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**38 of 1034 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**38 of 1035 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1079,6 +1079,7 @@ that ordering is the priority.
 - **R1068** · Format/Evaluate/text-function generator family with a per-cell BC differential (PR-52): 325 of 326 cells equal; the one difference is the closing-date letter under GlobalLanguage (#8178) · [R1068.md](docs/roadmap/R1068.md) · closed 2026-11-16 — measured; one al-runner difference filed (#8178, R586 row 21)
 - **R1070** · DO t7's new close family (SetFilter on a Boolean under GlobalLanguage 1030, 35 closes from one baseline-refused test) is kept on the daemon, measured clean; t7's new hang (X := '' under a blank-needing exit) is refused · [R1070.md](docs/roadmap/R1070.md) · done (0127aef5)
 - **R1071** · Keep census over the refusal ledger (PR-54): 74 of 75 refusal classes leave a kept serve daemon clean, none unclean; coverage 72 of 272 standing ledger texts; two DO close families join the keep-list; inverting the keep-list awaits a ruling · [R1071.md](docs/roadmap/R1071.md) · done (77cb28a3)
+- **R1073** · Upstream issues the maintainer reported fixed, verified on al-runner edge-5a58a0f16 (PR-58): 7 fixed, 4 batch issues with their reported cause fixed, 2 at step 1 only, 3 still refused, 1 not verifiable by a repro; 13 regression entries added, 17 issues commented · [R1073.md](docs/roadmap/R1073.md) · closed 2026-11-16 — measured and commented upstream; the LethAL knock-ons below are left to their own items
 
 ---
 
