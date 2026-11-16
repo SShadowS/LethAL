@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**39 of 1042 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**39 of 1043 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1087,6 +1087,7 @@ that ordering is the priority.
 - **R1075** · A resume onto a changed instrumented tree was silent when the resumed run had reused an earlier baseline (DO t8); the store now records baseline reuses, and the warning follows that lineage · [R1075.md](docs/roadmap/R1075.md) · done (8490d4f8)
 - **R1076** · Format/Evaluate family under five more languages (PR-63): 480 of 539 cells equal; Nordic Boolean words (#8182), closing-date letters (#8178) and refused month/weekday names (#8183) · [R1076.md](docs/roadmap/R1076.md) · closed 2026-11-16 — measured; two al-runner differences filed (#8182, R586 row 22; #8178 extended, row 21)…
 - **R1077** · heavy-slot: warn when a declared --peak is far above what the same kind of command measured in heavy-peaks.tsv · [R1077.md](docs/roadmap/R1077.md) · done (03240cf2)
+- **R1078** · t9's refusal families kept on the serve daemon (PR-74): 10 census classes CLEAN, 7 new entries and 2 widened; the t9 drift was a false fire on a red test · [R1078.md](docs/roadmap/R1078.md) · done (6024238e)
 
 ---
 

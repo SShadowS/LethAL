@@ -755,9 +755,19 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // FieldRef and RecordRef methods it refused on a never-assigned or unopened handle.
   READ: "(?:IsEmpty|FindFirst)",
   COMPANYM: "(?:IsEmpty|FindFirst|FindSet)",
-  FIELDREFM: "(?:Active|Caption|Class)",
-  RECORDREFM: "FilterGroup",
+  // PR-74 added SetFilter (FieldRef) and Duplicate, ClearMarks (RecordRef): measured CLEAN in its census.
+  FIELDREFM: "(?:Active|Caption|Class|SetFilter)",
+  RECORDREFM: "(?:FilterGroup|Duplicate|ClearMarks)",
   KIND: "(?:a Decimal|an Integer)",
+  // PR-74: the measured variants only, each by name.
+  SETOP: String.raw`(?:\.\.|@)`,
+  CMP: "(?:>100|>1000|<1000)",
+  // PR-74 review H1: SaveAs only. RunRequestPage was measured after a Commit(), never inside an open write
+  // transaction, which is where t9's mutants reach it.
+  REPORTM: "SaveAs",
+  // PR-74 review M2: the measured path `a`, plus t9's three paths by name (the path is the writer's own
+  // nesting, not engine state; a widening by name, not a measurement).
+  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\])`,
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1000,6 +1010,31 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "httpclient-relative-path",
     "HttpClient with the relative request path `relative/path` and no base address: which error it raises is not measured (docs/probes-needed.md)",
   ],
+  // PR-74 (coord PR-74, spec 2026-11-16-pr74-t9-refusal-families.md): the families DO window t9 met, each
+  // driven by an invented cell of family `t9-refusals` to t9's exact text and measured CLEAN by PR-54's strict
+  // census (`/coord/handoff/PR-74/census/`). Pinned by `al-runner-serve-pr74.test.ts`.
+  ["setfilter-value-expected", "SetFilter: value expected after %SETOP%"], // PR-54 class "SetFilter"
+  [
+    "evaluate-decimal-comparison",
+    "Evaluate of `%CMP%` into Decimal (form not pinned by the corpus)",
+  ],
+  [
+    "report-parameters-no-xml-declaration",
+    "a parameters string without the XML declaration in this form, given to Report.%REPORTM% (which character BC's filter error names is not pinned)",
+  ],
+  [
+    "dotnet-zip-central-directory-corrupt",
+    "DotNet new System.IO.Compression.ZipArchive raised the .NET exception System.IO.InvalidDataException: Central Directory corrupt. <- System.IO.IOException: An attempt was made to move the position before the beginning of the stream.; the text AL would see is not pinned (ADR-014 section 7)",
+  ], // PR-54 class "DotNet * raised the .NET exception *"
+  [
+    "dotnet-json-writer-no-token-to-close",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteEndObject raised the .NET exception Newtonsoft.Json.JsonWriterException: No token to close. Path ''.; the text AL would see is not pinned (ADR-014 section 7)",
+  ], // PR-54 class "DotNet * raised the .NET exception *"
+  [
+    "dotnet-json-writer-start-object-in-object",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path '%JSONPATH%'.; the text AL would see is not pinned (ADR-014 section 7)",
+  ], // PR-54 class "DotNet * raised the .NET exception *"; WritePropertyName and WriteEndArray were not driven, so they are not kept
+  ["boolean-false-to-biginteger", "conversion of Boolean false to BigInteger"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
