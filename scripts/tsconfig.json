@@ -207,6 +207,8 @@
     "generate-schemas.ts",
     "gift-card-refreeze.ts",
     "gift-card-refreeze.test.ts",
+    "heavy-slot-advice.test.ts",
+    "heavy-slot-advice.ts",
     "heavy-slot-class.test.ts",
     "heavy-slot-class.ts",
     "heavy-slot-guard.ts",
