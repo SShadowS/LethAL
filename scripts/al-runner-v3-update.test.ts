@@ -1876,6 +1876,26 @@ linuxOnly("R814: the two tracks", () => {
     expect(f.seen.logs.join("\n")).toContain("upstream-fixed-scan: #1 t | fixed-in-current");
   });
 
+  test("PR-59: the fixed scan runs outside the gate lock, and on a day the gate skips for memory", async () => {
+    await setupPinned();
+    const f = fake({ ...pinnedPass, tags: TAGS, mem: { refuse: true, message: "no memory" } });
+    let calls = 0;
+    let lockHeld: boolean | undefined;
+    const deps = {
+      ...f.deps,
+      edgeCommit: async () => "c893e3633",
+      fixedScan: async () => {
+        calls++;
+        lockHeld = existsSync(join(root, ".gate.lock"));
+        return [];
+      },
+    };
+    expect(await dailyOnce(deps)).toEqual({ edge: "skipped", releases: [] });
+    expect(calls).toBe(1);
+    expect(lockHeld).toBe(false);
+    expect(f.seen.published).toEqual([]);
+  });
+
   test("PR-59: a throwing fixed scan changes no outcome and is logged", async () => {
     await setupPinned();
     const f = fake({ ...pinnedPass, tags: TAGS });

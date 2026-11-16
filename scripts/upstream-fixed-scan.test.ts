@@ -4,12 +4,13 @@ import {
   type GhIssue,
   type ScanDeps,
   actionRows,
+  ancestorFromExit,
   commitOfDirName,
   entriesOf,
   extractBuilds,
   formatRows,
-  latestMaintainerComment,
   listOurIssues,
+  maintainerComments,
   readOnlyGh,
   scan,
   summariseRepros,
@@ -62,7 +63,7 @@ const ISSUES: GhIssue[] = [
   },
 ];
 
-const KNOWN = new Set(["bd44b20ea", "14e5d6937", "5a58a0f16", "deadbeef1"]);
+const KNOWN = new Set(["bd44b20ea", "14e5d6937", "5a58a0f16", "deadbeef1", "cand000001"]);
 const CURRENT = "5a58a0f16";
 // ancestors of current: bd44b20ea, 5a58a0f16 (itself), deadbeef1 is not.
 const ANCESTORS: Record<string, string[]> = {
@@ -87,6 +88,7 @@ function deps(over: Partial<ScanDeps> = {}) {
       { id: "u100-a", issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/100" },
       { id: "u103-a", issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/103" },
       { id: "u103-b", issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/103" },
+      { id: "u106-a", issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/106" },
       {
         id: "u1000-x",
         issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/1000",
@@ -112,55 +114,142 @@ describe("extractBuilds", () => {
     ).toEqual([]);
     expect(extractBuilds("`bd44b20ea` and again `bd44b20ea`")).toEqual(["bd44b20ea"]);
   });
+  test("quoted lines are dropped", () => {
+    expect(
+      extractBuilds("> I tested on `5a58a0f16`\n  > and `14e5d6937`\nNow `bd44b20ea`"),
+    ).toEqual(["bd44b20ea"]);
+  });
 });
 
-describe("latestMaintainerComment", () => {
-  test("ignores our later comments and picks the newest of the maintainer's", () => {
-    const c = latestMaintainerComment([
+describe("maintainerComments", () => {
+  test("newest first, our own comments never", () => {
+    const c = maintainerComments([
       maint("old", "2026-11-01T00:00:00Z"),
       maint("new", "2026-11-05T00:00:00Z"),
       ours("later, ours", "2026-11-09T00:00:00Z"),
     ]);
-    expect(c?.body).toBe("new");
+    expect(c.map((x) => x.body)).toEqual(["new", "old"]);
   });
-  test("prefers OWNER/MEMBER/COLLABORATOR over a newer drive-by comment", () => {
+  test("only OWNER/MEMBER/COLLABORATOR count; there is no fallback to anyone else", () => {
     const drive: GhComment = {
       author: { login: "someone" },
       authorAssociation: "NONE",
       body: "me too",
       createdAt: "2026-11-20T00:00:00Z",
     };
-    expect(latestMaintainerComment([maint("m", "2026-11-01T00:00:00Z"), drive])?.body).toBe("m");
-    expect(latestMaintainerComment([drive])?.body).toBe("me too");
+    expect(
+      maintainerComments([maint("m", "2026-11-01T00:00:00Z"), drive]).map((x) => x.body),
+    ).toEqual(["m"]);
+    expect(maintainerComments([drive])).toEqual([]);
+    expect(maintainerComments([ours("x", "2026-11-01T00:00:00Z")])).toEqual([]);
   });
-  test("none", () => {
-    expect(latestMaintainerComment([ours("x", "2026-11-01T00:00:00Z")])).toBeUndefined();
+});
+
+describe("ancestorFromExit", () => {
+  test("0 is yes, 1 is no, anything else throws", () => {
+    expect(ancestorFromExit(0, "")).toBe(true);
+    expect(ancestorFromExit(1, "")).toBe(false);
+    expect(() => ancestorFromExit(128, "fatal: Not a valid commit name")).toThrow("exited 128");
+    expect(() => ancestorFromExit(137, "")).toThrow();
   });
 });
 
 describe("scan", () => {
-  test("each class, with the comment's url and date", async () => {
+  test("each class, with the comment's url, date and excerpt", async () => {
     const { d } = deps();
     const rows = await scan(d, ISSUES);
     const by = (n: number) => rows.find((r) => r.number === n);
     expect(by(100)).toMatchObject({
-      class: "fixed-in-current",
+      class: "build-named-in-current",
       builds: ["bd44b20ea"],
       commentUrl: "https://x/2026-11-10T00:00:00Z",
       commentDate: "2026-11-10T00:00:00Z",
+      excerpt: "Thanks. The new edge build (`bd44b20ea`) changes one item.",
     });
-    expect(by(101)?.class).toBe("no-fix-reported");
+    expect(by(101)?.class).toBe("no-build-named");
     expect(by(101)?.commentUrl).toBeUndefined();
-    expect(by(102)?.class).toBe("fixed-not-pinned");
-    expect(by(103)?.class).toBe("fixed-in-current"); // one of two builds is enough
-    expect(by(104)?.class).toBe("no-fix-reported");
+    expect(by(102)?.class).toBe("build-named-not-pinned");
+    // EVERY named build must be in current: deadbeef1 is not, so one of two is not enough.
+    expect(by(103)?.class).toBe("build-named-not-pinned");
+    expect(by(104)?.class).toBe("no-build-named");
   });
 
-  test("candidate: fixed-in-candidate only when not already in current", async () => {
+  test("the excerpt is about 120 characters of one line, shown after the builds", async () => {
+    const long = `Fixed in \`bd44b20ea\`.\n${"word ".repeat(60)}`;
+    const issues: GhIssue[] = [
+      { number: 1, title: "t", comments: [maint(long, "2026-11-01T00:00:00Z")] },
+    ];
+    const [row] = await scan(deps().d, issues);
+    expect(row?.excerpt?.length).toBe(120);
+    expect(row?.excerpt?.includes("\n")).toBe(false);
+    const line = formatRows(row ? [row] : [])[0] ?? "";
+    expect(line.indexOf("builds: bd44b20ea")).toBeLessThan(line.indexOf('comment: "Fixed in'));
+  });
+
+  test("a quoted line naming our pinned build is not a build the maintainer named", async () => {
+    const issues: GhIssue[] = [
+      {
+        number: 1,
+        title: "t",
+        comments: [maint("> still wrong on `bd44b20ea`\nLooking at it.", "2026-11-01T00:00:00Z")],
+      },
+    ];
+    const [row] = await scan(deps().d, issues);
+    expect(row).toMatchObject({ class: "no-build-named", builds: [] });
+  });
+
+  test("a later comment that names nothing does not hide an earlier one that names a build", async () => {
+    const issues: GhIssue[] = [
+      {
+        number: 1,
+        title: "t",
+        comments: [
+          maint("Fixed in `bd44b20ea`.", "2026-11-01T00:00:00Z"),
+          maint("Thanks for the report!", "2026-11-03T00:00:00Z"),
+        ],
+      },
+    ];
+    const [row] = await scan(deps().d, issues);
+    expect(row).toMatchObject({ class: "build-named-in-current", builds: ["bd44b20ea"] });
+  });
+
+  test("a comment by someone who is no OWNER/MEMBER/COLLABORATOR names no build", async () => {
+    const drive: GhComment = {
+      author: { login: "someone" },
+      authorAssociation: "NONE",
+      body: "try `bd44b20ea`",
+      createdAt: "2026-11-01T00:00:00Z",
+    };
+    const [row] = await scan(deps().d, [{ number: 1, title: "t", comments: [drive] }]);
+    expect(row?.class).toBe("no-build-named");
+  });
+
+  test("candidate: in-candidate only when every build is in it and not all in current", async () => {
     const { d } = deps({ candidate: "cand000001" });
     const rows = await scan(d, ISSUES);
-    expect(rows.find((r) => r.number === 102)?.class).toBe("fixed-in-candidate");
-    expect(rows.find((r) => r.number === 100)?.class).toBe("fixed-in-current");
+    expect(rows.find((r) => r.number === 102)?.class).toBe("build-named-in-candidate");
+    expect(rows.find((r) => r.number === 100)?.class).toBe("build-named-in-current");
+    expect(rows.find((r) => r.number === 103)?.class).toBe("build-named-not-pinned");
+  });
+
+  test("a current or candidate the clone does not know throws, after one fetch", async () => {
+    const a = deps({ currentCommit: async () => "0000000ff" });
+    await expect(scan(a.d, ISSUES)).rejects.toThrow("current commit 0000000ff");
+    expect(a.seen.fetches).toBe(1);
+    const b = deps({ candidate: "1111111ee" });
+    await expect(scan(b.d, ISSUES)).rejects.toThrow("candidate commit 1111111ee");
+  });
+
+  test("a current that is unknown until the fetch is accepted", async () => {
+    let fetched = false;
+    const { d } = deps({
+      known: async (c) => (c === CURRENT ? fetched : KNOWN.has(c)),
+      fetch: async () => {
+        fetched = true;
+      },
+    });
+    const rows = await scan(d, ISSUES);
+    expect(rows.length).toBe(ISSUES.length);
   });
 
   test("an id the clone does not know is fetched once, then dropped as no build", async () => {
@@ -174,7 +263,7 @@ describe("scan", () => {
     const { d, seen } = deps();
     const rows = await scan(d, issues);
     expect(seen.fetches).toBe(1);
-    expect(rows[0]).toMatchObject({ class: "no-fix-reported", builds: [] });
+    expect(rows[0]).toMatchObject({ class: "no-build-named", builds: [] });
   });
 
   test("entries: ends with /<number>, never a longer number", async () => {
@@ -196,13 +285,18 @@ describe("scan", () => {
     expect(summariseRepros(rows, ["u103-a", "u103-b"])).toEqual({ differ: 1, match: 2, other: 1 });
   });
 
-  test("action list: fixed-in-current with no entry, or with an entry that still differs", async () => {
+  test("action list: a build named in current with no entry, or with an entry that still differs", async () => {
     const issues: GhIssue[] = [
       ...ISSUES,
       {
         number: 105,
-        title: "fixed, no entry",
+        title: "named, no entry",
         comments: [maint("`bd44b20ea`", "2026-11-02T00:00:00Z")],
+      },
+      {
+        number: 106,
+        title: "named, entry still differs",
+        comments: [maint("first step in `bd44b20ea`", "2026-11-02T00:00:00Z")],
       },
     ];
     const { d } = deps({
@@ -210,17 +304,21 @@ describe("scan", () => {
         { repro: "u100-a", test: "t", change: "still-matches" },
         { repro: "u103-a", test: "t", change: "still-differs" },
         { repro: "u103-b", test: "t", change: "still-matches" },
+        { repro: "u106-a", test: "t", change: "still-differs" },
       ],
     });
     const rows = await scan(d, issues);
     const actions = actionRows(rows);
-    expect(actions.map((a) => a.row.number)).toEqual([103, 105]);
-    expect(actions[0]?.why).toContain("still differs");
-    expect(actions[1]?.why).toContain("no regression entry");
+    // #103 differs too, but its build is not in current: no action yet.
+    expect(actions.map((a) => a.row.number)).toEqual([105, 106]);
+    expect(actions[0]?.why).toContain("no regression entry");
+    expect(actions[1]?.why).toContain("still differs");
     const text = formatRows(rows).join("\n");
-    expect(text).toContain("#103 batch issue, step one only | fixed-in-current");
+    expect(text).toContain("#103 batch issue, step one only | build-named-not-pinned");
     expect(text).toContain("repro: 1 differ, 1 match");
-    expect(text).toContain("counts: fixed-in-current 3, no-fix-reported 2, fixed-not-pinned 1");
+    expect(text).toContain(
+      "counts: build-named-in-current 3, no-build-named 2, build-named-not-pinned 2",
+    );
   });
 
   test("without a repro report no summary is made", async () => {
@@ -253,10 +351,10 @@ describe("read-only", () => {
   });
   test("the module exports no function named like a write", async () => {
     const names = Object.keys(await import("./upstream-fixed-scan"));
-    // `latestMaintainerComment` only READS a comment; any other write-like name fails this.
+    // `maintainerComments` only READS a comment; any other write-like name fails this.
     expect(
       names.filter(
-        (n) => /post|comment|close|label|edit|create/i.test(n) && n !== "latestMaintainerComment",
+        (n) => /post|comment|close|label|edit|create/i.test(n) && n !== "maintainerComments",
       ),
     ).toEqual([]);
   });
