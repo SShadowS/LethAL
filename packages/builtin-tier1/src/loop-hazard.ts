@@ -1017,6 +1017,7 @@ export function openItemHangRefuses(
     r896InvisibleProgress(node, ctx) ||
     r896TestFieldOnlyExit(node, op) ||
     deletedCallHangs(node, ctx) ||
+    toggledExitBlankHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
       (emptiedProgressCalleeHangs(node, ctx) || emptiedRefusedBlockHangs(node, ctx)))
   );
@@ -1280,6 +1281,50 @@ function emptiedRefusedBlockHangs(node: ALSyntaxNode, ctx: SemanticContext): boo
     }
   });
   return hangs;
+}
+
+/** Does the loop's body (its condition excluded) write `name`, by assignment or `var` argument? */
+function loopBodyWrites(loop: ALSyntaxNode, name: string, ctx: SemanticContext): boolean {
+  const cond = loop.childForFieldName("condition");
+  const names = new Set([name]);
+  let writes = false;
+  for (const c of loop.namedChildren) {
+    if (cond !== null && c.startIndex === cond.startIndex) continue;
+    visitAll(c, (n) => {
+      if (!writes && directWrite(n, names, ctx)) writes = true;
+    });
+  }
+  return writes;
+}
+
+/**
+ * PR-44: `toggle-blank-string` on a blank literal that is an operand of `=` / `<>` in a loop's
+ * exit condition (the whole condition, or an operand of a top-level `and` / `or`), when the other
+ * operand is a name the loop body writes. Toggling the blank to `'x'` makes the exit unreachable
+ * once the name converges to blank (`until X = ''`, X refilled in the body).
+ */
+function toggledExitBlankHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string | undefined) {
+  if (op !== "lethal.toggle-blank-string") return false;
+  const cmp = node.parent;
+  if (node.rawKind !== ALNodeKind.text_literal || cmp === null) return false;
+  if (cmp.rawKind !== "comparison_expression" || node.text.trim() !== "''") return false;
+  const sign = cmp.childForFieldName("operator")?.text.trim();
+  if (sign !== "=" && sign !== "<>") return false;
+  let top: ALSyntaxNode = cmp;
+  for (
+    let p = top.parent;
+    p !== null && (p.rawKind === "logical_expression" || p.rawKind === "parenthesized_expression");
+    p = p.parent
+  ) {
+    top = p;
+  }
+  const loop = top.parent;
+  if (loop === null || !LOOP_KINDS.has(loop.kind)) return false;
+  const other = [cmp.childForFieldName("left"), cmp.childForFieldName("right")].find(
+    (c) => c !== null && c.startIndex !== node.startIndex,
+  );
+  const name = baseNameOf(other ?? null);
+  return name !== null && loopBodyWrites(loop, name, ctx);
 }
 
 /** R893: test-only seam; tests switch `on` off to see the rule's effect. */
