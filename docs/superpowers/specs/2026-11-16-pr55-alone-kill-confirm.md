@@ -92,3 +92,18 @@ stop, a daemon kill and restart) before the reproduction still runs B alone; now
 ## Not in scope
 Recording `selection` in the store (R1067's first "to close" step): the warning event per alone confirm makes the diff
 attributable without a schema change.
+
+## Addendum 1 (2026-11-16, after the first full v3 gate run on the final head 64100794, before any change to the gate)
+The prediction "itest:alrunner-v3: no figure moves (no cut, nothing marked alone)" was WRONG for one leg.
+- **Leg X (d)** (the Sleep scenario on probe-app's `ProbeSleeper`) cuts its test codeunit at the sleep mutants' timeouts, so
+  `SleeperDoubles` runs alone for two mutants (M0001, M0005). It fails there, which is a kill, now confirmed alone. Its
+  warning set (`GATE_WARNINGS["al-runner-v3/xd-d"]`) gained `alone-confirm`, and the gate failed on that mismatch
+  (GateWarningsMismatchError) before its verdict checks ran.
+- My earlier reason was wrong: a gate with no `timeout-killed` in its baselines can still cut. X (d)'s sleep mutants are
+  stopped at the timeout and scored by their own rule, and the cut still routes the other tests alone.
+- **Prediction, pre-committed:**
+  - `GATE_WARNINGS["al-runner-v3/xd-d"]` becomes `XD_NARROWED` plus `alone-confirm`; every other leg's set is unchanged.
+  - Every verdict, killing test and count of X (d), and of every other leg, is unchanged: `SleeperDoubles` keeps no state
+    across tests, so it passes alone unmutated and both kills stand.
+  - Any verdict move is a BLOCK, to be explained before merge.
+- The gate page (docs/gates/alrunner-v3.md) records it in the R885 form.
