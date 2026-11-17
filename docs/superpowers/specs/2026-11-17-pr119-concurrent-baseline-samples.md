@@ -1,8 +1,32 @@
 # PR-119 (R1107): run the daemon fill's cross-check samples beside the daemon
 
-Status: r3 (coord PR-119, lethal-preproc, 2026-11-17). r3 answers the delta review of r2 (§0a), and r2 answered the
-spec-adversary review of r1 (§0). The pre-commitment of the proof runs (§7) is committed to master, with this spec's final
-text, before any proof run.
+Status: r4 (coord PR-119, lethal-preproc, 2026-11-17). r4 answers lethal-code's review of r3 (§0b). r3 answered the delta
+review of r2 (§0a), and r2 answered the spec-adversary review of r1 (§0). The pre-commitment of the proof runs (§7) is
+committed to master, with this spec's final text, before any proof run.
+
+## 0b. lethal-code's review of r3 (against master's PR-115 batch path), finding by finding
+- **A (medium): DBM must set the `concurrentSamples` seam to `true` itself.**
+  - The problem: §7.3 lets the default ship `false`. If DBM relied on the default, its `samplesOverlapped >= 1` check would
+    fail. PR-117 records `batchFacts` only from a DBM pass, so no later build would get any, and batching would turn off
+    everywhere.
+  - Fixed in §7.1.
+- **Placement (wording): the in-flight pre-check and settle point 3 sit inside the `send(id, group?)` closure,** before its
+  `memoryGate(true)`.
+  - Every daemon request goes through `send()`: a batch, a single, and the re-send after `batchFailed`.
+  - An answer already held in `batched` costs no request, so it needs no check.
+  - Fixed in §3 and §4.
+- **Memory (wording): sound.** A batch is one request, so it holds one slot. Two facts are now stated in §3:
+  - a batch grows the daemon by about 0.1 GiB, which the 0.5 GiB tolerance absorbs;
+  - after a discard, the fresh daemon ramps back to about the old one's size, so the S read before the close stays
+    conservative.
+- **Stats (low): `samplesOverlapped` counted a sample that started in flight but saw no daemon request before it settled.**
+  That happens to the last sample, and to one followed only by answers already held in `batched`. Counting it would inflate
+  §7.2's wall bar. Now it counts only when a `send()` request started while the sample was in flight (§6).
+- **Checked and holding (no change):**
+  - a batch discard closes only the daemon;
+  - the sample's `got` cannot change after the sample starts;
+  - a replacement pick inside the current batch works as it does today;
+  - the R955 stop after a batch is settle point 7.
 
 ## 0a. Delta review of r2 (opus), finding by finding
 1. **(low-medium) A `skipped` result applied at a stop could start a new one-shot after it (breaks R955).** Also, `finally`
@@ -91,7 +115,9 @@ and polls, then stops.
   plus the next daemon request.
   - No guard (off, or no limit): admitted.
   - An unreadable reading: not admitted (sequential).
-- **Before each daemon request's own `memoryGate(true)` while a sample is in flight:** the same read. It requires
+- **Before each daemon request's own `memoryGate(true)` while a sample is in flight:** the same read, made inside the `send()`
+  closure that every daemon request goes through: a batch, a single, and the re-send after `batchFailed` (r4). An answer
+  already held in `batched` makes no request and needs no check. The read requires
   `usedBytes + memoryHeld x memoryEstimate() + max(0, S - memoryEstimate()) + memoryEstimate() <= boundBytes`.
   - `memoryHeld` already holds the sample's one reservation at `memoryEstimate()`; the extra term is the part of S that the
     reservation does not cover. Counting it whole, although part of it may already show in `usedBytes`, errs high.
@@ -99,6 +125,9 @@ and polls, then stops.
   - So a daemon request's gate counts an in-flight reservation only when the read admitted both.
   - The sample's own one-shot gate runs on `memoryChain` before the next daemon gate, so it can only close an idle daemon
     (review: checked and holding).
+- **Batches (r4):** a batch is one request, so it holds one slot. At B = 8 a batch grows the daemon by about 0.1 GiB (PR-114),
+  so R can be that much low by the next batch, which the 0.5 GiB tolerance in §7 absorbs. After a batch discard, the fresh
+  daemon ramps back to about the old one's size, so an S read before the close stays conservative.
 - **No `watchMemory()` in this fill** (review #3).
 - **Durations:** a sample's kept durations come from its one-shot, and the daemon's come from requests that may run beside
   one. Under contention both can only be longer. That lengthens budgets (`max(2 x duration, floor)`) or adds R790 too-slow
@@ -109,7 +138,7 @@ and polls, then stops.
 The in-flight sample is settled, and its result applied per §2.3, at each of these points. A non-ok result ends the step there:
 1. before a sample is started or run in place;
 2. before the too-slow one-shot;
-3. before a daemon request whose memory read says no (§3);
+3. inside `send()`, before a daemon request whose memory read says no (§3);
 4. in the `got === undefined && isSample` branch, before its `replace` (review #2);
 5. before the R1001 uniform stop:
    - settle;
@@ -141,8 +170,9 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
 
 ## 6. Stats
 - `baselineStats` gains:
-  - `samplesOverlapped`: started in flight;
-  - `samplesSequential`: run in place, because admission said no, the seam was off, or it was a backward pick;
+  - `samplesOverlapped`: started in flight, AND at least one `send()` request started while it was in flight (r4);
+  - `samplesSequential`: every other sample. That covers a sample run in place (admission said no, the seam was off, or it
+    was a backward pick), and one that started in flight but settled before any request started;
   - `sampleMemoryAtStart`: `memory.current` read at the fill's start, or none.
 - The counters are printed in the existing `[lethal] al-runner-v3 baseline batching (PR-115): ...` line's neighbour,
   `... baseline samples (PR-119): N overlapped, M sequential`.
@@ -153,6 +183,9 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
    - **The DBM change, a gate change of its own (r3, delta review #2):**
      - DBM, the only leg with more than one sample over more than one request, gets a fixed `memoryReader` seam (as DBI has)
        and asserts `samplesOverlapped >= 1`.
+     - DBM sets the `concurrentSamples` seam to `true` itself and never relies on the default (r4, review A), so a default of
+       `false` (§7.3) cannot fail DBM and switch off PR-117's `batchFacts`. The overlap check is one of the leg's checks, so
+       it runs before the leg's final `dbmBatched = true`.
      - The overlap is build-independent. DBM's 4 codeunits put samples at index 1 and 3, and codeunit 2 always needs a request
        of its own (a second batch when batched, alone when not). With the fixed reader, admission admits.
      - DBM passing also gates the al-runner update script, since `batchFacts` are recorded only when DBM passes (R1109). So
