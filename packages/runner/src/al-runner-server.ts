@@ -767,7 +767,11 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   CMP: "(?:>100|>1000|<1000|<300)",
   // PR-93: the Date filter texts and the BigInteger codes t10/t11 closed on, each measured, by name.
   DATETEXT: "(?:-1M|-2026-09-01)",
-  BIGCODE: "(?:GL00000000|GU00000001)",
+  // PR-105 added C10000 (t12/t13), and the Evaluate whitespace widths (runs of NUL characters, 4 to 6) and the two
+  // Integer texts (`=18`, `1=18`) the same way: measured, by name.
+  BIGCODE: "(?:GL00000000|GU00000001|C10000)",
+  NULS: String.raw`\x00{4,6}`,
+  INTTEXT: "(?:=18|1=18)",
   // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
   ARRAYSTATE: "(?:ArrayStart|Array)",
   // PR-74 review H1: SaveAs only. RunRequestPage was measured after a Commit(), never inside an open write
@@ -775,7 +779,8 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   REPORTM: "SaveAs",
   // PR-74 review M2: the measured path `a`, plus t9's three paths by name (the path is the writer's own
   // nesting, not engine state; a widening by name, not a measurement).
-  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\])`,
+  // PR-105 added the path t12/t13 met, measured by its own cell.
+  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\]|message\.body\.ccRecipients\[0\]\.emailAddress)`,
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1079,6 +1084,30 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "dotnet-json-writer-property-in-array",
     "DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: Token PropertyName in state %ARRAYSTATE% would result in an invalid JSON object. Path 'message.toRecipients'.; the text AL would see is not pinned (ADR-014 section 7)",
   ], // PR-54 class "DotNet * raised the .NET exception *"
+  // PR-105 (coord PR-105, spec 2026-11-17-pr105-t12-t13-refusal-families.md): the texts DO windows t12/t13 still
+  // closed on, each driven by an invented cell of family `t12-refusals` to the exact text and measured CLEAN by
+  // PR-54's strict census with every distinct text a refuser (`--refusers 7`, `/coord/handoff/PR-105/census/`).
+  // Not kept: RunRequestPage (PR-74 review H1 stands), the SaveAs-with-layout errors, the placeholder Pdf read (no
+  // invented cell produces them), and the list-without-the-new-row-line text (no cell produced it). The
+  // setfilter and JSON writer texts are widened in their own entries above (BIGCODE, JSONPATH); the Evaluate NUL
+  // runs get their own entry below.
+  // Pinned by `al-runner-serve-pr105.test.ts`.
+  [
+    "fieldref-calcfield-not-flowfield",
+    "FieldRef.CalcField of a field that is not a FlowField (not pinned)",
+  ],
+  ["evaluate-decimal-nul-run", "Evaluate of `%NULS%` into Decimal (form not pinned by the corpus)"],
+  ["conversion-text-to-blob", `conversion of Text '<?xml version="1.0" encoding="...' to Blob`],
+  [
+    "action-left-another-row",
+    "an action left another row (another primary key) in Rec with changes to save (not pinned)",
+  ],
+  ["conversion-text-to-integer", "conversion of Text '%INTTEXT%' to Integer"],
+  ["copystream-untouched-to-dotnet", "CopyStream from an untouched handle into a DotNet stream"],
+  [
+    "report-saveas2-untouched-handle",
+    "Report.SaveAs#2 to an untouched handle, which is not an OutStream",
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

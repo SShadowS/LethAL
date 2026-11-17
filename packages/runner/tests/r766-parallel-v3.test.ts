@@ -94,6 +94,8 @@ interface Script {
   throwAt?: (code: string, test: string) => Error | undefined;
   /** The run under this mutant latches the batch (after its delay). */
   latchOn?: string;
+  /** PR-108: this test times out under this mutant (every time it runs). */
+  hangs?: (code: string, test: string) => boolean;
 }
 
 class ParStub implements ExecutionBackend {
@@ -216,6 +218,8 @@ class ParStub implements ExecutionBackend {
     if (this.script.latchOn === code && this.latch === undefined) {
       this.latch = { mutantId: code, why: "batchBlind: scripted" };
     }
+    if (this.script.hangs?.(code, ref.method) === true)
+      return { ref, outcome: "timeout", durationMs: 5, failureMessage: `stopped ${ref.method}` };
     const fails =
       this.script.fails?.(code, ref.method) ??
       (this.isFirstOfProc(code) ? ref.method === "T2" : true);
@@ -675,6 +679,102 @@ describe("R1014: a stop signal is honoured inside a window, and the mutant it cu
       expect(r.mutants.length).toBeLessThan(total);
       expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
       expect(new Set(stub.activations.map((a) => a.mutant)).size).toBeLessThanOrEqual(2 + workers);
+      expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+    });
+  }
+
+  // PR-108 M1: `held-walk-capped` goes out with the row (inside the commit), so a lane commit that
+  // `finish` drops leaves neither a row nor a warning.
+  const FOUR_TESTS_AL = `codeunit 79100 "Par Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure T1() begin end;
+    [Test]
+    procedure T2() begin end;
+    [Test]
+    procedure T3() begin end;
+    [Test]
+    procedure T4() begin end;
+}
+`;
+  const cappedWarnings = (events: readonly RunEvent[]): string[] =>
+    events.flatMap((e) =>
+      e.type === "warning" && e.code === "held-walk-capped" ? [e.message] : [],
+    );
+  const fourTestProject = async (): Promise<string> => {
+    const root = await project();
+    await Bun.write(join(root, "tests", "ParTests.Codeunit.al"), FOUR_TESTS_AL);
+    return root;
+  };
+  const hangFirstThree = (code: string, test: string) =>
+    code === "M0001" && ["T1", "T2", "T3"].includes(test);
+
+  test("PR-108 M1 --workers 2: a capped mutant that is recorded emits exactly one held-walk-capped warning", async () => {
+    const root = await fourTestProject();
+    const { procOf } = await learn(root);
+    const stub = new ParStub({ procOf, delay: () => 2, hangs: hangFirstThree });
+    const events: RunEvent[] = [];
+    const r = await session(root, stub, { workers: 2 }, events);
+    expect(r.mutants.find((m) => m.mutantCode === "M0001")?.failureNote).toContain("PR-108");
+    const w = cappedWarnings(events);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain("M0001");
+  });
+
+  test("PR-108 M1 --workers 2: a capped mutant whose finish is dropped after another lane's stop emits no warning and has no row", async () => {
+    const root = await fourTestProject();
+    const { procOf } = await learn(root);
+    const stub = new ParStub({
+      procOf,
+      // M0008 (the capped one; lane 1's first mutant) is slow, so M0001 latches the batch first;
+      // M0008 is later in the manifest and finishes after the stop, so its commit is discarded.
+      delay: (c) => (c === "M0008" ? 15 : 3),
+      latchOn: "M0001",
+      hangs: (c, t) => c === "M0008" && ["T1", "T2", "T3"].includes(t),
+    });
+    const events: RunEvent[] = [];
+    const err = await session(root, stub, { workers: 2 }, events).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ParallelStopError);
+    // the capped walk did run (3 hangs, then the replay), so the warning's absence is the commit's
+    expect(stub.runs.filter((x) => x.mutant === "M0008" && x.test === "T3").length).toBeGreaterThan(
+      0,
+    );
+    // red when the warning is emitted before `finish`: a warning for a mutant with no row
+    expect(cappedWarnings(events)).toEqual([]);
+  });
+
+  test("PR-108 --workers 2: a signal that cuts the LAST mutant before its first step leaves it out through the sink's stop, never a 'never finished' error", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const total = one.mutants.length;
+    const stub = new ParStub({ procOf, delay: () => 3 });
+    const extra = signalAt(stub, total);
+    // red when the lane exits by `budgetSpent(at)` instead of `sink.memoryStop`: the commit throws
+    // "mutant(s) were never finished or recorded" (R766)
+    const r = await session(root, stub, { workers: 2, ...extra });
+    const cut = cutOf(extra);
+    expect(cut).toBeDefined();
+    expect(stub.runs.filter((x) => x.mutant === cut)).toEqual([]);
+    expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
+    expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+  });
+
+  // PR-108: the budget is also checked BEFORE each covering step, and a lane leaves through the sink's stop.
+  for (const workers of [1, 2]) {
+    test(`PR-108 --workers ${workers}: a signal that arrives as a mutant starts runs none of its covering steps and records nothing`, async () => {
+      const root = await project();
+      const { procOf, report: one } = await learn(root);
+      const total = one.mutants.length;
+      const stub = new ParStub({ procOf, delay: () => 3 });
+      const extra = signalAt(stub, 3);
+      const r = await session(root, stub, { workers, ...extra });
+      const cut = cutOf(extra);
+      expect(cut).toBeDefined();
+      // red without the in-walk check: the cut mutant's steps ran before its record was dropped
+      expect(stub.runs.filter((x) => x.mutant === cut)).toEqual([]);
+      expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
       expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
     });
   }

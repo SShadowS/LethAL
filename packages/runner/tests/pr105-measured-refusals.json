@@ -1,0 +1,55 @@
+[
+  {
+    "cls": "FieldRef.CalcField of a field that is not a FlowField",
+    "entry": "fieldref-calcfield-not-flowfield",
+    "texts": ["FieldRef.CalcField of a field that is not a FlowField (not pinned)"]
+  },
+  {
+    "cls": "SetFilter",
+    "entry": "setfilter-not-a-biginteger",
+    "texts": ["SetFilter: `C10000` is not a BigInteger"]
+  },
+  {
+    "cls": "Evaluate of a run of NUL characters into Decimal",
+    "entry": "evaluate-decimal-nul-run",
+    "texts": [
+      "Evaluate of `\u0000\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "Evaluate of `\u0000\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)",
+      "Evaluate of `\u0000\u0000\u0000\u0000` into Decimal (form not pinned by the corpus)"
+    ]
+  },
+  {
+    "cls": "conversion of Text to Blob",
+    "entry": "conversion-text-to-blob",
+    "texts": ["conversion of Text '<?xml version=\"1.0\" encoding=\"...' to Blob"]
+  },
+  {
+    "cls": "an action left another row in Rec",
+    "entry": "action-left-another-row",
+    "texts": [
+      "an action left another row (another primary key) in Rec with changes to save (not pinned)"
+    ]
+  },
+  {
+    "cls": "conversion of Text to Integer",
+    "entry": "conversion-text-to-integer",
+    "texts": ["conversion of Text '=18' to Integer", "conversion of Text '1=18' to Integer"]
+  },
+  {
+    "cls": "CopyStream from an untouched handle into a DotNet stream",
+    "entry": "copystream-untouched-to-dotnet",
+    "texts": ["CopyStream from an untouched handle into a DotNet stream"]
+  },
+  {
+    "cls": "DotNet * raised the .NET exception *",
+    "entry": "dotnet-json-writer-start-object-in-object",
+    "texts": [
+      "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.body.ccRecipients[0].emailAddress'.; the text AL would see is not pinned (ADR-014 section 7)"
+    ]
+  },
+  {
+    "cls": "Report.SaveAs#2 to an untouched handle",
+    "entry": "report-saveas2-untouched-handle",
+    "texts": ["Report.SaveAs#2 to an untouched handle, which is not an OutStream"]
+  }
+]

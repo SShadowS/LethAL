@@ -44,6 +44,8 @@ export function createTimingFold(): TimingFold {
   let cuts = 0;
   /** The LAST verdict per mutant (a `batch-invalidated` batch scores its mutants again). */
   const verdicts = new Map<string, string>();
+  /** PR-108: the last verdict of each mutant whose walk the 3rd-hang cap ended. */
+  const capped = new Map<string, string>();
   const lanes = new Set<number>();
   let finished = false;
 
@@ -63,6 +65,10 @@ export function createTimingFold(): TimingFold {
           break;
         case "mutant-scored":
           verdicts.set(`${e.batchIndex}/${e.mutant.mutantId}`, e.verdict);
+          // PR-108: a walk the 3rd-hang cap ended carries this note (the same text the orchestrator writes).
+          if (e.failureNote?.includes("(PR-108, R1057's cap)") === true)
+            capped.set(`${e.batchIndex}/${e.mutant.mutantId}`, e.verdict);
+          else capped.delete(`${e.batchIndex}/${e.mutant.mutantId}`);
           break;
         case "serve-request-timed":
           lanes.add(e.lane);
@@ -138,6 +144,15 @@ export function createTimingFold(): TimingFold {
         lines.push(
           `  timeouts: ${plural(timeoutKilled, "mutant")} timeout-killed, ${plural(cuts, "answer")} cut at a timeout row`,
         );
+
+      if (capped.size > 0) {
+        const byVerdict = new Map<string, number>();
+        for (const v of capped.values()) byVerdict.set(v, (byVerdict.get(v) ?? 0) + 1);
+        const parts = [...byVerdict.entries()]
+          .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
+          .map(([v, n]) => `${v} ${n}`);
+        lines.push(`  capped walks: ${capped.size} (${parts.join(", ")})`);
+      }
 
       const mutantsMs = phaseMs.get("mutants");
       if (mutantsMs !== undefined && covered > 0)
