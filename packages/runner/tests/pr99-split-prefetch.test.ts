@@ -72,7 +72,9 @@ async function soleBaseline(r: LanesRig): Promise<void> {
   }
 }
 const requestsOf = (r: LanesRig, active: string) =>
-  r.serve.requests.filter((q) => q.active.endsWith(active));
+  r.serve.requests.filter((q) => posix(q.active).endsWith(active));
+/** The tree a request names, with `/` separators (on Windows it ends in `\active`; the CI `check` job). */
+const posix = (p: string) => p.replaceAll("\\", "/");
 
 describe("PR-99 spec 7.1: N = 1 is unchanged", () => {
   test("the owner prefetches the window on its only lane; no lane counter of the split moves", async () => {
@@ -80,7 +82,7 @@ describe("PR-99 spec 7.1: N = 1 is unchanged", () => {
     await soleBaseline(r);
     await r.b.prefetchMutants(plans(["M0001", "M0002"]), { batchPlans: plans(ALL) });
     // every prefetch request is on lane 0's tree
-    expect(r.serve.requests.every((q) => q.active.endsWith("/active"))).toBe(true);
+    expect(r.serve.requests.every((q) => posix(q.active).endsWith("/active"))).toBe(true);
     const s = r.b.entriesStats();
     expect(s.prefetchRequests).toBe(1);
     expect(s.unitsPrefetched).toBe(0); // a unit is a split notion
