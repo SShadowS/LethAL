@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**44 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -595,7 +595,7 @@ that ordering is the priority.
 - **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
 - **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (e7244b10)
 - **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
-- **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · open — filed by PR-67 (the DO pilot), 2026-11-17; refine after q-20261117T183405-4c6fee36
+- **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · done (e93270e9) — PR-128: doctor check text-search-dependencies over the project's dependency closure; live…
 
 ## Backends and tooling
 

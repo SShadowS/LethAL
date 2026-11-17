@@ -100,6 +100,13 @@ one failed.
   or `too-old`. It does not check the dependencies of those dependencies, or the implicit
   `application` and `platform` ones. It is skipped, with a reason, without `--project` or on an
   `envTool` config.
+- `text-search-dependencies` (R1110) scans the dependency closure of the target (and of the test app,
+  with `--tests`) in `packageCachePath` for table fields with `OptimizeForTextSearch`. Installing such
+  an app needs SQL Server Full-Text Search, which doctor cannot read on the server. It fails when an
+  app that declares one is not installed on the server at the cached version or newer (an older
+  installed version fails too: the upgrade installs the fields). A pass says only that the install
+  succeeded, never that the server has Full-Text Search. It lists packages it could not read. It is
+  skipped, with a reason, without `--project` or on an `envTool` config.
 - `credentials-env` (R1086) appears when the config has `bcdev.credentialsEnv`. It shows the variable
   names and whether each is set, never a value.
 

@@ -577,7 +577,7 @@ nothing about them changes.
   - **The database is in memory:** a host restart loses it, and so do the apps. bc1-bc3 are unchanged and have no Full-Text
     Search.
   - **Then, under the lane-code lease (attempt 045, released):**
-    - `bun scripts/bc-linux-setup.ts --server bc4` published LethAL Control 1.0.0.26 and every fixture app (doctor ok for all
+    - `bun scripts/bc-linux-setup.ts --server bc4` published the LethAL Control build that `extensions/lethal-control/app.json` names and every fixture app (doctor ok for all
       four fixtures);
     - PR-67's `scripts/bc-continia-publish.ts` published all 7 Continia 30 apps (System Application, Core, Connector App,
       Customer Onboarding, Delivery Network, Delivery Network - Onboarding, Core Internal Activation App 30.0.0.35781). Each was

@@ -394,7 +394,9 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
       "alc-runtime",
       "dependencies",
       "server-dependencies",
+      "text-search-dependencies", // PR-128: skipped too
     ]);
+    expect(report.checks[4]?.skipped).toBe(true);
     expect(report.checks[3]?.skipped).toBe(true);
     expect(report.checks[2]?.skipped).toBe(true);
     expect(report.checks[0]?.ok).toBe(true);
@@ -813,8 +815,10 @@ describe("doctorFromCli (final review, Important 1)", () => {
     );
     expect(code).toBe(0);
     // Issue #29: without --project the dependencies check is skipped, and the banner says so.
-    // R1087: `server-dependencies` is skipped for the same reason.
-    expect(out).toMatch(/^ok: no check failed, but 2 could not be checked/);
+    // R1087: `server-dependencies` is skipped for the same reason. PR-128: so is
+    // `text-search-dependencies`.
+    expect(out).toMatch(/^ok: no check failed, but 3 could not be checked/);
+    expect(out).toContain("[skip] text-search-dependencies");
     expect(out).toContain("[skip] dependencies");
     expect(out).toContain("[skip] server-dependencies");
     expect(out).toContain(DOCTOR_NOT_CHECKED);
