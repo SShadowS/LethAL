@@ -90,7 +90,8 @@
               "al-runner-v3-serve-default-fallback-warmup",
               "al-runner-v3-coverage-off",
               "time-budget-reached",
-              "nondebuggable-no-coverage"
+              "nondebuggable-no-coverage",
+              "withheld-kills"
             ]
           }
         },
@@ -484,6 +485,21 @@
               "confirm-stopped",
               "test-discovery-failed"
             ]
+          },
+          "withheldKill": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "failure"
+            ],
+            "properties": {
+              "failure": {
+                "type": "string"
+              },
+              "afterTest": {
+                "type": "string"
+              }
+            }
           },
           "platformKillMechanism": {
             "type": "string"
