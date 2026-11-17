@@ -3173,6 +3173,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §12: only a gated build runs (the update gate's candidate excepted).
     let gateRecord: string;
     let gatedWarnFacts: Readonly<Record<string, string>> | undefined;
+    let gatedRecord: GatedBuild | undefined;
     let binarySha256: string;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
@@ -3186,6 +3187,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
+      gatedRecord = gated;
       // R886: not a gate input; the contract probe below runs without it.
       const sidecar = await resolveDotnetSidecar(
         this.cfg.dotnetSidecar,
@@ -3285,7 +3287,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
     // PR-114a: decided once, printed in the details; PR-115's baseline fill reads it to batch.
-    this.baselineBatchingWhyOff = baselineBatchingOffReason(this.contract, reported, binarySha256);
+    this.baselineBatchingWhyOff = baselineBatchingOffReason(
+      this.contract,
+      reported,
+      binarySha256,
+      gatedRecord,
+    );
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);

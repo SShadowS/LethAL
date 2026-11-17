@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
+import { V3_CAPABILITY_FACTS } from "../packages/runner/src/al-runner-v3-contract";
 import { parseGated } from "../packages/runner/src/al-runner-v3-pin";
 import {
   type GatedBuildEntry,
@@ -31,6 +32,7 @@ import {
   type UpdateDeps,
   V3_CDO_DEFAULT,
   argv0FromCmdline,
+  batchingRecordLine,
   candidates,
   countHeavyJobs,
   dailyOnce,
@@ -117,6 +119,9 @@ function fake(o: {
   receiptSha?: string;
   lines?: string[];
   warnFacts?: Record<string, string>;
+  /** PR-117: the receipt's leg C capability readings and whether DBM batched (the update script reads both with `legs.DBM`). */
+  batchFacts?: Record<string, string>;
+  dbmBatched?: boolean;
   heavy?: number;
   free?: number;
   /** R952: the memory rule's answer for the gate; "no-limit" answers undefined (no cgroup limit). Absent: no such dep. */
@@ -213,6 +218,8 @@ function fake(o: {
           legs: o.legs ?? legsFor(outcome),
           lines: o.lines ?? [],
           ...(o.warnFacts !== undefined ? { warnFacts: o.warnFacts } : {}),
+          ...(o.batchFacts !== undefined ? { batchFacts: o.batchFacts } : {}),
+          ...(o.dbmBatched === true ? { dbmBatched: true } : {}),
           ...(o.pinApplied !== undefined
             ? { pinApplied: o.pinApplied, pinDigest: o.pinDigest ?? digestOfPin(o.pinApplied) }
             : {}),
@@ -380,6 +387,104 @@ linuxOnly("T19: the v3 update gate", () => {
     expect(await updateOnce(fake({ outcome: "pass" }).deps)).toEqual(["pass"]);
     const g2 = JSON.parse(await readFile(join(root, ALPHA3_DIR, ".gated"), "utf8"));
     expect("warnFacts" in g2).toBe(false);
+  });
+
+  describe("PR-117: batchFacts are recorded only from a gate that proved batching", () => {
+    const ALL = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    const withDbm = (dbm: string | undefined) => {
+      const { DBM: _d, ...rest } = legsFor("pass");
+      return dbm === undefined ? rest : { ...rest, DBM: dbm };
+    };
+    const gatedOf = async () =>
+      JSON.parse(await readFile(join(root, ALPHA3_DIR, ".gated"), "utf8"));
+
+    test("a receipt with legs.DBM pass and dbmBatched writes batchFacts into .gated", async () => {
+      await setup();
+      const { deps } = fake({
+        outcome: "pass",
+        batchFacts: ALL,
+        dbmBatched: true,
+        legs: withDbm("pass"),
+      });
+      expect(await updateOnce(deps)).toEqual(["pass"]);
+      expect((await gatedOf()).batchFacts).toEqual(ALL);
+    });
+
+    test("none written when DBM is not pass, is absent, or did not batch", async () => {
+      for (const o of [
+        { dbm: "gate-fail", batched: true },
+        { dbm: "infra-fail", batched: true },
+        { dbm: undefined, batched: true },
+        { dbm: "pass", batched: false },
+      ]) {
+        await setup();
+        const { deps } = fake({
+          outcome: "pass",
+          batchFacts: ALL,
+          dbmBatched: o.batched,
+          legs: withDbm(o.dbm),
+        });
+        expect(await updateOnce(deps)).toEqual(["pass"]);
+        expect("batchFacts" in (await gatedOf()), JSON.stringify(o)).toBe(false);
+      }
+    });
+
+    test("the update log says whether the record allows batching, both ways", async () => {
+      await setup();
+      const yes = fake({
+        outcome: "pass",
+        batchFacts: ALL,
+        dbmBatched: true,
+        legs: withDbm("pass"),
+        pinApplied: "edge-d72d3197d",
+      });
+      await updateOnce(yes.deps);
+      expect(yes.seen.logs.join("\n")).toContain("gate record allows baseline batching");
+      await setup();
+      const no = fake({ outcome: "pass", legs: withDbm("pass") });
+      await updateOnce(no.deps);
+      expect(no.seen.logs.join("\n")).toContain(
+        "gate record does not allow baseline batching (no batchFacts",
+      );
+    });
+
+    test("batchingRecordLine: each reason by name; the pin half of the Sleep rule", () => {
+      expect(batchingRecordLine(ALL, true)).toBe("gate record allows baseline batching");
+      expect(batchingRecordLine(ALL, false)).toMatch(/does not allow .*sleep-is-noop/);
+      expect(batchingRecordLine({ ...ALL, "batch-lane-hint-only": "diverged" }, true)).toContain(
+        "the gate read batch-lane-hint-only diverged",
+      );
+      const { "batch-no-cross-row": _x, ...rest } = ALL;
+      expect(batchingRecordLine(rest, true)).toContain("batch-no-cross-row not recorded");
+    });
+
+    test("a --regate whose receipt does not qualify writes none, although the old .gated had them", async () => {
+      await setup();
+      const gatedFile = join(await current(), ".gated");
+      const old = JSON.parse(await readFile(gatedFile, "utf8"));
+      await writeFile(gatedFile, JSON.stringify({ ...old, batchFacts: ALL }));
+      const { deps } = fake({ outcome: "pass", receiptSha: sha("alpha2"), legs: withDbm("pass") });
+      deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+      expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+      const g = JSON.parse(await readFile(gatedFile, "utf8"));
+      expect(g.lethalCommit).toBe(REGATE_COMMIT);
+      expect("batchFacts" in g).toBe(false);
+    });
+
+    test("a --regate whose receipt qualifies writes this gate's batchFacts", async () => {
+      await setup();
+      const { deps } = fake({
+        outcome: "pass",
+        receiptSha: sha("alpha2"),
+        batchFacts: ALL,
+        dbmBatched: true,
+        legs: withDbm("pass"),
+      });
+      deps.versionOf = async () => "alrunner 3.0.0-alpha.2 (91253f2d6)";
+      expect(await updateOnce(deps, { regateAt: REGATE_COMMIT })).toEqual(["pass"]);
+      const g = JSON.parse(await readFile(join(await current(), ".gated"), "utf8"));
+      expect(g.batchFacts).toEqual(ALL);
+    });
   });
 
   test("R614 I2: the gate's preparation line reaches the update log, tagged, on a pass and on a gate-fail", async () => {
@@ -1643,6 +1748,31 @@ linuxOnly("R814: the two tracks", () => {
     expect(seen.published).toEqual(["edge-c893e3633", "alpha.3-c893e3633"]);
   });
 
+  test("PR-117: a qualifying receipt writes batchFacts into the ledger row too; a non-qualifying one writes none", async () => {
+    const ALL = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    await setupPinned();
+    const yes = fake({
+      ...pinnedPass,
+      batchFacts: ALL,
+      dbmBatched: true,
+      legs: { ...legsFor("pass"), DBM: "pass" },
+    });
+    expect(await updateOnce(yes.deps)).toEqual(["pass"]);
+    const [r] = await ledger();
+    expect(r.batchFacts).toEqual(ALL);
+    await rm(join(root, "gated-builds.jsonl"), { force: true });
+    await setupPinned();
+    const no = fake({
+      ...pinnedPass,
+      batchFacts: ALL,
+      dbmBatched: true,
+      legs: { ...legsFor("pass"), DBM: "gate-fail" },
+    });
+    expect(await updateOnce(no.deps)).toEqual(["pass"]);
+    const [r2] = await ledger();
+    expect("batchFacts" in r2).toBe(false);
+  });
+
   test("daily: a release gate-fail or held leaves current and the manifest alone", async () => {
     for (const bad of ["gate-fail", "held"] as const) {
       await setupPinned();
@@ -2249,6 +2379,29 @@ linuxOnly("R859: refreshRows", () => {
       expect(existsSync(join(root, d))).toBe(false);
     expect(await current()).toBe(join(root, ALPHA2_DIR));
   };
+
+  test("PR-117 (M-1): a refresh drops the old row's batchFacts when its receipt does not qualify, and writes this gate's when it does", async () => {
+    const OLD = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    const NEW = { ...OLD, "batch-lane-hint-only": "unmeasurable" };
+    const p = await world({ batchFacts: OLD });
+    const { deps } = mk(p, {
+      ancestor: () => false,
+      legs: { ...legsFor("pass"), DBM: "gate-fail" },
+    });
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["pass"]);
+    const [a] = JSON.parse(await readFile(p, "utf8"));
+    expect("batchFacts" in a).toBe(false);
+    const p2 = await world({ batchFacts: OLD });
+    const q = mk(p2, {
+      ancestor: () => false,
+      batchFacts: NEW,
+      dbmBatched: true,
+      legs: { ...legsFor("pass"), DBM: "pass" },
+    });
+    expect(await refreshRows(q.deps, ["edge-aaaaaaaaa"])).toEqual(["pass"]);
+    const [a2] = JSON.parse(await readFile(p2, "utf8"));
+    expect(a2.batchFacts).toEqual(NEW);
+  });
 
   test("R-996 (review): a refresh runs no upstream repros", async () => {
     const p = await world({ warnFacts: { "serve-keep-reasons": "differs" } });

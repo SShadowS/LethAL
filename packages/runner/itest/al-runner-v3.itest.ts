@@ -62,7 +62,11 @@ import {
 } from "../src/al-runner-v3-backend";
 import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
-import { runV3ContractProbe, v3DefectWarnings } from "../src/al-runner-v3-contract";
+import {
+  V3_CAPABILITY_FACTS,
+  runV3ContractProbe,
+  v3DefectWarnings,
+} from "../src/al-runner-v3-contract";
 import {
   AL_RUNNER_V3_DEFAULT_PATH,
   AlRunnerV3UngatedBuildError,
@@ -72,8 +76,9 @@ import {
 } from "../src/al-runner-v3-pin";
 import {
   type V3BuildPin,
-  V3_BASELINE_BATCHING_BUILDS,
+  baselineBatchingFor,
   findV3Pin,
+  sleepRuleRetiredFor,
   undoTPin,
   v3ReadingsDigest,
 } from "../src/al-runner-v3-pins";
@@ -573,6 +578,12 @@ function assertServeCounters(b: AlRunnerV3Backend, leg: string, killed: number):
 /** R612 M-2: leg C's warn-fact readings, for the receipt. */
 let legCWarnFacts: Record<string, string> | undefined;
 
+/** PR-117: leg C's eight capability readings, for DBM's seam rule and the receipt's `batchFacts`. */
+let legCBatchFacts: Record<string, string> | undefined;
+
+/** PR-117: set only when DBM passed with its batched pre-committed figure (2 requests). */
+let dbmBatched = false;
+
 /** Returns the warn lines (R612 `serve-keep-reasons`) of a passing leg, for the receipt. */
 async function legC(scratch: string): Promise<readonly string[]> {
   // R667 (r12): `message-has-no-type-prefix`'s Assert half needs Microsoft's Library Assert, which
@@ -601,10 +612,23 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
+  // PR-117: the capability readings, for DBM and the receipt (recorded only if DBM batches and passes).
+  legCBatchFacts = Object.fromEntries(
+    r.facts
+      .filter((f) => (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact))
+      .map((f) => [f.fact, f.verdict]),
+  );
   // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,
   // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches); a warn fact (V3_WARN_FACTS) only adds its line, except
   // `unkept` (R1000), which is gate-fail.
-  const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS, activePin?.legC);
+  const c = classifyLegC(
+    r.facts,
+    V3_DEFECT_FACTS,
+    V3_LEG_C_FACTS,
+    V3_WARN_FACTS,
+    activePin?.legC,
+    V3_CAPABILITY_FACTS,
+  );
   for (const l of c.lines) console.log(`  C: ${l}`);
   if (c.outcome === "gate-fail") throw new LegFailure(`C: ${c.lines.join("; ")}`);
   if (c.outcome === "infra-fail") throw new V3LegEnvironment(`C: ${c.lines.join("; ")}`);
@@ -865,6 +889,8 @@ const DBM_CALLED_PROCEDURES = new Set([
 
 async function legDBMRun(scratch: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
+  let dbmSeam = false;
+  let dbmSeamWhy = "";
   const run = async (name: "dbm-daemon" | "dbm-oneshot") => {
     // Own scratch per session: GATE_WARNINGS keys on its name, and the two sessions warn differently.
     const dir = join(scratch, name);
@@ -891,6 +917,42 @@ async function legDBMRun(scratch: string): Promise<void> {
       // PR-115: batches of 2 over the four test codeunits (the default 8 would make one request with nothing to
       // leave out). Ignored when batching is off for this build.
       b.seams.baselineBatchSize = 2;
+      // PR-117: DBM tests batching on every gate run, through the seam, whatever the build's record says.
+      // The seam is on exactly when this run's leg C, this backend's own fresh probe and the Sleep rule all allow it.
+      const st = await b.status();
+      must(st.ok, `DBM: the status check failed before the baseline: ${st.details}`);
+      const build = b.runningBuild();
+      const probe = b.contractResult();
+      const probeAll = V3_CAPABILITY_FACTS.every(
+        (n) => probe?.facts.find((f) => f.fact === n)?.verdict === "matches",
+      );
+      const sleepGone =
+        build !== undefined && sleepRuleRetiredFor(probe, build.version, build.binarySha256);
+      if (legCBatchFacts === undefined) {
+        dbmSeam = false;
+        dbmSeamWhy =
+          "leg C was not among the selected legs, so there is no leg C reading to rest on";
+      } else {
+        const legCAll = V3_CAPABILITY_FACTS.every((n) => legCBatchFacts?.[n] === "matches");
+        if (legCAll !== probeAll)
+          throw new V3LegEnvironment(
+            `DBM: leg C and the DBM backend's own probe disagree on the eight capability facts (leg C ${JSON.stringify(legCBatchFacts)}; probe ${JSON.stringify(
+              Object.fromEntries(
+                V3_CAPABILITY_FACTS.map((n) => [
+                  n,
+                  probe?.facts.find((f) => f.fact === n)?.verdict,
+                ]),
+              ),
+            )})`,
+          );
+        dbmSeam = legCAll && probeAll && sleepGone;
+        dbmSeamWhy = dbmSeam
+          ? "leg C and the probe read all eight capability facts matches and the Sleep rule is retired"
+          : !legCAll
+            ? "leg C did not read all eight capability facts matches"
+            : "the Sleep rule is not retired";
+      }
+      b.seams.baselineBatching = dbmSeam;
     }
     const r = await session(dir, b, {
       projectDir: fixture("sandbox-optin"),
@@ -963,29 +1025,15 @@ async function legDBMRun(scratch: string): Promise<void> {
   must(d.codeunits === 4, `DBM: ${d.codeunits} codeunits, pre-committed 4`);
   // PR-115 (M-A, M2): conditional on the build. A build in V3_BASELINE_BATCHING_BUILDS MUST batch: two batches of
   // 2, each leaving out the other two. Any other build (an update gate's candidate) sends one request per codeunit.
-  const batching = dm.b.isBaselineBatching();
-  const offWhy = dm.b.baselineBatchingOffWhy() ?? "allowed";
-  const build = dm.b.runningBuild();
-  const listed =
-    build !== undefined &&
-    V3_BASELINE_BATCHING_BUILDS.some(
-      (x) => x.version === build.version && x.binarySha256 === build.binarySha256,
-    );
+  // PR-117: batching is forced on through the seam when leg C, this backend's probe and the Sleep rule allow it.
+  // On: 2 requests. Otherwise: 4, and the reason is printed.
   console.log(
-    `  DBM: build ${build?.version ?? "?"}, listed for batching ${listed}, baseline batching ${batching ? "on" : `off (${offWhy})`}`,
+    `  DBM: build ${dm.b.runningBuild()?.version ?? "?"}, batching through the seam ${dbmSeam ? "on" : `off (${dbmSeamWhy})`}`,
   );
-  must(
-    !listed || batching,
-    `DBM: this build is in V3_BASELINE_BATCHING_BUILDS but baseline batching is off (${offWhy})`,
-  );
-  must(
-    listed || !batching,
-    "DBM: baseline batching is on for a build that is not in V3_BASELINE_BATCHING_BUILDS",
-  );
-  const wantRequests = listed ? 2 : 4;
+  const wantRequests = dbmSeam ? 2 : 4;
   must(
     d.requests === wantRequests,
-    `DBM: ${d.requests} requests for ${d.codeunits} codeunits, pre-committed ${wantRequests} (listed ${listed}; batching ${batching ? "on" : `off: ${offWhy}`})`,
+    `DBM: ${d.requests} requests for ${d.codeunits} codeunits, pre-committed ${wantRequests} (seam ${dbmSeam ? "on" : `off: ${dbmSeamWhy}`})`,
   );
   const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
   must(
@@ -996,6 +1044,44 @@ async function legDBMRun(scratch: string): Promise<void> {
   for (const n of j.notes) console.log(`  ${n}`);
   must(j.fail === undefined, j.fail ?? "");
   must(dm.b.baselineDaemon, "DBM: the backend does not report a daemon baseline");
+  // PR-117: the accessor. A fresh backend WITHOUT the seam must answer what the build's own record, its probe and
+  // the Sleep rule say (a candidate has no record: false).
+  const fdir = join(scratch, "dbm-accessor");
+  await mkdir(fdir, { recursive: true });
+  const fresh = new AlRunnerV3Backend(
+    backendCfg({
+      instrumentedDir: join(fdir, "backend"),
+      testDir: fixture("sandbox-optin-tests"),
+      packagesDir: deps,
+      bcVersion: SANDBOX_BC,
+      selectorObjectId: DBM_IDS.selectorId,
+      transport: "serve-entries" as const,
+      daemonBaseline: true,
+      memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT,
+    }),
+  );
+  const fst = await fresh.status();
+  must(fst.ok, `DBM: the accessor check's status failed: ${fst.details}`);
+  const fb = fresh.runningBuild();
+  must(fb !== undefined, "DBM: the accessor check's backend found no build");
+  const record = CANDIDATE ? undefined : await checkGated(BIN, fb?.version ?? "");
+  const expected = CANDIDATE
+    ? false
+    : baselineBatchingFor(
+        fresh.contractResult(),
+        fb?.version ?? "",
+        fb?.binarySha256 ?? "",
+        record,
+      );
+  console.log(
+    `  DBM: accessor without the seam ${fresh.isBaselineBatching()}, expected ${expected} (${fresh.baselineBatchingOffWhy() ?? "allowed"})`,
+  );
+  must(
+    fresh.isBaselineBatching() === expected,
+    `DBM: isBaselineBatching() is ${fresh.isBaselineBatching()} without the seam, the build's record, probe and Sleep rule say ${expected}`,
+  );
+  // Recorded by the receipt only when batching ran and every check above held.
+  dbmBatched = dbmSeam;
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -3003,6 +3089,8 @@ async function main(): Promise<void> {
       legs,
       lines,
       ...(legCWarnFacts !== undefined ? { warnFacts: legCWarnFacts } : {}),
+      ...(legCBatchFacts !== undefined ? { batchFacts: legCBatchFacts } : {}),
+      ...(dbmBatched ? { dbmBatched: true } : {}),
       ...(PIN !== undefined ? { pinApplied: PIN.id, pinDigest: v3ReadingsDigest(PIN) } : {}),
       oracleBcBuild: ORACLE_BC_BUILD,
       writtenAt: new Date().toISOString(),

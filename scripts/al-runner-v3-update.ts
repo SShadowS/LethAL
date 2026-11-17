@@ -76,6 +76,7 @@ import {
   gateOutcome,
 } from "../packages/runner/itest/al-runner-v3-gate";
 import { prepareFixtureSymbols } from "../packages/runner/itest/fixture-symbols";
+import { V3_CAPABILITY_FACTS } from "../packages/runner/src/al-runner-v3-contract";
 import {
   type GatedBuild,
   V3_PIN_FROM_ENV,
@@ -483,6 +484,48 @@ async function receiptWarnFacts(
   }
 }
 
+/**
+ * PR-117: the receipt's leg C capability readings, for the record, ONLY when this gate proved batching:
+ * `legs.DBM === "pass"` and `dbmBatched === true`. Otherwise none, so nothing is ever inherited.
+ */
+async function receiptBatchFacts(
+  path: string,
+): Promise<Readonly<Record<string, string>> | undefined> {
+  try {
+    const r = JSON.parse(await readFile(path, "utf8")) as {
+      batchFacts?: unknown;
+      dbmBatched?: unknown;
+      legs?: { DBM?: unknown } | null;
+    };
+    if (r.legs?.DBM !== "pass" || r.dbmBatched !== true) return undefined;
+    return warnFactReadings(r.batchFacts);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * PR-117: the update log's line for a pass: whether the record just written lets a session batch the
+ * baseline. `sleepGone`: the pin half of the Sleep rule (`legC["sleep-is-noop"]` is `gone`).
+ */
+export function batchingRecordLine(
+  batchFacts: Readonly<Record<string, string>> | undefined,
+  sleepGone: boolean,
+): string {
+  const why = ((): string | undefined => {
+    if (batchFacts === undefined) return "no batchFacts: DBM did not batch and pass";
+    for (const n of V3_CAPABILITY_FACTS) {
+      const was = batchFacts[n];
+      if (was === undefined) return `${n} not recorded`;
+      if (was !== "matches") return `the gate read ${n} ${was}`;
+    }
+    return sleepGone ? undefined : "the pin does not record sleep-is-noop gone";
+  })();
+  return why === undefined
+    ? "gate record allows baseline batching"
+    : `gate record does not allow baseline batching (${why})`;
+}
+
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
 /**
@@ -577,6 +620,7 @@ export interface GateOneOpts {
   /** R859: this gate's own warn facts and time, handed to `refreshRows` on a pass. */
   readonly onRefreshPass?: (r: {
     warnFacts?: Readonly<Record<string, string>>;
+    batchFacts?: Readonly<Record<string, string>>;
     gatedAt: string;
   }) => void;
 }
@@ -835,7 +879,12 @@ export async function gateOne(
         return infra(deps, name);
       }
       const w = await receiptWarnFacts(receipt);
-      opts.onRefreshPass?.({ ...(w !== undefined ? { warnFacts: w } : {}), gatedAt: deps.now() });
+      const bf = await receiptBatchFacts(receipt);
+      opts.onRefreshPass?.({
+        ...(w !== undefined ? { warnFacts: w } : {}),
+        ...(bf !== undefined ? { batchFacts: bf } : {}),
+        gatedAt: deps.now(),
+      });
       return "pass";
     }
     const dirName =
@@ -854,6 +903,8 @@ export async function gateOne(
     }
     // R612 M-2: this gate's warn-fact readings, so a session shows what the gate read.
     const warnFacts = await receiptWarnFacts(receipt);
+    // PR-117: only from a gate whose DBM batched and passed; never inherited, not even by a regate.
+    const batchFacts = await receiptBatchFacts(receipt);
     // R886: a sidecar that fails to build cannot change the outcome. R1016: a candidate's was built before the gate and ran
     // with it; that one is kept. A regate keeps `current`'s, or tries a build when it has none.
     const sidecar =
@@ -865,6 +916,7 @@ export async function gateOne(
     const next: GatedBuild = {
       ...sidecar,
       ...(warnFacts !== undefined ? { warnFacts } : {}),
+      ...(batchFacts !== undefined ? { batchFacts } : {}),
       version,
       binarySha256: sha,
       lethalCommit: commit,
@@ -889,6 +941,11 @@ export async function gateOne(
       gatedAt: deps.now(),
     };
     await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
+    // PR-117: on every pass, whether the record just written lets a session batch.
+    const pinForSleep = pinApplied !== undefined ? handV3Pin(pinApplied) : findV3Pin(version, sha);
+    await deps.log(
+      `${deps.now()} ${tag}: ${batchingRecordLine(batchFacts, pinForSleep?.legC["sleep-is-noop"]?.verdict === "gone")}`,
+    );
     if (dirName !== undefined) {
       // R814: the row goes to the ledger before `current` moves; `publishPending` commits it.
       const handPin = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
@@ -907,6 +964,7 @@ export async function gateOne(
           lethalCommit: commit,
           gatedAt: next.gatedAt ?? deps.now(),
           ...(warnFacts !== undefined ? { warnFacts } : {}),
+          ...(batchFacts !== undefined ? { batchFacts } : {}),
           ...(sidecar.dotnetSidecar !== undefined
             ? { dotnetSidecarSha256: sidecar.dotnetSidecar.sha256 }
             : {}),
@@ -1408,7 +1466,13 @@ export async function refreshRows(
       const receiptFile = join(dir, "refresh.json");
       // A pass receipt of an earlier run for this id and head must not outlive a run that fails.
       await rm(receiptFile, { force: true });
-      let thisGate: { warnFacts?: Readonly<Record<string, string>>; gatedAt: string } | undefined;
+      let thisGate:
+        | {
+            warnFacts?: Readonly<Record<string, string>>;
+            batchFacts?: Readonly<Record<string, string>>;
+            gatedAt: string;
+          }
+        | undefined;
       const o = await gateOne(
         deps,
         `refresh-${id}`,
@@ -1433,7 +1497,11 @@ export async function refreshRows(
       const pin = handV3Pin(row.readingsFrom);
       // TypeScript cannot see the callback's assignment, so it narrows `thisGate` to undefined.
       const g = thisGate as
-        | { warnFacts?: Readonly<Record<string, string>>; gatedAt: string }
+        | {
+            warnFacts?: Readonly<Record<string, string>>;
+            batchFacts?: Readonly<Record<string, string>>;
+            gatedAt: string;
+          }
         | undefined;
       if (pin === undefined || g === undefined) return refuse(`${id}: no pin or gate result`);
       const refusal = async (why: string): Promise<never> => {
@@ -1454,13 +1522,15 @@ export async function refreshRows(
       // This gate's result only: the digest, the commit, warnFacts and gatedAt; nothing else moves.
       const next = fresh.map((r) => {
         if (r.id !== id) return r;
-        const { warnFacts: _old, ...rest } = r;
+        // PR-117 (M-1): the old batchFacts go too; only this gate's own, under the same rule, come back.
+        const { warnFacts: _old, batchFacts: _oldBatch, ...rest } = r;
         return {
           ...rest,
           readingsDigest: v3ReadingsDigest(pin),
           lethalCommit: head,
           gatedAt: g.gatedAt,
           ...(g.warnFacts !== undefined ? { warnFacts: g.warnFacts } : {}),
+          ...(g.batchFacts !== undefined ? { batchFacts: g.batchFacts } : {}),
         };
       });
       parseGatedBuilds(next, new Set(V3_BUILD_PINS.map((p) => p.id)));
@@ -1468,7 +1538,7 @@ export async function refreshRows(
       await mkdir(dir, { recursive: true });
       await writeFile(
         receiptFile,
-        `${JSON.stringify({ id, binary, binarySha256: row.binarySha256, readingsFrom: row.readingsFrom, oldDigest: row.readingsDigest, newDigest: v3ReadingsDigest(pin), oldCommit: row.lethalCommit, lethalCommit: head, gatedAt: g.gatedAt, warnFacts: g.warnFacts ?? null, outcome: "pass" }, null, 2)}\n`,
+        `${JSON.stringify({ id, binary, binarySha256: row.binarySha256, readingsFrom: row.readingsFrom, oldDigest: row.readingsDigest, newDigest: v3ReadingsDigest(pin), oldCommit: row.lethalCommit, lethalCommit: head, gatedAt: g.gatedAt, warnFacts: g.warnFacts ?? null, batchFacts: g.batchFacts ?? null, outcome: "pass" }, null, 2)}\n`,
       );
       await writeFile(deps.manifestPath, `${JSON.stringify(next, null, 2)}\n`);
       await deps.log(

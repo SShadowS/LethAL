@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { type V3ContractResult, V3_CAPABILITY_FACTS, v3MuteKey } from "./al-runner-v3-contract";
 import RAW_GATED_BUILDS from "./al-runner-v3-gated-builds.json";
+import type { GatedBuild } from "./al-runner-v3-pin";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 
 const REPO = "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues";
@@ -777,23 +778,6 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
 ];
 
 /**
- * PR-115: the builds whose baseline may be batched (`baselineBatchingFor`). Deliberately NOT a pin and
- * not part of any readings: a pin is what a gated or adopted build copies (`findV3Pin`), so a flag on
- * one would spread to every later build that reads from it. Only an exact version AND sha256 listed
- * here batches. Edge 4ebfe7913's leg C read all eight capability facts `matches` (PR-114). When edge
- * moves, batching is off on the new build until a person adds it here.
- */
-export const V3_BASELINE_BATCHING_BUILDS: readonly {
-  readonly version: string;
-  readonly binarySha256: string;
-}[] = [
-  {
-    version: "al-runner 3.0.0-alpha.14+edge.20261115 (4ebfe7913)",
-    binarySha256: "36613897149173c87b2ef2b7b59a1250a8999a8e566800be0ef35d4a91a1f632",
-  },
-];
-
-/**
  * R814: one gated build. `readingsFrom` names a hand pin in `V3_BUILD_PINS`, never another entry, and
  * the strict parse refuses any other key: an entry cannot carry a reading, so it cannot move a verdict.
  * `readingsDigest` binds it to that pin's readings as they were gated: an edit of the hand pin fails
@@ -812,6 +796,8 @@ export interface GatedBuildEntry {
   readonly lethalCommit: string;
   readonly gatedAt: string;
   readonly warnFacts?: Readonly<Record<string, string>>;
+  /** PR-117: leg C's capability readings, only from a gate whose DBM batched and passed. */
+  readonly batchFacts?: Readonly<Record<string, string>>;
   /**
    * R886: the sha256 of the .NET sidecar dll built from this build's commit, or why it was not
    * built. A record only: nothing here moves a verdict, and the path is local, so it is not kept
@@ -834,6 +820,7 @@ const GATED_BUILD_KEYS = new Set([
   "lethalCommit",
   "gatedAt",
   "warnFacts",
+  "batchFacts",
 ]);
 
 /** A digest of what a pin judges and changes, so an edit of a root pin cannot pass unseen. */
@@ -864,6 +851,12 @@ function gatedBuildFault(e: Record<string, unknown>): string | undefined {
     (typeof wf !== "object" || wf === null || Object.values(wf).some((v) => typeof v !== "string"))
   )
     return "warnFacts must map names to strings";
+  const bf = e.batchFacts;
+  if (
+    bf !== undefined &&
+    (typeof bf !== "object" || bf === null || Object.values(bf).some((v) => typeof v !== "string"))
+  )
+    return "batchFacts must map names to strings";
   if (
     e.dotnetSidecarSha256 !== undefined &&
     (typeof e.dotnetSidecarSha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.dotnetSidecarSha256))
@@ -991,7 +984,9 @@ export function sleepRuleRetiredFor(
 
 /**
  * PR-114a: why baseline batching is OFF for this session, or `undefined` when it is allowed. Allowed
- * only when ALL hold: the build is in `V3_BASELINE_BATCHING_BUILDS` (exact version AND sha256); this
+ * only when ALL hold: the build's own gate record (`.gated` or the manifest row) carries `batchFacts`
+ * with every `V3_CAPABILITY_FACTS` fact `matches` (PR-117: written only by a gate whose DBM batched
+ * and passed; no list, no candidate rule); this
  * session's probe reads every `V3_CAPABILITY_FACTS` fact `matches`; and `sleepRuleRetiredFor` is true
  * (§6 of draft 3).
  */
@@ -999,13 +994,16 @@ export function baselineBatchingOffReason(
   contract: V3ContractResult | undefined,
   version: string,
   binarySha256: string,
+  gated: Pick<GatedBuild, "batchFacts" | "lethalCommit"> | undefined,
 ): string | undefined {
-  if (
-    !V3_BASELINE_BATCHING_BUILDS.some(
-      (b) => b.version === version && b.binarySha256 === binarySha256,
-    )
-  )
-    return "this build is not in V3_BASELINE_BATCHING_BUILDS";
+  const recorded = gated?.batchFacts;
+  if (recorded === undefined)
+    return `this build's gate record (lethalCommit ${gated?.lethalCommit ?? "none"}) has no batchFacts`;
+  for (const name of V3_CAPABILITY_FACTS) {
+    const was = recorded[name];
+    if (was === undefined) return `${name} not recorded`;
+    if (was !== "matches") return `the gate read ${name} ${was}`;
+  }
   for (const name of V3_CAPABILITY_FACTS) {
     const read = contract?.facts.find((f) => f.fact === name)?.verdict;
     if (read !== "matches") return `${name} read ${read ?? "unmeasured"}`;
@@ -1015,12 +1013,13 @@ export function baselineBatchingOffReason(
   return undefined;
 }
 
-/** PR-114a: may this session batch the baseline's test codeunits? False on every build until a pin says so. */
+/** PR-114a: may this session batch the baseline's test codeunits? False until the build's own gate record says so. */
 export const baselineBatchingFor = (
   contract: V3ContractResult | undefined,
   version: string,
   binarySha256: string,
-): boolean => baselineBatchingOffReason(contract, version, binarySha256) === undefined;
+  gated: Pick<GatedBuild, "batchFacts" | "lethalCommit"> | undefined,
+): boolean => baselineBatchingOffReason(contract, version, binarySha256, gated) === undefined;
 
 /** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
 export function serveRowFieldsFor(version: string, binarySha256: string): boolean {
