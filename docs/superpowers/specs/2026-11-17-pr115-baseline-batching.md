@@ -5,6 +5,19 @@ Coord PR-115 (lethal-code, 2026-11-17).
 - **What PR-114 landed:** the 8 capability facts in leg C, `baselineBatchingFor`, and leg DBM.
 - **Evidence:** `/coord/handoff/PR-114/` (carry, carry2, lane, mem).
 
+## Erratum (2026-11-17, found in PR-120, committed before any window measured the prediction)
+The window prediction below has the wrong base.
+- **What happened:** t13 and t14 were `--resume` windows whose baseline was REUSED (`resume-baseline-reused` in both stderr
+  files). So their 214.5 s and 200.1 s are the L5 re-check of a stored baseline, which sends one request per codeunit and is
+  never batched (`recheckReusedBaseline`).
+- **Replaced by:**
+  - **A resumed window:** the baseline phase does NOT change because of PR-115 (it re-checks; nothing is batched).
+  - **A fresh window** (a fresh store, a head with PR-115, and `current`'s `.gated` carrying PR-117's `batchFacts`): the baseline
+    phase falls from x1's 1,697.7 s by at least 300 s, with 0 verdict moves.
+    - x1 used a fresh dos4 store and head c996629b, before PR-115's code. Its phase held 110 serve requests (1,075.0 s) and 12
+      cross-check one-shots (574.5 s).
+    - The 300 s is about half the serve share, which is the PR run's measured ratio (112.5 s fell to 28.9 s).
+
 ## Delta review r1 (2026-11-17), folded in below
 The review found no false-kill path, and its fixes converge:
 - **H-A, the pin flag.** `edge-4ebfe7913` has no hand pin; it reads `edge-d72d3197d` (the root of 17 of 18 gated rows). The

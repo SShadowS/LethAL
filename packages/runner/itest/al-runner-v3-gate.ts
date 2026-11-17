@@ -671,11 +671,14 @@ export function classifyLegC(
     readonly fact: string;
     readonly verdict: string;
     readonly measured?: string;
+    readonly reference?: string;
   }>,
   defects: readonly string[],
   count: number,
   warns: readonly string[] = V3_WARN_FACTS,
   pin?: V3BuildPin["legC"],
+  /** PR-117: the capability facts (`V3_CAPABILITY_FACTS`); empty by default, so a caller that passes none judges them as before. */
+  capabilities: readonly string[] = [],
 ): { readonly outcome: "pass" | "held" | "gate-fail" | "infra-fail"; readonly lines: string[] } {
   const lines: string[] = [];
   let fail = facts.length !== count;
@@ -731,6 +734,24 @@ export function classifyLegC(
       // refusal through unseen (a retry, never a block).
       infra = true;
       lines.push(`infra-fail: ${f.fact}: unmeasurable${m}`);
+    } else if (
+      capabilities.includes(f.fact) &&
+      f.verdict === "diverged" &&
+      f.reference !== undefined
+    ) {
+      // PR-117 (M-2): only the batch half differs and the single request is right: batching stays off
+      // for this build, which costs speed, never the build. A wrong single request is a real defect.
+      if (f.reference === "pass") {
+        lines.push(`al-runner-v3-baseline-batching-off: ${f.fact}: diverged${m}`);
+      } else if (f.reference === "fail") {
+        fail = true;
+        lines.push(
+          `gate-fail: ${f.fact}: diverged and its alone reference fails (the single request is wrong)${m}`,
+        );
+      } else {
+        infra = true;
+        lines.push(`infra-fail: ${f.fact}: diverged and its alone reference ran nothing${m}`);
+      }
     } else if (want === "defect-present" && f.verdict === "gone") {
       held = true;
       lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)${m}`);
@@ -1050,6 +1071,11 @@ export interface V3GateReceipt {
   /** R612 M-2: leg C's reading of each warn fact (`V3_WARN_FACTS`); the update script copies it
    *  into `.gated` on a pass. */
   readonly warnFacts?: Readonly<Record<string, string>>;
+  /** PR-117: leg C's eight capability readings (`V3_CAPABILITY_FACTS`). The update script records
+   *  them into `.gated` only with `legs.DBM === "pass"` AND `dbmBatched === true`. */
+  readonly batchFacts?: Readonly<Record<string, string>>;
+  /** PR-117: DBM ran its baseline batched (2 requests) and passed every check. Absent otherwise. */
+  readonly dbmBatched?: true;
   /** F8: the BC build of each leg's oracle server, beside v3's `--bc-version`. */
   readonly oracleBcBuild: Readonly<Record<string, string>>;
   readonly writtenAt: string;

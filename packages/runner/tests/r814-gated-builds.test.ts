@@ -67,6 +67,20 @@ describe("R814: an entry cannot carry a reading", () => {
     expect(() => parseGatedBuilds([a, b], HAND)).toThrow("is no hand pin");
     expect(() => parseGatedBuilds([row({ readingsFrom: "nope" })], HAND)).toThrow("is no hand pin");
   });
+  test("PR-117: batchFacts is an allowed key and must map names to strings; warnFacts the same", () => {
+    expect(
+      parseGatedBuilds([row({ batchFacts: { "batch-no-cross-row": "matches" } })], HAND),
+    ).toHaveLength(1);
+    expect(() => parseGatedBuilds([row({ batchFacts: { a: 1 } })], HAND)).toThrow(
+      "batchFacts must map names to strings",
+    );
+    expect(() => parseGatedBuilds([row({ batchFacts: "matches" })], HAND)).toThrow(
+      "batchFacts must map names to strings",
+    );
+    expect(() => parseGatedBuilds([row({ batchFacts: null })], HAND)).toThrow(
+      "batchFacts must map names to strings",
+    );
+  });
   test("a duplicate id or a duplicate build refuses", () => {
     expect(() => parseGatedBuilds([row(), row({ binarySha256: sha("c") })], HAND)).toThrow(
       "duplicate",
@@ -195,6 +209,7 @@ describe("R814: checkGated", () => {
       ({
         ...row({ track, tag: "v3.0.0-alpha.99", version: v, binarySha256: sha("listed") }),
         warnFacts: { "serve-keep-reasons": "matches" },
+        batchFacts: { "batch-no-cross-row": "matches", "batch-lane-hint-only": "diverged" },
       }) as unknown as GatedBuildEntry;
     const g = await checkGated(p, v, {
       findBuild: (a, b) => (a === v && b === sha("listed") ? entry("release") : undefined),
@@ -206,6 +221,8 @@ describe("R814: checkGated", () => {
       source: "manifest",
       readingsFrom: ROOT_PIN,
       warnFacts: { "serve-keep-reasons": "matches" },
+      // PR-117: the manifest path carries the row's batchFacts into the record the backend reads.
+      batchFacts: { "batch-no-cross-row": "matches", "batch-lane-hint-only": "diverged" },
     });
     await expect(checkGated(p, v, { findBuild: () => entry("edge") })).rejects.toThrow(
       "not a gated build",
@@ -213,6 +230,27 @@ describe("R814: checkGated", () => {
     await expect(checkGated(p, v, { findBuild: () => undefined })).rejects.toThrow(
       "not a gated build",
     );
+  });
+
+  test("PR-117: the manifest path keeps only verdicts in batchFacts (a non-verdict value is dropped), and none at all when nothing is left", async () => {
+    const p = await binary("listed2");
+    const v = "al-runner 3.0.0-alpha.99 (fff000555)";
+    const entry = (batchFacts: Record<string, unknown>): GatedBuildEntry =>
+      ({
+        ...row({
+          track: "release",
+          tag: "v3.0.0-alpha.99",
+          version: v,
+          binarySha256: sha("listed2"),
+        }),
+        batchFacts,
+      }) as unknown as GatedBuildEntry;
+    const g = await checkGated(p, v, {
+      findBuild: () => entry({ "batch-no-cross-row": "matches", junk: "pass", n: 1 }),
+    });
+    expect(g.batchFacts).toEqual({ "batch-no-cross-row": "matches" });
+    const none = await checkGated(p, v, { findBuild: () => entry({ junk: "pass" }) });
+    expect("batchFacts" in none).toBe(false);
   });
 
   test("the seed row is findable by its exact build", () => {

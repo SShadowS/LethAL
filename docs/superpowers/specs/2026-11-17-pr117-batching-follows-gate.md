@@ -9,6 +9,20 @@ Spec-adversary r1 is folded in:
 - **M-3:** no candidate rule; DBM reads its own record.
 - **The lows.**
 
+## Build amendment (2026-11-17, from the build and its Opus review); overrides the text below
+- **A fact with no alone reference by design** (`batch-onrun-included-duplicates`, `batch-lane-hint-only`,
+  `batch-lane-strict-reruns`) carries NO `reference` field. A `diverged` on it gate-fails, as before PR-117.
+  - **Why:** `none` would infra-fail, and an infra-fail retries for ever on a real divergence.
+  - **The cost:** a batch-only change in those three blocks a build.
+  - **What `none` means now:** only that the reference ran and returned nothing.
+- **`reference: "pass"` (review M2)** requires the alone reader AND the writer's batch rows to pass. A failing writer may fail in a
+  single request too, so it gives no reference: gate-fail.
+- **Item 4's "recorded with that reading" does not happen.** Rule 2 records nothing when DBM did not batch, and a `diverged` fact
+  means DBM does not batch. The log line names the receipt's non-`matches` fact.
+- **The manifest path** keeps only verdict values, like `parseGated`.
+- **DBM's accessor check (review M1)** also compares the off reason, which names the record's `lethalCommit`. A backend unit test
+  shows that a record of 8 `matches` turns batching on.
+
 ## Today
 - **The switch:** `baselineBatchingOffReason` allows batching only for builds in `V3_BASELINE_BATCHING_BUILDS`, a hand list (edge-4ebfe7913).
 - **The gap:** when edge moves `current`, batching turns off until someone edits the list.

@@ -2822,6 +2822,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     memoryWatchClock?: (tick: () => void) => () => void;
     /** PR-119: false runs every daemon-fill cross-check sample in place. Absent: true, unless `LETHAL_V3_SEQUENTIAL_SAMPLES=1`. */
     concurrentSamples?: boolean;
+    /** PR-119: the baseline daemon's RSS for a sample's admission (the DBM gate leg fixes it). Absent: read per pid. */
+    sampleRss?: () => number;
     /** R948: runs the daemon baseline's codeunits last to first (the order proof's second order). */
     reverseBaselineOrder?: true;
   } = {};
@@ -3207,6 +3209,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // §12: only a gated build runs (the update gate's candidate excepted).
     let gateRecord: string;
     let gatedWarnFacts: Readonly<Record<string, string>> | undefined;
+    let gatedRecord: GatedBuild | undefined;
     let binarySha256: string;
     try {
       const gated = await checkGated(this.cfg.alRunnerPath, reported, {
@@ -3220,6 +3223,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
+      gatedRecord = gated;
       // R886: not a gate input; the contract probe below runs without it.
       const sidecar = await resolveDotnetSidecar(
         this.cfg.dotnetSidecar,
@@ -3319,7 +3323,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
     // PR-114a: decided once, printed in the details; PR-115's baseline fill reads it to batch.
-    this.baselineBatchingWhyOff = baselineBatchingOffReason(this.contract, reported, binarySha256);
+    this.baselineBatchingWhyOff = baselineBatchingOffReason(
+      this.contract,
+      reported,
+      binarySha256,
+      gatedRecord,
+    );
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
@@ -4615,6 +4624,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** One test alone (a per-test sample): its ref and `--test-exact` selection. Absent: the whole codeunit. */
     only?: { readonly ref: TestMethodRef; readonly test: string },
   ): Promise<BaselineAnswer | NoOneShotAnswer> {
+    // Must stay the first statement, with no await before it: PR-119's `beforeRequest` relies on the gate being queued.
     if (!(await this.memoryGate(true))) return { noAnswer: "memory-gate" };
     const covDir = join(this.cfg.instrumentedDir, "cov");
     let covPath = "";
@@ -4865,9 +4875,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     /** The most the baseline daemon's resident memory says one more one-shot needs, or undefined when it cannot be read. */
     const sampleSize = (): number | undefined => {
-      const rss = lane
-        .daemonPids()
-        .reduce((t, pid) => t + (this.seams.anonReader ?? readProcessRssAnonBytes)(pid), 0);
+      const rss =
+        this.seams.sampleRss?.() ??
+        lane
+          .daemonPids()
+          .reduce((t, pid) => t + (this.seams.anonReader ?? readProcessRssAnonBytes)(pid), 0);
       return rss > 0 ? Math.max(this.memoryEstimate(), rss) : undefined;
     };
     /** Side-effect-free admission of a sample beside the loop (§3): its size, or undefined for "run it in place". */
@@ -4963,6 +4975,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const before = await beforeRequest();
       if (before === "dropped") return { dropped: true };
       if (before === "stop") return { stop: true };
+      // The settle may have run a replacement one-shot, long enough to spend the budget (R955).
+      if (this.stopHandle?.spent() === true) return { stop: true };
       if (!(await this.memoryGate(true))) return { stop: true }; // R948: no new request over the bound
       let got: BaselineAnswer | undefined;
       let batchFailed = false;
@@ -5096,7 +5110,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           }
           const size = admit(pos);
           if (size !== undefined) {
+            const chainBefore = this.memoryChain;
             const p = this.crossCheckSample(lane, stopSeconds, coverage, sampleArgs(id, got));
+            // `beforeRequest` waits on `memoryChain` to see this sample's reservation: its gate must be queued now.
+            if (this.memoryChain === chainBefore)
+              throw new Error(
+                "al-runner-v3-sample-gate-not-queued: a concurrent cross-check sample did not queue its memory gate before its first await (PR-119)",
+              );
             inflight = {
               id,
               size,
@@ -5526,7 +5546,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly replacements: Readonly<Record<string, string>>;
     /** PR-119: samples started beside the loop. */
     readonly samplesOverlapped: number;
-    /** PR-119: samples run in place (admission said no, the seam was off, or it was the last or a backward pick). */
+    /** PR-119: every other sample: run in place (admission said no, the seam was off, the last, a backward pick), or started in flight with no request beside it. */
     readonly samplesSequential: number;
     /** PR-119: `memory.current` at the fill's start, or undefined (no guard, or unreadable). */
     readonly sampleMemoryAtStart: number | undefined;
