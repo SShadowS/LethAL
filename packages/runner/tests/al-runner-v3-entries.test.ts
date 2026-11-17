@@ -10335,6 +10335,37 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         (r.b as unknown as { pairStore: Map<string, { through?: string | undefined }> }).pairStore;
       const counts = (r: Rig) => r.b.entriesStats();
 
+      // The kill ledger (R197) can pick any failing covering test as the killer, so the batch cuts after
+      // the LAST failing one: here A and B both fail and the actual kill is B.
+      test("A and B both fail in the prefetch and the kill is B: the pair is cut after B and served", async () => {
+        const r = await rig({
+          suite: SUITE_ABC,
+          serve: {
+            rows: (m, cu, d, n) =>
+              rowsIn(ABC)(m, cu, d, n).map((x) =>
+                m !== "NONE" && (x.method === "A" || x.method === "B")
+                  ? { ...x, status: "fail" as const, message: "boom" }
+                  : x,
+              ),
+          },
+          oneShotRows: rowsIn(ABC),
+          pairBatch: true,
+        });
+        await baseline(r.b, SUITE_ABC);
+        await r.b.prefetchMutants(plans(["M0001"], SUITE_ABC));
+        await r.b.activate("M0001");
+        expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+        expect([...storeOf(r).values()].map((v) => v.through)).toEqual(["B"]);
+        const last = r.serve.requests.at(-1);
+        expect(last?.body.runSelectedOnly).toBe(true);
+        expect(cuEntries(last ?? { body: {} }).map(cutOf)).toEqual([lower(["C"]), lower(["C"])]);
+        const before = counts(r);
+        await r.b.sendKillPair("M0001", ref("B"));
+        const after = counts(r);
+        expect(after.pairBatchServed - before.pairBatchServed).toBe(1);
+        expect(after.pairBatchRefused).toBe(0);
+      });
+
       test("the batch's pair is cut through the killer and served to that killer", async () => {
         const r = await batched();
         expect([...storeOf(r).values()].map((v) => v.through)).toEqual(["B"]);

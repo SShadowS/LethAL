@@ -8105,7 +8105,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
         const row = mine[0];
         if (mine.length === 1 && row?.status === "fail" && row.notRun !== true) {
-          kills.push({ mutantId: p.mutantId, cu: this.callId(r), method: r.method });
+          // PR-102: the kill ledger can make ANY failing covering test of this codeunit the killer
+          // (R197), so the pair is cut after the LAST one in baseline order, never after `r` alone:
+          // every possible killer is then inside the prefix (`takeStoredPair` refuses one past it).
+          const id = this.callId(r);
+          const order = this.baselineOrder(id);
+          let through = r.method;
+          for (const q of p.refs) {
+            if (this.callId(q) !== id) continue;
+            const qm = q.method.toLowerCase();
+            const fails = call.rows.some(
+              (x) =>
+                x.codeunit === q.codeunitId &&
+                x.method.toLowerCase() === qm &&
+                x.status === "fail" &&
+                x.notRun !== true,
+            );
+            if (fails && order.indexOf(qm) > order.indexOf(through.toLowerCase()))
+              through = q.method;
+          }
+          kills.push({ mutantId: p.mutantId, cu: id, method: through });
           // R857: a pair holds only its one test, and the kill ledger can make any failing test
           // the killer, so under --isolate-tests each one gets a pair. R896: per codeunit.
           if (!this.perTest(r.codeunitId)) break;
