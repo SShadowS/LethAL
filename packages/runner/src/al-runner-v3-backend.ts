@@ -32,6 +32,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  writeFileSync,
 } from "node:fs";
 import {
   cp,
@@ -1472,6 +1473,8 @@ export type V3DaemonCloseReason =
  * (`method=status`, or `method=notRun:<reason>`).
  */
 export type V3KeptDrift = {
+  /** PR-99: the lane whose daemon drifted. */
+  readonly lane?: number;
   readonly refusal: string;
   readonly test: string;
   readonly baselineRow: string;
@@ -1483,6 +1486,8 @@ export type { V3RequestSized };
 
 /** R939, R1009: what the close sink gets (`ExecutionBackend.setDaemonCloseSink`). */
 export type V3DaemonClose = {
+  /** PR-99: the lane whose daemon closed. */
+  readonly lane?: number;
   readonly reason: string;
   readonly family?: string;
   readonly text?: string;
@@ -1672,6 +1677,83 @@ export interface V3EntriesStats {
   pairBatchStored: number;
   pairBatchServed: number;
   pairBatchRefused: number;
+  /**
+   * PR-99 (the floors of the split prefetch, counted per lane and summed): units whose covered mutants a lane
+   * prefetched; lazy proofs (a restarted daemon's warm-up, `proveOnDaemon`); requests checked because the
+   * previous request on their daemon left a kept refusal (`requestOne`-armed); warm-ups that HELD a kept
+   * refusal in their own rows; warm-ups that FOLLOWED a request that left one set; daemons closed by a refusal.
+   */
+  unitsPrefetched: number;
+  lazyProofs: number;
+  armedRequests: number;
+  warmupsHeldKept: number;
+  warmupsAfterKept: number;
+  refusalCloses: number;
+}
+
+/**
+ * PR-99 (§10.2): what an N = 1 run measures per procedure-scope unit, so `scripts/simulate-lanes.ts` can run
+ * the manifest-order greedy of `runScopeQueue` later: the unit's scoring wall (its mutants' time, the
+ * window prefetch excluded) and its entries (the codeunit entries its mutants' groups send).
+ */
+export interface UnitTiming {
+  readonly window: number;
+  readonly scope: string;
+  readonly mutants: number;
+  readonly entries: number;
+  readonly scoringMs: number;
+}
+
+/** PR-99 (§10.2): a window's prefetch wall and the entries it sent, the unit's share is entries x wall / entries. */
+export interface WindowTiming {
+  readonly window: number;
+  readonly mutants: number;
+  readonly entries: number;
+  readonly prefetchMs: number;
+}
+
+/** PR-99: a zeroed counter set, one per lane. */
+function newLaneStats(): Omit<V3EntriesStats, V3PhaseTimer> {
+  return {
+    daemons: 0,
+    timeoutCuts: 0,
+    cachedFalse: 0,
+    warmups: 0,
+    prefetchRequests: 0,
+    liveRequests: 0,
+    coverageRequests: 0,
+    echoRequests: 0,
+    echoMismatches: 0,
+    secondEchoMismatches: 0,
+    prefetchDropped: 0,
+    l4MutantEntries: 0,
+    l4WholeTests: 0,
+    l4Entries: 0,
+    l4Excluded: 0,
+    l4Widened: 0,
+    l4OrderBroken: 0,
+    keptDrifts: 0,
+    selectedOnlyRequests: 0, // PR-94, per lane under PR-99
+    selectedOnlyTestsSkipped: 0,
+    selectedOnlyRefusedGapped: 0,
+    entriesSent: 0,
+    boundChecks: 0,
+    pairRequests: 0,
+    pairFallbacks1: 0,
+    pairFallbacks2: 0,
+    pairFallbacks1Passed: 0,
+    pairFallbacks2Passed: 0,
+    pairBatchRequests: 0,
+    pairBatchStored: 0,
+    pairBatchServed: 0,
+    pairBatchRefused: 0,
+    unitsPrefetched: 0,
+    lazyProofs: 0,
+    armedRequests: 0,
+    warmupsHeldKept: 0,
+    warmupsAfterKept: 0,
+    refusalCloses: 0,
+  };
 }
 
 /** R651: the phase timers of `V3EntriesStats`. */
@@ -2018,6 +2100,52 @@ interface KillPair {
 }
 
 /**
+ * PR-99 (the split prefetch, spec §2.2): what a lane's unit prefetch writes and its mutants read. It
+ * is the LANE's: lane B's prefetch leaves lane A's record unchanged. (The lane's pending kill pair is
+ * `Lane.pair`; its counters are `Lane.stats`.) `prefetchBatch` is not here: it is the batch's.
+ */
+class PrefetchState {
+  /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
+  prefetched = new Map<string, Map<number, CallRows>>();
+  /**
+   * PR-41: per mutant, the tests (lower-case `Codeunit<id>.<method>`) its calls were cut at a timeout
+   * on, since the last prefetch (this lane's) or layout (both clear it). `runOn` reads it.
+   */
+  timedOutMutants = new Map<string, Set<string>>();
+  /**
+   * R778: the kill pairs `batchKillPairs` sent after the prefetch, per `<artifactId>|<mutantId>`.
+   * Single-use (deleted at the first lookup, match or not) and cleared by a deploy, this lane's prefetch,
+   * the baseline bracket and `status()`.
+   */
+  pairStore = new Map<
+    string,
+    {
+      readonly cu: number;
+      readonly seq: number;
+      readonly none: CallRows;
+      readonly m: CallRows;
+      /** PR-102: the killer the pair was cut after (its request may have been flagged); absent: uncut. */
+      readonly through?: string;
+    }
+  >();
+  /** R912: the time left of `--time-budget`, set only while this lane's `prefetchMutants` runs. */
+  remainingMs: (() => number) | undefined;
+
+  /** The start of a unit's prefetch: this lane's record only. */
+  resetForPrefetch(): void {
+    this.pairStore.clear();
+    this.prefetched = new Map();
+    this.timedOutMutants = new Map();
+  }
+
+  /** A new layout (a deploy). */
+  reset(): void {
+    this.resetForPrefetch();
+    this.remainingMs = undefined;
+  }
+}
+
+/**
  * R766 step (a): the state that belongs to ONE serve daemon and the tree it reads. The backend holds
  * exactly one Lane today; a later step holds N, each with its own daemon and its own `active` dir.
  * What is session-wide (the proof, the latches, the prefetch map, the baseline rows, ...) stays on the
@@ -2068,6 +2196,14 @@ class Lane {
 
   /** R766 (b): the last mutant (not NONE) this lane activated; names the mutant behind a latch. */
   lastMutant: string | undefined;
+  /** PR-99 (§2.2): this lane's prefetch record. */
+  readonly prefetch = new PrefetchState();
+  /**
+   * PR-99 (§2.2): this lane's own counters. Every counter a lane increments is the lane's; the session
+   * totals are summed over the lanes (`entriesStats`), and PR-56's restore and `batchKillPairs` read the
+   * lane's own, so another lane's request cannot be counted or uncounted by this one.
+   */
+  readonly stats = newLaneStats();
   private cwd: string;
 
   constructor(
@@ -2206,6 +2342,7 @@ class Lane {
     this.deployedDir = undefined;
     this.lastActivated = null;
     this.lastMutant = undefined;
+    this.prefetch.reset(); // PR-99 (§10.5)
   }
 
   /** R651: `f`'s wall time into `timers[k]`, thrown or not. TIMING ONLY: no verdict reads it. */
@@ -2312,6 +2449,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * highest: never an average, never falling.
    */
   private noteEntryCost(
+    lane: number,
     startRss: number | undefined,
     floorRss: number | undefined,
     peakRss: number | undefined,
@@ -2349,6 +2487,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     this.requestSizedSink?.({
+      lane,
       calls,
       floor: floorRss,
       start: startRss,
@@ -2358,9 +2497,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       peakSource: reading.source,
     });
   }
-
-  /** R912: the time left of `--time-budget`, set only while `prefetchMutants` runs. */
-  private prefetchRemainingMs: (() => number) | undefined;
 
   /** R857, R890, R896: whether `cu`'s tests each run alone (own call id, `onlyTest`). */
   private perTest(cu: number): boolean {
@@ -2538,13 +2674,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private baselineRows = new Map<number, readonly V3Row[]>();
   /** R1001: the baseline's uniform-refusal watch, new per deploy. */
   private uniformWatch = new UniformRefusalWatch();
-  /** §4: per mutant, the rows a fully valid prefetch answer gave; consumed by `activate`. */
-  private prefetched = new Map<string, Map<number, CallRows>>();
-  /**
-   * PR-41: per mutant, the tests (lower-case `Codeunit<id>.<method>`) its calls were cut at a timeout
-   * on, since the last prefetch window or layout (both clear it). `runOn` reads it.
-   */
-  private timedOutMutants = new Map<string, Set<string>>();
+  /** PR-99: the prefetched rows, the cut state and the stored kill pairs are the LANE's (`Lane.prefetch`). */
   /**
    * PR-20 (L4): per mutant, per codeunit entry (a positive call id), the covering methods (lower-case)
    * of its plan, from `prefetchMutants`; `mutantExcludes` cuts the entry after the last of them.
@@ -2552,22 +2682,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private coveringOf = new Map<string, Map<number, Set<string>>>();
   /** PR-20 review 1: the (mutant, codeunit) entries `mutantExcludes` has counted in the stats. */
   private l4Counted = new Set<string>();
-  /**
-   * R778: the kill pairs `batchKillPairs` sent after the prefetch, per `<artifactId>|<mutantId>`.
-   * Single-use (deleted at the first lookup, match or not) and cleared by a deploy, a prefetch, the
-   * baseline bracket and `status()`. `seq` is the pair request's backend-wide sequence number.
-   */
-  private pairStore = new Map<
-    string,
-    {
-      readonly cu: number;
-      readonly seq: number;
-      readonly none: CallRows;
-      readonly m: CallRows;
-      /** PR-102: the killer the pair was cut after (its request may have been flagged); absent: uncut. */
-      readonly through?: string;
-    }
-  >();
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
   /** R778 (A2): the backend-wide count of `request()` calls (every lane); see `CallRows.prefetchSeq`. */
@@ -2718,10 +2832,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // closes cost no warm-up of their own, and a redeploy is noted on every lane (`noteDeploy`).
     if (!V3_ROUTINE_CLOSES.has(reason)) for (const k of keys) lane.lastClose.set(k, reason);
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
-    if (family !== undefined)
+    if (family !== undefined) {
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
+      lane.stats.refusalCloses += 1; // PR-99 (§6): a floor, per lane
+    }
     if (V3_ROUTINE_CLOSES.has(reason)) return;
     this.closeSink?.({
+      lane: lane.index,
       reason,
       ...(family !== undefined ? { family } : {}),
       ...(detail?.text !== undefined ? { text: detail.text } : {}),
@@ -2729,42 +2846,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       phase,
     });
   }
-  /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
-  private readonly stats: Omit<V3EntriesStats, V3PhaseTimer> = {
-    daemons: 0,
-    timeoutCuts: 0,
-    cachedFalse: 0,
-    warmups: 0,
-    prefetchRequests: 0,
-    liveRequests: 0,
-    coverageRequests: 0,
-    echoRequests: 0,
-    echoMismatches: 0,
-    secondEchoMismatches: 0,
-    prefetchDropped: 0,
-    l4MutantEntries: 0,
-    l4WholeTests: 0,
-    l4Entries: 0,
-    l4Excluded: 0,
-    l4Widened: 0,
-    l4OrderBroken: 0,
-    keptDrifts: 0,
-    selectedOnlyRequests: 0,
-    selectedOnlyTestsSkipped: 0,
-    selectedOnlyRefusedGapped: 0,
-    entriesSent: 0,
-    boundChecks: 0,
-    pairRequests: 0,
-    pairFallbacks1: 0,
-    pairFallbacks2: 0,
-    pairFallbacks1Passed: 0,
-    pairFallbacks2Passed: 0,
-    pairBatchRequests: 0,
-    pairBatchStored: 0,
-    pairBatchServed: 0,
-    pairBatchRefused: 0,
-  };
-
+  /** PR-99: the counters and the phase timers are per lane (`Lane.stats`, `Lane.timers`), summed in `entriesStats()`. */
   private proof: BatchProof | undefined;
   /** R790 (A1): the baseline calls deploy() ran while alc proved the batch, bound to `dir`'s proof. */
   private speculative:
@@ -2997,7 +3079,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     this.dropPair();
-    this.pairStore.clear();
+    this.clearPairStores();
     const res = await this.spawn([this.cfg.alRunnerPath, "--version"], this.cacheEnv()).catch(
       (e) => ({
         exitCode: -1,
@@ -3444,18 +3526,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.suitePerCodeunit = m;
   }
 
+  /** PR-99: every lane's stored kill pairs (an owner call between phases). */
+  private clearPairStores(): void {
+    for (const l of this.laneList) l.prefetch.pairStore.clear();
+  }
+
   /** PR-51 (Addendum 1): a copy of the tests `mutantId`'s calls were cut at (`timedOutMutants`). */
   cutState(mutantId: string): unknown {
-    return new Set(this.timedOutMutants.get(mutantId) ?? []);
+    return this.cutStateOn(this.soleLane("cutState"), mutantId);
+  }
+
+  private cutStateOn(lane: Lane, mutantId: string): unknown {
+    return new Set(lane.prefetch.timedOutMutants.get(mutantId) ?? []);
   }
 
   restoreCutState(mutantId: string, state: unknown): void {
+    this.restoreCutStateOn(this.soleLane("restoreCutState"), mutantId, state);
+  }
+
+  private restoreCutStateOn(lane: Lane, mutantId: string, state: unknown): void {
     if (!(state instanceof Set)) {
       throw new Error(
         `al-runner-v3: restoreCutState for ${mutantId} was given ${typeof state}, not the Set cutState returned`,
       );
     }
-    this.timedOutMutants.set(mutantId, new Set(state as Set<string>));
+    lane.prefetch.timedOutMutants.set(mutantId, new Set(state as Set<string>));
   }
 
   /** F5: the covering refs of `mutantId` and the budget each will be sent. */
@@ -3530,7 +3625,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
   baselinePhase(on: boolean): void | Promise<void> {
     this.dropPair();
-    this.pairStore.clear();
+    this.clearPairStores();
     this.inBaseline = on;
     // R948: the baseline's own daemon is closed before the mutant phase starts its own (its stop
     // differs, and it holds 2-3 GB).
@@ -3549,12 +3644,50 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R635: the transport's counters (serve-entries). */
   entriesStats(): Readonly<V3EntriesStats> {
-    // R766: the counters are the backend's; the phase timers are the lanes', summed.
+    // PR-99: the counters and the phase timers are the lanes', summed over EVERY lane.
     const timers = { ...this.lane.timers };
+    const counts = { ...this.lane.stats };
     for (const l of this.laneList.slice(1)) {
       for (const k of Object.keys(timers) as V3PhaseTimer[]) timers[k] += l.timers[k];
+      for (const k of Object.keys(counts) as (keyof typeof counts)[]) counts[k] += l.stats[k];
     }
-    return { ...this.stats, ...timers };
+    return { ...counts, ...timers };
+  }
+
+  /** PR-99 (§10.2): per-unit scoring times and per-window prefetch walls of an N = 1 run, for the scheduling bound. */
+  private readonly unitTimes: { units: UnitTiming[]; windows: WindowTiming[] } = {
+    units: [],
+    windows: [],
+  };
+
+  /** PR-99 (§10.2): the orchestrator hands over what it measured; see `UnitTiming`. */
+  noteUnitTimings(t: {
+    readonly units: readonly UnitTiming[];
+    readonly windows: readonly WindowTiming[];
+  }): void {
+    this.unitTimes.units.push(...t.units);
+    this.unitTimes.windows.push(...t.windows);
+  }
+
+  unitTimings(): {
+    readonly units: readonly UnitTiming[];
+    readonly windows: readonly WindowTiming[];
+  } {
+    return this.unitTimes;
+  }
+
+  /** PR-99 (§6): the floors' counters, session totals then per lane. */
+  private splitStatsText(): string {
+    const one = (s: Omit<V3EntriesStats, V3PhaseTimer>) =>
+      `units prefetched ${s.unitsPrefetched}, lazy proofs ${s.lazyProofs}, requestOne-armed requests ${s.armedRequests}, warm-ups holding a kept refusal ${s.warmupsHeldKept}, warm-ups following one ${s.warmupsAfterKept}, refusal closes ${s.refusalCloses}`;
+    const t = this.entriesStats();
+    return `split prefetch (PR-99): ${one(t)}; per lane: ${this.laneList.map((l) => `[lane ${l.index}: ${one(l.stats)}]`).join(" ")}`;
+  }
+
+  /** PR-99: one lane's own counters (a copy), for the per-lane stats line and the floors. */
+  laneStats(index: number): Readonly<Omit<V3EntriesStats, V3PhaseTimer>> | undefined {
+    const l = this.laneList[index];
+    return l === undefined ? undefined : { ...l.stats };
   }
 
   /** R635 §4: one-shot keeps `lastActivated === null`; serve-entries reads the bracket only. */
@@ -3600,15 +3733,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.proof = undefined;
     this.batchBlind = undefined;
     this.latchBy = undefined;
-    this.prefetched = new Map();
-    this.timedOutMutants = new Map();
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
     this.l4Counted = new Set();
-    this.pairStore.clear();
     this.baselineRows = new Map();
     this.uniformWatch = new UniformRefusalWatch();
     this.union = new Set();
     this.unionWarmed = new WeakMap(); // PR-24: a new deploy's first daemon warms its whole union again
+    this.lazyLanes = new WeakSet(); // PR-99 (§10.5): re-applied by `launchLane` at every launch
     this.echoId = undefined;
     this.speculative = undefined; // R790: never served across deploys
     this.isolatedBaseline = new Map(); // R866: nor these
@@ -5182,8 +5313,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
-      cutState: (id) => b.cutState(id),
-      restoreCutState: (id, state) => b.restoreCutState(id, state),
+      cutState: (id) => b.cutStateOn(lane, id),
+      restoreCutState: (id, state) => b.restoreCutStateOn(lane, id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering) => b.survivorNoteShared(covering),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
@@ -5202,7 +5333,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       baselineState: no("baselineState"),
       recheckReusedBaseline: no("recheckReusedBaseline"),
       chooseIsolation: no("chooseIsolation"),
-      prefetchMutants: no("prefetchMutants"),
+      // PR-99 (§2.1): a lane prefetches its own unit's covered mutants on its own daemon.
+      prefetchMutants: (plans, opts) => b.prefetchMutantsOn(lane, plans, opts),
       status: no("status"),
       close: no("close"),
     };
@@ -5242,8 +5374,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** R785: false when the shared prefetch already holds this mutant's answer (about 0 ms of live work). */
-  needsLiveCall(mutantId: string): boolean {
-    return !this.prefetched.has(mutantId);
+  needsLiveCall(mutantId: string, laneIndex = 0): boolean {
+    // PR-99: the held answer is the LANE's own (default lane 0, the only prefetching lane at N = 1).
+    return !(this.laneList[laneIndex] ?? this.lane).prefetch.prefetched.has(mutantId);
   }
 
   /** R785: the one-line notice of how many lanes started. */
@@ -5294,6 +5427,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.laneList.forEach((l, i) => {
       if (l.holdsDaemon()) charged.add(i);
     });
+    for (const k of this.reservedLanes) charged.add(k); // PR-99 (§2.5): launched, first request not measured
     return charged.size;
   }
 
@@ -5641,9 +5775,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           `al-runner-v3: activate(${mutantId}) inside the baseline phase; the baseline runs no mutant (R635 §4)`,
         );
       }
-      const pre = mutantId === null ? undefined : this.prefetched.get(mutantId);
+      const pre = mutantId === null ? undefined : lane.prefetch.prefetched.get(mutantId);
       if (mutantId !== null && pre !== undefined) {
-        this.prefetched.delete(mutantId);
+        lane.prefetch.prefetched.delete(mutantId);
         lane.rowsByCodeunit = pre;
       }
       if (mutantId !== null) lane.lastMutant = mutantId;
@@ -5654,9 +5788,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         lane.pair = { ...pair, next: "mutant" };
       } else if (pair?.next === "mutant" && mutantId === pair.mutantId) {
         // The reproduction, asked for only after the confirm passed (R577).
-        this.stats.pairRequests += 1;
-        if (pair.fallback === 1) this.stats.pairFallbacks1Passed += 1;
-        if (pair.fallback === 2) this.stats.pairFallbacks2Passed += 1;
+        lane.stats.pairRequests += 1;
+        if (pair.fallback === 1) lane.stats.pairFallbacks1Passed += 1;
+        if (pair.fallback === 2) lane.stats.pairFallbacks2Passed += 1;
         if (pair.m !== undefined) lane.rowsByCodeunit.set(this.callId(pair.ref), pair.m);
       }
       lane.lastActivated = mutantId;
@@ -5687,7 +5821,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private async checkBound(lane: Lane): Promise<void> {
     if (this.inBaseline) return this.assertBound(lane);
-    this.stats.boundChecks += 1;
+    lane.stats.boundChecks += 1;
     await lane.timed("boundMs", () => this.assertBound(lane));
   }
 
@@ -5834,7 +5968,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const self = `codeunit${ref.codeunitId}.${ref.method}`.toLowerCase();
       const cutElsewhere =
         lane.lastActivated !== null &&
-        [...(this.timedOutMutants.get(lane.lastActivated) ?? [])].some(
+        [...(lane.prefetch.timedOutMutants.get(lane.lastActivated) ?? [])].some(
           (t) => t.startsWith(`codeunit${ref.codeunitId}.`) && t !== self,
         );
       const toAlone = live && (forced || cutElsewhere);
@@ -5905,7 +6039,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         s.add(ref.method.toLowerCase());
         byCu.set(ref.codeunitId, s);
         this.coveringOf.set(m4, byCu);
-        this.stats.l4Widened += 1;
+        lane.stats.l4Widened += 1;
       }
       const made = await this.liveCall(lane, ref);
       if ("verdict" in made) return made.verdict;
@@ -6481,9 +6615,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<string | undefined> {
     const had = lane.oneShotEcho;
     if (had !== undefined && had.mutant === m) return had.why;
-    this.stats.echoRequests += 1;
+    lane.stats.echoRequests += 1;
     const why = await this.runOneShotEcho(lane, m, stopSeconds);
-    if (why !== undefined) this.stats.echoMismatches += 1;
+    if (why !== undefined) lane.stats.echoMismatches += 1;
     lane.oneShotEcho = { mutant: m, why };
     return why;
   }
@@ -6755,7 +6889,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const warmed = this.unionWarmed.get(lane) ?? new Set<string>();
       this.unionWarmed.set(lane, warmed);
       const before = lane.timers.warmupMs;
-      if (warmed.has(modeKey(mode))) {
+      // PR-99 (§2.3): a lane launched by the split queue counts as union-warmed for every mode.
+      if (warmed.has(modeKey(mode)) || this.lazyLanes.has(lane)) {
         d = await lane.timed("warmupMs", () => this.spawnRestarted(lane, mode));
       } else {
         d = await lane.timed("warmupMs", () => this.startDaemon(lane, mode));
@@ -6821,7 +6956,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const before = lane.timers.warmupMs;
       try {
         await lane.timed("warmupMs", async () => {
-          this.stats.warmups += 1;
+          lane.stats.warmups += 1;
+          lane.stats.lazyProofs += 1; // PR-99: a floor of the split prefetch's proof
           const { sent, rows } = await this.send(
             lane,
             [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
@@ -6915,7 +7051,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ]
         : []),
     ]);
-    this.stats.daemons += 1;
+    lane.stats.daemons += 1;
     const daemon: Daemon = {
       server,
       dirty: false,
@@ -6955,7 +7091,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // Inside the try (review r1): a daemon that cannot start is not this probe's to judge.
         await this.spawnDaemon(lane, mode, s);
         // Counted as a warm-up, so R652's `boundChecks = warmups + ...` still holds.
-        this.stats.warmups += 1;
+        lane.stats.warmups += 1;
         await this.send(
           lane,
           [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] }],
@@ -7015,7 +7151,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const leftOut = (cu: number) => this.leftOutNames(cu);
     const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
     try {
-      this.stats.warmups += 1;
+      lane.stats.warmups += 1;
       const { sent, rows } = await this.send(
         lane,
         [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: warm }],
@@ -7029,9 +7165,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // named row does (R786). An explicit transport keeps failing by name. Only at the
         // session's FIRST warm-up (review a): a later daemon (another mode, a restart) would
         // re-run the session and throw away verdicts already scored, so it fails as before.
+        // PR-99 (§10.6): session-scoped, so the warm-ups of EVERY lane are summed (one lane's count would
+        // not do). Build review #4: the sum, not `firstWarmupDone`, so N = 1 is exact (a first warm-up
+        // dropped as a request error leaves the flag unset but the count at 1). Lanes >= 1 start only after
+        // the first warm-up passed, so at N > 1 the sum is 1 only at lane 0's first warm-up.
         if (
           this.cfg.transportSource === "default" &&
-          this.stats.warmups === 1 &&
+          this.entriesStats().warmups === 1 &&
           err instanceof AlRunnerV3EntriesRefusedError &&
           err.code === "al-runner-v3-entries-batch-refused"
         ) {
@@ -7044,6 +7184,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         throw err;
       });
       this.judgeWarmup(sent, rows);
+      this.passBarrier();
     } catch (err) {
       // A failed request already closed (and counted) its daemon; this finds none then.
       await this.closeLaneIn(
@@ -7057,6 +7198,101 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw err;
     }
     return daemon;
+  }
+
+  /**
+   * PR-99 (§2.3, §10.6): set once, session-scoped (a deploy keeps it), when the session's FIRST whole-union
+   * warm-up passed `judgeWarmup`. It is the barrier of the split prefetch (no lane above 0 takes a unit
+   * before it) and the guard of R960's one-shot fallback (which fires only before it).
+   */
+  private firstWarmupDone = false;
+  /** PR-99: what wants to hear that the lane gate may have changed (the barrier, a measured request). */
+  private readonly gateWatchers = new Set<() => void>();
+
+  /** PR-99: true once the barrier has passed. */
+  barrierPassed(): boolean {
+    return this.firstWarmupDone;
+  }
+
+  /** PR-99 (§2.3): the barrier opens: tell the watchers, once. */
+  private passBarrier(): void {
+    if (this.firstWarmupDone) return;
+    this.firstWarmupDone = true;
+    this.gateChanged();
+  }
+
+  /**
+   * PR-99: `cb` runs when the barrier passes, a request is first measured, or a lane's reservation ends;
+   * the queue uses it as its ONE launcher of lanes above 0. Returns the way to stop watching.
+   */
+  watchLaneGate(cb: () => void): () => void {
+    this.gateWatchers.add(cb);
+    return () => void this.gateWatchers.delete(cb);
+  }
+
+  private gateChanged(): void {
+    for (const cb of [...this.gateWatchers]) cb();
+  }
+
+  /** PR-99: true once any serve request of the session gave a peak reading (the lane gate's input). */
+  laneGateMeasured(): boolean {
+    return this.peakReading !== undefined;
+  }
+
+  /**
+   * PR-99 (§2.5): lanes launched whose first request is not measured yet. Each holds its bytes in the lane
+   * gate (`lanesCharged`) until `releaseLane`.
+   */
+  private readonly reservedLanes = new Set<number>();
+
+  /**
+   * PR-99 (§2.3, §2.5, §10.5): lane `k` (above 0) is launched by the split queue. It counts as union-warmed for
+   * every mode, so its first daemon goes through `spawnRestarted` and `proveOnDaemon` proves each codeunit
+   * before first use, never a whole-union warm-up; and it reserves its bytes until its first request is
+   * measured. Called at every launch, after every deploy (`resetLayoutState` clears the mark).
+   */
+  launchLane(k: number): void {
+    const lane = this.laneList[k];
+    if (lane === undefined || k === 0) return;
+    this.lazyLanes.add(lane);
+    this.reservedLanes.add(k);
+  }
+
+  /** PR-99: lanes marked by `launchLane`, for the current layout. */
+  private lazyLanes = new WeakSet<Lane>();
+
+  /** PR-99: ends lane `k`'s reservation (its first request was measured, or the lane ended without one). */
+  releaseLane(k: number): void {
+    if (this.reservedLanes.delete(k)) this.gateChanged();
+  }
+
+  /** PR-99: the lanes holding a reservation, in lane order (tests, the lane notice). */
+  reservedLaneList(): number[] {
+    return [...this.reservedLanes].sort((a, b) => a - b);
+  }
+
+  /**
+   * PR-99 (§2.3): lane 0's first unit starts its daemon and warms the whole union FIRST, whatever its serve
+   * groups are (a first unit of one-shot codeunits only has none), so the barrier does not slip. Nothing
+   * to warm (an empty union) opens the barrier at once. A daemon the lane already holds opens it too.
+   */
+  private async warmSessionFirst(
+    lane: Lane,
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): Promise<void> {
+    if (this.firstWarmupDone || this.stopHandle?.spent() === true) return;
+    const ids = new Set<number>();
+    for (const p of plans) for (const r of this.serveRefs(p.refs)) ids.add(this.callId(r));
+    for (const id of ids) this.union.add(id); // as `prefetchWindow` does, before its first request
+    const first = [...(ids.size > 0 ? ids : this.union)].sort(
+      (a, b) => Math.abs(a) - Math.abs(b),
+    )[0];
+    if (first === undefined) {
+      this.passBarrier();
+      return;
+    }
+    await this.ensureDaemon(lane, this.modeOfCall(first), []);
+    this.passBarrier(); // a daemon the lane already held was warmed and judged when it started
   }
 
   /** R1004: the baseline rows a warm-up entry is compared with, without the tests the warm-up left out. */
@@ -7250,13 +7486,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R652 (review r1 #2): counted with the check, so `boundChecks = warmups + prefetchRequests +
     // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request). Build
     // review L3: a send the check refuses sends no entries.
-    this.stats.entriesSent += sent.length;
-    if (kind === "prefetch") this.stats.prefetchRequests += 1;
-    else if (kind === "live") this.stats.liveRequests += 1;
+    lane.stats.entriesSent += sent.length;
+    if (kind === "prefetch") lane.stats.prefetchRequests += 1;
+    else if (kind === "live") lane.stats.liveRequests += 1;
     if (selectedOnly.flag) {
-      this.stats.selectedOnlyRequests += 1;
-      this.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
-    } else if (selectedOnly.refused) this.stats.selectedOnlyRefusedGapped += 1;
+      lane.stats.selectedOnlyRequests += 1;
+      lane.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
+    } else if (selectedOnly.refused) lane.stats.selectedOnlyRefusedGapped += 1;
+    // PR-99 (§10.8): a warm-up never ARMS the drift guard (only `requestOne` sets `keptRefusal`); count the
+    // warm-ups that follow a request which left one set, beside those that hold one (below).
+    if (kind === "warmup" && daemon.keptRefusal !== undefined) lane.stats.warmupsAfterKept += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // PR-100: one `serve-request-timed` per send, after the answer or the throw and before any decode
     // check. A warm-up's cause is read (and used up) here.
@@ -7301,8 +7540,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         body,
         // R912: only a prefetch request is clamped to the time left. A live request never is: its
         // deadline would become `deadline-exceeded`, an error verdict.
-        kind === "prefetch" && this.prefetchRemainingMs !== undefined
-          ? Math.max(1000, Math.min(v3CallDeadlineMs(s, tests), this.prefetchRemainingMs()))
+        kind === "prefetch" && lane.prefetch.remainingMs !== undefined
+          ? Math.max(1000, Math.min(v3CallDeadlineMs(s, tests), lane.prefetch.remainingMs()))
           : v3CallDeadlineMs(s, tests),
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
@@ -7318,10 +7557,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.cut !== undefined) {
       // A partial answer has no summary: no R807 seed to read, no `cached` to count.
-      this.stats.timeoutCuts += 1;
+      lane.stats.timeoutCuts += 1;
     } else {
       if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
-      if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+      if (answer.summary.cached === false) lane.stats.cachedFalse += 1;
     }
     const decoded = decodeEntriesAnswer(sent, answer, this.serveRowFields);
     if ("why" in decoded) {
@@ -7340,11 +7579,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // chunk holding both would not have been. Chunk boundaries fall where `chunkGroups` puts them.
     // R987: always 256 here, whatever size the memory readings made the requests: a smaller request
     // is a part of its 256-entry chunk, so the judgement never depends on a reading.
+    // PR-99 (§10.1): with lanes (N > 1) `ran` is a LATCH: the chunk rule never resets it, and `size` is not
+    // used. N = 1 keeps the chunk rule exactly.
     const batch = kind === "prefetch" ? this.prefetchBatch : undefined;
-    if (batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
+    if (!this.lanesBuilt && batch !== undefined && batch.size + sent.length > ENTRIES_CHUNK_CAP) {
       batch.size = 0;
       batch.ran = false;
     }
+    if (kind === "warmup" && this.firstKeptRefusal(sent, decoded.rows) !== undefined)
+      lane.stats.warmupsHeldKept += 1; // PR-99 (§10.8): counted, never armed
     const speaksForBatch =
       kind === "warmup" ||
       (kind === "prefetch" && (batch?.groups ?? groupCount) >= 2 && batch?.ran !== true);
@@ -7356,7 +7599,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         )
       : undefined;
     if (batch !== undefined) {
-      batch.size += sent.length;
+      if (!this.lanesBuilt) batch.size += sent.length;
       if (refused === undefined) batch.ran = true;
     }
     if (refused !== undefined) {
@@ -7479,7 +7722,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
     const started = Date.now();
     // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
-    const before = { ...this.stats };
+    // PR-99: the LANE's counters that sent the request: another lane's are never read or written here.
+    const before = { ...lane.stats };
     const batchBefore =
       this.prefetchBatch === undefined
         ? undefined
@@ -7500,7 +7744,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           (cu, g) =>
             g.through !== undefined
               ? this.cutAfterKiller(cu, g.through)
-              : this.mutantExcludes(cu, g.mutantId),
+              : this.mutantExcludes(lane, cu, g.mutantId),
         ),
       );
     } finally {
@@ -7537,8 +7781,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         "selectedOnlyTestsSkipped",
         "selectedOnlyRefusedGapped",
       ] as const)
-        this.stats[k] = before[k];
-      if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
+        lane.stats[k] = before[k]; // PR-99: the counters of the lane that sent the discarded request
+      // PR-99 (§10.1): with lanes `ran` is a latch and `size` is unused: the restore writes neither.
+      if (!this.lanesBuilt && this.prefetchBatch !== undefined && batchBefore !== undefined) {
         this.prefetchBatch.size = batchBefore.size;
         this.prefetchBatch.ran = batchBefore.ran;
       }
@@ -7578,12 +7823,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
     // is re-sent (review L2).
     const prior = daemon.keptRefusal;
+    if (prior !== undefined) lane.stats.armedRequests += 1; // PR-99 (§6): a request armed by `requestOne`
     if (prior !== undefined && partial === undefined) {
       const drift = this.keptRefusalDrift(sent, rows, alone);
       if (drift !== undefined) {
         uncount();
-        this.stats.keptDrifts += 1;
-        const event: V3KeptDrift = { refusal: prior.text, ...drift };
+        lane.stats.keptDrifts += 1;
+        const event: V3KeptDrift = { lane: lane.index, refusal: prior.text, ...drift };
         this.driftSink?.(event);
         this.notify(
           "al-runner-v3-serve-drift-after-kept-refusal",
@@ -7610,7 +7856,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (this.peakReading === undefined || peakRss > this.peakReading.bytes)
     )
       this.peakReading = { bytes: peakRss, source: peakSource };
-    this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent, {
+    if (peakRss !== undefined) {
+      // PR-99 (§2.5): this lane's first measured request ends its reservation; the lane gate may now admit more.
+      this.reservedLanes.delete(lane.index);
+      this.gateChanged();
+    }
+    this.noteEntryCost(lane.index, startRss, daemon.floorRss, peakRss, sent, {
       source: peakSource,
       sampledPeak,
       ...(hwmPeak !== undefined ? { hwm: hwmPeak } : {}),
@@ -7653,20 +7904,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const mine = rows.get(e.id) ?? [];
       if (e.echo) {
         echoWhy = echoMismatch(mine, e.mutantId);
-        if (echoWhy !== undefined) this.stats.echoMismatches += 1;
+        if (echoWhy !== undefined) lane.stats.echoMismatches += 1;
         continue;
       }
       // R895: the entry the answer was cut in holds the rows it had; its other tests did not run.
       const cutHere = partial !== undefined && partial.entry === e.id;
       if (cutHere && partial !== undefined && e.mutantId !== SELECTOR_RESOURCE_NONE) {
-        const cuts = this.timedOutMutants.get(e.mutantId) ?? new Set<string>();
+        const cuts = lane.prefetch.timedOutMutants.get(e.mutantId) ?? new Set<string>();
         cuts.add(partial.test.toLowerCase());
-        this.timedOutMutants.set(e.mutantId, cuts);
+        lane.prefetch.timedOutMutants.set(e.mutantId, cuts);
       }
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
-          : this.suiteMissing(callOf(e), mine, e.excludeTests, answer.selectedOnly);
+          : this.suiteMissing(lane, callOf(e), mine, e.excludeTests, answer.selectedOnly);
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -7843,7 +8094,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * covering test or a discovered test of `cu` is not in it. #8059: a tail test whose name starts
    * another test that must run stays in (v3 matches `excludeTests` by prefix).
    */
-  private mutantExcludes(cu: number, mutantId: string): readonly string[] | undefined {
+  private mutantExcludes(lane: Lane, cu: number, mutantId: string): readonly string[] | undefined {
     const base = this.mutantLeftOutNames(cu);
     const out = this.cutAfterLastCovering(cu, mutantId, base);
     // Review 1: counted once per (mutant, codeunit), cut or not, so the stats line gives the share
@@ -7852,11 +8103,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (mutantId !== SELECTOR_RESOURCE_NONE && !this.l4Counted.has(key)) {
       this.l4Counted.add(key);
       const added = (out?.length ?? 0) - (base?.length ?? 0);
-      this.stats.l4MutantEntries += 1;
-      this.stats.l4WholeTests += new Set(this.baselineOrder(cu)).size;
+      lane.stats.l4MutantEntries += 1;
+      lane.stats.l4WholeTests += new Set(this.baselineOrder(cu)).size;
       if (added > 0) {
-        this.stats.l4Entries += 1;
-        this.stats.l4Excluded += added;
+        lane.stats.l4Entries += 1;
+        lane.stats.l4Excluded += added;
       }
     }
     return out;
@@ -7919,6 +8170,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * come back in the baseline order, or the entry is not used (the order is what makes the cut safe).
    */
   private suiteMissing(
+    lane: Lane,
     cu: number,
     rows: readonly V3Row[],
     excluded: readonly string[] = [],
@@ -7944,7 +8196,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const r of rows) {
         const i = at.get(r.method.toLowerCase()) ?? -1;
         if (i < prev) {
-          this.stats.l4OrderBroken += 1;
+          lane.stats.l4OrderBroken += 1;
           return `codeunit ${cu}'s entry ran ${r.method} out of its baseline order, so the tests it left out (PR-20) may have run before a kept one`;
         }
         prev = i;
@@ -7977,17 +8229,35 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }[];
     },
   ): Promise<void> {
-    this.dropPair();
-    this.pairStore.clear();
+    // PR-99: the owner's prefetch is lane 0's (N = 1: the only lane). With lanes each lane prefetches its
+    // own unit through its view (`prefetchMutantsOn`).
+    return this.prefetchMutantsOn(this.lane, plans, opts);
+  }
+
+  /**
+   * PR-99 (§10.5): the batch's setup, once per batch, in ONE owner call before window 0's queue: the warm-up
+   * union (every covered mutant's codeunits), `coveringOf`, and the batch record `prefetchBatch` that R912's
+   * batch-refusal judgement reads. Lanes then prefetch their units without touching any of it.
+   */
+  prepareBatch(
+    batchPlans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): void {
     if (!this.entries) return;
-    this.prefetched = new Map();
-    this.timedOutMutants = new Map();
-    for (const p of opts?.batchPlans ?? [])
+    this.registerPlans([], batchPlans);
+  }
+
+  private registerPlans(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    batchPlans:
+      | readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[]
+      | undefined,
+  ): void {
+    for (const p of batchPlans ?? [])
       for (const cu of new Set(this.serveRefs(p.refs).map((r) => this.callId(r))))
         this.union.add(cu);
     // PR-20 (L4): each planned mutant's covering methods per codeunit entry (a test run alone, a
     // negative call id, is its own entry and is never cut)
-    for (const p of [...plans, ...(opts?.batchPlans ?? [])]) {
+    for (const p of [...plans, ...(batchPlans ?? [])]) {
       const byCu = this.coveringOf.get(p.mutantId) ?? new Map<number, Set<string>>();
       for (const r of this.serveRefs(p.refs)) {
         const cu = this.callId(r);
@@ -7998,18 +8268,48 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       this.coveringOf.set(p.mutantId, byCu);
     }
-    if (opts?.batchPlans !== undefined) {
-      this.prefetchBatch = { groups: opts.batchPlans.length, size: 0, ran: false };
+    if (batchPlans !== undefined) {
+      this.prefetchBatch = { groups: batchPlans.length, size: 0, ran: false };
     }
-    this.prefetchRemainingMs = opts?.remainingMs;
+  }
+
+  /**
+   * PR-99 (§2.1, §2.2): `prefetchMutants` for `lane`: the plans are prefetched on the LANE's daemon, and its
+   * record (prefetched rows, cut state, stored pairs, R912's clamp, counters) is the only state written.
+   * The resets at the top reset this lane's record only. On lane 0's first call of a split session the
+   * session-first warm-up runs first (the barrier, §2.3).
+   */
+  private async prefetchMutantsOn(
+    lane: Lane,
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    opts?: {
+      readonly remainingMs?: () => number;
+      readonly batchPlans?: readonly {
+        readonly mutantId: string;
+        readonly refs: readonly TestMethodRef[];
+      }[];
+    },
+  ): Promise<void> {
+    lane.dropPair();
+    lane.prefetch.pairStore.clear();
+    if (!this.entries) return;
+    lane.prefetch.prefetched = new Map();
+    lane.prefetch.timedOutMutants = new Map();
+    this.registerPlans(plans, opts?.batchPlans);
+    if (this.lanesBuilt) {
+      if (lane.index === 0) await this.warmSessionFirst(lane, plans);
+      if (plans.length > 0) lane.stats.unitsPrefetched += 1;
+    }
+    lane.prefetch.remainingMs = opts?.remainingMs;
     try {
-      await this.prefetchWindow(plans);
+      await this.prefetchWindow(lane, plans);
     } finally {
-      this.prefetchRemainingMs = undefined;
+      lane.prefetch.remainingMs = undefined;
     }
   }
 
   private async prefetchWindow(
+    lane: Lane,
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void> {
     const groups: EntryGroup[] = plans
@@ -8043,15 +8343,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (this.stopHandle?.spent() === true) break;
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
-        // R766 (b): the shared prefetch runs on lane 0 with the N = 1 grouping; any lane consumes it.
-        out = await this.request(this.lane, chunk, "prefetchMs");
+        // PR-99: the prefetch runs on the lane that scores these mutants, with today's grouping.
+        out = await this.request(lane, chunk, "prefetchMs");
       } catch (err) {
         if (err instanceof AlRunnerServerRequestError) {
           // R1014 (review 6): a request the budget or a stop signal ended: nothing runs live after
           // it, so the warning below would be wrong; the session stops with its report.
           if (this.stopHandle?.spent() === true) break;
           // Never silent: its mutants run live, so a cause like a timer overflow shows.
-          this.stats.prefetchDropped += 1;
+          lane.stats.prefetchDropped += 1;
           this.notify(
             "al-runner-v3-entries-prefetch-dropped",
             `[lethal] al-runner-v3-entries-prefetch-dropped: a prefetch request of ${chunk.length} mutant group(s) gave no usable answer (${err.kind}: ${err.message.slice(0, 300)}); its mutants run as live requests (R635 §6).`,
@@ -8061,15 +8361,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         throw err;
       }
       for (const [m, rows] of out.results) {
-        const had = this.prefetched.get(m) ?? new Map<number, CallRows>();
+        const had = lane.prefetch.prefetched.get(m) ?? new Map<number, CallRows>();
         for (const [cu, c] of rows) had.set(cu, { ...c, prefetchSeq: out.seq });
-        this.prefetched.set(m, had);
+        lane.prefetch.prefetched.set(m, had);
       }
       const again = out.resend.filter((g) => !resent.has(g.mutantId));
       for (const g of again) resent.add(g.mutantId);
       if (again.length > 0) segments.push([...again]);
     }
-    await this.batchKillPairs(plans);
+    await this.batchKillPairs(lane, plans);
   }
 
   /**
@@ -8083,6 +8383,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * re-sends the kills after it once, on a fresh daemon.
    */
   private async batchKillPairs(
+    lane: Lane,
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
   ): Promise<void> {
     const proof = this.proof;
@@ -8097,7 +8398,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const kills: Kill[] = [];
     for (const p of plans) {
       for (const r of p.refs) {
-        const call = this.prefetched.get(p.mutantId)?.get(this.callId(r));
+        const call = lane.prefetch.prefetched.get(p.mutantId)?.get(this.callId(r));
         if (call === undefined || call.refusal !== undefined || call.missing !== undefined)
           continue;
         const mine = call.rows.filter(
@@ -8160,10 +8461,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         },
         { mutantId: k.mutantId, key: `${tagOf(k)}#m`, codeunits: [k.cu], through: k.method },
       ]);
-      const liveBefore = this.stats.liveRequests;
+      const liveBefore = lane.stats.liveRequests; // PR-99: the lane's own counter
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
       try {
-        out = await this.request(this.lane, groups, "liveMs");
+        out = await this.request(lane, groups, "liveMs");
       } catch (err) {
         // Like `prefetchMutants`: only a request error is absorbed; a refusal, an unproven batch
         // or a skipped dependency stops the session (S1: never serve stored pairs after one).
@@ -8175,7 +8476,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
         return;
       } finally {
-        this.stats.pairBatchRequests += this.stats.liveRequests - liveBefore;
+        lane.stats.pairBatchRequests += lane.stats.liveRequests - liveBefore;
       }
       const after: Kill[] = [];
       for (const k of chunk) {
@@ -8184,7 +8485,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const none = out.results.get(noneKey)?.get(k.cu);
         const m = out.results.get(`${tag}#m`)?.get(k.cu);
         if (none !== undefined && m !== undefined) {
-          this.pairStore.set(`${proof.artifactId}|${tag}`, {
+          lane.prefetch.pairStore.set(`${proof.artifactId}|${tag}`, {
             cu: k.cu,
             seq: out.seq,
             none,
@@ -8196,7 +8497,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               ? { through: k.method }
               : {}),
           });
-          this.stats.pairBatchStored += 1;
+          lane.stats.pairBatchStored += 1;
         } else if (!out.reached.has(noneKey) && !resent.has(tag)) {
           // Nothing of it stood: it lies after the cut. Re-sent once, whole, on a fresh daemon.
           // (A kill with something standing but not both entries is the cut kill: whatever stood
@@ -8226,9 +8527,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (proof === undefined) return undefined;
     const id = this.callId(ref);
     const key = `${proof.artifactId}|${this.pairTag(mutantId, id)}`;
-    const stored = this.pairStore.get(key);
+    const stored = lane.prefetch.pairStore.get(key);
     if (stored === undefined) return undefined;
-    this.pairStore.delete(key);
+    lane.prefetch.pairStore.delete(key);
     const killSeq = lane.rowsByCodeunit.get(id)?.prefetchSeq;
     // PR-102 (L1): a stored pair cut after `through` holds the rows of `ref` only if `ref` is at or
     // before it, and both names are in the codeunit's baseline order. Otherwise fail closed.
@@ -8240,10 +8541,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       cutOk = at >= 0 && to >= 0 && at <= to;
     }
     if (stored.cu !== id || killSeq === undefined || stored.seq <= killSeq || !cutOk) {
-      this.stats.pairBatchRefused += 1;
+      lane.stats.pairBatchRefused += 1;
       return undefined;
     }
-    this.stats.pairBatchServed += 1;
+    lane.stats.pairBatchServed += 1;
     return { mutantId, ref, none: stored.none, m: stored.m, next: "null" };
   }
 
@@ -8318,8 +8619,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const none = out.results.get(SELECTOR_RESOURCE_NONE)?.get(cu);
     const m = out.results.get(mutantId)?.get(cu);
     const fallback = none === undefined ? 2 : m === undefined ? 1 : undefined;
-    if (fallback === 2) this.stats.pairFallbacks2 += 1;
-    if (fallback === 1) this.stats.pairFallbacks1 += 1;
+    if (fallback === 2) lane.stats.pairFallbacks2 += 1;
+    if (fallback === 1) lane.stats.pairFallbacks1 += 1;
     lane.pair = {
       mutantId,
       ref,
@@ -8454,23 +8755,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // R652 Rule A: ONE check for the window's 2-3 plain sends, BEFORE `inWindow` (review r1 #1),
       // so it still requires the resource file to read NONE. Counted with its coverage request.
       await this.checkBound(lane);
-      this.stats.coverageRequests += 1;
+      lane.stats.coverageRequests += 1;
       checked = true;
       const windowT0 = this.now();
       this.inWindow = true;
       try {
         await writeFile(lane.resourcePath(), m, "utf8");
         const echoOk = async (): Promise<string | undefined> => {
-          this.stats.echoRequests += 1;
+          lane.stats.echoRequests += 1;
           const why = echoMismatch(
             (await lane.timed("echoMs", () => this.plain(lane, daemon, mode, echoId, false))).rows,
             m,
           );
-          if (why !== undefined) this.stats.echoMismatches += 1;
+          if (why !== undefined) lane.stats.echoMismatches += 1;
           return why;
         };
         const before = this.cfg.secondEcho === false ? undefined : await echoOk();
-        if (before !== undefined) this.stats.secondEchoMismatches += 1;
+        if (before !== undefined) lane.stats.secondEchoMismatches += 1;
         // R998 (review 1): the same tests left out as the entry it is compared with (PR-20: the
         // entry's own list, the L4 cut included)
         const cov = await lane.timed("coverageMs", () =>
@@ -8604,7 +8905,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed; // R807: AlRunnerServer already checked it
-    if (answer.summary.cached === false) this.stats.cachedFalse += 1;
+    if (answer.summary.cached === false) lane.stats.cachedFalse += 1;
     const rows: V3Row[] = [];
     for (const t of answer.tests) {
       const r = serveRow(t, this.serveRowFields);
@@ -8640,8 +8941,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
+      // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
+      // output (which the v3 gate pins at N = 1) is unchanged.
+      const unitTimesOut = process.env.LETHAL_UNIT_TIMES_OUT;
+      if (unitTimesOut !== undefined && unitTimesOut !== "" && this.unitTimes.units.length > 0) {
+        writeFileSync(unitTimesOut, `${JSON.stringify(this.unitTimes, null, 1)}\n`);
+      }
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(
       () => {},

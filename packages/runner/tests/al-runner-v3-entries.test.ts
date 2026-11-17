@@ -1562,6 +1562,7 @@ describe("R939: why each serve daemon closed", () => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
     const sunk: {
+      lane?: number;
       reason: string;
       family?: string;
       text?: string;
@@ -1583,6 +1584,7 @@ describe("R939: why each serve daemon closed", () => {
     // R1009: the whole first line too, which the family cuts
     expect(sunk).toEqual([
       {
+        lane: 0,
         reason: "refusal",
         family: "WithEvents subscriber …",
         text: WITH_EVENTS,
@@ -2245,7 +2247,9 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
     await baseline(r.b, SUITE1);
     // R960 review a: a session that already warmed a daemon up (another mode, a restart).
-    (r.b as unknown as { stats: { warmups: number } }).stats.warmups = earlierWarmups;
+    // PR-99 (§10.6, build review #4): the session's warm-ups, summed over the lanes (the only lane here).
+    (r.b as unknown as { lane: { stats: { warmups: number } } }).lane.stats.warmups =
+      earlierWarmups;
     return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
   };
 
@@ -3424,6 +3428,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       const r = await run({ spike: GiB });
       const e = r.sized[0];
       expect(e).toEqual({
+        lane: 0,
         calls: [{ call: CU, entries: 16, cost: (9 * GiB) / 16 }],
         floor: 0.5 * GiB,
         start: 0.5 * GiB,
@@ -5399,7 +5404,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
   describe("2: a pair is used only for a kill that came from the prefetch, and only if it ran after it", () => {
     test("a kill served by liveCall (the prefetched rows dropped) sends today's pair; the stored one is refused", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      (r.b as unknown as { prefetched: Map<string, unknown> }).prefetched = new Map();
+      (
+        r.b as unknown as { lane: { prefetch: { prefetched: Map<string, unknown> } } }
+      ).lane.prefetch.prefetched = new Map();
       await kill(r, "M0001");
       const n0 = r.serve.requests.length;
       await r.b.sendKillPair("M0001", A);
@@ -5415,7 +5422,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
 
     test("a kill from the prefetch but a pair that did not run after it: today's pair", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      const store = (r.b as unknown as { pairStore: Map<string, { seq: number }> }).pairStore;
+      const store = (
+        r.b as unknown as { lane: { prefetch: { pairStore: Map<string, { seq: number }> } } }
+      ).lane.prefetch.pairStore;
       for (const [k, v] of store) store.set(k, { ...v, seq: 0 });
       await kill(r, "M0001");
       const n0 = r.serve.requests.length;
@@ -5520,7 +5529,8 @@ describe("R778: kill pairs batched after the prefetch", () => {
   describe("4: a stored pair is single-use and bound to its deploy", () => {
     test("redeploy with the same mutant id: nothing is served", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+      const store = (r.b as unknown as { lane: { prefetch: { pairStore: Map<string, unknown> } } })
+        .lane.prefetch.pairStore;
       expect(store.size).toBe(1);
       await r.b.deploy(r.l.batch);
       // The deploy alone empties it (the baseline bracket and a prefetch would too).
@@ -5579,7 +5589,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
         },
       ]) {
         const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-        const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+        const store = (
+          r.b as unknown as { lane: { prefetch: { pairStore: Map<string, unknown> } } }
+        ).lane.prefetch.pairStore;
         expect(store.size).toBe(1);
         await clear(r);
         expect(store.size).toBe(0);
@@ -6992,7 +7004,7 @@ describe("R895: stop a request at its first timeout row", () => {
       await r.b.activate("M0001");
       const n0 = r.serve.requests.length;
       const so = () =>
-        (r.b as unknown as { stats: Record<string, number> }).stats as Record<string, number>;
+        (r.b as unknown as { entriesStats(): Record<string, number> }).entriesStats(); // PR-99: summed lanes
       const soBefore = [
         so().selectedOnlyRequests,
         so().selectedOnlyTestsSkipped,
@@ -9626,19 +9638,7 @@ describe("PR-20 (L4): a mutant entry stops after its last covering test", () => 
     r.serve.requests
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
       .filter((e) => String(e.test) === `Codeunit${CU}.` && String(e.id).startsWith(`${m}|`));
-  const stats = (r: Rig) =>
-    (
-      r.b as unknown as {
-        stats: {
-          l4MutantEntries: number;
-          l4WholeTests: number;
-          l4Entries: number;
-          l4Excluded: number;
-          l4Widened: number;
-          l4OrderBroken: number;
-        };
-      }
-    ).stats;
+  const stats = (r: Rig) => r.b.entriesStats(); // PR-99: the lanes' counters, summed
 
   test("the entry leaves out the tests after the last covering one; the NONE warm-up runs the whole codeunit", async () => {
     const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
@@ -9867,16 +9867,17 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         String(e.id).startsWith(`${m}|`),
       ),
     );
+  // PR-99: the counters are per lane; the session totals are `entriesStats()`, summed over the lanes.
   const sstats = (r: Rig) =>
     (
       r.b as unknown as {
-        stats: {
+        entriesStats(): {
           selectedOnlyRequests: number;
           selectedOnlyTestsSkipped: number;
           selectedOnlyRefusedGapped: number;
         };
       }
-    ).stats;
+    ).entriesStats();
 
   test("a suffix-cut prefetch carries runSelectedOnly; the warm-up does not; the daemon is the same one (no extra spawn)", async () => {
     const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
@@ -9956,7 +9957,8 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
     // red without the order check on flagged entries: A's row is read and the mutant passes
     expect((await r.b.run(ref("A"), OPTS)).outcome).not.toBe("pass");
     expect(
-      (r.b as unknown as { stats: { l4OrderBroken: number } }).stats.l4OrderBroken,
+      (r.b as unknown as { entriesStats(): { l4OrderBroken: number } }).entriesStats()
+        .l4OrderBroken,
     ).toBeGreaterThan(0);
   });
 
@@ -10003,7 +10005,9 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
     await baseline(r.b, SUITE_ABC);
     await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
     await r.b.prefetchMutants(plans(["M0002"], [ref("B")]));
-    expect((r.b as unknown as { stats: { keptDrifts: number } }).stats.keptDrifts).toBe(1);
+    expect(
+      (r.b as unknown as { entriesStats(): { keptDrifts: number } }).entriesStats().keptDrifts,
+    ).toBe(1);
     // M0001 skipped B and C; M0002 skipped C once. Red without the restore: 2 requests for M0002 -> 3 and 4
     expect(sstats(r)).toMatchObject({ selectedOnlyRequests: 2, selectedOnlyTestsSkipped: 3 });
   });
@@ -10135,8 +10139,8 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
       await r.b.activate("M0001");
       return r;
     };
-    const stats = (r: Rig) =>
-      (r.b as unknown as { stats: Record<string, number> }).stats as Record<string, number>;
+    // PR-99: the lanes' counters, summed
+    const stats = (r: Rig) => r.b.entriesStats() as unknown as Record<string, number>;
 
     test("both entries carry the cut through the killer, and the pair request is flagged", async () => {
       // covering A and C: before PR-102 the M entry was uncut and the NONE entry never cut
@@ -10299,7 +10303,7 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         await r.b.activate("M0002");
         const n0 = r.serve.requests.length;
         await r.b.sendKillPair("M0002", ref("B"));
-        expect((r.b as unknown as { stats: { keptDrifts: number } }).stats.keptDrifts).toBe(1);
+        expect(r.b.entriesStats().keptDrifts).toBe(1);
         // The drift re-send is not a neverFlag case: the decision would flag it again. It carries no cut
         // because `requestOne` strips it (red when that strip is removed).
         // the fresh daemon's warm-up sits between the two pair requests
@@ -10331,8 +10335,13 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
         return r;
       };
+      // PR-99: the stored pairs are the lane's; at N = 1 the owner's own lane
       const storeOf = (r: Rig) =>
-        (r.b as unknown as { pairStore: Map<string, { through?: string | undefined }> }).pairStore;
+        (
+          r.b as unknown as {
+            lane: { prefetch: { pairStore: Map<string, { through?: string | undefined }> } };
+          }
+        ).lane.prefetch.pairStore;
       const counts = (r: Rig) => r.b.entriesStats();
 
       // The kill ledger (R197) can pick any failing covering test as the killer, so the batch cuts after
@@ -10656,7 +10665,7 @@ describe("PR-56: drift after a kept refusal", () => {
     return { r, events, warned };
   };
   const keptsIn = (m: string, x: FakeRow) => (m === "M0001" && x.method === "A" ? refused(x) : x);
-  const driftStats = (r: Rig) => (r.b as unknown as { stats: { keptDrifts: number } }).stats;
+  const driftStats = (r: Rig) => r.b.entriesStats(); // PR-99: the lanes' counters, summed
   const CODE = "al-runner-v3-serve-drift-after-kept-refusal";
 
   test("a row before the first covering test differs: the daemon closes, the request re-runs fresh and the fresh rows stand", async () => {
@@ -10670,6 +10679,7 @@ describe("PR-56: drift after a kept refusal", () => {
     expect(r.serve.daemons.length).toBe(2);
     expect(events).toEqual([
       {
+        lane: 0,
         refusal: KEPT,
         test: `Codeunit${CU}.A`,
         baselineRow: "a=pass",

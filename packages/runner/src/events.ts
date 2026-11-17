@@ -558,6 +558,8 @@ export type RunEventInput =
        * gates pin their warning sets. The routine closes (a redeploy, the session's end) emit none.
        */
       readonly type: "serve-daemon-closed";
+      /** PR-99: the lane whose daemon closed (0 = the owner's). */
+      readonly lane?: number;
       readonly reason: string;
       readonly family?: string;
       /**
@@ -593,6 +595,8 @@ export type RunEventInput =
        * test and a refusal text).
        */
       readonly type: "serve-drift-after-kept-refusal";
+      /** PR-99: the lane whose daemon drifted (0 = the owner's). */
+      readonly lane?: number;
       readonly refusal: string;
       readonly test: string;
       readonly baselineRow: string;
