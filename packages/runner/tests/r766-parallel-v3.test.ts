@@ -679,6 +679,24 @@ describe("R1014: a stop signal is honoured inside a window, and the mutant it cu
     });
   }
 
+  // PR-108: the budget is also checked BEFORE each covering step, and a lane leaves through the sink's stop.
+  for (const workers of [1, 2]) {
+    test(`PR-108 --workers ${workers}: a signal that arrives as a mutant starts runs none of its covering steps and records nothing`, async () => {
+      const root = await project();
+      const { procOf, report: one } = await learn(root);
+      const total = one.mutants.length;
+      const stub = new ParStub({ procOf, delay: () => 3 });
+      const extra = signalAt(stub, 3);
+      const r = await session(root, stub, { workers, ...extra });
+      const cut = cutOf(extra);
+      expect(cut).toBeDefined();
+      // red without the in-walk check: the cut mutant's steps ran before its record was dropped
+      expect(stub.runs.filter((x) => x.mutant === cut)).toEqual([]);
+      expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
+      expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+    });
+  }
+
   test("--workers 2: a --time-budget that runs out inside a window (no signal) starts no further mutant; the ones in flight keep their verdicts", async () => {
     const root = await project();
     const { procOf, report: one } = await learn(root);
