@@ -121,6 +121,8 @@ import {
   encodeGroups,
   groupsThatFit,
   isolatedSelection,
+  missingKeptTests,
+  selectedOnlyDecision,
   serveRow,
 } from "./al-runner-v3-entries";
 import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
@@ -1582,6 +1584,11 @@ export interface V3EntriesStats {
   l4OrderBroken: number;
   /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
   keptDrifts: number;
+  /** PR-94: prefetch and live requests sent with `runSelectedOnly` (every entry whole or a prefix cut), the
+   *  excluded tests in them, and the requests with a cut entry that could not be flagged. */
+  selectedOnlyRequests: number;
+  selectedOnlyTestsSkipped: number;
+  selectedOnlyRefusedGapped: number;
   echoMismatches: number;
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
@@ -1687,6 +1694,9 @@ function newLaneStats(): Omit<V3EntriesStats, V3PhaseTimer> {
     l4Widened: 0,
     l4OrderBroken: 0,
     keptDrifts: 0,
+    selectedOnlyRequests: 0, // PR-94, per lane under PR-99
+    selectedOnlyTestsSkipped: 0,
+    selectedOnlyRefusedGapped: 0,
     entriesSent: 0,
     boundChecks: 0,
     pairRequests: 0,
@@ -2557,6 +2567,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private entries: boolean;
   /** R761: true once `decideTransport` ran or a v3 process started; `entries` never changes after. */
   private transportFrozen = false;
+  /** PR-94 (L5): each codeunit's discovered test names, lower-case, set with `discovered`. */
+  private discoveredNames: ReadonlyMap<number, readonly string[]> = new Map();
+  /** PR-94 (H1): codeunits whose flagged answer missed a kept test (v3's shallow scan); never flagged again. */
+  private neverFlag = new Set<number>();
   /** R857: why the default transport fell back, for `--isolate-tests`' refusal. */
   private fallbackReasons: readonly string[] = [];
   /**
@@ -3253,6 +3267,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
     this.discovered = [...tests];
+    // PR-94 (L5): grouped once here, not per entry per request
+    const names = new Map<number, string[]>();
+    for (const t of tests)
+      names.set(t.codeunitId, [...(names.get(t.codeunitId) ?? []), t.method.toLowerCase()]);
+    this.discoveredNames = names;
   }
 
   /**
@@ -7243,6 +7262,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    /** PR-94: the request carried `runSelectedOnly`, so `suiteMissing` checks the order of every entry. */
+    readonly selectedOnly: boolean;
     /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
     readonly cut?: SentCut;
   }> {
@@ -7264,8 +7285,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
+    // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
+    // `runSelectedOnly`, so the excluded tail does not run. Never in `requestBase` (the baseline and the
+    // coverage windows can leave a gap), and an alone or isolated request keeps its own flag.
+    const selectedOnly =
+      kind !== "warmup" && alone === undefined && !mode.runSelectedOnly
+        ? selectedOnlyDecision(
+            sent,
+            (cu) => ({
+              baseline: this.baselineOrder(cu),
+              discovered: this.discoveredNames.get(cu) ?? [],
+            }),
+            this.neverFlag,
+          )
+        : { flag: false, refused: false, skipped: 0 };
     const body = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
+      ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
@@ -7280,6 +7316,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane.stats.entriesSent += sent.length;
     if (kind === "prefetch") lane.stats.prefetchRequests += 1;
     else if (kind === "live") lane.stats.liveRequests += 1;
+    if (selectedOnly.flag) {
+      lane.stats.selectedOnlyRequests += 1;
+      lane.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
+    } else if (selectedOnly.refused) lane.stats.selectedOnlyRefusedGapped += 1;
     // PR-99 (§10.8): a warm-up never ARMS the drift guard (only `requestOne` sets `keptRefusal`); count the
     // warm-ups that follow a request which left one set, beside those that hold one (below).
     if (kind === "warmup" && daemon.keptRefusal !== undefined) lane.stats.warmupsAfterKept += 1;
@@ -7368,7 +7408,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
       );
     }
-    return { sent, rows: decoded.rows, ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}) };
+    return {
+      sent,
+      rows: decoded.rows,
+      selectedOnly: selectedOnly.flag,
+      ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}),
+    };
   }
 
   /**
@@ -7518,6 +7563,55 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     const { sent, rows, cut: partial } = answer;
+    // Review L1: a discarded send is not a request of the batch; the re-run counts in its place.
+    const uncount = () => {
+      for (const k of [
+        "entriesSent",
+        "prefetchRequests",
+        "liveRequests",
+        "boundChecks",
+        "cachedFalse",
+        "timeoutCuts",
+        "selectedOnlyRequests",
+        "selectedOnlyTestsSkipped",
+        "selectedOnlyRefusedGapped",
+      ] as const)
+        lane.stats[k] = before[k]; // PR-99: the counters of the lane that sent the discarded request
+      // PR-99 (§10.1): with lanes `ran` is a latch and `size` is unused: the restore writes neither.
+      if (!this.lanesBuilt && this.prefetchBatch !== undefined && batchBefore !== undefined) {
+        this.prefetchBatch.size = batchBefore.size;
+        this.prefetchBatch.ran = batchBefore.ran;
+      }
+    };
+    // PR-94 (H1): v3's test scan is shallow (a `[Test]` with another attribute on its line is missed), so
+    // under `runSelectedOnly` a test LethAL knows can fail to run, and the kept tests after it start from
+    // other state. Every kept test of a flagged entry needs its row; on a miss the answer is discarded,
+    // the codeunit is never flagged again, and the request is re-sent unflagged. An answer cut at a
+    // timeout has no rows to compare.
+    if (answer.selectedOnly && partial === undefined) {
+      const gaps = new Map<number, string[]>();
+      for (const e of sent) {
+        if (e.echo) continue;
+        const miss = missingKeptTests(
+          e.codeunit,
+          this.baselineOrder(e.codeunit),
+          e.excludeTests,
+          (rows.get(e.id) ?? []).map((r) => r.method),
+        );
+        if (miss.length > 0) gaps.set(e.codeunit, [...(gaps.get(e.codeunit) ?? []), ...miss]);
+      }
+      if (gaps.size > 0) {
+        uncount();
+        for (const [cu, miss] of gaps) {
+          this.neverFlag.add(cu);
+          this.notify(
+            "al-runner-v3-selected-only-scan-gap",
+            `[lethal] al-runner-v3-selected-only-scan-gap: with runSelectedOnly, codeunit ${cu}'s entry gave no row for ${[...new Set(miss)].join(", ")}, tests LethAL knows. al-runner's test scan is shallow and missed them. The answer was discarded, the request re-sent without the flag, and this codeunit is never flagged again this session (PR-94)`,
+          );
+        }
+        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
+      }
+    }
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
     // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
     // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
@@ -7527,21 +7621,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (prior !== undefined && partial === undefined) {
       const drift = this.keptRefusalDrift(sent, rows, alone);
       if (drift !== undefined) {
-        // Review L1: the drifted send is not a request of the batch; the re-run counts in its place.
-        for (const k of [
-          "entriesSent",
-          "prefetchRequests",
-          "liveRequests",
-          "boundChecks",
-          "cachedFalse",
-          "timeoutCuts",
-        ] as const)
-          lane.stats[k] = before[k];
-        // PR-99 (§10.1): with lanes `ran` is a latch and `size` is unused: the restore writes neither.
-        if (!this.lanesBuilt && this.prefetchBatch !== undefined && batchBefore !== undefined) {
-          this.prefetchBatch.size = batchBefore.size;
-          this.prefetchBatch.ran = batchBefore.ran;
-        }
+        uncount();
         lane.stats.keptDrifts += 1;
         const event: V3KeptDrift = { lane: lane.index, refusal: prior.text, ...drift };
         this.driftSink?.(event);
@@ -7616,7 +7696,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
-          : this.suiteMissing(lane, callOf(e), mine, e.excludeTests);
+          : this.suiteMissing(lane, callOf(e), mine, e.excludeTests, answer.selectedOnly);
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -7858,6 +7938,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     cu: number,
     rows: readonly V3Row[],
     excluded: readonly string[] = [],
+    /** PR-94: the request carried `runSelectedOnly`: the order check runs on this entry whatever it left out. */
+    selectedOnly = false,
   ): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
@@ -7869,7 +7951,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n.slice(`Codeunit${cu}.`.length).toLowerCase(),
       ),
     );
-    if (one === undefined && out.size > (this.mutantLeftOutNames(cu)?.length ?? 0)) {
+    if (
+      one === undefined &&
+      (selectedOnly || out.size > (this.mutantLeftOutNames(cu)?.length ?? 0))
+    ) {
       const at = new Map(this.baselineOrder(cu).map((m, i) => [m, i] as const));
       let prev = -1;
       for (const r of rows) {
@@ -8564,7 +8649,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.

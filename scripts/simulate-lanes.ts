@@ -4,8 +4,8 @@
  *
  *   bun scripts/simulate-lanes.ts <times.json> --lanes 3 --barrier-ms 90000 --lane-start-ms 35000
  *
- * `times.json` is `{ "units": [...], "windows": [...] }` (the backend's `unitTimings()`; the N = 1 run prints
- * it as the line "al-runner-v3 unit times (PR-99 ...)"). Per unit: its scoring wall plus its share of its
+ * `times.json` is `{ "units": [...], "windows": [...] }` (the backend's `unitTimings()`; an N = 1 run writes it
+ * to the file `LETHAL_UNIT_TIMES_OUT` names, only when that is set). Per unit: its scoring wall plus its share of its
  * window's prefetch wall (its entries x the window's prefetch wall per entry). The simulation is
  * `runScopeQueue`'s real greedy, in MANIFEST order (not longest-first): a free lane takes the next unit.
  * Windows run one after another. Lane 0 starts at 0; in the first window lane k >= 1 starts at the barrier
