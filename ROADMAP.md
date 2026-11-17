@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**43 of 1062 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**42 of 1062 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1104,8 +1104,8 @@ that ordering is the priority.
 - **R1093** · Measure whether the serve prefetch (32% of a DO window's mutant phase) can be split across parallel lanes per codeunit without moving a verdict · [R1093.md](docs/roadmap/R1093.md) · done (d0f4f2cc): split prefetch built (PR-99, spec r6); DO slice N = 1 = N = 3 per mutant, mutant phase 1,025…
 - **R1094** · On al-runner v3 serve, an entry's excludeTests hides rows but still RUNS the excluded tests; only runSelectedOnly skips them. So L4's cut (R1030) never saved test execution, and its t4 rate gain belongs elsewhere · [R1094.md](docs/roadmap/R1094.md) · done (PR-94) — runSelectedOnly on prefix-cut entries; DO e-doc slice prefetch -28.5%, per-mutant IDENTICAL
 - **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · open
-- **R1097** · On al-runner v3 serve, a kill pair's NONE entry runs its whole codeunit, though the confirm needs only the prefix up to the killing test: 284 s (15.7% of serve) on PR-94's DO slice · [R1097.md](docs/roadmap/R1097.md) · open — measured (PR-101); not built
-- **R1098** · al-runner v3 runs every entry and every test of a request, even after a mutant's killing failure: 193 s (10.7% of serve) on PR-94's DO slice runs after a kill; a stop needs upstream support · [R1098.md](docs/roadmap/R1098.md) · open — measured (PR-101); needs an upstream stop-at-first-failure option
+- **R1097** · On al-runner v3 serve, a kill pair's NONE entry runs its whole codeunit, though the confirm needs only the prefix up to the killing test: 284 s (15.7% of serve) on PR-94's DO slice · [R1097.md](docs/roadmap/R1097.md) · done (PR-102) — pairs cut after the killer in runSelectedOnly requests; DO slice live 579.9 s to 323.7 s…
+- **R1098** · al-runner v3 runs every entry and every test of a request, even after a mutant's killing failure: 193 s (10.7% of serve) on PR-94's DO slice runs after a kill; a stop needs upstream support · [R1098.md](docs/roadmap/R1098.md) · open — measured (PR-101); upstream asked: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8210
 - **R1099** · Each al-runner v3 serve pass carries a ~0.145 s floor outside the tests; 4,792 passes made it ~575 s (33% of tests time) on PR-94's DO slice; fewer passes per mutant need upstream multi-codeunit entries · [R1099.md](docs/roadmap/R1099.md) · open — measured (PR-101); upstream asked on #8204
 
 ---

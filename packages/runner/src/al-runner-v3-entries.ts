@@ -105,7 +105,16 @@ export interface EntryGroup {
    */
   readonly key?: string;
   readonly codeunits: readonly number[];
+  /**
+   * PR-102: a kill pair's cut: the killer's method. Both entries of the pair leave out every test after
+   * it. Set only by the two pair builders. The sender keeps it only in a request it flags
+   * `runSelectedOnly` (`withoutThrough` drops it otherwise); isolated entries ignore it.
+   */
+  readonly through?: string;
 }
+
+/** PR-102: `g` as an ordinary group, without its pair cut. */
+export const withoutThrough = ({ through: _through, ...rest }: EntryGroup): EntryGroup => rest;
 
 /** One sent entry, as the decoder's table holds it. */
 export interface SentEntry {
