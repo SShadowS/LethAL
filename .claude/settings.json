@@ -25,6 +25,10 @@
           {
             "type": "command",
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-shell-edits.ts\""
+          },
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/shell-write-advisory.ts\""
           }
         ]
       }
