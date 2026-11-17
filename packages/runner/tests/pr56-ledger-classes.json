@@ -182,6 +182,9 @@
   "NotRun: out-of-scope: FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
     "cls": "FieldRef.* on a FieldRef that was never assigned"
   },
+  "NotRun: out-of-scope: DeleteAll on a record of a table with a filter in filter group N (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not": {
+    "cls": "DeleteAll on a record of a table with a filter in filter group 1 (the global group) that another record set"
+  },
   "NotRun: out-of-scope: Error with an ErrorInfo nobody created": {
     "cls": "Error with an ErrorInfo nobody created"
   },

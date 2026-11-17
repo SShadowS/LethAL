@@ -2191,8 +2191,9 @@
   },
   {
     "key": "NotRun: out-of-scope: the login: which login events BC raises in a session without a client (--no-client) is not pinned, and this test codeunit can see what the login leaves",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 1271 error mutant(s) in non-DO/DC stores (PR-65/vat.new.sqlite=1271); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8273",
+    "note": "PR-135: reproduced on edge-4ebfe7913 (an OnAfterLogin subscriber, a test that reads its row; refused under --no-client only, an opt-in: V3_NO_CLIENT_DEFAULT is false). Was: PR-131, 1271 error mutant(s) (PR-65/vat.new.sqlite=1271)"
   },
   {
     "key": "NotRun: out-of-scope: a stale Audit File Export Line buffer from an Insert older than the last Commit but one, written after the new transaction touched the table",
@@ -2262,8 +2263,9 @@
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.SignData: System.Security.Cryptography.RSAWrapper.SignData has no overload taking N argument(s) of the given types (Byte[], null, RSASignaturePadding)",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 7 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=7); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: the null-into-a-value-type-parameter family, reproduced on edge-4ebfe7913 with DateTimeOffset and Convert.ToString (#8268). Was: PR-131, 7 error mutant(s) (R-958/runs/crypto.sqlite=7)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterCollectionNode.Collection: property, field or method <x> not found on <x>",
@@ -2274,7 +2276,7 @@
   {
     "key": "NotRun: out-of-scope: use of an unassigned XmlNode",
     "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 6 error mutant(s) in non-DO/DC stores (R-964/continia.run.sqlite=6); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "note": "PR-135: NOT reproduced on edge-4ebfe7913 by invented shapes (AsXmlElement, WriteTo, an XmlElement never created, a parameter): each fails with a BC-like text instead; the stored shape is unknown. Was: PR-131, 6 error mutant(s) (R-964/continia.run.sqlite=6)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.Debugger.VNProfileContract.CpuProfile.Nodes: refused by policy: server class <x> is neither registered nor classified pure",
@@ -2386,8 +2388,9 @@
   },
   {
     "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code InvalidOperation)",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 3 error mutant(s) in non-DO/DC stores (R-913/emr.sqlite=3); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8270",
+    "note": "PR-135: the family is reproduced on edge-4ebfe7913 for six other codes (#8270); no invented shape raised an error with code InvalidOperation, so this code itself is not reduced. Was: PR-131, 3 error mutant(s) (R-913/emr.sqlite=3)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Array.Length: property, field or method <x> not found on <x>",
@@ -2445,13 +2448,15 @@
   },
   {
     "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.XNCertificates.CertificateRequest: new System.Security.Cryptography.XNCertificates.CertificateRequest has no overload taking N argument(s) of the given types",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: the null-into-a-value-type-parameter family (#8268), reproduced on edge-4ebfe7913 with other types. Was: PR-131, 2 error mutant(s) (R-958/runs/crypto.sqlite=2)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.CertificateRequest.CreateSelfSigned: System.Security.Cryptography.XNCertificates.CertificateRequest.CreateSelfSigned has no overload taking N argum",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: the null-into-a-value-type-parameter family (#8268), reproduced on edge-4ebfe7913 with other types. Was: PR-131, 2 error mutant(s) (R-958/runs/crypto.sqlite=2)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.Export: <x> is an instance member and the variable holds no object",
@@ -2461,8 +2466,9 @@
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.Export: System.Security.Cryptography.XNCertificates.XNCertificateN.Export has no overload taking N argument(s) of the given types (n",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: the null-into-a-value-type-parameter family (#8268), reproduced on edge-4ebfe7913 with other types. Was: PR-131, 2 error mutant(s) (R-958/runs/crypto.sqlite=2)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RfcNDeriveBytes.GetBytes: <x> is an instance member and the variable holds no object",
@@ -2556,13 +2562,48 @@
   },
   {
     "key": "NotRun: out-of-scope: Clear of a DotNet variable that holds a Newtonsoft.Json.Linq.JObject: whether BC disposes the object is not pinned",
-    "state": "unexamined",
-    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-969/edocumentconne5.run.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+    "state": "open",
+    "issue": "#8269",
+    "note": "PR-135: reproduced on edge-4ebfe7913 (JObject and StringBuilder, #8269). Was: PR-131, 2 error mutant(s) (R-969/edocumentconne5.run.sqlite=2)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Client.Capabilities.Location.Coordinate: refused by policy: server class <x> is neither registered nor classified pure",
     "state": "open",
     "issue": "#7934",
     "note": "PR-131: a platform server class refused by policy (#7934, #7998); 2 error mutant(s) in non-DO/DC stores (R-969/geolocation.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.DateTimeOffset: new System.DateTimeOffset has no overload taking N argument(s) of the given types (DateTime, null)",
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: reproduced exactly on edge-4ebfe7913 (an unassigned TimeSpan into the DateTimeOffset constructor); 1 error mutant (R-958/runs/crypto.sqlite)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Convert.ToString: System.Convert.ToString has no overload taking N argument(s) of the given types (null, IntN)",
+    "state": "open",
+    "issue": "#8268",
+    "note": "PR-135: reproduced exactly on edge-4ebfe7913 (an unassigned Byte into Convert.ToString(Byte, Int32)); 1 error mutant (R-950/runs/excel.sqlite)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DeleteAll on a record of a table with a filter in filter group N (the global group) that another record set: BC applies it to every record of the table for the session, the runtime does not",
+    "state": "open",
+    "issue": "#8271",
+    "note": "PR-135: reproduced on edge-4ebfe7913 (group 1 set on R1, DeleteAll on R2; R1.DeleteAll and group 2 run); 1 error mutant (R-902/sa.sqlite)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the page's oninsertrecord trigger ended without running its exit(value) (measured only for the probe's Card)",
+    "state": "open",
+    "issue": "#8272",
+    "note": "PR-135: reproduced on edge-4ebfe7913 when one branch skips exit(value); an empty trigger runs; 1 error mutant (R-983/recheck/bd.sqlite)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Guid to RecordId",
+    "state": "unexamined",
+    "note": "PR-135: NOT reproduced on edge-4ebfe7913 by invented shapes (a Guid, and an empty Guid, through a Variant into a RecordId fail with a conversion error); 1 error mutant (R-914/mdm.sqlite); #7779 (closed) fixed one shape"
+  },
+  {
+    "key": "NotRun: out-of-scope: call <x>: <x> is a control add-in (usercontrol): control add-ins are not modelled",
+    "state": "unexamined",
+    "note": "PR-135: NOT reproduced on edge-4ebfe7913: an invented usercontrol call from an action, OnOpenPage or OnControlAddInReady fails with 'has not been instantiated'; 1 error mutant (R-930/m/saif.onprem.sqlite)"
   }
 ]
