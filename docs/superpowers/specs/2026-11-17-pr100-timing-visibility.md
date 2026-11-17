@@ -89,3 +89,35 @@ TIMING (wall clock)
   TIMING section whose prefetch/live/warm-up seconds are at most the `serve-entries` stderr line's wall ms (that timer also
   covers decoding and re-sends), and within 5% of it. Its per-mutant
   report equals PR-94's AFTER arm (`scripts/report-diff.ts`: 0 differences).
+
+## Addendum 1 (2026-11-17, after the Opus build review of 278d0ee7)
+The review found no verdict risk. It found five places where the TIMING output would not be true. The rules are amended as
+follows, before the fixes.
+- **Warm-up cause, decided once per daemon start.**
+  - The cause is set when a daemon starts and stored on the daemon. Its first warm-up carries it.
+  - Every later lazy warm-up on the same daemon (`proveOnDaemon`) carries `lazy-prove`.
+  - Closes of a BASELINE daemon (one with a baseline stop) never set a mutant warm-up's cause.
+  - A redeploy sets `after-deploy` on every lane, whether or not that lane held a daemon.
+  - So the causes are `first`, `after-deploy`, `recycle`, `after-<reason>` and `lazy-prove`.
+- **Phase `baseline`.** `serve-daemon-closed.phase` gains `baseline`, for closes during a baseline, coverage or echo request
+  (`plain()` and the coverage window). Every close that ends a request is stamped with that request's kind, including:
+  - `warmup-refused` after the warm-up judge;
+  - `kept-refusal-drift`;
+  - the coverage-window dirty close.
+
+  `idle` is only for closes with no request: a recycle or a stop-signal watch.
+- **Per covered mutant** excludes `known-survivor` as well as `no-coverage`. A `mutant-scored` superseded by
+  `batch-invalidated` is counted once: the last one per mutant id.
+- **The header reads `TIMING (serve times are summed over lanes)`** when more than one lane ran, and `TIMING` otherwise. Counts
+  take singular or plural forms ("1 mutant", "2 mutants").
+- **Printed once.** `lethal run` prints the section exactly once per invocation, after the R786 fallback retry if there is
+  one. A throw inside the fold or the render is reported on one stderr line and never replaces the run's own error.
+- **`explain --events` streams the file line by line.** Memory stays flat in the file's size, and a corrupt line's error names
+  its real line number.
+- **Tests added to the predictions, each red when its rule is reverted:**
+  - a restarted daemon with two codeunits gives the exact cause list `after-timeout`, `lazy-prove`;
+  - the first mutant warm-up after a baseline timeout says `first`;
+  - a `request-failed` close in a thrown send is stamped `prefetch`;
+  - a `plain()` close is stamped `baseline`;
+  - `run` prints once on the fallback path and on the normal return path;
+  - streaming, checked with a fold test over a generated 200,000-line file.
