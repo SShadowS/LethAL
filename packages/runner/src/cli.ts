@@ -91,6 +91,7 @@ import type {
   DoctorDeps,
   DoctorReport,
   ServerDependenciesProbe,
+  TextSearchDependenciesProbe,
 } from "./doctor";
 import { EnvToolClient, EnvToolError, READS_KEYS, validateEnvToolConfig } from "./env-tool";
 import type { EnvToolBlock, EnvToolConfigSection } from "./env-tool";
@@ -105,6 +106,7 @@ import type { EnvToolSession } from "./env-tool-session";
 import { loadEquivalenceMarks } from "./equivalence-marks";
 import { symbolPackageIdentity } from "./published-test-app";
 import { watchProjectInputs } from "./source-drift";
+import { type TextSearchApp, textSearchApp } from "./text-search-fields";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
@@ -5656,6 +5658,64 @@ export async function buildDoctorDeps(
     return { dependencies };
   };
 
+  // PR-128 (R1110): every package in the cache (not only direct dependencies) that declares a
+  // text-optimized field, with its installed versions on the server read by id.
+  const textSearchDependencies = async (): Promise<TextSearchDependenciesProbe> => {
+    if (projectDirForDeps === undefined) {
+      return {
+        skip: "pass --project <dir> to scan the package cache for dependencies that need SQL Server Full-Text Search",
+      };
+    }
+    if (cachePath === undefined || cachePath === "") {
+      return { skip: 'the config names no "bcdev.packageCachePath" to look for packages in' };
+    }
+    if (configFile.envTool !== undefined) {
+      return {
+        skip: "this config has an envTool section; its server is reached through the tool, and doctor does not read installed extensions there",
+      };
+    }
+    let walked: Awaited<ReturnType<typeof walkFiles>> | undefined;
+    try {
+      walked = await walkFiles(cachePath, { links: "yield-files" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+    const found: TextSearchApp[] = [];
+    const unread: string[] = [];
+    for (const rel of walked?.files ?? []) {
+      if (!rel.toLowerCase().endsWith(".app")) continue;
+      try {
+        const app = textSearchApp(
+          await readFile(walked?.resolved.get(rel) ?? join(cachePath, rel)),
+        );
+        if (app !== undefined) found.push(app);
+      } catch {
+        unread.push(rel);
+      }
+    }
+    const verifier =
+      found.length === 0 || opts.installedVersions !== undefined
+        ? undefined
+        : await harnessVerifierFor();
+    const read =
+      opts.installedVersions ??
+      (async (id: string) => (verifier as HarnessVerifier).fetchInstalledVersions(id));
+    const apps: (TextSearchApp & { installed: readonly string[] })[] = [];
+    for (const app of found) {
+      try {
+        apps.push({ ...app, installed: await read(app.id) });
+      } catch (err) {
+        if (err instanceof ApiBaseUnsetError || err instanceof UnfilteredExtensionsQueryError) {
+          throw err;
+        }
+        throw new Error(
+          `cannot read the installed versions of ${app.name} (${app.id}) on the server: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return { cachePath, apps, unread };
+  };
+
   // R1086: the variable NAMES and whether each is set; never a value.
   const credentialsEnvCheck =
     configFile.bcdev?.credentialsEnv === undefined
@@ -5691,6 +5751,7 @@ export async function buildDoctorDeps(
       ...(alcRuntime !== undefined ? { alcRuntime } : {}),
       dependencies,
       serverDependencies,
+      textSearchDependencies,
       ...(credentialsEnvCheck !== undefined ? { credentialsEnv: credentialsEnvCheck } : {}),
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
       ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),

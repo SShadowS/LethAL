@@ -5,6 +5,7 @@ import {
 } from "./assembly-probing-paths";
 import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
+import { type TextSearchApp, textSearchNote } from "./text-search-fields";
 
 /**
  * R109: `lethal doctor` — a read-only pass over every pre-flight refusal `lethal run` would
@@ -177,6 +178,12 @@ export interface DoctorDeps {
    */
   readonly serverDependencies?: () => Promise<ServerDependenciesProbe>;
   /**
+   * PR-128 (R1110): every package in `packageCachePath` (not only direct dependencies) that declares
+   * a table field with `OptimizeForTextSearch`, beside the versions of that app installed on the
+   * server (by id). `skip` (a reason) replaces the whole answer when doctor could not ask.
+   */
+  readonly textSearchDependencies?: () => Promise<TextSearchDependenciesProbe>;
+  /**
    * R1086: `bcdev.credentialsEnv` resolved: the variable NAMES and whether each is set. The details
    * must never hold a credential value.
    */
@@ -201,6 +208,19 @@ export type ServerDependenciesProbe =
         /** The versions installed on the server for this id; empty means not installed. */
         readonly installed: readonly string[];
       }[];
+    };
+
+export type TextSearchDependenciesProbe =
+  | { readonly skip: string }
+  | {
+      readonly skip?: undefined;
+      readonly cachePath: string;
+      readonly apps: readonly (TextSearchApp & {
+        /** The versions installed on the server for this id; empty means not installed. */
+        readonly installed: readonly string[];
+      })[];
+      /** Cache files that are not readable as packages. */
+      readonly unread: readonly string[];
     };
 
 export type DependenciesProbe =
@@ -652,6 +672,41 @@ export function checkServerDependencies(probe: ServerDependenciesProbe): DoctorC
 }
 
 /**
+ * PR-128 (R1110): a package that declares a text-optimized field needs SQL Server Full-Text Search
+ * to install. LethAL cannot read whether the server's SQL has it, so: an app already installed on
+ * the server proves it (its tables exist); one that is not installed fails with the warning.
+ * Scans every package in the cache, not only the direct dependencies.
+ */
+export function checkTextSearchDependencies(probe: TextSearchDependenciesProbe): DoctorCheck {
+  const name = "text-search-dependencies";
+  if (probe.skip !== undefined) {
+    return { name, ok: true, skipped: true, detail: `not checked: ${probe.skip}` };
+  }
+  const unreadNote =
+    probe.unread.length === 0 ? "" : ` Not readable as packages: ${probe.unread.join(", ")}.`;
+  if (probe.apps.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `no package in ${probe.cachePath} declares OptimizeForTextSearch.${unreadNote}`,
+    };
+  }
+  const bad = probe.apps.filter((a) => a.installed.length === 0);
+  if (bad.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `${probe.apps.length} package(s) declare OptimizeForTextSearch and are installed on the server, so its SQL supports them: ${probe.apps.map((a) => `${a.publisher} ${a.name}`).join("; ")}.${unreadNote}`,
+    };
+  }
+  return {
+    name,
+    ok: false,
+    detail: `${bad.length} package(s) in ${probe.cachePath} declare OptimizeForTextSearch and are NOT installed on the server: ${bad.map(textSearchNote).join("; ")}.${unreadNote}`,
+  };
+}
+
+/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -680,6 +735,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     testApp,
     dependencies,
     serverDependencies,
+    textSearchDependencies,
     credentialsEnv,
     assemblyProbingPaths,
   } = deps;
@@ -752,6 +808,13 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     checkPromises.push(
       runCheck("server-dependencies", async () =>
         checkServerDependencies(await serverDependencies()),
+      ),
+    );
+  }
+  if (textSearchDependencies !== undefined) {
+    checkPromises.push(
+      runCheck("text-search-dependencies", async () =>
+        checkTextSearchDependencies(await textSearchDependencies()),
       ),
     );
   }
