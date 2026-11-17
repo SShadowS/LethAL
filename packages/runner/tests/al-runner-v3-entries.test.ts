@@ -11503,8 +11503,14 @@ describe("PR-115: batching the daemon baseline", () => {
       seams: { baselineBatching: true, baselineBatchSize: size, ...(o.seams ?? {}) },
     });
   const isBatch = (q: Req) => q.body.test === undefined;
-  const dupFirstRow = (q: Req, _n: number, lines: Record<string, unknown>[]) =>
-    isBatch(q) ? { lines: [lines[0], ...lines] } : undefined;
+  // A batch answer that names an EXTRA row (no suite test) twice: only decode step 3 catches it, since the
+  // per-codeunit row check ignores extra rows (the first row of the answer is copied under another name).
+  const dupFirstRow = (q: Req, _n: number, lines: Record<string, unknown>[]) => {
+    const first = lines[0];
+    if (!isBatch(q) || first === undefined) return undefined;
+    const extra = { ...first, name: `Codeunit${CU}.Extra` };
+    return { lines: [extra, extra, ...lines] };
+  };
 
   test("the batch body is requestBase's plus excludeTests and coverage, with none of the forbidden fields; the lone codeunit is today's request", async () => {
     const r = await bRig({ extra: { daemonBaseline: true, noClient: true } });

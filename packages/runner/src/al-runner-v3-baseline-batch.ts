@@ -35,6 +35,10 @@ export function batchBody(
  */
 export const exclusionOf = (id: number): string => `Codeunit${id}.`;
 
+// ponytail: the header regex is discovery's (line-start `codeunit <id>`). Unguarded case: a codeunit whose
+// header it misses AND that is Subtype=Test with a `trigger OnRun` and no tests would not be in
+// `tests`/`onRun`: it stays out of `excludeTests` and its OnRun could run inside a batch. Discovery's
+// "lost [Test] procedures" guard covers a header miss only when the codeunit has tests.
 const HEADER = /^\s*codeunit\s+(\d+)(?=\s|")/gim;
 
 /**

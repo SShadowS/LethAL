@@ -3367,6 +3367,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.baselineBatchingWhyOff;
   }
 
+  /** PR-115: the build this session runs (version line and sha256), or `undefined` before `status()` found it. The gate reads it. */
+  runningBuild(): { readonly version: string; readonly binarySha256: string } | undefined {
+    return this.build;
+  }
+
   /** PR-115: set by the first discarded or failed batch; batching stays off for the rest of the session. */
   private baselineBatchingSpent: string | undefined;
 
@@ -4738,6 +4743,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const plan = new SamplePlan(ids, planned);
     this.baselineStats.codeunits = all.length;
     this.baselineStats.sampled = [...planned];
+    // PR-115: the batch counters (and so the stats line) belong to this fill alone.
+    this.baselineStats.batches = 0;
+    this.baselineStats.batchDiscards = 0;
+    this.baselineStats.orderHints = 0;
     const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
     const answers = new Map<number, BaselineAnswer>();
     const shots = new Map<number, BaselineAnswer>(); // R951 (R3): fresh processes' answers in hand

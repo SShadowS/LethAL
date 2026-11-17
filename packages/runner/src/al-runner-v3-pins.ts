@@ -117,12 +117,6 @@ export interface V3BuildPin {
     readonly issue: string;
     readonly evidence: string;
   };
-  /**
-   * PR-114a: this build may batch the baseline's test codeunits into one request, if the session's
-   * eight capability facts all read `matches` and the pin retires the §6 Sleep rule
-   * (`baselineBatchingFor`). PR-115 sets it on the one hand pin `edge-4ebfe7913`.
-   */
-  readonly baselineBatching?: true;
 }
 
 const ROW = (cu: number, method: string) =>
@@ -780,16 +774,22 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
+];
+
+/**
+ * PR-115: the builds whose baseline may be batched (`baselineBatchingFor`). Deliberately NOT a pin and
+ * not part of any readings: a pin is what a gated or adopted build copies (`findV3Pin`), so a flag on
+ * one would spread to every later build that reads from it. Only an exact version AND sha256 listed
+ * here batches. Edge 4ebfe7913's leg C read all eight capability facts `matches` (PR-114). When edge
+ * moves, batching is off on the new build until a person adds it here.
+ */
+export const V3_BASELINE_BATCHING_BUILDS: readonly {
+  readonly version: string;
+  readonly binarySha256: string;
+}[] = [
   {
-    // PR-115: edge 4ebfe7913 (its gated row reads edge-d72d3197d). Its leg C read all eight capability facts `matches`
-    // (PR-114), so it is the one build whose pin allows baseline batching. A hand pin wins over the gated row
-    // (`findV3Pin`); every reading is edge-d72d3197d's. When edge moves, batching is off until someone adds a pin.
-    id: "edge-4ebfe7913",
     version: "al-runner 3.0.0-alpha.14+edge.20261115 (4ebfe7913)",
     binarySha256: "36613897149173c87b2ef2b7b59a1250a8999a8e566800be0ef35d4a91a1f632",
-    ...READINGS_8078BCF49,
-    o1: { ...O1_8078BCF49, cdoApps: 18 },
-    baselineBatching: true,
   },
 ];
 
@@ -991,18 +991,21 @@ export function sleepRuleRetiredFor(
 
 /**
  * PR-114a: why baseline batching is OFF for this session, or `undefined` when it is allowed. Allowed
- * only when ALL hold: the build's pin carries `baselineBatching: true`; this session's probe reads
- * every `V3_CAPABILITY_FACTS` fact `matches`; and `sleepRuleRetiredFor` is true (§6 of draft 3). No pin
- * carries the flag in 114a, so this is a reason on every build.
+ * only when ALL hold: the build is in `V3_BASELINE_BATCHING_BUILDS` (exact version AND sha256); this
+ * session's probe reads every `V3_CAPABILITY_FACTS` fact `matches`; and `sleepRuleRetiredFor` is true
+ * (§6 of draft 3).
  */
 export function baselineBatchingOffReason(
   contract: V3ContractResult | undefined,
   version: string,
   binarySha256: string,
 ): string | undefined {
-  const pin = findV3Pin(version, binarySha256);
-  if (pin === undefined) return "no pin names this build";
-  if (pin.baselineBatching !== true) return `pin ${pin.id} does not allow it`;
+  if (
+    !V3_BASELINE_BATCHING_BUILDS.some(
+      (b) => b.version === version && b.binarySha256 === binarySha256,
+    )
+  )
+    return "this build is not in V3_BASELINE_BATCHING_BUILDS";
   for (const name of V3_CAPABILITY_FACTS) {
     const read = contract?.facts.find((f) => f.fact === name)?.verdict;
     if (read !== "matches") return `${name} read ${read ?? "unmeasured"}`;

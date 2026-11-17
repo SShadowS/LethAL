@@ -1,6 +1,6 @@
-// PR-114a: the capability facts' consumers. The accessor `baselineBatchingFor` is true only with the pin's
-// flag AND all eight capability facts `matches` AND the §6 Sleep rule retired; no real pin carries the
-// flag; `classifyLegC` gate-fails a capability fact that does not read `matches`; the probe cache stores
+// PR-114a: the capability facts' consumers. The accessor `baselineBatchingFor` is true only for a build in
+// `V3_BASELINE_BATCHING_BUILDS` (PR-115: not a pin flag, which gated and adopted builds would inherit) AND
+// all eight capability facts `matches` AND the §6 Sleep rule retired; `classifyLegC` gate-fails a capability fact that does not read `matches`; the probe cache stores
 // the new kind. Pure: the only pin changed is a synthetic copy, removed in `finally`.
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -15,11 +15,14 @@ import {
 } from "../src/al-runner-v3-contract";
 import {
   type V3BuildPin,
+  V3_BASELINE_BATCHING_BUILDS,
   V3_BUILD_PINS,
+  adoptV3Pin,
   baselineBatchingFor,
   baselineBatchingOffReason,
   findV3Pin,
   gatedBuilds,
+  resetAdoptedV3Pins,
 } from "../src/al-runner-v3-pins";
 import {
   type ProbeCacheKey,
@@ -54,37 +57,43 @@ const base = (() => {
 const SHA = "ab".repeat(32);
 const VERSION = "al-runner 3.0.0-pr114a-test (0000000)";
 
-/** Runs `fn` with a synthetic pin for (VERSION, SHA) in the table, then removes it. */
-function withPin(extra: Partial<V3BuildPin>, fn: () => void): void {
+/**
+ * Runs `fn` with a synthetic pin for (VERSION, SHA) in the table, and (PR-115) in the batching list when
+ * `listed`, then removes both.
+ */
+function withPin(listed: boolean, extra: Partial<V3BuildPin>, fn: () => void): void {
   const table = V3_BUILD_PINS as V3BuildPin[];
+  const list = V3_BASELINE_BATCHING_BUILDS as { version: string; binarySha256: string }[];
   table.push({ ...base, id: "pr114a-test", version: VERSION, binarySha256: SHA, ...extra });
+  if (listed) list.push({ version: VERSION, binarySha256: SHA });
   try {
     fn();
   } finally {
     table.pop();
+    if (listed) list.pop();
   }
 }
 
 describe("PR-114a: baselineBatchingFor", () => {
-  test("PR-115: exactly one pin carries baselineBatching (edge-4ebfe7913); the accessor is false on every other build", () => {
-    const flagged = V3_BUILD_PINS.filter((p) => p.baselineBatching === true).map((p) => p.id);
-    expect(flagged).toEqual(["edge-4ebfe7913"]);
+  test("PR-115: exactly one build is listed (edge-4ebfe7913's gated row, by version and sha); the accessor is false on every other pin and gated row", () => {
+    expect(V3_BASELINE_BATCHING_BUILDS).toHaveLength(1);
+    const gated = gatedBuilds().find((g) => g.id === "edge-4ebfe7913");
+    if (gated === undefined) throw new Error("no gated row for edge-4ebfe7913");
+    expect(V3_BASELINE_BATCHING_BUILDS[0]).toEqual({
+      version: gated.version,
+      binarySha256: gated.binarySha256,
+    });
     const probe = result(...allMatch(), sleep("gone"));
+    expect(baselineBatchingFor(probe, gated.version, gated.binarySha256)).toBe(true);
     for (const p of V3_BUILD_PINS) {
-      expect(baselineBatchingFor(probe, p.version, p.binarySha256), p.id).toBe(
-        p.id === "edge-4ebfe7913",
-      );
+      expect(baselineBatchingFor(probe, p.version, p.binarySha256), p.id).toBe(false);
     }
-    // The gated rows read a hand pin's readings and never carry the flag: only 4ebfe7913's hand pin wins for its own build.
     for (const g of gatedBuilds()) {
       expect(baselineBatchingFor(probe, g.version, g.binarySha256), g.id).toBe(
         g.id === "edge-4ebfe7913",
       );
-      expect(findV3Pin(g.version, g.binarySha256)?.id, g.id).toBe(
-        g.id === "edge-4ebfe7913" ? "edge-4ebfe7913" : g.readingsFrom,
-      );
     }
-    // Named builds the spec calls out: alpha.13, alpha.14 releases and edge-d72d3197d.
+    // Named builds: alpha.13, alpha.14 releases and edge-d72d3197d.
     for (const id of ["alpha.13-23e7631be", "alpha.14-ef00a6a8f", "edge-d72d3197d"]) {
       const e = gatedBuilds().find((g) => g.id === id) ?? V3_BUILD_PINS.find((p) => p.id === id);
       if (e === undefined) throw new Error(id);
@@ -92,16 +101,31 @@ describe("PR-114a: baselineBatchingFor", () => {
     }
   });
 
-  test("false without the pin's flag, though every fact matches and the Sleep rule is retired", () => {
-    withPin({}, () => {
+  test("PR-115 (H1): a build adopted or gated from ANY pin never batches, so the flag cannot spread through readingsFrom", () => {
+    const probe = result(...allMatch(), sleep("gone"));
+    try {
+      for (const p of V3_BUILD_PINS) {
+        adoptV3Pin(VERSION, SHA, p.id);
+        expect(findV3Pin(VERSION, SHA)?.id).toBe(p.id);
+        expect(baselineBatchingFor(probe, VERSION, SHA), `adopted from ${p.id}`).toBe(false);
+      }
+    } finally {
+      resetAdoptedV3Pins();
+    }
+  });
+
+  test("false when the build is not listed, though every fact matches and the Sleep rule is retired", () => {
+    withPin(false, {}, () => {
       const c = result(...allMatch(), sleep("gone"));
       expect(baselineBatchingFor(c, VERSION, SHA)).toBe(false);
-      expect(baselineBatchingOffReason(c, VERSION, SHA)).toMatch(/does not allow it/);
+      expect(baselineBatchingOffReason(c, VERSION, SHA)).toMatch(
+        /not in V3_BASELINE_BATCHING_BUILDS/,
+      );
     });
   });
 
   test("false when any one capability fact is not matches (each of the eight, each reading), or is missing", () => {
-    withPin({ baselineBatching: true }, () => {
+    withPin(true, {}, () => {
       for (const name of V3_CAPABILITY_FACTS) {
         for (const v of ["diverged", "unmeasurable"] as const) {
           const facts = allMatch().map((f) => (f.fact === name ? cap(name, v) : f));
@@ -117,25 +141,27 @@ describe("PR-114a: baselineBatchingFor", () => {
   });
 
   test("false when the §6 Sleep rule is not retired (the probe reads sleep-is-noop another way, or not at all)", () => {
-    withPin({ baselineBatching: true }, () => {
+    withPin(true, {}, () => {
       for (const c of [result(...allMatch(), sleep("defect-present")), result(...allMatch())]) {
         expect(baselineBatchingFor(c, VERSION, SHA)).toBe(false);
         expect(baselineBatchingOffReason(c, VERSION, SHA)).toMatch(/Sleep rule is not retired/);
       }
     });
-    // and a pin that does not record sleep-is-noop gone, though flagged
-    withPin({ baselineBatching: true, legC: {} }, () => {
+    // and a pin that does not record sleep-is-noop gone, though listed
+    withPin(true, { legC: {} }, () => {
       expect(baselineBatchingFor(result(...allMatch(), sleep("gone")), VERSION, SHA)).toBe(false);
     });
   });
 
-  test("true only with the flag, all eight matches, and the Sleep rule retired; false for an unpinned build", () => {
-    withPin({ baselineBatching: true }, () => {
+  test("true only when listed, all eight match, and the Sleep rule is retired; false for another sha", () => {
+    withPin(true, {}, () => {
       const c = result(...allMatch(), sleep("gone"));
       expect(baselineBatchingFor(c, VERSION, SHA)).toBe(true);
       expect(baselineBatchingOffReason(c, VERSION, SHA)).toBeUndefined();
       expect(baselineBatchingFor(c, VERSION, "cd".repeat(32))).toBe(false);
-      expect(baselineBatchingOffReason(c, VERSION, "cd".repeat(32))).toMatch(/no pin names/);
+      expect(baselineBatchingOffReason(c, VERSION, "cd".repeat(32))).toMatch(
+        /not in V3_BASELINE_BATCHING_BUILDS/,
+      );
     });
   });
 });

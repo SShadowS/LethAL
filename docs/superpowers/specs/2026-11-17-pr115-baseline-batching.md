@@ -20,6 +20,16 @@ The review found no false-kill path, and its fixes converge:
 
 Draft 3's text binds only where this draft restates it.
 
+## Build review amendment (2026-11-17), overrides the pin text below
+The Opus build review (H1) found that a hand pin carrying the flag spreads:
+- a re-gate of `current` writes the applied pin into `.gated` `readingsFrom`;
+- later candidates adopt that pin's readings, flag included.
+
+So there is NO hand pin and no pin field. The flag is a separate list `V3_BASELINE_BATCHING_BUILDS` (`{version, binarySha256}`),
+outside all readings, holding edge-4ebfe7913 only. `baselineBatchingFor` requires exact membership.
+- **Leg DBM:** a listed build REQUIRES batching on and 2 requests; any other build requires 4.
+- **Expected test moves:** no `serveRowFields` move. The gap is R1109.
+
 ## The switch
 - **Batching happens only when `baselineBatchingFor(contract, version, sha)` is true:**
   - the build's pin carries `baselineBatching: true`;

@@ -70,7 +70,13 @@ import {
   resolveV3Binary,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
-import { type V3BuildPin, findV3Pin, undoTPin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
+import {
+  type V3BuildPin,
+  V3_BASELINE_BATCHING_BUILDS,
+  findV3Pin,
+  undoTPin,
+  v3ReadingsDigest,
+} from "../src/al-runner-v3-pins";
 import { FRESH_PROBE_ENV } from "../src/al-runner-v3-probe-cache";
 import {
   AlRunnerV3SeedError,
@@ -955,16 +961,31 @@ async function legDBMRun(scratch: string): Promise<void> {
   console.log(`  DBM: daemon baseline ${JSON.stringify(d)}`);
   must(d.dropped === undefined, `DBM: the daemon baseline was dropped: ${d.dropped}`);
   must(d.codeunits === 4, `DBM: ${d.codeunits} codeunits, pre-committed 4`);
-  // PR-115 (M-A): conditional on the build. With batching on (the pin edge-4ebfe7913 allows it) two batches of 2,
-  // each leaving out the other two; with it off (an update gate's candidate has no flag) one request per codeunit.
+  // PR-115 (M-A, M2): conditional on the build. A build in V3_BASELINE_BATCHING_BUILDS MUST batch: two batches of
+  // 2, each leaving out the other two. Any other build (an update gate's candidate) sends one request per codeunit.
   const batching = dm.b.isBaselineBatching();
+  const offWhy = dm.b.baselineBatchingOffWhy() ?? "allowed";
+  const build = dm.b.runningBuild();
+  const listed =
+    build !== undefined &&
+    V3_BASELINE_BATCHING_BUILDS.some(
+      (x) => x.version === build.version && x.binarySha256 === build.binarySha256,
+    );
   console.log(
-    `  DBM: baseline batching ${batching ? "on" : `off (${dm.b.baselineBatchingOffWhy() ?? "?"})`}`,
+    `  DBM: build ${build?.version ?? "?"}, listed for batching ${listed}, baseline batching ${batching ? "on" : `off (${offWhy})`}`,
   );
-  const wantRequests = batching ? 2 : 4;
+  must(
+    !listed || batching,
+    `DBM: this build is in V3_BASELINE_BATCHING_BUILDS but baseline batching is off (${offWhy})`,
+  );
+  must(
+    listed || !batching,
+    "DBM: baseline batching is on for a build that is not in V3_BASELINE_BATCHING_BUILDS",
+  );
+  const wantRequests = listed ? 2 : 4;
   must(
     d.requests === wantRequests,
-    `DBM: ${d.requests} requests for ${d.codeunits} codeunits, pre-committed ${wantRequests} (batching ${batching ? "on" : "off"})`,
+    `DBM: ${d.requests} requests for ${d.codeunits} codeunits, pre-committed ${wantRequests} (listed ${listed}; batching ${batching ? "on" : `off: ${offWhy}`})`,
   );
   const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
   must(
@@ -975,12 +996,6 @@ async function legDBMRun(scratch: string): Promise<void> {
   for (const n of j.notes) console.log(`  ${n}`);
   must(j.fail === undefined, j.fail ?? "");
   must(dm.b.baselineDaemon, "DBM: the backend does not report a daemon baseline");
-  // PR-115 replaces 114a's "batching is off": it is on exactly when the build's pin, the probe and the Sleep
-  // rule allow it, and the request count above is what proves it either way.
-  must(
-    batching === (dm.b.baselineBatchingOffWhy() === undefined),
-    "DBM: isBaselineBatching() and baselineBatchingOffWhy() disagree",
-  );
 }
 
 async function legS3(scratch: string): Promise<void> {
