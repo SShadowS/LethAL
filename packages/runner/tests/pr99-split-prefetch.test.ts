@@ -820,11 +820,19 @@ describe("PR-99 spec 7.5/7.7: the queue under the split", () => {
     expect(new Set(h.launched).size).toBe(h.launched.length);
   });
 
-  test("a lane starts only when the window holds at least k + 1 untaken units", async () => {
+  test("r6 (§13): a lane starts while any unit is untaken, and none once the window has none", async () => {
+    // lane 0 takes unit 0 first: with 3 units, lanes 1 and 2 each take one (the r4 rule, k + 1, started only lane 1)
     const h = harness({ barrier: true });
     await run(h, 3, 3, async () => tick());
-    // lane 0 takes unit 0 first: lane 1 needs 2 untaken (has 2), lane 2 needs 3 (has 1 or 2)
-    expect(h.launched).toEqual([1]);
+    expect(h.launched).toEqual([1, 2]);
+    // 2 units: lane 1 takes the second; nothing is left for lane 2
+    const h2 = harness({ barrier: true });
+    await run(h2, 2, 3, async () => tick());
+    expect(h2.launched).toEqual([1]);
+    // 1 unit: lane 0 has it; no lane above starts
+    const h1 = harness({ barrier: true });
+    await run(h1, 1, 3, async () => tick());
+    expect(h1.launched).toEqual([]);
   });
 
   test("it does not start when the gate says no; it starts at the next event once the gate admits", async () => {

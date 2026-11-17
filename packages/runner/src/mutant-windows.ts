@@ -12,6 +12,19 @@ import { testKeyOf } from "./selection";
 /** A window holds mutants until their estimated covering-test time would pass this. */
 export const WINDOW_TIME_CAP_MS = 600_000;
 
+/**
+ * PR-99 r6 (§13): the caps of a window under the split prefetch, N lanes: N times the time and the entries. Its
+ * N lanes share the window, so it still takes about `WINDOW_TIME_CAP_MS` of wall, and the time budget (checked
+ * between windows) is still read about that often. At 600 s per window most DO windows held 1-3 units.
+ */
+export function splitWindowCaps(lanes: number): {
+  readonly timeMs: number;
+  readonly entries: number;
+} {
+  if (!Number.isInteger(lanes) || lanes < 1) throw new Error(`splitWindowCaps: lanes ${lanes}`);
+  return { timeMs: WINDOW_TIME_CAP_MS * lanes, entries: ENTRIES_CHUNK_CAP * lanes };
+}
+
 /** The estimate is worth a warning line above this. */
 export const ESTIMATE_WARN_MS = 2 * 3_600_000;
 

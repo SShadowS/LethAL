@@ -59,20 +59,18 @@ describe("simulate-lanes (PR-99, section 10.2)", () => {
     expect(simulateLanes({ ...base, lanes: 1, barrierMs: 30, laneStartMs: 20 }).wallMs).toBe(420);
   });
 
-  test("tryLaunch's rules: lane k needs k + 1 untaken units after lane 0 took one, and once short the window drains", () => {
+  test("tryLaunch's r6 rule: a lane starts while any unit is untaken; with none left the window drains", () => {
     const units = (n: number) => Array.from({ length: n }, (_, i) => u(0, `s${i}`, 100, 0));
     const at = (n: number) =>
       simulateLanes({ units: units(n), windows: [win(0)], lanes: 3, barrierMs: 0, laneStartMs: 0 });
-    // 2 units: 1 untaken < 2, so lane 0 runs both (the old greedy gave 2 lanes and 100 ms)
-    expect(at(2)).toMatchObject({ lanesPerWindow: [1], wallMs: 200 });
-    // 3 units: lane 1 (2 untaken >= 2), then 1 untaken < 3: lane 2 never starts
-    expect(at(3)).toMatchObject({ lanesPerWindow: [2], wallMs: 200 });
-    // 4 units: 4 - 2 = 2 untaken < 3 at lane 2's turn: still 2 lanes
-    expect(at(4).lanesPerWindow).toEqual([2]);
-    // 5 units: 3 untaken at lane 2's turn: 3 lanes
-    expect(at(5)).toMatchObject({ lanesPerWindow: [3], wallMs: 200 });
-    // a gate that opens after lane 0 took more units: 5 units, lane 0's first two units end before the gate
-    // (at 250): 2 untaken, lane 1 starts, lane 2 does not
+    // 1 unit: lane 0 has it; nothing for lane 1
+    expect(at(1)).toMatchObject({ lanesPerWindow: [1], wallMs: 100 });
+    // 2 units: lane 1 takes the second (r4's k + 1 rule ran both on lane 0: 200 ms)
+    expect(at(2)).toMatchObject({ lanesPerWindow: [2], wallMs: 100 });
+    // 3 units: every lane takes one (r4: 2 lanes, 200 ms)
+    expect(at(3)).toMatchObject({ lanesPerWindow: [3], wallMs: 100 });
+    // a gate that opens after lane 0 took more units: 5 units, lane 0 has run s0 and s1 and holds s2 at 250;
+    // 2 are untaken, so lanes 1 and 2 both start
     expect(
       simulateLanes({
         units: units(5),
@@ -81,7 +79,31 @@ describe("simulate-lanes (PR-99, section 10.2)", () => {
         barrierMs: 250,
         laneStartMs: 0,
       }).lanesPerWindow,
-    ).toEqual([2]);
+    ).toEqual([3]);
+  });
+
+  test("--merge-windows groups consecutive windows; a scope split across them becomes one unit", () => {
+    const base = {
+      units: [
+        u(0, "a", 100, 0),
+        u(0, "b", 50, 0),
+        u(1, "b", 50, 0),
+        u(1, "c", 100, 0),
+        u(2, "d", 30, 0),
+      ],
+      windows: [win(0), win(1), win(2)],
+      lanes: 3,
+      barrierMs: 0,
+      laneStartMs: 0,
+    };
+    const r = simulateLanes({ ...base, mergeWindows: 2 });
+    // windows 0+1: a (100), b (50 + 50), c (100) on three lanes: 100 ms; window 2: d alone: 30 ms
+    expect(r.unitsPerWindow).toEqual([3, 1]);
+    expect(r.lanesPerWindow).toEqual([3, 1]);
+    expect(r.perWindowMs).toEqual([100, 30]);
+    // unmerged: [a, b] and [b, c] on two lanes each, then d: 100 + 100 + 30
+    expect(simulateLanes(base)).toMatchObject({ unitsPerWindow: [2, 2, 1], wallMs: 230 });
+    expect(() => simulateLanes({ ...base, mergeWindows: 0 })).toThrow(/merge-windows/);
   });
 
   test("a lane first launched in a later window pays its start cost there", () => {

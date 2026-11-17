@@ -722,13 +722,15 @@ function splitOwner(
   const ended: number[] = [];
   const watchers = new Set<() => void>();
   let passed = false;
-  const state = { activationsAtBarrier: -1 };
+  /** `watches`: one per window's queue (each `runScopeQueue` watches the gate once). */
+  const state = { activationsAtBarrier: -1, watches: 0 };
   Object.assign(stub, {
     prepareBatch: (p: readonly { mutantId: string }[]) =>
       void prepared.push(p.map((x) => x.mutantId)),
     barrierPassed: () => passed,
     laneGateMeasured: () => true,
     watchLaneGate: (cb: () => void) => {
+      state.watches += 1;
       watchers.add(cb);
       return () => void watchers.delete(cb);
     },
@@ -820,7 +822,8 @@ describe("PR-99: the split prefetch, through a session", () => {
   test("a throw in a lane's unit prefetch, before the unit's first begin, is blamed on unit[0] (selfKept false), not on the lane's previous unit", async () => {
     const root = await project();
     const { procOf } = await learn(root);
-    // P1 is slow on lane 0, so P2 finishes first on lane 1 and waits for it; P3's prefetch then throws.
+    // P1 is slow on lane 0, so P2 finishes first on lane 1 and waits for it; P3's prefetch then throws. Two
+    // lanes, so P3 is lane 1's SECOND unit (r6: with three, lane 2 would take P3 at once).
     const stub = new ParStub({ procOf, delay: (code) => (procOf.get(code) === "P1" ? 80 : 1) });
     splitOwner(stub, {
       barrierAfter: 1,
@@ -828,13 +831,27 @@ describe("PR-99: the split prefetch, through a session", () => {
         procOf.get(ids[0] ?? "") === "P3" ? new Error("prefetch refused: boom") : undefined,
     });
     const events: RunEvent[] = [];
-    const err = await session(root, stub, { workers: 3 }, events).catch((e: unknown) => e);
+    const err = await session(root, stub, { workers: 2 }, events).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ParallelStopError);
     expect(String(err)).toContain("prefetch refused: boom");
     const scored = events.flatMap((e) => (e.type === "mutant-scored" ? [e.mutant.mutantId] : []));
     // Every P2 mutant finished before the stop and precedes P3's first mutant: all kept. Blamed on the
     // previous unit's last mutant instead, the last P2 mutant would be the stopping one, with selfKept false.
     expect(sorted(scored)).toEqual(codesOf(procOf, "P2"));
+  });
+
+  test("r6 (§13): under the split a window holds N lanes' work (N x 600 s); the table equals N = 1", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const stub = new ParStub({ procOf });
+    stub.baselineMs = 150_000; // two tests: 300 s a mutant, so 2 to a 600 s window and 6 to a 3 x 600 s one
+    const split = splitOwner(stub, { barrierAfter: 1 });
+    const par = await session(root, stub, { workers: 3 });
+    expect(table(par)).toEqual(table(one));
+    const n = one.mutants.length;
+    expect(n).toBeGreaterThan(6); // so the two caps give different counts
+    // red with the 600 s cap under the split: ceil(n / 2) windows
+    expect(split.state.watches).toBe(Math.ceil(n / 6));
   });
 
   test("lane 0's session-first warm-up fallback (R960/R786) reaches the caller raw, and the run is marked abandoned", async () => {

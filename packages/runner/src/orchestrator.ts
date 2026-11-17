@@ -212,6 +212,7 @@ import {
   cutWindows,
   estimateCovered,
   formatEstimate,
+  splitWindowCaps,
 } from "./mutant-windows";
 import { nestedProjectWarning } from "./nested-project";
 import { checkObjectClashes, dependenciesOf } from "./object-clash";
@@ -13506,10 +13507,13 @@ async function runMutantsParallel(
   // R912: window by window: the owner prefetches one window, its lanes score it, then the next.
   // A stop of the queue (a latch, a thrown stop) ends the call from `runScopeQueue` as before. The
   // time budget is checked between windows only: a lane's mutant cannot be left out of an ordered commit.
+  // PR-99 r6 (§13): under the split a window holds N lanes' work (`splitWindowCaps`), so it keeps about
+  // 600 s of wall and holds enough units for every lane.
   const windows = cutWindows(
     args.mutants,
     args.perMutantTests,
     costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs),
+    ...(split ? [splitWindowCaps(lanes.length)] : []),
   );
   if (split) prepareBatch.call(owner, prefetchPlans(args));
   else if (windows.length === 0) await owner.prefetchMutants?.([]);

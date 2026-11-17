@@ -430,7 +430,7 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
    * PR-99 (§2.3, §2.5, §10.6-7): the split prefetch. Lane 0 starts at once; lanes above 0 are launched by ONE
    * callback (`tryLaunch`, a single `nextLane` counter, so no index is launched twice) and never at a unit
    * boundary: when the barrier has passed (lane 0's session-first warm-up passed `judgeWarmup`), the lane
-   * gate has a reading (`measured`), the window holds at least k + 1 units not yet taken, and `mayStart(k)`
+   * gate has a reading (`measured`), the window holds a unit not yet taken (r6, §13), and `mayStart(k)`
    * admits it. The callback runs at queue start (a barrier that passed in an earlier window or batch), when
    * `watch`'s source fires (barrier, a measured request, a released reservation) and after each unit.
    * R785's `pace` is off under it.
@@ -548,8 +548,10 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
         return;
       }
       const k = nextLane;
-      // Untaken units only fall: a lane that has no unit to take now never will.
-      if (o.units.length - nextUnit < k + 1) {
+      // Untaken units only fall: a lane that has no unit to take now never will. PR-99 r6 (§13): any untaken
+      // unit starts a lane (the r4 rule asked for k + 1 and left lane 2 idle in most DO windows); PR-98's gate
+      // (`mayStart`) is the only memory brake.
+      if (o.units.length - nextUnit < 1) {
         nextLane = o.lanes;
         because("drained");
         return;
