@@ -105,3 +105,19 @@ the test execution in cut entries produces rows nobody reads.
   - The expected direction: less test time. preproc's estimate is about 400 s per full DO window. This slice's figure is
     reported as measured.
 - **R1094's status** moves to done when this lands (`done (<commit>)`), with the measured slice saving.
+
+## Addendum 1 (2026-11-16, after the pre-build probe and before any DO run)
+
+The text above is left as it was committed. Two things are settled before any measurement runs against it:
+- **The pre-build probe held** (`/coord/handoff/PR-94/probe2.ts`, app `app2/`, codeunit 58397, tests declared Zeta, Alpha,
+  Mid, Beta, each carrying state forward from OnRun). The full run gave Zeta 101, Alpha 202, Mid 209, Beta 210. A
+  `runSelectedOnly` prefix of 2 gave Zeta 101 and Alpha 202; a prefix of 3 added Mid 209. Both are equal to the full run's
+  first rows, in DECLARATION order, not alphabetical. So the build went ahead.
+- **The DO slice is changed, at the orchestrator's direction (2026-11-16):** it is the e-document slice PR-89's measurement ran
+  (`/coord/handoff/PR-89/m1/`; CDOEDocumentResponse, CDOSetupMigrationMgt, CDOeDocsSendingProfileSubs, CDOeDocumentsDispatcher;
+  864 mutants). It replaces PR-67's import/export codeunit, because its prefetch, 72% of its serve time, is where L4's cut
+  entries are. Both arms are fresh runs at `--workers 1`, on the same build pin and config:
+  - BEFORE on master at this PR's base;
+  - AFTER on this PR's head.
+  The same preconditions, the per-mutant IDENTICAL rule and the one-shot arbiter apply. Also reported: the prefetch serve
+  wall ms, before and after.
