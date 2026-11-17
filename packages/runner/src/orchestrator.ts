@@ -2737,8 +2737,7 @@ const REAL_TIMERS: LeaseTimers = {
   clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
 };
 
-/** Bounded acquire retry budget (design §6 step 1: backoff-with-jitter is the default, not optional). */
-/** PR-108 (R1057): the non-replay hang that PAUSES a mutant's walk for the held replay (provisional cap). */
+/** PR-108 (R1057): the non-replay hang that ENDS a mutant's walk, as a natural end does (addendum 2). */
 const WALK_HANG_CAP = 3;
 
 /**
@@ -2763,6 +2762,8 @@ export function cappedWalkNote(
     note: `the walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); ${k} covering test(s) after them were not run`,
   };
 }
+
+/** Bounded acquire retry budget (design §6 step 1: backoff-with-jitter is the default, not optional). */
 const LEASE_ACQUIRE_ATTEMPTS_DEFAULT = 6;
 const LEASE_BACKOFF_BASE_MS = 500;
 const LEASE_BACKOFF_CAP_MS = 8_000;
@@ -13442,15 +13443,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
       break;
     }
-    if (capK !== undefined) {
-      args.emit({
-        type: "warning",
-        code: "held-walk-capped",
-        message: `[lethal] held-walk-capped: mutant ${m.mutantId}'s walk stopped after ${WALK_HANG_CAP} timeouts (R1057's cap, PR-108); verdict ${verdict}; ${capK} covering test(s) after them were not run`,
-      });
-    }
-    if (args.sink === undefined) commitRecord();
-    else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);
+    // M1: the warning goes out with the row, inside the commit. On a lane `finish` may drop the commit
+    // (another lane's stop), and then there is neither a row nor a warning for this mutant.
+    const commitAndWarn = (): void => {
+      commitRecord();
+      if (capK !== undefined) {
+        args.emit({
+          type: "warning",
+          code: "held-walk-capped",
+          message: `[lethal] held-walk-capped: mutant ${m.mutantId}'s walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); verdict ${verdict}; ${capK} covering test(s) after them were not run`,
+        });
+      }
+    };
+    if (args.sink === undefined) commitAndWarn();
+    else args.sink.finish(m.mutantId, commitAndWarn, stopAfterRecord);
     if (stopAfterRecord !== undefined) throw stopAfterRecord;
     // Task 12 (spec §8/§12): the in-flight-unknown branch above just latched `safety` — stop
     // scheduling further mutants in THIS shard rather than letting the next iteration's
