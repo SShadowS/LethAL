@@ -84,3 +84,24 @@ batches.**
   - DBM's leg list entries.
 - **Docs:** the gate page (leg C's count and kinds, the DBM bullet, a History entry), docs/measurements/README.md's fact count,
   and the CHANGELOG.
+
+## Addendum 1 (2026-11-17, after the first live run and the Opus build review, before the final gate)
+- **Leg C's first live reading.** On edge-4ebfe7913, all 8 capability facts read `matches` (`/coord/handoff/PR-114/gate-observe.log`),
+  and leg C passes in 28 s.
+- **DBM's first run failed:** its selector ids lay outside `sandbox-optin`'s id range (77200-77249), so the instrumented app did
+  not compile. They are now 77249/77248/77247.
+- **DBM's figures, pre-committed here** from the observe run on the fixed ids (`/coord/handoff/PR-114/gate-dbm.log`): in both
+  sessions, 15 killed, 3 survived and 104 no-coverage over 122 mutants, with 0 errors and 0 timeout-killed.
+  - The daemon baseline: 4 codeunits, 4 requests, 2 served and compared samples, nothing dropped.
+  - The warning sets: `dbm-oneshot` `[]`; `dbm-daemon` `["al-runner-v3-memory-guard", "al-runner-v3-serve-flagged-unknown"]`.
+
+  DBM asserts these counts (`assertCounts`, from gate-expected.ts), so two equally uninformative sessions cannot pass.
+- **Fixes from the review:**
+  - a fact request that times out stops the probe's daemon and marks the remaining facts `unmeasurable`, so a late answer is
+    never read as the next fact's (M1);
+  - capability facts never make the probe uncacheable (M2);
+  - `batch-onrun-included-duplicates` sends a non-empty `excludeTests`, as LethAL's body always does (L2);
+  - DBM gets DBI's not-applicable path on a no-serve build (L3).
+- **R164 on DBM, stated honestly.** Built-in operators refuse hang-capable sites (R196) and never tag them, so the
+  `hangCapable` check guards only a future tagging operator. What keeps `sandbox-optin`'s loop sites off a server is that no test
+  calls those procedures.
