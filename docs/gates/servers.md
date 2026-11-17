@@ -569,17 +569,24 @@ nothing about them changes.
   the table below is not proven on bc4: use bc4 only for read-only predicts and the work R833 names.
 - **The 408 form is not measured on bc4.** Every hang on bc4 answered the 400 (GitHub #49). `itest:hang` accepts
   the 400 form on bc4 and the 408 form on bc1-bc3 (`stopFormFor`, which also checks the config's port).
-- **bc4 carries part of the Continia 30 stack** (coord PR-67, owner ruling q-20261117T160215-008076dd, 2026-11-17).
-  `scripts/bc-continia-publish.ts` published, under the lane-code lease (attempt 044, released), Continia System
-  Application, Core and Connector App 30.0.0.0. Each was read back: equal sha256, installed, one row.
-  - **The 4th app failed,** and the rest were not attempted. Continia Customer Onboarding 30.0.0.0 was refused with HTTP 422:
-    "Text optimized index cannot be created/queried because the SQL Server Full-Text Search component is not installed". BC
-    restored the original extensions. Delivery Network, Delivery Network - Onboarding and Core Internal Activation App were
-    not published.
-  - **bc4's 6 Microsoft app rows read the same before and after** (`/coord/handoff/PR-67/bc4/ids.log`, `ids-after.log`).
-  - **Asked of the owner:** q-20261117T183405-4c6fee36 (Full-Text Search on bc4's SQL, or another server).
-  - **The proof table below predates this,** so every bc4 gate needs re-proving on bc4 before it is used again (the proof
-    rule: a server's app set changed).
+- **bc4's SQL Server has Full-Text Search, and bc4 carries the Continia 30 stack** (coord PR-67, 2026-11-17).
+  - **The first attempt:** Continia Customer Onboarding 30.0.0.0 was refused with HTTP 422 ("Text optimized index ... the SQL
+    Server Full-Text Search component is not installed").
+  - **The owner's fix** (q-20261117T183405-4c6fee36): bc4-sql-1 was recreated on `bclan/mssql-fts:16.0.4305.5`
+    (`FULLTEXTSERVICEPROPERTY('IsFullTextInstalled')=1`), and bc4-bc-1 restarted, giving a fresh CRONUS.
+  - **The database is in memory:** a host restart loses it, and so do the apps. bc1-bc3 are unchanged and have no Full-Text
+    Search.
+  - **Then, under the lane-code lease (attempt 045, released):**
+    - `bun scripts/bc-linux-setup.ts --server bc4` published LethAL Control 1.0.0.26 and every fixture app (doctor ok for all
+      four fixtures);
+    - PR-67's `scripts/bc-continia-publish.ts` published all 7 Continia 30 apps (System Application, Core, Connector App,
+      Customer Onboarding, Delivery Network, Delivery Network - Onboarding, Core Internal Activation App 30.0.0.35781). Each was
+      read back: equal sha256, installed, one row.
+
+    Evidence: `/coord/handoff/PR-67/bc4/setup.log`, `publish2.log`.
+  - **The proof table below predates the fresh database and the Continia apps,** so every bc4 gate needs re-proving on bc4
+    before it is used again (the proof rule).
+  - **A user's dependency that needs Full-Text Search** is now a doctor check: R1110, coord PR-128.
 
 ### bc4 proof table (R-826b, 2026-11-07, LethAL Control 1.0.0.25)
 

@@ -44,4 +44,14 @@ Coord PR-128 (lethal-code, 2026-11-17). Found by PR-67: on `bc4`, Continia Custo
    with the Continia 30 packages in the cache:
    - `text-search-dependencies` FAILS, naming Continia Customer Onboarding and its 3 fields;
    - Core and Connector App are not named (installed, and no such fields).
+
+**Amendment (2026-11-17, before any live run of this check):**
+- **What changed on bc4:** the owner added SQL Full-Text Search to bc4 (q-20261117T183405-4c6fee36), which recreated its database.
+  PR-67 then published all 7 Continia 30 apps there, Customer Onboarding included. So prediction 2 is replaced by two live,
+  read-only runs, one per direction, each under its own server's lease:
+  - **bc2** (BC 28.4; no Continia 30, so Customer Onboarding is not installed): a doctor run with a config naming bc2 FAILS
+    `text-search-dependencies`, naming Customer Onboarding and its 3 fields;
+  - **bc4** (Customer Onboarding 30.0.0.0 installed): the same doctor run PASSES the check, naming Customer Onboarding as installed.
+- **The predict note** in `scripts/bc-continia-publish.ts` moves to PR-67, which owns that script; it is not on master. PR-128
+  exports `textSearchApp` and `textSearchNote` for it. Unit test 1's "the predict note names the app" is met by the note's own test.
 3. **`itest:alrunner-v3`** is not touched (doctor only). Verify and CI.
