@@ -1,5 +1,5 @@
 // PR-133: the keep entries for two of the texts DO's x2 window still closed its daemon on, measured CLEAN by PR-54's
-// strict census with every distinct text a refuser (`/coord/handoff/PR-133/census/`, invented cells of family
+// strict census with every distinct text a refuser (`/coord/handoff/PR-133/census2/`, invented cells of family
 // `x2-refusals`): `C*` in the BigInteger SetFilter text, and `RecordRef.GetTable of Integer 123`.
 import { describe, expect, test } from "bun:test";
 import { V3_SERVE_SAFE_REFUSALS, serveDaemonReusable } from "../src/al-runner-server";
