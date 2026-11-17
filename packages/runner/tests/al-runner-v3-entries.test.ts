@@ -8392,6 +8392,7 @@ describe("R948 C: the memory guard", () => {
       serve: { coverage: plainCoverage },
       extra: { daemonBaseline: true },
       polls: 1,
+      seams: { concurrentSamples: false }, // PR-119: this test counts the guard's reads
     });
     const v: TestVerdict[] = [];
     r.b.baselinePhase(true);
@@ -8463,6 +8464,7 @@ describe("R948 C: the memory guard", () => {
       extra: { daemonBaseline: true },
       polls: 1,
       seams: {
+        concurrentSamples: false, // PR-119: this test counts the guard's reads
         memorySleep: async () => {
           if (closesAtFirstSleep < 0) closesAtFirstSleep = held.rig?.serve.closes.length ?? -2;
         },
@@ -9374,7 +9376,9 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
   });
 
   test("a skipped middle sample (wall timeout) is replaced FORWARD; the report names reason and replacement", async () => {
-    const r = await six();
+    // PR-119: a concurrent sample's forward pick is taken after the loop's position at the settle,
+    // so this in-place-flow pin runs with the samples in place (the concurrent pick: pr119 tests).
+    const r = await six({ seams: { concurrentSamples: false } });
     stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
     await baseline(r.b, SUITE6);
     expect(rep(r)).toMatchObject({
@@ -9599,9 +9603,10 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
   test("review 3: a forward replacement the loop never reaches is not counted", async () => {
     let n = 0;
     const r = await six({
-      // spent() is read at each loop top and once after the skipped sample's run: the 4th read is
-      // the loop top before the replacement (CUS[2]), where the fill stops.
-      stopHandle: { spent: () => ++n >= 4, signalled: () => false, stopForMemory: () => {} },
+      seams: { concurrentSamples: false }, // PR-119: the spent() read count below is the in-place flow's
+      // spent() is read twice per request (PR-119: again after the pre-check) and once after the skipped
+      // sample's run: the 6th read is the loop top before the replacement (CUS[2]), where the fill stops.
+      stopHandle: { spent: () => ++n >= 6, signalled: () => false, stopForMemory: () => {} },
     });
     stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
     await baseline(r.b, SUITE6);
@@ -11728,3 +11733,421 @@ describe("PR-115: batching the daemon baseline", () => {
   });
 });
 const isBatchReq = (q: Req) => q.body.test === undefined;
+
+// ---------------------------------------------------------------------------------------------
+// PR-119 (R1107): the daemon fill's cross-check samples run beside the daemon. Event logs and call
+// counters on the fakes, never the clock: a "hold" waits for an event, with a cap only so a
+// sequential flow (where the event can never come first) cannot hang.
+// ---------------------------------------------------------------------------------------------
+describe("PR-119: cross-check samples beside the daemon", () => {
+  // Six codeunits: the plan samples index 1 and the last (index 5).
+  const CUS = [79120, 79121, 79122, 79123, 79124, 79125];
+  for (const c of CUS) SUITE_METHODS[c] = ["T"];
+  const SUITE = CUS.map((c) => ref("T", c));
+  const at = (i: number) => CUS[i] ?? 0;
+  const until = async (pred: () => boolean) => {
+    for (let i = 0; i < 150 && !pred(); i += 1) await Bun.sleep(1);
+  };
+  interface Hooks {
+    /** Runs at the start of a codeunit's FIRST one-shot process. */
+    hold?: (id: number, log: string[]) => Promise<void>;
+    /** Gives that first process this result instead of running it. */
+    stub?: Record<number, unknown>;
+    /** That first process throws. */
+    boom?: number[];
+  }
+  const GIBS = 2 ** 30;
+  const memSample = (usedBytes: number) => ({
+    usedBytes,
+    maxBytes: 32 * GIBS,
+    source: "/sys/fs/cgroup/memory.max",
+  });
+  /** One test's rig with an event log: `req:<cu>` at a daemon request, `start:`/`end:<cu>` around a one-shot. */
+  async function setup(o: RigOpts & { hooks?: Hooks } = {}) {
+    const log: string[] = [];
+    const { hooks, ...rest } = o;
+    const r = await dbRig({
+      suite: SUITE,
+      ...rest,
+      serve: {
+        coverage: plainCoverage,
+        stderr: (req) => {
+          log.push(`req:${/Codeunit(\d+)/.exec(req.ids[0] ?? "")?.[1]}`);
+          return undefined;
+        },
+        ...(rest.serve ?? {}),
+      },
+    });
+    const holder = r.b as unknown as {
+      spawnCodeunit: (...a: { id: number }[]) => Promise<unknown>;
+    };
+    const real = holder.spawnCodeunit.bind(r.b);
+    const seen = new Map<number, number>();
+    holder.spawnCodeunit = async (...a) => {
+      const id = a[0]?.id ?? 0;
+      const n = (seen.get(id) ?? 0) + 1;
+      seen.set(id, n);
+      log.push(`start:${id}`);
+      if (n === 1) await hooks?.hold?.(id, log);
+      if (n === 1 && hooks?.boom?.includes(id)) throw new Error("sample boom");
+      const made = n === 1 ? hooks?.stub?.[id] : undefined;
+      const out = made ?? (await real(...a));
+      log.push(`end:${id}`);
+      return out;
+    };
+    const idx = (e: string) => log.indexOf(e);
+    return { r, log, idx, rep: () => r.b.daemonBaselineReport() };
+  }
+  const timedOut = { timedOut: true, wallMs: 1 };
+  /** The one-shot of codeunit index 1 differs from the daemon's. */
+  const differsAt1: RowsFn = (_m, cu) =>
+    cu === at(1)
+      ? [{ method: "T", status: "fail" as const, message: "differs" }]
+      : (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const }));
+  /** Holds a first one-shot until the daemon request for index `i` has arrived. */
+  const holdUntilReq = (sample: number, i: number) => (id: number, log: string[]) =>
+    id === sample ? until(() => log.includes(`req:${at(i)}`)) : Promise.resolve();
+  /** Holds a first one-shot until another one-shot starts (it never does while the loop settles it first). */
+  const holdUntilOtherStart = (sample: number) => (id: number, log: string[]) =>
+    id === sample
+      ? until(() => log.some((e) => e.startsWith("start:") && e !== `start:${sample}`))
+      : Promise.resolve();
+
+  test("a sample in flight overlaps the next daemon request; the stats and the console line say so", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const t = await setup({ hooks: { hold: holdUntilReq(at(1), 2) } });
+      await baseline(t.r.b, SUITE);
+      // the request for index 2 arrived while index 1's one-shot was still running
+      expect(t.idx(`req:${at(2)}`)).toBeGreaterThan(-1);
+      expect(t.idx(`req:${at(2)}`)).toBeLessThan(t.idx(`end:${at(1)}`));
+      expect(t.rep()).toMatchObject({
+        dropped: undefined,
+        samplesOverlapped: 1,
+        samplesSequential: 1,
+      });
+      expect(t.rep().sampleMemoryAtStart).toBeUndefined(); // no guard here
+      expect(
+        warn.mock.calls.some((c) =>
+          String(c[0]).includes("baseline samples (PR-119): 1 overlapped, 1 sequential"),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the seam off, or LETHAL_V3_SEQUENTIAL_SAMPLES=1: today's call order, each sample finished before the next request", async () => {
+    const sequential = (t: Awaited<ReturnType<typeof setup>>) => {
+      expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`req:${at(2)}`));
+      expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+    };
+    const off = await setup({
+      seams: { concurrentSamples: false },
+      hooks: { hold: holdUntilReq(at(1), 2) },
+    });
+    await baseline(off.r.b, SUITE);
+    sequential(off);
+    const before = process.env.LETHAL_V3_SEQUENTIAL_SAMPLES;
+    process.env.LETHAL_V3_SEQUENTIAL_SAMPLES = "1";
+    try {
+      const env = await setup({ hooks: { hold: holdUntilReq(at(1), 2) } });
+      await baseline(env.r.b, SUITE);
+      sequential(env);
+      process.env.LETHAL_V3_SEQUENTIAL_SAMPLES = "yes";
+      await expect(setup()).rejects.toThrow(/al-runner-v3-sequential-samples-refused/);
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "LETHAL_V3_SEQUENTIAL_SAMPLES");
+      else process.env.LETHAL_V3_SEQUENTIAL_SAMPLES = before;
+    }
+  });
+
+  test("a sample that settles with no daemon request started beside it counts as sequential (one batch holds every codeunit)", async () => {
+    const t = await setup({ seams: { baselineBatching: true, baselineBatchSize: 6 } });
+    await baseline(t.r.b, SUITE);
+    expect(t.r.serve.requests.filter((q) => q.body.test === undefined)).toHaveLength(1);
+    expect(t.rep()).toMatchObject({ dropped: undefined, compared: 2 });
+    // index 1 ran in flight, but every later answer was cached: no request overlapped it
+    expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+  });
+
+  test("the result is applied only at the settle: a differing sample does not stop the requests the loop makes before it settles", async () => {
+    const t = await setup({ oneShotRows: differsAt1 });
+    await baseline(t.r.b, SUITE).catch(() => {});
+    expect(t.rep().dropped).toContain("differs from a fresh process's");
+    expect(t.r.serve.requests).toHaveLength(6); // sequentially: 2, the drop came first
+  });
+
+  test("a dropped result wins over a later uniform stop (R1001): the drop is the reading, not a throw", async () => {
+    const t = await setup({
+      suite: R1001_SUITE,
+      serve: { rows: refusedAll },
+      oneShotRows: (_m, cu) =>
+        (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const })),
+    });
+    const v = await baseline(t.r.b, R1001_SUITE);
+    expect(v).toHaveLength(R1001_SUITE.length);
+    expect(t.rep().dropped).toContain("differs from a fresh process's");
+    expect(t.r.serve.requests.length).toBeGreaterThanOrEqual(10); // the loop ran on to the 10th refusal
+  });
+
+  test("a dropped result wins over the two-unusable drop", async () => {
+    const t = await setup({
+      oneShotRows: differsAt1,
+      serve: { answer: (_q, n) => (n === 2 || n === 3 ? { lines: [], eof: true } : undefined) },
+    });
+    await baseline(t.r.b, SUITE).catch(() => {});
+    expect(t.rep().dropped).toContain("differs from a fresh process's");
+    expect(t.rep().dropped).not.toContain("two serve requests");
+  });
+
+  test("a dropped result is applied at the loop's end after a stop, not lost", async () => {
+    const held: { r?: Rig } = {};
+    const t = await setup({
+      oneShotRows: differsAt1,
+      stopHandle: {
+        spent: () => (held.r?.serve.requests.length ?? 0) >= 3,
+        signalled: () => false,
+        stopForMemory: () => {},
+      },
+    });
+    held.r = t.r;
+    await baseline(t.r.b, SUITE).catch(() => {});
+    expect(t.rep().dropped).toContain("differs from a fresh process's");
+  });
+
+  test("the sample's throw beats a loop throw in finally, and the loop's is named in a warning", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const t = await setup({ hooks: { boom: [at(1)] } });
+      const h = t.r.b as unknown as { baselineRequest: (...a: unknown[]) => Promise<unknown> };
+      const realReq = h.baselineRequest.bind(t.r.b);
+      let calls = 0;
+      h.baselineRequest = async (...a) => {
+        if (++calls === 3) throw new Error("loop boom");
+        return realReq(...a);
+      };
+      await expect(baseline(t.r.b, SUITE)).rejects.toThrow("sample boom");
+      expect(
+        warn.mock.calls.some((c) =>
+          String(c[0]).includes("al-runner-v3-baseline-sample-error-order"),
+        ),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("finally applies nothing but a throw: a dropped sample in flight when the loop throws gives the loop's error, no drop, no notice", async () => {
+    const seen: [string, string][] = [];
+    const t = await setup({ oneShotRows: differsAt1, notify: (c, m) => seen.push([c, m]) });
+    const h = t.r.b as unknown as { baselineRequest: (...a: unknown[]) => Promise<unknown> };
+    const realReq = h.baselineRequest.bind(t.r.b);
+    let calls = 0;
+    h.baselineRequest = async (...a) => {
+      if (++calls === 3) throw new Error("loop boom");
+      return realReq(...a);
+    };
+    await expect(baseline(t.r.b, SUITE)).rejects.toThrow("loop boom");
+    expect(dropNotice(seen)).toHaveLength(0);
+    expect(t.rep().dropped).toBeUndefined();
+  });
+
+  test("a skipped forward pick is taken after the loop's position at the settle, and the too-slow one-shot settles the sample first", async () => {
+    const slow: RowsFn = (_m, cu) =>
+      cu === at(3)
+        ? [{ method: "T", status: "fail" as const, message: "Test exceeded 9s timeout." }]
+        : (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const }));
+    const t = await setup({
+      serve: { rows: slow },
+      oneShotRows: slow,
+      hooks: {
+        stub: { [at(1)]: timedOut },
+        // held until the too-slow one-shot of index 3 starts: it never can before the sample is settled
+        hold: (id, log) =>
+          id === at(1) ? until(() => log.includes(`start:${at(3)}`)) : Promise.resolve(),
+      },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.idx(`end:${at(1)}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`start:${at(3)}`));
+    // settled while the loop was at index 3: the first unsampled codeunit after it is index 4 (not 2)
+    expect(t.rep().replacements).toEqual({ [`Codeunit${at(1)}`]: `Codeunit${at(4)}` });
+  });
+
+  test("a backward pick runs after the in-flight sample settled, never beside it", async () => {
+    const t = await setup({
+      hooks: { stub: { [at(1)]: timedOut }, hold: holdUntilOtherStart(at(1)) },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.idx(`end:${at(1)}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`start:${at(4)}`)); // the backward pick (the last has no later codeunit)
+    expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`start:${at(5)}`)); // and the last sample
+    expect(t.rep().replacements).toEqual({ [`Codeunit${at(1)}`]: `Codeunit${at(4)}` });
+  });
+
+  test("the got-undefined sample branch settles the sample before its replacement runs", async () => {
+    const t = await setup({
+      hooks: { hold: holdUntilOtherStart(at(1)) },
+      serve: { answer: (_q, n) => (n === 5 ? { lines: [], eof: true } : undefined) },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.idx(`end:${at(1)}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`start:${at(4)}`));
+    expect(t.rep().replacements).toEqual({ [`Codeunit${at(5)}`]: `Codeunit${at(4)}` });
+  });
+
+  test("a skipped result settled at a stop starts no replacement one-shot (R955)", async () => {
+    const held: { r?: Rig } = {};
+    const t = await setup({
+      hooks: { stub: { [at(1)]: timedOut } },
+      stopHandle: {
+        spent: () => false,
+        // the request for index 5 is the last that arrives: the stop signal ends it
+        signalled: () => (held.r?.serve.requests.length ?? 0) >= 6,
+        stopForMemory: () => {},
+      },
+    });
+    held.r = t.r;
+    // Only the fill (the first baseline call): later live calls would start index 4 for their own sake.
+    t.r.b.baselinePhase(true);
+    await t.r.b.activate(null);
+    await t.r.b.run(SUITE[0] ?? ref("T"), OPTS).catch(() => {});
+    t.r.b.baselinePhase(false);
+    expect(t.rep().sampledSkipped).toEqual([`Codeunit${at(1)} (timed-out)`]);
+    expect(t.log.includes(`start:${at(4)}`)).toBe(false); // the backward pick did not run
+  });
+
+  describe("memory (the guard on, a fixed reader)", () => {
+    const guarded = (
+      used: (held: { r?: Rig }) => number | undefined,
+      o: {
+        rss?: number;
+        hooks?: Hooks;
+        sampleRss?: () => number;
+        stopHandle?: RigOpts["stopHandle"];
+      } = {},
+    ) => {
+      const held: { r?: Rig } = {};
+      return setup({
+        extra: { memoryHeadroomGb: 4 },
+        seams: {
+          memoryReader: () => {
+            const u = used(held);
+            return u === undefined ? undefined : memSample(u);
+          },
+          memorySleep: async () => {},
+          anonReader: () => o.rss ?? GIBS,
+          ...(o.sampleRss !== undefined ? { sampleRss: o.sampleRss } : {}),
+        },
+        ...(o.stopHandle !== undefined ? { stopHandle: o.stopHandle } : {}),
+        ...(o.hooks !== undefined ? { hooks: o.hooks } : {}),
+      }).then((t) => {
+        held.r = t.r;
+        return t;
+      });
+    };
+
+    test("room: a sample overlaps and the fill's start reading is recorded; no room (23 of 28 GiB): it runs in place", async () => {
+      const yes = await guarded(() => 20 * GIBS);
+      await baseline(yes.r.b, SUITE);
+      expect(yes.rep().samplesOverlapped).toBeGreaterThanOrEqual(1);
+      expect(yes.rep().sampleMemoryAtStart).toBe(20 * GIBS);
+      const no = await guarded(() => 23 * GIBS);
+      await baseline(no.r.b, SUITE);
+      expect(no.rep()).toMatchObject({
+        samplesOverlapped: 0,
+        samplesSequential: 2,
+        dropped: undefined,
+      });
+    });
+
+    test("an unreadable memory reading, or an unreadable daemon RSS, means sequential", async () => {
+      const reading = await guarded((h) =>
+        (h.r?.serve.requests.length ?? 0) >= 2 ? undefined : 20 * GIBS,
+      );
+      await baseline(reading.r.b, SUITE);
+      expect(reading.rep().samplesOverlapped).toBe(0);
+      const rss = await guarded(() => 20 * GIBS, { rss: 0 });
+      await baseline(rss.r.b, SUITE);
+      expect(rss.rep().samplesOverlapped).toBe(0);
+    });
+
+    test("S is the larger of the estimate and the daemon's RSS: a 9 GiB daemon refuses a sample 3 GiB would admit", async () => {
+      const big = await guarded(() => 17 * GIBS, { rss: 9 * GIBS });
+      await baseline(big.r.b, SUITE);
+      expect(big.rep().samplesOverlapped).toBe(0);
+      const small = await guarded(() => 17 * GIBS, { rss: GIBS });
+      await baseline(small.r.b, SUITE);
+      expect(small.rep().samplesOverlapped).toBeGreaterThanOrEqual(1);
+    });
+
+    test("a daemon request whose read says no settles the sample before its gate", async () => {
+      // 20 GiB with nothing held, 26 GiB while the sample holds its reservation: admitted, then no room.
+      const t = await guarded((h) =>
+        ((h.r?.b as unknown as { memoryHeld: number } | undefined)?.memoryHeld ?? 0) > 0
+          ? 26 * GIBS
+          : 20 * GIBS,
+      );
+      await baseline(t.r.b, SUITE);
+      // admitted (started in flight), but settled before the request started: sequential in effect
+      expect(t.idx(`start:${at(1)}`)).toBeGreaterThan(-1);
+      expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`req:${at(2)}`));
+      expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+    });
+
+    const heldOf = (h: { r?: Rig }) =>
+      (h.r?.b as unknown as { memoryHeld: number } | undefined)?.memoryHeld ?? 0;
+
+    test("a settle at the pre-check whose replacement one-shot spends the stop handle: no daemon request follows (R955)", async () => {
+      const seen: { log?: string[] } = {};
+      // The sample (index 1) stays in flight, held, until the request for index 5 would arrive. That request's
+      // pre-check says no (26 GiB while the sample holds), so the sample settles: skipped, and its backward
+      // replacement (index 4, nothing is left after index 5's position) runs one-shot and spends the stop handle.
+      const t = await guarded(
+        (h) => (heldOf(h) > 0 && (h.r?.serve.requests.length ?? 0) >= 5 ? 26 * GIBS : 20 * GIBS),
+        {
+          hooks: { stub: { [at(1)]: timedOut }, hold: holdUntilReq(at(1), 5) },
+          stopHandle: {
+            spent: () => seen.log?.includes(`end:${at(4)}`) === true,
+            signalled: () => false,
+            stopForMemory: () => {},
+          },
+        },
+      );
+      seen.log = t.log;
+      // Only the fill (the first baseline call): later live calls would send requests of their own.
+      t.r.b.baselinePhase(true);
+      await t.r.b.activate(null);
+      await t.r.b.run(SUITE[0] ?? ref("T"), OPTS).catch(() => {});
+      t.r.b.baselinePhase(false);
+      expect(t.log).toContain(`end:${at(4)}`); // the replacement ran, inside the settle
+      expect(t.r.serve.requests).toHaveLength(5); // and the request for index 5 never went out
+    });
+
+    test("the pre-check reads with the in-flight sample's reservation already held (its gate was queued first)", async () => {
+      const reads: { req: number; held: boolean }[] = [];
+      const t = await guarded(
+        (h) => {
+          reads.push({ req: h.r?.serve.requests.length ?? 0, held: heldOf(h) > 0 });
+          return 20 * GIBS;
+        },
+        { hooks: { hold: holdUntilReq(at(1), 3) } },
+      );
+      await baseline(t.r.b, SUITE);
+      // after request 1 is answered (2 requests in): admission, the sample's own gate, the pre-check, the gate of request 2
+      expect(reads.filter((x) => x.req === 2).map((x) => x.held)).toEqual([
+        false,
+        false,
+        true,
+        true,
+      ]);
+    });
+
+    test("the sampleRss seam replaces the per-pid read in admission: 0 means the sample runs in place", async () => {
+      const t = await guarded(() => 20 * GIBS, { sampleRss: () => 0 });
+      await baseline(t.r.b, SUITE);
+      expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+    });
+  });
+});
