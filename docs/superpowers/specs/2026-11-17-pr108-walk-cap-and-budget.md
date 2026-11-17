@@ -73,3 +73,75 @@ Coord PR-108 (lethal-code, 2026-11-17). Analysis: `/coord/handoff/PR-108/analysi
     `unscheduledCount`, and no replay;
   - the other direction: with the budget not spent, the same walk completes with today's verdict;
   - the budget check on a lane uses the sink's stop.
+
+## Addendum 1 (2026-11-17, after spec-adversary r1; this text overrides the sections above where they differ)
+The spec-adversary found no way for the cap or the budget cut to make a false kill. It found four medium issues, all fixed
+here.
+
+**M2 fixed by design: the cap is PROVISIONAL.** The cap must never lower the score. As first written, it could turn
+`killed` into `error`, or `timeout-killed` into `error`. That happens when the held hang's cold confirm fails
+(`timeout-unconfirmed`, `confirm-stopped`, `unstable`, `session-reused`, stranded), or when none of the first three hangs
+reproduces. So:
+- **At the 3rd non-replay hang,** the 3rd is pushed into `noted` (L4). Feeding of new covering steps PAUSES; the walker is
+  NOT returned. The held step, and if needed the noted ones, are replayed through today's after-walk path.
+- **If that ends `timeout-killed`,** the walk is done and capped: the cap note is recorded and no further covering step runs.
+- **Otherwise,** the walk RESUMES from the next un-fed covering step under today's rules: the remaining steps are fed, held and
+  noted logic applies to later hangs with no second cap, and today's after-walk logic decides as it does now.
+
+So the only class moves the cap can cause are:
+1. `killed` -> `timeout-killed`: a later fail beyond the 3rd hang is not reached.
+2. A terminal answer past the 3rd hang (stranded, result-lost, deadline-exceeded, transport error, R688 abort, in-flight
+   latch) is not reached. Its `error` becomes the held replay's `timeout-killed`, with the same evidence a single-test
+   mutant gets. Its side effects (`stopAfterRecord`, the latch quarantine) do not happen on that mutant.
+3. Note only: R688's "blanked" note goes when the blanked codeunit lies past the cap.
+
+`timeout-killed` is a kill, so the mutation score never falls.
+
+**M1: the budget cut's exit.**
+- `feed` sets a local `budgetCut` flag and returns.
+- Right after the `for await` loop, BEFORE the after-walk code (`const h = held ?? ...`), a set flag leads to:
+  1. `walker.return()`;
+  2. `budgetSpent(at)` when sequential, or `sink.memoryStop(...)` on a lane;
+  3. `break` out of the mutant loop.
+- That skips the held replay, R577 I4, R198's coverage check, every note and `commitRecord`. No row is stored.
+- The cut is checked only while not replaying and not in a resumed replay.
+- **Extra test:** a walk with NO held step, cut by the budget, gives no stored row and no `group-coverage-incomplete`.
+
+**L1: the memory guard.** `TimeBudget.exhausted` is also true after a memory-guard stop. The in-walk cut fires only on the
+CLOCK budget and on signals, never on a memory stop (R948/R1014: the mutant in flight keeps its verdict on a memory stop).
+
+**M3: the evidence and the window comparison.**
+- **The 0-moves prediction rests on t9-t14,** the windows whose heads contain PR-51; t1-t8 cannot show PR-51's notes. Across
+  t9-t14:
+  - `killed` with "was not scored": 0;
+  - `error` with "was held earlier in this walk": 0;
+  - `timeout-killed` whose killer is not the held test: 0;
+  - an `error` carrying "after the timeout:": 0.
+
+  Every one of the 13 "after the timeout:" walks was killed by its held test. So no mutant of t9-t14 moves under the cap.
+- **The window comparison.** R-998's comparison rule must relax `killed` <-> `timeout-killed` for a pair where exactly one head
+  contains PR-108 and the PR-108 side carries the cap note. Every other move stays strict. That rule is lethal-bugs' tool
+  (`/coord/handoff/R-998/do/verdict-rule.ts`), so the change goes to lethal-bugs as a request, with this clause.
+
+**M4: the order limit, stated.** The covering order (R197's ledger) is fixed within one uninterrupted run. Verdicts carried by
+`--resume` do not enter the ledger, and v3 request packing can change which tests hang. So for a mutant with 3 or more hangs,
+the class (killed vs timeout-killed) can depend on order across a budget cut and `--resume`. This is recorded in R1057.
+Seeding the ledger from carried kills is out of scope.
+
+**L2-L5:**
+- The note's `<k>` counts the refs in the ordered covering list after the 3rd hang's ref, excluding codeunits in `skip`.
+- The cap note is appended where `heldNote` is (after any `STRANDED_NOTE_PREFIX`).
+- A test pins that a 3rd hang which alone reproduces gives timeout-killed by the 3rd.
+- The cap applies on bcdev too: it moves from "Not changed" to the changes.
+
+**Tests added to the predictions** (each red when its rule is reverted):
+- held hang, confirm fails, a later test fails: `killed` (the walk resumed), with no cap note;
+- none of the first three hangs reproduces, the 4th reproduces: `timeout-killed` by the 4th (the walk resumed);
+- the budget cut with no held step: no row, no R198 error;
+- a memory-guard stop mid-walk: the walk continues and its verdict is recorded.
+
+**Gates, checked by the adversary:**
+- `itest:hang`: at most 2 hangs per mutant (`heldSecondHangs` = 2), so the cap is never reached.
+- `itest:alrunner-v3`: no `timeout-killed` in its baselines (R164).
+
+Both pass unchanged.
