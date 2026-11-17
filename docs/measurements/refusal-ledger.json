@@ -1975,6 +1975,48 @@
     "note": "PR-106: reduced on edge-4ebfe7913 to Page.Run(0, V) with V an unassigned Variant; 1 error mutant in DO run 13"
   },
   {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteEndObject raised the .NET exception Newtonsoft.Json.JsonWriterException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: reduced on edge-4ebfe7913 through Base Application's \"Json Text Reader/Writer\" (WriteStartObject(''), WriteEndObject twice: No token to close); 4 error mutants in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: reduced on edge-4ebfe7913 through \"Json Text Reader/Writer\" (WriteStartObject('') twice); 3 error mutants in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WritePropertyName raised the .NET exception Newtonsoft.Json.JsonWriterException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: the same JsonWriterException family as WriteEndObject/WriteStartObject, met through WritePropertyName; not reduced on its own; 1 error mutant in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.JsonTextWriter.WriteEndArray raised the .NET exception Newtonsoft.Json.JsonWriterException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: the same JsonWriterException family, met through WriteEndArray; not reduced on its own; 1 error mutant in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Boolean false to BigInteger",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: reduced on edge-4ebfe7913 to RecordRef.Field(<BigInteger field>).SetRange(false); 3 error mutants in DO run 13 (a wrong field number)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Code <x> to BigInteger",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: reduced on edge-4ebfe7913 to RecordRef.Field(<BigInteger field>).SetRange(<a Code>); 1 error mutant in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: Evaluate of <x> into Decimal (form not pinned by the corpus)",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-107: reduced on edge-4ebfe7913 to Evaluate(D, '<300'); 4 error mutants in DO run 13. The run's text of 25 spaces is not reproduced by Evaluate(D, <25 spaces>), which runs"
+  },
+  {
     "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureMLWrapper.AzureMLRequest: refused by policy: server class <x> is neither registered nor classified pure",
     "state": "unexamined",
     "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 15"
