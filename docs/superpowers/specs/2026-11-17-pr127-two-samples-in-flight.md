@@ -1,8 +1,23 @@
 # PR-127 (R1112): up to two of the daemon fill's cross-check samples in flight
 
-Status: r2 (coord PR-127, lethal-preproc, 2026-11-17). It builds on PR-119's design
-(`2026-11-17-pr119-concurrent-baseline-samples.md`, r5), whose rules hold unless this file changes them. r2 answers the
-reviews of r1 (§0). The pre-commitment of the proof runs (§7) is committed to master with this spec's final text before any
+Status: r3 (coord PR-127, lethal-preproc, 2026-11-17). It builds on PR-119's design
+(`2026-11-17-pr119-concurrent-baseline-samples.md`, r5), whose rules hold unless this file changes them. r3 answers the
+delta review of r2 (§0a); r2 answered the reviews of r1 (§0).
+
+## 0a. Delta review of r2 (opus), finding by finding
+- **D1 (low-medium, R955): admission's `await memoryChain` was a wait with no stop re-check after it.** The re-check now
+  sits right before the start, after admission (§2.5).
+- **D2 (low):** `finally` now walks the queue oldest first, and the first non-ok entry decides (§4.6).
+- **D3 (low, also in today's code): a started sample could outlive the fill when `sample-gate-not-queued` fires.** The
+  entry is now queued before the check throws (§2.5).
+- **Stated:**
+  - every discard comes with a throw, a drop or a stop, so R951's count is never read with discarded entries in it
+    (§2.3);
+  - a re-check inside `apply` returns `stop`, and only that propagates (§2.7).
+- **D4:**
+  - "the compared codeunits" is now defined (§7.2);
+  - `requests` stays strict, except a re-send after a request error, traced by its event;
+  - P3's vacuous verdict clause is dropped. The pre-commitment of the proof runs (§7) is committed to master with this spec's final text before any
 proof run.
 
 ## 0. Reviews of r1 (opus spec-adversary; lethal-code), finding by finding
@@ -54,15 +69,20 @@ proof run.
 
    In the sequential fill those younger samples would not have started. `finally` awaits the discarded entries, and a
    throw from one of them is named in a warning (`al-runner-v3-baseline-sample-discarded-error`), never thrown.
+   - **Invariant:** a discard happens only with a throw, a drop (the fill returns) or a stop (R951's check is skipped). A
+     discarded entry may have counted `compared` inside `crossCheckSample`, so R951's count of clean samples is never read
+     after a discard. A future discard without a stop would break this and must not be added.
 4. **The settle operations:**
    - `settleOldest(when)` applies the oldest entry. A non-ok result triggers §2.3 and is returned.
    - `settleAll(when)` calls `settleOldest` until the queue is empty or a result is not `ok`.
 5. **Starting a sample** (settle point 1):
    - while the queue is full (`inflight.length === K`), the oldest entry is settled; a non-ok result is handled as today
      (return, or break);
-   - then the stop re-check (§2.7);
-   - then admission (§3). Admitted: the sample is appended. Refused: `settleAll`, the stop re-check again, then the sample
-     runs in place (`check`), as today.
+   - then admission (§3), which may await `memoryChain`;
+   - then the stop re-check (§2.7), right before anything starts (r3, D1);
+   - admitted: the sample starts, and its entry is appended BEFORE the `sample-gate-not-queued` check, so a throw there
+     leaves it for `finally` to await (r3, D3);
+   - refused: `settleAll`, the stop re-check again, then the sample runs in place (`check`), as today.
 6. **No one-shot runs in place beside a running one-shot (quiesce).**
    - When `apply` is about to run a backward replacement pick in place, it first awaits the promises of every younger
      entry still queued, without applying them.
@@ -75,6 +95,8 @@ proof run.
 7. **The stop re-check** after every wait (a `settleOldest`, a `settleAll`, a quiesce): if `stopHandle.spent()`,
    `stopHandle.signalled()` or `memoryStopped` holds, nothing new starts. The loop sets `stopped` and breaks, and the
    queue is discarded (§2.3).
+   - Inside `apply`, after a quiesce, or inside `send()`, the re-check returns `stop` as a value. Only that propagates to
+     the loop, which then breaks; `apply` never breaks the loop itself.
 8. **Every other settle point drains the whole queue (`settleAll`), as PR-119's single settle did:**
    - before the too-slow one-shot;
    - in the `got === undefined && isSample` branch, before its `replace`;
@@ -126,8 +148,11 @@ daemon's RSS); `memoryHeld` counts each in-flight entry's reservation at `E` onc
    - A queued entry that threw throws its original error when it is applied (FIFO).
    - In `finally`: if the loop's error came from applying an entry, or from that entry's pick, it stands, and every
      younger entry is discarded (a warning only).
-   - If the loop's error is the loop's own (a daemon request, a check), the oldest still-queued `threw` wins over it, with
-     PR-119's `al-runner-v3-baseline-sample-error-order` warning.
+   - If the loop's error is the loop's own (a daemon request, a check), `finally` walks the queue oldest first, and the
+     first non-ok entry decides (r3, D2):
+     - `threw`: that error is thrown, with PR-119's `al-runner-v3-baseline-sample-error-order` warning;
+     - `dropped` or `stop`: the loop's error stands (PR-119 r5);
+     - every younger entry is discarded (a warning only).
    - A discarded entry's throw is never thrown.
 7. **I7:**
    - Unchanged: the planned samples (`baselineSampleIds`), how each is compared, R1001's `cleanCompared`, and that R951's
@@ -153,6 +178,11 @@ is served.
      stated, not hidden: the unit tests and P2 carry it.
 2. **P2, DO 735fb42, (a) `LETHAL_V3_SAMPLES_IN_FLIGHT=1` against (b) the default 2,** one after the other in one heavy slot.
    Setup as PR-124's (config PR-67's `v3.json`, `--workers 1`).
+   - **"The compared codeunits"** is the planned samples, less `sampledSkipped`, plus the values of `replacements`,
+     taken from `daemonBaselineReport()` in the stderr's daemon-baseline line, or else from the `baseline-one-shot-timed`
+     events with reason `cross-check`.
+   - **`requests`** is strict, except a re-send after a request error (`batchFailed`), traced by its event; that is
+     reported.
    - **The arm** (`--changed-since 735fb42^`), whole runs. **Equal (a difference is a BLOCK):**
      - every per-mutant verdict and killingTest, by PR-107's join;
      - `requests`;
@@ -177,7 +207,7 @@ is served.
    - **Memory:** the whole-project leg's own al-runner children peak at most at the daemon's peak plus twice the largest
      one-shot peak plus 0.5 GiB; no memory stop in any leg.
 3. **P3, BaseApp 28.6 × the 12 FA test codeunits (PR-119's P3 setup), (a) against (b), baseline only:**
-   - the same per-test statuses and refusal texts, and the same mutant verdicts by join;
+   - the same per-test statuses and refusal texts (a baseline-only run scores no mutant, so no verdict is compared);
    - no memory stop, and the peak under the guard's bound.
    - It pairs at most once (samples at 1, 10, 11, and 11 is never admitted), so it is a memory and equality check, not a
      wall check.
@@ -190,6 +220,7 @@ is served.
      - K = 1 behaves as PR-119.
    - **I3:**
      - the budget spent during the queue-full wait starts no third one-shot;
+     - the budget spent during admission's chain wait starts nothing (r3, D1);
      - a younger `stop` found at quiesce cancels the pick;
      - a `stop` from the oldest discards the younger;
      - a `skipped` applied after a stop starts nothing.
@@ -199,7 +230,9 @@ is served.
    - **I6:**
      - A threw, B threw: A's error;
      - A stop, B threw: a clean stop and a warning;
-     - the loop's own error with B threw: B's error and the order warning.
+     - the loop's own error with B threw: B's error and the order warning;
+     - the loop's own error with A dropped (unapplied) and B threw: the loop's error, and B is warned about (r3, D2);
+     - a `sample-gate-not-queued` throw: the started sample is still awaited (r3, D3).
    - **The queue-full settle:**
      - a third sample settles only the oldest;
      - one lands among a batch's cached answers, with a skip whose forward pick is the next codeunit of the same batch.
