@@ -120,3 +120,25 @@ File at aldevtools/BusinessCentral.AL.Runner:
 - the evidence: PR-101's numbers (193 s, 10.7% of serve, after a kill; 291 s with kill-first order);
 - a minimal invented repro;
 - a duplicate search first, in its own step.
+
+## Addendum 1 (2026-11-17, after the build, the Opus review and the first observe gate)
+- **A batched pair is cut after the LAST failing covering test of its codeunit,** not the first. The first observe gate refused
+  stored pairs: `pairBatchRefused` was 35 (D1), 35 (D1c) and 7 (T), where 0 was pre-committed (R788). The cause: the kill
+  ledger (R197) can make any failing covering test of the codeunit the killer, so a pair cut after the first in plan order
+  refused a later killer. With the fix, every possible killer is inside the prefix.
+  - The second observe gate (head 4816958c) shows no gate failure and no moved pin.
+  - The unit test "A and B both fail ... the kill is B" goes red under the old rule.
+  - Single pairs (`sendKillPairOn`) keep the actual `ref` as `through`: their killer is known.
+- **The committed lane trace moves as predicted.** `packages/runner/tests/v3-lane-trace.expected.json`:
+  - the two kill-pair requests whose killer is not the codeunit's last test (M0002, M0005) gain `runSelectedOnly: true`;
+  - `selectedOnlyRequests` goes 0 -> 2 and `selectedOnlyTestsSkipped` 0 -> 4;
+  - closes, steps, verdicts and the other stats are unchanged.
+
+  M0001's pair is not flagged, because its killer is the last test, so there is nothing to cut.
+- **One behaviour change on a lying daemon.** Today, a NONE answer that is missing the killer's row stops the session through
+  `rowMissing`. Under this change, the cut request's missing kept row is PR-94's scan gap: the request is re-sent uncut, the
+  codeunit joins `neverFlag`, and a clean re-sent answer is what the confirm reads. This is the same rule PR-94 applies to
+  prefetches. Only a daemon that drops rows triggers it, and the unit test with a daemon that lies on the re-send too keeps
+  today's `rowMissing`.
+- **`itest:hang` is not run.** The diff touches only al-runner-v3 code, and the hang gate runs on bcdev. The owner's ruling of
+  2026-10-25 skips BC legs for v3-only changes.

@@ -1,7 +1,8 @@
-# PR-96/PR-97 (R1093): split the serve prefetch across lanes, per procedure scope, r5
+# PR-96/PR-97 (R1093): split the serve prefetch across lanes, per procedure scope, r6
 
-Status: r5 (coord PR-99, 2026-11-17, lethal-preproc). Built on lethal/pr99; this is the pre-commitment of its proof runs.
-- **What answers what:** §12 (r5) is the pre-commitment and overrides §6; §11 (r5) is the build and its two reviews; §10 (r4)
+Status: r6 (coord PR-99, 2026-11-17, lethal-preproc). Built on lethal/pr99; this is the pre-commitment of its proof runs.
+- **What answers what:** §13 (r6) changes the windows and the launch rule and overrides §12's N = 3 run, bar and peak;
+  §12 (r5) is the pre-commitment and overrides §6; §11 (r5) is the build and its two reviews; §10 (r4)
   answers the r3 delta review, §9 (r3) answers r2, §8 (r2) answers r1. Where they differ, the later section overrides the
   earlier text.
 - **Before the pre-commitment:** a final short delta review of §10, right before it is committed. The pre-commitment's
@@ -443,3 +444,101 @@ a pass:
 
 A move blocks; it is never re-recorded. A verdict move found here is diagnosed with PR-94's one-shot arbiter (§2.6), and
 still blocks.
+
+## 13. r6 (orchestrator ruling, 2026-11-17): windows sized for N lanes, the k + 1 rule dropped
+**Why.** §12's N = 1 run (659c28f0) cut the slice into 6 windows of 1-3 unit pieces (`cutWindows`: 600 s of estimated
+covering-test time, or 256 entries, per window; R912). Under r5's launch rule (§11.5, k + 1 untaken units) the simulation of
+its unit times gave lanes per window [2, 1, 2, 1, 1, 1]: lane 2 never started. The full DO run cuts the same windows, so this
+capped R1093's saving everywhere, not only on the slice. Re-planning only the slice would prove verdict identity on a layout
+DO rarely has. The orchestrator ruled for the code change below. Where this section differs from §2-§12, it overrides them.
+A short Opus delta review checked this section against the code; its three findings are folded in.
+
+**The change** (lethal/pr99 01a77e70, d8ce7868):
+1. **Windows.** Under the split (N > 1), `runMutantsParallel` cuts its windows with `splitWindowCaps(N)`: N x 600 s and
+   N x 256 entries. N lanes share a window, so it still takes about 600 s of wall when the lanes run. The time budget is still
+   checked between windows (a lane's mutant cannot be left out of an ordered commit), so it is still read about every 600 s of
+   wall. N is the lanes asked for (`--workers`): the gate's `affordableLanes` caps nothing before the first reading
+   (PR-98 build review #1). When PR-98's gate admits fewer lanes, a window can take up to N x 600 s, and the budget is read
+   that much less often. That costs time precision, never a verdict.
+2. **The launch rule.** A lane above 0 starts while ANY unit of its window is untaken. The k + 1 rule is dropped. PR-98's
+   cgroup lane gate (`mayStart`: modes x the highest peak reading per resident lane, no lane before a reading) stays the only
+   memory brake. A lane started for a single unit pays its start (~30 s: #8143's recompile, plus lazy proofs); DO units take
+   minutes.
+3. **The bound.** `scripts/simulate-lanes.ts` applies both:
+   - the r6 launch rule;
+   - `--merge-windows M`, which groups M consecutive N = 1 windows into one simulated window. This is an ESTIMATE of
+     the N-lane cut, not a bound (delta review #2): the greedy cut at M x the caps moves the boundaries rather than
+     cutting at the groups' ends; a mutant over a cap sits alone, so an N = 1 window can exceed a cap; and the N-lane
+     run cuts with its own baseline's durations. A later boundary can lengthen the wall (a long piece late in one
+     window delays the next). A scope split across merged windows becomes one unit, and each piece keeps its own N = 1
+     window's prefetch share.
+   - It reports the units and lanes per simulated window.
+   - Tests: the r6 rule both ways (a unit left starts a lane; none left starts none), the merge, the caps through
+     `runSession` (with 300 s mutants, 4 windows at 3 x the caps against 11 at 1 x). All red-checked.
+
+**Why no verdict moves.** §3's argument is per mutant: its group, echo, codeunit entries and `mutantExcludes` do not depend
+on the window. A bigger window changes only which units are queued together, as the split already does. The batch latch
+(§10.1, §11.4) is per BATCH, not per window, so it is unchanged. N = 1 is untouched. The two non-structural risks r5 already
+named stay: daemon history differs by lane (PR-56's guard), and CPU contention against the two `timeout-killed` pins, now
+with up to 3 lanes at once. The per-mutant comparison covers both.
+
+**The N = 1 run of §12 stays valid, and is the comparison's N = 1 side.**
+- The r6 diff changes only code that N = 1 never runs:
+  - `runMutantsParallel` runs only at N > 1 (`scope.parallel` needs `workers > 1` on al-runner-v3), and the caps are passed
+    only under its `split` condition;
+  - `tryLaunch` returns at once without the split;
+  - N = 1's own `cutWindows` call (in `runMutantsOnBackend`) keeps the default caps;
+  - `simulate-lanes.ts` is a script, not run by `lethal run`.
+- So an N = 1 run on the r6 head runs the same code path as the run on 659c28f0.
+- Its outputs are all recorded under `/coord/handoff/PR-99/proof/`: the per-mutant table (`n1.sqlite`, `n1.report.json`),
+  the unit times (`n1.unit-times.json`), the stats line and the peak.
+- Its verdict counts equal run 13's: killed 42, survived 177, `timeout-killed` 2 (the M13125 and M14760 pins), error 16,
+  no-coverage 6.
+
+**The re-simulation** (N = 1's unit times, `--lanes 3 --merge-windows 3`):
+
+| Gate G, start L | Simulated wall | Units per window | Lanes per window |
+|---|---|---|---|
+| G = 101,672 ms, L = 84,967 ms (§12's rule: L = N = 1's warm-up wall; G = L + unit 0's prefetch share, 16,705 ms) | 683,077 ms | [5, 2] | [3, 2] |
+| G = 42,705 ms, L = 26,000 ms (the tight figure, the #8143 recompile) | 565,143 ms | [5, 2] | [3, 2] |
+| for reference, N = 1 (the sum of its unit times) | 1,025,168 ms | [3, 1, 3, 2, 1, 1] | 1 each |
+
+So **the bar is 1.2 x 683,077 = 819,693 ms** of mutant-phase wall at N = 3 (678,172 ms with the tight L, reported beside it).
+3 lanes start in the first window, so the floor "lanes started = 3" is reachable.
+- The figure is an estimate (above). The delta review simulated the cut this slice most likely gets at 3 x 600 s
+  (`GetReportParameters` and part of `CreateDocumentsForRecord` moving into the first window: units [6, 1], lanes [3, 1]):
+  605,000-683,000 ms with §12's L, all within 683,077 ms; with the tight L up to 576,318 ms, above the tight figure. The
+  committed bar is the one above, on that basis. The receipt records the N = 3 run's actual cut (its lanes notice and the
+  per-lane units prefetched).
+
+**The N = 3 run** (overrides §12's run lines):
+- Head: the final lethal/pr99 head (at least d8ce7868). Same build (`edge-847b1fa5a`, from the config), same config, a
+  fresh scratch store, the same six `--lines` spans (`/coord/handoff/PR-99/proof/lines.args`).
+- `--workers 3`, under `scripts/heavy-slot.sh --wait --peak 16 baseapp` (the orchestrator's ruling (b), from the N = 1
+  measurement, replacing §12's `--peak 24`). The figure is set by PR-98's gate, not by the tree peak alone (delta review
+  #1):
+  - `decideLanes` refuses lane k when lanes charged x modes x the highest peak reading + 4 GiB (`LANE_LETHAL_BYTES`) is over
+    the declared peak.
+  - N = 1's highest reading (`sampledPeak` in its events) is 3,327,078,400 B (3.10 GiB). With one mode, 3 lanes need
+    3 x 3.10 + 4 = 13.3 GiB. 16 leaves 2.7 GiB, so a reading of up to 4.0 GiB still starts lane 2.
+  - heavy-slot's own tree measurement of N = 1 was 3.75 GiB, so 3 x 3.75 = 11.3 GiB also fits under 16.
+  - If lane 2 is still refused "declared peak", the floor is missed and the run is re-planned, never counted.
+- Not queued while it cannot be admitted: before queueing, check that `memory.current` + 16 + 4 GiB and the held slots'
+  declared peaks + 16 + 4 GiB both fit under `memory.max`. If not, wait for the holding job's end, then queue.
+- Compared with N = 1 per mutant with `scripts/report-diff.ts`: verdict and `killingTest` identical. Both runs generate
+  from the same spans on the same generation code, so their codes agree; the five-part pin (§12) is checked on both stores
+  before the comparison is read.
+- The gift card and D1 at N = 1 against N = 3, as §6.
+
+**The floors** (§12's, unchanged), read from the N = 3 run. "Lanes started = 3" is read from the lanes notice that
+`runMutantsParallel` writes once per batch, from the window that started the most lanes (`lanesNotice`: its started
+count must be 3 of 3 asked; delta review #3), with the split stats line's per-lane `units prefetched` (each ≥ 1). If the
+real cut differs from the simulated one so that no window starts 3 lanes, the run is not evidence and is re-planned.
+
+**Committed figures** (§12's, with the new bar):
+- 0 verdict or `killingTest` moves over the 243 pins (and on the gift card and D1);
+- 0 `entries-batch-refused` stops at N = 3 that N = 1 lacks;
+- the mutant-phase wall at N = 3 at most 819,693 ms;
+- the tree peak under 16 GiB, with no R948 stop.
+
+A move blocks; it is never re-recorded.
