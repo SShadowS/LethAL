@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**44 of 1064 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**44 of 1065 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1103,12 +1103,13 @@ that ordering is the priority.
 - **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — measured; levers ranked, none built
 - **R1093** · Measure whether the serve prefetch (32% of a DO window's mutant phase) can be split across parallel lanes per codeunit without moving a verdict · [R1093.md](docs/roadmap/R1093.md) · done (d0f4f2cc): split prefetch built (PR-99, spec r6); DO slice N = 1 = N = 3 per mutant, mutant phase 1,025…
 - **R1094** · On al-runner v3 serve, an entry's excludeTests hides rows but still RUNS the excluded tests; only runSelectedOnly skips them. So L4's cut (R1030) never saved test execution, and its t4 rate gain belongs elsewhere · [R1094.md](docs/roadmap/R1094.md) · done (PR-94) — runSelectedOnly on prefix-cut entries; DO e-doc slice prefetch -28.5%, per-mutant IDENTICAL
-- **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · open
+- **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · done (4605b385) — P3 held: DO t12 and t13 (heads with PR-93) closed 0 times on the 26 kept texts (PR-105)
 - **R1097** · On al-runner v3 serve, a kill pair's NONE entry runs its whole codeunit, though the confirm needs only the prefix up to the killing test: 284 s (15.7% of serve) on PR-94's DO slice · [R1097.md](docs/roadmap/R1097.md) · done (PR-102) — pairs cut after the killer in runSelectedOnly requests; DO slice live 579.9 s to 323.7 s…
 - **R1098** · al-runner v3 runs every entry and every test of a request, even after a mutant's killing failure: 193 s (10.7% of serve) on PR-94's DO slice runs after a kill; a stop needs upstream support · [R1098.md](docs/roadmap/R1098.md) · open — measured (PR-101); upstream asked: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8210
 - **R1099** · Each al-runner v3 serve pass carries a ~0.145 s floor outside the tests; 4,792 passes made it ~575 s (33% of tests time) on PR-94's DO slice; fewer passes per mutant need upstream multi-codeunit entries · [R1099.md](docs/roadmap/R1099.md) · open — attributed (PR-104): ~80% of the floor is the company login raised per test codeunit session; upstream…
 - **R1100** · R987's serve request sizing divides a request's whole memory jump by its entry count, but the jump barely depends on the count (~0.6 GiB + ~3 MiB/entry, R² 0.05-0.14): a 2-4 entry request charges hundreds of MiB per entry forever, capping 51 of 110 DO codeunits below 256 (one at 4) · [R1100.md](docs/roadmap/R1100.md) · open — measured and re-diagnosed (PR-103): g is mostly retained daemon memory; the affine bound was…
 - **R1101** · Size v3 serve requests on their own growth from start plus the target daemon's current retained memory, not on growth from the daemon's floor (R1100); needs the memory guard, the lane gate and the recycle check to match · [R1101.md](docs/roadmap/R1101.md) · open — designed in outline (PR-103); waits for the lazy-prove probe's data from a DO window
+- **R1103** · DO windows t12/t13's remaining refusal families kept on the serve daemon (PR-105): 9 of 10 measured classes driven by invented cells and CLEAN (12 texts); 45 of t12/t13's 71 closes now kept; P3 waits for a DO window · [R1103.md](docs/roadmap/R1103.md) · open — kept; P3 waits for the next DO window on a head with PR-105
 
 ---
 

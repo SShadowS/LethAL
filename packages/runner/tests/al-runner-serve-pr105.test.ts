@@ -75,7 +75,7 @@ describe("PR-105 keep entries", () => {
       ).toBe(false);
     expect(
       k(
-        "a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering)",
+        "a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF starts with the bytes '%PDF-' matches BC; a test that reads the content tests the layout renderer)",
       ),
     ).toBe(false);
     // the list-without-the-new-row-line text no cell produced

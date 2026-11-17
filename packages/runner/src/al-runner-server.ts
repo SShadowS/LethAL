@@ -1089,7 +1089,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // PR-54's strict census with every distinct text a refuser (`--refusers 7`, `/coord/handoff/PR-105/census/`).
   // Not kept: RunRequestPage (PR-74 review H1 stands), the SaveAs-with-layout errors, the placeholder Pdf read (no
   // invented cell produces them), and the list-without-the-new-row-line text (no cell produced it). The
-  // setfilter, JSON writer and Evaluate texts are widened in their own entries above.
+  // setfilter and JSON writer texts are widened in their own entries above (BIGCODE, JSONPATH); the Evaluate NUL
+  // runs get their own entry below.
   // Pinned by `al-runner-serve-pr105.test.ts`.
   [
     "fieldref-calcfield-not-flowfield",
