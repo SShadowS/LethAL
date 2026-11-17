@@ -105,6 +105,11 @@ export type BaselineClassification = (typeof BASELINE_CLASSIFICATIONS)[number];
 interface Base {
   /** Monotonic, starting at 1. A gap means the stream was truncated. */
   readonly seq: number;
+  /**
+   * PR-121: milliseconds since the `--progress-out` file was opened, stamped by that sink when it
+   * writes the line (the emit time). Absent on events held in memory.
+   */
+  readonly atMs?: number;
 }
 
 export type RunEventInput =

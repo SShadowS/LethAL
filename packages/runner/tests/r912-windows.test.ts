@@ -8,6 +8,7 @@ import {
   cutWindows,
   estimateCovered,
   formatEstimate,
+  splitWindowCaps,
 } from "../src/mutant-windows";
 
 /**
@@ -101,6 +102,31 @@ describe("R912: cutWindows", () => {
         ),
       ),
     ).toEqual([["M1"], ["M2"]]);
+  });
+});
+
+describe("PR-121 (a): the split's caps close a window by time only", () => {
+  // 400 one-test mutants (2 entries each, 800 in all), 1 s each. At 3 lanes the old split cap of 768 entries would
+  // have cut at 384; the default cap of 256 (the N = 1 path) cuts at 128.
+  const mutants = Array.from({ length: 400 }, (_, i) => m(`M${i}`));
+  const tests = new Map(mutants.map((x) => [x.mutantId, [ref(1, "A")]]));
+  const quick = model({ "1::A": 1_000 });
+
+  test("under the split, entries alone never close a window", () => {
+    const caps = splitWindowCaps(3);
+    expect(caps.entries).toBe(Number.POSITIVE_INFINITY);
+    expect(cutWindows(mutants, tests, quick, caps).map((w) => w.length)).toEqual([400]);
+  });
+
+  test("under the split, time still closes a window: 600 s x 3 lanes", () => {
+    const caps = splitWindowCaps(3);
+    expect(caps.timeMs).toBe(3 * WINDOW_TIME_CAP_MS);
+    const slow = model({ "1::A": 10_000 }); // 180 mutants of 10 s fill 1,800 s
+    expect(cutWindows(mutants, tests, slow, caps).map((w) => w.length)).toEqual([180, 180, 40]);
+  });
+
+  test("the N = 1 path (default caps) keeps the entries cap", () => {
+    expect(cutWindows(mutants, tests, quick).map((w) => w.length)).toEqual([128, 128, 128, 16]);
   });
 });
 
