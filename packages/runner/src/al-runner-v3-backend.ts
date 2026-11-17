@@ -5879,12 +5879,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       call = made.call;
       alone = true;
     }
-    // PR-20 (L4): a ref the entry's cut left out was not in the mutant's plan. It joins the mutant's
-    // covering set, and the call is made again live (so that cut leaves it in), never read as missing.
+    // PR-20 (L4): a ref the entry's cut left out was not in the mutant's plan. Under a mutant it joins the
+    // mutant's covering set, and the call is made again live (so that cut leaves it in), never read as
+    // missing. PR-102: under NONE (`m4` null) the same holds for a kill pair's cut NONE call: a live NONE
+    // call, never the stored rows; no covering set and no `l4Widened` count.
     const leftOutByCut = `codeunit${ref.codeunitId}.${ref.method}`.toLowerCase();
     const m4 = lane.lastActivated;
-    // PR-102: under NONE the same test applies to a kill pair's cut NONE call (`excluded` then holds
-    // names the cut added, which R998's run does not): a live NONE call, never the stored rows.
     if (
       !alone &&
       call.refusal === undefined && // review 3: an error the call already carries stands
@@ -7569,8 +7569,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             `[lethal] al-runner-v3-selected-only-scan-gap: with runSelectedOnly, codeunit ${cu}'s entry gave no row for ${[...new Set(miss)].join(", ")}, tests LethAL knows. al-runner's test scan is shallow and missed them. The answer was discarded, the request re-sent without the flag, and this codeunit is never flagged again this session (PR-94)`,
           );
         }
-        // PR-102 (H1): the re-send is unflagged, so it carries no pair cut
-        return this.requestOne(lane, groups.map(withoutThrough), phase, mode, groupCount, alone);
+        // The codeunit is now in neverFlag, so `sendInFlight` strips any pair cut (PR-102, H1).
+        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
       }
     }
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On

@@ -4236,6 +4236,29 @@ describe("R653 pair", () => {
         expect(today.serve.requests.length - t0 - (paired.serve.requests.length - p0)).toBe(saved);
       });
     }
+
+    // PR-102 (L3): "NONE 0 rows" on the CUT path. NONE gives no rows on the daemon's later requests too.
+    // The flagged pair lacks the kept A, so PR-94 discards it, puts the codeunit in neverFlag and re-sends
+    // it unflagged and uncut; that answer is empty too, so the confirm throws as today's does.
+    test("PR-102: NONE 0 rows on the cut path: a scan-gap re-send, neverFlag, and today's verdicts", async () => {
+      const serve: ServeScript = {
+        rows: (m, cu, d, n) => (m === "NONE" && d === 0 && n >= 2 ? [] : killsM1(m, cu, d, n)),
+      };
+      const today = await killed(serve);
+      const want = await confirmAndReproduce(today, false);
+      const r = await killed(serve);
+      const n0 = r.serve.requests.length;
+      const got = await confirmAndReproduce(r, true);
+      const sent = r.serve.requests.slice(n0, n0 + 2).map((q) => q.body.runSelectedOnly);
+      expect(sent).toEqual([true, undefined]);
+      expect(
+        (r.serve.requests[n0 + 1]?.body.entries as Record<string, unknown>[]).every(
+          (e) => e.excludeTests === undefined,
+        ),
+      ).toBe(true);
+      expect([...(r.b as unknown as { neverFlag: Set<number> }).neverFlag]).toEqual([CU]);
+      expect(got).toEqual(want);
+    });
   });
 
   test("P2: one send, confirm FIRST (echo NONE, NONE's codeunit, echo M, M's codeunit); nothing else is sent", async () => {
@@ -4452,6 +4475,41 @@ describe("R653 pair", () => {
         F2p: 0,
       });
     });
+
+    // PR-102 (M1): the same fake, but the pair is CUT after the killer A. B (the timeout row) is left out,
+    // so the cut never happens: no fallback, no daemon close, and the same verdicts as the uncut run.
+    for (const a of ["fail", "pass"] as const) {
+      test(`PR-102: P5c on the cut path (confirm ${a}): B is left out, nothing is cut or closed, verdicts equal the uncut run's`, async () => {
+        const verdicts = async (r: Rig) => {
+          await r.b.sendKillPair("M0001", A);
+          await r.b.activate(null);
+          const confirm = await settle(r.b.run(A, OPTS));
+          await r.b.activate("M0001");
+          const repro = await settle(r.b.run(A, OPTS));
+          return { confirm, repro };
+        };
+        const uncut = await killed(cutAtNoneCodeunit(a));
+        (uncut.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU);
+        const want = await verdicts(uncut);
+        const r = await killed(cutAtNoneCodeunit(a));
+        const n0 = r.serve.requests.length;
+        const s0 = r.b.entriesStats();
+        const daemons0 = r.serve.daemons.length;
+        const got = await verdicts(r);
+        const q = r.serve.requests[n0];
+        expect(q?.body.runSelectedOnly).toBe(true);
+        const none = (q?.body.entries as Record<string, unknown>[]).find(
+          (e) => e.id === `NONE|${CU}`,
+        );
+        expect(none?.excludeTests).toEqual([`Codeunit${CU}.B`]);
+        const s1 = r.b.entriesStats();
+        expect(s1.pairFallbacks1 - s0.pairFallbacks1).toBe(0);
+        expect(s1.pairFallbacks2 - s0.pairFallbacks2).toBe(0);
+        expect(s1.pairRequests - s0.pairRequests).toBe(1);
+        expect(r.serve.daemons.length).toBe(daemons0); // no close, no restart
+        expect(got).toEqual(want);
+      });
+    }
 
     test("P5d: the NONE echo cut (F2), the live confirm fails: two requests", async () => {
       const r = await killed((isPair, isWarmup) => ({
@@ -5598,6 +5656,44 @@ describe("R778: kill pairs batched after the prefetch", () => {
         );
       });
     }
+
+    // PR-102 (M1): case 0's fake on the cut path. B (the unkept row, after the killer A) is left out of
+    // every pair entry, so the batch is not cut: one request, all three pairs stored and served, and the
+    // same confirm and reproduction verdicts as the uncut run (where the cut kill takes today's pair).
+    test("PR-102: case 0 on the cut path: B is left out, no cut, no re-send, verdicts equal the uncut run's", async () => {
+      // case 0's cut (an unkept B after A in NONE_2's entry), but NONE_2's A passes, so a stored pair and
+      // today's pair agree on the confirm
+      const mk = (isBatch: (n: number) => boolean): ServeScript => ({
+        rows: (m, cu, d, n, seen) =>
+          d === 0 && isBatch(n) && m === "NONE" && seen === 1
+            ? [{ method: "A", status: "pass" }, unkept()]
+            : killsAll(m, cu, d, n),
+      });
+      const mutants = ["M0001", "M0002", "M0003"];
+      const run = async (uncut: boolean) => {
+        const { r } = await batchRig(mk, mutants, [], SUITE1, uncut);
+        const got: unknown[] = [];
+        for (const m of mutants) {
+          await kill(r, m);
+          got.push(await confirmAndRepro(r, m));
+        }
+        return { r, got };
+      };
+      const want = (await run(true)).got;
+      const { r, got } = await run(false);
+      const batch = r.serve.requests.filter((q) => (q.ids[0] ?? "").startsWith("NONE#"));
+      expect(batch).toHaveLength(1);
+      expect(batch[0]?.body.runSelectedOnly).toBe(true);
+      const cuts = ((batch[0]?.body.entries as Record<string, unknown>[]) ?? [])
+        .filter((e) => String(e.test) === `Codeunit${CU}.`)
+        .map((e) => e.excludeTests);
+      expect(cuts).toEqual(Array(6).fill([`Codeunit${CU}.B`]));
+      expect(batchStats(r)).toEqual({ requests: 1, stored: 3, served: 3, refused: 0 });
+      const s = r.b.entriesStats();
+      expect([s.pairFallbacks1, s.pairFallbacks2]).toEqual([0, 0]);
+      expect(r.serve.daemons).toHaveLength(1); // no close
+      expect(got).toEqual(want);
+    });
 
     // PR-102: a re-sent batch is flagged again, so its pairs keep their cut through the killer.
     test("PR-102: the cut batch and its re-send are both flagged and both carry the cut", async () => {
@@ -10173,7 +10269,8 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
           await r.b.activate("M0001");
           const n0 = r.serve.requests.length;
           await r.b.sendKillPair("M0001", ref("C"));
-          // red when the re-send keeps the cut: the second request hides a tail v3 still runs
+          // the re-send is unflagged because the codeunit is now in neverFlag; `sendInFlight` then drops
+          // the cut. Red when it keeps it: the second request would hide a tail v3 still runs.
           expect(sentCuts(r, n0)).toEqual([
             { flag: true, cuts: [lower(["D"]), lower(["D"])] },
             { flag: undefined, cuts: [undefined, undefined] },
@@ -10203,7 +10300,8 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         const n0 = r.serve.requests.length;
         await r.b.sendKillPair("M0002", ref("B"));
         expect((r.b as unknown as { stats: { keptDrifts: number } }).stats.keptDrifts).toBe(1);
-        // the re-send is flagged by the decision (the codeunit is not never-flagged), yet carries no cut
+        // The drift re-send is not a neverFlag case: the decision would flag it again. It carries no cut
+        // because `requestOne` strips it (red when that strip is removed).
         // the fresh daemon's warm-up sits between the two pair requests
         const sent = sentCuts(r, n0);
         expect(sent).toHaveLength(3);

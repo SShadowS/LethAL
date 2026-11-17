@@ -114,11 +114,7 @@ export interface EntryGroup {
 }
 
 /** PR-102: `g` as an ordinary group, without its pair cut. */
-export const withoutThrough = (g: EntryGroup): EntryGroup => ({
-  mutantId: g.mutantId,
-  ...(g.key !== undefined ? { key: g.key } : {}),
-  codeunits: g.codeunits,
-});
+export const withoutThrough = ({ through: _through, ...rest }: EntryGroup): EntryGroup => rest;
 
 /** One sent entry, as the decoder's table holds it. */
 export interface SentEntry {
