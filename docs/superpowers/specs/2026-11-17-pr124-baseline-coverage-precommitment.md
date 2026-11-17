@@ -44,6 +44,16 @@ al-runner's own per-request `timings.coverageMs` in `serve-request-timed` events
 5. **No verdict claim.** A-off scores mutants without coverage attribution, so its verdicts may differ from A-on's. They
    are reported, not judged.
 
+## Amendment 1 (before any run): batching needs coverage
+- `batchingOn(coverage)` batches only when coverage is asked, so A-off and B-off are unbatched, while A-on and B-on are
+  batched (`current`'s gate record now holds `batchFacts`).
+- No switch turns batching off without editing that shared record, which this task does not touch.
+- **So prediction 2 compares each off run with an unbatched on run of the same scope:**
+  - A-off against PR-119's `do-a` (the same arm, the same build, head 4fced9ed, unbatched, sequential samples);
+  - B-off against x1 (the same app and build, head c996629b, unbatched; a different head and mutant scope, a stated
+    confound).
+- The batched on runs feed predictions 1, 3 and 4.
+
 ## What the result will name
 - The lever (LethAL side: batching, fewer or cheaper requests; or upstream: coverage collection cost per request in
   al-runner) and its size in seconds on x1's scale.
