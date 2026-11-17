@@ -3726,6 +3726,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return l === undefined ? undefined : { ...l.stats };
   }
 
+  /**
+   * PR-113: one baseline one-shot process that is neither a cross-check nor a too-slow re-run, timed
+   * as `other` (R790's speculative calls, R866's per-test fill, the ordinary baseline call). No event
+   * when no process started.
+   */
+  private noteBaselineOneShot(id: number, made: { readonly wallMs: number }): void {
+    if ("spawnError" in made) return;
+    this.baselineOneShotSink?.({ codeunit: id, wallMs: made.wallMs, reason: "other" });
+  }
+
   /** R635 §4: one-shot keeps `lastActivated === null`; serve-entries reads the bracket only. */
   private isBaselineCall(lane: Lane): boolean {
     return this.entries ? this.inBaseline : lane.lastActivated === null;
@@ -4123,6 +4133,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           testDir: realTest,
           signal,
         });
+        this.noteBaselineOneShot(id, made);
         if (signal.aborted) return undefined;
         let covText: string | undefined;
         try {
@@ -4240,6 +4251,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             testDir: this.realTestDir ?? resolve(this.cfg.testDir),
             onlyTest,
           });
+          this.noteBaselineOneShot(ref.codeunitId, made);
         } finally {
           this.memoryRelease();
         }
@@ -4431,7 +4443,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.memoryRelease(); // a throw anywhere from the mkdir on still gives the hold back
     }
     // PR-113: every baseline one-shot process is timed, whatever it answered (events stream only).
-    this.baselineOneShotSink?.({ codeunit: id, wallMs: made.wallMs, reason });
+    if (!("spawnError" in made)) {
+      this.baselineOneShotSink?.({ codeunit: id, wallMs: made.wallMs, reason });
+    }
     const covText = coverage ? await readFile(covPath, "utf8").catch(() => undefined) : undefined;
     await rm(covPath, { force: true }).catch(() => {});
     if ("spawnError" in made) return { noAnswer: "spawn-error" };
@@ -6562,9 +6576,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         if (held) this.memoryRelease();
       });
+      if (this.inBaseline && aloneTest === undefined) this.noteBaselineOneShot(id, made);
       if ("spawnError" in made) {
         return {
-          verdict: transportFailure(ref, `could not run v3: ${made.spawnError}`, made.wallMs),
+          verdict: transportFailure(ref, `could not run v3:${made.spawnError}`, made.wallMs),
         };
       }
       raw = made;

@@ -96,9 +96,9 @@ describe("PR-100: foldTiming", () => {
         "  phases: generate 9.9 s, deploy 26.4 s, baseline 300.6 s, mutants 1,830.0 s, teardown 0.0 s",
         "  serve requests: baseline 2 (7.0 s), warm-up 4 (22.1 s), prefetch 2 (1,231.5 s), live 2 (574.0 s); selected-only 2",
         "    warm-ups by cause: first 2 (5.1 s), after-refusal 1 (10.2 s), recycle 1 (6.8 s)",
-        "    al-runner inside baseline: setup 0.1 s, engine 0.5 s",
-        "    al-runner inside prefetch: setup 1.0 s, tests 900.0 s, coverage 0.0 s",
-        "    al-runner inside live: setup 0.2 s, compile 12.0 s, engine 3.1 s, baseline 1.9 s, tests 700.0 s, other 7.3 s",
+        "    al-runner inside baseline requests: setup 0.1 s, engine 0.5 s",
+        "    al-runner inside prefetch requests: setup 1.0 s, tests 900.0 s, coverage 0.0 s",
+        "    al-runner inside live requests: setup 0.2 s, compile 12.0 s, engine 3.1 s, baseline 1.9 s, tests 700.0 s, other 7.3 s",
         "  baseline one-shots: 3 (31.0 s; cross-check 2, too-slow 1, other 0)",
         "  daemon restarts: 4 — refusal/WithEvents subscriber … in prefetch 2, recycle 1, timeout in live 1",
         "  timeouts: 1 mutant timeout-killed, 1 answer cut at a timeout row",
@@ -128,8 +128,8 @@ describe("PR-100: foldTiming", () => {
       finished,
     ]);
     expect(text).not.toContain("baseline one-shots");
-    expect(text).toContain("al-runner inside baseline: engine 0.9 s");
-    expect(text).toContain("al-runner inside live: engine 0.1 s");
+    expect(text).toContain("al-runner inside baseline requests: engine 0.9 s");
+    expect(text).toContain("al-runner inside live requests: engine 0.1 s");
   });
 
   test("counts take the plural form from 2 up, and a baseline-phase restart reads 'in baseline'", () => {

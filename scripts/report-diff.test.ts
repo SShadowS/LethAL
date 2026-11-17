@@ -150,9 +150,52 @@ describe("--by-line (PR-113)", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    expect(r.exitCode).not.toBe(0);
+    expect(r.exitCode).toBe(2);
     expect(r.stderr.toString()).toContain("ambiguous");
     expect(r.stderr.toString()).toContain("A.al line 1|lethal.return-value");
+  });
+
+  const runLine = (a: object, b: object, ...flags: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "report-diff-line-"));
+    const pa = join(dir, "a.json");
+    const pb = join(dir, "b.json");
+    writeFileSync(pa, JSON.stringify(a));
+    writeFileSync(pb, JSON.stringify(b));
+    return Bun.spawnSync(["bun", join(import.meta.dir, "report-diff.ts"), ...flags, pa, pb], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  };
+
+  test("H1: --subset with a narrowed report of zero mutants is refused (exit 2), not IDENTICAL", () => {
+    expect(() => compareByLine(full, report(), true)).toThrow(ReportDiffRefusal);
+    const r = runLine(full, report(), "--by-line", "--subset");
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("narrowed report (b) has zero mutants");
+    expect(r.stdout.toString()).not.toContain("IDENTICAL");
+  });
+
+  test("H1: --subset where no mutant is in both reports is refused (exit 2), not IDENTICAL", () => {
+    const elsewhere = report(at(7, "survived"));
+    expect(() => compareByLine(full, elsewhere, true)).toThrow(ReportDiffRefusal);
+    const r = runLine(full, elsewhere, "--by-line", "--subset");
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("0 shared");
+    expect(r.stdout.toString()).not.toContain("IDENTICAL");
+  });
+
+  test("L4: --by-line counts and prints the shared rows whose text could not be checked", () => {
+    const hashed = report(at(1, "killed", { mutatedText: "x" }), at(2, "survived"));
+    const c = compareByLine(hashed, hashed, false);
+    expect(c.shared).toBe(2);
+    expect(c.textUnchecked).toBe(1); // line 2 has no hash on either side
+    expect(formatLineDiff(c, 2, 2, false)).toContain("text unchecked: 1");
+    const all = compareByLine(
+      report(at(1, "killed", { mutatedText: "x" })),
+      report(at(1, "killed", { mutatedText: "x" })),
+    );
+    expect(all.textUnchecked).toBe(0);
+    expect(formatLineDiff(all, 1, 1, false)).not.toContain("text unchecked");
   });
 
   test("--subset without --by-line is refused", () => {

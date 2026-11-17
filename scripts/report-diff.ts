@@ -59,6 +59,8 @@ export interface LineComparison {
   readonly onlyInA: string[];
   readonly onlyInB: string[];
   readonly shared: number;
+  /** Shared rows where either side has no mutated-text hash: their text was not checked. */
+  readonly textUnchecked: number;
   readonly keyedBy: string;
 }
 
@@ -88,6 +90,12 @@ export function compareByLine(a: SessionReport, b: SessionReport, subset = false
   if (a.mutants.length === 0 && b.mutants.length === 0) {
     throw new ReportDiffRefusal("both reports have zero mutants; nothing to compare");
   }
+  // Under --subset, an empty narrowed report compares nothing: never IDENTICAL (empty-vs-empty).
+  if (subset && b.mutants.length === 0) {
+    throw new ReportDiffRefusal(
+      "--subset: the narrowed report (b) has zero mutants; nothing was compared",
+    );
+  }
   const ar = a.mutants as unknown as LineRow[];
   const br = b.mutants as unknown as LineRow[];
   const dup = (g: Map<string, number[]>) => [...g].filter(([, v]) => v.length > 1).map(([k]) => k);
@@ -107,6 +115,7 @@ export function compareByLine(a: SessionReport, b: SessionReport, subset = false
   const onlyInA: string[] = [];
   const onlyInB: string[] = [];
   let shared = 0;
+  let textUnchecked = 0;
   for (const [k, [i]] of ga) {
     const j = gb.get(k)?.[0];
     const x = i === undefined ? undefined : na[i];
@@ -117,6 +126,7 @@ export function compareByLine(a: SessionReport, b: SessionReport, subset = false
       continue;
     }
     shared++;
+    if (x.mutatedTextSha256 === undefined || y.mutatedTextSha256 === undefined) textUnchecked++;
     const f: string[] = [];
     if (x.verdict !== y.verdict) f.push(`verdict ${x.verdict} -> ${y.verdict}`);
     if (x.killingTest !== y.killingTest) f.push(`killingTest ${x.killingTest} -> ${y.killingTest}`);
@@ -134,11 +144,17 @@ export function compareByLine(a: SessionReport, b: SessionReport, subset = false
     if (f.length > 0) differences.push(`mutant ${k}: ${f.join("; ")}`);
   }
   for (const k of gb.keys()) if (!ga.has(k)) onlyInB.push(k);
+  if (subset && shared === 0) {
+    throw new ReportDiffRefusal(
+      "--subset: no mutant is in both reports (0 shared); nothing was compared",
+    );
+  }
   return {
     differences,
     onlyInA,
     onlyInB,
     shared,
+    textUnchecked,
     keyedBy: withStart ? "file, line, operator, startIndex, endIndex" : "file, line, operator",
   };
 }
@@ -149,6 +165,11 @@ export function formatLineDiff(c: LineComparison, aCount: number, bCount: number
   ];
   out.push(`differences: ${c.differences.length}`);
   for (const d of c.differences) out.push(`  ${d}`);
+  if (c.textUnchecked > 0) {
+    out.push(
+      `text unchecked: ${c.textUnchecked} (no mutated-text hash on one side: a mutant changed under an unchanged key is not caught there)`,
+    );
+  }
   out.push(`only in b: ${c.onlyInB.length}`);
   for (const d of c.onlyInB) out.push(`  ${d}`);
   out.push(

@@ -137,7 +137,7 @@ export function createTimingFold(): TimingFold {
             ([k, label]) => `${label} ${secs(sums.get(k) ?? 0)}`,
           );
           if (parts.length > 0)
-            lines.push(`    al-runner inside ${kindLabel}: ${parts.join(", ")}`);
+            lines.push(`    al-runner inside ${kindLabel} requests: ${parts.join(", ")}`);
         }
       }
 
