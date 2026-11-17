@@ -1869,7 +1869,8 @@
           "enum": [
             "warmup",
             "prefetch",
-            "live"
+            "live",
+            "baseline"
           ]
         },
         "lane": {
@@ -1931,6 +1932,39 @@
               "const": true
             }
           }
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "codeunit",
+        "wallMs",
+        "reason",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "baseline-one-shot-timed"
+        },
+        "codeunit": {
+          "type": "number"
+        },
+        "wallMs": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "cross-check",
+            "too-slow",
+            "other"
+          ]
         },
         "seq": {
           "type": "number"

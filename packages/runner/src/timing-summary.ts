@@ -9,6 +9,7 @@ import type { RunEvent } from "./events";
 
 const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown"] as const;
 const KINDS = [
+  ["baseline", "baseline"],
   ["warmup", "warm-up"],
   ["prefetch", "prefetch"],
   ["live", "live"],
@@ -37,7 +38,10 @@ export function createTimingFold(): TimingFold {
   const phaseMs = new Map<string, number>();
   const kinds = new Map<string, { n: number; ms: number }>();
   const causes = new Map<string, { n: number; ms: number }>();
-  const inside = new Map<string, number>();
+  /** PR-113: al-runner's own timings, summed per request kind. */
+  const inside = new Map<string, Map<string, number>>();
+  /** PR-113: baseline one-shot calls, by reason. */
+  const oneShots = new Map<string, { n: number; ms: number }>();
   const restarts = new Map<string, number>();
   let selectedOnly = 0;
   let restartTotal = 0;
@@ -77,11 +81,16 @@ export function createTimingFold(): TimingFold {
           if (e.cut === true) cuts += 1;
           if (e.kind === "warmup" && e.cause !== undefined) bump(causes, e.cause, e.wallMs);
           if (e.timings !== undefined) {
+            const sums = inside.get(e.kind) ?? new Map<string, number>();
+            inside.set(e.kind, sums);
             for (const [k] of INSIDE) {
               const v = e.timings[k];
-              if (v !== undefined) inside.set(k, (inside.get(k) ?? 0) + v);
+              if (v !== undefined) sums.set(k, (sums.get(k) ?? 0) + v);
             }
           }
+          break;
+        case "baseline-one-shot-timed":
+          bump(oneShots, e.reason, e.wallMs);
           break;
         case "serve-daemon-closed": {
           const label =
@@ -120,10 +129,29 @@ export function createTimingFold(): TimingFold {
             `    warm-ups by cause: ${ordered.map(([c, v]) => `${c} ${v.n} (${secs(v.ms)})`).join(", ")}`,
           );
         }
-        const parts = INSIDE.filter(([k]) => inside.has(k)).map(
-          ([k, label]) => `${label} ${secs(inside.get(k) ?? 0)}`,
+        // PR-113: one line per request kind that carried timings.
+        for (const [kind, kindLabel] of KINDS) {
+          const sums = inside.get(kind);
+          if (sums === undefined) continue;
+          const parts = INSIDE.filter(([k]) => sums.has(k)).map(
+            ([k, label]) => `${label} ${secs(sums.get(k) ?? 0)}`,
+          );
+          if (parts.length > 0)
+            lines.push(`    al-runner inside ${kindLabel} requests: ${parts.join(", ")}`);
+        }
+      }
+
+      let oneShotN = 0;
+      let oneShotMs = 0;
+      for (const v of oneShots.values()) {
+        oneShotN += v.n;
+        oneShotMs += v.ms;
+      }
+      if (oneShotN > 0) {
+        const by = (r: string): number => oneShots.get(r)?.n ?? 0;
+        lines.push(
+          `  baseline one-shots: ${oneShotN} (${secs(oneShotMs)}; cross-check ${by("cross-check")}, too-slow ${by("too-slow")}, other ${by("other")})`,
         );
-        if (parts.length > 0) lines.push(`    al-runner inside them: ${parts.join(", ")}`);
       }
 
       if (restartTotal > 0) {
