@@ -576,6 +576,14 @@ nothing about them changes.
     (`FULLTEXTSERVICEPROPERTY('IsFullTextInstalled')=1`), and bc4-bc-1 restarted, giving a fresh CRONUS.
   - **The database is in memory:** a host restart loses it, and so do the apps. bc1-bc3 are unchanged and have no Full-Text
     Search.
+  - **A BC-only restart is never safe on the bclan servers** (owner, q-20261117T220300-9c964f63, 2026-11-17):
+    - the bc-runner entrypoint deletes the test framework apps from SQL on every start, then republishes them;
+    - with SQL kept, that republish is blocked, because AI Test Toolkit still depends on Test Runner;
+    - so Test Runner stays uninstalled, and every BC API call fails with HTTP 400 ("metadata object Table 130450 was not found").
+
+    Kraken now always restarts SQL, then BC. That wipes the in-memory database, so after ANY restart, re-run
+    `bc-linux-setup.ts --server <bcN>` and republish every app the server carried. On 2026-11-17 bc4 was recreated twice; the
+    second time, setup, Continia 30 ×7, DO and DO Test were republished under one held lane-code lease (PR-67).
   - **Then, under the lane-code lease (attempt 045, released):**
     - `bun scripts/bc-linux-setup.ts --server bc4` published the LethAL Control build that `extensions/lethal-control/app.json` names and every fixture app (doctor ok for all
       four fixtures);
