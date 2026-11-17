@@ -3429,6 +3429,11 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       const e = r.sized[0];
       expect(e).toEqual({
         lane: 0,
+        kind: "prefetch", // PR-103
+        daemonRequest: 2, // the whole-union warm-up was the daemon's first
+        daemonProved: 0,
+        daemonProveGrowth: 0,
+        fresh: true,
         calls: [{ call: CU, entries: 16, cost: (9 * GiB) / 16 }],
         floor: 0.5 * GiB,
         start: 0.5 * GiB,
@@ -8932,6 +8937,226 @@ describe("PR-24 (L2): a restarted daemon warms each codeunit on its first use th
       expect(warm?.ids.every((i) => i.startsWith("NONE|"))).toBe(true);
       expect(rest.filter((q) => !q.ids.every((i) => i.startsWith("NONE|")))).toHaveLength(2);
     }
+  });
+});
+
+describe("PR-103: the serve-request-sized event says what the request's daemon did first", () => {
+  const P1 = [ref("A"), ref("B")]; // codeunit CU
+  const P2 = [ref("C", CU2)]; // codeunit CU2
+  const MiB = 2 ** 20;
+  const GiB = 2 ** 30;
+  const GROW = 7 * MiB;
+  /**
+   * Each mutant prefetched on its own, then run. A lazy proof (a NONE-only request on a daemon after the
+   * first) grows the fake daemon by `GROW`.
+   */
+  const session = async (extra: Partial<AlRunnerV3Config>) => {
+    const mem = { level: GiB };
+    const r = await rig({
+      serve: {
+        rows: killsM1,
+        answer: (q) => {
+          if (q.daemon >= 1 && q.ids.every((i) => i.startsWith("NONE|"))) mem.level += GROW;
+          return undefined;
+        },
+      },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra,
+      seams: { requestRssReader: () => mem.level },
+    });
+    const sized: V3RequestSized[] = [];
+    r.b.setRequestSizedSink((e) => sized.push(e));
+    await baseline(r.b, SUITE2);
+    for (const [m, refs] of [
+      ["M0001", P1],
+      ["M0002", P2],
+      ["M0003", P1],
+    ] as const) {
+      await r.b.prefetchMutants([{ mutantId: m, refs }]);
+      await r.b.activate(m);
+      for (const t of refs) await r.b.run(t, OPTS);
+    }
+    return { sized, r };
+  };
+
+  test("a request after a lazy proof carries proved and proveGrowth", async () => {
+    const { sized } = await session({ daemonMaxRequests: 1 });
+    const proofs = sized.filter((e) => e.proved !== undefined);
+    expect(proofs.length).toBeGreaterThan(0);
+    for (const e of proofs) {
+      expect(e.proved).toBeGreaterThan(0);
+      expect(e.proveGrowth).toBe(GROW);
+    }
+  });
+
+  test("a request without a lazy proof carries neither", async () => {
+    const { sized } = await session({});
+    expect(sized.length).toBeGreaterThan(1);
+    for (const e of sized) {
+      expect("proved" in e).toBe(false);
+      expect("proveGrowth" in e).toBe(false);
+    }
+  });
+
+  test("proveGrowth is left out when the RSS before the proofs cannot be read", async () => {
+    // Unreadable until the first lazy proof is answered: the "before" read fails, the "after" read works.
+    let blind = true;
+    const r = await rig({
+      serve: {
+        rows: killsM1,
+        answer: (q) => {
+          if (q.daemon >= 1 && q.ids.every((i) => i.startsWith("NONE|"))) blind = false;
+          return undefined;
+        },
+      },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      extra: { daemonMaxRequests: 1 },
+      seams: { requestRssReader: () => (blind ? undefined : GiB) },
+    });
+    const sized: V3RequestSized[] = [];
+    r.b.setRequestSizedSink((e) => sized.push(e));
+    await baseline(r.b, SUITE2);
+    for (const [m, refs] of [
+      ["M0001", P1],
+      ["M0002", P2],
+    ] as const)
+      await r.b.prefetchMutants([{ mutantId: m, refs }]);
+    const first = sized.find((e) => e.proved !== undefined);
+    expect(first).toBeDefined();
+    expect(first?.proveGrowth).toBeUndefined();
+  });
+
+  test("fresh is on a new daemon's first request only", async () => {
+    const { sized } = await session({});
+    expect(sized[0]?.fresh).toBe(true);
+    expect(sized.slice(1).some((e) => "fresh" in e)).toBe(false);
+    const recycled = await session({ daemonMaxRequests: 1 });
+    expect(recycled.sized.every((e) => e.fresh === true)).toBe(true);
+  });
+
+  describe("running totals per daemon (addendum 1)", () => {
+    // daemonMaxRequests 3: daemon 0 (union-warmed) serves a and b, then daemon 1 is restarted for
+    // c (fresh, proves CU), d (proves CU2, +600 MiB: a reading-less request, the daemon is 600 MiB over its
+    // floor and did not grow) and e (grows 1 MiB: the next emitted event).
+    const run = async () => {
+      const mem = { level: GiB };
+      let entriesAnswers = 0;
+      const r = await rig({
+        serve: {
+          rows: killsM1,
+          answer: (q) => {
+            if (q.daemon < 1) return undefined;
+            if (q.ids.every((i) => i.startsWith("NONE|"))) {
+              mem.level += q.ids.includes(`NONE|${CU2}`) ? 600 * MiB : GROW;
+            } else {
+              entriesAnswers += 1;
+              if (entriesAnswers !== 2) mem.level += MiB; // d's own entries do not grow it
+            }
+            return undefined;
+          },
+        },
+        oneShotRows: killsM1,
+        suite: SUITE2,
+        extra: { daemonMaxRequests: 3 },
+        seams: { requestRssReader: () => mem.level },
+      });
+      const sized: V3RequestSized[] = [];
+      r.b.setRequestSizedSink((e) => sized.push(e));
+      await baseline(r.b, SUITE2);
+      for (const [m, t] of [
+        ["M0001", ref("A")],
+        ["M0001", ref("B")],
+        ["M0003", ref("A")], // c
+        ["M0002", ref("C", CU2)], // d
+        ["M0003", ref("C", CU2)], // e
+      ] as const) {
+        await r.b.activate(m);
+        await r.b.run(t, OPTS);
+      }
+      return sized;
+    };
+
+    test("a reused daemon's request that took no reading still has its proof in the next event's totals", async () => {
+      const sized = await run();
+      const last = sized[sized.length - 1];
+      expect(last?.daemonRequest).toBe(3);
+      expect(last?.proved).toBeUndefined(); // the last request proved nothing itself
+      expect(last?.daemonProved).toBe(1); // d's proof, though d gave no event
+      expect(last?.daemonProveGrowth).toBe(600 * MiB);
+      expect(sized.filter((e) => e.proved !== undefined && e.fresh !== true)).toHaveLength(0);
+    });
+
+    test("the totals leave out the fresh request's proofs", async () => {
+      const sized = await run();
+      const fresh = sized.filter((e) => e.fresh === true && e.proved !== undefined);
+      expect(fresh.length).toBeGreaterThan(0);
+      for (const e of fresh) {
+        expect(e.daemonProved).toBe(0);
+        expect(e.daemonProveGrowth).toBe(0);
+      }
+      // c proved CU on the fresh daemon (+GROW): not in the last event's totals (they are d's alone).
+      expect(sized[sized.length - 1]?.daemonProveGrowth).not.toBe(600 * MiB + GROW);
+    });
+  });
+
+  test("proved counts the codeunits sent, not those marked missing (R1004: an isolated call whose test is left out)", async () => {
+    const REFUSAL = "NotRun: out-of-scope: InStream method on an unassigned Variant";
+    const bRefused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: REFUSAL }
+          : x,
+      );
+    const r = await rig({
+      serve: { rows: bRefused },
+      oneShotRows: bRefused,
+      suite: SUITE2,
+      extra: { isolateTests: true, daemonMaxRequests: 1 },
+      seams: { requestRssReader: () => GiB },
+    });
+    const sized: V3RequestSized[] = [];
+    r.b.setRequestSizedSink((e) => sized.push(e));
+    await baseline(r.b, SUITE2);
+    for (const m of ["M0001", "M0002", "M0003"])
+      await r.b.prefetchMutants([{ mutantId: m, refs: [ref("A"), ref("B")] }]);
+    const proofs = sized.filter((e) => e.proved !== undefined);
+    expect(proofs.length).toBeGreaterThan(0);
+    // A is proved; B (left out at baseline, isolated) is marked proven but not sent.
+    for (const e of proofs) expect(e.proved).toBe(1);
+  });
+
+  test("daemonRequest counts as R952 does: a lazy proof is not a request", async () => {
+    const { sized } = await session({ daemonMaxRequests: 1 });
+    const proofs = sized.filter((e) => e.proved !== undefined);
+    expect(proofs.length).toBeGreaterThan(0);
+    expect(proofs.every((e) => e.daemonRequest === 1)).toBe(true);
+    const plain = (await session({})).sized;
+    const counts = plain.map((e) => e.daemonRequest);
+    expect(counts.every((n, i) => i === 0 || n === (counts[i - 1] ?? 0) + 1)).toBe(true);
+  });
+
+  test("lane and kind are right on a prefetch and on a live request", async () => {
+    const r = await rig({
+      serve: { rows: killsM1 },
+      oneShotRows: killsM1,
+      suite: SUITE2,
+      seams: { requestRssReader: () => GiB },
+    });
+    const sized: V3RequestSized[] = [];
+    r.b.setRequestSizedSink((e) => sized.push(e));
+    await baseline(r.b, SUITE2);
+    await r.b.prefetchMutants([{ mutantId: "M0003", refs: P1 }]);
+    expect(sized.length).toBeGreaterThan(0);
+    expect(sized.every((e) => e.lane === 0 && e.kind === "prefetch")).toBe(true);
+    // M0001 was not prefetched: its call runs live.
+    const n = sized.length;
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    const live = sized.slice(n);
+    expect(live.length).toBeGreaterThan(0);
+    expect(live.every((e) => e.kind === "live" && e.lane === 0)).toBe(true);
   });
 });
 

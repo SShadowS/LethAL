@@ -1792,8 +1792,19 @@ export const LANE_LETHAL_BYTES = 4 * 2 ** 30;
 /** PR-98: heavy-slot's default peak for the `other` class, used when no class file names one. */
 export const LANE_DEFAULT_DECLARED_GIB = 8;
 
+/** PR-103: what `ensureDaemon` did for one request, for the `serve-request-sized` event. */
+interface ProveInfo {
+  fresh?: true;
+  proved: number;
+  proveGrowth?: number;
+}
+
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
+  /** PR-103: running total of codeunits proved lazily on it AFTER its first request (events only). */
+  daemonProved?: number;
+  /** PR-103: running total of the RSS growth measured across those proofs, bytes (events only). */
+  daemonProveGrowth?: number;
   readonly server: AlRunnerServer;
   /** R954: the `--test-timeout` seconds it started with; `ensureDaemon` restarts one that differs. */
   readonly stopSeconds: number;
@@ -2459,7 +2470,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       readonly source: "hwm" | "sampled";
       readonly sampledPeak: number | undefined;
       readonly hwm?: number;
-    },
+    } & Pick<
+      V3RequestSized,
+      | "kind"
+      | "daemonRequest"
+      | "fresh"
+      | "proved"
+      | "proveGrowth"
+      | "daemonProved"
+      | "daemonProveGrowth"
+    >,
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
     const tests = sent.filter((e) => !e.echo);
@@ -2488,6 +2508,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     this.requestSizedSink?.({
       lane,
+      ...(reading.kind !== undefined ? { kind: reading.kind } : {}),
+      ...(reading.daemonRequest !== undefined ? { daemonRequest: reading.daemonRequest } : {}),
+      ...(reading.fresh !== undefined ? { fresh: reading.fresh } : {}),
+      ...(reading.proved !== undefined ? { proved: reading.proved } : {}),
+      ...(reading.proveGrowth !== undefined ? { proveGrowth: reading.proveGrowth } : {}),
+      ...(reading.daemonProved !== undefined ? { daemonProved: reading.daemonProved } : {}),
+      ...(reading.daemonProveGrowth !== undefined
+        ? { daemonProveGrowth: reading.daemonProveGrowth }
+        : {}),
       calls,
       floor: floorRss,
       start: startRss,
@@ -6867,6 +6896,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mode: RequestMode,
     /** PR-24 (L2): the codeunits (call ids) the caller is about to run on the daemon. */
     need: readonly number[],
+    /** PR-103: filled in for the `serve-request-sized` event. */
+    info?: ProveInfo,
   ): Promise<Daemon> {
     let d = lane.daemonFor(mode);
     // R954: a daemon started under another stop (before `useMutantStop`) is replaced.
@@ -6900,8 +6931,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // pacing reads it; not the session total.
       lane.lastWarmupMs = lane.timers.warmupMs - before;
       lane.daemonStarts += 1;
+      if (info !== undefined) info.fresh = true;
     }
-    if (d.proven !== undefined) await this.proveOnDaemon(lane, d, mode, need);
+    if (d.proven !== undefined) await this.proveOnDaemon(lane, d, mode, need, info);
     return d;
   }
 
@@ -6934,6 +6966,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     d: Daemon,
     mode: RequestMode,
     need: readonly number[],
+    info?: ProveInfo,
   ): Promise<void> {
     const proven = d.proven;
     if (proven === undefined) return;
@@ -6954,6 +6987,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const warm = missing.filter((id) => this.warmable(id));
     if (warm.length > 0) {
       const before = lane.timers.warmupMs;
+      // PR-103: the daemon's RSS just before and just after the proofs (events only).
+      const pid = d.server.pid;
+      const readRss = (): number | undefined =>
+        pid === undefined ? undefined : (this.seams.requestRssReader ?? readProcessRssBytes)(pid);
+      const rssBefore = readRss();
+      if (info !== undefined) info.proved = warm.length;
       try {
         await lane.timed("warmupMs", async () => {
           lane.stats.warmups += 1;
@@ -6982,6 +7021,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         throw err;
       }
       lane.lastWarmupMs += lane.timers.warmupMs - before; // R785: this daemon's start plus its warm-ups
+      if (info !== undefined && rssBefore !== undefined && d.server.pid === pid) {
+        const rssAfter = readRss();
+        if (rssAfter !== undefined) info.proveGrowth = rssAfter - rssBefore;
+      }
     }
     for (const cu of missing) proven.add(cu);
   }
@@ -7680,11 +7723,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const seq = ++this.requestSeq;
     // PR-24 (L2): every entries request passes here (prefetch chunks, live calls, kill pairs, the
     // PR-20 widening), so a restarted daemon proves the request's codeunits before they are sent.
+    const proveInfo: ProveInfo = { proved: 0 };
     const daemon = await this.ensureDaemon(
       lane,
       mode,
       groups.flatMap((g) => g.codeunits),
+      proveInfo,
     );
+    // PR-103: the running totals leave out the first request's proofs (below the floor), and count a
+    // request whose event is skipped (no reading), which is why they sit on the daemon.
+    if (proveInfo.fresh !== true && proveInfo.proved > 0) {
+      daemon.daemonProved = (daemon.daemonProved ?? 0) + proveInfo.proved;
+      daemon.daemonProveGrowth = (daemon.daemonProveGrowth ?? 0) + (proveInfo.proveGrowth ?? 0);
+    }
     // R987: the daemon's RSS while the request runs (it holds every entry's state until the end).
     const pid = daemon.server.pid;
     const readRss = (): number | undefined =>
@@ -7865,6 +7916,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       source: peakSource,
       sampledPeak,
       ...(hwmPeak !== undefined ? { hwm: hwmPeak } : {}),
+      kind: phase === "prefetchMs" ? "prefetch" : "live",
+      daemonRequest: daemon.requests,
+      daemonProved: daemon.daemonProved ?? 0,
+      daemonProveGrowth: daemon.daemonProveGrowth ?? 0,
+      ...(proveInfo.fresh === true ? { fresh: true as const } : {}),
+      ...(proveInfo.proved > 0 ? { proved: proveInfo.proved } : {}),
+      ...(proveInfo.proved > 0 && proveInfo.proveGrowth !== undefined
+        ? { proveGrowth: proveInfo.proveGrowth }
+        : {}),
     });
     const wallMs = Date.now() - started;
     const s = this.serveStopSeconds() ?? 1;
