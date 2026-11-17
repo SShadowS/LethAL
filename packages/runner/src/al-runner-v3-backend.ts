@@ -4942,14 +4942,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let scan: ReturnType<typeof scanTestCodeunits> | undefined;
     if (this.batchingOn(coverage)) {
       try {
-        const roots = lane.requestBase(mode).sourcePaths as string[];
-        const texts: string[] = [];
-        for (const [i, root] of roots.entries()) {
-          const walked = await walkFiles(root, { links: i === 0 ? "skip" : "refuse" });
-          for (const rel of walked.files.filter((e) => e.toLowerCase().endsWith(".al")))
-            texts.push(await readFile(join(root, rel), "utf8"));
-        }
-        scan = scanTestCodeunits(texts);
+        scan = await this.scanTestSources(lane, mode);
         const size = this.seams.baselineBatchSize ?? BASELINE_BATCH_SIZE;
         for (const g of planBaselineBatches(ids, size, scan, suiteIds))
           if (g.length > 1 && g[0] !== undefined) groupAt.set(g[0], g);
@@ -5398,6 +5391,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     } finally {
       await this.closeLane(lane, "baseline-end");
     }
+  }
+
+  /** PR-115, PR-123: the test codeunits of the request's source roots, for planning batches (the fill's and the re-check's). */
+  private async scanTestSources(
+    lane: Lane,
+    mode: RequestMode,
+  ): Promise<ReturnType<typeof scanTestCodeunits>> {
+    const roots = lane.requestBase(mode).sourcePaths as string[];
+    const texts: string[] = [];
+    for (const [i, root] of roots.entries()) {
+      const walked = await walkFiles(root, { links: i === 0 ? "skip" : "refuse" });
+      for (const rel of walked.files.filter((e) => e.toLowerCase().endsWith(".al")))
+        texts.push(await readFile(join(root, rel), "utf8"));
+    }
+    return scanTestCodeunits(texts);
   }
 
   /** R948: the answer the daemon baseline holds for this baseline call, taken once, if it matches. */
@@ -7316,61 +7324,131 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // Review 1: this session's own NONE rows are imported (what a live fill gives the warm-up), only
     // after every check passed; they equal the stored rows in everything the check compares.
     const fresh = new Map<number, readonly V3Row[]>();
-    for (const id of order) {
-      // Review 3: the daemon fill's safeguards (R955 budget and signal, R652 bound, R948 rows).
-      if (this.stopHandle?.spent() === true) return "the time budget (spent during the re-check)";
-      if (!(await this.memoryGate(true))) return "the memory bound (the re-check could not run)";
-      let got: BaselineAnswer | undefined;
-      try {
-        await this.checkBound(lane);
-        got = await this.baselineRequest(lane, mode, id, stopSeconds, sample.has(id));
-      } catch (err) {
-        if (!(err instanceof AlRunnerServerRequestError)) throw err;
-        got = undefined;
-      } finally {
-        this.memoryRelease();
-      }
-      if (this.stopHandle?.signalled() === true) return "a stop signal (during the re-check)";
-      if (got === undefined) return `the re-check (codeunit ${id} gave no usable answer)`;
-      if (!this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? []))
-        return `the re-check (codeunit ${id}'s answer does not hold exactly one row per suite test)`;
-      fresh.set(id, got.rows);
-      const diffs = compareBaselineAnswers(
-        { rows: masked(got.rows), coverage: none },
-        { rows: masked(stored.get(id) ?? []), coverage: none },
-      );
-      if (diffs.length > 0) return `the re-check (codeunit ${id}: ${diffs[0]})`;
-      if (sample.has(id)) {
-        // Review 2: a sampled codeunit with a passing test must compare at least one coverage map,
-        // or the check would pass with nothing compared (empty vs empty)
-        let compared = 0;
-        const passing = got.rows.some((r) => r.status === "pass" && !r.notRun);
-        for (const r of got.rows) {
-          // as `runOn` reads it: a pass, or a test refused mid-run (R609), has coverage; others none
-          const refusedMidRun =
-            r.notRun &&
-            r.status === "error" &&
-            !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message));
-          let now =
-            (r.status === "pass" && !r.notRun) || refusedMidRun
-              ? this.coverageOf(lane, r.name, got.coverage)
-              : undefined;
-          if (refusedMidRun && now === "unavailable") now = undefined;
-          const was = storedCoverage.get(`codeunit${id}.${r.method}`.toLowerCase());
-          if (was === undefined) continue; // a test the session does not measure (TestPage-skipped, out of scope)
-          if (JSON.stringify(now ?? null) !== was)
-            return `the re-check (codeunit ${id}: ${r.method}'s coverage differs)`;
-          compared += 1;
+    // PR-123: the batches, fetched ahead of the checks; the checks below still run per codeunit, in stored order.
+    // L6: the fill's coverage in the baseline phase is always true (`callCodeunit`: no `noCoverage` there, and
+    // `isBaselineCall` holds), so batching is decided as the fill decides it.
+    const batchOn = this.batchingOn(true);
+    const batched = new Map<number, BaselineAnswer>();
+    let planned = 0;
+    const stats = this.baselineStats;
+    try {
+      if (batchOn) {
+        stats.batches = 0;
+        stats.batchDiscards = 0;
+        stats.orderHints = 0;
+        const suiteIds = [...this.suitePerCodeunit.keys()];
+        let groups: number[][] = [];
+        let scan: ReturnType<typeof scanTestCodeunits> | undefined;
+        try {
+          scan = await this.scanTestSources(lane, mode);
+          const size = this.seams.baselineBatchSize ?? BASELINE_BATCH_SIZE;
+          groups = planBaselineBatches(
+            [...order].sort((a, b) => a - b),
+            size,
+            scan,
+            suiteIds,
+          ).filter((g) => g.length > 1);
+        } catch (err) {
+          this.baselineBatchingSpent = `the re-check: the source scan failed: ${err instanceof Error ? err.message : String(err)}`;
         }
-        if (passing && compared === 0)
-          return `the re-check (codeunit ${id}: no stored coverage to compare for its passing tests)`;
+        planned = groups.length;
+        for (const g of groups) {
+          if (scan === undefined) break;
+          if (this.stopHandle?.spent() === true)
+            return "the time budget (spent during the re-check)";
+          if (!(await this.memoryGate(true)))
+            return "the memory bound (the re-check could not run)";
+          let answers: Map<number, BaselineAnswer> | undefined;
+          try {
+            await this.checkBound(lane);
+            answers = await this.batchRequest(
+              lane,
+              mode,
+              g,
+              stopSeconds,
+              exclusionsFor(g, scan, suiteIds),
+            );
+            // a decode discard: `batchRequest` has latched and counted it; the reason gets the re-check's prefix
+            if (answers === undefined)
+              this.baselineBatchingSpent = `the re-check: ${this.baselineBatchingSpent ?? "a batch was discarded"}`;
+          } catch (err) {
+            if (!(err instanceof AlRunnerServerRequestError)) throw err;
+            this.baselineBatchingSpent = `the re-check: a batch request failed: ${err.message}`;
+            stats.batchDiscards += 1;
+          } finally {
+            this.memoryRelease();
+          }
+          if (this.stopHandle?.signalled() === true) return "a stop signal (during the re-check)";
+          if (answers === undefined) break; // each codeunit of this batch, and the rest, goes singly below
+          for (const [k, v] of answers) batched.set(k, v);
+        }
       }
+      for (const id of order) {
+        let got = batched.get(id);
+        if (got === undefined) {
+          // Review 3: the daemon fill's safeguards (R955 budget and signal, R652 bound, R948 rows).
+          if (this.stopHandle?.spent() === true)
+            return "the time budget (spent during the re-check)";
+          if (!(await this.memoryGate(true)))
+            return "the memory bound (the re-check could not run)";
+          try {
+            await this.checkBound(lane);
+            got = await this.baselineRequest(lane, mode, id, stopSeconds, sample.has(id));
+          } catch (err) {
+            if (!(err instanceof AlRunnerServerRequestError)) throw err;
+            got = undefined;
+          } finally {
+            this.memoryRelease();
+          }
+          if (this.stopHandle?.signalled() === true) return "a stop signal (during the re-check)";
+        }
+        if (got === undefined) return `the re-check (codeunit ${id} gave no usable answer)`;
+        if (!this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? []))
+          return `the re-check (codeunit ${id}'s answer does not hold exactly one row per suite test)`;
+        fresh.set(id, got.rows);
+        const diffs = compareBaselineAnswers(
+          { rows: masked(got.rows), coverage: none },
+          { rows: masked(stored.get(id) ?? []), coverage: none },
+        );
+        if (diffs.length > 0) return `the re-check (codeunit ${id}: ${diffs[0]})`;
+        if (sample.has(id)) {
+          // Review 2: a sampled codeunit with a passing test must compare at least one coverage map,
+          // or the check would pass with nothing compared (empty vs empty)
+          let compared = 0;
+          const passing = got.rows.some((r) => r.status === "pass" && !r.notRun);
+          for (const r of got.rows) {
+            // as `runOn` reads it: a pass, or a test refused mid-run (R609), has coverage; others none
+            const refusedMidRun =
+              r.notRun &&
+              r.status === "error" &&
+              !(r.message !== undefined && V3_TIMEOUT_MESSAGE.test(r.message));
+            let now =
+              (r.status === "pass" && !r.notRun) || refusedMidRun
+                ? this.coverageOf(lane, r.name, got.coverage)
+                : undefined;
+            if (refusedMidRun && now === "unavailable") now = undefined;
+            const was = storedCoverage.get(`codeunit${id}.${r.method}`.toLowerCase());
+            if (was === undefined) continue; // a test the session does not measure (TestPage-skipped, out of scope)
+            if (JSON.stringify(now ?? null) !== was)
+              return `the re-check (codeunit ${id}: ${r.method}'s coverage differs)`;
+            compared += 1;
+          }
+          if (passing && compared === 0)
+            return `the re-check (codeunit ${id}: no stored coverage to compare for its passing tests)`;
+        }
+      }
+      if ((this.observedSeed ?? null) !== s.seed)
+        return `the seed (stored ${String(s.seed)}, this session ${String(this.observedSeed ?? null)})`;
+      for (const [id, rows] of fresh) this.noteBaselineRows(lane, id, rows);
+      this.daemonBaselineFilled = true; // nothing left for R948's fill to do
+      return undefined;
+    } finally {
+      // PR-123 (M1): the re-check's own batching line; the fill's line and counts are its own.
+      const off = this.baselineBatchingSpent ?? this.baselineBatchingWhyOff;
+      console.warn(
+        `[lethal] al-runner-v3 re-check batching (PR-123): ${planned > 0 ? `${stats.batches} batch(es) kept, ${stats.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}` : `off (${batchOn ? (off ?? "no batch to send") : (off ?? "not allowed")})`}`,
+      );
     }
-    if ((this.observedSeed ?? null) !== s.seed)
-      return `the seed (stored ${String(s.seed)}, this session ${String(this.observedSeed ?? null)})`;
-    for (const [id, rows] of fresh) this.noteBaselineRows(lane, id, rows);
-    this.daemonBaselineFilled = true; // nothing left for R948's fill to do
-    return undefined;
   }
 
   /** PR-21: masks the target app's minted version (`<name> by <publisher> version a.b.c.d`) only. */
