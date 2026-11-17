@@ -83,7 +83,7 @@ import {
 } from "./cli-envelope";
 import { dependencyCheckWarning, dependencyCodeunitsOf } from "./dependency-codeunits";
 import { DeploymentVerifier } from "./deployment-verifier";
-import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, runDoctor } from "./doctor";
+import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, dependencyClosure, runDoctor } from "./doctor";
 import type {
   DependenciesProbe,
   DoctorCheck,
@@ -106,7 +106,7 @@ import type { EnvToolSession } from "./env-tool-session";
 import { loadEquivalenceMarks } from "./equivalence-marks";
 import { symbolPackageIdentity } from "./published-test-app";
 import { watchProjectInputs } from "./source-drift";
-import { type TextSearchApp, textSearchApp } from "./text-search-fields";
+import { type CachedPackage, type TextSearchApp, readCachedPackage } from "./text-search-fields";
 
 // Moved to equivalence-marks.ts so verify.ts can read marks without importing the CLI.
 export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-marks";
@@ -5680,19 +5680,37 @@ export async function buildDoctorDeps(
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
-    const found: TextSearchApp[] = [];
+    // Only the project's dependency closure counts: a leftover package in the cache is not published.
+    const target = await readAppJsonDependencies(join(projectDirForDeps, "app.json"));
+    const roots = [...target.dependencies];
+    if (testsDir !== undefined) {
+      const tests = await readAppJsonDependencies(join(testsDir, "app.json"));
+      const targetId = target.id?.toLowerCase();
+      roots.push(...tests.dependencies.filter((d) => d.id.toLowerCase() !== targetId));
+    }
+    const scope =
+      testsDir === undefined
+        ? "the target only (pass --tests to include the test app)"
+        : "the target and the test app";
+    const cached: CachedPackage[] = [];
     const unread: string[] = [];
     for (const rel of walked?.files ?? []) {
       if (!rel.toLowerCase().endsWith(".app")) continue;
       try {
-        const app = textSearchApp(
-          await readFile(walked?.resolved.get(rel) ?? join(cachePath, rel)),
+        cached.push(
+          readCachedPackage(await readFile(walked?.resolved.get(rel) ?? join(cachePath, rel))),
         );
-        if (app !== undefined) found.push(app);
       } catch {
         unread.push(rel);
       }
     }
+    const closure = dependencyClosure(roots, cached);
+    const noSymbols = closure
+      .filter((p) => p.fields === undefined)
+      .map((p) => `${p.name} ${p.version}`);
+    const found: TextSearchApp[] = closure.flatMap((p) =>
+      p.fields !== undefined && p.fields.length > 0 ? [{ ...p, fields: p.fields }] : [],
+    );
     const verifier =
       found.length === 0 || opts.installedVersions !== undefined
         ? undefined
@@ -5713,7 +5731,7 @@ export async function buildDoctorDeps(
         );
       }
     }
-    return { cachePath, apps, unread };
+    return { cachePath, apps, unread, noSymbols, scope };
   };
 
   // R1086: the variable NAMES and whether each is set; never a value.

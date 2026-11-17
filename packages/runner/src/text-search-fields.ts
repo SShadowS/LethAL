@@ -68,8 +68,36 @@ export function textSearchApp(bytes: Buffer): TextSearchApp | undefined {
   return { ...symbolPackageIdentity(bytes), fields };
 }
 
+/** One cached package as doctor's closure scan sees it. `fields` is undefined: no SymbolReference.json. */
+export interface CachedPackage {
+  readonly id: string;
+  readonly name: string;
+  readonly publisher: string;
+  readonly version: string;
+  /** The manifest's `<Dependency Id MinVersion>` entries. */
+  readonly deps: readonly { readonly id: string; readonly version: string }[];
+  readonly fields: readonly TextSearchField[] | undefined;
+}
+
+/** Identity, manifest dependencies and text-search fields of a package (through a Ready-to-Run wrapper). */
+export function readCachedPackage(bytes: Buffer): CachedPackage {
+  const inner = unwrapSymbolPackage(bytes);
+  const manifest = readPackageEntry(inner, "NavxManifest.xml")?.toString("utf8") ?? "";
+  const deps = [...manifest.matchAll(/<Dependency\b[^>]*>/g)].flatMap((m) => {
+    const attr = (k: string) => new RegExp(`\\s${k}="([^"]*)"`).exec(m[0])?.[1];
+    const id = attr("Id");
+    return id === undefined ? [] : [{ id, version: attr("MinVersion") ?? "0.0.0.0" }];
+  });
+  return { ...symbolPackageIdentity(inner), deps, fields: textSearchFields(inner) };
+}
+
+/** The most field names one note lists. */
+const MAX_FIELDS_IN_NOTE = 5;
+
 /** The note `lethal doctor` and `bc-continia-publish --predict` print for one such app. */
 export function textSearchNote(app: TextSearchApp): string {
-  const where = app.fields.map((f) => `${f.table}.${f.field}`).join(", ");
+  const shown = app.fields.slice(0, MAX_FIELDS_IN_NOTE).map((f) => `${f.table}.${f.field}`);
+  const more = app.fields.length - shown.length;
+  const where = shown.join(", ") + (more > 0 ? ` ... and ${more} more` : "");
   return `${app.publisher} ${app.name} ${app.version} (${app.id}) declares OptimizeForTextSearch on ${where}: installing it needs SQL Server Full-Text Search on the server's SQL Server; LethAL cannot read whether it is there; without it the publish fails with HTTP 422 'Text optimized index cannot be created'`;
 }
