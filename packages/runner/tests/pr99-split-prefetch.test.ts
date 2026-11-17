@@ -816,3 +816,72 @@ describe("PR-99 spec 7.5/7.7: the queue under the split", () => {
     expect(h2.ended).toEqual([1]);
   });
 });
+
+describe("PR-99 spec 2.6 (test 10): PR-94's flag is decided per request, the same at N = 1 and N = 3", () => {
+  // The backend's own lists never make a gap (#8059 is guarded), so the list is forced: M0001 excludes A and
+  // keeps B after it (a gap: no flag, counted refused); M0002 excludes B, the tail (a clean cut: flagged).
+  const EXCLUDES: Record<string, string[]> = {
+    M0001: [`Codeunit${CU}.A`],
+    M0002: [`Codeunit${CU}.B`],
+  };
+  const force = (r: LanesRig) => {
+    (
+      r.b as unknown as { mutantExcludes: (l: unknown, cu: number, m: string) => unknown }
+    ).mutantExcludes = (_l, _cu, m) => EXCLUDES[m];
+  };
+  const decisions = (r: LanesRig) =>
+    ["M0001", "M0002"].map((m) =>
+      r.serve.requests.filter((q) => q.mutants.includes(m)).map((q) => q.selectedOnly),
+    );
+
+  const atOne = async () => {
+    const r = await lanesRig({ lanes: 0 });
+    await soleBaseline(r);
+    force(r);
+    for (const m of ["M0001", "M0002"])
+      await r.b.prefetchMutants(plans([m], m === "M0001" ? [B] : [A]));
+    return {
+      r,
+      stats: (r.b as unknown as { entriesStats(): Record<string, number> }).entriesStats(),
+    };
+  };
+  const atThree = async () => {
+    const r = await lanesRig({ lanes: 3 });
+    await laneBaseline(r);
+    force(r);
+    r.b.prepareBatch(plans(["M0001", "M0002"]));
+    await view(r, 1).prefetchMutants?.(plans(["M0001"], [B]));
+    await view(r, 2).prefetchMutants?.(plans(["M0002"], [A]));
+    return r;
+  };
+
+  test("a gapped entry's request is unflagged and a clean cut's is flagged, on any lane", async () => {
+    const one = await atOne();
+    const three = await atThree();
+    // red if the split changed the per-request decision (for example a lane that skipped PR-94's check)
+    expect(decisions(one.r)).toEqual([[false], [true]]);
+    expect(decisions(three)).toEqual(decisions(one.r));
+  });
+
+  test("the counters are the sending lane's, and their totals equal N = 1's", async () => {
+    const one = await atOne();
+    const three = await atThree();
+    const pick = (s: Record<string, number>) => ({
+      selectedOnlyRequests: s.selectedOnlyRequests,
+      selectedOnlyRefusedGapped: s.selectedOnlyRefusedGapped,
+    });
+    expect(pick(one.stats)).toEqual({ selectedOnlyRequests: 1, selectedOnlyRefusedGapped: 1 });
+    expect(pick(laneOf(three, 1).stats)).toEqual({
+      selectedOnlyRequests: 0,
+      selectedOnlyRefusedGapped: 1,
+    });
+    expect(pick(laneOf(three, 2).stats)).toEqual({
+      selectedOnlyRequests: 1,
+      selectedOnlyRefusedGapped: 0,
+    });
+    expect(pick(laneOf(three, 0).stats)).toEqual({
+      selectedOnlyRequests: 0,
+      selectedOnlyRefusedGapped: 0,
+    });
+  });
+});

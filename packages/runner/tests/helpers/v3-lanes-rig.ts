@@ -121,6 +121,8 @@ export interface Req {
   readonly ids: string[];
   /** The mutant ids of the entries (echo entries leave out), in order. */
   readonly mutants: string[];
+  /** PR-99 test 10: the request carried `runSelectedOnly: true` (PR-94). */
+  readonly selectedOnly: boolean;
 }
 
 export interface ServeCtl {
@@ -171,6 +173,7 @@ function fakeServe(ctl: ServeCtl) {
             active: sources[0] ?? "",
             ids: entries.map((e) => String(e.id)),
             mutants,
+            selectedOnly: body.runSelectedOnly === true,
           };
           requests.push(req);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
