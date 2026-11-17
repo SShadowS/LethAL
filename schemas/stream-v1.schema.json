@@ -2011,6 +2011,12 @@
         "proveGrowth": {
           "type": "number"
         },
+        "daemonProved": {
+          "type": "number"
+        },
+        "daemonProveGrowth": {
+          "type": "number"
+        },
         "calls": {
           "type": "array",
           "items": {

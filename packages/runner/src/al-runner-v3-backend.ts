@@ -1792,7 +1792,6 @@ export const LANE_LETHAL_BYTES = 4 * 2 ** 30;
 /** PR-98: heavy-slot's default peak for the `other` class, used when no class file names one. */
 export const LANE_DEFAULT_DECLARED_GIB = 8;
 
-/** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 /** PR-103: what `ensureDaemon` did for one request, for the `serve-request-sized` event. */
 interface ProveInfo {
   fresh?: true;
@@ -1800,7 +1799,12 @@ interface ProveInfo {
   proveGrowth?: number;
 }
 
+/** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
+  /** PR-103: running total of codeunits proved lazily on it AFTER its first request (events only). */
+  daemonProved?: number;
+  /** PR-103: running total of the RSS growth measured across those proofs, bytes (events only). */
+  daemonProveGrowth?: number;
   readonly server: AlRunnerServer;
   /** R954: the `--test-timeout` seconds it started with; `ensureDaemon` restarts one that differs. */
   readonly stopSeconds: number;
@@ -2466,7 +2470,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       readonly source: "hwm" | "sampled";
       readonly sampledPeak: number | undefined;
       readonly hwm?: number;
-    } & Pick<V3RequestSized, "kind" | "daemonRequest" | "fresh" | "proved" | "proveGrowth">,
+    } & Pick<
+      V3RequestSized,
+      | "kind"
+      | "daemonRequest"
+      | "fresh"
+      | "proved"
+      | "proveGrowth"
+      | "daemonProved"
+      | "daemonProveGrowth"
+    >,
   ) {
     if (startRss === undefined || floorRss === undefined || peakRss === undefined) return;
     const tests = sent.filter((e) => !e.echo);
@@ -2500,6 +2513,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(reading.fresh !== undefined ? { fresh: reading.fresh } : {}),
       ...(reading.proved !== undefined ? { proved: reading.proved } : {}),
       ...(reading.proveGrowth !== undefined ? { proveGrowth: reading.proveGrowth } : {}),
+      ...(reading.daemonProved !== undefined ? { daemonProved: reading.daemonProved } : {}),
+      ...(reading.daemonProveGrowth !== undefined
+        ? { daemonProveGrowth: reading.daemonProveGrowth }
+        : {}),
       calls,
       floor: floorRss,
       start: startRss,
@@ -7713,6 +7730,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       groups.flatMap((g) => g.codeunits),
       proveInfo,
     );
+    // PR-103: the running totals leave out the first request's proofs (below the floor), and count a
+    // request whose event is skipped (no reading), which is why they sit on the daemon.
+    if (proveInfo.fresh !== true && proveInfo.proved > 0) {
+      daemon.daemonProved = (daemon.daemonProved ?? 0) + proveInfo.proved;
+      daemon.daemonProveGrowth = (daemon.daemonProveGrowth ?? 0) + (proveInfo.proveGrowth ?? 0);
+    }
     // R987: the daemon's RSS while the request runs (it holds every entry's state until the end).
     const pid = daemon.server.pid;
     const readRss = (): number | undefined =>
@@ -7895,6 +7918,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(hwmPeak !== undefined ? { hwm: hwmPeak } : {}),
       kind: phase === "prefetchMs" ? "prefetch" : "live",
       daemonRequest: daemon.requests,
+      daemonProved: daemon.daemonProved ?? 0,
+      daemonProveGrowth: daemon.daemonProveGrowth ?? 0,
       ...(proveInfo.fresh === true ? { fresh: true as const } : {}),
       ...(proveInfo.proved > 0 ? { proved: proveInfo.proved } : {}),
       ...(proveInfo.proved > 0 && proveInfo.proveGrowth !== undefined

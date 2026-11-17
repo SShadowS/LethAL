@@ -3431,6 +3431,8 @@ describe("R987: entries per serve request follow the daemon growth measured per 
         lane: 0,
         kind: "prefetch", // PR-103
         daemonRequest: 2, // the whole-union warm-up was the daemon's first
+        daemonProved: 0,
+        daemonProveGrowth: 0,
         fresh: true,
         calls: [{ call: CU, entries: 16, cost: (9 * GiB) / 16 }],
         floor: 0.5 * GiB,
@@ -9032,6 +9034,97 @@ describe("PR-103: the serve-request-sized event says what the request's daemon d
     expect(sized.slice(1).some((e) => "fresh" in e)).toBe(false);
     const recycled = await session({ daemonMaxRequests: 1 });
     expect(recycled.sized.every((e) => e.fresh === true)).toBe(true);
+  });
+
+  describe("running totals per daemon (addendum 1)", () => {
+    // daemonMaxRequests 3: daemon 0 (union-warmed) serves a and b, then daemon 1 is restarted for
+    // c (fresh, proves CU), d (proves CU2, +600 MiB: a reading-less request, the daemon is 600 MiB over its
+    // floor and did not grow) and e (grows 1 MiB: the next emitted event).
+    const run = async () => {
+      const mem = { level: GiB };
+      let entriesAnswers = 0;
+      const r = await rig({
+        serve: {
+          rows: killsM1,
+          answer: (q) => {
+            if (q.daemon < 1) return undefined;
+            if (q.ids.every((i) => i.startsWith("NONE|"))) {
+              mem.level += q.ids.includes(`NONE|${CU2}`) ? 600 * MiB : GROW;
+            } else {
+              entriesAnswers += 1;
+              if (entriesAnswers !== 2) mem.level += MiB; // d's own entries do not grow it
+            }
+            return undefined;
+          },
+        },
+        oneShotRows: killsM1,
+        suite: SUITE2,
+        extra: { daemonMaxRequests: 3 },
+        seams: { requestRssReader: () => mem.level },
+      });
+      const sized: V3RequestSized[] = [];
+      r.b.setRequestSizedSink((e) => sized.push(e));
+      await baseline(r.b, SUITE2);
+      for (const [m, t] of [
+        ["M0001", ref("A")],
+        ["M0001", ref("B")],
+        ["M0003", ref("A")], // c
+        ["M0002", ref("C", CU2)], // d
+        ["M0003", ref("C", CU2)], // e
+      ] as const) {
+        await r.b.activate(m);
+        await r.b.run(t, OPTS);
+      }
+      return sized;
+    };
+
+    test("a reused daemon's request that took no reading still has its proof in the next event's totals", async () => {
+      const sized = await run();
+      const last = sized[sized.length - 1];
+      expect(last?.daemonRequest).toBe(3);
+      expect(last?.proved).toBeUndefined(); // the last request proved nothing itself
+      expect(last?.daemonProved).toBe(1); // d's proof, though d gave no event
+      expect(last?.daemonProveGrowth).toBe(600 * MiB);
+      expect(sized.filter((e) => e.proved !== undefined && e.fresh !== true)).toHaveLength(0);
+    });
+
+    test("the totals leave out the fresh request's proofs", async () => {
+      const sized = await run();
+      const fresh = sized.filter((e) => e.fresh === true && e.proved !== undefined);
+      expect(fresh.length).toBeGreaterThan(0);
+      for (const e of fresh) {
+        expect(e.daemonProved).toBe(0);
+        expect(e.daemonProveGrowth).toBe(0);
+      }
+      // c proved CU on the fresh daemon (+GROW): not in the last event's totals (they are d's alone).
+      expect(sized[sized.length - 1]?.daemonProveGrowth).not.toBe(600 * MiB + GROW);
+    });
+  });
+
+  test("proved counts the codeunits sent, not those marked missing (R1004: an isolated call whose test is left out)", async () => {
+    const REFUSAL = "NotRun: out-of-scope: InStream method on an unassigned Variant";
+    const bRefused: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === "NONE" && x.method === "B"
+          ? { ...x, status: "error" as const, notRun: true, message: REFUSAL }
+          : x,
+      );
+    const r = await rig({
+      serve: { rows: bRefused },
+      oneShotRows: bRefused,
+      suite: SUITE2,
+      extra: { isolateTests: true, daemonMaxRequests: 1 },
+      seams: { requestRssReader: () => GiB },
+    });
+    const sized: V3RequestSized[] = [];
+    r.b.setRequestSizedSink((e) => sized.push(e));
+    await baseline(r.b, SUITE2);
+    for (const m of ["M0001", "M0002", "M0003"])
+      await r.b.prefetchMutants([{ mutantId: m, refs: [ref("A"), ref("B")] }]);
+    const proofs = sized.filter((e) => e.proved !== undefined);
+    expect(proofs.length).toBeGreaterThan(0);
+    // A is proved; B (left out at baseline, isolated) is marked proven but not sent.
+    for (const e of proofs) expect(e.proved).toBe(1);
   });
 
   test("daemonRequest counts as R952 does: a lazy proof is not a request", async () => {
