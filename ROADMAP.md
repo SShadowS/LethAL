@@ -596,7 +596,7 @@ that ordering is the priority.
 - **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (e7244b10)
 - **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
 - **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · done (e93270e9) — PR-128: doctor check text-search-dependencies over the project's dependency closure; live…
-- **R1113** · One hanging test anywhere in a user's suite quarantines a whole bcdev run at baseline, with no recovery steps printed; nothing warns before the run about tests that can make real outbound HTTP calls · [R1113.md](docs/roadmap/R1113.md) · open — filed by PR-67 (the DO pilot), 2026-11-17
+- **R1113** · One hanging test anywhere in a user's suite quarantines a whole bcdev run at baseline, with no recovery steps printed; nothing warns before the run about tests that can make real outbound HTTP calls · [R1113.md](docs/roadmap/R1113.md) · open — fix 1 (recovery steps on a quarantine) and a dry-run whole-suite note landed in PR-132; fix 2…
 
 ## Backends and tooling
 
