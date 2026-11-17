@@ -511,10 +511,12 @@ const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]
   ],
 };
 
+/** The last part of a path, whether it uses `/` or `\` (the probe's scratch folders use the host's: backslashes on Windows). */
+const folderName = (p: string): string => p.split(/[\\/]/).pop() ?? "";
+
 /** PR-114a: is this serve request one of the capability facts' (a scratch folder named `batch-...`)? */
 const isCapabilityRequest = (q: Record<string, unknown>): boolean =>
-  Array.isArray(q.sourcePaths) &&
-  String(q.sourcePaths[0]).split("/").pop()?.startsWith("batch-") === true;
+  Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])).startsWith("batch-");
 
 const capRow = (id: number, method: string, status = "pass", message?: string) => ({
   name: `Codeunit${id}.${method}`,
@@ -585,9 +587,7 @@ function fakeServe(
         const req = JSON.parse(line) as Record<string, unknown>;
         requests.push(req);
         const capFact = Array.isArray(req.sourcePaths)
-          ? String(req.sourcePaths[0] ?? "")
-              .split("/")
-              .pop()
+          ? folderName(String(req.sourcePaths[0] ?? ""))
           : undefined;
         if (req.command === "runTests" && capFact?.startsWith("batch-") === true) {
           // PR-114a: a capability fact's request (its own scratch folder is named for it).
@@ -1307,6 +1307,19 @@ describe("PR-114a: the eight capability facts", () => {
     });
   }
 
+  test("Windows-style paths: the scratch folders arrive with backslashes and every fact still reads matches", async () => {
+    const serve = fakeServe();
+    const win: ServerSpawnFn = (argv, opts) => {
+      const h = serve.spawn(argv, opts);
+      return { ...h, write: (l: string) => h.write(l.replaceAll("/", "\\\\")) };
+    };
+    const r = await probe({}, win);
+    for (const n of V3_CAPABILITY_FACTS)
+      expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
+    expect(r.facts.length).toBe(36);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
   test("M1: a request that never answers in time reads unmeasurable, and its LATE rows never reach the next fact", async () => {
     const serve = fakeServe(SERVE_ROWS, {
       cap: (name, q, def) =>
@@ -1418,11 +1431,9 @@ describe("PR-114a: the eight capability facts", () => {
       expect(Array.isArray(q.sourcePaths) && q.sourcePaths.length === 1).toBe(true);
     }
     const dirs = new Set(cap.map((q) => (q.sourcePaths as string[])[0] ?? ""));
-    expect([...dirs].map((d) => d.split("/").pop()).sort()).toEqual(
-      [...V3_CAPABILITY_FACTS].sort(),
-    );
+    expect([...dirs].map(folderName).sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
     const strict = cap.filter((q) => Object.hasOwn(q, "strictOrder"));
-    expect(strict.map((q) => (q.sourcePaths as string[])[0]?.split("/").pop())).toEqual([
+    expect(strict.map((q) => folderName((q.sourcePaths as string[])[0] ?? ""))).toEqual([
       "batch-lane-strict-reruns",
     ]);
     // the batch requests name the complement in excludeTests and carry no `test`
@@ -1440,7 +1451,8 @@ describe("PR-114a: the eight capability facts", () => {
     const seen = new Map<string, string>();
     const { r } = await readOf((name, q, def) => {
       const dir = (q.sourcePaths as string[])[0] ?? "";
-      if (!seen.has(name)) seen.set(name, readFileSync(`${dir}/src/Batch.Codeunit.al`, "utf8"));
+      if (!seen.has(name))
+        seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
     expect(r.facts.length).toBe(36);
