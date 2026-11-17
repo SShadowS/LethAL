@@ -3448,9 +3448,13 @@ async function* coveringRuns(args: {
   readonly group: GroupRunSettings | undefined;
   readonly mutantId: string;
   readonly skip: ReadonlySet<number>;
+  /** PR-81 (L1): runs just before each test is sent (a held confirm's re-activation). */
+  readonly beforeRun?: () => Promise<void>;
 }): AsyncGenerator<CoveringStep, void, undefined> {
-  const single = (ref: TestMethodRef): Promise<CoveringStep> =>
-    singleStep(args, ref, args.budgetOf(ref));
+  const single = async (ref: TestMethodRef): Promise<CoveringStep> => {
+    await args.beforeRun?.();
+    return singleStep(args, ref, args.budgetOf(ref));
+  };
   const skipped = (ref: TestMethodRef) => args.skip.has(ref.codeunitId);
   const group = args.group;
   if (group === undefined || args.backend.runMany === undefined) {
@@ -3515,6 +3519,7 @@ async function* coveringRuns(args: {
       stopGraceMs: group.stopGraceMs,
     };
     const groupBudgetMs = group.requestCeilingMs + group.stopGraceMs;
+    await args.beforeRun?.();
     const out = await runFencedMany(
       args.backend,
       args.safety,
@@ -12560,6 +12565,44 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let budgetCut = false;
     const clockSpent = (): boolean =>
       args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
+    // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
+    type WalkSnap = HeldTimeout["snap"];
+    const snapNow = (): WalkSnap => ({
+      verdict,
+      cause,
+      failureNote,
+      permissionRefusedTest,
+      runnerDisagreement,
+      runnerDisagreementTest,
+      notReproduced,
+      refusedPending,
+      transportErrorRef,
+      abortAfterRecord,
+    });
+    const restoreWalk = (s: WalkSnap): void => {
+      verdict = s.verdict;
+      cause = s.cause;
+      failureNote = s.failureNote;
+      permissionRefusedTest = s.permissionRefusedTest;
+      runnerDisagreement = s.runnerDisagreement;
+      runnerDisagreementTest = s.runnerDisagreementTest;
+      notReproduced = s.notReproduced;
+      refusedPending = s.refusedPending;
+      transportErrorRef = s.transportErrorRef;
+      abortAfterRecord = s.abortAfterRecord;
+    };
+    // The FIRST non-terminal error met (its own fields and its test); later ones are only named.
+    let heldErr: { readonly test: string; readonly snap: WalkSnap } | undefined;
+    const notedErr: string[] = [];
+    const afterErr: string[] = []; // the tests a later step answered, names only
+    let stepSnap: WalkSnap = snapNow();
+    let stepDeactivated = false; // this step ran a confirm and left the mutant NOT active
+    let stepTerminal = false; // this step's cold confirm did not FAIL: its `unstable` is not holdable
+    let needsReactivate = false; // a held confirm left the mutant inactive; `feed` re-activates it
+    let stepRef: TestMethodRef | undefined;
+    let heldRounds = 0;
+    let errNoted = false; // the held error is already named in the note
+    let errNote: string | undefined;
     const walker = coveringRuns({
       backend: args.backend,
       safety: args.safety,
@@ -12571,6 +12614,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       group: args.groupRuns,
       mutantId: m.mutantId,
       skip,
+      beforeRun: async () => {
+        if (!needsReactivate) return;
+        needsReactivate = false;
+        await activateOnce(args.backend, args.safety, m.mutantId);
+      },
     });
     const feed = async function* (): AsyncGenerator<CoveringStep, void, undefined> {
       if (replayStep !== undefined) {
@@ -12584,6 +12632,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           budgetCut = true;
           return;
         }
+        // PR-81 (L1): the re-activation is sent by `beforeRun`, inside this pull, so it comes after
+        // the clock check above and only when a covering test is really about to run.
         const next = await walker.next();
         if (next.done === true) return;
         yield next.value;
@@ -12607,9 +12657,15 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           testBudgetMs: budget,
           groupBudgetMs,
         } = step;
+        // PR-81: this step's start state, so a held error leaves none of its fields on a later kill.
+        stepSnap = snapNow();
+        stepDeactivated = false;
+        stepTerminal = false;
+        stepRef = ref;
         // PR-51: the replay of the held step was counted when it was first met.
         if (!replaying) {
           if (held !== undefined) afterHeld.push(qualifiedTestName(ref));
+          if (heldErr !== undefined) afterErr.push(qualifiedTestName(ref));
           testResultBuffer.push({
             mutantCode: m.mutantId,
             ref,
@@ -12671,18 +12727,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             `covering loop: mutant ${m.mutantId}'s ${ref.method} is marked alone at group position ${step.groupPosition} — caller-contract violation (an alone request runs one test, so its position is 1) (PR-55)`,
           );
         }
-        const reproduce = (): Promise<ReproDecision | undefined> =>
-          args.backend.killsMustReproduce === true
-            ? reproduceKill({
-                args,
-                m,
-                step,
-                leaseSession,
-                resyncOpSeq,
-                testResultBuffer,
-                ...(aloneKill ? { alone: true as const } : {}),
-              })
-            : Promise.resolve(undefined);
+        const reproduce = async (): Promise<ReproDecision | undefined> => {
+          if (args.backend.killsMustReproduce !== true) return undefined;
+          const r = await reproduceKill({
+            args,
+            m,
+            step,
+            leaseSession,
+            resyncOpSeq,
+            testResultBuffer,
+            ...(aloneKill ? { alone: true as const } : {}),
+          });
+          stepDeactivated = false; // reproduceKill re-activates the mutant first
+          return r;
+        };
         // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
         const notKilled = (r: KillErrorDecision): boolean => {
           if (r.cause === "kill-not-reproduced") {
@@ -12698,8 +12756,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         // R639: v3's refusal that follows a timeout in the same call is a cascade of that stop. The
         // next covering test's row is one it would get were it first in the order, so the loop goes
         // on; the refusal stays pending and ends the mutant as an error if nothing else decides it.
-        // Here and not in `classifyNonVerdictStep`: a refused row in a reproduction or a confirm
-        // (which share it) must still end the mutant.
+        // Here and not in `classifyNonVerdictStep`: a refused row in a CONFIRM (which shares it) must
+        // still end the mutant. PR-81: a `runner-refused` in a kill's REPRODUCTION no longer ends it
+        // either: it is in N, so the walk holds it and goes on (spec, section N).
         if (step.cause === "runner-refused" && v.refusedAfterStop !== undefined) {
           refusedPending ??= v.failureMessage ?? `${step.cause} running ${ref.method}`;
           continue;
@@ -12726,6 +12785,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             v.operation === undefined &&
             isRunMutantFoundNone(v.failureMessage)
           ) {
+            stepDeactivated = true;
             const d = await confirmFoundNone({
               args,
               m,
@@ -12801,18 +12861,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           const entry: HeldTimeout = {
             step,
             cut: args.backend.cutState?.(m.mutantId),
-            snap: {
-              verdict,
-              cause,
-              failureNote,
-              permissionRefusedTest,
-              runnerDisagreement,
-              runnerDisagreementTest,
-              notReproduced,
-              refusedPending,
-              transportErrorRef,
-              abortAfterRecord,
-            },
+            snap: snapNow(),
           };
           if (held === undefined) held = entry;
           else noted.push(entry);
@@ -12827,6 +12876,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         }
         if (v.outcome === "timeout") {
           if (step.groupPosition > 1) {
+            stepDeactivated = true;
             const warm = await confirmWarm({
               args,
               m,
@@ -12867,6 +12917,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         if (v.outcome === "fail" && step.groupPosition > 1) {
           // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
           // methods 1..k of the SAME call unmutated, in another fresh session.
+          stepDeactivated = true;
           const warm = await confirmWarm({
             args,
             m,
@@ -12928,6 +12979,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               message: `[lethal] alone-confirm: ${ref.method} (mutant ${m.mutantId}) was measured alone under the mutant (${v.outcome}); its unmutated confirm and its reproduction run alone too, and no kill pair is sent (R1067)`,
             });
           }
+          stepDeactivated = true;
           await activateOnce(args.backend, args.safety, null);
           // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
           // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
@@ -13214,6 +13266,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               disagreement !== undefined ? ` — ${disagreement}` : ""
             }`;
             cause = "unstable";
+            // PR-81 (M2): only a confirm that FAILED says the test is unstable. An `error` confirm (a
+            // rejected dispatch, a v3 `runner-test-error` row) or anything else is terminal, as before.
+            stepTerminal = confirm.outcome !== "fail";
           }
           break;
         }
@@ -13230,6 +13285,52 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             "the time budget was used up (or a stop signal spent it)",
           );
         break mutantLoop;
+      }
+      // PR-81 (R1066): a step that ended the mutant as a non-terminal error is HELD, like a timeout:
+      // the walk goes on from the next covering test, with the fields as this step found them.
+      // L4 reliance: a `runner-refused` not after a stop is held although R639 once stopped there.
+      // A refusal is `notRun`: the refused test never executed, so it left no state, and a later
+      // test's plain FAIL in the same call is as trustworthy as any (R637 already scores it as a kill,
+      // with a note, when the walk meets it first). What can NOT be trusted is a row after an
+      // UNFINISHED test: v3 marks it (upstream #5776) and R-435 maps it to `runner-test-error`, which
+      // is terminal (never held). Leg C pins those markings: `refusal-cascade` and
+      // `dependent-fail-after-timeout-is-notrun` (al-runner-v3-contract.ts). DO's store count (0
+      // unmarked fail rows) is NOT evidence: those walks broke at the refusal (spec addendum A).
+      if (
+        !replaying &&
+        stepRef !== undefined &&
+        verdict === "error" &&
+        cause !== undefined &&
+        HELD_ERROR_CAUSES.has(cause) &&
+        !stepTerminal &&
+        transportErrorRef === undefined &&
+        // Redundant today (the abort branch sets no `cause`, so `cause !== undefined` rejects it); kept so an
+        // abort can never be held if that branch ever gains a cause. No test can go red on it alone.
+        abortAfterRecord === undefined &&
+        !args.safety.isUnsafe // checked first: a latched session is terminal, nothing re-activated
+      ) {
+        // Each hold consumes a step the walker had not yielded before, so a walk holds at most
+        // once per covering test. More means the fields were not restored and the walk would loop.
+        heldRounds += 1;
+        if (heldRounds > ordered.length + noted.length + 1) {
+          throw new Error(
+            `covering loop: mutant ${m.mutantId} held ${heldRounds} errors for ${ordered.length} covering test(s) — the walk is not advancing (PR-81)`,
+          );
+        }
+        const name = qualifiedTestName(stepRef);
+        if (heldErr === undefined) heldErr = { test: name, snap: snapNow() };
+        else notedErr.push(name);
+        restoreWalk(stepSnap);
+        if (stepDeactivated) {
+          // Only a step that deactivated the mutant (a confirm) re-activates it. An error met on the
+          // covering row leaves it active, and re-activating would throw away v3's prefetched rows.
+          // The pair a failed cold confirm left pending is dropped first, or `activateOn` would read
+          // this activation as the pair's reproduction. The re-activation itself waits for `feed`,
+          // after its clock check, so a spent clock or an empty tail sends none.
+          args.backend.dropPendingPair?.(m.mutantId);
+          needsReactivate = true;
+        }
+        continue;
       }
       // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
       const h: HeldTimeout | undefined =
@@ -13274,10 +13375,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       transportErrorRef = h.snap.transportErrorRef;
       abortAfterRecord = h.snap.abortAfterRecord;
       if (wasFirst) {
-        heldNote =
-          afterHeld.length > 0
-            ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
-            : undefined;
+        // PR-81: a held error's test (and a later one's) is named here too, names only.
+        const errNames = heldErr !== undefined ? [heldErr.test, ...notedErr] : [];
+        const names = [...new Set([...errNames, ...afterHeld])];
+        errNoted = heldErr !== undefined;
+        heldNote = names.length > 0 ? `after the timeout: ${names.join(", ")}` : undefined;
       }
       // v3: the cut state this step met, so its reproduction routes as it did in the old walk.
       args.backend.restoreCutState?.(m.mutantId, h.cut);
@@ -13286,6 +13388,22 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       replayStep = h.step;
     }
     await walker.return(undefined);
+    // PR-81: the held error becomes the outcome when nothing else decided the mutant. It goes
+    // BEFORE the two resolutions below, so a pending `kill-not-reproduced` or R639 refusal does not
+    // outrank an error met earlier; after a held timeout's replay, that replay's result stands.
+    const adoptHeldError = (): void => {
+      if (heldErr === undefined) return;
+      verdict = heldErr.snap.verdict;
+      cause = heldErr.snap.cause;
+      failureNote = heldErr.snap.failureNote;
+      permissionRefusedTest = heldErr.snap.permissionRefusedTest;
+      runnerDisagreement = heldErr.snap.runnerDisagreement;
+      runnerDisagreementTest = heldErr.snap.runnerDisagreementTest;
+      const later = [...new Set(afterErr)];
+      errNote = later.length > 0 ? `after the error: ${later.join(", ")}` : undefined;
+      errNoted = true;
+    };
+    if (verdict === "survived" && !replaying) adoptHeldError();
     // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
     // mutant is that error, never `survived`. Before R198's check below, which guards survivors
     // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
@@ -13299,9 +13417,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       cause = "runner-refused";
       failureNote = refusedPending;
     }
+    // PR-81 (L5), the safety net: a mutant with a held error is never a survivor.
+    if (verdict === "survived") adoptHeldError();
+    if (heldErr !== undefined && !errNoted) {
+      // A kill (names only, never the error's diagnosis) or a terminal answer ended the walk.
+      const names = [...new Set([heldErr.test, ...notedErr])].join(", ");
+      errNote =
+        verdict === "killed" || verdict === "timeout-killed"
+          ? `the error of ${names} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`
+          : `an error of ${names} was held earlier in this walk and not scored`;
+    }
     // PR-51: names only, after any strand prefix (`--resume` reads it) and any other note.
-    if (heldNote !== undefined) {
-      failureNote = failureNote !== undefined ? `${failureNote} ${heldNote}` : heldNote;
+    for (const note of [heldNote, errNote]) {
+      if (note !== undefined)
+        failureNote = failureNote !== undefined ? `${failureNote} ${note}` : note;
     }
     // PR-108: a walk the 3rd hang ended says so, even with nothing left to run (k = 0). `k`: the
     // ordered covering refs after the 3rd hang's ref, minus the skipped codeunits. A ref that is not in
@@ -14245,6 +14374,23 @@ function nearestAlDir(alDirs: ReadonlySet<string>, rel: string): string | undefi
   }
   return best;
 }
+
+/**
+ * PR-81 (R1066): the closed whitelist N of error causes the covering walk HOLDS (goes on past)
+ * instead of ending the mutant. Each is an error whose code's own notes say the server is clean
+ * and the answer is not about the mutant. A cause not listed here is terminal. NOT
+ * `runner-test-error` (it covers contract violations, a missing row, an echo mismatch and
+ * R-435's untrusted timeout, which must never let the walk go on). `op-stopped`,
+ * `stopped-after-completion` and `confirm-stopped` are terminal conservatively.
+ */
+const HELD_ERROR_CAUSES: ReadonlySet<MutantErrorCause> = new Set<MutantErrorCause>([
+  "session-reused",
+  "unstable",
+  "warm-prefix-unstable",
+  "warm-timeout-unconfirmed",
+  "warm-confirmation-incomplete",
+  "runner-refused",
+]);
 
 /**
  * One activation attempt. Retries ONLY a `pre-dispatch-rejected` failure (provably never reached

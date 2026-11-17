@@ -27,14 +27,16 @@ An error is held only when ALL of these hold:
   (review L7):
   - `session-reused`, from R206's session guard: that call's session had already run other tests, so its state was another
     call's. It comes from both the walk site and the confirm site, and each later call is judged by its own `testRunsBefore`;
-  - `unstable`, from a cold confirm whose unmutated run also failed. That includes the permission-refusal and
+  - `unstable`, from a cold confirm whose unmutated run also FAILED (review M2: only a confirm with outcome `fail`; an `error`
+    confirm, such as a `runner-test-error` row or a pre-dispatch rejection, is terminal). That includes the permission-refusal and
     runner-disagreement diagnoses, which are notes on `unstable`;
   - `warm-prefix-unstable`, `warm-timeout-unconfirmed`, `warm-confirmation-incomplete`, from `confirmWarm`'s replay that did not
     confirm (the last also from `reproduceKill`, and both of the last two from `confirmWarm`'s renaming of a replay's
     `stopped-after-completion` and of an op-in-flight-cleared answer). The code's own notes say the server is clean in each
     case (R203, `ownStopAsTimeout`);
   - `runner-refused` when not after a stop: al-runner refused a surface it does not run for that test (R534).
-    `runner-refused` after a stop already continues (R639) and is unchanged.
+    `runner-refused` after a stop already continues (R639) and is unchanged. **This includes a `runner-refused` in a kill's
+    REPRODUCTION** (review L3): R639's comment once said a refused row in a reproduction must end the mutant; it is now held.
   - **NOT `runner-test-error`** (review M4). It covers very different events:
     - al-runner contract violations;
     - a missing row;
@@ -120,7 +122,10 @@ replaying a held timeout, which happens after the walk, so they never reach the 
    error or the timeout outcome. The attempted-set check runs only for `survived`, so it is unchanged. **A safety net**
    (delta review, L5): after the walk, where `notReproduced` and `refusedPending` are resolved, a verdict still `survived`
    while an error is held is replaced by the held error. Then no future replay path can make a survivor out of a held error.
-   A unit test pins it.
+   The late net is unreachable today (every replay that ends `survived` sets `notReproduced`), so no test can reach it. E10
+   exercises the EARLY `adoptHeldError`, not the late net (review L5).
+   **A held error at the last covering test with the clock then spent** is dropped as `budgetCut` (left to `--resume`), as
+   PR-108 treats held timeouts; no verdict moves (review L2).
 
 ## A stated reliance, and its measurement (delta review, L4)
 Holding a `runner-refused` that did not follow a stop means the walk goes on past it. R639 deliberately did not: after such a
@@ -195,3 +200,24 @@ row that do NOT carry the marker. The result goes in addendum A.
   (H1) is covered by PR-55's condition when PR-55 lands first (delta review, L2).
 - The cause stability of an `error` across orders (only the class is made stable).
 - `group-*` causes stay terminal. They describe the group call itself, so walking on through the same call is not attempted.
+
+## Addendum A (2026-11-16, before the build merged): the L4 count and the hang-gate check
+
+**L4 measurement** (source: `/coord/handoff/PR-81/cost.md`, section L4; DO's stored R-984 runs). Marker: `V3_REFUSAL_PREFIX`.
+- Scope: 1,670 mutants scored `error` (the walks a non-after-stop refusal ended), 1,848 refusal rows. Every error row in them carries the marker.
+- Rows after a refusal, same mutant and codeunit (1,680): 1,483 pass; 197 error, refused again and marked; 0 fail without the marker; 0 fail with it. Widened to any codeunit of the same mutant: also 0 fail rows.
+- The store has no call id, so "the same call" is approximated by mutant, codeunit and row order. It covers walks that ended as `error` only.
+- **Result: the count is 0, but it is NOT evidence** (review M1): those walks broke at the refusal, so no later row was ever read, and 0 is true by construction. The basis for holding: a refusal is `notRun`, so the refused test never executed and left no state; a later test's plain FAIL in the same call is as trustworthy as any (R637 already scores it as a kill, with a note, when the walk meets it first). What can NOT be trusted is a row after an UNFINISHED test: v3 marks it (upstream #5776) and R-435 maps it to `runner-test-error`, which is terminal (never held). Leg C pins those markings: `refusal-cascade` and `dependent-fail-after-timeout-is-notrun` in `al-runner-v3-contract.ts`. The code comment beside the hold says so. `runner-refused` is held without the "last row of its call" restriction.
+
+**Hang-gate row check.** No stored hang-gate store (ON or SINGLE) was found quickly, so no stored test row was checked for an N error. The prediction rests on the PR-51 argument: its list of every hang-gate walk after its held timeout shows only further hangs or nothing, and no frozen baseline holds an `error`.
+
+**Build notes.**
+- PR-51's `P5a`, `P5b` and `P11c` assert that the walk stops at a session-reused or unstable error that follows a held timeout (`nthOf(T3) === 0`). Under this rule that error is held and the walk goes on (`nthOf(T3) === 1`); the class (`timeout-killed`) is unchanged. These three assertions need updating by the owner of PR-51's file.
+- **Moved under the owner's ruling q-20261117T160215-3631a110 (option a):** P5a, P5b and P11c (`nthOf(T3)` is now 1, the class
+  unchanged), O3 (R639's stop reversed: `timeout-killed`, T2 run twice, once in the walk and once as the replay), and O7 (one
+  activation: the re-activation after a held confirm is sent only just before a covering test runs, review L1).
+- **Red checks on the rebased build:** E16, E17 and E18 were added for `warm-timeout-unconfirmed`, `warm-confirmation-incomplete` and
+  `!replaying`. The `abortAfterRecord` clause, the `heldRounds` guard and the late L5 net are redundant or unreachable by
+  construction, and say so beside them.
+- The L5 net (a `survived` verdict still standing while an error is held) is defence in depth: no walk reaches it, because a replay ending with no verdict always leaves `notReproduced` set.
+- A guard throws when a walk holds more errors than it has covering tests, so a walk that fails to advance stops by name instead of looping.

@@ -449,7 +449,9 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     expect(nthOf(b, "T2")).toBe(2);
   });
 
-  test("P5a: hang then a session-reused fail -> the walk ends, the held timeout is scored, no later test runs", async () => {
+  // PR-81 (R1066, owner ruling q-20261117T160215-3631a110): an error after a held timeout is held too, so the walk
+  // goes on to T3 (P5a, P5b, P11c). The class is unchanged: the held timeout is scored.
+  test("P5a: hang then a session-reused fail -> the error is held (PR-81), T3 runs, the held timeout is scored", async () => {
     const b = make({ T1: "timeout", T2: "fail" }, (method, _n, v) =>
       method === "T2" ? { ...v, testRunsBefore: 3, sessionId: 7 } : undefined,
     );
@@ -458,10 +460,10 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     expect(m1(report)?.killingTest).toContain("T1");
     expect(m1(report)?.cause).toBeUndefined();
     expect(m1(report)?.failureNote ?? "").not.toContain("session-reused");
-    expect(nthOf(b, "T3")).toBe(0);
+    expect(nthOf(b, "T3")).toBe(1);
   });
 
-  test("P5b: hang then a fail whose confirm is unstable -> the walk ends, the held timeout is scored, no later test runs", async () => {
+  test("P5b: hang then a fail whose confirm is unstable -> the error is held (PR-81), T3 runs, the held timeout is scored", async () => {
     // T2 fails under M0001 and again in its unmutated confirm (its second null run; the first is
     // the baseline, which passes).
     const b = make({ T1: "timeout", T2: "fail" });
@@ -476,7 +478,7 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     expect(m1(report)?.killingTest).toContain("T1");
     expect(m1(report)?.cause).toBeUndefined();
     expect(m1(report)?.failureNote ?? "").not.toContain("unstable");
-    expect(nthOf(b, "T3")).toBe(0);
+    expect(nthOf(b, "T3")).toBe(1);
   });
 
   test("P6: hang then a stranded step -> the strand stands, the held timeout is named after its prefix, no further call", async () => {
@@ -668,7 +670,7 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     ).toEqual(["null:false", "M0001:false", "null:true", "M0001:true"]);
   });
 
-  test("P11c (F1): a fail marked alone whose alone confirm is unstable -> the walk ends and the held timeout is scored, no pair", async () => {
+  test("P11c (F1): a fail marked alone whose alone confirm is unstable -> the error is held (PR-81), T3 runs, the held timeout is scored, no pair", async () => {
     const b: HeldStub = new HeldStub(
       CAPS_NST,
       (mutant, ref) => {
@@ -684,7 +686,7 @@ describe("PR-51: a timeout is held while the walk looks for a kill", () => {
     expect(m1(report)?.verdict).toBe("timeout-killed");
     expect(m1(report)?.killingTest).toContain("T1");
     expect(b.pairs).toEqual([]);
-    expect(nthOf(b, "T3")).toBe(0);
+    expect(nthOf(b, "T3")).toBe(1);
   });
 
   test("P12: a held timeout whose reproduction fails and no noted timeout is left -> error with the held note", async () => {
