@@ -86,6 +86,8 @@ report rebuilt from a store.
      ` Isolation "auto" scores most of them (R1102).`
    - or, when it is present, by
      ` They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).`
+   - **Known limit (build review #3):** a resumed auto session in which every mutant is carried, and no batch runs a
+     baseline, has no `isolation`. Its console would print the forced-mode text. This is console-only.
 4. **`lethal explain`:** the caveat by reference, as every caveat. Its not-measured entries are unchanged (no
    `withheldKill` there, so explain's path pin does not move beyond the caveat enum).
 
@@ -97,7 +99,8 @@ report rebuilt from a store.
 - `tests/schemas.test.ts`: the caveat enum and the explain version. No root-required list moves, because the field is
   optional; the committed sample reports still validate.
 - `interpretation.test.ts` and `report.test.ts`: the caveat counts.
-- The `report-equality` snapshot, updated on purpose with `bun test --update-snapshots <file>`.
+- The `report-equality` snapshot: unchanged in the build, as its golden scenario holds no withheld row; the field and
+  caveat are pinned by `pr116-withheld-kills.test.ts` (build review #5).
 - `report-fold.ts`, `events.ts`: unchanged, since the field is derived in the builder from recorded fields. If the
   builder does not see `cause` or `failureNote` there, the field is added to the fold instead, and this spec says so in
   the build notes.

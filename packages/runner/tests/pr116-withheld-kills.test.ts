@@ -17,6 +17,32 @@ const AFTER_FAIL =
 const AFTER_TIMEOUT =
   "NotRun: out-of-scope: a test before this one in the codeunit did not pass (T3: Test exceeded 3s timeout.) and left state; this failure is not trusted: boom";
 
+/** Verbatim v3 texts committed elsewhere in the repo, so a change in v3's wording reddens this file too. */
+// al-runner-v3-contract.test.ts NOT_TRUSTED_MESSAGE (R637/R639: after a timeout)
+const REAL_AFTER_TIMEOUT =
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (HangsDirty: did not run (the test used more than the time limit of 3 s of CPU time and was stopped (--test-timeout-secs)): it can change the global variable Probe Cut.Dirty that this test reads, so the state it would have left is not BC's; this failure is not trusted: dirty";
+// pr56-measured-refusals.json (a measured cascade after a refused test), with the row's own prefix
+const REAL_AFTER_REFUSAL =
+  "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (FeatureKeyRollback: did not run (a rollback of an uncommitted Feature Key change (whether it is undone is a Linux suspec): it can write the table Feature Key that this test reads, so the state it would have left is not BC's; this failure is not trusted: The record in table Refusal Probe already exists. Identification fields and values: Id='1'";
+
+describe("withheldKillOf on real v3 texts", () => {
+  test("the contract row after a timeout, and a measured cascade after a refusal", () => {
+    expect(
+      withheldKillOf("error", "runner-refused", `${REAL_AFTER_TIMEOUT} ${V3_NOT_RUN_SUFFIX}`),
+    ).toEqual({
+      failure: "dirty",
+      afterTest: "HangsDirty",
+    });
+    expect(
+      withheldKillOf("error", "runner-refused", `${REAL_AFTER_REFUSAL} ${V3_NOT_RUN_SUFFIX}`),
+    ).toEqual({
+      failure:
+        "The record in table Refusal Probe already exists. Identification fields and values: Id='1'",
+      afterTest: "FeatureKeyRollback",
+    });
+  });
+});
+
 describe("withheldKillOf", () => {
   test("detects the three v3 shapes, with failure and afterTest", () => {
     expect(withheldKillOf("error", "runner-refused", REFUSED)).toEqual({
