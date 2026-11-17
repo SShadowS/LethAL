@@ -2182,5 +2182,387 @@
     "key": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF star",
     "state": "by-design",
     "note": "PR-130: the runtime renders no report output, only a placeholder; reading its content is out of scope by design; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the ModalPageHandler GeneralJournalBatchesPageHandler, which takes a TestPage or TestRequestPage, in a session without a client (--no-client): BC fails a TestPage open there (al-runner issue N), and",
+    "state": "open",
+    "issue": "#8028",
+    "note": "PR-131: a TestPage handler under --no-client (PR-65's --no-client runs); al-runner's text cites #8028; 2080 error mutant(s) in non-DO/DC stores (PR-65/bd.new.sqlite=2080)"
+  },
+  {
+    "key": "NotRun: out-of-scope: the login: which login events BC raises in a session without a client (--no-client) is not pinned, and this test codeunit can see what the login leaves",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 1271 error mutant(s) in non-DO/DC stores (PR-65/vat.new.sqlite=1271); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: a stale Audit File Export Line buffer from an Insert older than the last Commit but one, written after the new transaction touched the table",
+    "state": "open",
+    "issue": "#7964",
+    "note": "PR-131: named in #7964 (SAF-T); 44 error mutant(s) in non-DO/DC stores (R-913/afe.sqlite=17, R-914/saft.sqlite=27)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of RecordId to Code[N]",
+    "state": "open",
+    "issue": "#8262",
+    "note": "PR-131: reproduced on edge-4ebfe7913 (an empty RecordId through a Variant; a RecordId through FieldRef.Value into a Code field); 38 error mutant(s) in non-DO/DC stores (R-914/mdm.sqlite=36, R-926/sub.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.SignedXml.ComputeSignature raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 27 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=27)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.FromXmlString raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinn",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 22 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=22)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.IO.StreamReader.ReadToEnd raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 10 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=10)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SessionSettings.RequestSessionUpdate(true) writes User Personalization (not pinned by the corpus)",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-131: named in #7997 (R-961's System Application tests); 10 error mutant(s) in non-DO/DC stores (R-961/usrset.run.sqlite=10)"
+  },
+  {
+    "key": "NotRun: out-of-scope: an unassigned Variant used as a condition",
+    "state": "open",
+    "issue": "#7764",
+    "note": "PR-131: named in #7764 (Data Search tests); 8 error mutant(s) in non-DO/DC stores (R-913/ds.sqlite=8)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.Decrypt raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (AD",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 8 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=8)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Error with an ErrorInfo nobody created",
+    "state": "open",
+    "issue": "#7819",
+    "note": "PR-131: named in #7819 (System Application module tests); 7 error mutant(s) in non-DO/DC stores (R-958/runs/rest.sqlite=7)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Array.Length: member <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 7 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=7)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.Decrypt raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 7 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=7)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSAWrapper.SignData: System.Security.Cryptography.RSAWrapper.SignData has no overload taking N argument(s) of the given types (Byte[], null, RSASignaturePadding)",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 7 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=7); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Platform.Integration.Office.FilterCollectionNode.Collection: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 6 error mutant(s) in non-DO/DC stores (R-950/runs/excel.sqlite=6)"
+  },
+  {
+    "key": "NotRun: out-of-scope: use of an unassigned XmlNode",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 6 error mutant(s) in non-DO/DC stores (R-964/continia.run.sqlite=6); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Runtime.Debugger.VNProfileContract.CpuProfile.Nodes: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-131: a platform server class refused by policy (#7934, #7998); 5 error mutant(s) in non-DO/DC stores (R-928/profiler.run.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RijndaelManaged.CreateEncryptor: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 5 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSA.ToXmlString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 5 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.DecryptData raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 5 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.KeyInfo.AddClause: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 5 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.SignedXml.GetXml raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N section",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 5 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=5)"
+  },
+  {
+    "key": "NotRun: out-of-scope: A guarded Codeunit.Run ends a transaction while Consistent(false) marks table G/L Entry (only Commit() is pinned)",
+    "state": "open",
+    "issue": "#7586",
+    "note": "PR-131: named in #7586; 4 error mutant(s) in non-DO/DC stores (R-902/vat.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a failing worker of a background task enqueued with ErrorLevel Error or Warning (not pinned)",
+    "state": "open",
+    "issue": "#7764",
+    "note": "PR-131: named in #7764 (Data Search tests); 4 error mutant(s) in non-DO/DC stores (R-913/ds.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RijndaelManaged.Key raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR-N section N",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 4 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.CryptoStream raised the .NET exception System.NullReferenceException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 4 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.ToXmlString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 4 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.SignedXml.LoadXml: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 4 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=4)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.CalcField of a field that is not a FlowField (not pinned)",
+    "state": "open",
+    "issue": "#8001",
+    "note": "PR-131: named in #8001; 4 error mutant(s) in non-DO/DC stores (R-940/blobst.run.sqlite=1, R-962/dataclass.run.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: IsolatedStorage.Get of a missing key into a SecretText as a statement (error text not pinned)",
+    "state": "open",
+    "issue": "#8263",
+    "note": "PR-131: reproduced on edge-4ebfe7913; the Text overload fails with BC's error; 4 error mutant(s) in non-DO/DC stores (R-975/edocumentconne3.fresh.sqlite=2, R-969/edocumentconne5.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Text <x> to BigInteger",
+    "state": "open",
+    "issue": "#8219",
+    "note": "PR-131: the BigInteger conversions of #8219; 3 error mutant(s) in non-DO/DC stores (PR-40/v3/uptags.sqlite=1, R-986/avalara.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.UriBuilder.Query: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 3 error mutant(s) in non-DO/DC stores (PR-46/v3/appsrc.sqlite=1, PR-14/v3/azurestoragese.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: SetFilter: unexpected <x> in filter <x>",
+    "state": "open",
+    "issue": "#7764",
+    "note": "PR-131: named in #7764 (Data Search tests); 3 error mutant(s) in non-DO/DC stores (R-913/ds.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: KeyRef.FieldCount on a KeyRef that was never assigned",
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-131: named in #7760; 3 error mutant(s) in non-DO/DC stores (R-913/ds.sqlite=2, R-962/wordtpl.run.sqlite=1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: GetLastErrorText(true) of an error raised in a way the corpus does not pin for the flag (code InvalidOperation)",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 3 error mutant(s) in non-DO/DC stores (R-913/emr.sqlite=3); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Array.Length: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 3 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSACryptoServiceProvider.FromXmlString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 3 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSA.FromXmlString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 3 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.GetPublicKey: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 3 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.Service.CopilotApi.AL.ALCopilotCapability: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-131: a platform server class refused by policy (#7934, #7998); 3 error mutant(s) in non-DO/DC stores (R-958/runs/ai.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet NavUserAccountHelper.IsPermissionSetAssigned for a set an Access Control row assigns (what it answers is not pinned)",
+    "state": "open",
+    "issue": "#7997",
+    "note": "PR-131: named in #7997 (R-961's System Application tests); 3 error mutant(s) in non-DO/DC stores (R-961/usrperm.run.sqlite=3)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlNode.InnerText: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-913/peppol.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.FieldCount on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-131: named in #7760; 2 error mutant(s) in non-DO/DC stores (R-913/peppol.sqlite=1, R-961/uptags.run.sqlite=1)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.CertificateRequest.CreateSelfSigned raised the .NET exception System.ArgumentException: <message>; the text AL would see is not pinned (ADR-N secti",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new System.Security.Cryptography.XNCertificates.CertificateRequest: new System.Security.Cryptography.XNCertificates.CertificateRequest has no overload taking N argument(s) of the given types",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.CertificateRequest.CreateSelfSigned: System.Security.Cryptography.XNCertificates.CertificateRequest.CreateSelfSigned has no overload taking N argum",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.Export: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.Export: System.Security.Cryptography.XNCertificates.XNCertificateN.Export has no overload taking N argument(s) of the given types (n",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RfcNDeriveBytes.GetBytes: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.SymmetricAlgorithm.CreateEncryptor: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.RSA.Encrypt: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.AsymmetricAlgorithm.ToXmlString: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.XNCertificates.XNCertificateN.PublicKey: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.GetElementsByTagName: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.ReplaceElement raised the .NET exception System.Security.Cryptography.CryptographicException: <message>; the text AL would see is not pinned (ADR",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.DecryptKey raised the .NET exception Interop+Crypto+OpenSslCryptographicException: <message>; the text AL would see is not pinned (ADR-N section",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Security.Cryptography.Xml.EncryptedXml.ReplaceElement raised the .NET exception System.NullReferenceException: <message>; the text AL would see is not pinned (ADR-N section N)",
+    "state": "open",
+    "issue": "#7924",
+    "note": "PR-131: a .NET exception raised inside AL, 'the text AL would see is not pinned' (#7924; #8219, #8251 for other shapes); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: WriteTo(XmlWriteOptions, Text) of a document or element with options never set (not pinned)",
+    "state": "open",
+    "issue": "#7819",
+    "note": "PR-131: named in #7819 (System Application module tests); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet System.Xml.XmlDocument.PreserveWhitespace: settable property or field <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-958/runs/crypto.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.Runtime.Apps.NavAppALInstaller: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-131: a platform server class refused by policy (#7934, #7998); 2 error mutant(s) in non-DO/DC stores (R-932/extmgmt.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.CodeN: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-962/barcode.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet IDAutomation.Linear.FontEncoder.EANN: <x> is an instance member and the variable holds no object",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-962/barcode.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Newtonsoft.Json.Linq.JArray.Count: property, field or method <x> not found on <x>",
+    "state": "open",
+    "issue": "#8036",
+    "note": "PR-131: a DotNet member of an unmade object (#8036); 2 error mutant(s) in non-DO/DC stores (R-969/edocumentconne5.run.sqlite=2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Clear of a DotNet variable that holds a Newtonsoft.Json.Linq.JObject: whether BC disposes the object is not pinned",
+    "state": "unexamined",
+    "note": "PR-131: no upstream issue found by search; 2 error mutant(s) in non-DO/DC stores (R-969/edocumentconne5.run.sqlite=2); builds of 2026-11-10..17, not re-checked on edge-4ebfe7913"
+  },
+  {
+    "key": "NotRun: out-of-scope: DotNet Microsoft.Dynamics.Nav.Client.Capabilities.Location.Coordinate: refused by policy: server class <x> is neither registered nor classified pure",
+    "state": "open",
+    "issue": "#7934",
+    "note": "PR-131: a platform server class refused by policy (#7934, #7998); 2 error mutant(s) in non-DO/DC stores (R-969/geolocation.run.sqlite=2)"
   }
 ]
