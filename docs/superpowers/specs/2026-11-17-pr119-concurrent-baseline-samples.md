@@ -1,7 +1,25 @@
 # PR-119 (R1107): run the daemon fill's cross-check samples beside the daemon
 
-Status: r2 (coord PR-119, lethal-preproc, 2026-11-17). r2 answers the spec-adversary review of r1 (§0). The pre-commitment of
-the proof runs (§7) is committed to master, with this spec's final text, before any proof run.
+Status: r3 (coord PR-119, lethal-preproc, 2026-11-17). r3 answers the delta review of r2 (§0a), and r2 answered the
+spec-adversary review of r1 (§0). The pre-commitment of the proof runs (§7) is committed to master, with this spec's final
+text, before any proof run.
+
+## 0a. Delta review of r2 (opus), finding by finding
+1. **(low-medium) A `skipped` result applied at a stop could start a new one-shot after it (breaks R955).** Also, `finally`
+   did not say what it does with a `skipped` or `dropped` result. Fixed in §4:
+   - at a stop or in `finally`, or whenever `spent()`, `signalled()` or `memoryStopped` holds, a `skipped` is applied as
+     `answers.delete(id)` only, with no `replace`;
+   - `finally` acts on `threw` alone.
+   - New tests in §7.4.
+2. **(low) The DBM change is a gate change, and it also gates the al-runner update script** (R1109: `batchFacts` are recorded
+   only when DBM passes). Its own pre-commitment line is in §7.1.
+3. **(low) §7.2's equal set:** `compared` and `dropped` are equal only when no sample was skipped in either run, since a
+   settle-time pick can come up empty where the sequential one did not. Otherwise both are reported, not judged. `served`
+   may differ either way.
+- **Also in r3 (the author's own, from PR-118's finding that a one-shot loads the daemon's program): the admission's sample
+  estimate.** A sample is counted at `max(memoryEstimate(), the live baseline daemon's RSS)`, not at the fixed 3 GiB. On a
+  BaseApp-under-test corpus the daemon holds about 9 GiB (PR-75), so 3 GiB would admit a sample three times its estimate
+  (§3).
 
 ## 0. Review of r1 (opus spec-adversary), finding by finding
 - **1, 2 (medium): the in-flight promise applied its side effects when it finished, not when it was settled.**
@@ -61,13 +79,23 @@ At most ONE cross-check sample is in flight beside the loop.
 ## 3. Memory
 `memoryGate(true)` counts every held reservation at `memoryEstimate()` (3 GiB). Over the bound, it closes the baseline daemons
 and polls, then stops.
+- **The sample's size, S** (r3): `max(memoryEstimate(), R)`, where R is the live baseline daemon's RSS when the sample would
+  start.
+  - R is read with PR-98's per-process reader (`readProcessRssAnonBytes`, the lane's daemon pids).
+  - A one-shot loads the same program as the daemon. PR-118 measured 1.22-1.42 GiB against the daemon's 1.78 GiB on DO; on
+    a BaseApp-under-test corpus the daemon holds about 9 GiB (PR-75).
+  - R unreadable: the sample is not admitted (sequential).
 - **Admission, before a sample starts in flight:** one side-effect-free read of the guard (`memoryGuard.read()`; no wait, no
-  close, no reservation). It admits only if `usedBytes + (memoryHeld + 2) x memoryEstimate() <= boundBytes`, which covers the
-  sample's one-shot plus the next daemon request.
+  close, no reservation). It admits only if
+  `usedBytes + memoryHeld x memoryEstimate() + S + memoryEstimate() <= boundBytes`, which covers the sample's one-shot at S
+  plus the next daemon request.
   - No guard (off, or no limit): admitted.
   - An unreadable reading: not admitted (sequential).
-- **Before each daemon request's own `memoryGate(true)` while a sample is in flight:** the same read, with `memoryHeld + 1`.
-  If it says no, the loop settles the in-flight sample (§4) first.
+- **Before each daemon request's own `memoryGate(true)` while a sample is in flight:** the same read. It requires
+  `usedBytes + memoryHeld x memoryEstimate() + max(0, S - memoryEstimate()) + memoryEstimate() <= boundBytes`.
+  - `memoryHeld` already holds the sample's one reservation at `memoryEstimate()`; the extra term is the part of S that the
+    reservation does not cover. Counting it whole, although part of it may already show in `usedBytes`, errs high.
+  - If it says no, the loop settles the in-flight sample (§4) first.
   - So a daemon request's gate counts an in-flight reservation only when the read admitted both.
   - The sample's own one-shot gate runs on `memoryChain` before the next daemon gate, so it can only close an idle daemon
     (review: checked and holding).
@@ -91,10 +119,18 @@ The in-flight sample is settled, and its result applied per §2.3, at each of th
 7. before each `break` from the loop;
 8. after the loop, before R951's clean-sample count;
 9. **in `finally`, before `closeLane`:**
+   - it acts on `threw` alone;
    - if the loop is throwing and the sample `threw` too, the sample's error is thrown, and the loop's error is named in a
      warning (`al-runner-v3-baseline-sample-error-order`);
    - if the loop is throwing and the sample did not throw, the loop's error stands;
+   - a `skipped`, `dropped` or `compared` result is not applied in `finally`: no `replace`, no drop notice, no keep;
    - the sample never outlives the fill.
+
+**No new work after a stop** (r3, delta review #1). At settle points 7 and 9, and at any settle where `stopHandle.spent()`,
+`stopHandle.signalled()` or `memoryStopped` holds:
+- a `skipped` result is applied as `answers.delete(id)` only, with no `replace`, so no new one-shot starts after the stop
+  (R955);
+- `dropped` and `stop` are applied as above.
 
 **R1001 counts clean compares.** `cleanCompared` is incremented only when a settled sample was `compared` with no difference.
 It is equivalent to `compared` in the sequential path, since a differing compare always drops. `compared` keeps feeding
@@ -113,21 +149,37 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
 
 ## 7. The proof (pre-committed on master before any proof run)
 1. **The v3 gate:** every leg passes unchanged.
-   - DBM, the only leg with more than one sample over more than one request, gets a fixed `memoryReader` seam (as DBI has) and
-     asserts `samplesOverlapped >= 1`.
    - DB and DBI cannot overlap: DB has 1 codeunit, and DBI's codeunits are all per-test.
+   - **The DBM change, a gate change of its own (r3, delta review #2):**
+     - DBM, the only leg with more than one sample over more than one request, gets a fixed `memoryReader` seam (as DBI has)
+       and asserts `samplesOverlapped >= 1`.
+     - The overlap is build-independent. DBM's 4 codeunits put samples at index 1 and 3, and codeunit 2 always needs a request
+       of its own (a second batch when batched, alone when not). With the fixed reader, admission admits.
+     - DBM passing also gates the al-runner update script, since `batchFacts` are recorded only when DBM passes (R1109). So
+       this assertion becomes a condition of every future build's update. Being a LethAL figure that no build can move, it
+       moves no build's outcome.
+     - **Unchanged:**
+       - `DBM_FIGURES` (122 / 15 / 3 / 104);
+       - `GATE_WARNINGS["al-runner-v3/dbm-daemon"]`, which stays `["al-runner-v3-memory-guard",
+         "al-runner-v3-serve-flagged-unknown"]`. The fixed reader returns a `maxBytes`, so the guard line stays
+         `memory-guard`.
+       - The new "baseline samples (PR-119)" line is a `console.warn`, never a `notify` code.
+     - `docs/gates/alrunner-v3.md`'s DBM bullet says the reader is fixed and that the leg asserts the overlap.
 2. **DO's 735fb42 arm** (PR-118's setup), on the PR head, one after the other in one heavy slot:
    - (a) `LETHAL_V3_SEQUENTIAL_SAMPLES=1`;
    - (b) concurrent.
 
    **Equal:**
    - every per-mutant verdict and `killingTest`;
-   - `daemonBaselineReport()`'s `requests`, `sampledCodeunits`, `compared` and `dropped`.
+   - `daemonBaselineReport()`'s `requests` and `sampledCodeunits`;
+   - `compared` and `dropped`, when no sample was skipped in either run (r3, delta review #3). Otherwise they are reported,
+     not judged: a settle-time pick can come up empty where the sequential one did not.
 
    **Allowed to differ:**
    - `replacements` (a skipped sample's forward pick is taken after the settle position);
    - the order of `skippedError` / `sampledSkipped`;
-   - `skippedTooSlow` and `served`: only more re-runs, from longer durations.
+   - `skippedTooSlow` (only more, from longer durations);
+   - `served`, in either direction (a re-run, or a different replacement pick).
 
    **The wall:** if (b) has `samplesOverlapped >= 6` (9 samples; the last never overlaps), its baseline wall is at most
    (a)'s minus 15 s. With fewer, the wall is reported, not judged, with `sampleMemoryAtStart` and the admission refusals.
@@ -136,11 +188,18 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
    - PR-118's sampler: the fill's peak at most daemon + one one-shot + 0.5 GiB;
    - no memory stop.
 3. **A larger corpus (R1107's gate):** an RSS time series of the fill on a BaseApp-size corpus, sequential and concurrent.
-   - The corpus is named in the pre-commitment, from `scripts/corpus-build-cache.ts list`.
+   - The corpus is named in the pre-commitment.
+   - The series records:
+     - the baseline daemon's RSS while idle and during an overlapped request;
+     - each one-shot's ramp and run time;
+     - S at each admission, and every admission decision.
    - Predictions:
      - no memory stop in either leg;
-     - either admission admits and the peak stays under the bound, or it refuses and the stats say "sequential";
+     - each admitted sample's real one-shot peak at most S + 0.5 GiB;
+     - either admission admits and the fill's peak stays under the bound, or it refuses and the stats say "sequential";
      - per-mutant identical over the run's scope.
+   - **The default depends on it.** The build ships `concurrentSamples` default `true` only if this series stays under the
+     bound in both legs. Otherwise the default is `false` until a ruling.
 4. **Unit tests, each red when its rule is reverted (call counters on stateful fakes, never wall-clock):**
    - a sample in flight overlaps the next daemon request;
    - the result is applied only at settle;
@@ -149,7 +208,10 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
    - a differing compare does not unlock R1001;
    - `replace` picks after the settle position, and a backward pick runs after the in-flight sample settled, never beside it;
    - the `got === undefined && isSample` branch settles first;
-   - admission no means sequential; an unreadable reading means sequential;
+   - admission no means sequential; an unreadable reading means sequential; an unreadable daemon RSS means sequential;
+   - S is `max(memoryEstimate(), the daemon's RSS)`: a daemon RSS over the estimate refuses a sample that 3 GiB would admit;
+   - a `skipped` settled at a stop, or after `spent()`, starts no replacement one-shot;
+   - `finally` applies nothing but `threw`;
    - a daemon request whose read says no settles the sample before its gate;
    - the too-slow one-shot settles first;
    - the seam off means today's call order exactly.
