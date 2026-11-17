@@ -4536,6 +4536,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     group: readonly number[],
     stopSeconds: number,
     excludeTests: readonly string[],
+    /** PR-126: false for the re-check's non-sample batches: no coverage asked, step 5 skipped. */
+    withCoverage = true,
   ): Promise<Map<number, BaselineAnswer> | undefined> {
     const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
     const prev = lane.inFlight;
@@ -4557,7 +4559,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
       try {
         answer = await daemon.server.runEntries(
-          batchBody(lane.requestBase(mode), excludeTests),
+          batchBody(lane.requestBase(mode), excludeTests, withCoverage),
           v3CallDeadlineMs(stopSeconds, totalTests),
         );
       } catch (err) {
@@ -4597,6 +4599,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ),
         isKept: (r) => serveDaemonReusable(serveLines([r]), "v3"),
         hasEveryRow: (have, id) => this.hasEveryRow(have, this.suitePerCodeunit.get(id) ?? []),
+        withCoverage,
       });
       if (!decoded.ok) {
         this.baselineBatchingSpent = decoded.why;
@@ -4617,7 +4620,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               coverage: d.coverage,
               wallMs,
               stopSeconds,
-              withCoverage: true,
+              withCoverage,
               fromDaemon: true as const,
               callId,
             },
@@ -7484,8 +7487,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         try {
           scan = await this.scanTestSources(lane, mode);
           const size = this.seams.baselineBatchSize ?? BASELINE_BATCH_SIZE;
+          // PR-126: the samples go singly with coverage below, never in a batch; the rest batch WITHOUT coverage.
           groups = planBaselineBatches(
-            [...order].sort((a, b) => a - b),
+            [...order].filter((id) => !sample.has(id)).sort((a, b) => a - b),
             size,
             scan,
             suiteIds,
@@ -7509,6 +7513,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               g,
               stopSeconds,
               exclusionsFor(g, scan, suiteIds),
+              false,
             );
             // a decode discard: `batchRequest` has latched and counted it; the reason gets the re-check's prefix
             if (answers === undefined)
