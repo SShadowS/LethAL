@@ -908,7 +908,8 @@ async function legDBMRun(scratch: string): Promise<void> {
         ...(daemon ? { daemonBaseline: true, memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT } : {}),
       }),
     );
-    // As in DB: a fixed reader keeps the guard's one warning the same on every host.
+    // As in DB: a fixed reader keeps the guard's one warning the same on every host. PR-119: it also
+    // makes the admission of a concurrent cross-check sample (`maxBytes` set, 1 GiB used) the same everywhere.
     if (daemon) {
       b.seams.memoryReader = () => ({
         usedBytes: 2 ** 30,
@@ -918,6 +919,10 @@ async function legDBMRun(scratch: string): Promise<void> {
       // PR-115: batches of 2 over the four test codeunits (the default 8 would make one request with nothing to
       // leave out). Ignored when batching is off for this build.
       b.seams.baselineBatchSize = 2;
+      // PR-119: set explicitly, never the default's: the leg asserts `samplesOverlapped >= 1` below. The
+      // sample's size is fixed too, so admission never reads a host's (or a closed daemon's) real RSS.
+      b.seams.concurrentSamples = true;
+      b.seams.sampleRss = () => 2 ** 30;
       // PR-117: DBM tests batching on every gate run, through the seam, whatever the build's record says.
       // The seam is on exactly when this run's leg C, this backend's own fresh probe and the Sleep rule all allow it.
       const st = await b.status();
@@ -1040,6 +1045,13 @@ async function legDBMRun(scratch: string): Promise<void> {
   must(
     d.sampledCodeunits.length === want,
     `DBM: ${d.sampledCodeunits.length} codeunits sampled, pre-committed ${want}`,
+  );
+  // PR-119: the fixed memory reader and sample size above make admission build-independent. Four codeunits
+  // put samples at index 1 and 3; codeunit 2 always needs a request of its own (batch {2,3} or alone), so
+  // the first sample overlaps it. Checked before the accessor and before the leg's `dbmBatched = dbmSeam`.
+  must(
+    d.samplesOverlapped >= 1,
+    `DBM: ${d.samplesOverlapped} cross-check sample(s) ran beside the daemon (${d.samplesSequential} in place), pre-committed at least 1`,
   );
   const j = judgeDaemonBaseline("DBM", d, d.codeunits - want, want);
   for (const n of j.notes) console.log(`  ${n}`);

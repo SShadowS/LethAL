@@ -4543,7 +4543,13 @@ export async function runFromCliWithAccept(
             if (parsed.progressOutPath !== undefined) {
               progressOutFd = openSync(parsed.progressOutPath, "w");
               const fd = progressOutFd;
-              emitSubscribers.push(createNdjsonSink((chunk) => writeSync(fd, chunk)));
+              const opened = performance.now(); // PR-121: each line's `atMs`
+              emitSubscribers.push(
+                createNdjsonSink(
+                  (chunk) => writeSync(fd, chunk),
+                  () => performance.now() - opened,
+                ),
+              );
             }
             // R360: kept for the scratch-folder decision after the session, see above.
             tier = resourceIdentityFor(parsed, effectiveConfig);
