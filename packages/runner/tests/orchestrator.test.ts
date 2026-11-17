@@ -4462,6 +4462,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
   // which the report counts, and never a warning. Removed at the session's end.
   test("R939: a backend's daemon close becomes an event and the report's v3DaemonCloses, never a warning", async () => {
     type Close = {
+      readonly lane?: number;
       readonly reason: string;
       readonly family?: string;
       readonly text?: string;
@@ -4475,6 +4476,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
       override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
         if (ref.method === "UnsupportedTest")
           this.sink?.({
+            lane: 2, // PR-99 (build review #5): red without handNotify's lane spread
             reason: "refusal",
             family: "WithEvents …",
             // R1009: the whole text and the test reach the event (red without handNotify's spreads)
@@ -4497,6 +4499,7 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const closed = events.filter((e) => e.type === "serve-daemon-closed");
     expect(closed.length).toBeGreaterThan(0);
     expect(closed[0]).toMatchObject({
+      lane: 2,
       reason: "refusal",
       family: "WithEvents …",
       text: "NotRun: out-of-scope: WithEvents subscriber 'S' (not pinned)",

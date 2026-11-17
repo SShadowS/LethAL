@@ -4955,6 +4955,7 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   backend.setDaemonCloseSink?.((c) =>
     emit({
       type: "serve-daemon-closed",
+      ...(c.lane !== undefined ? { lane: c.lane } : {}),
       reason: c.reason,
       ...(c.family !== undefined ? { family: c.family } : {}),
       ...(c.text !== undefined ? { text: c.text } : {}),

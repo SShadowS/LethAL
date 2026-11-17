@@ -2237,8 +2237,9 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
     await baseline(r.b, SUITE1);
     // R960 review a: a session that already warmed a daemon up (another mode, a restart).
-    // PR-99 (§10.6): the session-scoped flag, no read of the (per-lane) counters.
-    (r.b as unknown as { firstWarmupDone: boolean }).firstWarmupDone = earlierWarmups > 0;
+    // PR-99 (§10.6, build review #4): the session's warm-ups, summed over the lanes (the only lane here).
+    (r.b as unknown as { lane: { stats: { warmups: number } } }).lane.stats.warmups =
+      earlierWarmups;
     return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
   };
 

@@ -7032,10 +7032,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         // named row does (R786). An explicit transport keeps failing by name. Only at the
         // session's FIRST warm-up (review a): a later daemon (another mode, a restart) would
         // re-run the session and throw away verdicts already scored, so it fails as before.
-        // PR-99 (§10.6): a session-scoped flag, never a read of the counters (they are per lane).
+        // PR-99 (§10.6): session-scoped, so the warm-ups of EVERY lane are summed (one lane's count would
+        // not do). Build review #4: the sum, not `firstWarmupDone`, so N = 1 is exact (a first warm-up
+        // dropped as a request error leaves the flag unset but the count at 1). Lanes >= 1 start only after
+        // the first warm-up passed, so at N > 1 the sum is 1 only at lane 0's first warm-up.
         if (
           this.cfg.transportSource === "default" &&
-          !this.firstWarmupDone &&
+          this.entriesStats().warmups === 1 &&
           err instanceof AlRunnerV3EntriesRefusedError &&
           err.code === "al-runner-v3-entries-batch-refused"
         ) {

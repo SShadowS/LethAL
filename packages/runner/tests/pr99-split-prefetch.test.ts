@@ -410,6 +410,46 @@ describe("PR-99 spec 7.5: the barrier, in the backend", () => {
     expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
   });
 
+  test("N = 1 (build review #4): a first warm-up lost to a request error makes the next one a LATER warm-up, as on master", async () => {
+    let refuse = false;
+    let eofSent = false;
+    const rows: RowsFn = (m, cu, d, n) =>
+      refuse ? allPass(m, cu, d, n).map((x) => refusedRow(x)) : allPass(m, cu, d, n);
+    const r = await lanesRig({
+      lanes: 0,
+      serve: {
+        rows,
+        echo: (m) =>
+          refuse
+            ? { method: "Echo", status: "error", notRun: true, message: UNLISTED }
+            : { method: "Echo", status: "fail", message: `LETHAL-ECHO:${m}:true` },
+        // the first request after the baseline (the first warm-up) dies: a server request error
+        eofAt: () => {
+          if (!refuse || eofSent) return false;
+          eofSent = true;
+          return true;
+        },
+      },
+    });
+    (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = "default";
+    await soleBaseline(r);
+    refuse = true;
+    const first = await r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
+    expect(eofSent).toBe(true);
+    const err =
+      first instanceof Error
+        ? first
+        : await r.b
+            .activate("M0001")
+            .then(() => r.b.run(A, OPTS))
+            .catch((e: unknown) => e);
+    expect(r.b.entriesStats()).toMatchObject({ warmups: 2, prefetchDropped: 1 });
+    // red with `!firstWarmupDone` as the guard: the second warm-up takes R960's fallback (a session re-run)
+    // instead of failing by name
+    expect(err).not.toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    expect((err as TestVerdict).failureMessage).toContain("al-runner-v3-entries-batch-refused");
+  });
+
   test("a lane >= 1 reaching startDaemon after the barrier passed, and after a deploy, never takes R960's path", async () => {
     const { r, refuseNow } = await refusingRig();
     await view(r, 0).prefetchMutants?.(plans(["M0001"])); // the session-first warm-up passes

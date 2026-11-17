@@ -628,6 +628,8 @@ export interface ExecutionBackend {
    */
   setDaemonCloseSink?(
     sink?: (close: {
+      /** PR-99: the lane whose daemon closed. */
+      readonly lane?: number;
       readonly reason: string;
       readonly family?: string;
       /** R1009: a refusal's whole first line, and the refused row's test name. */
