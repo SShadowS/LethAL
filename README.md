@@ -186,7 +186,9 @@ for a person: [Your first week with LethAL](docs/first-week.md).
 **1. Write `lethal.config.json` next to your AL app.** `lethal init --project path/to/your-al-app`
 writes one for you, including the three injected object ids picked from your own app.json id ranges
 (the one field nobody can guess, and the one whose absence fails at publish time). Fill in the
-server and credentials it leaves as placeholders. `lethal init --project ... --backend al-runner-v3`
+server it leaves as a placeholder. For the login, prefer `--credentials-env <USER_VAR>,<PASS_VAR>`, so the
+file names two environment variables and holds no secret (see "Keep the login out of the file" below);
+otherwise fill in the placeholders. `lethal init --project ... --backend al-runner-v3`
 writes the offline `alRunnerV3` section instead (its `bcVersion` is a placeholder you must replace).
 
 To write it by hand instead, every field below is required; LethAL refuses to start and names any
@@ -318,7 +320,7 @@ codeunit 50100 "Pricing"
 ```
 
 **2. Your test code** (`--tests`). LethAL discovers the tests inside it and asks the server to run
-them; publishing the test app stays your own workflow.
+them; publishing the test app stays your own workflow (see "Publishing your test app" below).
 
 ```al
 codeunit 50101 "Pricing Tests"
@@ -809,6 +811,32 @@ own conformance suite, which runs at registration. The one to understand is `val
 the assignment leaves the field's **value correct** and deletes only the `OnValidate` trigger chain,
 so a test that checks the field still passes and a test that checks the side effect does not. It is
 the only operator that separates those two.
+
+## Publishing your test app
+
+LethAL publishes the changed build of your app itself, but never your test app: it must already be
+installed on the server when a run starts. `lethal doctor --config <path> --project <app> --tests <test app>`
+says so by name (`test-app-present`) when it is missing.
+
+1. **Put your app on the server first.** The test app depends on it, so BC refuses the test app while
+   your app is missing. Publish your own build of the app (any way you normally do). After a run, LethAL's
+   changed build is on the server at a higher version, and it also satisfies the test app's dependency.
+2. **Compile the test app against your app's symbols.** Its `.alpackages` needs your app's `.app` (or
+   its symbols), as well as the packages your app's `.alpackages` holds (the platform, the base app, test
+   libraries such as Library Assert, and any third-party dependencies). Keep this cache separate from your
+   app's own `packageCachePath`: your app's cache must not contain your app.
+3. **Publish it** the way you publish any app to that server:
+   - from VS Code, with the test project open (its `launch.json` names the server);
+   - with `altool publishapp <test-app.app> --project <test project folder>`, which reads the connection
+     from that project's `launch.json`;
+   - on a BcContainerHelper container, with `Publish-BcContainerApp`.
+4. **Check it** with `lethal doctor ... --tests <test app>`. `test-app-present` passes, and
+   `server-dependencies` lists each direct dependency of your app and the test app with its installed version.
+   If a dependency's tables use a text-optimized index, `text-search-dependencies` says the server's SQL
+   Server needs Full-Text Search before you publish it.
+
+Whenever you change your app's AL, rebuild the test app against the new symbols and publish it again.
+LethAL refuses a run against a test app built for older symbols (`StaleTestAppError`).
 
 ## Restoring your app after a run
 
