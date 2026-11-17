@@ -1,8 +1,23 @@
 # PR-127 (R1112): up to two of the daemon fill's cross-check samples in flight
 
-Status: r3 (coord PR-127, lethal-preproc, 2026-11-17). It builds on PR-119's design
-(`2026-11-17-pr119-concurrent-baseline-samples.md`, r5), whose rules hold unless this file changes them. r3 answers the
-delta review of r2 (§0a); r2 answered the reviews of r1 (§0).
+Status: r4 (coord PR-127, lethal-preproc, 2026-11-17). It builds on PR-119's design
+(`2026-11-17-pr119-concurrent-baseline-samples.md`, r5), whose rules hold unless this file changes them. r4 answers the
+opus review of the built diff (§0b); r3 answered the delta review of r2 (§0a); r2 answered the reviews of r1 (§0). r4 is
+amendment 1 of the pre-commitment (3ce00972); the proof's predictions (§7) are unchanged.
+
+## 0b. The review of the built diff (opus; lethal-code on deviation 3), finding by finding
+- **No high or medium finding.** It is safe to run the proofs.
+- **L1: a stop found by the loop's own re-check discarded the queue, so an older in-flight drop was lost**, though the
+  sequential fill would have applied it. `send()`'s stop already applied it.
+  - No verdict risk: a stopped baseline scores nothing, and a partial baseline is never stored for reuse.
+  - Fixed so both paths match the sequential fill: §2.7 now applies the queue in stop mode.
+  - lethal-code found no batch-path case where the two paths differ beyond that warning.
+- **L2:** the re-check right after the queue-full settle was redundant (the post-admission one always follows). Removed.
+- **L4:** two `finally` tests depended on a hold's cap. They are now held by a flag.
+- **L3, L5, L6 (noted):**
+  - the "younger stop at quiesce" branch is a backstop that production cannot reach;
+  - under a drop, K = 2 runs more requests before the fill returns (P2 expects no drop);
+  - discarded entries are counted in no stat.
 
 ## 0a. Delta review of r2 (opus), finding by finding
 - **D1 (low-medium, R955): admission's `await memoryChain` was a wait with no stop re-check after it.** The re-check now
@@ -93,8 +108,11 @@ proof run.
    - A forward pick only marks `pending`, as today, and starts nothing.
    - The too-slow one-shot and every other in-place `check` are preceded by `settleAll`.
 7. **The stop re-check** after every wait (a `settleOldest`, a `settleAll`, a quiesce): if `stopHandle.spent()`,
-   `stopHandle.signalled()` or `memoryStopped` holds, nothing new starts. The loop sets `stopped` and breaks, and the
-   queue is discarded (§2.3).
+   `stopHandle.signalled()` or `memoryStopped` holds, nothing new starts. The loop sets `stopped` and breaks. The queue is
+   NOT discarded: the after-loop `settleAll("stop")` applies it in stop mode, as PR-119 and `send()`'s stop do (r4, build
+   review L1). Every queued entry started at an earlier position, so the sequential fill would have applied it, an older
+   drop included. In stop mode a `skipped` is `answers.delete` only, so nothing new starts. Only a RESULT that ends the
+   step discards (§2.3).
    - Inside `apply`, after a quiesce, or inside `send()`, the re-check returns `stop` as a value. Only that propagates to
      the loop, which then breaks; `apply` never breaks the loop itself.
 8. **Every other settle point drains the whole queue (`settleAll`), as PR-119's single settle did:**
@@ -221,6 +239,7 @@ is served.
    - **I3:**
      - the budget spent during the queue-full wait starts no third one-shot;
      - the budget spent during admission's chain wait starts nothing (r3, D1);
+     - an older in-flight drop is still applied when the loop's re-check stops the fill (r4, L1);
      - a younger `stop` found at quiesce cancels the pick;
      - a `stop` from the oldest discards the younger;
      - a `skipped` applied after a stop starts nothing.
