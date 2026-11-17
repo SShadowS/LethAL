@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**42 of 1072 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -595,6 +595,7 @@ that ordering is the priority.
 - **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
 - **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (e7244b10)
 - **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
+- **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · open — filed by PR-67 (the DO pilot), 2026-11-17; refine after q-20261117T183405-4c6fee36
 
 ## Backends and tooling
 
@@ -1102,7 +1103,7 @@ that ordering is the priority.
 - **R1089** · Dates, times and date formulas as a generated BC differential (PR-86): 334 cells, 300 equal; Format length, closing dates and Danish/German date formulas measured, filed #8198-#8200 · [R1089.md](docs/roadmap/R1089.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1090** · JSON and text handling as a generated BC differential (PR-87): 416 cells, every answered cell equal; 25 refusals in 3 classes with BC's answers measured, filed #8201-#8203 · [R1090.md](docs/roadmap/R1090.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1091** · R1058's follow-up: an order-independent serve entry cost per codeunit needs per-codeunit calibration requests; probe their cost and how often entries are cut first · [R1091.md](docs/roadmap/R1091.md) · open
-- **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — refreshed by PR-120 (2026-11-17): most LethAL-side levers landed; the largest remaining shares are…
+- **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — refreshed by PR-125 (2026-11-17): the cross-check one-shots (12-14 s each, 55% workspace compile) are…
 - **R1093** · Measure whether the serve prefetch (32% of a DO window's mutant phase) can be split across parallel lanes per codeunit without moving a verdict · [R1093.md](docs/roadmap/R1093.md) · done (d0f4f2cc): split prefetch built (PR-99, spec r6); DO slice N = 1 = N = 3 per mutant, mutant phase 1,025…
 - **R1094** · On al-runner v3 serve, an entry's excludeTests hides rows but still RUNS the excluded tests; only runSelectedOnly skips them. So L4's cut (R1030) never saved test execution, and its t4 rate gain belongs elsewhere · [R1094.md](docs/roadmap/R1094.md) · done (PR-94) — runSelectedOnly on prefix-cut entries; DO e-doc slice prefetch -28.5%, per-mutant IDENTICAL
 - **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · done (4605b385) — P3 held: DO t12 and t13 (heads with PR-93) closed 0 times on the 26 kept texts (PR-105)
@@ -1117,6 +1118,8 @@ that ordering is the priority.
 - **R1107** · Run R948's baseline cross-check samples beside the v3 daemon instead of in sequence (up to 33 s of a 143 s DO baseline): designed, sunk by spec-adversary as written; gated on an RSS probe and five fixes · [R1107.md](docs/roadmap/R1107.md) · done (a698bd28)
 - **R1108** · Name withheld kills in the report: an error whose covering test failed under the mutant but al-runner v3 did not trust the failure gets a per-mutant note, a count, a caveat with the remedy, and a console line · [R1108.md](docs/roadmap/R1108.md) · done (52e679a8): withheld kills named in the report…
 - **R1109** · v3 baseline batching (PR-115) is switched on per build by `V3_BASELINE_BATCHING_BUILDS`, listing edge-4ebfe7913 only: when edge moves `current`, batching silently turns off until someone lists the new build; let the update gate record it · [R1109.md](docs/roadmap/R1109.md) · done (d9fcdfca) — PR-117: the update gate records batchFacts only when its own DBM batched and passed; a…
+- **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · open
+- **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · open
 
 ---
 
