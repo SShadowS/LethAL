@@ -5,6 +5,7 @@ import {
 } from "./assembly-probing-paths";
 import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
+import { type TextSearchApp, textSearchNote } from "./text-search-fields";
 
 /**
  * R109: `lethal doctor` — a read-only pass over every pre-flight refusal `lethal run` would
@@ -177,6 +178,12 @@ export interface DoctorDeps {
    */
   readonly serverDependencies?: () => Promise<ServerDependenciesProbe>;
   /**
+   * PR-128 (R1110): every package in `packageCachePath` (not only direct dependencies) that declares
+   * a table field with `OptimizeForTextSearch`, beside the versions of that app installed on the
+   * server (by id). `skip` (a reason) replaces the whole answer when doctor could not ask.
+   */
+  readonly textSearchDependencies?: () => Promise<TextSearchDependenciesProbe>;
+  /**
    * R1086: `bcdev.credentialsEnv` resolved: the variable NAMES and whether each is set. The details
    * must never hold a credential value.
    */
@@ -202,6 +209,53 @@ export type ServerDependenciesProbe =
         readonly installed: readonly string[];
       }[];
     };
+
+export type TextSearchDependenciesProbe =
+  | { readonly skip: string }
+  | {
+      readonly skip?: undefined;
+      readonly cachePath: string;
+      readonly apps: readonly (TextSearchApp & {
+        /** The versions installed on the server for this id; empty means not installed. */
+        readonly installed: readonly string[];
+      })[];
+      /** Cache files that are not readable as packages. */
+      readonly unread: readonly string[];
+      /** Closure packages with no SymbolReference.json: nothing could be read from them. */
+      readonly noSymbols: readonly string[];
+      /** Whose dependency closure was scanned, e.g. "the target only (pass --tests ...)". */
+      readonly scope: string;
+    };
+
+/**
+ * PR-128: the packages reachable from `roots` through their manifest dependencies. A dependency
+ * resolves to the highest cached package of that id whose version is at or above the asked one;
+ * one with no such package is left out (the `dependencies` check names it).
+ */
+export function dependencyClosure<
+  T extends {
+    readonly id: string;
+    readonly version: string;
+    readonly deps: readonly { readonly id: string; readonly version: string }[];
+  },
+>(roots: readonly { readonly id: string; readonly version: string }[], pkgs: readonly T[]): T[] {
+  const chosen = new Map<string, T>();
+  const queue = [...roots];
+  for (let dep = queue.shift(); dep !== undefined; dep = queue.shift()) {
+    let best: T | undefined;
+    for (const p of pkgs) {
+      if (p.id.toLowerCase() !== dep.id.toLowerCase()) continue;
+      if (compareVersionParts(p.version, dep.version) < 0) continue;
+      if (best === undefined || compareVersionParts(p.version, best.version) > 0) best = p;
+    }
+    if (best === undefined) continue;
+    const key = `${best.id.toLowerCase()}@${best.version}`;
+    if (chosen.has(key)) continue;
+    chosen.set(key, best);
+    queue.push(...best.deps);
+  }
+  return [...chosen.values()];
+}
 
 export type DependenciesProbe =
   | { readonly skip: string }
@@ -652,6 +706,56 @@ export function checkServerDependencies(probe: ServerDependenciesProbe): DoctorC
 }
 
 /**
+ * PR-128 (R1110): a package that declares a text-optimized field needs SQL Server Full-Text Search
+ * to install. LethAL cannot read whether the server's SQL has it, and an installed app proves
+ * nothing about it (Base Application declares such fields and ships in the database). So the check
+ * only says what it saw: an app installed at the cached version or newer needs no install, so it
+ * passes; one not installed, or installed older than the cached version (an upgrade installs the
+ * fields), fails with the warning. Scans the dependency closure of the project (see the probe).
+ */
+export function checkTextSearchDependencies(probe: TextSearchDependenciesProbe): DoctorCheck {
+  const name = "text-search-dependencies";
+  if (probe.skip !== undefined) {
+    return { name, ok: true, skipped: true, detail: `not checked: ${probe.skip}` };
+  }
+  const unreadNote =
+    (probe.unread.length === 0 ? "" : ` Not readable as packages: ${probe.unread.join(", ")}.`) +
+    (probe.noSymbols.length === 0
+      ? ""
+      : ` No symbols (no SymbolReference.json) in: ${probe.noSymbols.join(", ")}.`);
+  const scanned = `the dependency closure of ${probe.scope}, from ${probe.cachePath}`;
+  if (probe.apps.length === 0) {
+    const readable = probe.unread.length === 0 && probe.noSymbols.length === 0;
+    return {
+      name,
+      ok: true,
+      detail: readable
+        ? `no package in ${scanned} declares OptimizeForTextSearch.`
+        : `no readable package in ${scanned} declares OptimizeForTextSearch, but some could not be read.${unreadNote}`,
+    };
+  }
+  const covered = (a: (typeof probe.apps)[number]) =>
+    a.installed.some((v) => compareVersionParts(v, a.version) >= 0);
+  const bad = probe.apps.filter((a) => !covered(a));
+  if (bad.length === 0) {
+    return {
+      name,
+      ok: true,
+      detail: `${probe.apps.length} package(s) in ${scanned} declare OptimizeForTextSearch and are installed on the server at the cached version or newer (their install succeeded): ${probe.apps.map((a) => `${a.publisher} ${a.name}`).join("; ")}.${unreadNote}`,
+    };
+  }
+  const row = (a: (typeof probe.apps)[number]) =>
+    a.installed.length === 0
+      ? textSearchNote(a)
+      : `${a.publisher} ${a.name} is installed at ${a.installed.join(", ")}, older than the cached ${a.version}: an upgrade to ${a.version} installs text-optimized fields (${textSearchNote(a)})`;
+  return {
+    name,
+    ok: false,
+    detail: `${bad.length} package(s) in ${scanned} declare OptimizeForTextSearch and are NOT installed on the server at the cached version: ${bad.map(row).join("; ")}.${unreadNote}`,
+  };
+}
+
+/**
  * Runs EVERY AVAILABLE check before reporting — never stops at the first failure. That is the
  * entire point over `lethal run`'s own pre-flight refusals, which each fire (correctly) but one at
  * a time, across however many slow round-trips it takes a user to fix one problem and discover the
@@ -680,6 +784,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     testApp,
     dependencies,
     serverDependencies,
+    textSearchDependencies,
     credentialsEnv,
     assemblyProbingPaths,
   } = deps;
@@ -752,6 +857,13 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     checkPromises.push(
       runCheck("server-dependencies", async () =>
         checkServerDependencies(await serverDependencies()),
+      ),
+    );
+  }
+  if (textSearchDependencies !== undefined) {
+    checkPromises.push(
+      runCheck("text-search-dependencies", async () =>
+        checkTextSearchDependencies(await textSearchDependencies()),
       ),
     );
   }
