@@ -208,5 +208,11 @@ row that do NOT carry the marker. The result goes in addendum A.
 
 **Build notes.**
 - PR-51's `P5a`, `P5b` and `P11c` assert that the walk stops at a session-reused or unstable error that follows a held timeout (`nthOf(T3) === 0`). Under this rule that error is held and the walk goes on (`nthOf(T3) === 1`); the class (`timeout-killed`) is unchanged. These three assertions need updating by the owner of PR-51's file.
+- **Moved under the owner's ruling q-20261117T160215-3631a110 (option a):** P5a, P5b and P11c (`nthOf(T3)` is now 1, the class
+  unchanged), O3 (R639's stop reversed: `timeout-killed`, T2 run twice, once in the walk and once as the replay), and O7 (two
+  activations; the second sends nothing on its own).
+- **Red checks on the rebased build:** E16, E17 and E18 were added for `warm-timeout-unconfirmed`, `warm-confirmation-incomplete` and
+  `!replaying`. The `abortAfterRecord` clause, the `heldRounds` guard and the late L5 net are redundant or unreachable by
+  construction, and say so beside them.
 - The L5 net (a `survived` verdict still standing while an error is held) is defence in depth: no walk reaches it, because a replay ending with no verdict always leaves `notReproduced` set.
 - A guard throws when a walk holds more errors than it has covering tests, so a walk that fails to advance stops by name instead of looping.
