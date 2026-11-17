@@ -48,9 +48,11 @@ import {
   V3_ROUTINE_CLOSES,
   V3_UNIFORM_REFUSAL_CODEUNITS,
   WINDOW_BOUND_CAVEAT,
+  pickV3Timings,
   unkeptRowReason,
   v3CallDeadlineMs,
   v3DaemonClosesText,
+  warmupCause,
 } from "../src/al-runner-v3-backend";
 import type { PeakProbe } from "../src/al-runner-v3-baseline-check";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
@@ -75,7 +77,7 @@ import {
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
-import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
+import type { RunOpts, TestMethodRef, TestVerdict, V3RequestTimed } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import { baselineSourceTag } from "../src/orchestrator";
 import { splitBackend } from "../src/parallel-queue";
@@ -1559,8 +1561,14 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
-    const sunk: { lane?: number; reason: string; family?: string; text?: string; test?: string }[] =
-      [];
+    const sunk: {
+      lane?: number;
+      reason: string;
+      family?: string;
+      text?: string;
+      test?: string;
+      phase?: string;
+    }[] = [];
     r.b.setNotify((c, m) => seen.push([c, m]));
     r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
@@ -1581,6 +1589,8 @@ describe("R939: why each serve daemon closed", () => {
         family: "WithEvents subscriber …",
         text: WITH_EVENTS,
         test: `Codeunit${CU}.A`,
+        // PR-100: the request that held the refused row was a prefetch
+        phase: "prefetch",
       },
     ]);
     // Not a warning: gates pin their warning sets (R939).
@@ -10377,5 +10387,240 @@ describe("PR-56: drift after a kept refusal", () => {
     expect(c.r.b.entriesStats().timeoutCuts).toBe(1);
     expect(c.events).toEqual([]);
     expect(driftStats(c.r).keptDrifts).toBe(0);
+  });
+});
+
+// PR-100: where a run's time went. Spec docs/superpowers/specs/2026-11-17-pr100-timing-visibility.md §1, §2.
+describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => {
+  const REFUSED = "NotRun: out-of-scope: WithEvents subscriber 'Probe Sub' (not pinned)";
+  const refusedFor =
+    (who: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === who && x.method === "A"
+          ? { ...x, status: "error" as const, notRun: true, message: REFUSED }
+          : x,
+      );
+  const timedOutFor =
+    (who: string): RowsFn =>
+    (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        m === who && x.method === "A"
+          ? { ...x, status: "error" as const, notRun: true, message: TIMEOUT_1S }
+          : x,
+      );
+  const watchedRig = async (opts: RigOpts) => {
+    const r = await rig({ oneShotRows: allPass, ...opts });
+    const timed: V3RequestTimed[] = [];
+    const closed: { reason: string; phase: string }[] = [];
+    r.b.setRequestTimedSink((e) => timed.push(e));
+    r.b.setDaemonCloseSink((c) => closed.push({ reason: c.reason, phase: c.phase }));
+    await baseline(r.b, SUITE1);
+    return { r, timed, closed };
+  };
+  const warmupCauses = (t: readonly V3RequestTimed[]) =>
+    t.filter((e) => e.kind === "warmup").map((e) => e.cause);
+
+  test("closeLane stamps the kind in flight: a refusal after a prefetch says prefetch", async () => {
+    const { r, closed } = await watchedRig({ serve: { rows: refusedFor("M0002") } });
+    await r.b.prefetchMutants(plans(["M0001", "M0002", "M0003"]));
+    expect(closed).toEqual([{ reason: "refusal", phase: "prefetch" }]);
+  });
+
+  test("closeLane stamps idle between requests: a recycle is not in a request", async () => {
+    const { r, closed } = await watchedRig({
+      serve: { rows: killsM1 },
+      extra: { daemonMaxRequests: 2 },
+    });
+    for (const m of ["M0001", "M0002", "M0003"]) await r.b.prefetchMutants(plans([m]));
+    const recycles = closed.filter((c) => c.reason === "recycle");
+    expect(recycles.length).toBeGreaterThan(0);
+    expect(recycles.every((c) => c.phase === "idle")).toBe(true);
+  });
+
+  test("one serve-request-timed per send, each with LethAL's wall clock and its counts", async () => {
+    const { r, timed } = await watchedRig({ serve: { rows: allPass } });
+    await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+    expect(timed.length).toBe(r.serve.requests.length);
+    expect(timed.map((e) => e.kind)).toEqual(["warmup", "prefetch"]);
+    for (const e of timed) {
+      expect(e.lane).toBe(0);
+      expect(e.wallMs).toBeGreaterThanOrEqual(0);
+      expect(e.entries).toBeGreaterThan(0);
+      expect(e.tests).toBeGreaterThan(0);
+    }
+    expect(timed.some((e) => e.failed === true || e.cut === true)).toBe(false);
+  });
+
+  test("a thrown send is timed with failed, and has no timings", async () => {
+    const { r, timed, closed } = await watchedRig({
+      serve: {
+        rows: allPass,
+        answer: (q) => (q.ids[0] === "M0001|echo" ? { lines: [], eof: true } : undefined),
+      },
+    });
+    await r.b.prefetchMutants(plans(["M0001"])).catch(() => undefined);
+    const bad = timed.filter((e) => e.failed === true);
+    expect(bad).toHaveLength(1);
+    expect(bad[0]?.kind).toBe("prefetch");
+    expect(bad[0]?.timings).toBeUndefined();
+    // the close that ends a thrown request is stamped with that request's kind
+    expect(closed).toContainEqual({ reason: "request-failed", phase: "prefetch" });
+  });
+
+  test("an answer cut at a timeout row is timed with cut, and has no timings", async () => {
+    const { r, timed } = await watchedRig({
+      seams: { sleepRuleRetired: true }, // the only build a request is cut on
+      serve: {
+        rows: timedOutFor("M0002"),
+        answer: (_q, _n, ls) => ({
+          lines: ls.map((x) => (x.type === "summary" ? { ...x, timings: { setupMs: 5 } } : x)),
+        }),
+      },
+    });
+    await r.b.prefetchMutants(plans(["M0001", "M0002", "M0003"]));
+    const cuts = timed.filter((e) => e.cut === true);
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0]?.timings).toBeUndefined();
+    expect(timed.filter((e) => e.cut !== true).every((e) => e.timings !== undefined)).toBe(true);
+  });
+
+  test("timings copies only the known fields, of the right type", async () => {
+    const { r, timed } = await watchedRig({
+      serve: {
+        rows: allPass,
+        answer: (_q, _n, ls) => ({
+          lines: ls.map((x) =>
+            x.type === "summary"
+              ? {
+                  ...x,
+                  timings: {
+                    setupMs: 11,
+                    compileMs: "12",
+                    engineMs: 13,
+                    baselineSource: "snapshot",
+                    engineKept: true,
+                    resetMs: 14,
+                    surprise: 99,
+                  },
+                }
+              : x,
+          ),
+        }),
+      },
+    });
+    await r.b.prefetchMutants(plans(["M0001"]));
+    const p = timed.find((e) => e.kind === "prefetch");
+    expect(p?.timings).toEqual({
+      setupMs: 11,
+      engineMs: 13,
+      resetMs: 14,
+      baselineSource: "snapshot",
+      engineKept: true,
+    });
+    // the same rule as a plain function
+    expect(pickV3Timings({ engineKept: false, testsMs: Number.NaN, x: 1 })).toBeUndefined();
+    expect(pickV3Timings("nope")).toBeUndefined();
+    expect(pickV3Timings({ testsMs: 0 })).toEqual({ testsMs: 0 });
+  });
+
+  test("the warm-up cause: first, after-deploy, recycle, after-<reason>", async () => {
+    // first, and after a refusal closed the daemon
+    const a = await watchedRig({ serve: { rows: refusedFor("M0002") } });
+    await a.r.b.prefetchMutants(plans(["M0001", "M0002", "M0003"]));
+    expect(warmupCauses(a.timed)[0]).toBe("first");
+    expect(warmupCauses(a.timed)).toContain("after-refusal");
+    // after a redeploy
+    const b = await watchedRig({ serve: { rows: allPass } });
+    await b.r.b.prefetchMutants(plans(["M0001"]));
+    await b.r.b.deploy(b.r.l.batch);
+    await baseline(b.r.b, SUITE1);
+    await b.r.b.prefetchMutants(plans(["M0001"]));
+    expect(warmupCauses(b.timed)).toEqual(["first", "after-deploy"]);
+    // after R952's bound
+    const c = await watchedRig({ serve: { rows: allPass }, extra: { daemonMaxRequests: 2 } });
+    for (const m of ["M0001", "M0002", "M0003"]) await c.r.b.prefetchMutants(plans([m]));
+    expect(warmupCauses(c.timed)[0]).toBe("first");
+    expect(warmupCauses(c.timed)).toContain("recycle");
+    // only warm-ups carry a cause
+    expect(c.timed.filter((e) => e.kind !== "warmup").every((e) => e.cause === undefined)).toBe(
+      true,
+    );
+  });
+
+  test("a restarted daemon: its first warm-up carries the restart's cause, every later lazy one is lazy-prove", async () => {
+    const P1 = [ref("A"), ref("B")]; // codeunit CU
+    const P2 = [ref("C", CU2)]; // codeunit CU2
+    const { r, timed } = await watchedRig({
+      serve: { rows: timedOutFor("M0002") },
+      suite: SUITE2,
+      seams: { sleepRuleRetired: true }, // the only build a request is cut on
+    });
+    await baseline(r.b, SUITE2);
+    // M0002's A times out: the request is cut there, daemon 0 closes (timeout), M0003 is re-sent on a
+    // fresh daemon, which first proves CU (cause: the timeout).
+    await r.b.prefetchMutants([
+      { mutantId: "M0001", refs: P1 },
+      { mutantId: "M0002", refs: P1 },
+      { mutantId: "M0003", refs: P1 },
+    ]);
+    // the same daemon then meets CU2 for the first time: a second, lazy warm-up
+    await r.b.prefetchMutants([{ mutantId: "M0004", refs: P2 }]);
+    expect(warmupCauses(timed)).toEqual(["first", "after-timeout", "lazy-prove"]);
+  });
+
+  test("a baseline daemon's close never sets a mutant warm-up's cause: after a baseline timeout the first mutant warm-up says first", async () => {
+    // The baseline daemon (daemon 0) times out on codeunit CU's first request and is closed; the mutant
+    // phase's own daemon then starts for the first time.
+    const timedOutAtBaseline: RowsFn = (m, cu, d, n) =>
+      d === 0 && cu === CU
+        ? [
+            { method: "A", status: "error" as const, notRun: true, message: TIMEOUT_1S },
+            { method: "B", status: "pass" as const },
+          ]
+        : allPass(m, cu, d, n);
+    const r = await dbRig({ serve: { rows: timedOutAtBaseline } });
+    const timed: V3RequestTimed[] = [];
+    const closed: { reason: string; phase: string }[] = [];
+    r.b.setRequestTimedSink((e) => timed.push(e));
+    r.b.setDaemonCloseSink((c) => closed.push({ reason: c.reason, phase: c.phase }));
+    await baseline(r.b, SUITE3);
+    // a close during a plain() request says baseline
+    expect(closed).toContainEqual({ reason: "timeout", phase: "baseline" });
+    await r.b.prefetchMutants(plans(["M0001"], SUITE3)).catch(() => undefined);
+    expect(warmupCauses(timed)[0]).toBe("first");
+  });
+
+  test("a close inside a plain() request (a failed baseline request) says baseline", async () => {
+    const r = await dbRig({
+      serve: {
+        answer: (q) =>
+          q.ids[0]?.startsWith("plain:") === true && q.daemon === 0
+            ? { lines: [], eof: true }
+            : undefined,
+      },
+    });
+    const closed: { reason: string; phase: string }[] = [];
+    r.b.setDaemonCloseSink((c) => closed.push({ reason: c.reason, phase: c.phase }));
+    await baseline(r.b, SUITE3).catch(() => undefined);
+    expect(closed).toContainEqual({ reason: "request-failed", phase: "baseline" });
+  });
+
+  test("a redeploy sets after-deploy on a lane that held no daemon when it came", async () => {
+    // daemon 0 closes for a refusal and the lane holds none; the redeploy still counts for its next start
+    const { r, timed } = await watchedRig({ serve: { rows: refusedFor("M0001") } });
+    await r.b.prefetchMutants(plans(["M0001"]));
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0002"]));
+    expect(warmupCauses(timed).at(-1)).toBe("after-deploy");
+  });
+
+  test("warmupCause maps a close reason to the cause", () => {
+    expect(warmupCause(undefined)).toBe("first");
+    expect(warmupCause("deploy")).toBe("after-deploy");
+    expect(warmupCause("recycle")).toBe("recycle");
+    expect(warmupCause("timeout")).toBe("after-timeout");
+    expect(warmupCause("refusal")).toBe("after-refusal");
   });
 });

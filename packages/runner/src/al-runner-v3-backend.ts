@@ -189,6 +189,8 @@ import type {
   TestMethodRef,
   TestVerdict,
   V3RequestSized,
+  V3RequestTimed,
+  V3Timings,
 } from "./backend";
 import {
   type OtherFile,
@@ -1489,7 +1491,43 @@ export type V3DaemonClose = {
   readonly family?: string;
   readonly text?: string;
   readonly test?: string;
+  /** PR-100: the request kind in flight on the lane when it closed, else `idle`. */
+  readonly phase: "warmup" | "prefetch" | "live" | "baseline" | "idle";
 };
+
+/** PR-100: `summary.timings` reduced to the known fields of the right type; absent when none is left. */
+export function pickV3Timings(raw: unknown): V3Timings | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: { -readonly [K in keyof V3Timings]: V3Timings[K] } = {};
+  for (const k of [
+    "setupMs",
+    "compileMs",
+    "engineMs",
+    "baselineMs",
+    "testsMs",
+    "coverageMs",
+    "otherMs",
+    "resetMs",
+  ] as const) {
+    const v = r[k];
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  if (typeof r.baselineSource === "string") out.baselineSource = r.baselineSource;
+  if (r.engineKept === true) out.engineKept = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * PR-100: why a warm-up happens, from the last non-routine close of its lane and mode (`undefined`: none).
+ * `first`, `after-deploy`, `recycle`, else `after-<reason>`.
+ */
+export function warmupCause(lastClose: string | undefined): string {
+  if (lastClose === undefined) return "first";
+  if (lastClose === "deploy") return "after-deploy";
+  if (lastClose === "recycle") return "recycle";
+  return `after-${lastClose}`;
+}
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
  *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own.
@@ -1778,6 +1816,11 @@ interface Daemon {
    * lane and mode) and on the baseline's own daemon.
    */
   proven?: Set<number>;
+  /**
+   * PR-100: the cause of this daemon's FIRST warm-up (`first`, `after-deploy`, `recycle`, `after-<reason>`),
+   * decided when it started; used up by that warm-up. Every later warm-up on it is `lazy-prove`.
+   */
+  cause?: string | undefined;
 }
 
 /** R857, R890, R896: what one serve request (and its daemon) is sent under. */
@@ -2205,6 +2248,41 @@ class Lane {
       ...(mode.runSelectedOnly ? { runSelectedOnly: true } : {}),
       ...(this.where.noClient() ? { noClient: true } : {}),
     };
+  }
+
+  /** PR-100: the request kind in flight on this lane, for `serve-daemon-closed`'s `phase`. */
+  inFlight: "warmup" | "prefetch" | "live" | "baseline" | undefined;
+  /** PR-100: by `modeKey`, the reason of the lane's last close of a mutant-phase daemon that costs a warm-up. */
+  readonly lastClose = new Map<string, string>();
+  /** PR-100: a redeploy hit this lane after it had started a mutant-phase daemon; each mode takes `after-deploy` once. */
+  private deployedAfterStart = false;
+  private readonly deployTaken = new Set<string>();
+  /** PR-100: this lane has started a mutant-phase daemon (a redeploy after that is `after-deploy`). */
+  startedMutantDaemon = false;
+
+  /** PR-100: the mode keys of this lane's MUTANT-phase daemons (a baseline daemon's close causes nothing). */
+  daemonKeys(): string[] {
+    return [...this.daemons].filter(([, d]) => d.baselineStop === undefined).map(([k]) => k);
+  }
+
+  /** PR-100: a redeploy, whether or not this lane holds a daemon now. */
+  noteDeploy(): void {
+    if (!this.startedMutantDaemon) return;
+    this.lastClose.clear();
+    this.deployTaken.clear();
+    this.deployedAfterStart = true;
+  }
+
+  /** PR-100: the cause of the warm-up of a mutant daemon starting now for `mk`; used up by the start. */
+  takeCause(mk: string): string {
+    const own = this.lastClose.get(mk);
+    this.lastClose.delete(mk);
+    if (own !== undefined) return warmupCause(own);
+    if (this.deployedAfterStart && !this.deployTaken.has(mk)) {
+      this.deployTaken.add(mk);
+      return "after-deploy";
+    }
+    return "first";
   }
 
   /** R896 (review 6a): this lane's daemon for `mode`, one per mode, each with its own warm-up. */
@@ -2703,6 +2781,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   setRequestSizedSink(sink?: (e: V3RequestSized) => void): void {
     this.requestSizedSink = sink;
   }
+  /** PR-100: the session's sink for `serve-request-timed` events (`setRequestTimedSink`). */
+  private requestTimedSink: ((e: V3RequestTimed) => void) | undefined;
+  /** PR-100: see `ExecutionBackend.setRequestTimedSink`. */
+  setRequestTimedSink(sink?: (e: V3RequestTimed) => void): void {
+    this.requestTimedSink = sink;
+  }
+  /** PR-100: `closeLane` for a close that ends a request of `kind`, so its event is stamped with it. */
+  private async closeLaneIn(
+    kind: "warmup" | "prefetch" | "live" | "baseline",
+    lane: Lane,
+    reason: V3DaemonCloseReason,
+    family?: string,
+    detail?: { readonly text?: string; readonly test?: string },
+  ): Promise<void> {
+    const prev = lane.inFlight;
+    lane.inFlight = kind;
+    try {
+      await this.closeLane(lane, reason, family, detail);
+    } finally {
+      lane.inFlight = prev;
+    }
+  }
+
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
    * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
@@ -2716,7 +2817,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     family?: string,
     detail?: { readonly text?: string; readonly test?: string },
   ): Promise<void> {
+    const keys = lane.daemonKeys();
+    const phase = lane.inFlight ?? "idle";
     if ((await lane.closeDaemon()) === 0) return;
+    // PR-100: the next warm-up of each MUTANT-phase mode closed here is caused by this close; routine
+    // closes cost no warm-up of their own, and a redeploy is noted on every lane (`noteDeploy`).
+    if (!V3_ROUTINE_CLOSES.has(reason)) for (const k of keys) lane.lastClose.set(k, reason);
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
     if (family !== undefined) {
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
@@ -2729,6 +2835,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(family !== undefined ? { family } : {}),
       ...(detail?.text !== undefined ? { text: detail.text } : {}),
       ...(detail?.test !== undefined ? { test: detail.test } : {}),
+      phase,
     });
   }
   /** PR-99: the counters and the phase timers are per lane (`Lane.stats`, `Lane.timers`), summed in `entriesStats()`. */
@@ -4206,7 +4313,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
     const wallMs = Date.now() - started;
     if (daemon.dirty) {
-      await this.closeLane(
+      await this.closeLaneIn(
+        "baseline",
         lane,
         daemon.dirtyWhy?.reason ?? "unkept-row",
         daemon.dirtyWhy?.family,
@@ -6791,7 +6899,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
-    const d = await this.spawnDaemon(lane, mode, s);
+    const d = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
     d.proven = new Set();
     return d;
   }
@@ -6825,7 +6933,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const none = missing.filter((cu) => !this.baselineRows.has(cu));
     if (none.length > 0) {
       const named = none.map((id) => this.isolated(id)?.test ?? id);
-      await this.closeLane(lane, "warmup-refused");
+      await this.closeLaneIn("warmup", lane, "warmup-refused");
       throw new AlRunnerV3EntriesRefusedError(
         "al-runner-v3-entries-no-baseline-rows",
         `codeunit(s) ${named.join(", ")} of a restarted daemon's warm-up have no baseline rows recorded by this backend (a reused --resume snapshot runs no baseline), so the warm-up has nothing to be compared with; never empty against empty`,
@@ -6852,7 +6960,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         });
       } catch (err) {
         // A failed request already closed its daemon; this finds none then.
-        await this.closeLane(
+        await this.closeLaneIn(
+          "warmup",
           lane,
           err instanceof AlRunnerV3EntriesRefusedError ||
             err instanceof AlRunnerV3ServeFallbackWarmupError
@@ -6903,7 +7012,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private rssBoundOff = false;
 
   /** A started `serve` daemon, set as `lane`'s for `mode` (no request sent yet). */
-  private async spawnDaemon(lane: Lane, mode: RequestMode, stopSeconds: number): Promise<Daemon> {
+  private async spawnDaemon(
+    lane: Lane,
+    mode: RequestMode,
+    stopSeconds: number,
+    /** PR-100: the cause of a MUTANT daemon's first warm-up; absent on the baseline's and the probe's. */
+    cause?: string,
+  ): Promise<Daemon> {
     const server = new AlRunnerServer(
       absToolPath(this.cfg.alRunnerPath),
       (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
@@ -6926,7 +7041,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         : []),
     ]);
     lane.stats.daemons += 1;
-    const daemon: Daemon = { server, dirty: false, stopSeconds, requests: 0 };
+    const daemon: Daemon = {
+      server,
+      dirty: false,
+      stopSeconds,
+      requests: 0,
+      ...(cause !== undefined ? { cause } : {}),
+    };
+    if (cause !== undefined) lane.startedMutantDaemon = true;
     lane.setDaemon(mode, daemon);
     return daemon;
   }
@@ -7016,7 +7138,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R998: mutant entries leave the same tests out (`leftOutNames`).
     const warm = union.filter((id) => this.warmable(id));
     const leftOut = (cu: number) => this.leftOutNames(cu);
-    const daemon = await this.spawnDaemon(lane, mode, s);
+    const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
     try {
       lane.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -7054,7 +7176,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.passBarrier();
     } catch (err) {
       // A failed request already closed (and counted) its daemon; this finds none then.
-      await this.closeLane(
+      await this.closeLaneIn(
+        "warmup",
         lane,
         err instanceof AlRunnerV3EntriesRefusedError ||
           err instanceof AlRunnerV3ServeFallbackWarmupError
@@ -7239,6 +7362,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R766 (b): every lane's daemon; all are tried even if one close fails, then the first failure is thrown. */
   private async closeAllDaemons(reason: "deploy" | "session-end"): Promise<void> {
+    if (reason === "deploy") for (const l of this.laneList) l.noteDeploy(); // PR-100
     const done = await Promise.allSettled(this.laneList.map((l) => this.closeLane(l, reason)));
     for (const d of done) if (d.status === "rejected") throw d.reason;
   }
@@ -7251,6 +7375,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R652: the bound is checked here, the last await before the bytes leave, for every kind.
    */
   private async send(
+    lane: Lane,
+    groups: readonly EntryGroup[],
+    kind: "warmup" | "prefetch" | "live",
+    mode: RequestMode,
+    groupCount: number = groups.length,
+    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    excluded?: (codeunit: number, group: EntryGroup) => readonly string[] | undefined,
+  ): Promise<{
+    readonly sent: readonly SentEntry[];
+    readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    readonly selectedOnly: boolean;
+    readonly cut?: SentCut;
+  }> {
+    // PR-100: the kind in flight on the lane, for `serve-daemon-closed`'s phase; closes inside the
+    // request (a failure, an unreadable answer, a dependency skip, a batch refusal) read it.
+    const prev = lane.inFlight;
+    lane.inFlight = kind;
+    try {
+      return await this.sendInFlight(lane, groups, kind, mode, groupCount, alone, excluded);
+    } finally {
+      lane.inFlight = prev;
+    }
+  }
+
+  private async sendInFlight(
     lane: Lane,
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
@@ -7327,6 +7476,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // warm-ups that follow a request which left one set, beside those that hold one (below).
     if (kind === "warmup" && daemon.keptRefusal !== undefined) lane.stats.warmupsAfterKept += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    // PR-100: one `serve-request-timed` per send, after the answer or the throw and before any decode
+    // check. A warm-up's cause is read (and used up) here.
+    const timedAt = Date.now();
+    const emitTimed = (extra: {
+      readonly cut?: true;
+      readonly failed?: true;
+      readonly timings?: V3Timings;
+    }): void => {
+      // The daemon's first warm-up carries the cause decided at its start; a later lazy one is `lazy-prove`.
+      const cause =
+        kind === "warmup"
+          ? (daemon.cause ?? (daemon.proven !== undefined ? "lazy-prove" : "first"))
+          : undefined;
+      if (kind === "warmup") daemon.cause = undefined;
+      this.requestTimedSink?.({
+        kind,
+        lane: lane.index,
+        wallMs: Date.now() - timedAt,
+        entries: sent.length,
+        tests,
+        ...(selectedOnly.flag ? { selectedOnly: true as const } : {}),
+        ...extra,
+        ...(cause !== undefined ? { cause } : {}),
+      });
+    };
     // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
     // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
     // orchestrator records nothing that ended under a signal), so nothing scored is lost.
@@ -7351,11 +7525,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
+      emitTimed({ failed: true });
       await this.closeLane(lane, signalClosed ? "stop-signal" : "request-failed");
       throw missingDependencyOr(err);
     } finally {
       clearInterval(watch);
     }
+    const timings = answer.cut === undefined ? pickV3Timings(answer.summary.timings) : undefined;
+    emitTimed(answer.cut !== undefined ? { cut: true } : timings !== undefined ? { timings } : {});
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.cut !== undefined) {
       // A partial answer has no summary: no R807 seed to read, no `cached` to count.
@@ -7632,10 +7809,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           "al-runner-v3-serve-drift-after-kept-refusal",
           `[lethal] al-runner-v3-serve-drift-after-kept-refusal: after the kept refusal "${prior.text}" (${prior.test}) the next request on the same daemon gave ${drift.test} the row [${drift.row}], the baseline's is [${drift.baselineRow}], where it cannot differ. The daemon was closed and the request re-run on a fresh one (PR-56)`,
         );
-        await this.closeLane(lane, "kept-refusal-drift", undefined, {
-          text: prior.text,
-          test: drift.test,
-        });
+        await this.closeLaneIn(
+          phase === "prefetchMs" ? "prefetch" : "live",
+          lane,
+          "kept-refusal-drift",
+          undefined,
+          {
+            text: prior.text,
+            test: drift.test,
+          },
+        );
         return this.requestOne(lane, groups, phase, mode, groupCount, alone);
       }
     }
@@ -7672,8 +7855,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       cut < sent.length
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
-    if (cut < sent.length || daemon.dirty)
-      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family, unkept);
+    if (cut < sent.length || daemon.dirty) {
+      // PR-100: this close ends the request that just ran (`send` has restored the lane's kind).
+      await this.closeLaneIn(
+        phase === "prefetchMs" ? "prefetch" : "live",
+        lane,
+        unkept?.reason ?? "unkept-row",
+        unkept?.family,
+        unkept,
+      );
+    }
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);
@@ -8541,7 +8732,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await writeFile(lane.resourcePath(), SELECTOR_RESOURCE_NONE, "utf8");
         this.inWindow = false;
         if (daemon.dirty)
-          await this.closeLane(
+          await this.closeLaneIn(
+            "baseline",
             lane,
             daemon.dirtyWhy?.reason ?? "unkept-row",
             daemon.dirtyWhy?.family,
@@ -8584,6 +8776,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * R857: `call` is one test's id under `--isolate-tests`.
    */
   private async plain(
+    lane: Lane,
+    daemon: Daemon,
+    mode: RequestMode,
+    call: number,
+    coverage: boolean,
+    stopSeconds?: number,
+    leaveOut?: readonly string[],
+  ): Promise<{ readonly rows: readonly V3Row[]; readonly coverage: V3CoverageRead }> {
+    // PR-100: a plain request is a baseline, coverage-window or echo request: closes in it say `baseline`.
+    const prev = lane.inFlight;
+    lane.inFlight = "baseline";
+    try {
+      return await this.plainInFlight(lane, daemon, mode, call, coverage, stopSeconds, leaveOut);
+    } finally {
+      lane.inFlight = prev;
+    }
+  }
+
+  private async plainInFlight(
     lane: Lane,
     daemon: Daemon,
     mode: RequestMode,
