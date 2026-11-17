@@ -80,7 +80,6 @@ describe("lanes(N): the guards", () => {
       ["useBuildSymbols", () => v.useBuildSymbols([])],
       ["baselinePhase", () => v.baselinePhase?.(true)],
       ["noteReusedBaseline", () => v.noteReusedBaseline?.([])],
-      ["prefetchMutants", () => v.prefetchMutants?.([])],
       ["status", () => v.status()],
       ["close", () => v.close()],
     ];
@@ -214,7 +213,7 @@ describe("per-lane state", () => {
     expect(k1.backendNote).toBeUndefined();
   });
 
-  test("the shared prefetch runs once on lane 0 with the N = 1 grouping, and any lane consumes a mutant's rows once", async () => {
+  test("PR-99: the owner's prefetch is lane 0's own (the N = 1 grouping); lane 1 does not consume it, and lane 0 consumes a mutant's rows once", async () => {
     const r = await lanesRig({ lanes: 2 });
     await laneBaseline(r);
     const [v0, v1] = r.views;
@@ -228,14 +227,18 @@ describe("per-lane state", () => {
     const n0 = r.serve.requests.length;
     await v1.activate("M0002");
     expect((await v1.run(A, OPTS)).outcome).toBe("pass");
-    // Lane 1 used lane 0's prefetch: no request, and no daemon of its own.
-    expect(r.serve.requests.length).toBe(n0);
-    expect(r.serve.daemons.length).toBe(1);
-    // Consumed once: the same mutant on lane 0 now runs live.
+    // Lane 1 holds nothing of lane 0's prefetch: its call is live, on a daemon of its own.
+    expect(r.serve.requests.length).toBeGreaterThan(n0);
+    expect(r.serve.requests.at(-1)?.mutants).toEqual(["M0002"]);
+    expect(r.serve.daemons.length).toBe(2);
+    // Lane 0's rows were not taken by lane 1: lane 0 consumes them (no request), once.
+    const n1 = r.serve.requests.length;
     await v0.activate("M0002");
     await v0.run(A, OPTS);
-    expect(r.serve.requests.length).toBe(n0 + 1);
-    expect(r.serve.requests.at(-1)?.mutants).toEqual(["M0002"]);
+    expect(r.serve.requests.length).toBe(n1);
+    await v0.activate("M0002");
+    await v0.run(A, OPTS);
+    expect(r.serve.requests.length).toBe(n1 + 1);
   });
 
   test("a kill pair is the lane's own: another lane's activity does not drop it", async () => {
@@ -265,7 +268,7 @@ describe("per-lane state", () => {
     expect(r.b.entriesStats().pairRequests).toBe(1);
   });
 
-  test("R778 batch ON: a prefetch-tagged kill on lane 1 is served from lane 0's batch; a live kill on lane 1 is refused and sends today's pair", async () => {
+  test("R778 batch ON (PR-99: the batch is the lane's own): a prefetch-tagged kill is served from its own lane's batch, another lane's kill is not; a live kill is refused and sends today's pair", async () => {
     const rows: RowsFn = (m) =>
       m === "M0001" || m === "M0002"
         ? failing(allPass(m, 0, 0, 0), "A", "boom")
@@ -276,24 +279,27 @@ describe("per-lane state", () => {
     if (v0 === undefined || v1 === undefined) throw new Error("lanes");
     await r.b.prefetchMutants(plans(["M0001", "M0002"]));
     expect(r.b.entriesStats().pairBatchStored).toBe(2);
-    // M0001: killed on lane 1 from lane 0's prefetch; its pair comes from lane 0's batch, no send.
+    // M0001: killed on lane 0 from its own prefetch; its pair comes from lane 0's batch, no send.
     const n0 = r.serve.requests.length;
-    await v1.activate("M0001");
-    expect((await v1.run(A, OPTS)).outcome).toBe("fail");
-    await v1.sendKillPair("M0001", A);
+    await v0.activate("M0001");
+    expect((await v0.run(A, OPTS)).outcome).toBe("fail");
+    await v0.sendKillPair("M0001", A);
     expect(r.serve.requests.length).toBe(n0);
     expect(r.b.entriesStats()).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
-    // M0002: lane 0 consumes its prefetched rows, so lane 1's kill is a LIVE one: refused.
-    await v0.activate("M0002");
-    expect((await v0.run(A, OPTS)).outcome).toBe("fail");
-    const n1 = r.serve.requests.length;
+    // M0002 on lane 1: lane 1 holds no prefetch of it, so its kill is a LIVE one (lane 0's batch is not its own).
     await v1.activate("M0002");
     expect((await v1.run(A, OPTS)).outcome).toBe("fail");
-    expect(r.serve.requests.length).toBeGreaterThan(n1); // the live kill (and lane 1's warm-up)
-    const n2 = r.serve.requests.length;
+    const n1 = r.serve.requests.length;
     await v1.sendKillPair("M0002", A);
-    expect(r.serve.requests.length).toBe(n2 + 1); // today's pair
+    expect(r.serve.requests.length).toBe(n1 + 1); // today's pair, sent by lane 1
     expect(r.serve.requests.at(-1)?.ids).toContain("NONE|echo");
+    expect(r.b.entriesStats()).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
+    // M0002 on lane 0: its prefetched rows are consumed; the re-activation is a LIVE kill: the stored pair is refused.
+    await v0.activate("M0002");
+    expect((await v0.run(A, OPTS)).outcome).toBe("fail");
+    await v0.activate("M0002");
+    expect((await v0.run(A, OPTS)).outcome).toBe("fail");
+    await v0.sendKillPair("M0002", A);
     expect(r.b.entriesStats()).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 1 });
   });
 

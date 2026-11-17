@@ -1818,6 +1818,9 @@
         "type": {
           "const": "serve-daemon-closed"
         },
+        "lane": {
+          "type": "number"
+        },
         "reason": {
           "type": "string"
         },
@@ -1949,6 +1952,9 @@
         "type": {
           "const": "serve-drift-after-kept-refusal"
         },
+        "lane": {
+          "type": "number"
+        },
         "refusal": {
           "type": "string"
         },
@@ -1982,6 +1988,34 @@
       "properties": {
         "type": {
           "const": "serve-request-sized"
+        },
+        "lane": {
+          "type": "number"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prefetch",
+            "live"
+          ]
+        },
+        "daemonRequest": {
+          "type": "number"
+        },
+        "fresh": {
+          "const": true
+        },
+        "proved": {
+          "type": "number"
+        },
+        "proveGrowth": {
+          "type": "number"
+        },
+        "daemonProved": {
+          "type": "number"
+        },
+        "daemonProveGrowth": {
+          "type": "number"
         },
         "calls": {
           "type": "array",

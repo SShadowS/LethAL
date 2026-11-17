@@ -302,7 +302,13 @@
   "pairBatchRequests": 0,
   "pairBatchStored": 0,
   "pairBatchServed": 0,
-  "pairBatchRefused": 0
+  "pairBatchRefused": 0,
+  "unitsPrefetched": 0,
+  "lazyProofs": 4,
+  "armedRequests": 0,
+  "warmupsHeldKept": 0,
+  "warmupsAfterKept": 0,
+  "refusalCloses": 0
  },
  "notices": []
 }

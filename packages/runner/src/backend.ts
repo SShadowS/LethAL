@@ -495,6 +495,30 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
  * after the reading.
  */
 export type V3RequestSized = {
+  /** PR-99: the lane (0 = the owner's) whose daemon served the request. */
+  readonly lane?: number;
+  /** PR-103: the request's kind. */
+  readonly kind?: "prefetch" | "live";
+  /**
+   * PR-103: the daemon's request count at this request (`daemon.requests`, as R952 counts it). A daemon
+   * that warmed the whole union starts at 2, so read a daemon's first request from `fresh`, not from this.
+   * A gap in the count is a discarded re-send, not a lost event.
+   */
+  readonly daemonRequest?: number;
+  /** PR-103: present when `ensureDaemon` started a new daemon for this request. */
+  readonly fresh?: true;
+  /** PR-103: the codeunits `ensureDaemon` proved lazily for this request; present only when above 0. */
+  readonly proved?: number;
+  /** PR-103: the daemon's RSS just after those proofs less its RSS just before, bytes (same pid, both reads). */
+  readonly proveGrowth?: number;
+  /**
+   * PR-103: running total of the codeunits proved lazily on this daemon AFTER its first request (the
+   * `fresh` one). The first request's proofs sit below the floor (its start), so they are left out. It
+   * also counts requests that gave no reading and so no event.
+   */
+  readonly daemonProved?: number;
+  /** PR-103: running total of the `proveGrowth` bytes measured across those proofs (same exclusion). */
+  readonly daemonProveGrowth?: number;
   readonly calls: readonly {
     readonly call: number;
     readonly entries: number;
@@ -661,6 +685,8 @@ export interface ExecutionBackend {
    */
   setDaemonCloseSink?(
     sink?: (close: {
+      /** PR-99: the lane whose daemon closed. */
+      readonly lane?: number;
       readonly reason: string;
       readonly family?: string;
       /** R1009: a refusal's whole first line, and the refused row's test name. */
@@ -979,6 +1005,27 @@ export interface ExecutionBackend {
       }[];
     },
   ): Promise<void>;
+
+  /**
+   * PR-99 (§10.2), OPTIONAL: an N = 1 mutant loop hands over what it measured per procedure-scope unit (its
+   * scoring wall, the window prefetch excluded) and per window (the prefetch wall), so the run records the
+   * input of the scheduling bound. Timing only: no verdict reads it.
+   */
+  noteUnitTimings?(t: {
+    readonly units: readonly {
+      readonly window: number;
+      readonly scope: string;
+      readonly mutants: number;
+      readonly entries: number;
+      readonly scoringMs: number;
+    }[];
+    readonly windows: readonly {
+      readonly window: number;
+      readonly mutants: number;
+      readonly entries: number;
+      readonly prefetchMs: number;
+    }[];
+  }): void;
 
   /**
    * R912, OPTIONAL: true when a call for test codeunit `codeunitId` runs the codeunit's WHOLE suite
