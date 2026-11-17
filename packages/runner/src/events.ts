@@ -28,6 +28,7 @@ import type {
   TestMethodRef,
   TestOutcome,
   V3RequestSized,
+  V3RequestTimed,
 } from "./backend";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
@@ -567,7 +568,21 @@ export type RunEventInput =
       readonly text?: string;
       /** R1009: the refused row's test name (`Codeunit<id>.<method>`), so its shape can be reduced. */
       readonly test?: string;
+      /**
+       * PR-100: the request kind in flight on that lane when it closed (`warmup`, `prefetch`, `live`,
+       * or `baseline` for a baseline, coverage-window or echo request), or `idle` when none was.
+       */
+      readonly phase?: "warmup" | "prefetch" | "live" | "baseline" | "idle";
     }
+  | ({
+      /**
+       * PR-100: one al-runner-v3 serve request, timed: LethAL's wall clock around it (`wallMs`) and
+       * al-runner's own `timings` when the answer carried them. A thrown request has `failed`, a
+       * request cut at a timeout row has `cut` and no `timings`. `cause` is set on warm-ups only
+       * (`first`, `after-deploy`, `recycle`, `after-<close reason>`). Events stream only, not the report.
+       */
+      readonly type: "serve-request-timed";
+    } & V3RequestTimed)
   | {
       /**
        * PR-56: the request after a kept refusal (a `V3_SERVE_SAFE_REFUSALS` row) on one al-runner-v3

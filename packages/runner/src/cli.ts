@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -158,6 +158,7 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
+import { createTimingFold, foldTimingFile } from "./timing-summary";
 import {
   AlRunnerV2RetiredError,
   RETIRED_V2_BACKEND,
@@ -869,6 +870,8 @@ export interface ExplainCliConfig {
   readonly projectDir?: string;
   /** R273: `--suggest`, the opt-in suggestions section (explain-suggest.ts). */
   readonly suggest?: boolean;
+  /** PR-100: `--events <events.ndjson>`, a run's event stream, folded into a TIMING section on stderr. */
+  readonly eventsPath?: string;
 }
 
 /**
@@ -1050,7 +1053,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest]
+  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest] [--events <path>]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1303,6 +1306,8 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              LABELLED as a suggestion, not a measurement, derived only from each
                              survivor's measured reach and coverage attribution ('undecided' where
                              the report cannot tell). Everything else in the output is unchanged.
+  --events <path>            a run's --progress-out file: print its TIMING section (where the time
+                             went) on stderr. Stdout stays the one JSON document; --json is refused.
                              Refused on a report without gap ids
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
@@ -1488,6 +1493,8 @@ export const RUN_FLAGS = {
   top: { type: "string" },
   // R273: `lethal explain --suggest`, the opt-in suggestions section. Owned by `explain` alone.
   suggest: { type: "boolean", default: false },
+  // PR-100: `lethal explain --events <events.ndjson>`, the TIMING section. Owned by `explain` alone.
+  events: { type: "string" },
   // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
   // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
   format: { type: "string" },
@@ -1623,6 +1630,12 @@ export const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "events",
+    owners: ["explain"],
+    instead:
+      "It names the events file (a run's --progress-out) that `lethal explain` folds into a TIMING section.",
+  },
   {
     flag: "suggest",
     owners: ["explain"],
@@ -2106,9 +2119,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (project === "") {
       throw new Error("--project needs the target project directory the report's run measured.");
     }
+    const events = values.events;
+    if (events === "") {
+      throw new Error("--events needs the events file a run wrote with --progress-out.");
+    }
     const projectOpt = {
       ...(project !== undefined ? { projectDir: project } : {}),
       ...(values.suggest === true ? { suggest: true } : {}),
+      ...(events !== undefined ? { eventsPath: events } : {}),
     };
     if (top !== undefined) {
       const n = Number(top);
@@ -4442,6 +4460,9 @@ export async function runFromCliWithAccept(
         // refuses by name) the first attempt's backend is closed in its `finally` and thrown away;
         // the second is built one-shot and is exactly what an explicit one-shot run is. It carries
         // the row's name for the warning and the status, and nothing else.
+        // PR-100: the latest attempt's TIMING fold (a dropped attempt's is replaced), and the first throw from it.
+        let runTimingFold: ReturnType<typeof createTimingFold> | undefined;
+        let timingFoldError: unknown;
         const attempt = async (serveFallbackWarmup: string | undefined): Promise<SessionReport> => {
           let backend: ExecutionBackend | undefined;
           let store: ResultsStore | undefined;
@@ -4497,8 +4518,18 @@ export async function runFromCliWithAccept(
             // partially — a ruling that silently went missing looks exactly like a survivor nobody has
             // examined yet.
             const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
+            // PR-100: folds the run's events into the TIMING section printed once, below.
+            const timingFold = createTimingFold();
+            runTimingFold = timingFold;
             const emitSubscribers: EventSubscriber[] = [
               progress,
+              (e) => {
+                try {
+                  timingFold.add(e);
+                } catch (err) {
+                  timingFoldError ??= err;
+                }
+              },
               (e) => {
                 if (e.type !== "batch-published" || e.appVersion === undefined) return;
                 if (
@@ -4646,22 +4677,45 @@ export async function runFromCliWithAccept(
           }
           return report;
         };
-        try {
-          return await attempt(undefined);
-        } catch (err) {
-          if (!(err instanceof AlRunnerV3ServeFallbackWarmupError)) throw err;
-          // R786: parallel lanes need serve-entries, so a one-shot re-run cannot honour --workers.
-          if (parsed.workers > 1) {
-            throw new Error(
-              `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1${err.wholeRequest ? " (R960: al-runner refused the whole warm-up request)" : ", or exclude that test (R786)"}`,
+        const runAttempts = async (): Promise<SessionReport> => {
+          try {
+            return await attempt(undefined);
+          } catch (err) {
+            if (!(err instanceof AlRunnerV3ServeFallbackWarmupError)) throw err;
+            // R786: parallel lanes need serve-entries, so a one-shot re-run cannot honour --workers.
+            if (parsed.workers > 1) {
+              throw new Error(
+                `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1${err.wholeRequest ? " (R960: al-runner refused the whole warm-up request)" : ", or exclude that test (R786)"}`,
+              );
+            }
+            console.warn(
+              `[lethal] ${err.message}. The serve attempt is dropped from this report; the session starts again on one-shot.`,
+            );
+            return await attempt(
+              `${err.row}: ${err.rowReason}${err.abandonedRunId !== undefined ? `; the serve attempt's run ${err.abandonedRunId} stays in the store, marked so --resume skips it` : ""}`,
             );
           }
-          console.warn(
-            `[lethal] ${err.message}. The serve attempt is dropped from this report; the session starts again on one-shot.`,
-          );
-          return await attempt(
-            `${err.row}: ${err.rowReason}${err.abandonedRunId !== undefined ? `; the serve attempt's run ${err.abandonedRunId} stays in the store, marked so --resume skips it` : ""}`,
-          );
+        };
+        // PR-100: the TIMING section is printed once per invocation, after the fallback retry if there
+        // was one (the dropped attempt's events are not in it), and a failure of the fold or the render
+        // costs one stderr line and never replaces the run's own result or error.
+        try {
+          return await runAttempts();
+        } finally {
+          const failed = (err: unknown): void => {
+            process.stderr.write(
+              `[lethal] the TIMING section could not be written: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          };
+          if (timingFoldError !== undefined) failed(timingFoldError);
+          else {
+            try {
+              const text = runTimingFold?.render();
+              if (text !== undefined) process.stderr.write(`${text}\n`);
+            } catch (err) {
+              failed(err);
+            }
+          }
         }
       },
       deps.quarantineDir ?? defaultQuarantineDir(),
@@ -6067,11 +6121,28 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
   };
   const report = assertExplainableReport(parsedJson);
   const out = explain(report, options);
+  // PR-100: read before anything prints, so an unreadable events file leaves stdout empty.
+  let timing: string | undefined;
+  if (parsed.eventsPath !== undefined) {
+    try {
+      await access(parsed.eventsPath);
+    } catch (err) {
+      throw new Error(
+        `explain: could not read ${parsed.eventsPath} — ${err instanceof Error ? err.message : String(err)}. Pass the NDJSON file a run wrote with --progress-out.`,
+      );
+    }
+    // Streamed line by line: a DO run's events file is hundreds of MB.
+    timing =
+      (await foldTimingFile(parsed.eventsPath)) ??
+      "TIMING: the events file held no timing data (no phases, serve requests or scored mutants).";
+  }
   // R273: composed HERE, never inside `explain()`, so the default output is unchanged by
   // construction. Built before anything prints, so a refusal leaves stdout empty.
   const printed: ExplainOutput | ExplainSuggestedOutput =
     parsed.suggest === true ? { ...out, suggestions: suggest(report, out) } : out;
   console.log(JSON.stringify(printed, null, 2));
+  // PR-100: on STDERR, so stdout stays one JSON document.
+  if (timing !== undefined) console.error(timing);
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
   // under its survivor; the stale statement, when there is one, comes first.
   if (out.markKeysStale !== undefined) {
