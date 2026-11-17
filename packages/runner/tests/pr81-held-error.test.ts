@@ -917,6 +917,98 @@ describe("PR-81: a non-terminal error is held while the walk looks for a kill", 
     expect(row?.cause).toBeUndefined();
     expect(row?.failureNote).toContain(`the error of ${NAME("T2")} was not scored`);
   });
+
+  /** T2 and T4 fail under M0001 (position 2 of two warm calls); the FIRST replay answers `first`. */
+  const warmWithBadFirstReplay = async (
+    first: (opts: RunManyOpts) => RunManyResult,
+  ): Promise<{ b: ReproWarmStub; row: ReturnType<typeof m1> }> => {
+    const b: ReproWarmStub = new ReproWarmStub(
+      CAPS_NST,
+      (mutant, ref) =>
+        mutant === "M0001" && (ref.method === "T2" || ref.method === "T4") ? "fail" : "pass",
+      ["IsOverBudget"],
+    );
+    let replays = 0;
+    const original = b.runMany.bind(b);
+    b.runMany = async (opts) => {
+      if (opts.confirmation === true) replays += 1;
+      if (opts.confirmation === true && replays === 1) return first(opts);
+      return original(opts);
+    };
+    const row = m1(await session(b, { groupRuns: { maxMethodsPerCall: 3 } }));
+    return { b, row };
+  };
+  const mutantCalls = (b: ReproWarmStub) =>
+    b.callLog.filter((c) => c.mutant === "M0001").map((c) => c.methods);
+
+  test("E16: warm-timeout-unconfirmed is held; a later fail in the next call kills", async () => {
+    // The replay of T2 (position 2) is stopped at T2 itself, without the mutant.
+    const { b, row } = await warmWithBadFirstReplay((opts) => {
+      const ref = opts.methods[1]?.ref;
+      if (ref === undefined) throw new Error("no method 2");
+      return {
+        kind: "call",
+        methodIndex: 2,
+        verdict: { ref, outcome: "timeout", durationMs: 9, failureMessage: "stopped (fake 408)" },
+        fencedOp: { attemptId: "c1", opSeq: 901 },
+      };
+    });
+    expect(row?.verdict).toBe("killed");
+    expect(row?.killingTest).toContain("T4");
+    expect(row?.cause).toBeUndefined();
+    expect(row?.failureNote).toContain(`the error of ${NAME("T2")} was not scored`);
+    expect(mutantCalls(b)[0]).toEqual(["T1", "T2", "T3"]);
+    expect(mutantCalls(b).slice(1).flat()).toContain("T4"); // the walk went on past the error
+  });
+
+  test("E17: warm-confirmation-incomplete is held; a later fail in the next call kills", async () => {
+    // The replay stops at the server's cap after one method, before reaching T2.
+    const { b, row } = await warmWithBadFirstReplay((opts) => {
+      const m = opts.methods[0];
+      if (m === undefined) throw new Error("no method 1");
+      return {
+        kind: "verdicts",
+        endedBy: "cap",
+        ranCount: 1,
+        verdicts: [
+          { ref: m.ref, outcome: "pass", durationMs: 1, sessionId: 4242, testRunsBefore: 0 },
+        ],
+        durationMs: 1,
+        fencedOp: { attemptId: "c1", opSeq: 901 },
+      };
+    });
+    expect(row?.verdict).toBe("killed");
+    expect(row?.killingTest).toContain("T4");
+    expect(row?.cause).toBeUndefined();
+    expect(row?.failureNote).toContain(`the error of ${NAME("T2")} was not scored`);
+    expect(mutantCalls(b)[0]).toEqual(["T1", "T2", "T3"]);
+    expect(mutantCalls(b).slice(1).flat()).toContain("T4"); // the walk went on past the error
+  });
+
+  test("E18: an error met in the REPLAY of a held timeout is not held: the walk ends, no covering test runs after it", async () => {
+    // T1 hangs under M0001 (held); T2..T5 pass. The replay's unmutated confirm of T1 fails -> unstable.
+    const b: HeldStub = new HeldStub(
+      CAPS_NST,
+      (mutant, ref) => {
+        if (mutant === "M0001") return ref.method === "T1" ? "timeout" : "pass";
+        return ref.method === "T1" && b.trace.some((t) => t.startsWith("run null T1 "))
+          ? "fail"
+          : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const row = m1(await session(b));
+    expect(row?.verdict).toBe("error");
+    expect(row?.cause).toBe("unstable");
+    expect(row?.failureNote).toContain("unstable test T1");
+    // The walk ran T1..T5 once under the mutant; the replay added nothing under it.
+    const mutated = b.sent.filter((s) => s.mutant === "M0001").map((s) => s.method);
+    expect(mutated).toEqual(["T1", "T2", "T3", "T4", "T5"]);
+    const confirmAt = b.trace.indexOf("run null T1 fail"); // the replay's confirm
+    expect(confirmAt).toBeGreaterThan(-1);
+    // A held error would re-activate the mutant to go on; the walk ends instead.
+    expect(b.trace[confirmAt + 1]).not.toBe("activate M0001");
+  });
 });
 
 describe("PR-81: the lane view forwards dropPendingPair to its own lane (delta M1)", () => {

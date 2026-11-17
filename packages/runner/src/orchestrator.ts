@@ -13275,12 +13275,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       // walk-ending refusal; /coord/handoff/PR-81/cost.md, section L4; spec addendum A).
       if (
         !replaying &&
-        capRef === undefined && // PR-108: a capped walk has ended; a hold never continues it
         stepRef !== undefined &&
         verdict === "error" &&
         cause !== undefined &&
         HELD_ERROR_CAUSES.has(cause) &&
         transportErrorRef === undefined &&
+        // Redundant today (the abort branch sets no `cause`, so `cause !== undefined` rejects it); kept so an
+        // abort can never be held if that branch ever gains a cause. No test can go red on it alone.
         abortAfterRecord === undefined &&
         !args.safety.isUnsafe // checked first: a latched session is terminal, nothing re-activated
       ) {

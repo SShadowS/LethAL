@@ -24413,7 +24413,9 @@ describe("R653: the orchestrator asks for the kill pair only before a cold fail 
       "activate null",
       `run null ${KILLER} fail`,
     ]);
-    expect(b.trace.filter((x) => x === "activate M0001")).toHaveLength(1);
+    // PR-81 (R1066): the unstable error is held and the mutant re-activated for the walk's next test. This
+    // covering set has none, so nothing more runs (one row); the re-activation sends nothing on its own.
+    expect(b.trace.filter((x) => x === "activate M0001")).toHaveLength(2);
     const rows = store.db
       .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_code = 'M0001'")
       .get() as { n: number };
@@ -24796,14 +24798,16 @@ describe("R639: the covering loop and a refusal that follows a timeout", () => {
     }
   });
 
-  test("O3: a refused row WITHOUT the flag still ends the mutant; the next test never runs under it", async () => {
+  // PR-81 (R1066, owner ruling q-20261117T160215-3631a110): R639's stop at a refused row is reversed. A refused
+  // row without the flag is HELD and the walk goes on, so T2's hang is met and scored.
+  test("O3: a refused row WITHOUT the flag is held (PR-81); the walk goes on and the next test's hang is scored", async () => {
     const { backend, report } = await session(
       (mutant, ref) => (mutant !== null && ref.method === "T2" ? "timeout" : "pass"),
       t1Refused(false),
     );
-    expect(m1(report)?.verdict).toBe("error");
-    expect(m1(report)?.cause).toBe("runner-refused");
-    expect(ranUnder(backend, "M0001", "T2")).toBe(0);
+    expect(m1(report)?.verdict).toBe("timeout-killed");
+    // Once in the walk, once as PR-51's replay of the held timeout.
+    expect(ranUnder(backend, "M0001", "T2")).toBe(2);
   });
 
   test("O4: a pending kill-not-reproduced wins over the pending refusal; a reproduced kill wins over both", async () => {
