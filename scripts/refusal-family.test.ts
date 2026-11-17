@@ -1152,16 +1152,22 @@ describe("PR-105: the t12-refusals family", () => {
 
 describe("PR-133: the x2-refusals family", () => {
   const f = X2_REFUSALS;
-  const TEXTS = ["SetFilter: `C*` is not a BigInteger", "RecordRef.GetTable of Integer 123"];
+  // the third cell reaches the C* text through a card TestPage, a modal handler, a TryFunction and an OnValidate
+  const TEXTS = [
+    "SetFilter: `C*` is not a BigInteger",
+    "RecordRef.GetTable of Integer 123",
+    "SetFilter: `C*` is not a BigInteger",
+  ];
 
-  test("two cells, an OnPrem app, distinct cell names", () => {
+  test("three cells, an OnPrem app, distinct cell names, the nested cell binds a modal handler", () => {
     expect(f.cells).toHaveLength(TEXTS.length);
     expect(f.target).toBe("OnPrem");
     const names = f.cells.map((c, i) => cellName(c, i));
     expect(new Set(names).size).toBe(names.length);
+    expect(f.cells.at(-1)?.handlers).toHaveLength(1);
   });
 
-  test("a run that gives the measured texts makes 2 refusal classes, none of them known", () => {
+  test("a run that gives the measured texts makes 2 refusal classes (the nested cell shares the C* text), none of them known", () => {
     const rows = f.cells.map((_, i) => ({
       name: `Codeunit${BASE_ID + 1 + i}.Cell`,
       status: "error",

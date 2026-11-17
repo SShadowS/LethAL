@@ -1114,9 +1114,9 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // still closed its daemon on, each driven by an invented cell of family `x2-refusals` to the exact text and
   // measured CLEAN by PR-54's strict census (`--refusers 7`, `/coord/handoff/PR-133/census/`): `C*` joins BIGCODE
   // above, and the GetTable entry below is new.
-  // Not kept: Report.RunRequestPage (DO reaches it inside an AutoRollback write transaction, which the census
-  // cells did not measure: spec r2 H1/H2), the SaveAs-with-layout errors and the placeholder Pdf read (they need
-  // BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
+  // Not kept: Report.RunRequestPage (DO reaches it with no request-page handler, on a BaseApp report, inside an
+  // open write transaction, and nothing measured what report code runs before the refusal: spec r2 H1/H2), the
+  // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
   ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer 123"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
