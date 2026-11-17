@@ -145,3 +145,60 @@ Seeding the ledger from carried kills is out of scope.
 - `itest:alrunner-v3`: no `timeout-killed` in its baselines (R164).
 
 Both pass unchanged.
+
+## Addendum 2 (2026-11-17, orchestrator ruling after the Opus build review of 28bf931b; this text overrides Addendum 1's cap)
+**The provisional cap is withdrawn; the cap is SIMPLE.** The build review found that the provisional resume interacts with the
+walk:
+- **H1, earlier calls:** the replay sends the held step's unmutated confirm earlier than today. An infrastructure failure on it
+  turns today's later `killed` into `error`, and a stranded confirm quarantines the session.
+- **M1, an unlisted move:** an `error` can become `timeout-killed`, with no note.
+- **M2, routing:** the resume rewinds v3's cut state, so later calls route differently.
+- **M3, other mutants:** the early `noteMeasured` raises other mutants' budgets.
+
+Each fix adds state to the verdict path. The orchestrator chose option B.
+
+**The rule.** The 3rd non-replay hang of a walk ENDS the walk exactly as a natural walk end does: no further covering step is
+fed, and today's after-walk code runs unchanged. That code replays the held step, then the noted ones while the verdict is
+`survived`. There is no pause, no resume, no state capture and no re-activation.
+
+**The moves it can cause** (the safe direction: a lost kill, never a false one):
+1. `killed` -> `timeout-killed`: a later fail beyond the 3rd hang is not reached.
+2. `killed` -> `error`: the held confirm fails (`timeout-unconfirmed`, `confirm-stopped`, `unstable`, `session-reused`,
+   stranded), or none of the 3 hangs reproduces, while a later fail exists beyond the cap.
+3. `timeout-killed` -> `error`: only a 4th or later hang reproduces.
+4. A terminal answer past the 3rd hang is not reached, so its `error` becomes the held replay's verdict.
+5. Note only: R688's "blanked" note goes when the blanked codeunit lies past the cap.
+
+**Making a lost kill visible (orchestrator conditions 1 and 3):**
+- **The note.** Every capped walk carries the cap note on its `failureNote` (stored, and on `mutant-scored`): `the walk stopped
+  after 3 timeouts (PR-108, R1057's cap); <k> covering test(s) after them were not run`.
+  - `<k>` counts the ordered covering refs after the 3rd hang, excluding codeunits in `skip`.
+  - It is emitted even when k = 0, so every capped walk is identifiable.
+  - A ref missing from the ordered list THROWS, never giving a silent k.
+- **The warning.** Each capped walk also emits one warning, `held-walk-capped`, naming the mutant, its verdict and k. A capped
+  `error` is therefore listed by name.
+- **The count.** PR-100's TIMING section gains a line: `capped walks: <n> (<verdict> <count>, ...)`.
+- **Why not the report.** The report JSON carries no general warning list, and a new Caveat would ripple through the report
+  schema and the sample reports. So the count is in the run's output and events, which `explain --events` also reads.
+- **The comparison.** lethal-bugs' comparison relaxes only `killed` (other head) <-> `timeout-killed` (PR-108 head, cap note).
+  Moves 2-4 stay STRICT: a BLOCK to look at.
+
+**Prediction (condition 2).** t9-t14's 13 timeout walks show 0 moves of any kind under the cap. Each was `timeout-killed` by
+its held test (its first hang), and the held step reproduced. A walk ended at its 3rd hang therefore replays the same held step,
+with the same evidence and verdict.
+
+**The budget cut** stays exactly as built (Addendum 1, M1 and L1).
+
+**Tests (replacing Addendum 1's cap tests):**
+- 4 hangs of 5 tests: the walk ends at the 3rd, the held step is replayed, timeout-killed with the cap note and k = 2, and T4/T5
+  are never run;
+- 2 hangs then a fail: killed, no cap;
+- 3 hangs then a later fail: timeout-killed (move 1), T4 never fed;
+- the held confirm fails at the cap: `error` (move 2), named in the `held-walk-capped` warning;
+- the 3rd hang alone reproduces: timeout-killed by the 3rd;
+- replay timeouts are not counted;
+- k = 0 still carries the note;
+- a missing ref throws;
+- the TIMING line counts capped walks by verdict.
+
+Each test is red when its rule is reverted.

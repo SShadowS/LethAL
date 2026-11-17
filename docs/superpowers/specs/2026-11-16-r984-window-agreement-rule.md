@@ -28,3 +28,23 @@ red-checked both ways (without the amendment the CPU-stop case fails; accepting 
 
 **t7 under the amended rule:** vs t5, 27,014 same, 1 under the timeout rule (CDOMailMessageBuilder:137: timeout-killed both sides,
 t7's by v3-cpu-stop), 0 differ; vs t1, t2b, t3, t4 and t6: 0 differ. Before the amendment that row read "differ" only on (b).
+
+## Amendment 2 (orchestrator ruling 2026-11-17, PR-108's walk cap; committed before the first PR-108 window)
+
+PR-108 (R1057, spec `2026-11-17-pr108-walk-cap-and-budget.md` addendum 1, M3) stops PR-51's held-timeout walk after 3 hangs. A
+mutant whose later covering test would have failed then reads `timeout-killed` instead of `killed`, and its `failureNote` says
+`the walk stopped after <n> timeouts (PR-108, R1057's cap); <k> covering test(s) after them were not run`.
+
+**The clause.** For a pair where EXACTLY ONE window's recorded head contains PR-108 (its merge sha, `PR108` in
+`verdict-rule.ts`, set when it lands): `killed` on the side without PR-108 and `timeout-killed` on the PR-108 side agree
+(`same-walk-cap`, killing test exempt) when the PR-108 side's stored row carries that note with n >= 3. The note is read from the
+row (`failureNote` of the `mutant-scored` event), never inferred. The reverse direction, a pair where both or neither heads contain
+PR-108, and every other move stay as before (strict, or the PR-51 timeout rule where it applies). `compare.ts` lists such rows as
+`WALK-CAP` and counts them apart, never silently.
+
+**Expected use: none.** PR-108's pre-commitment predicts 0 such moves on t9-t14's mutants; the clause is a guard.
+
+**Tests:** `verdict-rule.test.ts`, 7 more cases (21 in all), on a strict PR-51 pair so the timeout rule cannot be what lets a row
+agree. Red-checked three ways: the clause disabled (2 fail), the note ignored (1 fail: the no-note, 2-hang and other-note cases),
+the PR-108 side swapped (3 fail); restored green. With `PR108` unset, t12 vs t13 still reads 27,317 same, 0 under the walk cap,
+0 differ.
