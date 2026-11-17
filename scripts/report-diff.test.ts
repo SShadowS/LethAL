@@ -3,7 +3,14 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionReport } from "../packages/runner/src/report";
-import { ReportDiffRefusal, compareReports, diffReports, formatDiff } from "./report-diff.ts";
+import {
+  ReportDiffRefusal,
+  compareByLine,
+  compareReports,
+  diffReports,
+  formatDiff,
+  formatLineDiff,
+} from "./report-diff.ts";
 
 function m(hash: string, verdict: string, extra: Record<string, unknown> = {}) {
   return {
@@ -95,6 +102,112 @@ describe("R556: report-diff reads both reports' identity schemes", () => {
       );
     }
     expect(formatDiff([], 2, 2, 0)).not.toContain("UNVERIFIED");
+  });
+});
+
+describe("--by-line (PR-113)", () => {
+  const at = (line: number, verdict: string, extra: Record<string, unknown> = {}) =>
+    m("h1", verdict, { file: "A.al", line, startIndex: line * 10, ...extra });
+  const full = report(at(1, "killed", { killingTest: "T1" }), at(2, "survived"));
+  const subset = report(at(2, "survived"));
+
+  test("twins on two lines: default mode shows a spurious difference, --by-line --subset shows 0", () => {
+    expect(diffReports(full, subset).length).toBeGreaterThan(0);
+    const c = compareByLine(full, subset, true);
+    expect(c.differences).toEqual([]);
+    expect(c.onlyInB).toEqual([]);
+    expect(c.onlyInA).toHaveLength(1);
+    expect(formatLineDiff(c, 2, 1, true)).toContain("not in the subset");
+    expect(formatLineDiff(c, 2, 1, true).endsWith("\nIDENTICAL")).toBe(true);
+  });
+
+  test("without --subset, a mutant only in a is a difference", () => {
+    const c = compareByLine(full, subset, false);
+    expect(formatLineDiff(c, 2, 1, false).endsWith("\nDIFFERENT")).toBe(true);
+  });
+
+  test("a real verdict difference on one line is caught", () => {
+    const changed = report(at(2, "killed", { killingTest: "T9" }));
+    const c = compareByLine(full, changed, true);
+    expect(c.differences).toHaveLength(1);
+    expect(c.differences[0]).toContain("A.al line 2|lethal.return-value");
+    expect(c.differences[0]).toContain("verdict survived -> killed");
+  });
+
+  test("same file, line and operator twice falls back to startIndex", () => {
+    const a = report(at(1, "killed", { startIndex: 5 }), at(1, "survived", { startIndex: 9 }));
+    const b = report(at(1, "survived", { startIndex: 9 }), at(1, "killed", { startIndex: 5 }));
+    const c = compareByLine(a, b);
+    expect(c.keyedBy).toContain("startIndex");
+    expect(c.differences).toEqual([]);
+  });
+
+  test("keys still ambiguous exit non-zero naming them", () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-diff-line-"));
+    const p = join(dir, "amb.json");
+    writeFileSync(p, JSON.stringify(report(at(1, "killed"), at(1, "survived"))));
+    const r = Bun.spawnSync(["bun", join(import.meta.dir, "report-diff.ts"), "--by-line", p, p], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("ambiguous");
+    expect(r.stderr.toString()).toContain("A.al line 1|lethal.return-value");
+  });
+
+  const runLine = (a: object, b: object, ...flags: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "report-diff-line-"));
+    const pa = join(dir, "a.json");
+    const pb = join(dir, "b.json");
+    writeFileSync(pa, JSON.stringify(a));
+    writeFileSync(pb, JSON.stringify(b));
+    return Bun.spawnSync(["bun", join(import.meta.dir, "report-diff.ts"), ...flags, pa, pb], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  };
+
+  test("H1: --subset with a narrowed report of zero mutants is refused (exit 2), not IDENTICAL", () => {
+    expect(() => compareByLine(full, report(), true)).toThrow(ReportDiffRefusal);
+    const r = runLine(full, report(), "--by-line", "--subset");
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("narrowed report (b) has zero mutants");
+    expect(r.stdout.toString()).not.toContain("IDENTICAL");
+  });
+
+  test("H1: --subset where no mutant is in both reports is refused (exit 2), not IDENTICAL", () => {
+    const elsewhere = report(at(7, "survived"));
+    expect(() => compareByLine(full, elsewhere, true)).toThrow(ReportDiffRefusal);
+    const r = runLine(full, elsewhere, "--by-line", "--subset");
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("0 shared");
+    expect(r.stdout.toString()).not.toContain("IDENTICAL");
+  });
+
+  test("L4: --by-line counts and prints the shared rows whose text could not be checked", () => {
+    const hashed = report(at(1, "killed", { mutatedText: "x" }), at(2, "survived"));
+    const c = compareByLine(hashed, hashed, false);
+    expect(c.shared).toBe(2);
+    expect(c.textUnchecked).toBe(1); // line 2 has no hash on either side
+    expect(formatLineDiff(c, 2, 2, false)).toContain("text unchecked: 1");
+    const all = compareByLine(
+      report(at(1, "killed", { mutatedText: "x" })),
+      report(at(1, "killed", { mutatedText: "x" })),
+    );
+    expect(all.textUnchecked).toBe(0);
+    expect(formatLineDiff(all, 1, 1, false)).not.toContain("text unchecked");
+  });
+
+  test("--subset without --by-line is refused", () => {
+    const dir = mkdtempSync(join(tmpdir(), "report-diff-line-"));
+    const p = join(dir, "one.json");
+    writeFileSync(p, JSON.stringify(full));
+    const r = Bun.spawnSync(["bun", join(import.meta.dir, "report-diff.ts"), "--subset", p, p], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr.toString()).toContain("--subset only works with --by-line");
   });
 });
 

@@ -18,6 +18,17 @@ export const BCDEV_FIGURES = {
   assertionScreenDiscrimination: "vacuous",
 } as const;
 
+/**
+ * PR-114a: leg DBM of the al-runner-v3 gate (sandbox-optin, default operators), both sessions. First live
+ * reading 2026-11-17 (/coord/handoff/PR-114/gate-dbm.log); pre-committed in the spec addendum.
+ */
+export const DBM_FIGURES = {
+  totalMutantSites: 122,
+  killed: 15,
+  survived: 3,
+  noCoverage: 104,
+} as const;
+
 export const ENVTOOL_FIGURES = {
   totalMutantSites: 19,
   killed: 3,
@@ -363,6 +374,11 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/S1E": [],
   // R948: leg DB's reader is fixed by the leg (a 32 GiB limit), so its guard line is the one warning.
   "al-runner-v3/DB": ["al-runner-v3-memory-guard"],
+  // PR-114a: leg DBM's two sessions (own scratch each, so own key). OBSERVED 2026-11-17 (/coord/handoff/PR-114/gate-dbm.log):
+  // the daemon session has the fixed-reader guard line and, as DBI, the daemon's unknown flagged state (#7954); the
+  // one-shot baseline none.
+  "al-runner-v3/dbm-daemon": ["al-runner-v3-memory-guard", "al-runner-v3-serve-flagged-unknown"],
+  "al-runner-v3/dbm-oneshot": [],
   // R948: leg DBI runs under --isolate-tests (which says so) with the same fixed-reader guard line.
   // R949 (pre-commitment master 02d2139b): DBI serves a daemon answer, whose flagged state is unknown (#7954).
   "al-runner-v3/DBI": [

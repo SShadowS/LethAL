@@ -15,7 +15,11 @@ import {
 } from "../itest/al-runner-v3-gate";
 import { TABLES_KNOWN_DIFFERENCES } from "../itest/al-runner-v3-tables-known";
 import { type NormalizedMutant, compareMutants } from "../itest/mutant-equality";
-import { BC_END_OF_TEST_TEXT, BC_HTTP_HUB_TEXT } from "../src/al-runner-v3-contract";
+import {
+  BC_END_OF_TEST_TEXT,
+  BC_HTTP_HUB_TEXT,
+  V3_CAPABILITY_FACTS,
+} from "../src/al-runner-v3-contract";
 import type { V3ContractResult } from "../src/al-runner-v3-contract";
 import {
   type V3BuildPin,
@@ -186,7 +190,7 @@ describe("R586c pins: the table", () => {
 // Leg C
 // ---------------------------------------------------------------------------------------------
 
-/** The 28 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn. */
+/** The 36 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: all matches). */
 function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
   const facts: { fact: string; verdict: string; measured?: string }[] = [];
   for (const d of V3_DEFECT_FACTS) {
@@ -198,6 +202,7 @@ function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
   for (let i = 1; i <= 18; i++)
     facts.push({ fact: `contract-${i}`, verdict: "matches", measured: "ok" });
   facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
+  for (const c of V3_CAPABILITY_FACTS) facts.push({ fact: c, verdict: "matches", measured: "ok" });
   return facts;
 }
 const withFact = (
@@ -215,7 +220,7 @@ const runC = (facts: ReturnType<typeof alpha5Facts>, withPin = true) =>
   );
 
 describe("R586c leg C: the pin", () => {
-  test("the 28 facts: 9 defect, 18 contract, 1 warn", () => {
+  test("the 36 facts: 9 defect, 18 contract, 1 warn, 8 capability", () => {
     expect(alpha5Facts().length).toBe(V3_LEG_C_FACTS);
   });
   test("C-pin-1: alpha.5's readings with the pin pass, with seven pinned lines and no held line", () => {
@@ -625,6 +630,8 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
     for (let i = 1; i <= 18; i++)
       facts.push({ fact: `contract-${i}`, verdict: "matches", measured: "ok" });
     facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
+    for (const c of V3_CAPABILITY_FACTS)
+      facts.push({ fact: c, verdict: "matches", measured: "ok" });
     return facts;
   };
   const runEdge = (withPin: boolean) =>

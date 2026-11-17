@@ -4546,6 +4546,34 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     expect(got[0]).toMatchObject(sized);
     expect(backend.sink).toBeUndefined();
   });
+  // PR-113: the same for the baseline one-shot sink.
+  test("PR-113: a backend's baseline one-shot timing becomes one baseline-one-shot-timed event; the sink is removed at the end", async () => {
+    const shot = { codeunit: 79100, wallMs: 1234, reason: "cross-check" } as const;
+    class ShotBackend extends RecordingBackend {
+      sink: ((s: typeof shot) => void) | undefined;
+      setBaselineOneShotSink(sink?: (s: typeof shot) => void) {
+        this.sink = sink;
+      }
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        if (ref.method === "UnsupportedTest") this.sink?.(shot);
+        return super.run(ref, opts);
+      }
+    }
+    const dirs = await project();
+    const backend = new ShotBackend({ ...FENCED, kind: "al-runner-v3", authoritative: false });
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const got = events.filter((e) => e.type === "baseline-one-shot-timed");
+    expect(got.length).toBe(1);
+    expect(got[0]).toMatchObject(shot);
+    expect(backend.sink).toBeUndefined();
+  });
   // R909: Linux BC's page-open failure is a bare CLR exception with an AL top frame. It is named
   // only when that frame is a page call in the test app's source; the same text at any other
   // statement is an ordinary failure.

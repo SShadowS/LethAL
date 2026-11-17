@@ -132,7 +132,7 @@ export function uncacheableReason(
         ? f.verdict === "matches"
         : f.kind === "defect"
           ? f.verdict === "defect-present" || f.verdict === "gone"
-          : true;
+          : true; // warn, and (PR-114a) capability: never uncacheable, whatever the reading. Fail-safe: batching needs `matches` anyway, and an always-unmeasurable fact (an older build) must not make every session re-run the probe.
     if (passes || (pin !== undefined && pinnedFactMatches(pin.legC, f))) continue;
     return `${f.fact} = ${f.verdict}, not the pinned reading`;
   }
@@ -155,7 +155,10 @@ const isFact = (f: unknown): f is V3Fact => {
     typeof x === "object" &&
     x !== null &&
     typeof x.fact === "string" &&
-    (x.kind === "contract" || x.kind === "defect" || x.kind === "warn") &&
+    (x.kind === "contract" ||
+      x.kind === "defect" ||
+      x.kind === "warn" ||
+      x.kind === "capability") &&
     typeof x.verdict === "string" &&
     typeof x.expected === "string" &&
     typeof x.measured === "string"

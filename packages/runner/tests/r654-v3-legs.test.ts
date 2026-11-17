@@ -87,6 +87,11 @@ describe("R654 S2: the leg sets", () => {
     expect(V3_GATE_LEGS as readonly string[]).not.toContain("K");
   });
 
+  test("PR-114a: DBM is a default leg outside V3_GATE_LEGS, as DB and DBI are", () => {
+    expect(V3_GATE_LEGS as readonly string[]).not.toContain("DBM");
+    expect(v3DefaultLegs({ cdo: false, tables: false })).toContain("DBM");
+  });
+
   test("the default legs: K always listed (it runs, or is skipped with its summary); D and T only when configured", () => {
     // R602 (flipped on purpose): MO and WR join the default set, after Y-B, and (orchestrator
     // ruling) V3_GATE_LEGS too, so the update gate judges them.
@@ -96,6 +101,7 @@ describe("R654 S2: the leg sets", () => {
       "S1E", // R761: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
       "DB", // R948: S1E with the daemon baseline and the memory guard; not in V3_GATE_LEGS
       "DBI", // R948: ISO's session with the daemon baseline (per-test requests); likewise
+      "DBM", // PR-114a: the daemon baseline over sandbox-optin's four codeunits; likewise
       "S3",
       "N1",
       "N1E", // R722: also in V3_GATE_LEGS (alpha.2 reads pass, not applicable)
@@ -118,6 +124,7 @@ describe("R654 S2: the leg sets", () => {
       "S1E",
       "DB",
       "DBI",
+      "DBM",
       "S3",
       "N1",
       "N1E",
@@ -187,6 +194,7 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
     ISO: "pass", // R857: a default leg outside V3_GATE_LEGS
     DB: "pass", // R948: so is DB
     DBI: "pass", // and DBI
+    DBM: "pass", // and DBM (PR-114a)
     ...(k !== undefined ? { K: k } : {}),
   });
 

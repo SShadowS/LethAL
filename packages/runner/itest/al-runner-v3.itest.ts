@@ -139,6 +139,7 @@ import {
   O1_SEED_TEST,
   type V3RowFacts,
   V3_DBI_LEG,
+  V3_DBM_LEG,
   V3_DB_LEG,
   V3_ISO_LEG,
   V3_K_CANDIDATE_SKIP,
@@ -186,7 +187,7 @@ import {
   recordRequested,
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
-import { GATE_WARNINGS } from "./gate-expected";
+import { DBM_FIGURES, GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   WarningsObservedError,
@@ -594,8 +595,8 @@ async function legC(scratch: string): Promise<readonly string[]> {
   legCWarnFacts = Object.fromEntries(
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 28 facts (r13,
-  // R590: 9 defect, 18 contract, 1 warn); a warn fact (V3_WARN_FACTS) only adds its line, except
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,
+  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches); a warn fact (V3_WARN_FACTS) only adds its line, except
   // `unkept` (R1000), which is gate-fail.
   const c = classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS, activePin?.legC);
   for (const l of c.lines) console.log(`  C: ${l}`);
@@ -814,6 +815,154 @@ async function legDBI(scratch: string, version: string): Promise<void> {
     "DBI: no daemon answer was taken and none was skipped by name",
   );
   must(b.baselineDaemon, "DBI: the backend does not report a daemon baseline");
+}
+
+/**
+ * PR-114a: leg DBM's selector ids. They must lie inside the TARGET's idRanges (sandbox-optin: 77200-77249,
+ * objects 77200 and 77201 used), or alc rejects the instrumented app and every mutant reads `error`.
+ */
+const DBM_IDS = { selectorId: 77249, controlId: 77248, tableId: 77247 } as const;
+
+/**
+ * PR-114a: leg DBM, the daemon baseline over a fixture with SEVERAL test codeunits that 114b will batch
+ * (`docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`). `sandbox-optin` and
+ * `-tests` (4 test codeunits, no OnRun) run twice under serve-entries: once with `daemonBaseline` and
+ * once with the one-shot baseline. Per mutant the two must agree (verdict, `killingTest`, note): a
+ * self-relative check, so no new frozen baseline file. The daemon session must not drop its baseline,
+ * must make one request per codeunit (4), and its sample must be `baselineSampleIds(4)`. Batching is
+ * OFF in 114a (no pin allows it), so these are today's request counts; 114b moves them. No fixture
+ * file is edited (R-307's golden list).
+ */
+async function legDBM(scratch: string, version: string): Promise<void> {
+  try {
+    await legDBMRun(scratch);
+  } catch (e) {
+    // A build with no serve path refuses `entries` by name: not applicable, as DBI reads it.
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  DBM: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+}
+
+/** The procedures of sandbox-optin that its tests call (directly or through `Greet`/`Store`); every other one is never run. */
+const DBM_CALLED_PROCEDURES = new Set([
+  "KilledGuard",
+  "SurvivingGuard",
+  "Welcome",
+  "Greet",
+  "Remember",
+  "Store",
+  "Remembered",
+]);
+
+async function legDBMRun(scratch: string): Promise<void> {
+  const deps = await microsoftDeps(scratch);
+  const run = async (name: "dbm-daemon" | "dbm-oneshot") => {
+    // Own scratch per session: GATE_WARNINGS keys on its name, and the two sessions warn differently.
+    const dir = join(scratch, name);
+    await mkdir(dir, { recursive: true });
+    const daemon = name === "dbm-daemon";
+    const b = new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: join(dir, "backend"),
+        testDir: fixture("sandbox-optin-tests"),
+        packagesDir: deps,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: DBM_IDS.selectorId,
+        transport: "serve-entries" as const,
+        ...(daemon ? { daemonBaseline: true, memoryHeadroomGb: MEMORY_HEADROOM_GB_DEFAULT } : {}),
+      }),
+    );
+    // As in DB: a fixed reader keeps the guard's one warning the same on every host.
+    if (daemon) {
+      b.seams.memoryReader = () => ({
+        usedBytes: 2 ** 30,
+        maxBytes: 32 * 2 ** 30,
+        source: "/sys/fs/cgroup/memory.max",
+      });
+    }
+    const r = await session(dir, b, {
+      projectDir: fixture("sandbox-optin"),
+      testDir: fixture("sandbox-optin-tests"),
+      selectorIds: DBM_IDS,
+    });
+    console.log(`  DBM ${name}: ${counts(r)} over ${r.mutants.length}`);
+    must(r.mutants.length > 0, `DBM ${name}: the session measured no mutant`);
+    // M3: both sessions read the pre-committed figures, so equality cannot pass on two equally empty sessions.
+    assertCounts(
+      r,
+      `DBM ${name}`,
+      DBM_FIGURES.killed,
+      DBM_FIGURES.survived,
+      DBM_FIGURES.noCoverage,
+      DBM_FIGURES.totalMutantSites,
+    );
+    assertCleanLeg(r, b, `DBM ${name}`);
+    // R164, L1: sandbox-optin's refused loop procedures are never called by a test; what keeps a mutant that
+    // could loop for ever off a server is that none of them is covered. Every mutant outside the called
+    // procedures must read no-coverage.
+    const stray = r.mutants.filter(
+      (m) => !DBM_CALLED_PROCEDURES.has(m.procedureName) && m.verdict !== "no-coverage",
+    );
+    must(
+      stray.length === 0,
+      `DBM ${name}: ${stray.length} mutant(s) in a procedure no test calls were run (${stray
+        .slice(0, 5)
+        .map((m) => `${m.mutantCode} ${m.procedureName} ${m.verdict}`)
+        .join(", ")}); R164 keeps hang-capable sites off a server`,
+    );
+    return { r, b };
+  };
+  const one = await run("dbm-oneshot");
+  const dm = await run("dbm-daemon");
+  // Empty-vs-empty must not pass: both sessions measured mutants.
+  must(one.r.mutants.length > 0, "DBM: the one-shot session measured no mutant");
+  // R164: a hang-capable site never enters a gate other than itest:hang. NOTE: the built-in operators refuse hang
+  // sites (R196) and never tag a mutant `hangCapable`, so this check cannot fire on today's operators; it only
+  // guards an operator that does tag one. The real guard is the per-session "no mutant outside the called
+  // procedures ran" check above.
+  const hangy = [...one.r.mutants, ...dm.r.mutants].filter((m) => m.hangCapable !== undefined);
+  must(
+    hangy.length === 0,
+    `DBM: ${hangy.length} hang-capable mutant(s) on sandbox-optin (${hangy
+      .slice(0, 5)
+      .map((m) => m.mutantCode)
+      .join(", ")}); R164 keeps them out of this gate`,
+  );
+  const table = (r: SessionReport): Map<string, string> =>
+    new Map(
+      rowFacts(r).map((m) => [
+        m.mutantCode,
+        `${m.verdict}|${m.killingTest ?? ""}|${m.failureNote ?? ""}`,
+      ]),
+    );
+  const a = table(one.r);
+  const c = table(dm.r);
+  const diffs = [...new Set([...a.keys(), ...c.keys()])]
+    .filter((k) => a.get(k) !== c.get(k))
+    .map((k) => `${k}: one-shot ${a.get(k) ?? "absent"} -> daemon ${c.get(k) ?? "absent"}`);
+  for (const d of diffs) console.log(`    - ${d}`);
+  must(
+    diffs.length === 0 && a.size === one.r.mutants.length && c.size === dm.r.mutants.length,
+    `DBM: ${diffs.length} per-mutant difference(s) between the daemon and the one-shot baseline`,
+  );
+  const d = dm.b.daemonBaselineReport();
+  console.log(`  DBM: daemon baseline ${JSON.stringify(d)}`);
+  must(d.dropped === undefined, `DBM: the daemon baseline was dropped: ${d.dropped}`);
+  must(d.codeunits === 4, `DBM: ${d.codeunits} codeunits, pre-committed 4`);
+  must(d.requests === d.codeunits, `DBM: ${d.requests} requests for ${d.codeunits} codeunits`);
+  const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
+  must(
+    d.sampledCodeunits.length === want,
+    `DBM: ${d.sampledCodeunits.length} codeunits sampled, pre-committed ${want}`,
+  );
+  const j = judgeDaemonBaseline("DBM", d, d.codeunits - want, want);
+  for (const n of j.notes) console.log(`  ${n}`);
+  must(j.fail === undefined, j.fail ?? "");
+  must(dm.b.baselineDaemon, "DBM: the backend does not report a daemon baseline");
+  must(!dm.b.isBaselineBatching(), "DBM: baseline batching is on in 114a (no pin allows it)");
 }
 
 async function legS3(scratch: string): Promise<void> {
@@ -2633,6 +2782,7 @@ async function main(): Promise<void> {
         else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
         else if (leg === V3_DB_LEG) await legS1(scratch, V3_DB_LEG, version);
         else if (leg === V3_DBI_LEG) await legDBI(scratch, version);
+        else if (leg === V3_DBM_LEG) await legDBM(scratch, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

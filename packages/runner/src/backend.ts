@@ -556,7 +556,8 @@ export type V3Timings = {
  * the request. `cause` is set on warm-ups only.
  */
 export type V3RequestTimed = {
-  readonly kind: "warmup" | "prefetch" | "live";
+  /** PR-113: `baseline` is a baseline `plain()` request (the daemon baseline fill), never a coverage or echo window. */
+  readonly kind: "warmup" | "prefetch" | "live" | "baseline";
   readonly lane: number;
   readonly wallMs: number;
   readonly entries: number;
@@ -566,6 +567,17 @@ export type V3RequestTimed = {
   readonly failed?: true;
   readonly cause?: string;
   readonly timings?: V3Timings;
+};
+
+/**
+ * PR-113: one baseline one-shot process (a fresh `--codeunit` run during the daemon baseline), timed. `reason`:
+ * `cross-check` (an R948/R951 sample), `too-slow` (R790's re-run) or `other`. Also the body of the
+ * `baseline-one-shot-timed` event.
+ */
+export type V3BaselineOneShotTimed = {
+  readonly codeunit: number;
+  readonly wallMs: number;
+  readonly reason: "cross-check" | "too-slow" | "other";
 };
 
 export interface ExecutionBackend {
@@ -721,6 +733,8 @@ export interface ExecutionBackend {
    * (events stream only, not the report).
    */
   setRequestTimedSink?(sink?: (timed: V3RequestTimed) => void): void;
+  /** PR-113, OPTIONAL: where the backend reports each baseline one-shot call (al-runner-v3 only); a `baseline-one-shot-timed` event. */
+  setBaselineOneShotSink?(sink?: (timed: V3BaselineOneShotTimed) => void): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

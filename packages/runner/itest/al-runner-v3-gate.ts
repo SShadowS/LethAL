@@ -621,8 +621,8 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 28 is a contract fact and must read
- * `matches`, except the warn facts.
+ * `refusal-row-shape` since r9, R639). Every other fact of the 36 is a contract or capability fact and
+ * must read `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
   "upstream-compile-errors",
@@ -638,10 +638,12 @@ export const V3_DEFECT_FACTS = [
 ] as const;
 
 /**
- * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn (r13, R590: the contract fact
- * `dependency-skip-line`; r12 (R667, `message-has-no-type-prefix`) had 27, r9 had 26).
+ * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: the eight
+ * `batch-*` facts of `V3_CAPABILITY_FACTS`; a capability fact not reading `matches` is a gate-fail
+ * here, never a session refusal). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
+ * (R667, `message-has-no-type-prefix`) had 27, r9 had 26.
  */
-export const V3_LEG_C_FACTS = 28;
+export const V3_LEG_C_FACTS = 36;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {

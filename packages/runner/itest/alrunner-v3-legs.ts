@@ -421,6 +421,13 @@ export const V3_DB_LEG = "DB";
 /** R948: leg ISO's session under `--isolate-tests` with the daemon baseline and the memory guard on (the per-test path). */
 export const V3_DBI_LEG = "DBI";
 
+/**
+ * PR-114a: the daemon baseline over `sandbox-optin` (4 test codeunits, no OnRun), against the same
+ * fixture with the one-shot baseline: per mutant equal, one request per codeunit. Batching is off, so
+ * these are today's counts; PR-114b turns batching on for this leg. Not in `V3_GATE_LEGS`, as DB and DBI are not.
+ */
+export const V3_DBM_LEG = "DBM";
+
 /** What `AlRunnerV3Backend.daemonBaselineReport()` says, as far as the legs read it. */
 export interface DaemonBaselineFacts {
   readonly served: number;
@@ -558,6 +565,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     V3_S1E_LEG,
     V3_DB_LEG, // R948: not in V3_GATE_LEGS, as ISO is not
     V3_DBI_LEG, // R948: the per-test path, likewise
+    V3_DBM_LEG, // PR-114a: the daemon baseline over several codeunits; likewise
     "S3",
     "N1",
     V3_N1E_LEG,
