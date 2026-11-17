@@ -2320,6 +2320,121 @@ dotnet
 };
 
 /**
+ * PR-133: two refusal texts DO's x2 window still closed its serve daemon on, each driven by an invented cell (no corpus source
+ * text); the C* text has a second, nested cell. Cell i is codeunit BASE_ID + 1 + i (51001 to 51003); the support objects are
+ * table 51000, codeunit 51000 and pages 51000 and 51001, all inside the family's id block (51000 to 51004).
+ */
+export const X2_REFUSALS: Family = {
+  name: "x2-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "X2 Row"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; BigInteger) { }
+        field(3; Trig; Integer)
+        {
+            trigger OnValidate()
+            var
+                R: Record "X2 Row";
+            begin
+                R.SetFilter(Amount, 'C*');
+                if R.FindFirst() then;
+            end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "X2 Helper"
+{
+    [TryFunction]
+    procedure ValidateTrig(var R: Record "X2 Row")
+    begin
+        R.Validate(Trig, 1);
+    end;
+}
+
+page 51000 "X2 Wizard"
+{
+    PageType = Card;
+    SourceTable = "X2 Row";
+    UsageCategory = None;
+    layout { area(Content) { field(IdCtl; Rec.Id) { ApplicationArea = All; } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(Go)
+            {
+                ApplicationArea = All;
+                trigger OnAction()
+                var
+                    Helper: Codeunit "X2 Helper";
+                    Row: Record "X2 Row";
+                begin
+                    Row.Id := 1;
+                    if not Helper.ValidateTrig(Row) then;
+                end;
+            }
+        }
+    }
+}
+
+page 51001 "X2 Card"
+{
+    PageType = Card;
+    SourceTable = "X2 Row";
+    UsageCategory = None;
+    layout { area(Content) { field(IdCtl; Rec.Id) { ApplicationArea = All; } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(OpenWizard)
+            {
+                ApplicationArea = All;
+                trigger OnAction()
+                begin
+                    Page.RunModal(Page::"X2 Wizard");
+                end;
+            }
+        }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9(
+      "Filter",
+      "SetFilterBigIntWildcard",
+      "C*",
+      "R.SetFilter(Amount, 'C*'); if R.FindFirst() then;",
+      {
+        vars: ['R: Record "X2 Row";'],
+      },
+    ),
+    t9("RecordRef", "GetTable", "Integer 123", "RR.GetTable(V);", {
+      vars: ["RR: RecordRef;", "V: Variant;"],
+      setup: ["V := 123;"],
+    }),
+    // PR-133 amendment 1: the C* text reached as DO reaches it: a card TestPage action runs a wizard with Page.RunModal,
+    // a modal handler invokes the wizard's action, which calls a [TryFunction] that validates a field whose OnValidate
+    // runs the SetFilter. The refusal must unwind through all of it.
+    t9("Page", "NestedValidate", "C*", "TP.OpenWizard.Invoke();", {
+      vars: ['R: Record "X2 Row";', 'TP: TestPage "X2 Card";'],
+      setup: ["R.Id := 1;", "R.Insert();", "TP.OpenView();"],
+      handlers: [
+        '    [ModalPageHandler]\n    procedure WizHandler(var W: TestPage "X2 Wizard")\n    begin\n        W.Go.Invoke();\n    end;\n',
+      ],
+    }),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -4731,6 +4846,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [T10_REFUSALS.name]: T10_REFUSALS,
   // PR-105: appended (BC-check number 18): the refusal texts t12 and t13 still closed on, for a keep census
   [T12_REFUSALS.name]: T12_REFUSALS,
+  // PR-133: appended (BC-check number 19): the two refusal texts DO's x2 window closed on, for a keep census
+  [X2_REFUSALS.name]: X2_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

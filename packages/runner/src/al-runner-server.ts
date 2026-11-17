@@ -769,7 +769,10 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   DATETEXT: "(?:-1M|-2026-09-01)",
   // PR-105 added C10000 (t12/t13), and the Evaluate whitespace widths (runs of NUL characters, 4 to 6) and the two
   // Integer texts (`=18`, `1=18`) the same way: measured, by name.
-  BIGCODE: "(?:GL00000000|GU00000001|C10000)",
+  // PR-133 added C\* (the regex-escaped text `C*`), measured by family `x2-refusals`, census CLEAN at
+  // /coord/handoff/PR-133/census2/ with two refusers: a plain SetFilter, and one that unwinds through a TryFunction,
+  // an OnValidate, a ModalPageHandler and an open TestPage (the state DO reaches it in).
+  BIGCODE: String.raw`(?:GL00000000|GU00000001|C10000|C\*)`,
   NULS: String.raw`\x00{4,6}`,
   INTTEXT: "(?:=18|1=18)",
   // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
@@ -1108,6 +1111,14 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "report-saveas2-untouched-handle",
     "Report.SaveAs#2 to an untouched handle, which is not an OutStream",
   ],
+  // PR-133 (coord PR-133, spec 2026-11-17-pr133-x2-restarts-precommitment.md): two of the texts DO's x2 window
+  // still closed its daemon on, each driven by an invented cell of family `x2-refusals` to the exact text and
+  // measured CLEAN by PR-54's strict census (`--refusers 7`, `/coord/handoff/PR-133/census2/`): `C*` joins BIGCODE
+  // above, and the GetTable entry below is new.
+  // Not kept: Report.RunRequestPage (DO reaches it with no request-page handler, on a BaseApp report, inside an
+  // open write transaction, and nothing measured what report code runs before the refusal: spec r2 H1/H2), the
+  // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
+  ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer 123"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
