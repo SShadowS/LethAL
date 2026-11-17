@@ -448,6 +448,18 @@ linuxOnly("T19: the v3 update gate", () => {
       );
     });
 
+    test("L: a receipt that does not qualify because a capability fact did not read matches names that fact in the log", async () => {
+      await setup();
+      const bad = { ...ALL, "batch-lane-hint-only": "diverged" };
+      const f = fake({ outcome: "pass", batchFacts: bad, legs: withDbm("pass") });
+      await updateOnce(f.deps);
+      expect(f.seen.logs.join("\n")).toContain(
+        "gate record does not allow baseline batching (the gate read batch-lane-hint-only diverged)",
+      );
+      expect("batchFacts" in (await gatedOf())).toBe(false);
+      expect(batchingRecordLine(undefined, true, ALL)).toContain("no batchFacts");
+    });
+
     test("batchingRecordLine: each reason by name; the pin half of the Sleep rule", () => {
       expect(batchingRecordLine(ALL, true)).toBe("gate record allows baseline batching");
       expect(batchingRecordLine(ALL, false)).toMatch(/does not allow .*sleep-is-noop/);

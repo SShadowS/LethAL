@@ -998,7 +998,7 @@ export function baselineBatchingOffReason(
 ): string | undefined {
   const recorded = gated?.batchFacts;
   if (recorded === undefined)
-    return `this build's gate record (lethalCommit ${gated?.lethalCommit ?? "none"}) has no batchFacts`;
+    return `this build's gate record (lethalCommit ${gated?.lethalCommit || "none"}) has no batchFacts`;
   for (const name of V3_CAPABILITY_FACTS) {
     const was = recorded[name];
     if (was === undefined) return `${name} not recorded`;

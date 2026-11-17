@@ -104,6 +104,12 @@ export function warnFactReadings(x: unknown): Readonly<Record<string, string>> |
   return kept.length > 0 ? Object.fromEntries(kept) : undefined;
 }
 
+/** PR-117: `{ batchFacts }` with only the verdicts of `x`, or `{}` when none are left. */
+const batchFactsField = (x: unknown): { batchFacts?: Readonly<Record<string, string>> } => {
+  const b = warnFactReadings(x);
+  return b !== undefined ? { batchFacts: b } : {};
+};
+
 /** The binary is not a gated build. Extends `Error` directly. */
 export class AlRunnerV3UngatedBuildError extends Error {
   constructor(detail: string) {
@@ -212,7 +218,7 @@ export async function checkGated(
         lethalCommit: listed.lethalCommit,
         gatedAt: listed.gatedAt,
         ...(listed.warnFacts !== undefined ? { warnFacts: listed.warnFacts } : {}),
-        ...(listed.batchFacts !== undefined ? { batchFacts: listed.batchFacts } : {}),
+        ...batchFactsField(listed.batchFacts),
         readingsFrom: listed.readingsFrom,
         source: "manifest",
       };

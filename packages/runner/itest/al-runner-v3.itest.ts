@@ -77,6 +77,7 @@ import {
 import {
   type V3BuildPin,
   baselineBatchingFor,
+  baselineBatchingOffReason,
   findV3Pin,
   sleepRuleRetiredFor,
   undoTPin,
@@ -1079,6 +1080,17 @@ async function legDBMRun(scratch: string): Promise<void> {
   must(
     fresh.isBaselineBatching() === expected,
     `DBM: isBaselineBatching() is ${fresh.isBaselineBatching()} without the seam, the build's record, probe and Sleep rule say ${expected}`,
+  );
+  // M1: the reason too, so a status() that threads the wrong record shows as a different sentence.
+  const expectedWhy = baselineBatchingOffReason(
+    fresh.contractResult(),
+    fb?.version ?? "",
+    fb?.binarySha256 ?? "",
+    record,
+  );
+  must(
+    fresh.baselineBatchingOffWhy() === expectedWhy,
+    `DBM: baselineBatchingOffWhy() is ${JSON.stringify(fresh.baselineBatchingOffWhy())}, the build's record, probe and Sleep rule say ${JSON.stringify(expectedWhy)}`,
   );
   // Recorded by the receipt only when batching ran and every check above held.
   dbmBatched = dbmSeam;

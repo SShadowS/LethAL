@@ -504,6 +504,19 @@ async function receiptBatchFacts(
   }
 }
 
+/** PR-117: the receipt's leg C readings whether or not they qualify (for the log line only). */
+async function receiptBatchReading(
+  path: string,
+): Promise<Readonly<Record<string, string>> | undefined> {
+  try {
+    return warnFactReadings(
+      (JSON.parse(await readFile(path, "utf8")) as { batchFacts?: unknown }).batchFacts,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * PR-117: the update log's line for a pass: whether the record just written lets a session batch the
  * baseline. `sleepGone`: the pin half of the Sleep rule (`legC["sleep-is-noop"]` is `gone`).
@@ -511,9 +524,17 @@ async function receiptBatchFacts(
 export function batchingRecordLine(
   batchFacts: Readonly<Record<string, string>> | undefined,
   sleepGone: boolean,
+  /** The receipt's own leg C readings, when it did not qualify: names a fact that did not read `matches`. */
+  receiptRead?: Readonly<Record<string, string>>,
 ): string {
   const why = ((): string | undefined => {
-    if (batchFacts === undefined) return "no batchFacts: DBM did not batch and pass";
+    if (batchFacts === undefined) {
+      for (const n of V3_CAPABILITY_FACTS) {
+        const was = receiptRead?.[n];
+        if (was !== undefined && was !== "matches") return `the gate read ${n} ${was}`;
+      }
+      return "no batchFacts: DBM did not batch and pass";
+    }
     for (const n of V3_CAPABILITY_FACTS) {
       const was = batchFacts[n];
       if (was === undefined) return `${n} not recorded`;
@@ -944,7 +965,7 @@ export async function gateOne(
     // PR-117: on every pass, whether the record just written lets a session batch.
     const pinForSleep = pinApplied !== undefined ? handV3Pin(pinApplied) : findV3Pin(version, sha);
     await deps.log(
-      `${deps.now()} ${tag}: ${batchingRecordLine(batchFacts, pinForSleep?.legC["sleep-is-noop"]?.verdict === "gone")}`,
+      `${deps.now()} ${tag}: ${batchingRecordLine(batchFacts, pinForSleep?.legC["sleep-is-noop"]?.verdict === "gone", await receiptBatchReading(receipt))}`,
     );
     if (dirName !== undefined) {
       // R814: the row goes to the ledger before `current` moves; `publishPending` commits it.

@@ -1345,6 +1345,57 @@ describe("PR-114a: the eight capability facts", () => {
     });
   }
 
+  // PR-117 (M2): a writer that fails in the batch is not "only the batch half differs": no reference at all.
+  const WRITERS: [string, number][] = [
+    ["batch-no-cross-singleinstance", 50702],
+    ["batch-no-cross-library-global", 50712],
+    ["batch-no-cross-row", 50722],
+    ["batch-no-cross-subscriber", 50733],
+  ];
+  for (const [fact, writer] of WRITERS) {
+    test(`PR-117 ${fact}: the writer failing in the batch while the reader passes alone leaves no reference, so diverged gate-fails`, async () => {
+      const r = await readOf((n, q, def) =>
+        n === fact && q.test === undefined && "tests" in def
+          ? {
+              ...def,
+              tests: def.tests.map((t) =>
+                String(t.name).startsWith(`Codeunit${writer}.`)
+                  ? { ...t, status: "fail", message: "writer broke" }
+                  : t,
+              ),
+            }
+          : def,
+      );
+      const f = r.f(fact);
+      expect(f?.verdict).toBe("diverged");
+      expect(f !== undefined && "reference" in f).toBe(false);
+      expect(
+        classifyLegC(r.r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, undefined, undefined, [
+          ...V3_CAPABILITY_FACTS,
+        ]).outcome,
+      ).toBe("gate-fail");
+    });
+  }
+
+  // PR-117 (M3): a fact with no alone reference by design carries no `reference` field.
+  test("PR-117: the three judges with no alone reference emit no reference, whatever they read", async () => {
+    const NONE = [
+      "batch-onrun-included-duplicates",
+      "batch-lane-hint-only",
+      "batch-lane-strict-reruns",
+    ];
+    const ok = await readOf();
+    const bad = await readOf((n, _q, def) =>
+      NONE.includes(n) && "tests" in def ? { ...def, tests: [], summary: {} } : def,
+    );
+    for (const n of NONE) {
+      expect(ok.f(n)?.verdict, n).toBe("matches");
+      expect(bad.f(n)?.verdict, n).toBe("diverged");
+      for (const x of [ok.f(n), bad.f(n)])
+        expect(x !== undefined && "reference" in x, n).toBe(false);
+    }
+  });
+
   test("Windows-style paths: the scratch folders arrive with backslashes and every fact still reads matches", async () => {
     const serve = fakeServe();
     const win: ServerSpawnFn = (argv, opts) => {

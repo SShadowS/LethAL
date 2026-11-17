@@ -131,6 +131,14 @@ describe("PR-117: baselineBatchingFor follows the build's own gate record", () =
     });
   });
 
+  test("L: an empty lethalCommit (a candidate's record) prints none in the off reason", () => {
+    withPin({}, () => {
+      expect(baselineBatchingOffReason(probe(), VERSION, SHA, { lethalCommit: "" })).toBe(
+        "this build's gate record (lethalCommit none) has no batchFacts",
+      );
+    });
+  });
+
   test("M-3: off when the probe alone reads eight matches and there is no record (no candidate rule)", () => {
     withPin({}, () => {
       expect(baselineBatchingFor(probe(), VERSION, SHA, undefined)).toBe(false);

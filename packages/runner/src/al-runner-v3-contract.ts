@@ -138,7 +138,8 @@ export interface V3Fact {
   /**
    * PR-117 (`capability` facts only): how the single (alone) request read, apart from the batch half.
    * `pass`: it was right (a `diverged` fact then means only batching is off); `fail`: the single
-   * request itself is wrong; `none`: this fact has no alone reference, or it ran nothing.
+   * request itself is wrong; `none`: the alone reference ran and returned nothing. Absent: this fact has
+   * no alone reference by design (or its writer did not pass in the batch), or it is not a capability fact.
    */
   readonly reference?: "pass" | "fail" | "none";
 }
@@ -1929,10 +1930,14 @@ function noCrossSpec(
         w.every((x) => x.status === "pass") &&
         sameRows(r, ref) &&
         rowsOf(batch, spare).length === 0;
+      // PR-117 (M2): "pass" only when the reader alone AND the writer's rows in the batch all pass; a writer that
+      // fails or is missing in the batch is not "only the batch half differs", so no reference (a diverged gate-fails).
+      const reference = referenceOf(ref);
+      const writerFine = w.length > 0 && w.every((x) => x.status === "pass");
       return {
         ok,
         measured: `alone: ${rowText(ref)}; batch writer: ${rowText(w)}; batch reader: ${rowText(r)}`,
-        reference: referenceOf(ref),
+        ...(reference === "pass" && !writerFine ? {} : { reference }),
       };
     },
   };
