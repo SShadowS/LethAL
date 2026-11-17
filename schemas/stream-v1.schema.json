@@ -1992,6 +1992,25 @@
         "lane": {
           "type": "number"
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "prefetch",
+            "live"
+          ]
+        },
+        "daemonRequest": {
+          "type": "number"
+        },
+        "fresh": {
+          "const": true
+        },
+        "proved": {
+          "type": "number"
+        },
+        "proveGrowth": {
+          "type": "number"
+        },
         "calls": {
           "type": "array",
           "items": {

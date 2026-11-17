@@ -497,6 +497,16 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 export type V3RequestSized = {
   /** PR-99: the lane (0 = the owner's) whose daemon served the request. */
   readonly lane?: number;
+  /** PR-103: the request's kind. */
+  readonly kind?: "prefetch" | "live";
+  /** PR-103: the daemon's request count at this request (`daemon.requests`, as R952 counts it). */
+  readonly daemonRequest?: number;
+  /** PR-103: present when `ensureDaemon` started a new daemon for this request. */
+  readonly fresh?: true;
+  /** PR-103: the codeunits `ensureDaemon` proved lazily for this request; present only when above 0. */
+  readonly proved?: number;
+  /** PR-103: the daemon's RSS just after those proofs less its RSS just before, bytes (same pid, both reads). */
+  readonly proveGrowth?: number;
   readonly calls: readonly {
     readonly call: number;
     readonly entries: number;
