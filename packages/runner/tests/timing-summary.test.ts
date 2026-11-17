@@ -1,14 +1,19 @@
 // PR-100: the TIMING section folded from a run's events. Spec
-// docs/superpowers/specs/2026-11-17-pr100-timing-visibility.md §3.
+// docs/superpowers/specs/2026-11-17-pr100-timing-visibility.md §3 and addendum 1.
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { RunEvent } from "../src/events";
-import { foldTiming, parseEventsNdjson } from "../src/timing-summary";
+import { foldTiming, foldTimingFile } from "../src/timing-summary";
 
 const ev = (e: Record<string, unknown>): RunEvent => e as unknown as RunEvent;
 const phase = (p: string, elapsedMs: number) => ev({ type: "phase-left", phase: p, elapsedMs });
 const timed = (e: Record<string, unknown>) => ev({ type: "serve-request-timed", ...e });
 const closed = (e: Record<string, unknown>) => ev({ type: "serve-daemon-closed", ...e });
-const scored = (verdict: string) => ev({ type: "mutant-scored", verdict });
+let nextMutant = 0;
+const scored = (verdict: string, mutantId = `M${nextMutant++}`, batchIndex = 0) =>
+  ev({ type: "mutant-scored", verdict, batchIndex, mutant: { mutantId } });
 const finished = ev({ type: "session-finished", elapsedMs: 1 });
 
 const FIXED: RunEvent[] = [
@@ -66,16 +71,29 @@ describe("PR-100: foldTiming", () => {
     const text = foldTiming(FIXED);
     expect(text).toBe(
       [
-        "TIMING (wall clock)",
+        "TIMING",
         "  phases: generate 9.9 s, deploy 26.4 s, baseline 300.6 s, mutants 1,830.0 s, teardown 0.0 s",
         "  serve requests: warm-up 4 (22.1 s), prefetch 2 (1,231.5 s), live 2 (574.0 s); selected-only 2",
         "    warm-ups by cause: first 2 (5.1 s), after-refusal 1 (10.2 s), recycle 1 (6.8 s)",
         "    al-runner inside them: setup 1.2 s, compile 12.0 s, engine 3.1 s, baseline 1.9 s, tests 1,600.0 s, coverage 0.0 s, other 7.3 s",
         "  daemon restarts: 4 — refusal/WithEvents subscriber … in prefetch 2, recycle 1, timeout in live 1",
-        "  timeouts: 1 mutants timeout-killed, 1 answers cut at a timeout row",
+        "  timeouts: 1 mutant timeout-killed, 1 answer cut at a timeout row",
         "  per covered mutant: 457.50 s (4 scored with coverage over the mutants phase)",
       ].join("\n"),
     );
+  });
+
+  test("counts take the plural form from 2 up, and a baseline-phase restart reads 'in baseline'", () => {
+    const text = foldTiming([
+      scored("timeout-killed"),
+      scored("timeout-killed"),
+      timed({ kind: "prefetch", lane: 0, wallMs: 1, entries: 1, tests: 1, cut: true }),
+      timed({ kind: "prefetch", lane: 0, wallMs: 1, entries: 1, tests: 1, cut: true }),
+      closed({ reason: "timeout", phase: "baseline" }),
+      finished,
+    ]);
+    expect(text).toContain("2 mutants timeout-killed, 2 answers cut at a timeout row");
+    expect(text).toContain("timeout in baseline 1");
   });
 
   test("a restart family is cut at 40 characters", () => {
@@ -87,17 +105,33 @@ describe("PR-100: foldTiming", () => {
     expect(text).not.toContain("x".repeat(41));
   });
 
-  test("per covered mutant excludes no-coverage", () => {
+  test("per covered mutant excludes no-coverage and known-survivor", () => {
     const base = [phase("mutants", 10_000), finished];
     const one = foldTiming([
       ...base,
       scored("killed"),
       scored("no-coverage"),
+      scored("known-survivor"),
       scored("no-coverage"),
     ]);
     expect(one).toContain("per covered mutant: 10.00 s (1 scored with coverage");
     const two = foldTiming([...base, scored("killed"), scored("survived")]);
     expect(two).toContain("per covered mutant: 5.00 s (2 scored");
+  });
+
+  test("a mutant scored again after batch-invalidated counts once, by its last verdict", () => {
+    const text = foldTiming([
+      phase("mutants", 10_000),
+      scored("killed", "M1", 0),
+      scored("killed", "M2", 0),
+      // batch 0 was invalidated and re-run: both mutants are scored again
+      scored("killed", "M1", 0),
+      scored("no-coverage", "M2", 0),
+      // the same id in another batch is another mutant
+      scored("survived", "M1", 1),
+      finished,
+    ]);
+    expect(text).toContain("per covered mutant: 5.00 s (2 scored");
   });
 
   test("per covered mutant is omitted at 0, never '0 s'", () => {
@@ -111,6 +145,15 @@ describe("PR-100: foldTiming", () => {
     expect(text?.split("\n")[0]).toBe("TIMING (partial: the run did not finish)");
   });
 
+  test("the header says serve times are summed when more than one lane ran", () => {
+    const lane = (n: number) =>
+      timed({ kind: "live", lane: n, wallMs: 1_000, entries: 1, tests: 1 });
+    expect(foldTiming([lane(0), lane(0), finished])?.split("\n")[0]).toBe("TIMING");
+    expect(foldTiming([lane(0), lane(1), finished])?.split("\n")[0]).toBe(
+      "TIMING (serve times are summed over lanes)",
+    );
+  });
+
   test("a stream from a non-serve backend shows phases and per-mutant only", () => {
     const text = foldTiming([
       phase("deploy", 2_000),
@@ -122,7 +165,7 @@ describe("PR-100: foldTiming", () => {
     ]);
     expect(text).toBe(
       [
-        "TIMING (wall clock)",
+        "TIMING",
         "  phases: deploy 2.0 s, mutants 6.0 s",
         "  per covered mutant: 2.00 s (3 scored with coverage over the mutants phase)",
       ].join("\n"),
@@ -132,16 +175,58 @@ describe("PR-100: foldTiming", () => {
   test("an empty stream gives no section", () => {
     expect(foldTiming([])).toBeUndefined();
   });
+});
 
-  test("parseEventsNdjson skips the header and unknown lines, and a cut last line, but not a bad middle one", () => {
-    const good = JSON.stringify({ type: "phase-left", phase: "deploy", elapsedMs: 1 });
-    const text = [
-      JSON.stringify({ ndjsonHeader: true, streamSchemaVersion: 1 }),
-      good,
-      JSON.stringify({ nothing: 1 }),
-      '{"type":"phase-le',
-    ].join("\n");
-    expect(parseEventsNdjson(text)).toHaveLength(1);
-    expect(() => parseEventsNdjson(`{"type":\n${good}\n`)).toThrow(/line 1/);
+describe("PR-100: foldTimingFile streams the events file", () => {
+  const scratchFile = (lines: string[]): { path: string; done: () => void } => {
+    const dir = mkdtempSync(join(tmpdir(), "lethal-pr100-events-"));
+    const path = join(dir, "events.ndjson");
+    writeFileSync(path, lines.join("\n"), "utf8");
+    return { path, done: () => rmSync(dir, { recursive: true, force: true }) };
+  };
+
+  test("a generated 200,000-line file folds to the right counts", async () => {
+    const lines = [JSON.stringify({ ndjsonHeader: true, streamSchemaVersion: 1 })];
+    lines.push(JSON.stringify({ type: "phase-left", phase: "mutants", elapsedMs: 200_000 }));
+    for (let i = 0; i < 199_995; i++)
+      lines.push(
+        JSON.stringify({
+          type: "mutant-scored",
+          verdict: i % 2 === 0 ? "killed" : "no-coverage",
+          batchIndex: 0,
+          mutant: { mutantId: `M${i}` },
+        }),
+      );
+    lines.push(JSON.stringify({ type: "from-the-future", x: 1 }));
+    lines.push(JSON.stringify({ type: "session-finished", elapsedMs: 1 }));
+    lines.push('{"type":"phase-le'); // a killed run's cut last write
+    expect(lines.length).toBe(200_000);
+    const f = scratchFile(lines);
+    try {
+      const text = await foldTimingFile(f.path);
+      // 99,998 covered of 199,995 scored, over 200 s
+      expect(text).toContain("per covered mutant: 0.00 s (99998 scored with coverage");
+      expect(text?.split("\n")[0]).toBe("TIMING");
+    } finally {
+      f.done();
+    }
+  });
+
+  test("a corrupt line names its real file line, blank lines counted; a cut last line is skipped", async () => {
+    const good = JSON.stringify({ type: "phase-left", phase: "deploy", elapsedMs: 1000 });
+    const bad = scratchFile([good, "", "", '{"type":', good]);
+    try {
+      await expect(foldTimingFile(bad.path)).rejects.toThrow(
+        "events file line 4 is not valid JSON",
+      );
+    } finally {
+      bad.done();
+    }
+    const cut = scratchFile([good, "", '{"type":"phase-le', ""]);
+    try {
+      expect(await foldTimingFile(cut.path)).toContain("deploy 1.0 s");
+    } finally {
+      cut.done();
+    }
   });
 });

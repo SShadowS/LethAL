@@ -10459,7 +10459,8 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
     expect(bad).toHaveLength(1);
     expect(bad[0]?.kind).toBe("prefetch");
     expect(bad[0]?.timings).toBeUndefined();
-    expect(closed.map((c) => c.reason)).toContain("request-failed");
+    // the close that ends a thrown request is stamped with that request's kind
+    expect(closed).toContainEqual({ reason: "request-failed", phase: "prefetch" });
   });
 
   test("an answer cut at a timeout row is timed with cut, and has no timings", async () => {
@@ -10540,6 +10541,74 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
     expect(c.timed.filter((e) => e.kind !== "warmup").every((e) => e.cause === undefined)).toBe(
       true,
     );
+  });
+
+  test("a restarted daemon: its first warm-up carries the restart's cause, every later lazy one is lazy-prove", async () => {
+    const P1 = [ref("A"), ref("B")]; // codeunit CU
+    const P2 = [ref("C", CU2)]; // codeunit CU2
+    const { r, timed } = await watchedRig({
+      serve: { rows: timedOutFor("M0002") },
+      suite: SUITE2,
+      seams: { sleepRuleRetired: true }, // the only build a request is cut on
+    });
+    await baseline(r.b, SUITE2);
+    // M0002's A times out: the request is cut there, daemon 0 closes (timeout), M0003 is re-sent on a
+    // fresh daemon, which first proves CU (cause: the timeout).
+    await r.b.prefetchMutants([
+      { mutantId: "M0001", refs: P1 },
+      { mutantId: "M0002", refs: P1 },
+      { mutantId: "M0003", refs: P1 },
+    ]);
+    // the same daemon then meets CU2 for the first time: a second, lazy warm-up
+    await r.b.prefetchMutants([{ mutantId: "M0004", refs: P2 }]);
+    expect(warmupCauses(timed)).toEqual(["first", "after-timeout", "lazy-prove"]);
+  });
+
+  test("a baseline daemon's close never sets a mutant warm-up's cause: after a baseline timeout the first mutant warm-up says first", async () => {
+    // The baseline daemon (daemon 0) times out on codeunit CU's first request and is closed; the mutant
+    // phase's own daemon then starts for the first time.
+    const timedOutAtBaseline: RowsFn = (m, cu, d, n) =>
+      d === 0 && cu === CU
+        ? [
+            { method: "A", status: "error" as const, notRun: true, message: TIMEOUT_1S },
+            { method: "B", status: "pass" as const },
+          ]
+        : allPass(m, cu, d, n);
+    const r = await dbRig({ serve: { rows: timedOutAtBaseline } });
+    const timed: V3RequestTimed[] = [];
+    const closed: { reason: string; phase: string }[] = [];
+    r.b.setRequestTimedSink((e) => timed.push(e));
+    r.b.setDaemonCloseSink((c) => closed.push({ reason: c.reason, phase: c.phase }));
+    await baseline(r.b, SUITE3);
+    // a close during a plain() request says baseline
+    expect(closed).toContainEqual({ reason: "timeout", phase: "baseline" });
+    await r.b.prefetchMutants(plans(["M0001"], SUITE3)).catch(() => undefined);
+    expect(warmupCauses(timed)[0]).toBe("first");
+  });
+
+  test("a close inside a plain() request (a failed baseline request) says baseline", async () => {
+    const r = await dbRig({
+      serve: {
+        answer: (q) =>
+          q.ids[0]?.startsWith("plain:") === true && q.daemon === 0
+            ? { lines: [], eof: true }
+            : undefined,
+      },
+    });
+    const closed: { reason: string; phase: string }[] = [];
+    r.b.setDaemonCloseSink((c) => closed.push({ reason: c.reason, phase: c.phase }));
+    await baseline(r.b, SUITE3).catch(() => undefined);
+    expect(closed).toContainEqual({ reason: "request-failed", phase: "baseline" });
+  });
+
+  test("a redeploy sets after-deploy on a lane that held no daemon when it came", async () => {
+    // daemon 0 closes for a refusal and the lane holds none; the redeploy still counts for its next start
+    const { r, timed } = await watchedRig({ serve: { rows: refusedFor("M0001") } });
+    await r.b.prefetchMutants(plans(["M0001"]));
+    await r.b.deploy(r.l.batch);
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0002"]));
+    expect(warmupCauses(timed).at(-1)).toBe("after-deploy");
   });
 
   test("warmupCause maps a close reason to the cause", () => {

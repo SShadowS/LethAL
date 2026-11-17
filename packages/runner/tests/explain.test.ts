@@ -2545,7 +2545,7 @@ describe("lethal explain — CLI", () => {
       [
         { ndjsonHeader: true, streamSchemaVersion: 1 },
         { type: "phase-left", phase: "mutants", elapsedMs: 4000 },
-        { type: "mutant-scored", verdict: "killed" },
+        { type: "mutant-scored", verdict: "killed", batchIndex: 0, mutant: { mutantId: "M1" } },
         { type: "from-the-future", x: 1 },
         { type: "session-finished", elapsedMs: 1 },
       ]
@@ -2570,14 +2570,16 @@ describe("lethal explain — CLI", () => {
     expect(JSON.parse(out.join("\n")).explainSchemaVersion).toBe(EXPLAIN_SCHEMA_VERSION);
     expect(err).toContain(
       [
-        "TIMING (wall clock)",
+        "TIMING",
         "  phases: mutants 4.0 s",
         "  per covered mutant: 4.00 s (1 scored with coverage over the mutants phase)",
       ].join("\n"),
     );
   });
 
-  test("--events is refused with --json, by name: the events file is the machine surface", () => {
+  // Not new behaviour: explain refuses --json with or without --events (the shared flag-owner rule).
+  // Kept to pin that --events does not open it.
+  test("--json stays refused for explain when --events is given too", () => {
     expect(() =>
       parseCliConfig(["explain", "report.json", "--events", "run.ndjson", "--json"]),
     ).toThrow(/--json is only accepted by .*not `lethal explain`/);

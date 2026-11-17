@@ -3,6 +3,8 @@
  * stderr at the session's end) and `lethal explain <report> --events <events.ndjson>`, on any backend.
  * Timing only: nothing here is read by a verdict.
  */
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import type { RunEvent } from "./events";
 
 const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown"] as const;
@@ -39,9 +41,10 @@ export function createTimingFold(): TimingFold {
   const restarts = new Map<string, number>();
   let selectedOnly = 0;
   let restartTotal = 0;
-  let timeoutKilled = 0;
   let cuts = 0;
-  let covered = 0;
+  /** The LAST verdict per mutant (a `batch-invalidated` batch scores its mutants again). */
+  const verdicts = new Map<string, string>();
+  const lanes = new Set<number>();
   let finished = false;
 
   const bump = (m: Map<string, { n: number; ms: number }>, k: string, ms: number): void => {
@@ -59,10 +62,10 @@ export function createTimingFold(): TimingFold {
           finished = true;
           break;
         case "mutant-scored":
-          if (e.verdict !== "no-coverage") covered += 1;
-          if (e.verdict === "timeout-killed") timeoutKilled += 1;
+          verdicts.set(`${e.batchIndex}/${e.mutant.mutantId}`, e.verdict);
           break;
         case "serve-request-timed":
+          lanes.add(e.lane);
           bump(kinds, e.kind, e.wallMs);
           if (e.selectedOnly === true) selectedOnly += 1;
           if (e.cut === true) cuts += 1;
@@ -124,9 +127,16 @@ export function createTimingFold(): TimingFold {
         lines.push(`  daemon restarts: ${restartTotal} — ${parts.join(", ")}`);
       }
 
+      let timeoutKilled = 0;
+      let covered = 0;
+      for (const v of verdicts.values()) {
+        if (v === "timeout-killed") timeoutKilled += 1;
+        if (v !== "no-coverage" && v !== "known-survivor") covered += 1;
+      }
+      const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
       if (timeoutKilled > 0 || cuts > 0)
         lines.push(
-          `  timeouts: ${timeoutKilled} mutants timeout-killed, ${cuts} answers cut at a timeout row`,
+          `  timeouts: ${plural(timeoutKilled, "mutant")} timeout-killed, ${plural(cuts, "answer")} cut at a timeout row`,
         );
 
       const mutantsMs = phaseMs.get("mutants");
@@ -136,7 +146,11 @@ export function createTimingFold(): TimingFold {
         );
 
       if (lines.length === 0) return undefined;
-      const head = finished ? "TIMING (wall clock)" : "TIMING (partial: the run did not finish)";
+      const head = !finished
+        ? "TIMING (partial: the run did not finish)"
+        : lanes.size > 1
+          ? "TIMING (serve times are summed over lanes)"
+          : "TIMING";
       return [head, ...lines].join("\n");
     },
   };
@@ -147,23 +161,36 @@ export function createTimingFold(): TimingFold {
  * without a string `type` are skipped. A last line that does not parse is a killed run's cut write
  * and is skipped; any other unparsable line is a corrupt file and throws.
  */
-export function parseEventsNdjson(text: string): RunEvent[] {
-  const lines = text.split("\n").filter((l) => l.trim() !== "");
-  const out: RunEvent[] = [];
-  for (const [i, line] of lines.entries()) {
+export async function foldTimingFile(path: string): Promise<string | undefined> {
+  const fold = createTimingFold();
+  const feed = (line: string, no: number, last: boolean): void => {
     let v: unknown;
     try {
       v = JSON.parse(line);
     } catch {
-      if (i === lines.length - 1) continue;
-      throw new Error(`events file line ${i + 1} is not valid JSON.`);
+      if (last) return;
+      throw new Error(`events file line ${no} is not valid JSON.`);
     }
-    if (typeof v !== "object" || v === null) continue;
+    if (typeof v !== "object" || v === null) return;
     const r = v as Record<string, unknown>;
-    if (r.ndjsonHeader === true || typeof r.type !== "string") continue;
-    out.push(v as RunEvent);
+    if (r.ndjsonHeader === true || typeof r.type !== "string") return;
+    fold.add(v as RunEvent);
+  };
+  // One line of lookahead: the last non-blank line is the only one allowed to be a cut write.
+  let pending: { readonly line: string; readonly no: number } | undefined;
+  let no = 0;
+  const rl = createInterface({
+    input: createReadStream(path, { encoding: "utf8" }),
+    crlfDelay: Number.POSITIVE_INFINITY,
+  });
+  for await (const line of rl) {
+    no += 1;
+    if (line.trim() === "") continue;
+    if (pending !== undefined) feed(pending.line, pending.no, false);
+    pending = { line, no };
   }
-  return out;
+  if (pending !== undefined) feed(pending.line, pending.no, true);
+  return fold.render();
 }
 
 /** PR-100: the TIMING section for a whole event list (any backend); `undefined` when nothing is in it. */

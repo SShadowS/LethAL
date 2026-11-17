@@ -667,7 +667,7 @@ export interface ExecutionBackend {
       readonly text?: string;
       readonly test?: string;
       /** PR-100: the request kind in flight on the lane when it closed, else `idle`. */
-      readonly phase?: "warmup" | "prefetch" | "live" | "idle";
+      readonly phase?: "warmup" | "prefetch" | "live" | "baseline" | "idle";
     }) => void,
   ): void;
   /**

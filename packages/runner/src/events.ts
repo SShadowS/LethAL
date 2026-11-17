@@ -569,10 +569,10 @@ export type RunEventInput =
       /** R1009: the refused row's test name (`Codeunit<id>.<method>`), so its shape can be reduced. */
       readonly test?: string;
       /**
-       * PR-100: the request kind in flight on that lane when it closed (`warmup`, `prefetch`, `live`),
-       * or `idle` when none was.
+       * PR-100: the request kind in flight on that lane when it closed (`warmup`, `prefetch`, `live`,
+       * or `baseline` for a baseline, coverage-window or echo request), or `idle` when none was.
        */
-      readonly phase?: "warmup" | "prefetch" | "live" | "idle";
+      readonly phase?: "warmup" | "prefetch" | "live" | "baseline" | "idle";
     }
   | ({
       /**

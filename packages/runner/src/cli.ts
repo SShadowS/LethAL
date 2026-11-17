@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -158,7 +158,7 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
-import { createTimingFold, foldTiming, parseEventsNdjson } from "./timing-summary";
+import { createTimingFold, foldTimingFile } from "./timing-summary";
 import {
   AlRunnerV2RetiredError,
   RETIRED_V2_BACKEND,
@@ -4460,6 +4460,9 @@ export async function runFromCliWithAccept(
         // refuses by name) the first attempt's backend is closed in its `finally` and thrown away;
         // the second is built one-shot and is exactly what an explicit one-shot run is. It carries
         // the row's name for the warning and the status, and nothing else.
+        // PR-100: the latest attempt's TIMING fold (a dropped attempt's is replaced), and the first throw from it.
+        let runTimingFold: ReturnType<typeof createTimingFold> | undefined;
+        let timingFoldError: unknown;
         const attempt = async (serveFallbackWarmup: string | undefined): Promise<SessionReport> => {
           let backend: ExecutionBackend | undefined;
           let store: ResultsStore | undefined;
@@ -4469,8 +4472,6 @@ export async function runFromCliWithAccept(
           let progressOutFd: number | undefined;
           // Issue #22: the highest version an instrumented build was published under this run.
           let highestPublished: string | undefined;
-          // PR-100: the run's TIMING fold, set once the subscribers are built.
-          let timingFoldForRun: ReturnType<typeof createTimingFold> | undefined;
           // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
           // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
           // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
@@ -4519,10 +4520,16 @@ export async function runFromCliWithAccept(
             const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
             // PR-100: folds the run's events into the TIMING section printed once, below.
             const timingFold = createTimingFold();
-            timingFoldForRun = timingFold;
+            runTimingFold = timingFold;
             const emitSubscribers: EventSubscriber[] = [
               progress,
-              (e) => timingFold.add(e),
+              (e) => {
+                try {
+                  timingFold.add(e);
+                } catch (err) {
+                  timingFoldError ??= err;
+                }
+              },
               (e) => {
                 if (e.type !== "batch-published" || e.appVersion === undefined) return;
                 if (
@@ -4639,9 +4646,6 @@ export async function runFromCliWithAccept(
                 );
               }
             }
-            // PR-100: where the time went, once, on stderr (partial when the run threw or was killed).
-            const timingText = timingFoldForRun?.render();
-            if (timingText !== undefined) process.stderr.write(`${timingText}\n`);
             // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
             // posture as `store`/`backend` above — a close failure here must not mask a real error
             // already unwinding through this `finally`, and every event that mattered was already
@@ -4673,22 +4677,45 @@ export async function runFromCliWithAccept(
           }
           return report;
         };
-        try {
-          return await attempt(undefined);
-        } catch (err) {
-          if (!(err instanceof AlRunnerV3ServeFallbackWarmupError)) throw err;
-          // R786: parallel lanes need serve-entries, so a one-shot re-run cannot honour --workers.
-          if (parsed.workers > 1) {
-            throw new Error(
-              `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1${err.wholeRequest ? " (R960: al-runner refused the whole warm-up request)" : ", or exclude that test (R786)"}`,
+        const runAttempts = async (): Promise<SessionReport> => {
+          try {
+            return await attempt(undefined);
+          } catch (err) {
+            if (!(err instanceof AlRunnerV3ServeFallbackWarmupError)) throw err;
+            // R786: parallel lanes need serve-entries, so a one-shot re-run cannot honour --workers.
+            if (parsed.workers > 1) {
+              throw new Error(
+                `al-runner-v3-workers-refused: --workers ${parsed.workers} > 1 needs the serve-entries transport, but the default transport fell back to one-shot at the warm-up (${err.row}: ${err.rowReason}). Run with --workers 1${err.wholeRequest ? " (R960: al-runner refused the whole warm-up request)" : ", or exclude that test (R786)"}`,
+              );
+            }
+            console.warn(
+              `[lethal] ${err.message}. The serve attempt is dropped from this report; the session starts again on one-shot.`,
+            );
+            return await attempt(
+              `${err.row}: ${err.rowReason}${err.abandonedRunId !== undefined ? `; the serve attempt's run ${err.abandonedRunId} stays in the store, marked so --resume skips it` : ""}`,
             );
           }
-          console.warn(
-            `[lethal] ${err.message}. The serve attempt is dropped from this report; the session starts again on one-shot.`,
-          );
-          return await attempt(
-            `${err.row}: ${err.rowReason}${err.abandonedRunId !== undefined ? `; the serve attempt's run ${err.abandonedRunId} stays in the store, marked so --resume skips it` : ""}`,
-          );
+        };
+        // PR-100: the TIMING section is printed once per invocation, after the fallback retry if there
+        // was one (the dropped attempt's events are not in it), and a failure of the fold or the render
+        // costs one stderr line and never replaces the run's own result or error.
+        try {
+          return await runAttempts();
+        } finally {
+          const failed = (err: unknown): void => {
+            process.stderr.write(
+              `[lethal] the TIMING section could not be written: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          };
+          if (timingFoldError !== undefined) failed(timingFoldError);
+          else {
+            try {
+              const text = runTimingFold?.render();
+              if (text !== undefined) process.stderr.write(`${text}\n`);
+            } catch (err) {
+              failed(err);
+            }
+          }
         }
       },
       deps.quarantineDir ?? defaultQuarantineDir(),
@@ -6097,16 +6124,16 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
   // PR-100: read before anything prints, so an unreadable events file leaves stdout empty.
   let timing: string | undefined;
   if (parsed.eventsPath !== undefined) {
-    let text: string;
     try {
-      text = await readFile(parsed.eventsPath, "utf8");
+      await access(parsed.eventsPath);
     } catch (err) {
       throw new Error(
         `explain: could not read ${parsed.eventsPath} — ${err instanceof Error ? err.message : String(err)}. Pass the NDJSON file a run wrote with --progress-out.`,
       );
     }
+    // Streamed line by line: a DO run's events file is hundreds of MB.
     timing =
-      foldTiming(parseEventsNdjson(text)) ??
+      (await foldTimingFile(parsed.eventsPath)) ??
       "TIMING: the events file held no timing data (no phases, serve requests or scored mutants).";
   }
   // R273: composed HERE, never inside `explain()`, so the default output is unchanged by

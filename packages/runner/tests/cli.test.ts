@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { ActivationConfig } from "../src/activation";
+import { AlRunnerV3ServeFallbackWarmupError } from "../src/al-runner-v3-backend";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
   BackendCapabilities,
@@ -71,6 +72,7 @@ import { InstalledBundleError, bundleOfParts, openInstalledBundle } from "../src
 import { LeaseClient, LeaseUnavailableError } from "../src/lease";
 import { defaultQuarantineDir, generateMutationSet } from "../src/orchestrator";
 import { QuarantineStore } from "../src/quarantine-store";
+import type { SessionReport } from "../src/report";
 import { quarantineResourceKey } from "../src/resource-key";
 import { ResultsStore } from "../src/store";
 import {
@@ -2587,47 +2589,104 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
       keepEnv: false,
       allowExpiringEnv: false,
     };
-    const drive = async (finish: boolean): Promise<string[]> => {
-      const sentinel = new Error("PR-100 sentinel");
+    const canned = { validity: { caveats: [] }, mutants: [] } as unknown as SessionReport;
+    const scoredEvent = (id: string) => ({
+      type: "mutant-scored",
+      verdict: "killed",
+      batchIndex: 0,
+      mutant: { mutantId: id },
+    });
+    /** Runs `lethal run` with a fake session per attempt; returns what reached stderr, and how it ended. */
+    const drive = async (
+      attempts: ((send: (e: Record<string, unknown>) => void) => SessionReport)[],
+    ): Promise<{ written: string[]; outcome: "returned" | Error }> => {
       const written: string[] = [];
       const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
         written.push(String(chunk));
         return true;
       }) as typeof process.stderr.write);
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      let n = 0;
       try {
-        await expect(
-          runFromCli(parsed, {
-            validateSelectorIdsForProject: async () => {},
-            resolveEnvToolSession: async (_p, cfg) => ({ effectiveConfig: cfg }),
-            buildBackend: async () => new PassingBackend(),
-            runSession: async (cfg) => {
-              const send = (e: Record<string, unknown>) => {
-                // As the real emitter does: a subscriber that throws on a bare event costs the others nothing.
-                for (const s of cfg.emit ?? []) {
-                  try {
-                    s(e as unknown as RunEvent);
-                  } catch {}
-                }
-              };
-              send({ type: "phase-left", phase: "mutants", elapsedMs: 8000 });
-              send({ type: "mutant-scored", verdict: "killed" });
-              send({ type: "mutant-scored", verdict: "killed" });
-              if (finish) send({ type: "session-finished", elapsedMs: 1 });
-              throw sentinel;
-            },
-          }),
-        ).rejects.toBe(sentinel);
+        await runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          resolveEnvToolSession: async (_p, cfg) => ({ effectiveConfig: cfg }),
+          buildBackend: async () => new PassingBackend(),
+          runSession: async (cfg) => {
+            const send = (e: Record<string, unknown>) => {
+              // As the real emitter does: a subscriber that throws costs the others nothing.
+              for (const s of cfg.emit ?? []) {
+                try {
+                  s(e as unknown as RunEvent);
+                } catch {}
+              }
+            };
+            const run = attempts[n++];
+            if (run === undefined) throw new Error("more attempts than the test scripted");
+            return run(send);
+          },
+        });
+        return { written, outcome: "returned" };
+      } catch (err) {
+        return { written, outcome: err instanceof Error ? err : new Error(String(err)) };
       } finally {
         spy.mockRestore();
+        warn.mockRestore();
       }
-      return written.filter((w) => w.startsWith("TIMING"));
     };
-    expect(await drive(true)).toEqual([
-      "TIMING (wall clock)\n  phases: mutants 8.0 s\n  per covered mutant: 4.00 s (2 scored with coverage over the mutants phase)\n",
+    const timingOf = (w: string[]) => w.filter((x) => x.startsWith("TIMING"));
+    const finishedRun = (send: (e: Record<string, unknown>) => void) => {
+      send({ type: "phase-left", phase: "mutants", elapsedMs: 8000 });
+      send(scoredEvent("M1"));
+      send(scoredEvent("M2"));
+      send({ type: "session-finished", elapsedMs: 1 });
+      return canned;
+    };
+    const FINISHED_TEXT =
+      "TIMING\n  phases: mutants 8.0 s\n  per covered mutant: 4.00 s (2 scored with coverage over the mutants phase)\n";
+
+    // the normal return path
+    const normal = await drive([finishedRun]);
+    expect(normal.outcome).toBe("returned");
+    expect(timingOf(normal.written)).toEqual([FINISHED_TEXT]);
+
+    // a run that threw before it finished: partial, and the run's own error is what comes out
+    const sentinel = new Error("PR-100 sentinel");
+    const threw = await drive([
+      (send) => {
+        send({ type: "phase-left", phase: "mutants", elapsedMs: 8000 });
+        throw sentinel;
+      },
     ]);
-    const partial = await drive(false);
+    expect(threw.outcome).toBe(sentinel);
+    const partial = timingOf(threw.written);
     expect(partial).toHaveLength(1);
     expect(partial[0]?.startsWith("TIMING (partial: the run did not finish)")).toBe(true);
+
+    // R786's one-shot retry: ONE section, from the attempt that stood (the dropped attempt is not in it)
+    const fallback = await drive([
+      (send) => {
+        send({ type: "phase-left", phase: "mutants", elapsedMs: 1000 });
+        throw new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company");
+      },
+      finishedRun,
+    ]);
+    expect(fallback.outcome).toBe("returned");
+    expect(timingOf(fallback.written)).toEqual([FINISHED_TEXT]);
+
+    // a throw inside the fold costs one stderr line and neither the run's report nor its error
+    const broken = await drive([
+      (send) => {
+        send({ type: "mutant-scored", verdict: "killed" }); // no `mutant`: the fold throws
+        send({ type: "session-finished", elapsedMs: 1 });
+        return canned;
+      },
+    ]);
+    expect(broken.outcome).toBe("returned");
+    expect(timingOf(broken.written)).toEqual([]);
+    expect(
+      broken.written.filter((x) => x.includes("the TIMING section could not be written")),
+    ).toHaveLength(1);
   });
 
   // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.

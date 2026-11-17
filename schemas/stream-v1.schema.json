@@ -1836,6 +1836,7 @@
             "warmup",
             "prefetch",
             "live",
+            "baseline",
             "idle"
           ]
         },
