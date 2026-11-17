@@ -12005,6 +12005,7 @@ describe("PR-123: the batched re-check of a reused baseline", () => {
       expect(r2.serve.requests.map((q) => q.body.test)).toEqual([undefined, `Codeunit${CU}.`]);
       expect(singlesOf(r2).map((q) => q.body.coverage === true)).toEqual([false]);
       expect(priv(r2).baselineBatchingSpent).toStartWith("the re-check: ");
+      expect(priv(r2).baselineBatchingSpent).toContain(`test Codeunit${CU}.Extra appears twice`); // step 3
       expect(priv(r2).baselineStats.batchDiscards).toBe(1);
       expect(lineOf(warn)).toContain("1 discarded or failed (the re-check: ");
     } finally {
@@ -12161,11 +12162,12 @@ describe("PR-123: the batched re-check of a reused baseline", () => {
   test("batches are planned over ascending ids, and the checks run in stored order", async () => {
     const f = await stored();
     const { why, r2 } = await resume(f, {
-      // stored order CU7 .. CU; samples CU6, CU4, CU; the first mismatch in STORED order is CU4's, not CU's
+      // stored order CU7 .. CU; samples CU6, CU4, CU. Two failing BATCHED codeunits: CU5 is stored before CU2,
+      // so the reason names CU5 (ascending or batch order would name CU2)
       patch: (s) => ({ ...s, rows: [...(s.rows as unknown[])].reverse() }),
-      rows: failing([CU, "B"], [CU4, "E"]),
+      rows: failing([CU5, "F"], [CU2, "C"]),
     });
-    expect(why).toContain(`codeunit ${CU4}:`);
+    expect(why).toContain(`codeunit ${CU5}:`);
     const first = batchesOf(r2)[0]?.body.excludeTests as string[] | undefined;
     // ascending plan over the non-samples CU2, CU3, CU5, CU7: the first batch is [CU2, CU3]
     expect(first).toContain(`Codeunit${CU4}.`);
