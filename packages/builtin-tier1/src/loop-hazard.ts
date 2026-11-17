@@ -1020,6 +1020,7 @@ export function openItemHangRefuses(
     assignmentCallHangs(node, ctx, op) ||
     toggledExitBlankHangs(node, ctx, op) ||
     removedBoundHangs(node, ctx, op) ||
+    removeNotEosAfterReadHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
       (emptiedProgressCalleeHangs(node, ctx) ||
         emptiedRefusedBlockHangs(node, ctx) ||
@@ -1428,6 +1429,65 @@ function loopBodyWrites(loop: ALSyntaxNode, name: string, ctx: SemanticContext):
     });
   }
   return writes;
+}
+
+/** PR-109 switch: `removeNotEosAfterReadHangs` refuses. Set false only for a red check. */
+const PR109_RULE = true;
+
+/** `S.Member` or `S.Member(...)` on a plain name S: [S, member] (lowercase), else null. */
+function plainMemberCall(n: ALSyntaxNode): [ALSyntaxNode, string] | null {
+  const m = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+  if (m === null || m.rawKind !== "member_expression") return null;
+  const [recv, member] = m.namedChildren;
+  if (recv === undefined || member === undefined || !isIdentifierLike(recv)) return null;
+  if (recv.rawKind !== "identifier" || member.rawKind !== "identifier") return null;
+  return [recv, member.text.trim().toLowerCase()];
+}
+
+/**
+ * PR-109: `remove-not` on `while not S.EOS do` (or `S.EOS()`), with S an `InStream` of this
+ * procedure (local or parameter) that a straight-line `S.Read(..)` / `S.ReadText(..)` has read
+ * BEFORE the loop. R173 ruled the removal safe because EOS is false at the start; after a pre-read
+ * of a short stream it is true, and reading at the end never moves it, so the loop never ends.
+ * Straight-line: the read is a statement of a block that also holds the loop, so the loop cannot
+ * run without it (`if H then begin S.ReadText(T); while not S.EOS do ..; end` counts; a read in
+ * an `if`, loop or `case` the loop is not inside does not). A member or call receiver (`X.S.EOS`), `until S.EOS` and `not (S.EOS and X)`
+ * are not this shape.
+ */
+function removeNotEosAfterReadHangs(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  if (!PR109_RULE || op !== "lethal.remove-not" || node.rawKind !== "unary_expression")
+    return false;
+  const loop = node.parent;
+  // the `not` is the whole condition: its parent is the loop itself
+  if (loop === null || loop.rawKind !== "while_statement") return false;
+  const operand = node.namedChildren[node.namedChildren.length - 1];
+  const eos = operand === undefined ? null : plainMemberCall(operand);
+  if (eos === null || eos[1] !== "eos") return false;
+  const name = normalizeAlName(eos[0].text);
+  const decl = resolveVarRef(eos[0], ctx);
+  if (decl === null || decl.typeText.trim().toLowerCase() !== "instream") return false;
+  let proc: ALSyntaxNode | null = node.parent;
+  while (proc !== null && !isProcedureLike(proc)) proc = proc.parent;
+  if (proc === null) return false;
+  let read = false;
+  visitAll(proc, (n) => {
+    if (read || n.endIndex > loop.startIndex || n.rawKind !== "call_expression") return;
+    const c = plainMemberCall(n);
+    if (c === null || normalizeAlName(c[0].text) !== name || !["read", "readtext"].includes(c[1]))
+      return;
+    // straight-line: a statement of a block that holds the loop, so the loop never runs without it
+    const blk = n.parent;
+    read =
+      blk !== null &&
+      blk.rawKind === "statement_block" &&
+      blk.startIndex <= loop.startIndex &&
+      blk.endIndex >= loop.endIndex;
+  });
+  return read;
 }
 
 /**
