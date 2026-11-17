@@ -221,6 +221,7 @@ import {
   type Latch,
   MAX_V3_WORKERS,
   OrderedCommit,
+  ParallelStopError,
   asParallelOwner,
   lanesNotice,
   runScopeQueue,
@@ -9155,7 +9156,15 @@ async function runSessionBody(
       // any work-plane call (deploy/activate/run) against a tier that may still be stranded.
       if (safety.isUnsafe) break;
     }
-  } catch (err) {
+  } catch (caught) {
+    // PR-99 (build review #1): at N > 1 lane 0's session-first warm-up runs inside a queue unit, so its
+    // R960/R786 fallback arrives wrapped in the queue's stop. Nothing is scored before that warm-up (no lane
+    // >= 1 starts before it), so unwrap it to the raw error it was before the split.
+    const err =
+      caught instanceof ParallelStopError &&
+      caught.cause instanceof AlRunnerV3ServeFallbackWarmupError
+        ? caught.cause
+        : caught;
     // Layer 5C-B1 (design §6): every work-plane dispatch — deploy, activate AND run — is guarded
     // by the latch, and the latch can now be set ASYNCHRONOUSLY (the renew heartbeat fires on a
     // timer, mid-mutant). A guard that refuses a dispatch is the system working as designed, not

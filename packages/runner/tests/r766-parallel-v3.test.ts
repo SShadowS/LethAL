@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
+import { AlRunnerV3ServeFallbackWarmupError } from "../src/al-runner-v3-backend";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -834,6 +835,24 @@ describe("PR-99: the split prefetch, through a session", () => {
     // Every P2 mutant finished before the stop and precedes P3's first mutant: all kept. Blamed on the
     // previous unit's last mutant instead, the last P2 mutant would be the stopping one, with selfKept false.
     expect(sorted(scored)).toEqual(codesOf(procOf, "P2"));
+  });
+
+  test("lane 0's session-first warm-up fallback (R960/R786) reaches the caller raw, and the run is marked abandoned", async () => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    const stub = new ParStub({ procOf });
+    splitOwner(stub, {
+      throwOn: (lane) =>
+        lane === 0 ? new AlRunnerV3ServeFallbackWarmupError("Codeunit1.T", "Company") : undefined,
+    });
+    const store = new ResultsStore(":memory:");
+    const err = await session(root, stub, { workers: 3, store }).catch((e: unknown) => e);
+    // red without the unwrap: a ParallelStopError, so the CLI's named --workers refusal and R786's mark miss
+    expect(err).toBeInstanceOf(AlRunnerV3ServeFallbackWarmupError);
+    const id = (err as AlRunnerV3ServeFallbackWarmupError).abandonedRunId;
+    expect(typeof id).toBe("number");
+    expect(store.getRun(id ?? -1)?.configFingerprint?.endsWith("|abandoned")).toBe(true);
+    store.close();
   });
 
   test("N = 1: the loop records per-unit scoring times and per-window prefetch walls (the scheduling bound's input)", async () => {
