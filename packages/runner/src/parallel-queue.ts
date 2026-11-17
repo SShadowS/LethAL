@@ -426,6 +426,24 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   readonly runUnit: (lane: number, unit: readonly M[], sink: LaneSink) => Promise<void>;
   /** R785: when set, `lanes` is an upper bound and extra lanes start by `LanePace`'s rule. */
   readonly pace?: LanePace<M>;
+  /**
+   * PR-99 (§2.3, §2.5, §10.6-7): the split prefetch. Lane 0 starts at once; lanes above 0 are launched by ONE
+   * callback (`tryLaunch`, a single `nextLane` counter, so no index is launched twice) and never at a unit
+   * boundary: when the barrier has passed (lane 0's session-first warm-up passed `judgeWarmup`), the lane
+   * gate has a reading (`measured`), the window holds at least k + 1 units not yet taken, and `mayStart(k)`
+   * admits it. The callback runs at queue start (a barrier that passed in an earlier window or batch), when
+   * `watch`'s source fires (barrier, a measured request, a released reservation) and after each unit.
+   * R785's `pace` is off under it.
+   */
+  readonly split?: {
+    readonly barrierPassed: () => boolean;
+    readonly measured: () => boolean;
+    readonly watch: (cb: () => void) => () => void;
+    /** A lane above 0 was launched (it reserves its bytes). */
+    readonly onLaunch?: (k: number) => void;
+    /** A lane ended, with or without a measured request (it releases its reservation). */
+    readonly onEnd?: (k: number) => void;
+  };
 }): Promise<{
   readonly started: number;
   readonly warmupMs: number;
@@ -483,11 +501,13 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
       reason = "memory";
     } else launch(k);
   };
+  const split = o.split;
   const launch = (k: number): void => {
     started += 1;
+    if (k > 0) split?.onLaunch?.(k);
     const { sink, current } = o.commit.laneSink();
-    runners.push(
-      (async () => {
+    const runner = (async () => {
+      try {
         for (let unit = take(); unit !== undefined; unit = take()) {
           const t0 = pace?.now() ?? 0;
           const w = pace?.weight(unit) ?? 0;
@@ -504,12 +524,49 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
             costW += w;
           }
           evaluate();
+          tryLaunch();
         }
-      })(),
-    );
+      } finally {
+        if (k > 0) split?.onEnd?.(k);
+      }
+    })();
+    // A lane launched while others run is awaited only later (`allSettled` below): its rejection must not
+    // be reported as unhandled in between; the settled result still carries it.
+    runner.catch(() => {});
+    runners.push(runner);
   };
+  /** PR-99: the ONE launcher of lanes above 0 under the split. A lane that is not admitted now is asked again at the next event. */
+  const tryLaunch = (): void => {
+    if (split === undefined || started === 0) return; // lane 0 first: it takes the first unit
+    while (nextLane < o.lanes) {
+      if (o.commit.closed || o.isUnsafe()) {
+        because("closed");
+        return;
+      }
+      if (!split.barrierPassed() || !split.measured()) {
+        because("unmeasured");
+        return;
+      }
+      const k = nextLane;
+      // Untaken units only fall: a lane that has no unit to take now never will.
+      if (o.units.length - nextUnit < k + 1) {
+        nextLane = o.lanes;
+        because("drained");
+        return;
+      }
+      if (!o.mayStart(k)) {
+        reason = "memory";
+        return;
+      }
+      nextLane += 1;
+      if (reason === "memory") reason = "unmeasured";
+      launch(k);
+    }
+  };
+  const unwatch = split?.watch(tryLaunch);
   launch(0);
-  if (pace === undefined) {
+  tryLaunch();
+  if (pace === undefined && split === undefined) {
     for (let k = 1; k < o.lanes; k++) if (o.mayStart(k)) launch(k);
   }
   // Lanes may start while others run: wait until no runner is left unawaited.
@@ -517,9 +574,11 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   while (settled.length < runners.length) {
     settled.push(...(await Promise.allSettled(runners.slice(settled.length))));
   }
+  unwatch?.();
   o.commit.conclude();
   for (const s of settled) if (s.status === "rejected") throw s.reason;
-  if (pace === undefined) reason = "cap";
+  if (pace === undefined && split === undefined) reason = "cap";
+  if (split !== undefined && started >= o.lanes) reason = "cap";
   return { started, warmupMs: pace?.warmupMs() ?? 0, reason };
 }
 

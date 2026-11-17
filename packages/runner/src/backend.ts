@@ -495,6 +495,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
  * after the reading.
  */
 export type V3RequestSized = {
+  /** PR-99: the lane (0 = the owner's) whose daemon served the request. */
+  readonly lane?: number;
   readonly calls: readonly {
     readonly call: number;
     readonly entries: number;
@@ -936,6 +938,27 @@ export interface ExecutionBackend {
       }[];
     },
   ): Promise<void>;
+
+  /**
+   * PR-99 (§10.2), OPTIONAL: an N = 1 mutant loop hands over what it measured per procedure-scope unit (its
+   * scoring wall, the window prefetch excluded) and per window (the prefetch wall), so the run records the
+   * input of the scheduling bound. Timing only: no verdict reads it.
+   */
+  noteUnitTimings?(t: {
+    readonly units: readonly {
+      readonly window: number;
+      readonly scope: string;
+      readonly mutants: number;
+      readonly entries: number;
+      readonly scoringMs: number;
+    }[];
+    readonly windows: readonly {
+      readonly window: number;
+      readonly mutants: number;
+      readonly entries: number;
+      readonly prefetchMs: number;
+    }[];
+  }): void;
 
   /**
    * R912, OPTIONAL: true when a call for test codeunit `codeunitId` runs the codeunit's WHOLE suite

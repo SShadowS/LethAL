@@ -115,6 +115,8 @@
     "roadmap-next-id.test.ts",
     "roadmap-set.ts",
     "roadmap-set.test.ts",
+    "simulate-lanes.ts",
+    "simulate-lanes.test.ts",
     "verify.ts",
     "verify.test.ts",
     "coord-status.ts",

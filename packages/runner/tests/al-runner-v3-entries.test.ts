@@ -1555,7 +1555,8 @@ describe("R939: why each serve daemon closed", () => {
   const watched = async (rows: RowsFn) => {
     const r = await rig({ serve: { rows }, oneShotRows: allPass });
     const seen: [string, string][] = [];
-    const sunk: { reason: string; family?: string; text?: string; test?: string }[] = [];
+    const sunk: { lane?: number; reason: string; family?: string; text?: string; test?: string }[] =
+      [];
     r.b.setNotify((c, m) => seen.push([c, m]));
     r.b.setDaemonCloseSink((c) => sunk.push({ ...c }));
     await baseline(r.b, SUITE1);
@@ -1571,6 +1572,7 @@ describe("R939: why each serve daemon closed", () => {
     // R1009: the whole first line too, which the family cuts
     expect(sunk).toEqual([
       {
+        lane: 0,
         reason: "refusal",
         family: "WithEvents subscriber …",
         text: WITH_EVENTS,
@@ -2231,7 +2233,8 @@ describe("11, 20: a refusal of the whole request names its reason and re-sends n
     (r.b as unknown as { cfg: { transportSource: string } }).cfg.transportSource = source;
     await baseline(r.b, SUITE1);
     // R960 review a: a session that already warmed a daemon up (another mode, a restart).
-    (r.b as unknown as { stats: { warmups: number } }).stats.warmups = earlierWarmups;
+    // PR-99 (§10.6): the session-scoped flag, no read of the (per-lane) counters.
+    (r.b as unknown as { firstWarmupDone: boolean }).firstWarmupDone = earlierWarmups > 0;
     return r.b.prefetchMutants(plans(["M0001"])).catch((e: unknown) => e);
   };
 
@@ -3410,6 +3413,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       const r = await run({ spike: GiB });
       const e = r.sized[0];
       expect(e).toEqual({
+        lane: 0,
         calls: [{ call: CU, entries: 16, cost: (9 * GiB) / 16 }],
         floor: 0.5 * GiB,
         start: 0.5 * GiB,
@@ -5313,7 +5317,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
   describe("2: a pair is used only for a kill that came from the prefetch, and only if it ran after it", () => {
     test("a kill served by liveCall (the prefetched rows dropped) sends today's pair; the stored one is refused", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      (r.b as unknown as { prefetched: Map<string, unknown> }).prefetched = new Map();
+      (
+        r.b as unknown as { lane: { prefetch: { prefetched: Map<string, unknown> } } }
+      ).lane.prefetch.prefetched = new Map();
       await kill(r, "M0001");
       const n0 = r.serve.requests.length;
       await r.b.sendKillPair("M0001", A);
@@ -5329,7 +5335,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
 
     test("a kill from the prefetch but a pair that did not run after it: today's pair", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      const store = (r.b as unknown as { pairStore: Map<string, { seq: number }> }).pairStore;
+      const store = (
+        r.b as unknown as { lane: { prefetch: { pairStore: Map<string, { seq: number }> } } }
+      ).lane.prefetch.pairStore;
       for (const [k, v] of store) store.set(k, { ...v, seq: 0 });
       await kill(r, "M0001");
       const n0 = r.serve.requests.length;
@@ -5433,7 +5441,8 @@ describe("R778: kill pairs batched after the prefetch", () => {
   describe("4: a stored pair is single-use and bound to its deploy", () => {
     test("redeploy with the same mutant id: nothing is served", async () => {
       const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-      const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+      const store = (r.b as unknown as { lane: { prefetch: { pairStore: Map<string, unknown> } } })
+        .lane.prefetch.pairStore;
       expect(store.size).toBe(1);
       await r.b.deploy(r.l.batch);
       // The deploy alone empties it (the baseline bracket and a prefetch would too).
@@ -5492,7 +5501,9 @@ describe("R778: kill pairs batched after the prefetch", () => {
         },
       ]) {
         const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
-        const store = (r.b as unknown as { pairStore: Map<string, unknown> }).pairStore;
+        const store = (
+          r.b as unknown as { lane: { prefetch: { pairStore: Map<string, unknown> } } }
+        ).lane.prefetch.pairStore;
         expect(store.size).toBe(1);
         await clear(r);
         expect(store.size).toBe(0);
@@ -9461,19 +9472,7 @@ describe("PR-20 (L4): a mutant entry stops after its last covering test", () => 
     r.serve.requests
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
       .filter((e) => String(e.test) === `Codeunit${CU}.` && String(e.id).startsWith(`${m}|`));
-  const stats = (r: Rig) =>
-    (
-      r.b as unknown as {
-        stats: {
-          l4MutantEntries: number;
-          l4WholeTests: number;
-          l4Entries: number;
-          l4Excluded: number;
-          l4Widened: number;
-          l4OrderBroken: number;
-        };
-      }
-    ).stats;
+  const stats = (r: Rig) => r.b.entriesStats(); // PR-99: the lanes' counters, summed
 
   test("the entry leaves out the tests after the last covering one; the NONE warm-up runs the whole codeunit", async () => {
     const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) } });
@@ -9799,7 +9798,7 @@ describe("PR-56: drift after a kept refusal", () => {
     return { r, events, warned };
   };
   const keptsIn = (m: string, x: FakeRow) => (m === "M0001" && x.method === "A" ? refused(x) : x);
-  const driftStats = (r: Rig) => (r.b as unknown as { stats: { keptDrifts: number } }).stats;
+  const driftStats = (r: Rig) => r.b.entriesStats(); // PR-99: the lanes' counters, summed
   const CODE = "al-runner-v3-serve-drift-after-kept-refusal";
 
   test("a row before the first covering test differs: the daemon closes, the request re-runs fresh and the fresh rows stand", async () => {
@@ -9813,6 +9812,7 @@ describe("PR-56: drift after a kept refusal", () => {
     expect(r.serve.daemons.length).toBe(2);
     expect(events).toEqual([
       {
+        lane: 0,
         refusal: KEPT,
         test: `Codeunit${CU}.A`,
         baselineRow: "a=pass",

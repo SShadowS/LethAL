@@ -247,6 +247,11 @@ class ParStub implements ExecutionBackend {
 class ParView implements ExecutionBackend {
   readonly killsMustReproduce = true;
   readonly inRunStopIsBudget = false;
+  /** PR-99: set by `splitOwner` only; the owner decides by its own shape whether a lane prefetches. */
+  prefetchHook: ((plans: readonly { readonly mutantId: string }[]) => Promise<void>) | undefined;
+  async prefetchMutants(plans: readonly { readonly mutantId: string }[]): Promise<void> {
+    await this.prefetchHook?.(plans);
+  }
   private active: string | null = null;
   constructor(
     private readonly b: ParStub,
@@ -698,5 +703,155 @@ describe("R1014: a stop signal is honoured inside a window, and the mutant it cu
     const r = await session(root, stub, { workers: 2 });
     expect(r.mutants).toHaveLength(one.mutants.length);
     expect(r.timeBudget).toBeUndefined();
+  });
+});
+
+/**
+ * PR-99: makes the stub a SPLIT owner (the batch setup, the barrier, the lane gate) whose lane views prefetch
+ * their own unit. `barrierAfter`: ticks lane 0's first unit prefetch takes before the barrier passes (absent:
+ * it never passes). `throwOn`: a lane's unit prefetch that throws.
+ */
+function splitOwner(
+  stub: ParStub,
+  o: { barrierAfter?: number; throwOn?: (lane: number, ids: string[]) => Error | undefined },
+) {
+  const calls: { lane: number; ids: string[]; activationsBefore: number }[] = [];
+  const prepared: string[][] = [];
+  const launched: number[] = [];
+  const ended: number[] = [];
+  const watchers = new Set<() => void>();
+  let passed = false;
+  const state = { activationsAtBarrier: -1 };
+  Object.assign(stub, {
+    prepareBatch: (p: readonly { mutantId: string }[]) =>
+      void prepared.push(p.map((x) => x.mutantId)),
+    barrierPassed: () => passed,
+    laneGateMeasured: () => true,
+    watchLaneGate: (cb: () => void) => {
+      watchers.add(cb);
+      return () => void watchers.delete(cb);
+    },
+    launchLane: (k: number) => void launched.push(k),
+    releaseLane: (k: number) => void ended.push(k),
+  });
+  const base = stub.lanes.bind(stub);
+  stub.lanes = (n: number) => {
+    const views = base(n) as ParView[];
+    for (const v of views) {
+      v.prefetchHook = async (plans) => {
+        const ids = plans.map((p) => p.mutantId);
+        calls.push({ lane: v.laneIndex, ids, activationsBefore: stub.activations.length });
+        const err = o.throwOn?.(v.laneIndex, ids);
+        if (err !== undefined) throw err;
+        if (v.laneIndex === 0 && !passed && o.barrierAfter !== undefined) {
+          await ticks(o.barrierAfter);
+          passed = true;
+          state.activationsAtBarrier = stub.activations.length;
+          for (const cb of [...watchers]) cb();
+        }
+      };
+    }
+    return views;
+  };
+  return { calls, prepared, launched, ended, state };
+}
+
+describe("PR-99: the split prefetch, through a session", () => {
+  const sorted = (xs: readonly string[]) => [...xs].sort();
+  const codesOf = (procOf: ReadonlyMap<string, string>, p: string) =>
+    sorted([...procOf].filter(([, v]) => v === p).map(([k]) => k));
+
+  test("N = 3: one batch setup, no owner window prefetch; each lane prefetches exactly the unit it takes, before scoring it; the table equals N = 1", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const firsts = new Set(["P1", "P2", "P3"].map((p) => codesOf(procOf, p)[0] ?? ""));
+    const stub = new ParStub({ procOf, delay: (code) => (firsts.has(code) ? 30 : 1) });
+    const split = splitOwner(stub, { barrierAfter: 2 });
+    const par = await session(root, stub, { workers: 3 });
+    const all = sorted(one.mutants.map((m) => m.mutantCode));
+    expect(table(par)).toEqual(table(one));
+    expect(stub.prefetchPlans).toEqual([]); // no owner-wide window prefetch
+    expect(split.prepared).toHaveLength(1); // the batch setup: once, whole batch
+    expect(sorted(split.prepared[0] ?? [])).toEqual(all);
+    // each call is one procedure scope; together they are every covered mutant, once
+    for (const c of split.calls) expect(new Set(c.ids.map((id) => procOf.get(id))).size).toBe(1);
+    expect(sorted(split.calls.flatMap((c) => c.ids))).toEqual(all);
+    // prefetch before scoring: no mutant of a unit was activated before its unit's prefetch call
+    for (const c of split.calls) {
+      const first = stub.activations.findIndex((a) => c.ids.includes(a.mutant));
+      expect(first).toBeGreaterThanOrEqual(c.activationsBefore);
+    }
+    // a unit is scored on the lane that prefetched it
+    for (const c of split.calls) {
+      const lanes = stub.activations.filter((a) => c.ids.includes(a.mutant)).map((a) => a.lane);
+      expect(new Set(lanes)).toEqual(new Set([c.lane]));
+    }
+  });
+
+  test("the barrier: no lane above 0 activates a mutant before lane 0's warm-up passed; the lanes then start while lane 0 is still in its first unit", async () => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    const slowFirst = sorted([...procOf.keys()])[0];
+    const stub = new ParStub({ procOf, delay: (code) => (code === slowFirst ? 60 : 1) });
+    const split = splitOwner(stub, { barrierAfter: 3 });
+    await session(root, stub, { workers: 3 });
+    expect(split.state.activationsAtBarrier).toBeGreaterThanOrEqual(0);
+    const before = stub.activations.slice(0, split.state.activationsAtBarrier);
+    expect(before.every((a) => a.lane === 0)).toBe(true);
+    expect(stub.activations.some((a) => a.lane === 1)).toBe(true); // started by the callback
+    const lane1 = stub.activations.findIndex((a) => a.lane === 1);
+    expect(lane1).toBeGreaterThanOrEqual(split.state.activationsAtBarrier);
+    expect(new Set(split.launched).size).toBe(split.launched.length); // no lane index twice
+    expect(sorted(split.ended.map(String))).toEqual(sorted(split.launched.map(String))); // each released
+  });
+
+  test("a barrier that never passes keeps the run on lane 0 (a failed warm-up launches nothing)", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const stub = new ParStub({ procOf });
+    const split = splitOwner(stub, {});
+    const par = await session(root, stub, { workers: 3 });
+    expect(table(par)).toEqual(table(one));
+    expect(new Set(stub.activations.map((a) => a.lane))).toEqual(new Set([0]));
+    expect(split.launched).toEqual([]);
+  });
+
+  test("a throw in a lane's unit prefetch, before the unit's first begin, is blamed on unit[0] (selfKept false), not on the lane's previous unit", async () => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    // P1 is slow on lane 0, so P2 finishes first on lane 1 and waits for it; P3's prefetch then throws.
+    const stub = new ParStub({ procOf, delay: (code) => (procOf.get(code) === "P1" ? 80 : 1) });
+    splitOwner(stub, {
+      barrierAfter: 1,
+      throwOn: (_lane, ids) =>
+        procOf.get(ids[0] ?? "") === "P3" ? new Error("prefetch refused: boom") : undefined,
+    });
+    const events: RunEvent[] = [];
+    const err = await session(root, stub, { workers: 3 }, events).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ParallelStopError);
+    expect(String(err)).toContain("prefetch refused: boom");
+    const scored = events.flatMap((e) => (e.type === "mutant-scored" ? [e.mutant.mutantId] : []));
+    // Every P2 mutant finished before the stop and precedes P3's first mutant: all kept. Blamed on the
+    // previous unit's last mutant instead, the last P2 mutant would be the stopping one, with selfKept false.
+    expect(sorted(scored)).toEqual(codesOf(procOf, "P2"));
+  });
+
+  test("N = 1: the loop records per-unit scoring times and per-window prefetch walls (the scheduling bound's input)", async () => {
+    const root = await project();
+    const stub = new ParStub();
+    type Got = {
+      units: { scope: string; mutants: number; entries: number; scoringMs: number }[];
+      windows: { entries: number; prefetchMs: number }[];
+    };
+    const got: Got[] = [];
+    Object.assign(stub, { noteUnitTimings: (t: Got) => void got.push(t) });
+    const r = await session(root, stub, {});
+    expect(got).toHaveLength(1);
+    const t = got[0];
+    expect(t?.units.map((u) => u.mutants).reduce((a, b) => a + b, 0)).toBe(r.mutants.length);
+    expect(new Set(t?.units.map((u) => u.scope)).size).toBe(3); // P1, P2, P3
+    expect(t?.units.every((u) => u.scoringMs >= 0 && u.entries > 0)).toBe(true);
+    expect(t?.windows.length).toBeGreaterThanOrEqual(1);
+    expect(t?.windows.every((w) => w.prefetchMs >= 0 && w.entries > 0)).toBe(true);
   });
 });

@@ -1818,6 +1818,9 @@
         "type": {
           "const": "serve-daemon-closed"
         },
+        "lane": {
+          "type": "number"
+        },
         "reason": {
           "type": "string"
         },
@@ -1849,6 +1852,9 @@
       "properties": {
         "type": {
           "const": "serve-drift-after-kept-refusal"
+        },
+        "lane": {
+          "type": "number"
         },
         "refusal": {
           "type": "string"
@@ -1883,6 +1889,9 @@
       "properties": {
         "type": {
           "const": "serve-request-sized"
+        },
+        "lane": {
+          "type": "number"
         },
         "calls": {
           "type": "array",

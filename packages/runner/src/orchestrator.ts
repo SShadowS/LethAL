@@ -12263,7 +12263,42 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     if (left > 0) reachBudget(args.timeBudget, left, args.batchIndex + 1);
     return true;
   };
+  // PR-99 (§10.2): at N = 1 (no sink) record, per procedure-scope unit, the scoring wall (the window prefetch
+  // excluded) and its entries, and per window the prefetch wall: the input of the scheduling bound
+  // (`scripts/simulate-lanes.ts`). Timing only; a mutant's time is read at the next iteration's top.
+  const timings =
+    args.sink === undefined && args.backend.noteUnitTimings !== undefined
+      ? {
+          units: new Map<
+            string,
+            { window: number; scope: string; mutants: number; entries: number; scoringMs: number }
+          >(),
+          windows: [] as { window: number; mutants: number; entries: number; prefetchMs: number }[],
+          window: -1,
+          mark: undefined as
+            | { readonly key: string; readonly t0: number; readonly entries: number }
+            | undefined,
+        }
+      : undefined;
+  const entriesOf = (mutantId: string): number => {
+    const refs = args.perMutantTests.get(mutantId) ?? [];
+    return args.backend.isolatesTests === true
+      ? new Set(refs.map((r) => `${r.codeunitId}.${r.method}`)).size
+      : new Set(refs.map((r) => r.codeunitId)).size;
+  };
+  const flushTiming = (): void => {
+    const t = timings;
+    if (t?.mark === undefined) return;
+    const u = t.units.get(t.mark.key);
+    if (u !== undefined) {
+      u.mutants += 1;
+      u.entries += t.mark.entries;
+      u.scoringMs += performance.now() - t.mark.t0;
+    }
+    t.mark = undefined;
+  };
   for (const [at, m] of args.mutants.entries()) {
+    flushTiming();
     // R766 (b): the queue closed (a latch or a stop elsewhere) or the session latched unsafe: take no more.
     if (args.sink !== undefined && (args.sink.closed || args.safety.isUnsafe)) break;
     // R912: `--time-budget`, before each window and each live mutant (a lane's mutants belong to
@@ -12272,6 +12307,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     const win = windowAt.get(m.mutantId);
     if (win !== undefined && prefetch !== undefined) {
       const clock = args.timeBudget;
+      const prefetchT0 = performance.now();
       await prefetch.call(args.backend, prefetchPlans({ ...args, mutants: win }), {
         // R955: no clamp for a session with no `--time-budget` (its clock is only a signal latch).
         ...(clock !== undefined && Number.isFinite(clock.seconds)
@@ -12280,11 +12316,33 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         ...(firstWindow ? { batchPlans: prefetchPlans(args) } : {}),
       });
       firstWindow = false;
+      if (timings !== undefined) {
+        timings.window += 1;
+        timings.windows.push({
+          window: timings.window,
+          mutants: win.filter((x) => args.perMutantTests.get(x.mutantId) !== undefined).length,
+          entries: win.reduce((n, x) => n + entriesOf(x.mutantId), 0),
+          prefetchMs: performance.now() - prefetchT0,
+        });
+      }
       // The prefetch itself can use up the budget: no live mutant runs after that.
       if (budgetSpent(at)) break;
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    if (timings !== undefined) {
+      const scope = procedureScopeOf(m);
+      const key = `${Math.max(0, timings.window)}|${scope}`;
+      if (!timings.units.has(key))
+        timings.units.set(key, {
+          window: Math.max(0, timings.window),
+          scope,
+          mutants: 0,
+          entries: 0,
+          scoringMs: 0,
+        });
+      timings.mark = { key, t0: performance.now(), entries: entriesOf(m.mutantId) };
+    }
     // R1014: a LANE checks the budget (a signal spends it, R955) before each mutant too. Between
     // windows only let one window of hanging mutants (each a whole test timeout) run on past the
     // budget and a SIGTERM (DO, R-998: 40 min). The commit stops as the memory guard's does: what
@@ -13313,6 +13371,12 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       break;
     }
   }
+  flushTiming();
+  if (timings !== undefined)
+    args.backend.noteUnitTimings?.({
+      units: [...timings.units.values()],
+      windows: timings.windows,
+    });
 }
 
 /**
@@ -13402,11 +13466,29 @@ async function runMutantsParallel(
       needsLiveCall?: (mutantId: string) => boolean;
       laneDaemonStarts?: () => number;
       noteLanes?: (message: string) => void;
+      /**
+       * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
+       * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
+       */
+      prepareBatch?: (batchPlans: { mutantId: string; refs: readonly TestMethodRef[] }[]) => void;
+      barrierPassed?: () => boolean;
+      laneGateMeasured?: () => boolean;
+      watchLaneGate?: (cb: () => void) => () => void;
+      launchLane?: (k: number) => void;
+      releaseLane?: (k: number) => void;
     };
     readonly lanes: readonly ExecutionBackend[];
   },
 ): Promise<void> {
   const { owner, lanes, ...rest } = args;
+  // PR-99: N > 1 splits the prefetch: no owner-wide window prefetch; each lane prefetches exactly the unit it
+  // takes, on its own daemon, then scores it (the batch setup is the owner's, once, below).
+  const { prepareBatch, barrierPassed, laneGateMeasured, watchLaneGate } = owner;
+  const split =
+    prepareBatch !== undefined &&
+    barrierPassed !== undefined &&
+    laneGateMeasured !== undefined &&
+    watchLaneGate !== undefined;
   // R912: window by window: the owner prefetches one window, its lanes score it, then the next.
   // A stop of the queue (a latch, a thrown stop) ends the call from `runScopeQueue` as before. The
   // time budget is checked between windows only: a lane's mutant cannot be left out of an ordered commit.
@@ -13415,13 +13497,15 @@ async function runMutantsParallel(
     args.perMutantTests,
     costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs),
   );
-  if (windows.length === 0) await owner.prefetchMutants?.([]);
+  if (split) prepareBatch.call(owner, prefetchPlans(args));
+  else if (windows.length === 0) await owner.prefetchMutants?.([]);
   // The latch is shared by every lane: the owner's is the one to read.
   const probe: Latch = () => owner.latched?.();
   const asked = lanes.length;
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
-  const paced = laneWarmupMs !== undefined && needsLiveCall !== undefined;
+  // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.
+  const paced = !split && laneWarmupMs !== undefined && needsLiveCall !== undefined;
   let widest: Awaited<ReturnType<typeof runScopeQueue>> | undefined;
   for (const [wi, window] of windows.entries()) {
     if (args.safety.isUnsafe) break;
@@ -13436,14 +13520,19 @@ async function runMutantsParallel(
     };
     if (spent()) break;
     const clock = args.timeBudget;
-    await owner.prefetchMutants?.(prefetchPlans({ ...args, mutants: window }), {
+    const prefetchOpts = {
       ...(clock !== undefined && Number.isFinite(clock.seconds)
         ? { remainingMs: () => clock.remainingMs() }
         : {}),
-      ...(wi === 0 ? { batchPlans: prefetchPlans(args) } : {}),
-    });
-    // The prefetch itself can use up the budget: no lane runs a live mutant after that.
-    if (spent()) break;
+    };
+    if (!split) {
+      await owner.prefetchMutants?.(prefetchPlans({ ...args, mutants: window }), {
+        ...prefetchOpts,
+        ...(wi === 0 ? { batchPlans: prefetchPlans(args) } : {}),
+      });
+      // The prefetch itself can use up the budget: no lane runs a live mutant after that.
+      if (spent()) break;
+    }
     const commit = new OrderedCommit(
       window.map((m) => m.mutantId),
       probe,
@@ -13482,12 +13571,39 @@ async function runMutantsParallel(
             },
           }
         : {}),
+      ...(split
+        ? {
+            split: {
+              barrierPassed: () => barrierPassed.call(owner),
+              measured: () => laneGateMeasured.call(owner),
+              watch: (cb: () => void) => watchLaneGate.call(owner, cb),
+              onLaunch: (k: number) => owner.launchLane?.(k),
+              onEnd: (k: number) => owner.releaseLane?.(k),
+            },
+          }
+        : {}),
       mayStart: (k) => owner.laneMayStart?.(k) ?? true,
       commit,
       isUnsafe: () => args.safety.isUnsafe,
       runUnit: async (k, unit, sink) => {
         const backend = lanes[k];
         if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
+        if (
+          split &&
+          backend.prefetchMutants !== undefined &&
+          !sink.closed &&
+          !args.safety.isUnsafe
+        ) {
+          // PR-99 (§2.1, §2.4): this lane prefetches exactly the covered mutants of the unit it took, on its
+          // own daemon. A throw here is before the unit's first `begin`: blame the unit's first mutant
+          // (`selfKept` false), not the lane's previous unit (`current()` would name that one).
+          try {
+            await backend.prefetchMutants(prefetchPlans({ ...args, mutants: unit }), prefetchOpts);
+          } catch (err) {
+            commit.fail(unit[0]?.mutantId, err);
+            throw err;
+          }
+        }
         await runMutantsOnBackend({ ...rest, backend, mutants: unit, sink, skipPrefetch: true });
       },
     });
@@ -13510,7 +13626,7 @@ async function runMutantsParallel(
     }
   }
   // One notice for the call: the window that started the most lanes speaks for it.
-  if (paced && widest !== undefined)
+  if ((paced || split) && widest !== undefined)
     owner.noteLanes?.(lanesNotice(widest.started, asked, cap, widest.reason, widest.warmupMs));
 }
 
