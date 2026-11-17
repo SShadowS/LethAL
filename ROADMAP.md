@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**44 of 1064 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 1065 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1109,6 +1109,7 @@ that ordering is the priority.
 - **R1099** · Each al-runner v3 serve pass carries a ~0.145 s floor outside the tests; 4,792 passes made it ~575 s (33% of tests time) on PR-94's DO slice; fewer passes per mutant need upstream multi-codeunit entries · [R1099.md](docs/roadmap/R1099.md) · open — attributed (PR-104): ~80% of the floor is the company login raised per test codeunit session; upstream…
 - **R1100** · R987's serve request sizing divides a request's whole memory jump by its entry count, but the jump barely depends on the count (~0.6 GiB + ~3 MiB/entry, R² 0.05-0.14): a 2-4 entry request charges hundreds of MiB per entry forever, capping 51 of 110 DO codeunits below 256 (one at 4) · [R1100.md](docs/roadmap/R1100.md) · open — measured and re-diagnosed (PR-103): g is mostly retained daemon memory; the affine bound was…
 - **R1101** · Size v3 serve requests on their own growth from start plus the target daemon's current retained memory, not on growth from the daemon's floor (R1100); needs the memory guard, the lane gate and the recycle check to match · [R1101.md](docs/roadmap/R1101.md) · open — designed in outline (PR-103); waits for the lazy-prove probe's data from a DO window
+- **R1102** · DO's forced isolation "test" withholds 268 of 481 error verdicts as untrusted kills; isolation "auto" (R921) would score 163 of them at the cost of a method re-baseline; the other 105 wait on upstream #8218 · [R1102.md](docs/roadmap/R1102.md) · open — measured (PR-106)
 
 ---
 

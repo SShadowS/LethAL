@@ -1957,6 +1957,24 @@
     "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 11"
   },
   {
+    "key": "NotRun: out-of-scope: SetFilter: value expected after ..",
+    "state": "open",
+    "issue": "#8213",
+    "note": "PR-106: reduced on edge-4ebfe7913 to SetFilter(\"No.\", '..'); 25 error mutants in DO run 13 (a mutant leaves both sides of a built range empty); 'A..', '1..', '%1..' and 'A..|B' run"
+  },
+  {
+    "key": "NotRun: out-of-scope: conversion of Text <x> to Blob",
+    "state": "open",
+    "issue": "#8213",
+    "note": "PR-106: reduced on edge-4ebfe7913 to a FieldRef of a Blob field assigned a Text; 1 error mutant in DO run 13"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.Run with an unassigned Variant as the record",
+    "state": "open",
+    "issue": "#8213",
+    "note": "PR-106: reduced on edge-4ebfe7913 to Page.Run(0, V) with V an unassigned Variant; 1 error mutant in DO run 13"
+  },
+  {
     "key": "NotRun: out-of-scope: DotNet new Microsoft.Dynamics.Nav.AzureMLWrapper.AzureMLRequest: refused by policy: server class <x> is neither registered nor classified pure",
     "state": "unexamined",
     "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 15"
