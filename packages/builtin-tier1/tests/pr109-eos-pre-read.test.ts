@@ -24,12 +24,13 @@ const NOT = "lethal.remove-not";
 /** Is the first `not ...` unary site of the unit refused? */
 function refused(
   body: string,
-  vars = "S: InStream; Other: InStream; T: Text; B: Byte; X: Boolean;",
+  vars = 'S: InStream; "In S": InStream; Other: InStream; T: Text; B: Byte; X: Boolean; N: Integer; Buf: Codeunit "Some Blob"; Cust: Record Customer;',
   params = "",
+  trigger = false,
 ) {
   const src = `codeunit 50500 "Shape"
 {
-    procedure Run(${params})
+    ${trigger ? "trigger OnRun()" : `procedure Run(${params})`}
     var
         ${vars}
     begin
@@ -136,5 +137,54 @@ describe("PR-109: while not S.EOS after a pre-read", () => {
     // revert: drop the while_statement-parent check (it is also the whole-condition check; the
     // `and` node, not the loop, is this `not`'s parent)
     expect(refused("S.ReadText(T); while X and not S.EOS do S.ReadText(T);")).toBe(false);
+  });
+
+  it("M1: refuses inside a trigger", () => {
+    // revert: walk up with isProcedureLike instead of isScope
+    expect(refused("S.ReadText(T); while not S.EOS do S.ReadText(T);", undefined, "", true)).toBe(
+      true,
+    );
+  });
+
+  it("L1: keeps when a statement between re-opens S", () => {
+    // revert: drop the CreateInStream check / the directWrite check
+    expect(
+      refused("S.ReadText(T); Cust.Picture.CreateInStream(S); while not S.EOS do S.ReadText(T);"),
+    ).toBe(false);
+    expect(refused("S.ReadText(T); Buf.CreateInStream(S); while not S.EOS do S.ReadText(T);")).toBe(
+      false,
+    );
+    expect(refused("S.ReadText(T); S := Other; while not S.EOS do S.ReadText(T);")).toBe(false);
+  });
+
+  it("L1: keeps when a guard on S.EOS sits between", () => {
+    // revert: drop the `S.EOS` scan between the read and the loop
+    expect(refused("S.ReadText(T); if S.EOS then exit; while not S.EOS do S.ReadText(T);")).toBe(
+      false,
+    );
+  });
+
+  it("L1: a re-open BEFORE the last read does not matter", () => {
+    // revert: scan from the first read instead of the last
+    expect(
+      refused(
+        "S.ReadText(T); Cust.Picture.CreateInStream(S); S.ReadText(T); while not S.EOS do S.ReadText(T);",
+      ),
+    ).toBe(true);
+  });
+
+  it("L3: refuses `while not (S.EOS)`", () => {
+    // revert: drop the one-level parenthesis unwrap
+    expect(refused("S.ReadText(T); while not (S.EOS) do S.ReadText(T);")).toBe(true);
+  });
+
+  it("L4: an assignment pre-read counts", () => {
+    // revert: use the call itself as the statement (its parent is the assignment, not a block)
+    expect(refused("N := S.Read(B); while not S.EOS do S.ReadText(T);")).toBe(true);
+  });
+
+  it("L5: refuses a quoted receiver", () => {
+    // revert: restore `recv.rawKind !== "identifier"` in plainMemberCall
+    expect(refused('"In S".ReadText(T); while not "In S".EOS do "In S".ReadText(T);')).toBe(true);
   });
 });
