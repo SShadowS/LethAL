@@ -182,6 +182,15 @@
   "NotRun: out-of-scope: FieldRef.Value on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
     "cls": "FieldRef.* on a FieldRef that was never assigned"
   },
+  "NotRun: out-of-scope: FieldRef.EnumValueCount on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
+    "cls": "FieldRef.* on a FieldRef that was never assigned"
+  },
+  "NotRun: out-of-scope: FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
+    "cls": "FieldRef.* on a FieldRef that was never assigned"
+  },
+  "NotRun: out-of-scope: FieldRef.SetFilter on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)": {
+    "cls": "FieldRef.* on a FieldRef that was never assigned"
+  },
   "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not": {
     "cls": "File.DownloadFromStream needs a client (a browser round trip), which a headless run has not",
     "raw": "NotRun: out-of-scope: File.DownloadFromStream needs a client (a browser round trip), which a headless run has not"
@@ -226,6 +235,24 @@
     "cls": "RecordRef.* on a RecordRef that is not open"
   },
   "NotRun: out-of-scope: RecordRef.ReadPermission on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.Duplicate on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.FindFirst on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.SetLoadFields on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.SetRecFilter on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.ClearMarks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
+    "cls": "RecordRef.* on a RecordRef that is not open"
+  },
+  "NotRun: out-of-scope: RecordRef.FilterGroup on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)": {
     "cls": "RecordRef.* on a RecordRef that is not open"
   },
   "NotRun: out-of-scope: RegisterTableConnection with a connection string other than @@test@@ (no Dataverse in the runtime)": {

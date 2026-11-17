@@ -1953,8 +1953,9 @@
   },
   {
     "key": "NotRun: out-of-scope: SetFilter: value expected after @",
-    "state": "unexamined",
-    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 11"
+    "state": "open",
+    "issue": "#8256",
+    "note": "PR-130: reproduced on edge-4ebfe7913 by an invented app: 'A|@' and '@..B' refuse while '@', '@*', '@ ' and '@%1' run; 2 DO mutants (dos4 x2). Was: PR-06: NEW on edge-a184cfc79, 1 sighting(s) from error mutants, in the scoring store of project 11"
   },
   {
     "key": "NotRun: out-of-scope: SetFilter: value expected after ..",
@@ -2068,13 +2069,15 @@
   },
   {
     "key": "NotRun: out-of-scope: Report.SaveAs#N of id N, which no report declares (error text not pinned)",
-    "state": "unexamined",
-    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-130: named in #7760 ('Report.SaveAs#2 of id 0, which no report declares'); 1 DO mutant (dos4 x2). Was: PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
   },
   {
     "key": "NotRun: out-of-scope: an error in a SaveAs of report <x>, which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): <message>",
-    "state": "unexamined",
-    "note": "PR-06: NEW on edge-a184cfc79, 1 sighting from error mutants, in the scoring store of project 982-9; withheld in PR-06 until the normaliser masked the raised message (code PR-13, 5fddfb6d); added by PR-10"
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-130: named in #7760 and #7964 (an error in a SaveAs of a report with a layout of this kind); 3 DO mutants (dos4 x2). Was: PR-06: NEW on edge-a184cfc79, 1 sighting from error mutants, in the scoring store of project 982-9; withheld in PR-06 until the normaliser masked the raised message (code PR-13, 5fddfb6d); added by PR-10"
   },
   {
     "key": "NotRun: out-of-scope: a permission denial (read permission on object type N id N) whose error is not pinned yet (a page control over a FlowField the session cannot read: BC leaves the control off the page); the test is n",
@@ -2090,5 +2093,94 @@
     "key": "NotRun: out-of-scope: Rename of Guided Experience Item: a primary key field another table relates to changes to or from a blank or zero key value, in a shape that is not measured (more than one relation targets the table",
     "state": "unexamined",
     "note": "PR-10: NEW on edge-5a58a0f16, 3 sighting(s) from error mutants, Guided Experience (guided/score); met where #8038's fix freed its tests and they now run further"
+  },
+  {
+    "key": "NotRun: out-of-scope: Format of a value (standard format N) while CurrReport.FormatRegion is <x> is not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8094",
+    "note": "PR-130: #8094's case exactly (standard format 4 under en-GB); 10 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.Duplicate on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: reproduced on edge-4ebfe7913 by an invented app, on a plain unopened RecordRef and after a failed Get(RecordId); 3 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.FindFirst on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: reproduced on edge-4ebfe7913 after Open(0); a plain unopened RecordRef already fails with BC's 'The record is not open.'; 2 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.SetLoadFields on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: reproduced on edge-4ebfe7913 after a failed Get(RecordId); plain unopened and after Open(0) fail with BC's text; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.SetRecFilter on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: reproduced on edge-4ebfe7913 after a failed Get(RecordId); plain unopened and after Open(0) fail with BC's text; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.ClearMarks on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: reproduced on edge-4ebfe7913 on a plain unopened RecordRef; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: RecordRef.FilterGroup on a RecordRef that is not open: BC's error text, and whether Get(RecordId) opens the table of the RecordId, are not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#7819",
+    "note": "PR-130: named in #7819 (FilterGroupOnUnopenedRecordRef); 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: Page.Run with RecordRef as the record",
+    "state": "open",
+    "issue": "#8254",
+    "note": "PR-130: NOT reproduced: an invented Page.Run(page, RecordRef) with an open RecordRef runs and passes; asked in #8254 which state leads to it; 3 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.EnumValueCount on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#8255",
+    "note": "PR-130: reproduced on edge-4ebfe7913 by an invented app; 2 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.Class on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#7760",
+    "note": "PR-130: named in #7760 (FieldRef.Class never assigned); 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: FieldRef.SetFilter on a FieldRef that was never assigned: what BC does (an error, or a no-op) is not pinned (docs/probes-needed.md)",
+    "state": "open",
+    "issue": "#7964",
+    "note": "PR-130: named in #7964 (FieldRef.SetRange and SetFilter never assigned); 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.SaveAs (which character BC's filter error names is not pinned)",
+    "state": "open",
+    "issue": "#7908",
+    "note": "PR-130: #7908's family; its fix covers two measured layouts, and DO's string has another (not reproduced); 2 DO mutants (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)",
+    "state": "open",
+    "issue": "#7908",
+    "note": "PR-130: reproduced on edge-4ebfe7913 with #7908's WriteTo form through RunRequestPage (SaveAs now runs it); commented on #7908; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: XmlDocument.ReadFrom of something that is not an InStream",
+    "state": "open",
+    "issue": "#8257",
+    "note": "PR-130: reproduced on edge-4ebfe7913 with an InStream that was never created; 1 DO mutant (dos4 x2)"
+  },
+  {
+    "key": "NotRun: out-of-scope: a read of the content of a placeholder Pdf of report Standard Sales - Invoice (the runtime writes a placeholder, not BC's rendering: only that the output exists and is not empty, and that a PDF star",
+    "state": "by-design",
+    "note": "PR-130: the runtime renders no report output, only a placeholder; reading its content is out of scope by design; 1 DO mutant (dos4 x2)"
   }
 ]
