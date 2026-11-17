@@ -13,11 +13,11 @@
  * first MEASURED request after the barrier (PR-98's gate needs a peak reading; a warm-up gives none). A lane's
  * first unit also pays the per-lane start cost, once (its daemons then stay resident).
  *
- * `--merge-windows M` (r6): the N-lane run cuts its windows at M x the N = 1 caps (`splitWindowCaps`). Groups of M
- * consecutive N = 1 windows hold at most what one such window holds (each N = 1 window is at most one cap), so the
- * real windows are at least as big: the merged layout has at least as many window ends, which only lengthens the
- * simulated wall. Each piece keeps its own N = 1 window's prefetch share; pieces of one scope that end up next to
- * each other become one unit.
+ * `--merge-windows M` (r6): the N-lane run cuts its windows at M x the N = 1 caps (`splitWindowCaps`). Grouping M
+ * consecutive N = 1 windows is an ESTIMATE of that cut, not a bound: the greedy cut at M x the caps moves the
+ * boundaries (it does not cut at the groups' ends), a mutant over a cap sits alone, and the N-lane run cuts with
+ * its own baseline's durations (spec §13, delta review #2). Each piece keeps its own N = 1 window's prefetch share;
+ * pieces of one scope that end up next to each other become one unit.
  */
 import { readFileSync } from "node:fs";
 
