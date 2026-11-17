@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**47 of 1068 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1068 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -384,7 +384,7 @@ that ordering is the priority.
 - **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
 - **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · closed 2026-11-16 — measured clean (PR-95): hidden excluded tests leave a kept daemon clean; the remaining…
 - **R1104** · Hang refusal for remove-not on `while not S.EOS` when the InStream S is read earlier in a block that holds the loop (R173's 'EOS is false at the start' fails after a pre-read): 7 DO sites refused, 2 hangs per 3 scored lost; P4 waits for a DO window · [R1104.md](docs/roadmap/R1104.md) · open — built (PR-109); P4 waits for the first DO window on a head with it
-- **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · open — found by PR-109's review; one DO site, not measured as a hang
+- **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · closed 2026-11-17 — measured (PR-110): the only static rule fails PR-37's bar (0 hangs in 3 scored sites)…
 
 ## Product gaps a real project hits
 
