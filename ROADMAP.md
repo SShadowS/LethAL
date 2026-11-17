@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**44 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**43 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1119,7 +1119,7 @@ that ordering is the priority.
 - **R1108** · Name withheld kills in the report: an error whose covering test failed under the mutant but al-runner v3 did not trust the failure gets a per-mutant note, a count, a caveat with the remedy, and a console line · [R1108.md](docs/roadmap/R1108.md) · done (52e679a8): withheld kills named in the report…
 - **R1109** · v3 baseline batching (PR-115) is switched on per build by `V3_BASELINE_BATCHING_BUILDS`, listing edge-4ebfe7913 only: when edge moves `current`, batching silently turns off until someone lists the new build; let the update gate record it · [R1109.md](docs/roadmap/R1109.md) · done (d9fcdfca) — PR-117: the update gate records batchFacts only when its own DBM batched and passed; a…
 - **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · open
-- **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · open
+- **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · closed 2026-11-17 — measured by PR-127: correct (0 moves) but no wall gain…
 
 ---
 
