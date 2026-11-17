@@ -2737,6 +2737,32 @@ const REAL_TIMERS: LeaseTimers = {
   clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
 };
 
+/** PR-108 (R1057): the non-replay hang that ENDS a mutant's walk, as a natural end does (addendum 2). */
+const WALK_HANG_CAP = 3;
+
+/**
+ * PR-108: the note of a walk the 3rd hang ended. `k`: the ordered covering refs after the 3rd hang's
+ * ref, minus the codeunits in `skip`. A ref missing from `ordered` throws: never a silent k.
+ */
+export function cappedWalkNote(
+  ordered: readonly TestMethodRef[],
+  capRef: TestMethodRef,
+  skip: ReadonlySet<number>,
+  mutantId: string,
+): { readonly k: number; readonly note: string } {
+  const capKey = testKeyOf(capRef);
+  const at3 = ordered.findIndex((r) => testKeyOf(r) === capKey);
+  if (at3 < 0)
+    throw new Error(
+      `walk cap: the 3rd hang's test ${capKey} (mutant ${mutantId}) is not in the ordered covering list — caller-contract violation (PR-108)`,
+    );
+  const k = ordered.slice(at3 + 1).filter((r) => !skip.has(r.codeunitId)).length;
+  return {
+    k,
+    note: `the walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); ${k} covering test(s) after them were not run`,
+  };
+}
+
 /** Bounded acquire retry budget (design §6 step 1: backoff-with-jitter is the default, not optional). */
 const LEASE_ACQUIRE_ATTEMPTS_DEFAULT = 6;
 const LEASE_BACKOFF_BASE_MS = 500;
@@ -12312,7 +12338,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     t.mark = undefined;
   };
-  for (const [at, m] of args.mutants.entries()) {
+  mutantLoop: for (const [at, m] of args.mutants.entries()) {
     flushTiming();
     // R766 (b): the queue closed (a latch or a stop elsewhere) or the session latched unsafe: take no more.
     if (args.sink !== undefined && (args.sink.closed || args.safety.isUnsafe)) break;
@@ -12520,6 +12546,17 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let replaying = false;
     let walkClosed = false;
     let heldNote: string | undefined;
+    // PR-108 (R1057's cap, addendum 2): the 3rd non-replay hang ENDS the walk as a natural end does.
+    // Moves it can cause (a lost kill, never a false one): killed -> timeout-killed or error,
+    // timeout-killed -> error (only a later hang reproduces), a terminal answer past the cap not
+    // reached. Every capped walk is noted on its `failureNote` and warned by name below.
+    let hangs = 0; // non-replay timeouts met so far
+    let capRef: TestMethodRef | undefined; // the 3rd hang's ref: set only on a capped walk
+    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop) ran out between two covering
+    // steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
+    let budgetCut = false;
+    const clockSpent = (): boolean =>
+      args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
     const walker = coveringRuns({
       backend: args.backend,
       safety: args.safety,
@@ -12540,6 +12577,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         return;
       }
       while (!walkClosed) {
+        if (!replaying && clockSpent()) {
+          budgetCut = true;
+          return;
+        }
         const next = await walker.next();
         if (next.done === true) return;
         yield next.value;
@@ -12772,6 +12813,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           };
           if (held === undefined) held = entry;
           else noted.push(entry);
+          hangs += 1;
+          // The 3rd hang ENDS the walk as a natural end does: nothing more is fed, and the after-walk
+          // code below replays the held step (then the noted ones) unchanged.
+          if (hangs === WALK_HANG_CAP) {
+            capRef = ref;
+            walkClosed = true;
+          }
           continue;
         }
         if (v.outcome === "timeout") {
@@ -13167,6 +13215,19 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           break;
         }
       }
+      // PR-108 (R1014): the clock budget ran out between two covering steps. Before the held replay,
+      // R577's I4, R198's check, any note and `commitRecord`: a partial walk is never recorded, and the
+      // mutant is counted as left out (`--resume` scores it). The signal exit below, for a lane or not.
+      if (budgetCut) {
+        await walker.return(undefined);
+        if (args.sink === undefined) budgetSpent(at);
+        else
+          args.sink.memoryStop(
+            m.mutantId,
+            "the time budget was used up (or a stop signal spent it)",
+          );
+        break mutantLoop;
+      }
       // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
       const h: HeldTimeout | undefined =
         held ?? (replaying && verdict === "survived" ? noted.shift() : undefined);
@@ -13238,6 +13299,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // PR-51: names only, after any strand prefix (`--resume` reads it) and any other note.
     if (heldNote !== undefined) {
       failureNote = failureNote !== undefined ? `${failureNote} ${heldNote}` : heldNote;
+    }
+    // PR-108: a walk the 3rd hang ended says so, even with nothing left to run (k = 0). `k`: the
+    // ordered covering refs after the 3rd hang's ref, minus the skipped codeunits. A ref that is not in
+    // the ordered list is a caller-contract violation: it throws, never a silent k.
+    let capK: number | undefined;
+    if (capRef !== undefined) {
+      const cap = cappedWalkNote(ordered, capRef, skip, m.mutantId);
+      capK = cap.k;
+      const capNote = cap.note;
+      failureNote = failureNote !== undefined ? `${failureNote} ${capNote}` : capNote;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
@@ -13372,8 +13443,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
       break;
     }
-    if (args.sink === undefined) commitRecord();
-    else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);
+    // M1: the warning goes out with the row, inside the commit. On a lane `finish` may drop the commit
+    // (another lane's stop), and then there is neither a row nor a warning for this mutant.
+    const commitAndWarn = (): void => {
+      commitRecord();
+      if (capK !== undefined) {
+        args.emit({
+          type: "warning",
+          code: "held-walk-capped",
+          message: `[lethal] held-walk-capped: mutant ${m.mutantId}'s walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); verdict ${verdict}; ${capK} covering test(s) after them were not run`,
+        });
+      }
+    };
+    if (args.sink === undefined) commitAndWarn();
+    else args.sink.finish(m.mutantId, commitAndWarn, stopAfterRecord);
     if (stopAfterRecord !== undefined) throw stopAfterRecord;
     // Task 12 (spec §8/§12): the in-flight-unknown branch above just latched `safety` — stop
     // scheduling further mutants in THIS shard rather than letting the next iteration's
