@@ -531,9 +531,10 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     expect(probe.bad).toEqual([]);
     const c = await read("al-runner-v3-contract.ts");
     expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv()", 150)).toEqual({ count: 1, bad: [] });
+    // serve-keep-reasons' daemon and (PR-114a) the capability facts' daemon
     expect(
       eachFollowedBy(c, /env\.serveSpawn \?\? defaultServerSpawn\)\(/g, "v3ChildEnv(", 150),
-    ).toEqual({ count: 1, bad: [] });
+    ).toEqual({ count: 2, bad: [] });
     expect(
       eachFollowedBy(await read("cli.ts"), /spawn\(\[c\.path, "--version"\]/g, "v3ChildEnv()", 100),
     ).toEqual({ count: 1, bad: [] });

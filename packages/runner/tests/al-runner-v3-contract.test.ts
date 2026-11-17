@@ -1,6 +1,7 @@
 // R586 §8 and §12: the v3 contract probe against a fake v3 (and a fake alc), and the `.gated`
 // pin (T18). Every refusal has a test per direction.
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -25,6 +26,7 @@ import {
   MESSAGE_PREFIX_REASON,
   SERVE_TESTS_AL,
   type V3ContractResult,
+  V3_CAPABILITY_FACTS,
   burnerArgv,
   classifySleep,
   leastBusyCore,
@@ -456,10 +458,109 @@ const TODAY_ROWS: Record<string, ServeRow> = {
   "Codeunit50676.C_UsesKey": { status: "error", notRun: true, message: KEY_847 },
 };
 
+/** PR-114a: what a request of a capability fact gets back: test rows and a summary, or an error line. */
+type CapAnswer =
+  | { tests: Record<string, unknown>[]; summary: Record<string, unknown> }
+  | { error: string };
+
+/** PR-114a: each capability folder's test codeunits `[id, methods]`, as the probe writes them. */
+const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]> = {
+  "batch-no-cross-singleinstance": [
+    [50702, ["WritesState"]],
+    [50703, ["SeesNoCounter", "SeesNoTemp"]],
+    [50704, ["Spare"]],
+  ],
+  "batch-no-cross-library-global": [
+    [50712, ["WritesLibraryGlobal"]],
+    [50713, ["SeesFreshLibrary"]],
+    [50714, ["Spare"]],
+  ],
+  "batch-no-cross-row": [
+    [50722, ["WritesARealRow"]],
+    [50723, ["SeesNoRealRow"]],
+    [50724, ["Spare"]],
+  ],
+  "batch-no-cross-subscriber": [
+    [50733, ["BindsASubscriber"]],
+    [50734, ["SeesNoBoundSubscriber"]],
+    [50735, ["Spare"]],
+  ],
+  "batch-onrun-excluded-no-carry": [
+    [50741, ["WriterSeesOwnRow"]],
+    [50742, ["ReaderSeesNoRow"]],
+    [50743, ["OtherInsertsAndSeesOne"]],
+  ],
+  "batch-onrun-included-duplicates": [
+    [50751, ["WriterSeesOwnRow"]],
+    [50752, ["ReaderSeesNoRow"]],
+    [50753, ["OtherInsertsAndSeesOne"]],
+  ],
+  "batch-lane-hint-only": [
+    [50762, ["StoresFive"]],
+    [50763, ["NeedsFive"]],
+    [50764, ["Spare"]],
+  ],
+  "batch-lane-strict-reruns": [
+    [50772, ["StoresFive"]],
+    [50773, ["NeedsFive"]],
+    [50774, ["Spare"]],
+  ],
+};
+
+/** PR-114a: is this serve request one of the capability facts' (a scratch folder named `batch-...`)? */
+const isCapabilityRequest = (q: Record<string, unknown>): boolean =>
+  Array.isArray(q.sourcePaths) &&
+  String(q.sourcePaths[0]).split("/").pop()?.startsWith("batch-") === true;
+
+const capRow = (id: number, method: string, status = "pass", message?: string) => ({
+  name: `Codeunit${id}.${method}`,
+  status,
+  ...(message !== undefined ? { message } : {}),
+});
+
+/** PR-114a: the answer an edge-4ebfe7913-like build gives a capability request (the probes' readings). */
+function capabilityAnswer(fact: string, req: Record<string, unknown>): CapAnswer {
+  const test = typeof req.test === "string" ? req.test : undefined;
+  const gone = Array.isArray(req.excludeTests) ? (req.excludeTests as string[]) : [];
+  const cus = (CAP_APPS[fact] ?? []).filter(
+    ([id]) => (test === undefined || test === `Codeunit${id}.`) && !gone.includes(`Codeunit${id}.`),
+  );
+  const tests: Record<string, unknown>[] = [];
+  const summary: Record<string, unknown> = {};
+  const lane = fact.startsWith("batch-lane-");
+  for (const [id, methods] of cus)
+    for (const m of methods)
+      tests.push(lane && m === "NeedsFive" ? capRow(id, m, "fail", "store is 0") : capRow(id, m));
+  if (lane && req.strictOrder === true) {
+    // strictOrder: the writer runs again, then the reader is re-run and passes.
+    for (const [id, methods] of cus) for (const m of methods) tests.push(capRow(id, m));
+  } else if (lane) {
+    const reader = cus.find(([, ms]) => ms.includes("NeedsFive"));
+    if (reader !== undefined)
+      summary.orderHints = [
+        {
+          name: `Codeunit${reader[0]}.NeedsFive`,
+          orderHint:
+            'this test read global Stored of SingleInstance codeunit 50760 "Batch Lane Store"',
+        },
+      ];
+  }
+  if (fact === "batch-onrun-included-duplicates" && cus.length === 3) {
+    // The OnRun writer's row reaches the later codeunits, which stream a second row (a carry).
+    tests.push(capRow(50752, "ReaderSeesNoRow", "fail", "reader: carried row 7"));
+    tests.push(capRow(50753, "OtherInsertsAndSeesOne", "fail", "other: count 2"));
+  }
+  return { tests, summary };
+}
+
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
 function fakeServe(
   rows: Record<string, { status: string; notRun?: boolean; message?: string }> = SERVE_ROWS,
-  o: { ready?: boolean } = {},
+  o: {
+    ready?: boolean;
+    /** PR-114a: change one capability fact's answer to a request (default: the measured reading). */
+    cap?: (fact: string, req: Record<string, unknown>, def: CapAnswer) => CapAnswer;
+  } = {},
 ): { spawn: ServerSpawnFn; argvs: string[][]; requests: Record<string, unknown>[] } {
   const argvs: string[][] = [];
   const requests: Record<string, unknown>[] = [];
@@ -478,7 +579,21 @@ function fakeServe(
       write: (line: string) => {
         const req = JSON.parse(line) as Record<string, unknown>;
         requests.push(req);
-        if (req.command === "runTests") {
+        const capFact = Array.isArray(req.sourcePaths)
+          ? String(req.sourcePaths[0] ?? "")
+              .split("/")
+              .pop()
+          : undefined;
+        if (req.command === "runTests" && capFact?.startsWith("batch-") === true) {
+          // PR-114a: a capability fact's request (its own scratch folder is named for it).
+          const def = capabilityAnswer(capFact, req);
+          const ans = o.cap?.(capFact, req, def) ?? def;
+          if ("error" in ans) emit(JSON.stringify({ error: ans.error }));
+          else {
+            for (const t of ans.tests) emit(JSON.stringify({ type: "test", ...t }));
+            emit(JSON.stringify({ type: "summary", exitCode: 1, ...ans.summary }));
+          }
+        } else if (req.command === "runTests") {
           for (const [name, r] of Object.entries(rows))
             emit(JSON.stringify({ type: "test", name, ...r }));
           emit(JSON.stringify({ type: "summary", exitCode: 7 }));
@@ -538,9 +653,12 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
       expect(c.cwd).toBeDefined();
       expect(c.cwd).not.toBe(process.cwd());
     }
-    expect(serveCwds).toHaveLength(1);
-    expect(serveCwds[0]).toBeDefined();
-    expect(serveCwds[0]).not.toBe(process.cwd());
+    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon.
+    expect(serveCwds).toHaveLength(2);
+    for (const c of serveCwds) {
+      expect(c).toBeDefined();
+      expect(c).not.toBe(process.cwd());
+    }
   });
 });
 
@@ -631,8 +749,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
-    expect(s.argvs).toEqual([[resolve("/fake/alrunner"), "serve", "--test-timeout", "3"]]);
-    const run = s.requests.filter((q) => q.command === "runTests");
+    // PR-114a: a second daemon, with the same argv, measures the capability facts.
+    const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
+    expect(s.argvs).toEqual([serveArgv, serveArgv]);
+    const run = s.requests.filter((q) => q.command === "runTests" && !isCapabilityRequest(q));
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS)).toEqual({
@@ -1008,7 +1128,11 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     for (const v of ["matches", "diverged"]) {
       const s = fakeServe();
       const r = await session(s, { "serve-keep-reasons": v });
-      expect(s.argvs).toEqual([]);
+      // PR-114a: a session does start serve, for the capability facts alone.
+      expect(s.argvs.length).toBe(1);
+      expect(
+        s.requests.filter((q) => q.command === "runTests").every((q) => isCapabilityRequest(q)),
+      ).toBe(true);
       const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
       expect(f).toMatchObject({ kind: "warn", verdict: v });
       expect(f?.measured).toBe(
@@ -1021,7 +1145,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
   test("M-2: a .gated without the reading (gated before R612) is unmeasurable, never matches", async () => {
     const s = fakeServe();
     const r = await session(s);
-    expect(s.argvs).toEqual([]);
+    expect(
+      s.requests.filter((q) => q.command === "runTests").every((q) => isCapabilityRequest(q)),
+    ).toBe(true);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "unmeasurable" });
     expect(f?.measured).toMatch(/\.gated records no reading/);
@@ -1065,6 +1191,15 @@ describe("§8 the contract probe", () => {
         "serve-keep-reasons",
         "dependent-fail-after-timeout-is-notrun",
         "message-has-no-type-prefix",
+        // PR-114a: the capability facts
+        "batch-no-cross-singleinstance",
+        "batch-no-cross-library-global",
+        "batch-no-cross-row",
+        "batch-no-cross-subscriber",
+        "batch-onrun-excluded-no-carry",
+        "batch-onrun-included-duplicates",
+        "batch-lane-hint-only",
+        "batch-lane-strict-reruns",
       ].sort(),
     );
   });
@@ -1079,6 +1214,215 @@ describe("§8 the contract probe", () => {
       }),
     });
     expect(v3ContractRefusals(r).join("\n")).toMatch(/timeout-classified/);
+  });
+});
+
+describe("PR-114a: the eight capability facts", () => {
+  type Body = Record<string, unknown>;
+  const readOf = async (cap?: (fact: string, req: Body, def: CapAnswer) => CapAnswer) => {
+    const serve = fakeServe(SERVE_ROWS, cap !== undefined ? { cap } : {});
+    const r = await probe({}, serve.spawn);
+    const f = (name: string) => r.facts.find((x) => x.fact === name);
+    return { r, f, serve };
+  };
+  test("as edge-4ebfe7913 measured: all eight read matches, kind capability, none refuses a session", async () => {
+    const { r, f } = await readOf();
+    for (const n of V3_CAPABILITY_FACTS)
+      expect(f(n), n).toMatchObject({ kind: "capability", verdict: "matches" });
+    expect(r.facts.filter((x) => x.kind === "capability").map((x) => x.fact)).toEqual([
+      ...V3_CAPABILITY_FACTS,
+    ]);
+    expect(v3ContractRefusals(r)).toEqual([]);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
+  });
+
+  // Each no-cross fact: a build whose batch lets the writer's state reach the reader reads diverged.
+  const NO_CROSS: [string, number, string, string][] = [
+    ["batch-no-cross-singleinstance", 50703, "SeesNoCounter", "counter 1"],
+    ["batch-no-cross-library-global", 50713, "SeesFreshLibrary", "library global carried"],
+    ["batch-no-cross-row", 50723, "SeesNoRealRow", "real rows 1"],
+    ["batch-no-cross-subscriber", 50734, "SeesNoBoundSubscriber", "subscriber still bound"],
+  ];
+  for (const [fact, reader, method, msg] of NO_CROSS) {
+    test(`${fact}: matches when the batch's reader rows equal the reader alone; diverged when state crossed`, async () => {
+      const crossed = await readOf((name, q, def) =>
+        name === fact && q.test === undefined && "tests" in def
+          ? {
+              ...def,
+              tests: def.tests.map((t) =>
+                t.name === `Codeunit${reader}.${method}`
+                  ? { ...t, status: "fail", message: msg }
+                  : t,
+              ),
+            }
+          : def,
+      );
+      expect(crossed.f(fact)).toMatchObject({ verdict: "diverged" });
+      expect(crossed.f(fact)?.measured).toContain(msg);
+      // the other seven are not touched by this fact's divergence
+      for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== fact))
+        expect(crossed.f(n)?.verdict, n).toBe("matches");
+      // a session still accepts it; the gate does not
+      expect(v3ContractRefusals(crossed.r)).toEqual([]);
+      expect(classifyLegC(crossed.r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe(
+        "gate-fail",
+      );
+    });
+
+    test(`${fact}: empty answers do not match (empty equals empty is not a pass); a request error is unmeasurable`, async () => {
+      const empty = await readOf((name, _q, def) =>
+        name === fact && "tests" in def ? { ...def, tests: [] } : def,
+      );
+      expect(empty.f(fact)?.verdict).toBe("diverged");
+      // the reader gives no row ANYWHERE (alone and in the batch): empty equals empty, which must not pass
+      const noReader = await readOf((name, _q, def) =>
+        name === fact && "tests" in def
+          ? {
+              ...def,
+              tests: def.tests.filter((t) => !String(t.name).startsWith(`Codeunit${reader}.`)),
+            }
+          : def,
+      );
+      expect(noReader.f(fact)?.verdict).toBe("diverged");
+      const err = await readOf((name, _q, def) => (name === fact ? { error: "boom" } : def));
+      expect(err.f(fact)?.verdict).toBe("unmeasurable");
+      expect(err.f(fact)?.measured).toContain("boom");
+      // a request error closes this daemon's request only; the other facts still read
+      expect(err.f("batch-lane-hint-only")?.verdict).toBe("matches");
+    });
+  }
+
+  test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
+    const { f } = await readOf((name, q, def) =>
+      name === "batch-onrun-excluded-no-carry" && q.test === undefined && "tests" in def
+        ? {
+            ...def,
+            tests: def.tests.map((t) =>
+              t.name === "Codeunit50742.ReaderSeesNoRow"
+                ? { ...t, status: "fail", message: "reader: carried row 7" }
+                : t,
+            ),
+          }
+        : def,
+    );
+    expect(f("batch-onrun-excluded-no-carry")).toMatchObject({ verdict: "diverged" });
+  });
+
+  test("batch-onrun-included-duplicates: matches on the carry's signature (a second row); diverged when none appears", async () => {
+    const { f } = await readOf((name, _q, def) =>
+      name === "batch-onrun-included-duplicates" && "tests" in def
+        ? { ...def, tests: def.tests.slice(0, 3) }
+        : def,
+    );
+    expect(f("batch-onrun-included-duplicates")).toMatchObject({
+      verdict: "diverged",
+    });
+    // exactly the pre-committed shape matches: writer once, reader and other twice
+    expect((await readOf()).f("batch-onrun-included-duplicates")?.measured).toContain(
+      "Codeunit50752.ReaderSeesNoRow=fail(reader: carried row 7)",
+    );
+  });
+
+  test("batch-lane-hint-only: matches with the hint and the failing reader; diverged without the hint, with a re-run, or with another message", async () => {
+    const F = "batch-lane-hint-only";
+    const noHint = await readOf((n, _q, d) =>
+      n === F && "tests" in d ? { ...d, summary: {} } : d,
+    );
+    expect(noHint.f(F)?.verdict).toBe("diverged");
+    const wrongGlobal = await readOf((n, _q, d) =>
+      n === F && "tests" in d
+        ? {
+            ...d,
+            summary: { orderHints: [{ name: "Codeunit50763.NeedsFive", orderHint: "other" }] },
+          }
+        : d,
+    );
+    expect(wrongGlobal.f(F)?.verdict).toBe("diverged");
+    const rerun = await readOf((n, _q, d) =>
+      n === F && "tests" in d
+        ? { ...d, tests: [...d.tests, { name: "Codeunit50763.NeedsFive", status: "pass" }] }
+        : d,
+    );
+    expect(rerun.f(F)?.verdict).toBe("diverged");
+    const msg = await readOf((n, _q, d) =>
+      n === F && "tests" in d
+        ? {
+            ...d,
+            tests: d.tests.map((t) => (t.status === "fail" ? { ...t, message: "store is 5" } : t)),
+          }
+        : d,
+    );
+    expect(msg.f(F)?.verdict).toBe("diverged");
+  });
+
+  test("batch-lane-strict-reruns: matches on a failing then passing reader; diverged when the reader is not re-run or fails again", async () => {
+    const F = "batch-lane-strict-reruns";
+    const noRerun = await readOf((n, _q, d) =>
+      n === F && "tests" in d ? { ...d, tests: d.tests.slice(0, 2) } : d,
+    );
+    expect(noRerun.f(F)?.verdict).toBe("diverged");
+    const failsAgain = await readOf((n, _q, d) =>
+      n === F && "tests" in d
+        ? {
+            ...d,
+            tests: d.tests.map((t, i) =>
+              i === 3 ? { ...t, status: "fail", message: "store is 0" } : t,
+            ),
+          }
+        : d,
+    );
+    expect(failsAgain.f(F)?.verdict).toBe("diverged");
+  });
+
+  test("the requests: LethAL's batch body (isolation test, coverage, per-test coverage); one folder per fact; only the strict fact sends strictOrder", async () => {
+    const { serve } = await readOf();
+    const cap = serve.requests.filter((q) => q.command === "runTests" && isCapabilityRequest(q));
+    // 4 no-cross x2, excluded-no-carry x3, included x1, hint x1, strict x1
+    expect(cap).toHaveLength(14);
+    for (const q of cap) {
+      expect(q.testIsolation).toBe("test");
+      expect(q.coverage).toBe(true);
+      expect(q.perTestCoverage).toBe(true);
+      for (const k of ["runSelectedOnly", "testSuites", "testRunner", "testDriver"])
+        expect(Object.hasOwn(q, k), k).toBe(false);
+      expect(Array.isArray(q.sourcePaths) && q.sourcePaths.length === 1).toBe(true);
+    }
+    const dirs = new Set(cap.map((q) => (q.sourcePaths as string[])[0] ?? ""));
+    expect([...dirs].map((d) => d.split("/").pop()).sort()).toEqual(
+      [...V3_CAPABILITY_FACTS].sort(),
+    );
+    const strict = cap.filter((q) => Object.hasOwn(q, "strictOrder"));
+    expect(strict.map((q) => (q.sourcePaths as string[])[0]?.split("/").pop())).toEqual([
+      "batch-lane-strict-reruns",
+    ]);
+    // the batch requests name the complement in excludeTests and carry no `test`
+    for (const q of cap.filter(
+      (x) => x.test === undefined && (x.sourcePaths as string[])[0]?.includes("batch-no-cross"),
+    ))
+      expect(q.excludeTests).toHaveLength(1);
+  });
+
+  test("the invented AL: ids in 50700-50779, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
+    const seen = new Map<string, string>();
+    const { r } = await readOf((name, q, def) => {
+      const dir = (q.sourcePaths as string[])[0] ?? "";
+      if (!seen.has(name)) seen.set(name, readFileSync(`${dir}/src/Batch.Codeunit.al`, "utf8"));
+      return def;
+    });
+    expect(r.facts.length).toBe(36);
+    expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
+    for (const [name, al] of seen) {
+      const ids = [...al.matchAll(/^(?:table|codeunit) (\d+) /gm)].map((m) => Number(m[1]));
+      expect(ids.length, name).toBeGreaterThan(2);
+      for (const id of ids) {
+        expect(id, name).toBeGreaterThanOrEqual(50700);
+        expect(id, name).toBeLessThanOrEqual(50779);
+        expect(Math.floor((id - 50700) / 10), name).toBe(
+          Math.floor((Math.min(...ids) - 50700) / 10),
+        );
+      }
+      expect(al, name).not.toMatch(/DotNet/);
+    }
   });
 });
 
@@ -1634,7 +1978,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(28);
+    expect(r.facts.length).toBe(36);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1945,13 +2289,18 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13): 28 facts, 9 defect, 18 contract, 1 warn; the old count of 27 is gate-fail", async () => {
+  test("P10 (R590, r13; PR-114a): 36 facts, 9 defect, 18 contract, 1 warn, 8 capability; the old count of 28 is gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
-    expect([r.facts.length, kinds("defect"), kinds("contract"), kinds("warn")]).toEqual([
-      28, 9, 18, 1,
-    ]);
-    expect(V3_LEG_C_FACTS).toBe(28);
+    expect([
+      r.facts.length,
+      kinds("defect"),
+      kinds("contract"),
+      kinds("warn"),
+      kinds("capability"),
+    ]).toEqual([36, 9, 18, 1, 8]);
+    expect(V3_LEG_C_FACTS).toBe(36);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 28).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
       r.facts

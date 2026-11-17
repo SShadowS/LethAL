@@ -363,6 +363,10 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/S1E": [],
   // R948: leg DB's reader is fixed by the leg (a 32 GiB limit), so its guard line is the one warning.
   "al-runner-v3/DB": ["al-runner-v3-memory-guard"],
+  // PR-114a: leg DBM's two sessions (own scratch each, so own key). PREDICTED, not observed: the daemon session
+  // has DB's one guard line, the one-shot baseline none. Confirm with LETHAL_ITEST_OBSERVE_WARNINGS on the first run.
+  "al-runner-v3/dbm-daemon": ["al-runner-v3-memory-guard"],
+  "al-runner-v3/dbm-oneshot": [],
   // R948: leg DBI runs under --isolate-tests (which says so) with the same fixed-reader guard line.
   // R949 (pre-commitment master 02d2139b): DBI serves a daemon answer, whose flagged state is unknown (#7954).
   "al-runner-v3/DBI": [

@@ -15,6 +15,9 @@
  * - `warn` (R612, plan r3 §2): `serve-keep-reasons`. Never refuses a session; a non-`matches` reading
  *   prints `al-runner-v3-serve-keep-reason-moved` (`V3_WARN_FACTS`), except `unkept` (R1000: a refusal
  *   no keep-list entry accepts), which fails the gate.
+ * - `capability` (PR-114a): the eight `V3_CAPABILITY_FACTS` baseline batching rests on. `matches` /
+ *   `diverged` / `unmeasurable`. Gate-fail in leg C when not `matches`; NEVER refuses a session (it only
+ *   feeds `baselineBatchingFor`).
  */
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -123,8 +126,12 @@ export type V3WarnVerdict = V3ContractVerdict | "unkept";
 
 export interface V3Fact {
   readonly fact: string;
-  /** `warn` (R612): never refuses a session; fails the gate only on `unkept` (R1000), else only prints its line. */
-  readonly kind: "contract" | "defect" | "warn";
+  /**
+   * `warn` (R612): never refuses a session; fails the gate only on `unkept` (R1000), else only prints its line.
+   * `capability` (PR-114a): never refuses a session (it only feeds `baselineBatchingFor`); a reading other
+   * than `matches` fails the gate (`classifyLegC`).
+   */
+  readonly kind: "contract" | "defect" | "warn" | "capability";
   readonly verdict: V3ContractVerdict | V3DefectVerdict | V3WarnVerdict;
   readonly expected: string;
   readonly measured: string;
@@ -1476,6 +1483,627 @@ const rowCount = (c: Call, method: string): number =>
 const rowsText = (c: Call, method: string): string =>
   `${JSON.stringify(c.rows?.filter((r) => r.method === method).map(({ stackTrace: _, clock: _clock, ...r }) => r) ?? null)} exit ${c.exitCode}`;
 
+/**
+ * PR-114a: the eight capability facts baseline batching (PR-114b) rests on. Each runs serve requests
+ * of LethAL's batch body (no `test` unless it measures one codeunit alone, the complement in
+ * `excludeTests`, `testIsolation: "test"`, coverage and per-test coverage; none of `runSelectedOnly`,
+ * `strictOrder` (but `batch-lane-strict-reruns`, which measures it), `testSuites`, `testRunner`,
+ * `testDriver`) over its own scratch folder of invented AL, ids 50700-50779 (ten per fact).
+ */
+export const V3_CAPABILITY_FACTS = [
+  "batch-no-cross-singleinstance",
+  "batch-no-cross-library-global",
+  "batch-no-cross-row",
+  "batch-no-cross-subscriber",
+  "batch-onrun-excluded-no-carry",
+  "batch-onrun-included-duplicates",
+  "batch-lane-hint-only",
+  "batch-lane-strict-reruns",
+] as const;
+
+const batchSpareAl = (id: number): string => `codeunit ${id} "Batch Spare"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure Spare()
+    begin
+    end;
+}
+`;
+
+const batchRowTableAl = (id: number): string => `table ${id} "Batch Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[10]) { }
+    }
+    keys
+    {
+        key(PK; "Code") { Clustered = true; }
+    }
+}
+`;
+
+/** Writer (no OnRun) and reader that fail on a SingleInstance counter or temp table. ids b..b+4. */
+const batchSingleInstanceAl = (b: number): string => `${batchRowTableAl(b)}
+codeunit ${b + 1} "Batch Single State"
+{
+    SingleInstance = true;
+
+    var
+        Counter: Integer;
+        TempRows: Record "Batch Row" temporary;
+
+    procedure Bump()
+    begin
+        Counter += 1;
+    end;
+
+    procedure Count(): Integer
+    begin
+        exit(Counter);
+    end;
+
+    procedure AddTemp(C: Code[10])
+    begin
+        TempRows.Init();
+        TempRows."Code" := C;
+        TempRows.Insert();
+    end;
+
+    procedure TempCount(): Integer
+    begin
+        exit(TempRows.Count());
+    end;
+}
+
+codeunit ${b + 2} "Batch Writer Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure WritesState()
+    var
+        S: Codeunit "Batch Single State";
+    begin
+        S.Bump();
+        S.AddTemp('T');
+    end;
+}
+
+codeunit ${b + 3} "Batch Reader Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure SeesNoCounter()
+    var
+        S: Codeunit "Batch Single State";
+    begin
+        if S.Count() <> 0 then
+            Error('counter %1', S.Count());
+    end;
+
+    [Test]
+    procedure SeesNoTemp()
+    var
+        S: Codeunit "Batch Single State";
+    begin
+        if S.TempCount() <> 0 then
+            Error('temp rows %1', S.TempCount());
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
+/** Writer and reader of a library codeunit's (not SingleInstance) global. ids b..b+4. */
+const batchLibraryAl = (b: number): string => `codeunit ${b + 1} "Batch Library"
+{
+    var
+        Seen: Integer;
+
+    procedure Touch(): Integer
+    begin
+        Seen += 1;
+        exit(Seen);
+    end;
+}
+
+codeunit ${b + 2} "Batch Writer Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure WritesLibraryGlobal()
+    var
+        L: Codeunit "Batch Library";
+    begin
+        L.Touch();
+    end;
+}
+
+codeunit ${b + 3} "Batch Reader Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure SeesFreshLibrary()
+    var
+        L: Codeunit "Batch Library";
+    begin
+        if L.Touch() <> 1 then
+            Error('library global carried');
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
+/** Writer that inserts a real row, and a reader that fails on it. ids b..b+4. */
+const batchRowAl = (b: number): string => `${batchRowTableAl(b)}
+codeunit ${b + 2} "Batch Writer Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure WritesARealRow()
+    var
+        R: Record "Batch Row";
+    begin
+        R.Init();
+        R."Code" := 'W';
+        R.Insert();
+    end;
+}
+
+codeunit ${b + 3} "Batch Reader Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure SeesNoRealRow()
+    var
+        R: Record "Batch Row";
+    begin
+        if not R.IsEmpty() then
+            Error('real rows %1', R.Count());
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
+/** Writer that binds a manual subscriber, and a reader that fails while it is still bound. ids b..b+5. */
+const batchSubscriberAl = (b: number): string => `codeunit ${b + 1} "Batch Event Source"
+{
+    [IntegrationEvent(false, false)]
+    procedure OnPing(var Hits: Integer)
+    begin
+    end;
+
+    procedure Ping(): Integer
+    var
+        Hits: Integer;
+    begin
+        OnPing(Hits);
+        exit(Hits);
+    end;
+}
+
+codeunit ${b + 2} "Batch Manual Subscriber"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Batch Event Source", 'OnPing', '', false, false)]
+    local procedure HandlePing(var Hits: Integer)
+    begin
+        Hits += 1;
+    end;
+}
+
+codeunit ${b + 3} "Batch Writer Tests"
+{
+    Subtype = Test;
+
+    var
+        Sub: Codeunit "Batch Manual Subscriber";
+
+    [Test]
+    procedure BindsASubscriber()
+    begin
+        BindSubscription(Sub);
+    end;
+}
+
+codeunit ${b + 4} "Batch Reader Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure SeesNoBoundSubscriber()
+    var
+        E: Codeunit "Batch Event Source";
+    begin
+        if E.Ping() <> 0 then
+            Error('subscriber still bound');
+    end;
+}
+
+${batchSpareAl(b + 5)}`;
+
+/** A writer WITH an OnRun that inserts a row; a reader that fails on it; an other that counts rows. ids b..b+3. */
+const batchOnRunAl = (b: number): string => `table ${b} "Batch Setup"
+{
+    fields
+    {
+        field(1; "Code"; Code[10]) { }
+        field(2; Value; Integer) { }
+    }
+    keys
+    {
+        key(PK; "Code") { Clustered = true; }
+    }
+}
+
+codeunit ${b + 1} "Batch Writer Tests"
+{
+    Subtype = Test;
+
+    trigger OnRun()
+    var
+        S: Record "Batch Setup";
+    begin
+        S.Init();
+        S."Code" := 'X';
+        S.Value := 7;
+        S.Insert();
+    end;
+
+    [Test]
+    procedure WriterSeesOwnRow()
+    var
+        S: Record "Batch Setup";
+    begin
+        if not S.Get('X') then
+            Error('writer: no row');
+    end;
+}
+
+codeunit ${b + 2} "Batch Reader Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure ReaderSeesNoRow()
+    var
+        S: Record "Batch Setup";
+    begin
+        if S.Get('X') then
+            Error('reader: carried row %1', S.Value);
+    end;
+}
+
+codeunit ${b + 3} "Batch Other Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure OtherInsertsAndSeesOne()
+    var
+        S: Record "Batch Setup";
+    begin
+        S.Init();
+        S."Code" := 'Y';
+        S.Insert();
+        if S.Count() <> 1 then
+            Error('other: count %1', S.Count());
+    end;
+}
+`;
+
+/** A SingleInstance store, its writer and a reader that fails on a store the writer left. ids b..b+4. */
+const batchLaneAl = (b: number): string => `codeunit ${b + 1} "Batch Lane Store"
+{
+    SingleInstance = true;
+
+    var
+        Stored: Integer;
+
+    procedure SetValue(V: Integer)
+    begin
+        Stored := V;
+    end;
+
+    procedure GetValue(): Integer
+    begin
+        exit(Stored);
+    end;
+}
+
+codeunit ${b + 2} "Batch Lane Writer"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure StoresFive()
+    var
+        S: Codeunit "Batch Lane Store";
+    begin
+        S.SetValue(5);
+    end;
+}
+
+codeunit ${b + 3} "Batch Lane Reader"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure NeedsFive()
+    var
+        S: Codeunit "Batch Lane Store";
+    begin
+        if S.GetValue() <> 5 then
+            Error('store is %1', S.GetValue());
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
+interface BatchRow {
+  readonly name: string;
+  readonly status: string;
+  readonly message: string | undefined;
+}
+
+interface BatchAnswer {
+  readonly rows: readonly BatchRow[];
+  readonly hints: readonly { readonly name: string; readonly orderHint: string }[];
+}
+
+type BatchAsk = (extra: Record<string, unknown>) => Promise<BatchAnswer>;
+
+interface BatchFactSpec {
+  readonly fact: (typeof V3_CAPABILITY_FACTS)[number];
+  /** The first of the fact's ten ids. */
+  readonly base: number;
+  readonly al: string;
+  readonly expected: string;
+  readonly judge: (ask: BatchAsk) => Promise<{ ok: boolean; measured: string }>;
+}
+
+const rowText = (rs: readonly BatchRow[]): string =>
+  rs
+    .map((r) => `${r.name}=${r.status}${r.message !== undefined ? `(${r.message})` : ""}`)
+    .join(" ");
+const rowsOf = (a: BatchAnswer, id: number): BatchRow[] =>
+  a.rows.filter((r) => r.name.startsWith(`Codeunit${id}.`));
+const sameRows = (a: readonly BatchRow[], b: readonly BatchRow[]): boolean =>
+  a.length === b.length &&
+  a.every(
+    (r, i) => r.name === b[i]?.name && r.status === b[i]?.status && r.message === b[i]?.message,
+  );
+
+/**
+ * `reader` alone is the reference: a pass on every row, and at least one row (an empty reference would
+ * make "equal" true for a build that ran nothing). The batch holds the writer's rows (they ran), the
+ * reader's rows equal to the reference, and no row of the excluded spare.
+ */
+function noCrossSpec(
+  fact: BatchFactSpec["fact"],
+  base: number,
+  al: string,
+  writer: number,
+  reader: number,
+  spare: number,
+  what: string,
+): BatchFactSpec {
+  return {
+    fact,
+    base,
+    al,
+    expected: `the reader (codeunit ${reader}) gives the same rows in one batch (writer ${writer} included, spare ${spare} excluded) as alone, all passes: ${what} does not cross test codeunits in one plain request`,
+    judge: async (ask) => {
+      const alone = await ask({ test: `Codeunit${reader}.` });
+      const batch = await ask({ excludeTests: [`Codeunit${spare}.`] });
+      const ref = rowsOf(alone, reader);
+      const w = rowsOf(batch, writer);
+      const r = rowsOf(batch, reader);
+      const ok =
+        ref.length > 0 &&
+        ref.every((x) => x.status === "pass") &&
+        w.length > 0 &&
+        w.every((x) => x.status === "pass") &&
+        sameRows(r, ref) &&
+        rowsOf(batch, spare).length === 0;
+      return {
+        ok,
+        measured: `alone: ${rowText(ref)}; batch writer: ${rowText(w)}; batch reader: ${rowText(r)}`,
+      };
+    },
+  };
+}
+
+const BATCH_FACTS: readonly BatchFactSpec[] = [
+  noCrossSpec(
+    "batch-no-cross-singleinstance",
+    50700,
+    batchSingleInstanceAl(50700),
+    50702,
+    50703,
+    50704,
+    "a SingleInstance counter or temp table",
+  ),
+  noCrossSpec(
+    "batch-no-cross-library-global",
+    50710,
+    batchLibraryAl(50710),
+    50712,
+    50713,
+    50714,
+    "a library codeunit's global",
+  ),
+  noCrossSpec("batch-no-cross-row", 50720, batchRowAl(50720), 50722, 50723, 50724, "a real row"),
+  noCrossSpec(
+    "batch-no-cross-subscriber",
+    50730,
+    batchSubscriberAl(50730),
+    50733,
+    50734,
+    50735,
+    "a bound manual subscriber",
+  ),
+  {
+    fact: "batch-onrun-excluded-no-carry",
+    base: 50740,
+    al: batchOnRunAl(50740),
+    expected:
+      "an OnRun writer (50741) EXCLUDED from the batch carries nothing: the reader (50742) and other (50743) give the same rows in the batch as each alone, all passes",
+    judge: async (ask) => {
+      const reader = await ask({ test: "Codeunit50742." });
+      const other = await ask({ test: "Codeunit50743." });
+      const batch = await ask({ excludeTests: ["Codeunit50741."] });
+      const refs = [...rowsOf(reader, 50742), ...rowsOf(other, 50743)];
+      const got = [...rowsOf(batch, 50742), ...rowsOf(batch, 50743)];
+      const ok =
+        refs.length === 2 &&
+        refs.every((x) => x.status === "pass") &&
+        batch.rows.length === 2 &&
+        sameRows(got, refs);
+      return { ok, measured: `alone: ${rowText(refs)}; batch: ${rowText(batch.rows)}` };
+    },
+  },
+  {
+    fact: "batch-onrun-included-duplicates",
+    base: 50750,
+    al: batchOnRunAl(50750),
+    expected:
+      "an OnRun writer (50751) INCLUDED reaches the later codeunits, and they stream a second row with the same name: the writer one row, the reader (50752) and other (50753) two each",
+    judge: async (ask) => {
+      const batch = await ask({});
+      const n = (id: number) => rowsOf(batch, id).length;
+      return {
+        ok: n(50751) === 1 && n(50752) === 2 && n(50753) === 2,
+        measured: rowText(batch.rows),
+      };
+    },
+  },
+  {
+    fact: "batch-lane-hint-only",
+    base: 50760,
+    al: batchLaneAl(50760),
+    expected:
+      'without strictOrder the SingleInstance lane only hints: the reader (50763) is exactly `fail` "store is 0", two rows in all, and the summary\'s orderHints names the reader and the global Stored',
+    judge: async (ask) => {
+      const batch = await ask({ excludeTests: ["Codeunit50764."] });
+      const r = rowsOf(batch, 50763);
+      const hint = batch.hints.filter((h) => h.name === "Codeunit50763.NeedsFive");
+      const ok =
+        batch.rows.length === 2 &&
+        r.length === 1 &&
+        r[0]?.status === "fail" &&
+        r[0]?.message === "store is 0" &&
+        hint.length === 1 &&
+        hint[0]?.orderHint.includes("Stored") === true;
+      return {
+        ok,
+        measured: `${rowText(batch.rows)}; orderHints ${JSON.stringify(batch.hints).slice(0, 300)}`,
+      };
+    },
+  },
+  {
+    fact: "batch-lane-strict-reruns",
+    base: 50770,
+    al: batchLaneAl(50770),
+    expected:
+      'with strictOrder: true (NOT LethAL\'s body) the reader (50773) is re-run: a first reader row that fails with "store is 0", then a second that passes',
+    judge: async (ask) => {
+      const batch = await ask({ excludeTests: ["Codeunit50774."], strictOrder: true });
+      const r = rowsOf(batch, 50773);
+      return {
+        ok:
+          r.length === 2 &&
+          r[0]?.status === "fail" &&
+          r[0]?.message === "store is 0" &&
+          r[1]?.status === "pass",
+        measured: rowText(batch.rows),
+      };
+    },
+  },
+];
+
+/**
+ * PR-114a: the eight capability facts, one serve daemon, one scratch folder per fact. A request that
+ * fails (or a daemon that will not start) reads `unmeasurable` for the facts it carried.
+ */
+async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fact[]> {
+  const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  const spawn: ServerSpawnFn = (argv) =>
+    (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
+  const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+  const out: V3Fact[] = [];
+  try {
+    await server.start(
+      SERVE_DEADLINE_MS,
+      [],
+      SERVE_TEST_TIMEOUT_S,
+      env.environment !== undefined ? ["--environment", env.environment] : [],
+    );
+    for (const spec of BATCH_FACTS) {
+      const dir = join(root, spec.fact);
+      await mkdir(join(dir, "src"), { recursive: true });
+      await writeFile(
+        join(dir, "app.json"),
+        baseAppJson({
+          id: `7a1c0e52-5b8e-4d3a-9f60-2c7b8e1d${String(spec.base - 50000).padStart(4, "0")}`,
+          name: `LethAL PR114 ${spec.fact}`,
+          idFrom: spec.base,
+          idTo: spec.base + 9,
+        }),
+      );
+      await writeFile(join(dir, "src", "Batch.Codeunit.al"), spec.al);
+      const ask: BatchAsk = async (extra) => {
+        const a = await server.runEntries(
+          {
+            command: "runTests",
+            sourcePaths: [dir],
+            testIsolation: "test",
+            coverage: true,
+            perTestCoverage: true,
+            ...extra,
+          },
+          SERVE_DEADLINE_MS,
+        );
+        const hints: unknown[] = Array.isArray(a.summary.orderHints) ? a.summary.orderHints : [];
+        return {
+          rows: a.tests.map((t) => ({
+            name: String(t.name),
+            status: String(t.status),
+            message: typeof t.message === "string" ? t.message : undefined,
+          })),
+          hints: hints.map((h) => {
+            const x = (h ?? {}) as Record<string, unknown>;
+            return { name: String(x.name), orderHint: String(x.orderHint ?? "") };
+          }),
+        };
+      };
+      try {
+        const j = await spec.judge(ask);
+        out.push(
+          fact(spec.fact, "capability", j.ok ? "matches" : "diverged", spec.expected, j.measured),
+        );
+      } catch (err) {
+        out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
+      }
+    }
+  } catch (err) {
+    for (const spec of BATCH_FACTS)
+      if (!out.some((f) => f.fact === spec.fact))
+        out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
+  } finally {
+    await server.close();
+  }
+  return out;
+}
+
 /** The probe. Never throws for a v3 answer; a fact it could not read is `unmeasurable`. */
 export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractResult> {
   const root = await mkdtemp(join(tmpdir(), "lethal-r586-contract-"));
@@ -2108,6 +2736,8 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         ),
       );
     } else facts.push(await serveKeepReasons(env, app, root));
+    // PR-114a: the eight capability facts (batch carry and the SingleInstance lane); never a refusal.
+    facts.push(...(await batchCapabilityFacts(env, root)));
     // duplicate-key-insert-raises (#5603), r9 §6 (branch F): bc1 FAILS the test at its end.
     const keys = await call(["--codeunit", "50655"], { codeunit: 50655 });
     const k = onlyRow(keys, "DuplicateNamedKey");
