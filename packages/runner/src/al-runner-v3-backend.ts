@@ -75,6 +75,14 @@ import {
   serveDaemonReusable,
 } from "./al-runner-server";
 import {
+  BASELINE_BATCH_SIZE,
+  batchBody,
+  decodeBatchAnswer,
+  exclusionsFor,
+  planBaselineBatches,
+  scanTestCodeunits,
+} from "./al-runner-v3-baseline-batch";
+import {
   BASELINE_MIN_CLEAN_SAMPLES,
   type MemorySample,
   ONE_SHOT_EXITS,
@@ -214,7 +222,7 @@ import {
   testAppPathRewrite,
   testAppPathWarning,
 } from "./test-app-publish";
-import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFilesSync } from "./walk";
+import { LINK_EXCUSED_DIRS, ProjectSymlinkRefusedError, walkFiles, walkFilesSync } from "./walk";
 
 /**
  * `--version` of a v3 build: `alrunner 3.0.0-alpha.2 (91253f2d6)` (alpha.3 renamed it `al-runner`).
@@ -1010,6 +1018,8 @@ interface BaselineAnswer {
   readonly withCoverage: boolean;
   /** Set on an answer a serve daemon gave (not one a fresh process gave in its place). */
   readonly fromDaemon?: true;
+  /** PR-115: one call id for every codeunit of a batch, so the batch's wall time is charged once. */
+  readonly callId?: string;
   /** R951: a fresh process's answer whose exit was 8 (serving it raises the .NET-helper notice, as a live call does). */
   readonly exit8?: true;
 }
@@ -2635,6 +2645,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     sampledSkipped: [] as string[],
     /** R951: skipped sample name -> the name that replaced it (`replaced` is its size). */
     replacements: {} as Record<string, string>,
+    /** PR-115: batch requests answered and kept, batches discarded or failed, and the `orderHints` their summaries held (ignored). */
+    batches: 0,
+    batchDiscards: 0,
+    orderHints: 0,
   };
 
   /**
@@ -2735,6 +2749,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   readonly seams: {
     /** Forces `sleepRuleRetiredForParallel()`. */
     sleepRuleRetired?: boolean;
+    /** PR-115: replaces `BASELINE_BATCH_SIZE` (leg DBM and the unit tests). */
+    baselineBatchSize?: number;
+    /** PR-115: forces the batching decision of the fill (unit tests that do not run `status()`). */
+    baselineBatching?: boolean;
     /** Replaces `os.freemem()` for the lane memory hold. */
     availableBytes?: () => number;
     /** Runs on each lane copy right after it was made, before it is checked against the proof. */
@@ -3266,7 +3284,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
-    // PR-114a: decided once, printed in the details; nothing reads it to batch (114b will).
+    // PR-114a: decided once, printed in the details; PR-115's baseline fill reads it to batch.
     this.baselineBatchingWhyOff = baselineBatchingOffReason(this.contract, reported, binarySha256);
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
@@ -3339,9 +3357,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private baselineBatchingWhyOff: string | undefined = "status() has not run";
 
-  /** PR-114a: may the baseline batch its test codeunits? False on every build in 114a; nothing reads it yet. */
+  /** PR-114a: may the baseline batch its test codeunits (`baselineBatchingFor`, as the last `status()` read it)? */
   isBaselineBatching(): boolean {
     return this.baselineBatchingWhyOff === undefined;
+  }
+
+  /** PR-114a: why batching is off, or `undefined` when allowed (the gate prints it). */
+  baselineBatchingOffWhy(): string | undefined {
+    return this.baselineBatchingWhyOff;
+  }
+
+  /** PR-115: set by the first discarded or failed batch; batching stays off for the rest of the session. */
+  private baselineBatchingSpent: string | undefined;
+
+  /** PR-115: whether the fill batches now: allowed, asked for coverage, and no batch has failed yet. */
+  private batchingOn(coverage: boolean): boolean {
+    return (
+      (this.seams.baselineBatching ?? this.isBaselineBatching()) &&
+      coverage &&
+      this.baselineBatchingSpent === undefined
+    );
   }
 
   /** R782: the switch, as the last `status()` decided it (read by tests and the gate). */
@@ -4402,6 +4437,113 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
+  /**
+   * PR-115: ONE request for the test codeunits `group` (two or more) on the baseline daemon, every
+   * other test codeunit left out by `excludeTests`. The pre-row steps are `plainInFlight`'s and throw
+   * as they do. Then `decodeBatchAnswer` splits the answer per codeunit. Returns the per-codeunit
+   * answers (they share one call id and the batch's wall time), or `undefined` when any check failed:
+   * the daemon is closed (R612) and the caller re-sends each codeunit alone. A request error
+   * propagates as `AlRunnerServerRequestError` (the daemon is already closed); the caller treats it the same.
+   */
+  private async batchRequest(
+    lane: Lane,
+    mode: RequestMode,
+    group: readonly number[],
+    stopSeconds: number,
+    excludeTests: readonly string[],
+  ): Promise<Map<number, BaselineAnswer> | undefined> {
+    const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
+    const prev = lane.inFlight;
+    lane.inFlight = "baseline";
+    try {
+      const totalTests = group.reduce((n, id) => n + (this.testsPerCodeunit.get(id) ?? 1), 0);
+      const timedAt = Date.now();
+      const emit = (extra: { readonly failed?: true; readonly timings?: V3Timings }): void => {
+        if (!this.inBaseline) return;
+        this.requestTimedSink?.({
+          kind: "baseline",
+          lane: lane.index,
+          wallMs: Date.now() - timedAt,
+          entries: group.length,
+          tests: totalTests,
+          ...extra,
+        });
+      };
+      let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+      try {
+        answer = await daemon.server.runEntries(
+          batchBody(lane.requestBase(mode), excludeTests),
+          v3CallDeadlineMs(stopSeconds, totalTests),
+        );
+      } catch (err) {
+        emit({ failed: true });
+        await this.closeLane(lane, "request-failed");
+        throw missingDependencyOr(err);
+      }
+      const wallMs = Date.now() - timedAt;
+      const timings = pickV3Timings(answer.summary.timings);
+      emit(timings !== undefined ? { timings } : {});
+      await this.refuseDaemonDependencySkip(lane, daemon); // R590, R885: throws as today
+      if (typeof answer.summary.seed === "number") this.observedSeed = answer.summary.seed;
+      if (answer.summary.cached === false) lane.stats.cachedFalse += 1;
+      const rows: V3Row[] = [];
+      for (const t of answer.tests) {
+        const r = serveRow(t, this.serveRowFields);
+        if (typeof r === "string") {
+          await this.closeLane(lane, "answer-unreadable");
+          throw new AlRunnerServerRequestError(
+            "protocol",
+            `the batch request for codeunits ${group.join(", ")} answered ${r}`,
+          );
+        }
+        rows.push(r);
+      }
+      // An orderHints list is ignored (a batch is not a strict-order run); only its size is counted.
+      if (Array.isArray(answer.summary.orderHints))
+        this.baselineStats.orderHints += answer.summary.orderHints.length;
+      const decoded = decodeBatchAnswer<V3Row>({
+        ids: group,
+        rows,
+        coverage: decodeV3Coverage(
+          JSON.stringify({
+            coverage: answer.summary.coverage,
+            perTestCoverage: answer.summary.perTestCoverage,
+          }),
+        ),
+        isKept: (r) => serveDaemonReusable(serveLines([r]), "v3"),
+        hasEveryRow: (have, id) => this.hasEveryRow(have, this.suitePerCodeunit.get(id) ?? []),
+      });
+      if (!decoded.ok) {
+        this.baselineBatchingSpent = decoded.why;
+        this.baselineStats.batchDiscards += 1;
+        await this.closeLane(lane, "answer-unreadable");
+        return undefined;
+      }
+      this.baselineStats.batches += 1;
+      const callId = randomUUID();
+      return new Map(
+        group.map((id) => {
+          const d = decoded.byId.get(id);
+          if (d === undefined) throw new Error(`batch decode lost codeunit ${id}`);
+          return [
+            id,
+            {
+              rows: d.rows.map((r) => ({ ...r, flaggedUnknown: true as const })), // R949
+              coverage: d.coverage,
+              wallMs,
+              stopSeconds,
+              withCoverage: true,
+              fromDaemon: true as const,
+              callId,
+            },
+          ];
+        }),
+      );
+    } finally {
+      lane.inFlight = prev;
+    }
+  }
+
   /** The exit-8 notice, once per deploy: raised by a live call and by serving a kept exit-8 answer. */
   private noteDotnetHelper(): void {
     if (this.dotnetHelperWarned) return;
@@ -4533,7 +4675,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (this.stopHandle?.signalled() === true) return { kind: "stop" };
     this.baselineStats.compared += 1;
-    const why = compareBaselineAnswers(s.daemon, shot);
+    // PR-115: an answer sliced out of a batch carries the batch's call id; its top level is not a whole call's.
+    const why = compareBaselineAnswers(s.daemon, shot, {
+      wholeCall: s.daemon.callId === undefined,
+    });
     if (why.length > 0) {
       return {
         kind: "dropped",
@@ -4649,30 +4794,99 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
     let stopped = false;
     let unusable = 0;
+    // PR-115: the batches (first id -> its codeunits), when this session batches; else every codeunit goes alone.
+    const groupAt = new Map<number, readonly number[]>();
+    const suiteIds = [...this.suitePerCodeunit.keys()];
+    let scan: ReturnType<typeof scanTestCodeunits> | undefined;
+    if (this.batchingOn(coverage)) {
+      try {
+        const roots = lane.requestBase(mode).sourcePaths as string[];
+        const texts: string[] = [];
+        for (const [i, root] of roots.entries()) {
+          const walked = await walkFiles(root, { links: i === 0 ? "skip" : "refuse" });
+          for (const rel of walked.files.filter((e) => e.toLowerCase().endsWith(".al")))
+            texts.push(await readFile(join(root, rel), "utf8"));
+        }
+        scan = scanTestCodeunits(texts);
+        const size = this.seams.baselineBatchSize ?? BASELINE_BATCH_SIZE;
+        for (const g of planBaselineBatches(ids, size, scan, suiteIds))
+          if (g.length > 1 && g[0] !== undefined) groupAt.set(g[0], g);
+      } catch (err) {
+        this.baselineBatchingSpent = `the source scan failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+    /** PR-115: batch answers by codeunit, held until the loop reaches the codeunit. */
+    const batched = new Map<number, BaselineAnswer>();
+    /**
+     * One request for `id` (a whole batch when `group` is given): the stop, bound and memory checks
+     * before, the signal check after. `stop`: no request was kept. `batchFailed`: the batch request
+     * failed or its answer was discarded, so nothing was kept and the caller re-sends `id` alone.
+     */
+    const send = async (
+      id: number,
+      group?: readonly number[],
+    ): Promise<
+      | { readonly stop: true }
+      | { readonly got: BaselineAnswer | undefined; readonly batchFailed?: true }
+    > => {
+      if (this.stopHandle?.spent() === true) return { stop: true }; // R955
+      if (!(await this.memoryGate(true))) return { stop: true }; // R948: no new request over the bound
+      let got: BaselineAnswer | undefined;
+      let batchFailed = false;
+      try {
+        await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
+        this.baselineStats.requests += 1;
+        if (group !== undefined && scan !== undefined) {
+          try {
+            const answers = await this.batchRequest(
+              lane,
+              mode,
+              group,
+              stopSeconds,
+              exclusionsFor(group, scan, suiteIds),
+            );
+            if (answers === undefined) batchFailed = true;
+            else {
+              for (const [k, v] of answers) batched.set(k, v);
+              got = batched.get(id);
+            }
+          } catch (err) {
+            if (!(err instanceof AlRunnerServerRequestError)) throw err;
+            this.baselineBatchingSpent = `a batch request failed: ${err.message}`;
+            this.baselineStats.batchDiscards += 1;
+            batchFailed = true; // the daemon was closed; each codeunit is re-sent alone
+          }
+        } else got = await this.baselineRequest(lane, mode, id, stopSeconds, coverage);
+      } catch (err) {
+        if (!(err instanceof AlRunnerServerRequestError)) throw err;
+        got = undefined; // the daemon was closed; this codeunit runs one-shot
+      } finally {
+        this.memoryRelease();
+      }
+      if (this.stopHandle?.signalled() === true) {
+        batched.clear(); // R955: that call, a whole batch included, is dropped
+        return { stop: true };
+      }
+      return batchFailed ? { got, batchFailed: true } : { got };
+    };
     try {
       for (const [pos, id] of ids.entries()) {
-        if (this.stopHandle?.spent() === true) {
-          stopped = true;
-          break; // R955
-        }
-        if (!(await this.memoryGate(true))) {
-          stopped = true;
-          break; // R948: no new request over the bound
-        }
-        let got: BaselineAnswer | undefined;
-        try {
-          await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
-          this.baselineStats.requests += 1;
-          got = await this.baselineRequest(lane, mode, id, stopSeconds, coverage);
-        } catch (err) {
-          if (!(err instanceof AlRunnerServerRequestError)) throw err;
-          got = undefined; // the daemon was closed; this codeunit runs one-shot
-        } finally {
-          this.memoryRelease();
-        }
-        if (this.stopHandle?.signalled() === true) {
-          stopped = true;
-          break; // R955: that call is dropped
+        let got = batched.get(id);
+        if (got === undefined) {
+          const group = this.batchingOn(coverage) ? groupAt.get(id) : undefined;
+          let r = await send(id, group);
+          if ("stop" in r) {
+            stopped = true;
+            break;
+          }
+          if (r.batchFailed === true) {
+            r = await send(id); // the batch is gone: this codeunit, alone, as today
+            if ("stop" in r) {
+              stopped = true;
+              break;
+            }
+          }
+          got = r.got;
         }
         if (got !== undefined && !this.hasEveryRow(got.rows, this.suitePerCodeunit.get(id) ?? [])) {
           got = undefined;
@@ -4760,6 +4974,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     } finally {
       // The test-mode daemon is not needed again; the per-test baseline starts its own.
       await this.closeLane(lane, "baseline-end");
+      const s = this.baselineStats;
+      const off = this.baselineBatchingSpent ?? this.baselineBatchingWhyOff;
+      console.warn(
+        `[lethal] al-runner-v3 baseline batching (PR-115): ${groupAt.size > 0 ? `${s.batches} batch(es) kept, ${s.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}, ${s.orderHints} orderHints ignored` : `off (${coverage ? (off ?? "no batch to send") : "no coverage asked"})`}.`,
+      );
     }
   }
 
@@ -6512,7 +6731,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         stopSeconds,
         wallMs: viaDaemon.wallMs,
         // R963: one daemon baseline answer is one request (`baselineRequest`, one `plain()` per call): its own call id.
-        callId: randomUUID(),
+        callId: viaDaemon.callId ?? randomUUID(), // PR-115: a batch's codeunits share one
         coverage: viaDaemon.coverage,
         ...(noCoverage ? { noCoverage: true } : {}),
       };

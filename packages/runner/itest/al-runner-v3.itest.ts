@@ -882,6 +882,9 @@ async function legDBMRun(scratch: string): Promise<void> {
         maxBytes: 32 * 2 ** 30,
         source: "/sys/fs/cgroup/memory.max",
       });
+      // PR-115: batches of 2 over the four test codeunits (the default 8 would make one request with nothing to
+      // leave out). Ignored when batching is off for this build.
+      b.seams.baselineBatchSize = 2;
     }
     const r = await session(dir, b, {
       projectDir: fixture("sandbox-optin"),
@@ -952,7 +955,17 @@ async function legDBMRun(scratch: string): Promise<void> {
   console.log(`  DBM: daemon baseline ${JSON.stringify(d)}`);
   must(d.dropped === undefined, `DBM: the daemon baseline was dropped: ${d.dropped}`);
   must(d.codeunits === 4, `DBM: ${d.codeunits} codeunits, pre-committed 4`);
-  must(d.requests === d.codeunits, `DBM: ${d.requests} requests for ${d.codeunits} codeunits`);
+  // PR-115 (M-A): conditional on the build. With batching on (the pin edge-4ebfe7913 allows it) two batches of 2,
+  // each leaving out the other two; with it off (an update gate's candidate has no flag) one request per codeunit.
+  const batching = dm.b.isBaselineBatching();
+  console.log(
+    `  DBM: baseline batching ${batching ? "on" : `off (${dm.b.baselineBatchingOffWhy() ?? "?"})`}`,
+  );
+  const wantRequests = batching ? 2 : 4;
+  must(
+    d.requests === wantRequests,
+    `DBM: ${d.requests} requests for ${d.codeunits} codeunits, pre-committed ${wantRequests} (batching ${batching ? "on" : "off"})`,
+  );
   const want = baselineSampleIds(Array.from({ length: d.codeunits }, (_, i) => i)).length;
   must(
     d.sampledCodeunits.length === want,
@@ -962,7 +975,12 @@ async function legDBMRun(scratch: string): Promise<void> {
   for (const n of j.notes) console.log(`  ${n}`);
   must(j.fail === undefined, j.fail ?? "");
   must(dm.b.baselineDaemon, "DBM: the backend does not report a daemon baseline");
-  must(!dm.b.isBaselineBatching(), "DBM: baseline batching is on in 114a (no pin allows it)");
+  // PR-115 replaces 114a's "batching is off": it is on exactly when the build's pin, the probe and the Sleep
+  // rule allow it, and the request count above is what proves it either way.
+  must(
+    batching === (dm.b.baselineBatchingOffWhy() === undefined),
+    "DBM: isBaselineBatching() and baselineBatchingOffWhy() disagree",
+  );
 }
 
 async function legS3(scratch: string): Promise<void> {

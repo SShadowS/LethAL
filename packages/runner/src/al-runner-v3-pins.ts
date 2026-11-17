@@ -120,7 +120,7 @@ export interface V3BuildPin {
   /**
    * PR-114a: this build may batch the baseline's test codeunits into one request, if the session's
    * eight capability facts all read `matches` and the pin retires the §6 Sleep rule
-   * (`baselineBatchingFor`). Set on NO pin in 114a, so no build batches.
+   * (`baselineBatchingFor`). PR-115 sets it on the one hand pin `edge-4ebfe7913`.
    */
   readonly baselineBatching?: true;
 }
@@ -779,6 +779,17 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     binarySha256: "3e19dbec34826e2d057304d9e85859c04e87d69a5846bb738fe9567a00c22be4",
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
+  {
+    // PR-115: edge 4ebfe7913 (its gated row reads edge-d72d3197d). Its leg C read all eight capability facts `matches`
+    // (PR-114), so it is the one build whose pin allows baseline batching. A hand pin wins over the gated row
+    // (`findV3Pin`); every reading is edge-d72d3197d's. When edge moves, batching is off until someone adds a pin.
+    id: "edge-4ebfe7913",
+    version: "al-runner 3.0.0-alpha.14+edge.20261115 (4ebfe7913)",
+    binarySha256: "36613897149173c87b2ef2b7b59a1250a8999a8e566800be0ef35d4a91a1f632",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+    baselineBatching: true,
   },
 ];
 

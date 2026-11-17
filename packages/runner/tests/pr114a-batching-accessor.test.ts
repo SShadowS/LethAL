@@ -18,6 +18,8 @@ import {
   V3_BUILD_PINS,
   baselineBatchingFor,
   baselineBatchingOffReason,
+  findV3Pin,
+  gatedBuilds,
 } from "../src/al-runner-v3-pins";
 import {
   type ProbeCacheKey,
@@ -64,12 +66,29 @@ function withPin(extra: Partial<V3BuildPin>, fn: () => void): void {
 }
 
 describe("PR-114a: baselineBatchingFor", () => {
-  test("no real pin carries baselineBatching, so it is false on every build", () => {
+  test("PR-115: exactly one pin carries baselineBatching (edge-4ebfe7913); the accessor is false on every other build", () => {
+    const flagged = V3_BUILD_PINS.filter((p) => p.baselineBatching === true).map((p) => p.id);
+    expect(flagged).toEqual(["edge-4ebfe7913"]);
+    const probe = result(...allMatch(), sleep("gone"));
     for (const p of V3_BUILD_PINS) {
-      expect(p.baselineBatching, p.id).toBeUndefined();
-      expect(
-        baselineBatchingFor(result(...allMatch(), sleep("gone")), p.version, p.binarySha256),
-      ).toBe(false);
+      expect(baselineBatchingFor(probe, p.version, p.binarySha256), p.id).toBe(
+        p.id === "edge-4ebfe7913",
+      );
+    }
+    // The gated rows read a hand pin's readings and never carry the flag: only 4ebfe7913's hand pin wins for its own build.
+    for (const g of gatedBuilds()) {
+      expect(baselineBatchingFor(probe, g.version, g.binarySha256), g.id).toBe(
+        g.id === "edge-4ebfe7913",
+      );
+      expect(findV3Pin(g.version, g.binarySha256)?.id, g.id).toBe(
+        g.id === "edge-4ebfe7913" ? "edge-4ebfe7913" : g.readingsFrom,
+      );
+    }
+    // Named builds the spec calls out: alpha.13, alpha.14 releases and edge-d72d3197d.
+    for (const id of ["alpha.13-23e7631be", "alpha.14-ef00a6a8f", "edge-d72d3197d"]) {
+      const e = gatedBuilds().find((g) => g.id === id) ?? V3_BUILD_PINS.find((p) => p.id === id);
+      if (e === undefined) throw new Error(id);
+      expect(baselineBatchingFor(probe, e.version, e.binarySha256), id).toBe(false);
     }
   });
 
