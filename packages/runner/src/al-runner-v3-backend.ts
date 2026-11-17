@@ -138,6 +138,7 @@ import {
   v3InstallHint,
 } from "./al-runner-v3-pin";
 import {
+  baselineBatchingOffReason,
   pinnedDefectCoverage,
   serveRowFieldsFor,
   sleepRuleLine,
@@ -3265,6 +3266,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
+    // PR-114a: decided once, printed in the details; nothing reads it to batch (114b will).
+    this.baselineBatchingWhyOff = baselineBatchingOffReason(this.contract, reported, binarySha256);
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
@@ -3278,7 +3281,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779)${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
@@ -3329,6 +3332,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * their own `codeunit` and `method` fields, and a dotted test method may run under serve-entries.
    */
   private serveRowFields = false;
+
+  /**
+   * PR-114a: why baseline batching is off, as the last `status()` decided it (`baselineBatchingOffReason`);
+   * `undefined` means allowed. Before any `status()` it reads off. No pin allows it in 114a.
+   */
+  private baselineBatchingWhyOff: string | undefined = "status() has not run";
+
+  /** PR-114a: may the baseline batch its test codeunits? False on every build in 114a; nothing reads it yet. */
+  isBaselineBatching(): boolean {
+    return this.baselineBatchingWhyOff === undefined;
+  }
 
   /** R782: the switch, as the last `status()` decided it (read by tests and the gate). */
   isServeRowFields(): boolean {

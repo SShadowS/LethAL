@@ -23,8 +23,18 @@ The legs:
   keyed by the binary sha256, LethAL's probe code, bcVersion, the packages folder, alc, the cache dir and the `.gated`
   commit. This gate never does: it sets `LETHAL_V3_FRESH_PROBE=1` for every session it starts, and leg C calls
   `runV3ContractProbe` directly, so the figures below are always measured fresh. The update gate runs this gate.
-- C: the contract probe, 28 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of three kinds: 9 defect, 18 contract
-  and 1 warn (r9, below). Since r13
+- C: the contract probe, 36 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of four kinds: 9 defect, 18 contract,
+  1 warn and 8 capability (r9, below; capability since PR-114a). The 8 capability facts
+  (`V3_CAPABILITY_FACTS`, spec `docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`) are what
+  baseline batching (PR-114b) will rest on, each one made of 1, 2 or 3 serve requests of LethAL's batch body over its own
+  invented app (ids 50700-50779): `batch-no-cross-singleinstance`, `-library-global`, `-row` and `-subscriber` (no state
+  crosses test codeunits in one plain request), `batch-onrun-excluded-no-carry` (an excluded OnRun writer carries
+  nothing), `batch-onrun-included-duplicates` (an included one reaches later codeunits, which stream a second row),
+  `batch-lane-hint-only` (the SingleInstance lane only hints without `strictOrder`) and `batch-lane-strict-reruns`
+  (with it, the reader is re-run). Each must read `matches`: anything else is `gate-fail` in leg C
+  (`unmeasurable`: `infra-fail`). **In a session a capability fact never refuses;** it only feeds
+  `baselineBatchingFor`, which is false on every build (no pin carries `baselineBatching`) and is printed in the
+  session details as `baseline batching: allowed | off (<reason>)`. Since r13
   (`docs/superpowers/specs/2026-10-23-r586-alrunner-v3-precommitment-r13-dependency-skip.md`, [[R590]]), the 18th
   contract fact is `dependency-skip-line`: a tests app that declares a dependency no package holds must make v3
   write a stderr line starting `dependency skipped:` that names it. The backend refuses a session on that line
@@ -132,6 +142,17 @@ The legs:
   - A whole-codeunit entry must show the writer's date reach the reader: that control proves the probe can see a leak. Then each test as its own entry, with `runSelectedOnly`: the reader must not see it.
   - A build that accepted the field and ignored it would still give one row per entry, so `--isolate-tests` would read clean: this leg is what catches that. Any other reading is `gate-fail`.
   - It is a default leg, outside `V3_GATE_LEGS`, so a build gated before it stays gated. On a build with no serve path it reads "not applicable".
+- DBM (PR-114a; pre-commitment `docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`):
+  - What it runs: `fixtures/sandbox-optin` and `-tests` (4 test codeunits, no OnRun) twice under serve-entries, once
+    with `daemonBaseline` and once with the one-shot baseline. No fixture file is edited (R-307's golden list).
+  - Asserts: per mutant the two sessions agree (verdict, `killingTest`, note), a self-relative check with no new
+    frozen baseline file; the daemon baseline is not dropped; `requests === codeunits` (4); the sample count equals
+    `baselineSampleIds(4).length`; `judgeDaemonBaseline("DBM", ...)` names every skip.
+  - Batching is off, so these are today's counts. PR-114b turns batching on for this leg (batch size 2): requests 4 -> 2.
+  - Warning sets (`GATE_WARNINGS`, keys `dbm-daemon` and `dbm-oneshot`, one per session), observed: daemon `al-runner-v3-memory-guard` and `al-runner-v3-serve-flagged-unknown`; one-shot `[]`.
+    Selector ids 77249/77248/77247 lie inside the target's id range (outside it alc rejects the app and all mutants read `error`).
+    First live reading: 15 killed / 3 survived / 104 no-coverage over 122, identical in both sessions; daemon baseline 4 requests for 4 codeunits, 2 sampled.
+  - It is a default leg, outside `V3_GATE_LEGS`, as DB and DBI are.
 - O1 (R784; pre-commitment `docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md`, master 6aa7700c):
   - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of
     `fixtures/sandbox-order-tests` (Writer sets, Reader reports): `[R]`, `[W,R]`, `[R,W]`, `[W1,R1,W2,R2,R3]`, then a
@@ -769,3 +790,11 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
   infra-fail) for a request that returns no row. The new cases read as kept refusals on all 15 gated builds. Leg C
   keeps its 28 facts; no pinned figure moves (pre-commitment and addendum in
   `docs/superpowers/specs/2026-11-14-r1000-serve-keep-texts-precommitment.md`).
+- 2026-11-17: PR-114a (coord PR-114, first half of [[R1106]]) adds the capability facts and leg DBM, with no
+  behaviour change. Leg C goes from 28 to 36 facts: 9 defect, 18 contract, 1 warn and 8 capability, a new kind that
+  fails the gate when it does not read `matches` and never refuses a session. `baselineBatchingFor` (pin flag, all 8
+  `matches`, §6 Sleep rule retired) is false on every build because no pin carries the flag. Leg DBM is new (see its
+  bullet). Predicted: all 8 facts `matches` on edge-4ebfe7913 (as probed in `/coord/handoff/PR-114/`); DBM passes with
+  4 requests for 4 codeunits; every other leg and pin unchanged. Session contract probes take longer by the new
+  facts' requests, and every cached probe is re-run once (the probe code hash changes). Pre-commitment:
+  `docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`.

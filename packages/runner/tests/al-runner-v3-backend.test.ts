@@ -848,6 +848,57 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
         warn.mockRestore();
       }
     });
+
+  // PR-114a: a capability fact never refuses a session; it only keeps baseline batching off (no pin allows it).
+  for (const verdict of ["matches", "diverged", "unmeasurable"] as const)
+    test(`PR-114a: status() with a capability fact ${verdict} still passes, and reports baseline batching off`, async () => {
+      const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+      const versionOnly: SpawnFn = async () => ({
+        exitCode: 0,
+        stdout: `${VERSION}\n`,
+        stderr: "",
+      });
+      const l = await layout();
+      const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+      await writeFile(
+        join(l.deps, "Microsoft_System Application.app"),
+        buildFakeAppWithEntries({
+          "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+        }),
+      );
+      const bin = join(l.root, "al-runner");
+      await writeFile(bin, "binary");
+      await writeFile(
+        join(l.root, ".gated"),
+        JSON.stringify({
+          version: VERSION,
+          binarySha256: await sha256OfFile(bin),
+          lethalCommit: "a".repeat(40),
+        }),
+      );
+      const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
+      (b as unknown as { contract: V3ContractResult }).contract = {
+        facts: [
+          {
+            fact: "batch-lane-hint-only",
+            kind: "capability",
+            verdict,
+            expected: "x",
+            measured: "m",
+          },
+        ],
+      };
+      expect(b.isBaselineBatching()).toBe(false); // before any status()
+      const warn = spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const s = await b.status();
+        expect(s.ok).toBe(true);
+        expect(b.isBaselineBatching()).toBe(false);
+        expect(s.details).toMatch(/baseline batching: off \(.+\) \(PR-114a\)/);
+      } finally {
+        warn.mockRestore();
+      }
+    });
 });
 
 describe("T3, T4, T23", () => {
