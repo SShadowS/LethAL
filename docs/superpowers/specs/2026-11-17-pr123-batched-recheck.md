@@ -79,4 +79,10 @@ and checks 4 to 6 passed, or runs today's code.
      - the re-check (the baseline phase) falls by at least 40% from `before/`'s;
      - `report-diff --by-line --subset` over the mutants both arms scored: 0 differences (verdict and `killingTest`).
    - **If the setup run's own PR-115 line shows a discard,** the slice cannot show batching, and the 40% is reported, not judged.
+   - **Measured note (2026-11-17, on master 2190f068 + later, before any after arm):**
+     - `setup/`: a fresh run whose fill was batched: `14 batch(es) kept, 0 discarded or failed`. Baseline 94.1 s, then the 900 s
+       budget stopped it with 388 mutants left out (rc 7), so the snapshot is stored.
+     - `before/`: a resume with `resume-baseline-reused` (1,979 baseline verdicts). Today's unbatched re-check, the baseline
+       phase: **81.7 s**.
+     - **So the after arm's bar is a baseline phase ≤ 49.0 s** (−40%). No discard was shown, so the bar is judged.
 4. **The next resumed DO window** (bugs): the re-check falls from t14's 200.1 s. It is reported there, not judged here.
