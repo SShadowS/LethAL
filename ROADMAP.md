@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1070 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1071 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1111,10 +1111,11 @@ that ordering is the priority.
 - **R1099** · Each al-runner v3 serve pass carries a ~0.145 s floor outside the tests; 4,792 passes made it ~575 s (33% of tests time) on PR-94's DO slice; fewer passes per mutant need upstream multi-codeunit entries · [R1099.md](docs/roadmap/R1099.md) · open — attributed (PR-104): ~80% of the floor is the company login raised per test codeunit session; upstream…
 - **R1100** · R987's serve request sizing divides a request's whole memory jump by its entry count, but the jump barely depends on the count (~0.6 GiB + ~3 MiB/entry, R² 0.05-0.14): a 2-4 entry request charges hundreds of MiB per entry forever, capping 51 of 110 DO codeunits below 256 (one at 4) · [R1100.md](docs/roadmap/R1100.md) · closed 2026-11-17 — measured: real but worth under 2%…
 - **R1101** · Size v3 serve requests on their own growth from start plus the target daemon's current retained memory, not on growth from the daemon's floor (R1100); needs the memory guard, the lane gate and the recycle check to match · [R1101.md](docs/roadmap/R1101.md) · closed 2026-11-17 — measured (PR-111): neither recycling nor sizing on retained memory clears 2% of t14's…
-- **R1102** · DO's forced isolation "test" withholds 268 of 481 error verdicts as untrusted kills; isolation "auto" (R921) would score 163 of them at the cost of a method re-baseline; the other 105 wait on upstream #8218 · [R1102.md](docs/roadmap/R1102.md) · open — measured (PR-106)
+- **R1102** · DO's forced isolation "test" withholds 268 of 481 error verdicts as untrusted kills; isolation "auto" (R921) would score 163 of them at the cost of a method re-baseline; the other 105 wait on upstream #8218 · [R1102.md](docs/roadmap/R1102.md) · open — measured under auto (PR-107): 450/451 withheld kills scored, P0 exact, 1 unexplained move…
 - **R1103** · DO windows t12/t13's remaining refusal families kept on the serve daemon (PR-105): 9 of 10 measured classes driven by invented cells and CLEAN (12 texts); 45 of t12/t13's 71 closes now kept; P3 waits for a DO window · [R1103.md](docs/roadmap/R1103.md) · open — kept; P3 waits for the next DO window on a head with PR-105
-- **R1106** · A PR run's v3 baseline is ~76% per-codeunit request overhead (74 requests, ~1.5 s each, ~11 s of test time): batch codeunits per baseline request; decide from PR-113's baseline timing events · [R1106.md](docs/roadmap/R1106.md) · open — part a done…
+- **R1106** · A PR run's v3 baseline is ~76% per-codeunit request overhead (74 requests, ~1.5 s each, ~11 s of test time): batch codeunits per baseline request; decide from PR-113's baseline timing events · [R1106.md](docs/roadmap/R1106.md) · done (8999b17d) — part a PR-114 (capability facts, accessor, leg DBM); part b PR-115…
 - **R1107** · Run R948's baseline cross-check samples beside the v3 daemon instead of in sequence (up to 33 s of a 143 s DO baseline): designed, sunk by spec-adversary as written; gated on an RSS probe and five fixes · [R1107.md](docs/roadmap/R1107.md) · open — designed (PR-113), not built; gate: an RSS time-series probe on DO and a larger corpus
+- **R1109** · v3 baseline batching (PR-115) is switched on per build by `V3_BASELINE_BATCHING_BUILDS`, listing edge-4ebfe7913 only: when edge moves `current`, batching silently turns off until someone lists the new build; let the update gate record it · [R1109.md](docs/roadmap/R1109.md) · open — filed by PR-115
 
 ---
 

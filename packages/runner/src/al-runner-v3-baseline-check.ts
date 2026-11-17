@@ -144,10 +144,13 @@ const describeRow = (r: ComparableRow): string =>
  * status, notRun, the fail text (NOT `flagged`: serve cannot report it, R949), and the exact per-test coverage set (and the whole
  * call's). Empty: they agree. Durations are not compared (a warm daemon is faster by design; the
  * budget rule handles that).
+ * PR-115: `wholeCall: false` (a codeunit sliced out of a batch, whose top level is the union of its
+ * own tests') skips the whole-call coverage compare; rows and per-test sets are still compared.
  */
 export function compareBaselineAnswers(
   daemon: { readonly rows: readonly ComparableRow[]; readonly coverage: V3CoverageRead },
   oneShot: { readonly rows: readonly ComparableRow[]; readonly coverage: V3CoverageRead },
+  opts: { readonly wholeCall?: boolean } = {},
 ): string[] {
   const why: string[] = [];
   const byMethod = (rows: readonly ComparableRow[]) =>
@@ -177,8 +180,10 @@ export function compareBaselineAnswers(
   if (daemon.coverage.kind !== oneShot.coverage.kind) {
     why.push(`coverage: daemon ${daemon.coverage.kind}, one-shot ${oneShot.coverage.kind}`);
   } else if (daemon.coverage.kind === "doc" && oneShot.coverage.kind === "doc") {
-    const whole = keyDiff(hitSet(daemon.coverage.coverage), hitSet(oneShot.coverage.coverage));
-    if (whole !== undefined) why.push(`coverage: the whole call differs (${whole})`);
+    if (opts.wholeCall !== false) {
+      const whole = keyDiff(hitSet(daemon.coverage.coverage), hitSet(oneShot.coverage.coverage));
+      if (whole !== undefined) why.push(`coverage: the whole call differs (${whole})`);
+    }
     const per = (c: V3CoverageRead) =>
       new Map(
         c.kind === "doc"
