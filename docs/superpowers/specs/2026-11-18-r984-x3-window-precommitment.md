@@ -20,6 +20,11 @@ move is allowed and counted apart as **(E) PR-81 walk-on**: x2 `error` -> x3 `ki
 out-of-scope: ...`) and x3's killing test belongs to a different codeunit than the refused test. Each (E) row is named and that
 condition checked. Any other move against x2 is a BLOCK.
 
+**Amendment 1 (orchestrator, 2026-11-18, x3 running, nothing scored yet):** E is accepted as PR-81's intended effect and kept
+narrow. For each (E) row, also check from x3's events that the killing test ran AFTER the held refusal in the same walk (the
+refused test precedes the killer in the mutant's covering walk). `error -> survived` and `error -> timeout-killed` against x2
+stay BLOCKs, as does any E row failing a condition.
+
 ## Predictions
 1. **vs x2 (same build, strict): 0 differ except (E).** (E) counted and named, not predicted in number (PR-81's spec: only tests of
    other codeunits can turn such an error into a kill; most DO refusals cascade within one codeunit).
