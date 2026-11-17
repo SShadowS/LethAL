@@ -135,6 +135,13 @@ export interface V3Fact {
   readonly verdict: V3ContractVerdict | V3DefectVerdict | V3WarnVerdict;
   readonly expected: string;
   readonly measured: string;
+  /**
+   * PR-117 (`capability` facts only): how the single (alone) request read, apart from the batch half.
+   * `pass`: it was right (a `diverged` fact then means only batching is off); `fail`: the single
+   * request itself is wrong; `none`: the alone reference ran and returned nothing. Absent: this fact has
+   * no alone reference by design (or its writer did not pass in the batch), or it is not a capability fact.
+   */
+  readonly reference?: "pass" | "fail" | "none";
 }
 
 export interface V3ContractResult {
@@ -1870,8 +1877,14 @@ interface BatchFactSpec {
   readonly base: number;
   readonly al: string;
   readonly expected: string;
-  readonly judge: (ask: BatchAsk) => Promise<{ ok: boolean; measured: string }>;
+  readonly judge: (
+    ask: BatchAsk,
+  ) => Promise<{ ok: boolean; measured: string; reference?: "pass" | "fail" | "none" }>;
 }
+
+/** PR-117: the alone reference's reading: no rows is `none`, any non-pass row is `fail`. */
+const referenceOf = (refs: readonly BatchRow[]): "pass" | "fail" | "none" =>
+  refs.length === 0 ? "none" : refs.every((x) => x.status === "pass") ? "pass" : "fail";
 
 const rowText = (rs: readonly BatchRow[]): string =>
   rs
@@ -1917,9 +1930,14 @@ function noCrossSpec(
         w.every((x) => x.status === "pass") &&
         sameRows(r, ref) &&
         rowsOf(batch, spare).length === 0;
+      // PR-117 (M2): "pass" only when the reader alone AND the writer's rows in the batch all pass; a writer that
+      // fails or is missing in the batch is not "only the batch half differs", so no reference (a diverged gate-fails).
+      const reference = referenceOf(ref);
+      const writerFine = w.length > 0 && w.every((x) => x.status === "pass");
       return {
         ok,
         measured: `alone: ${rowText(ref)}; batch writer: ${rowText(w)}; batch reader: ${rowText(r)}`,
+        ...(reference === "pass" && !writerFine ? {} : { reference }),
       };
     },
   };
@@ -1971,7 +1989,11 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
         refs.every((x) => x.status === "pass") &&
         batch.rows.length === 2 &&
         sameRows(got, refs);
-      return { ok, measured: `alone: ${rowText(refs)}; batch: ${rowText(batch.rows)}` };
+      return {
+        ok,
+        measured: `alone: ${rowText(refs)}; batch: ${rowText(batch.rows)}`,
+        reference: refs.length === 2 ? referenceOf(refs) : refs.length === 0 ? "none" : "fail",
+      };
     },
   },
   {
@@ -2098,9 +2120,17 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
       };
       try {
         const j = await spec.judge(ask);
-        out.push(
-          fact(spec.fact, "capability", j.ok ? "matches" : "diverged", spec.expected, j.measured),
-        );
+        out.push({
+          ...fact(
+            spec.fact,
+            "capability",
+            j.ok ? "matches" : "diverged",
+            spec.expected,
+            j.measured,
+          ),
+          // A fact with no alone reference by design carries none: classifyLegC judges it as before PR-117.
+          ...(j.reference !== undefined ? { reference: j.reference } : {}),
+        });
       } catch (err) {
         out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
         // M1: a request that timed out (or broke the protocol) may still be running or leave late rows and a
