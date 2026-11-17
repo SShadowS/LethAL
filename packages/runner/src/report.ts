@@ -2,6 +2,7 @@ import { tier1Operators } from "@lethal/builtin-tier1";
 import { tier2Operators } from "@lethal/builtin-tier2";
 import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
+import { V3_NOT_RUN_SUFFIX } from "./al-runner-v3-backend";
 import {
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
@@ -263,7 +264,8 @@ export type Caveat =
   | "al-runner-v3-serve-default-fallback-warmup"
   | "al-runner-v3-coverage-off"
   | "time-budget-reached"
-  | "nondebuggable-no-coverage";
+  | "nondebuggable-no-coverage"
+  | "withheld-kills";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -726,7 +728,82 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "coverage record cannot tell. Not a wrong verdict on any other mutant.",
     basis: "R1049",
   },
+  "withheld-kills": {
+    meaning:
+      "At least one `error` mutant is a withheld kill. A covering test failed under it, but " +
+      "al-runner v3 did not trust the failure, because an earlier test of its codeunit was refused, " +
+      "failed or ran out of time and the state it left is not BC's. Such a mutant is outside " +
+      "`mutationScore`, so the score leaves out a kill candidate. Each such mutant carries " +
+      "`withheldKill` (the withheld failure, and the earlier test when v3 names it). The count is a " +
+      "lower bound: some are hidden behind a direct refusal met first. Per-test isolation runs each " +
+      "test in its own session, where the earlier test is never sent. Under a config that forces " +
+      '`"alRunnerV3.isolation": "test"`, the default `"auto"` moves to method the codeunits whose ' +
+      "baseline passes strictly more tests so, or ties with a test v3 refused by name. On DO it " +
+      "scored 450 of 451 such errors, at about 21 min more baseline and about 3x the time per mutant " +
+      'in moved codeunits (R1102). Under `"auto"`, the ones left are in codeunits auto kept on ' +
+      '"test". `"method"` runs every codeunit one test per session, which moves other baseline ' +
+      "outcomes (R1102 measured 156 on DO). al-runner's own rule is asked about in #8218.",
+    entailedNegative:
+      "Not a kill LethAL counts, not a wrong verdict, and not a claim that BC would kill each one: " +
+      "the earlier test's effect on the state is unknown, and a trusted failure would still be " +
+      "confirmed and reproduced.",
+    basis: "R1108",
+  },
 };
+
+/**
+ * R1108: the "withheld kill" shape of an error row. al-runner v3 reports a covering test that FAILED
+ * as `NotRun: out-of-scope: ...; this failure is not trusted: <failure>` when an earlier test of its
+ * codeunit was refused, failed or ran out of time. Derived from the recorded fields only, so it moves
+ * no verdict. Undercounting is the safe direction: confirm/reproduce notes carry another prefix and
+ * are not matched, and the manual-binding cascade (R1019) is al-runner's own artifact.
+ */
+const WITHHELD_PREFIX = "NotRun: out-of-scope: ";
+const WITHHELD_PHRASE = "this failure is not trusted: ";
+const WITHHELD_AFTER = [
+  "an earlier test of this codeunit was refused while it ran (",
+  "a test before this one in the codeunit did not pass (",
+];
+// The v3 backend appends V3_NOT_RUN_SUFFIX to every refused row (`v3RowVerdict`), and LethAL's own notes (PR-51's held
+// note, PR-108's cap note) come after the whole row, so the suffix ends the failure. Only a note without the suffix
+// falls back to LethAL's note texts: those words could occur inside a failure message itself.
+const WITHHELD_SUFFIX = ` ${V3_NOT_RUN_SUFFIX}`;
+const WITHHELD_FALLBACK_CUTS = [
+  " the timeout of ",
+  " a timeout of ",
+  " after the timeout: ",
+  " the walk stopped after ",
+];
+
+export function withheldKillOf(
+  verdict: string,
+  cause: string | undefined,
+  failureNote: string | undefined,
+): { readonly failure: string; readonly afterTest?: string } | undefined {
+  if (verdict !== "error" || cause !== "runner-refused" || failureNote === undefined)
+    return undefined;
+  if (!failureNote.startsWith(WITHHELD_PREFIX)) return undefined;
+  if (failureNote.includes("left a manual event subscription bound")) return undefined;
+  const at = failureNote.lastIndexOf(WITHHELD_PHRASE);
+  if (at < 0) return undefined;
+  let rest = failureNote.slice(at + WITHHELD_PHRASE.length);
+  const end = rest.indexOf(WITHHELD_SUFFIX);
+  if (end >= 0) rest = rest.slice(0, end);
+  else
+    for (const cut of WITHHELD_FALLBACK_CUTS) {
+      const i = rest.indexOf(cut);
+      if (i >= 0) rest = rest.slice(0, i);
+    }
+  const tail = failureNote.slice(WITHHELD_PREFIX.length);
+  let afterTest: string | undefined;
+  for (const p of WITHHELD_AFTER) {
+    if (!tail.startsWith(p)) continue;
+    const name = tail.slice(p.length);
+    const end = name.indexOf(": ");
+    if (end > 0) afterTest = name.slice(0, end);
+  }
+  return { failure: rest.trim(), ...(afterTest !== undefined ? { afterTest } : {}) };
+}
 
 /**
  * The closed set of STRUCTURAL reasons an `error` verdict can name — see `MutantOutcome.cause`.
@@ -2181,6 +2258,12 @@ export interface MutantOutcome {
    */
   readonly cause?: MutantErrorCause;
   /**
+   * R1108: on an `error` row, the covering test FAILED under the mutant but al-runner v3 did not
+   * trust the failure (see `withheldKillOf`). Derived from `cause` and `failureNote`; absent on
+   * every other row and on older reports. Not a kill, and outside `mutationScore`.
+   */
+  readonly withheldKill?: { readonly failure: string; readonly afterTest?: string };
+  /**
    * R72: a syntactic property of this mutant's SITE saying the platform is known to refuse the
    * mutated program here, so a kill can be BC rather than an assertion. Carried verbatim from
    * `MutantManifestEntry.platformKillMechanism`; see `PLATFORM_KILL_MECHANISM_EXPLANATIONS`
@@ -2853,6 +2936,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
         break;
     }
     const identity = identityKeyOf(o.mutant);
+    const wk = withheldKillOf(o.verdict, o.cause, o.failureNote);
     const row: MutantOutcome = {
       mutantCode: o.mutant.mutantId,
       file: o.mutant.file,
@@ -2899,6 +2983,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.killReproduced === true ? { killReproduced: true as const } : {}),
       ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
+      ...(wk !== undefined ? { withheldKill: wk } : {}),
       // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
       // true of this mutant whatever happened when it ran.
       ...(o.mutant.platformKillMechanism !== undefined
@@ -3093,6 +3178,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R844 - see CAVEAT_INTERPRETATIONS["some-errors"]. Some rows errored and some did not: the
   // errored ones are outside `mutationScore`. Never together with "all-errors".
   if (counts.errors > 0 && !allErrors) caveats.push("some-errors");
+  // R1108 - see CAVEAT_INTERPRETATIONS["withheld-kills"].
+  if (mutants.some((m) => m.withheldKill !== undefined)) caveats.push("withheld-kills");
   // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
   // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
   // score", and that is one fact however many flags produced it.
@@ -3757,6 +3844,17 @@ export function renderConsole(r: SessionReport): string {
         : "";
     lines.push(
       `${n} mutant(s) errored${inside} and are not in the score; had they run, it would read ${pct(kills / (denom + n))} to ${pct((kills + n) / (denom + n))}.`,
+    );
+  }
+  // R1108: error rows whose covering test failed, but v3 withheld the failure. A lower bound.
+  const withheld = r.mutants.filter((m) => m.withheldKill !== undefined).length;
+  if (withheld > 0) {
+    const remedy =
+      r.isolation === undefined
+        ? ' Isolation "auto" scores most of them (R1102).'
+        : ' They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).';
+    lines.push(
+      `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}`,
     );
   }
   // R206: warm kills are a fact about HOW the kills were measured, stated beside the score.

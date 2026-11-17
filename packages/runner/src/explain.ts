@@ -280,8 +280,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 29: PR-45 (R1049) added the caveat value `nondebuggable-no-coverage` to `$.caveats[].caveat`. A new value, so it
  * bumps (R233); v28 is frozen.
+ *
+ * 30: PR-116 (R1108) added the caveat value `withheld-kills` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v29 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 29;
+export const EXPLAIN_SCHEMA_VERSION = 30;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

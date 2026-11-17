@@ -244,7 +244,7 @@ export { V3_TIMEOUT_MESSAGE };
  * otherwise a same-build snapshot stored under the old text is lent, and its refusals lose their
  * `[v3-refused-test-nearby]` notes on a resume.
  */
-const V3_NOT_RUN_SUFFIX =
+export const V3_NOT_RUN_SUFFIX =
   "[al-runner v3 did not run this test (notRun), so whether the mutant changes its outcome on BC is unknown: NOT scored (R586 §5)]";
 
 /** R987: how often a request's daemon RSS is read while it runs (Contoso grew about 0.6 GB a second). */

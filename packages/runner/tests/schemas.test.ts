@@ -1561,6 +1561,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v30.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v29.schema.json": [
         "caveats",
         "contract",
@@ -1829,6 +1841,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "al-runner-v3-coverage-off",
         "time-budget-reached",
         "nondebuggable-no-coverage",
+        "withheld-kills",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -1972,6 +1985,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v28.schema.json")).toEqual(required("explain-v27.schema.json"));
     // PR-45's v29 added a caveat value, not a required field.
     expect(required("explain-v29.schema.json")).toEqual(required("explain-v28.schema.json"));
+    // PR-116's v30 added a caveat value, not a required field.
+    expect(required("explain-v30.schema.json")).toEqual(required("explain-v29.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",
