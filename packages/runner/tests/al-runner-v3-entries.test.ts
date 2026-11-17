@@ -4161,7 +4161,9 @@ describe("R653 pair", () => {
       (f: (rows: FakeRow[]) => FakeRow[]): RowsFn =>
       (m, cu, d, n) =>
         m === "NONE" && pairReq(d, n) ? f(allPass(m, cu, d, n)) : killsM1(m, cu, d, n);
-    const cases: Array<[string, ServeScript, number]> = [
+    // PR-102: a case with a 4th element `true` sends its pair uncut. A malformed answer (a missing row of a
+    // test the cut keeps) makes a flagged request re-send unflagged (PR-94), which today's confirm does not do.
+    const cases: Array<[string, ServeScript, number, boolean?]> = [
       ["NONE pass, M fail", { rows: killsM1 }, 1],
       [
         "NONE fail, M fail",
@@ -4191,7 +4193,7 @@ describe("R653 pair", () => {
         },
         1,
       ],
-      ["NONE 0 rows", { rows: noneAtPair(() => []) }, 1],
+      ["NONE 0 rows", { rows: noneAtPair(() => []) }, 1, true],
       [
         "2 rows for the method",
         { rows: noneAtPair((rs) => [...rs, { method: "A", status: "pass" }]) },
@@ -4214,14 +4216,20 @@ describe("R653 pair", () => {
         },
         0,
       ],
-      ["a suite test missing", { rows: noneAtPair((rs) => rs.filter((x) => x.method !== "B")) }, 1],
+      [
+        "a suite test missing",
+        { rows: noneAtPair((rs) => rs.filter((x) => x.method !== "B")) },
+        1,
+        true,
+      ],
     ];
-    for (const [name, serve, saved] of cases) {
+    for (const [name, serve, saved, uncut] of cases) {
       test(`${name}: equal verdicts, ${saved} request(s) saved`, async () => {
         const today = await killed(serve);
         const t0 = today.serve.requests.length;
         const want = await confirmAndReproduce(today, false);
         const paired = await killed(serve);
+        if (uncut === true) (paired.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU);
         const p0 = paired.serve.requests.length;
         const got = await confirmAndReproduce(paired, true);
         expect(got).toEqual(want);
@@ -4414,6 +4422,8 @@ describe("R653 pair", () => {
 
     test("P5c: a cut at the NONE CODEUNIT entry (it stands: F1), the confirm fails: one request, nothing else", async () => {
       const r = await killed(cutAtNoneCodeunit("fail"));
+      // PR-102: an uncut pair, so the timeout row B is inside the entry (a cut pair leaves B out)
+      (r.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU);
       expect(await flow(r)).toEqual({
         c: 0,
         live: 1,
@@ -4429,6 +4439,7 @@ describe("R653 pair", () => {
 
     test("P5c twin: the same cut, the confirm passes: the reproduction goes live on a new daemon", async () => {
       const r = await killed(cutAtNoneCodeunit("pass"));
+      (r.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU); // PR-102: uncut pair
       expect(await flow(r)).toEqual({
         c: 1,
         live: 2,
@@ -5228,11 +5239,14 @@ describe("R778: kill pairs batched after the prefetch", () => {
     mutants: readonly string[],
     notices: string[] = [],
     suite: readonly TestMethodRef[] = SUITE1,
+    /** PR-102: true sends the pairs uncut (the codeunit is never flagged), as before the cut existed. */
+    uncut = false,
   ) => {
     let reqs: readonly Req[] = [];
     /** Request `n` is a batch: its first entry is a NONE pair group. */
     const isBatch = (n: number) => (reqs[n]?.ids[0] ?? "").startsWith("NONE#");
     const r = await rig({ serve: mk(isBatch), oneShotRows: allPass, suite, pairBatch: true });
+    if (uncut) (r.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU);
     reqs = r.serve.requests;
     r.b.setNotify((c) => notices.push(c));
     await baseline(r.b, suite);
@@ -5368,7 +5382,8 @@ describe("R778: kill pairs batched after the prefetch", () => {
     });
 
     test("a hit sets the pair's ref to the actual killer: its confirm and its reproduction are served", async () => {
-      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"]);
+      // PR-102: uncut pairs (a cut pair serves only a killer at or before the one it was cut after)
+      const { r } = await batchRig(() => ({ rows: killsAll }), ["M0001"], [], SUITE1, true);
       await kill(r, "M0001");
       const n0 = r.serve.requests.length;
       // The prefetch predicted A; the kill was by B (the same codeunit).
@@ -5552,7 +5567,8 @@ describe("R778: kill pairs batched after the prefetch", () => {
       // Cases 0 and 1 leave kill 2 without both entries: it takes today's pair. Case 2 keeps it.
       const own = i < 2 ? 1 : 0;
       test(`${name}: earlier kills stand, the cut kill ${own === 1 ? "takes today's pair" : "stands as it is"}, later kills are re-sent`, async () => {
-        const { r, before } = await batchRig(mk, ["M0001", "M0002", "M0003"]);
+        // PR-102: uncut pairs, so the unkept B row is inside the entry (a cut pair would leave B out)
+        const { r, before } = await batchRig(mk, ["M0001", "M0002", "M0003"], [], SUITE1, true);
         // The first request (daemon 0) was cut; the kills after the cut were re-sent on a fresh daemon.
         expect(batchStats(r)).toEqual({ requests: 2, stored: 3 - own, served: 0, refused: 0 });
         const got: Record<string, unknown> = {};
@@ -5582,6 +5598,30 @@ describe("R778: kill pairs batched after the prefetch", () => {
         );
       });
     }
+
+    // PR-102: a re-sent batch is flagged again, so its pairs keep their cut through the killer.
+    test("PR-102: the cut batch and its re-send are both flagged and both carry the cut", async () => {
+      // NONE_2's entry ends in a timeout at the killer A, a row R612 does not keep: the batch is cut there
+      const { r } = await batchRig(
+        (isBatch) => ({
+          rows: (m, cu, d, n, seen) =>
+            d === 0 && isBatch(n) && m === "NONE" && seen === 1
+              ? [{ method: "A", status: "error", notRun: true, message: TIMEOUT_1S }]
+              : killsAll(m, cu, d, n),
+        }),
+        ["M0001", "M0002", "M0003"],
+      );
+      const batches = r.serve.requests.filter((q) => (q.ids[0] ?? "").startsWith("NONE#"));
+      expect(batches).toHaveLength(2);
+      for (const q of batches) {
+        expect(q.body.runSelectedOnly).toBe(true);
+        const cuts = ((q.body.entries as Record<string, unknown>[]) ?? [])
+          .filter((e) => String(e.test) === `Codeunit${CU}.`)
+          .map((e) => e.excludeTests);
+        expect(cuts.length).toBeGreaterThan(0);
+        for (const c of cuts) expect(c).toEqual([`Codeunit${CU}.B`]);
+      }
+    });
   });
 
   describe("S1: only a request error is absorbed (as the prefetch does); every other error stops the session", () => {
@@ -5633,6 +5673,7 @@ describe("R778: kill pairs batched after the prefetch", () => {
         suite: SUITE1,
         pairBatch: true,
       });
+      (r.b as unknown as { neverFlag: Set<number> }).neverFlag.add(CU); // PR-102: uncut pairs
       reqs = r.serve.requests;
       r.b.setNotify((c) => notices.push(c));
       await baseline(r.b, SUITE1);
@@ -9971,6 +10012,266 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
     expect(pair.length).toBeGreaterThan(0);
     expect(pair.some((q) => q.ids.some((i) => i.startsWith("NONE")))).toBe(true);
     expect(pair.every((q) => q.body.runSelectedOnly === true)).toBe(true);
+  });
+
+  // PR-102 (R1097): a kill pair runs only the prefix through the killing test, and the cut goes out only
+  // in a request sent with runSelectedOnly (docs/superpowers/specs/2026-11-17-pr102-kill-pair-prefix.md).
+  describe("PR-102: a kill pair is cut after its killer", () => {
+    const cuEntries = (q: { body: Record<string, unknown> }) =>
+      ((q.body.entries as Record<string, unknown>[] | undefined) ?? []).filter(
+        (e) => String(e.test) === `Codeunit${CU}.`,
+      );
+    const cutOf = (e: Record<string, unknown> | undefined) => e?.excludeTests;
+    const lower = (xs: string[]) => xs.map((x) => `Codeunit${CU}.${x}`);
+    /** A rig past the prefetch of M0001 (covering `covering`) with M0001 active, ready to send a pair. */
+    const pairRig = async (
+      covering: readonly string[] = ["A", "C"],
+      o: Partial<RigOpts> = {},
+    ): Promise<Rig> => {
+      const r = await rig({ suite: SUITE_ABC, serve: { rows: rowsIn(ABC) }, ...o });
+      await baseline(r.b, SUITE_ABC);
+      await r.b.prefetchMutants(
+        plans(
+          ["M0001"],
+          covering.map((m) => ref(m)),
+        ),
+      );
+      await r.b.activate("M0001");
+      return r;
+    };
+    const stats = (r: Rig) =>
+      (r.b as unknown as { stats: Record<string, number> }).stats as Record<string, number>;
+
+    test("both entries carry the cut through the killer, and the pair request is flagged", async () => {
+      // covering A and C: before PR-102 the M entry was uncut and the NONE entry never cut
+      const r = await pairRig();
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", ref("A"));
+      const q = r.serve.requests.slice(n0);
+      expect(q).toHaveLength(1);
+      expect(q[0]?.body.runSelectedOnly).toBe(true);
+      expect(cuEntries(q[0] ?? { body: {} }).map(cutOf)).toEqual([
+        lower(["B", "C"]),
+        lower(["B", "C"]),
+      ]);
+    });
+
+    test("no cut when the killer is not in the baseline order", async () => {
+      const r = await pairRig();
+      const n0 = r.serve.requests.length;
+      await r.b.sendKillPair("M0001", ref("Z"));
+      const q = r.serve.requests[n0];
+      expect(cuEntries(q ?? { body: {} }).map(cutOf)).toEqual([undefined, undefined]);
+      expect(q?.body.runSelectedOnly).toBeUndefined();
+    });
+
+    test("#8059: a tail test whose name starts the killer or a kept test stays in", async () => {
+      const order = ["AB", "A", "C"];
+      const saved = SUITE_METHODS[CU];
+      SUITE_METHODS[CU] = order;
+      try {
+        const suite = order.map((m) => ref(m));
+        const r = await rig({ suite, serve: { rows: rowsIn(order) } });
+        await baseline(r.b, suite);
+        await r.b.prefetchMutants(plans(["M0001"], [ref("AB")]));
+        await r.b.activate("M0001");
+        const n0 = r.serve.requests.length;
+        await r.b.sendKillPair("M0001", ref("AB"));
+        // red without the keep rule: `A` is left out too, and v3 drops AB with it (prefix match)
+        expect(cuEntries(r.serve.requests[n0] ?? { body: {} }).map(cutOf)).toEqual([
+          lower(["C"]),
+          lower(["C"]),
+        ]);
+      } finally {
+        SUITE_METHODS[CU] = saved ?? ["A", "B"];
+      }
+    });
+
+    test("under NONE, after the confirm, a test after the killer runs live and never reads the pair's rows", async () => {
+      const r = await pairRig();
+      await r.b.sendKillPair("M0001", ref("A"));
+      await r.b.activate(null);
+      expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+      const n0 = r.serve.requests.length;
+      // red without the NONE branch: the cut pair has no B row and the run is a rowMissing throw
+      expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+      expect(r.serve.requests).toHaveLength(n0 + 1);
+      expect(cuEntries(r.serve.requests[n0] ?? { body: {} }).map(cutOf)).toEqual([undefined]);
+      // the NONE widen is not an L4 widen
+      expect(stats(r).l4Widened).toBe(0);
+    });
+
+    test("still holds: under the mutant, a covering test after the killer is widened live (L4)", async () => {
+      const r = await pairRig();
+      await r.b.sendKillPair("M0001", ref("A"));
+      await r.b.activate(null);
+      await r.b.run(ref("A"), OPTS);
+      await r.b.activate("M0001");
+      expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+      const n0 = r.serve.requests.length;
+      expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("pass");
+      expect(stats(r).l4Widened).toBe(1);
+      expect(r.serve.requests).toHaveLength(n0 + 1);
+    });
+
+    test("a pair's cut does not move the l4* stats", async () => {
+      const r = await pairRig();
+      await r.b.activate("M0002"); // never prefetched: a counted cut would add its entry
+      const keys = ["l4MutantEntries", "l4WholeTests", "l4Entries", "l4Excluded", "l4Widened"];
+      const before = keys.map((k) => stats(r)[k]);
+      await r.b.sendKillPair("M0002", ref("A"));
+      expect(keys.map((k) => stats(r)[k])).toEqual(before);
+    });
+
+    describe("H1: the cut goes out only with the flag", () => {
+      const sentCuts = (r: Rig, n0: number) =>
+        r.serve.requests.slice(n0).map((q) => ({
+          flag: q.body.runSelectedOnly,
+          cuts: cuEntries(q).map(cutOf),
+        }));
+
+      test("a neverFlag codeunit's pair is sent uncut", async () => {
+        const r = await pairRig();
+        neverFlagOf(r).add(CU);
+        const n0 = r.serve.requests.length;
+        await r.b.sendKillPair("M0001", ref("A"));
+        expect(sentCuts(r, n0)).toEqual([{ flag: undefined, cuts: [undefined, undefined] }]);
+      });
+
+      test("a #8059 gap in the pair's cut: sent uncut", async () => {
+        const order = ["BX", "X", "B"];
+        const saved = SUITE_METHODS[CU];
+        SUITE_METHODS[CU] = order;
+        try {
+          const suite = order.map((m) => ref(m));
+          const r = await rig({ suite, serve: { rows: rowsIn(order) } });
+          await baseline(r.b, suite);
+          await r.b.prefetchMutants(plans(["M0001"], [ref("X")]));
+          await r.b.activate("M0001");
+          (r.b as unknown as { cutAfterKiller: () => string[] }).cutAfterKiller = () =>
+            lower(["B"]);
+          const n0 = r.serve.requests.length;
+          await r.b.sendKillPair("M0001", ref("X"));
+          expect(sentCuts(r, n0)).toEqual([{ flag: undefined, cuts: [undefined, undefined] }]);
+        } finally {
+          SUITE_METHODS[CU] = saved ?? ["A", "B"];
+        }
+      });
+
+      test("the scan-gap re-send of a pair carries no cut", async () => {
+        await withABCD(async () => {
+          const suite = ABCD_NAMES.map((m) => ref(m));
+          const r = await rig({
+            suite,
+            serve: {
+              rows: rowsIn(ABCD_NAMES),
+              answer: (req, _n, lines) => dropBUnderFlag(req, lines),
+            },
+          });
+          await baseline(r.b, suite);
+          await r.b.prefetchMutants(plans(["M0001"], [ref("D")]));
+          await r.b.activate("M0001");
+          const n0 = r.serve.requests.length;
+          await r.b.sendKillPair("M0001", ref("C"));
+          // red when the re-send keeps the cut: the second request hides a tail v3 still runs
+          expect(sentCuts(r, n0)).toEqual([
+            { flag: true, cuts: [lower(["D"]), lower(["D"])] },
+            { flag: undefined, cuts: [undefined, undefined] },
+          ]);
+        });
+      });
+
+      test("the drift re-send of a pair carries no cut", async () => {
+        const KEPT = "NotRun: out-of-scope: conversion of Blob to Integer";
+        let armed = false;
+        const rows: RowsFn = (m, cu, d) =>
+          cu === CU
+            ? ABC.map((method) => {
+                const x: FakeRow = { method, status: "pass" };
+                if (m === "M0001" && method === "A")
+                  return { ...x, status: "error" as const, notRun: true, message: KEPT };
+                if (armed && d === 0 && m === "NONE" && method === "A")
+                  return { ...x, status: "fail" as const, message: "boom" };
+                return x;
+              })
+            : allPass(m, cu, d, 0);
+        const r = await rig({ suite: SUITE_ABC, serve: { rows }, oneShotRows: rows });
+        await baseline(r.b, SUITE_ABC);
+        await r.b.prefetchMutants(plans(["M0001"], [ref("A")]));
+        armed = true;
+        await r.b.activate("M0002");
+        const n0 = r.serve.requests.length;
+        await r.b.sendKillPair("M0002", ref("B"));
+        expect((r.b as unknown as { stats: { keptDrifts: number } }).stats.keptDrifts).toBe(1);
+        // the re-send is flagged by the decision (the codeunit is not never-flagged), yet carries no cut
+        // the fresh daemon's warm-up sits between the two pair requests
+        const sent = sentCuts(r, n0);
+        expect(sent).toHaveLength(3);
+        expect(sent[0]).toEqual({ flag: true, cuts: [lower(["C"]), lower(["C"])] });
+        expect(sent[2]).toEqual({ flag: undefined, cuts: [undefined, undefined] });
+      });
+    });
+
+    describe("a stored batched pair (R778, L1)", () => {
+      const batched = async (): Promise<Rig> => {
+        const r = await rig({
+          suite: SUITE_ABC,
+          serve: {
+            rows: (m, cu, d, n) =>
+              rowsIn(ABC)(m, cu, d, n).map((x) =>
+                m !== "NONE" && x.method === "B"
+                  ? { ...x, status: "fail" as const, message: "boom" }
+                  : x,
+              ),
+          },
+          oneShotRows: rowsIn(ABC),
+          pairBatch: true,
+        });
+        await baseline(r.b, SUITE_ABC);
+        await r.b.prefetchMutants(plans(["M0001"], SUITE_ABC));
+        await r.b.activate("M0001");
+        expect((await r.b.run(ref("B"), OPTS)).outcome).toBe("fail");
+        return r;
+      };
+      const storeOf = (r: Rig) =>
+        (r.b as unknown as { pairStore: Map<string, { through?: string | undefined }> }).pairStore;
+      const counts = (r: Rig) => r.b.entriesStats();
+
+      test("the batch's pair is cut through the killer and served to that killer", async () => {
+        const r = await batched();
+        expect([...storeOf(r).values()].map((v) => v.through)).toEqual(["B"]);
+        const last = r.serve.requests.at(-1);
+        expect(last?.body.runSelectedOnly).toBe(true);
+        expect(cuEntries(last ?? { body: {} }).map(cutOf)).toEqual([lower(["C"]), lower(["C"])]);
+        await r.b.sendKillPair("M0001", ref("B"));
+        expect(counts(r)).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
+      });
+
+      test("a killer after `through` is refused and the pair is sent fresh", async () => {
+        const r = await batched();
+        const n0 = r.serve.requests.length;
+        await r.b.sendKillPair("M0001", ref("C"));
+        expect(counts(r)).toMatchObject({ pairBatchServed: 0, pairBatchRefused: 1 });
+        expect(r.serve.requests).toHaveLength(n0 + 1);
+      });
+
+      test("a ref or a through that is not in the baseline order is refused", async () => {
+        const r = await batched();
+        await r.b.sendKillPair("M0001", ref("Z"));
+        expect(counts(r)).toMatchObject({ pairBatchServed: 0, pairBatchRefused: 1 });
+        const r2 = await batched();
+        for (const [k, v] of storeOf(r2)) storeOf(r2).set(k, { ...v, through: "Zed" });
+        await r2.b.sendKillPair("M0001", ref("B"));
+        expect(counts(r2)).toMatchObject({ pairBatchServed: 0, pairBatchRefused: 1 });
+      });
+
+      test("an uncut stored pair is served as today", async () => {
+        const r = await batched();
+        for (const [k, v] of storeOf(r)) storeOf(r).set(k, { ...v, through: undefined });
+        await r.b.sendKillPair("M0001", ref("C"));
+        expect(counts(r)).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
+      });
+    });
   });
 
   test("the stats line names the three counters", async () => {
