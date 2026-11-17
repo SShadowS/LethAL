@@ -24,6 +24,26 @@ answers the spec-adversary's review of r1 (§0). Evidence: `/coord/handoff/PR-13
 - **L6:** the slot holds the regex-escaped `C\*` (in TypeScript `String.raw`). The near misses include an empty value,
   `` `C` `` and `` `CC` ``.
 
+## 0b. Amendment 1, before a second census (the opus review of the built keep, 36bee8e3)
+- **The GetTable keep:** safe. DO reaches it as a plain call from an AutoRollback test: no writes, no handler, no
+  TryFunction. That is the census cell's state.
+- **The `C*` keep (medium):** DO reaches it in a deeper state than the cell measured. The refusal unwinds through a
+  `[TryFunction]`, the field's `OnValidate`, two nested `ModalPageHandler`s and an open TestPage, with uncommitted writes.
+  No census cell has ever measured a refusal that unwinds through a TryFunction.
+- **So, before `C*` ships,** the family gets one more cell in that shape:
+  - the standard writes;
+  - a TestPage on an invented card page;
+  - an action opens an invented wizard page modally;
+  - a `ModalPageHandler` invokes the wizard's action;
+  - the action calls a `[TryFunction]`, which validates a BigInteger field whose `OnValidate` does `SetFilter(..., 'C*')`.
+- **Then the census runs again** (`--refusers 7`).
+  - **P1':** the new cell refuses with the exact text, and the class stays CLEAN with both cells as refusers. Only then
+    is `C*` kept.
+  - If the cell does not refuse with that text, or the class is not CLEAN, `C*` is removed from BIGCODE, and this PR
+    ships the GetTable keep alone. P3 then falls to 27.1 s.
+- **The "not kept" comment for RunRequestPage** is corrected to the real distinction: no request-page handler in DO, a
+  BaseApp report, and report code that may run before the refusal, unmeasured.
+
 ## 1. The measurement (x2's own events, read-only: `/coord/handoff/R-984/x2.run.events.ndjson`)
 x2 closed its daemon 26 times. Each warm-up's own `cause` field accounts for all 1,202.8 s of warm-up compile:
 
