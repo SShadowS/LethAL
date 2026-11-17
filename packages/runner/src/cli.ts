@@ -158,6 +158,7 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
+import { createTimingFold, foldTiming, parseEventsNdjson } from "./timing-summary";
 import {
   AlRunnerV2RetiredError,
   RETIRED_V2_BACKEND,
@@ -869,6 +870,8 @@ export interface ExplainCliConfig {
   readonly projectDir?: string;
   /** R273: `--suggest`, the opt-in suggestions section (explain-suggest.ts). */
   readonly suggest?: boolean;
+  /** PR-100: `--events <events.ndjson>`, a run's event stream, folded into a TIMING section on stderr. */
+  readonly eventsPath?: string;
 }
 
 /**
@@ -1050,7 +1053,7 @@ USAGE
   lethal clear-ceiling     --project <dir> (--server <url> --instance <name> | --config <path>) [--db <path>] [--file <name>]
   lethal force-reset-lease --server <url> --instance <name> --config <path> [--project <dir>]
   lethal doctor            --config <path> [--project <dir>] [--tests <dir>] [--json]
-  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest]
+  lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest] [--events <path>]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
@@ -1303,6 +1306,8 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
                              LABELLED as a suggestion, not a measurement, derived only from each
                              survivor's measured reach and coverage attribution ('undecided' where
                              the report cannot tell). Everything else in the output is unchanged.
+  --events <path>            a run's --progress-out file: print its TIMING section (where the time
+                             went) on stderr. Stdout stays the one JSON document; --json is refused.
                              Refused on a report without gap ids
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
@@ -1488,6 +1493,8 @@ export const RUN_FLAGS = {
   top: { type: "string" },
   // R273: `lethal explain --suggest`, the opt-in suggestions section. Owned by `explain` alone.
   suggest: { type: "boolean", default: false },
+  // PR-100: `lethal explain --events <events.ndjson>`, the TIMING section. Owned by `explain` alone.
+  events: { type: "string" },
   // R178: `lethal export`. In the shared table for the same strict-mode reason as every flag above,
   // and owned by `export` alone in FLAG_OWNERS so another subcommand cannot swallow one silently.
   format: { type: "string" },
@@ -1623,6 +1630,12 @@ export const FLAG_OWNERS: ReadonlyArray<{
     instead: "It pre-commits a mutant count for `lethal campaign freeze`.",
   },
   { flag: "top", owners: ["explain"], instead: "It bounds `lethal explain`'s survivor list." },
+  {
+    flag: "events",
+    owners: ["explain"],
+    instead:
+      "It names the events file (a run's --progress-out) that `lethal explain` folds into a TIMING section.",
+  },
   {
     flag: "suggest",
     owners: ["explain"],
@@ -2106,9 +2119,14 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     if (project === "") {
       throw new Error("--project needs the target project directory the report's run measured.");
     }
+    const events = values.events;
+    if (events === "") {
+      throw new Error("--events needs the events file a run wrote with --progress-out.");
+    }
     const projectOpt = {
       ...(project !== undefined ? { projectDir: project } : {}),
       ...(values.suggest === true ? { suggest: true } : {}),
+      ...(events !== undefined ? { eventsPath: events } : {}),
     };
     if (top !== undefined) {
       const n = Number(top);
@@ -4451,6 +4469,8 @@ export async function runFromCliWithAccept(
           let progressOutFd: number | undefined;
           // Issue #22: the highest version an instrumented build was published under this run.
           let highestPublished: string | undefined;
+          // PR-100: the run's TIMING fold, set once the subscribers are built.
+          let timingFoldForRun: ReturnType<typeof createTimingFold> | undefined;
           // Task 7 review, wave 2 (Important — the restructure itself introduced this): `report` MUST be
           // captured in a local BEFORE the `finally` runs, and returned AFTER it — never
           // `return await runSession(...)` directly inside the `try`. Per JS `try/finally` semantics, a
@@ -4497,8 +4517,12 @@ export async function runFromCliWithAccept(
             // partially — a ruling that silently went missing looks exactly like a survivor nobody has
             // examined yet.
             const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
+            // PR-100: folds the run's events into the TIMING section printed once, below.
+            const timingFold = createTimingFold();
+            timingFoldForRun = timingFold;
             const emitSubscribers: EventSubscriber[] = [
               progress,
+              (e) => timingFold.add(e),
               (e) => {
                 if (e.type !== "batch-published" || e.appVersion === undefined) return;
                 if (
@@ -4615,6 +4639,9 @@ export async function runFromCliWithAccept(
                 );
               }
             }
+            // PR-100: where the time went, once, on stderr (partial when the run threw or was killed).
+            const timingText = timingFoldForRun?.render();
+            if (timingText !== undefined) process.stderr.write(`${timingText}\n`);
             // Task 6: closes the `--progress-out` file descriptor, if one was opened. Best-effort, same
             // posture as `store`/`backend` above — a close failure here must not mask a real error
             // already unwinding through this `finally`, and every event that mattered was already
@@ -6067,11 +6094,28 @@ export async function explainFromCli(parsed: ExplainCliConfig): Promise<number> 
   };
   const report = assertExplainableReport(parsedJson);
   const out = explain(report, options);
+  // PR-100: read before anything prints, so an unreadable events file leaves stdout empty.
+  let timing: string | undefined;
+  if (parsed.eventsPath !== undefined) {
+    let text: string;
+    try {
+      text = await readFile(parsed.eventsPath, "utf8");
+    } catch (err) {
+      throw new Error(
+        `explain: could not read ${parsed.eventsPath} — ${err instanceof Error ? err.message : String(err)}. Pass the NDJSON file a run wrote with --progress-out.`,
+      );
+    }
+    timing =
+      foldTiming(parseEventsNdjson(text)) ??
+      "TIMING: the events file held no timing data (no phases, serve requests or scored mutants).";
+  }
   // R273: composed HERE, never inside `explain()`, so the default output is unchanged by
   // construction. Built before anything prints, so a refusal leaves stdout empty.
   const printed: ExplainOutput | ExplainSuggestedOutput =
     parsed.suggest === true ? { ...out, suggestions: suggest(report, out) } : out;
   console.log(JSON.stringify(printed, null, 2));
+  // PR-100: on STDERR, so stdout stays one JSON document.
+  if (timing !== undefined) console.error(timing);
   // R265: the mark keys for a human, on STDERR so stdout stays one JSON document. Each key sits
   // under its survivor; the stale statement, when there is one, comes first.
   if (out.markKeysStale !== undefined) {

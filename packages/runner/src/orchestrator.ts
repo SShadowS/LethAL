@@ -4958,13 +4958,17 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
       ...(c.family !== undefined ? { family: c.family } : {}),
       ...(c.text !== undefined ? { text: c.text } : {}),
       ...(c.test !== undefined ? { test: c.test } : {}),
+      ...(c.phase !== undefined ? { phase: c.phase } : {}),
     }),
   );
   // PR-56: a request that drifted from the baseline right after a kept refusal.
   backend.setKeptDriftSink?.((d) => emit({ type: "serve-drift-after-kept-refusal", ...d }));
   // PR-88: the size of a serve request that gave a memory reading.
   backend.setRequestSizedSink?.((s) => emit({ type: "serve-request-sized", ...s }));
+  // PR-100: each serve request's wall time and al-runner's own timings (events stream only).
+  backend.setRequestTimedSink?.((t) => emit({ type: "serve-request-timed", ...t }));
   return () => {
+    backend.setRequestTimedSink?.(undefined);
     backend.setNotify?.(undefined);
     backend.setDaemonCloseSink?.(undefined);
     backend.setKeptDriftSink?.(undefined);

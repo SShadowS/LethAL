@@ -1830,6 +1830,104 @@
         "test": {
           "type": "string"
         },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "warmup",
+            "prefetch",
+            "live",
+            "idle"
+          ]
+        },
+        "seq": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "kind",
+        "lane",
+        "wallMs",
+        "entries",
+        "tests",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "serve-request-timed"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "warmup",
+            "prefetch",
+            "live"
+          ]
+        },
+        "lane": {
+          "type": "number"
+        },
+        "wallMs": {
+          "type": "number"
+        },
+        "entries": {
+          "type": "number"
+        },
+        "tests": {
+          "type": "number"
+        },
+        "selectedOnly": {
+          "const": true
+        },
+        "cut": {
+          "const": true
+        },
+        "failed": {
+          "const": true
+        },
+        "cause": {
+          "type": "string"
+        },
+        "timings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "setupMs": {
+              "type": "number"
+            },
+            "compileMs": {
+              "type": "number"
+            },
+            "engineMs": {
+              "type": "number"
+            },
+            "baselineMs": {
+              "type": "number"
+            },
+            "testsMs": {
+              "type": "number"
+            },
+            "coverageMs": {
+              "type": "number"
+            },
+            "otherMs": {
+              "type": "number"
+            },
+            "resetMs": {
+              "type": "number"
+            },
+            "baselineSource": {
+              "type": "string"
+            },
+            "engineKept": {
+              "const": true
+            }
+          }
+        },
         "seq": {
           "type": "number"
         }

@@ -188,6 +188,8 @@ import type {
   TestMethodRef,
   TestVerdict,
   V3RequestSized,
+  V3RequestTimed,
+  V3Timings,
 } from "./backend";
 import {
   type OtherFile,
@@ -1484,7 +1486,43 @@ export type V3DaemonClose = {
   readonly family?: string;
   readonly text?: string;
   readonly test?: string;
+  /** PR-100: the request kind in flight on the lane when it closed, else `idle`. */
+  readonly phase: "warmup" | "prefetch" | "live" | "idle";
 };
+
+/** PR-100: `summary.timings` reduced to the known fields of the right type; absent when none is left. */
+export function pickV3Timings(raw: unknown): V3Timings | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: { -readonly [K in keyof V3Timings]: V3Timings[K] } = {};
+  for (const k of [
+    "setupMs",
+    "compileMs",
+    "engineMs",
+    "baselineMs",
+    "testsMs",
+    "coverageMs",
+    "otherMs",
+    "resetMs",
+  ] as const) {
+    const v = r[k];
+    if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  if (typeof r.baselineSource === "string") out.baselineSource = r.baselineSource;
+  if (r.engineKept === true) out.engineKept = true;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * PR-100: why a warm-up happens, from the last non-routine close of its lane and mode (`undefined`: none).
+ * `first`, `after-deploy`, `recycle`, else `after-<reason>`.
+ */
+export function warmupCause(lastClose: string | undefined): string {
+  if (lastClose === undefined) return "first";
+  if (lastClose === "deploy") return "after-deploy";
+  if (lastClose === "recycle") return "recycle";
+  return `after-${lastClose}`;
+}
 
 /** R939: closes that cost no extra warm-up: counted on the close line, never sent to the sink.
  *  R948: `baseline-end` is the baseline's own daemon, closed before the mutant phase starts its own.
@@ -2078,6 +2116,16 @@ class Lane {
     };
   }
 
+  /** PR-100: the request kind in flight on this lane, for `serve-daemon-closed`'s `phase`. */
+  inFlight: "warmup" | "prefetch" | "live" | undefined;
+  /** PR-100: by `modeKey`, the reason of the lane's last close that costs a warm-up (the warm-up's cause). */
+  readonly lastClose = new Map<string, string>();
+
+  /** PR-100: the mode keys this lane holds a daemon for. */
+  daemonKeys(): string[] {
+    return [...this.daemons.keys()];
+  }
+
   /** R896 (review 6a): this lane's daemon for `mode`, one per mode, each with its own warm-up. */
   daemonFor(mode: RequestMode): Daemon | undefined {
     return this.daemons.get(modeKey(mode));
@@ -2589,6 +2637,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   setRequestSizedSink(sink?: (e: V3RequestSized) => void): void {
     this.requestSizedSink = sink;
   }
+  /** PR-100: the session's sink for `serve-request-timed` events (`setRequestTimedSink`). */
+  private requestTimedSink: ((e: V3RequestTimed) => void) | undefined;
+  /** PR-100: see `ExecutionBackend.setRequestTimedSink`. */
+  setRequestTimedSink(sink?: (e: V3RequestTimed) => void): void {
+    this.requestTimedSink = sink;
+  }
   /**
    * R939: close every daemon of `lane` and count the CAUSE once by `reason` (a lane's other mode
    * daemons close as collateral, and counting them would inflate the refusal a probe should admit);
@@ -2602,7 +2656,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     family?: string,
     detail?: { readonly text?: string; readonly test?: string },
   ): Promise<void> {
+    const keys = lane.daemonKeys();
+    const phase = lane.inFlight ?? "idle";
     if ((await lane.closeDaemon()) === 0) return;
+    // PR-100: the next warm-up of each mode closed here is caused by this close; routine closes
+    // other than a deploy cost no warm-up of their own and do not count.
+    if (!V3_ROUTINE_CLOSES.has(reason) || reason === "deploy")
+      for (const k of keys) lane.lastClose.set(k, reason);
     this.closes.set(reason, (this.closes.get(reason) ?? 0) + 1);
     if (family !== undefined)
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
@@ -2612,6 +2672,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       ...(family !== undefined ? { family } : {}),
       ...(detail?.text !== undefined ? { text: detail.text } : {}),
       ...(detail?.test !== undefined ? { test: detail.test } : {}),
+      phase,
     });
   }
   /** The counters; the phase timers are per lane and summed in `entriesStats()`. */
@@ -7019,6 +7080,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groups: readonly EntryGroup[],
     kind: "warmup" | "prefetch" | "live",
     mode: RequestMode,
+    groupCount: number = groups.length,
+    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    excluded?: (codeunit: number, group: EntryGroup) => readonly string[] | undefined,
+  ): Promise<{
+    readonly sent: readonly SentEntry[];
+    readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    readonly selectedOnly: boolean;
+    readonly cut?: SentCut;
+  }> {
+    // PR-100: the kind in flight on the lane, for `serve-daemon-closed`'s phase; closes inside the
+    // request (a failure, an unreadable answer, a dependency skip, a batch refusal) read it.
+    const prev = lane.inFlight;
+    lane.inFlight = kind;
+    try {
+      return await this.sendInFlight(lane, groups, kind, mode, groupCount, alone, excluded);
+    } finally {
+      lane.inFlight = prev;
+    }
+  }
+
+  private async sendInFlight(
+    lane: Lane,
+    groups: readonly EntryGroup[],
+    kind: "warmup" | "prefetch" | "live",
+    mode: RequestMode,
     /** R896 (build review 4): the group count before `request()` split it by mode. */
     groupCount: number = groups.length,
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
@@ -7088,6 +7174,28 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
     } else if (selectedOnly.refused) this.stats.selectedOnlyRefusedGapped += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+    // PR-100: one `serve-request-timed` per send, after the answer or the throw and before any decode
+    // check. A warm-up's cause is read (and used up) here.
+    const timedAt = Date.now();
+    const emitTimed = (extra: {
+      readonly cut?: true;
+      readonly failed?: true;
+      readonly timings?: V3Timings;
+    }): void => {
+      const mk = modeKey(mode);
+      const cause = kind === "warmup" ? warmupCause(lane.lastClose.get(mk)) : undefined;
+      if (kind === "warmup") lane.lastClose.delete(mk);
+      this.requestTimedSink?.({
+        kind,
+        lane: lane.index,
+        wallMs: Date.now() - timedAt,
+        entries: sent.length,
+        tests,
+        ...(selectedOnly.flag ? { selectedOnly: true as const } : {}),
+        ...extra,
+        ...(cause !== undefined ? { cause } : {}),
+      });
+    };
     // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
     // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
     // orchestrator records nothing that ended under a signal), so nothing scored is lost.
@@ -7112,11 +7220,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         kind !== "warmup" && this.sleepRuleRetiredForParallel(),
       );
     } catch (err) {
+      emitTimed({ failed: true });
       await this.closeLane(lane, signalClosed ? "stop-signal" : "request-failed");
       throw missingDependencyOr(err);
     } finally {
       clearInterval(watch);
     }
+    const timings = answer.cut === undefined ? pickV3Timings(answer.summary.timings) : undefined;
+    emitTimed(answer.cut !== undefined ? { cut: true } : timings !== undefined ? { timings } : {});
     await this.refuseDaemonDependencySkip(lane, daemon);
     if (answer.cut !== undefined) {
       // A partial answer has no summary: no R807 seed to read, no `cached` to count.
@@ -7421,8 +7532,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       cut < sent.length
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
-    if (cut < sent.length || daemon.dirty)
-      await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family, unkept);
+    if (cut < sent.length || daemon.dirty) {
+      // PR-100: this close ends the request that just ran (`send` has restored the lane's kind).
+      const prevKind = lane.inFlight;
+      lane.inFlight = phase === "prefetchMs" ? "prefetch" : "live";
+      try {
+        await this.closeLane(lane, unkept?.reason ?? "unkept-row", unkept?.family, unkept);
+      } finally {
+        lane.inFlight = prevKind;
+      }
+    }
     // An unkept ECHO stands like any entry, but its group's codeunit entries come after it, so the
     // whole group is re-sent (§7).
     const standing = sent.slice(0, cut + 1);

@@ -509,6 +509,41 @@ export type V3RequestSized = {
   readonly peakSource: "hwm" | "sampled";
 };
 
+/**
+ * PR-100: al-runner's own per-request timings (its `summary.timings`), only the known fields and only
+ * when their type is right. Milliseconds, except `baselineSource` and `engineKept`.
+ */
+export type V3Timings = {
+  readonly setupMs?: number;
+  readonly compileMs?: number;
+  readonly engineMs?: number;
+  readonly baselineMs?: number;
+  readonly testsMs?: number;
+  readonly coverageMs?: number;
+  readonly otherMs?: number;
+  readonly resetMs?: number;
+  readonly baselineSource?: string;
+  readonly engineKept?: true;
+};
+
+/**
+ * PR-100: what the request-timed sink gets (`ExecutionBackend.setRequestTimedSink`), one per serve
+ * `send()`; also the body of the `serve-request-timed` event. `wallMs` is LethAL's own clock around
+ * the request. `cause` is set on warm-ups only.
+ */
+export type V3RequestTimed = {
+  readonly kind: "warmup" | "prefetch" | "live";
+  readonly lane: number;
+  readonly wallMs: number;
+  readonly entries: number;
+  readonly tests: number;
+  readonly selectedOnly?: true;
+  readonly cut?: true;
+  readonly failed?: true;
+  readonly cause?: string;
+  readonly timings?: V3Timings;
+};
+
 export interface ExecutionBackend {
   capabilities(): BackendCapabilities;
   /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
@@ -631,6 +666,8 @@ export interface ExecutionBackend {
       /** R1009: a refusal's whole first line, and the refused row's test name. */
       readonly text?: string;
       readonly test?: string;
+      /** PR-100: the request kind in flight on the lane when it closed, else `idle`. */
+      readonly phase?: "warmup" | "prefetch" | "live" | "idle";
     }) => void,
   ): void;
   /**
@@ -652,6 +689,12 @@ export interface ExecutionBackend {
    * event (events stream only, not the report). Bytes throughout.
    */
   setRequestSizedSink?(sink?: (sized: V3RequestSized) => void): void;
+  /**
+   * PR-100, OPTIONAL: where the backend reports each serve request's timing (al-runner-v3 only).
+   * Installed and removed with `setNotify`; each call becomes a `serve-request-timed` event
+   * (events stream only, not the report).
+   */
+  setRequestTimedSink?(sink?: (timed: V3RequestTimed) => void): void;
   activate(mutantId: string | null): Promise<void>;
   run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict>;
   /**

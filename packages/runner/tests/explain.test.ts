@@ -2528,6 +2528,61 @@ describe("lethal explain — CLI", () => {
     await expect(runCli("not json at all")).rejects.toThrow(/not valid JSON/);
   });
 
+  // PR-100: `--events <events.ndjson>` adds the TIMING section, on stderr; stdout stays one JSON document.
+  test("--events prints the TIMING section on stderr and leaves the explain schema where it was", async () => {
+    const parsed = parseCliConfig(["explain", "report.json", "--events", "run.ndjson"]);
+    expect(parsed).toEqual({
+      mode: "explain",
+      reportPath: "report.json",
+      eventsPath: "run.ndjson",
+    });
+    const dir = scratch("lethal-explain-events-");
+    const reportPath = join(dir, "report.json");
+    const eventsPath = join(dir, "events.ndjson");
+    await writeFile(reportPath, JSON.stringify(reportFixture()), "utf8");
+    await writeFile(
+      eventsPath,
+      [
+        { ndjsonHeader: true, streamSchemaVersion: 1 },
+        { type: "phase-left", phase: "mutants", elapsedMs: 4000 },
+        { type: "mutant-scored", verdict: "killed" },
+        { type: "from-the-future", x: 1 },
+        { type: "session-finished", elapsedMs: 1 },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join("\n"),
+      "utf8",
+    );
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      out.push(a.map(String).join(" "));
+    });
+    const error = spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      err.push(a.map(String).join(" "));
+    });
+    try {
+      expect(await explainFromCli({ mode: "explain", reportPath, eventsPath })).toBe(0);
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+    expect(JSON.parse(out.join("\n")).explainSchemaVersion).toBe(EXPLAIN_SCHEMA_VERSION);
+    expect(err).toContain(
+      [
+        "TIMING (wall clock)",
+        "  phases: mutants 4.0 s",
+        "  per covered mutant: 4.00 s (1 scored with coverage over the mutants phase)",
+      ].join("\n"),
+    );
+  });
+
+  test("--events is refused with --json, by name: the events file is the machine surface", () => {
+    expect(() =>
+      parseCliConfig(["explain", "report.json", "--events", "run.ndjson", "--json"]),
+    ).toThrow(/--json is only accepted by .*not `lethal explain`/);
+  });
+
   test("a missing file is refused naming what to pass instead", async () => {
     await expect(
       explainFromCli({ mode: "explain", reportPath: join(tmpdir(), "lethal-no-such-report.json") }),

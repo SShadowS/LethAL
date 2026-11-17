@@ -2552,6 +2552,84 @@ describe("runFromCli: preprocessorSymbols reach the session (C02-06)", () => {
     expect(await seen("bcdev", true, false, true)).toEqual([undefined, undefined]);
   });
 
+  // PR-100: `lethal run` folds its own events and prints the TIMING section once, on stderr, at the end.
+  test("PR-100: run prints the TIMING section once at the end; partial when the run did not finish", async () => {
+    const root = scratch("lethal-cli-pr100-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(testDir, { recursive: true });
+    await writeFile(
+      join(projectDir, "app.json"),
+      JSON.stringify({
+        id: "0f2b7c5e-4d3a-4917-8a1c-3b4a8d9f1027",
+        name: "Timing Fixture",
+        publisher: "LethAL",
+        version: "1.0.0.0",
+        idRanges: [{ from: 79000, to: 79199 }],
+      }),
+    );
+    await writeFile(
+      join(testDir, "app.json"),
+      JSON.stringify({ name: "Timing Tests", publisher: "LethAL", version: "1.0.0.0" }),
+    );
+    const configPath = join(root, "lethal.config.json");
+    await writeFile(configPath, JSON.stringify({}));
+    const parsed: RunCliConfig = {
+      mode: "run",
+      projectDir,
+      testDir,
+      backendKind: "al-runner-v3",
+      dbPath: join(root, "lethal.sqlite"),
+      configPath,
+      skipKnownSurvivors: false,
+      workers: 1,
+      keepEnv: false,
+      allowExpiringEnv: false,
+    };
+    const drive = async (finish: boolean): Promise<string[]> => {
+      const sentinel = new Error("PR-100 sentinel");
+      const written: string[] = [];
+      const spy = spyOn(process.stderr, "write").mockImplementation(((chunk: unknown) => {
+        written.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write);
+      try {
+        await expect(
+          runFromCli(parsed, {
+            validateSelectorIdsForProject: async () => {},
+            resolveEnvToolSession: async (_p, cfg) => ({ effectiveConfig: cfg }),
+            buildBackend: async () => new PassingBackend(),
+            runSession: async (cfg) => {
+              const send = (e: Record<string, unknown>) => {
+                // As the real emitter does: a subscriber that throws on a bare event costs the others nothing.
+                for (const s of cfg.emit ?? []) {
+                  try {
+                    s(e as unknown as RunEvent);
+                  } catch {}
+                }
+              };
+              send({ type: "phase-left", phase: "mutants", elapsedMs: 8000 });
+              send({ type: "mutant-scored", verdict: "killed" });
+              send({ type: "mutant-scored", verdict: "killed" });
+              if (finish) send({ type: "session-finished", elapsedMs: 1 });
+              throw sentinel;
+            },
+          }),
+        ).rejects.toBe(sentinel);
+      } finally {
+        spy.mockRestore();
+      }
+      return written.filter((w) => w.startsWith("TIMING"));
+    };
+    expect(await drive(true)).toEqual([
+      "TIMING (wall clock)\n  phases: mutants 8.0 s\n  per covered mutant: 4.00 s (2 scored with coverage over the mutants phase)\n",
+    ]);
+    const partial = await drive(false);
+    expect(partial).toHaveLength(1);
+    expect(partial[0]?.startsWith("TIMING (partial: the run did not finish)")).toBe(true);
+  });
+
   // R214: the same project, with a `#if X` arm. The config's symbols decide which arm is mutated.
   const R214_LOGIC = `codeunit 79000 "Sandbox Logic"
 {
