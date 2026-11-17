@@ -82,7 +82,9 @@ describe("PR-56 keep entries", () => {
       hits += matched.length;
       if (exact !== undefined && matched.length > 0) exactHits += 1;
     }
-    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(84);
+    // 84 from PR-54's coverage.tsv, plus 9 ledger keys PR-130 added to two of its classes (RecordRef.* not open: 6;
+    // FieldRef.* never assigned: 3), each matched by that class's own entry.
+    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(93);
     expect(hits).toBeGreaterThan(0);
     expect(exactHits).toBeGreaterThan(5); // the Company keys etc. are really tested, not only the guesses
   });
