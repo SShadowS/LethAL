@@ -1,66 +1,120 @@
 # PR-116 (R1108): name withheld kills in the report
 
-Status: r1 (coord PR-116, lethal-preproc, 2026-11-17). Report-only: no verdict, cause, failure note or exit code changes.
+Status: r2 (coord PR-116, lethal-preproc, 2026-11-17). r2 answers the spec-adversary review of r1 (§0). Report-only: no
+verdict, cause, failure note, exit code or gate-compared field changes.
+
+## 0. Review of r1 (opus spec-adversary), finding by finding
+1. **The remedy told an "auto" run to use "auto".**
+   - The caveat's text now covers both modes. The console line is built from the run's own mode: `SessionReport.isolation`
+     is present only on an auto run.
+   - Auto's rule is stated as it is: a codeunit moves to method when its baseline passes strictly more tests so, or ties
+     and v3 refused one of its tests by name.
+2. **The cause was named for one shape only.** The text now says "after an earlier test of its codeunit was refused,
+   failed or ran out of time".
+3. **The manual-binding cascade is al-runner's own artifact**, not the covering test's reaction to the mutant. It is
+   excluded by name, with a test.
+4. **Confirm and reproduction notes** ("confirming ...: ", "reproducing ...: ") are excluded. The note must start with
+   v3's row prefix `NotRun: out-of-scope: `. Undercounting is the safe direction.
+5. **`counts.withheldKills` is dropped.**
+   - A required count would force a live regeneration of the committed sample report.
+   - The per-mutant field and the caveat carry the fact; the console counts the mutants.
+6. **The explain schema bump** is added to the ripple: a new caveat value is an explain schema change (v29 → v30, the
+   README row, the R233 enum list). The `report-equality` snapshot is added too.
+7. **Softer wording.**
+   - "a kill candidate", not "a kill BC would score": had al-runner trusted the failure, it would still go through the
+     confirm and R577's reproduction, and on DO 2 of 35 withheld failures were al-runner conversion errors.
+   - The count is a LOWER bound, and is said as "at least": a direct refusal met first hides a later withheld kill
+     (PR-107's M2320); `kill-not-reproduced` takes precedence; a phrase on a plain `fail` row is `runner-test-error`.
+8. **Extraction.** The LAST occurrence of the phrase is used. The withheld failure runs up to v3's not-run suffix, or else
+   up to LethAL's own appended suffixes (PR-51's held note, PR-108's cap note).
 
 ## Why
-- [[R1102]] (PR-106, PR-107): on DO, 557 of 868 error verdicts (run 15) are **withheld kills**. A covering test FAILED
-  under the mutant, but al-runner v3 reported the failure as `NotRun` because an earlier test of the same codeunit was
-  refused, or did not pass, so "the state it would have left is not BC's". The row text ends with
-  `this failure is not trusted: <the assertion message>`.
+- [[R1102]] (PR-106, PR-107): on DO, 557 of 868 error verdicts (run 15) are withheld kills.
+  - A covering test FAILED under the mutant, but al-runner v3 reported the failure as `NotRun`. An earlier test of the
+    same codeunit had been refused, had failed, or had run out of time, so "the state it would have left is not BC's".
+  - The row text holds `this failure is not trusted: <the failure>`.
 - LethAL records such a mutant as `error` with cause `runner-refused`, the same as a mutant whose own path al-runner
-  refuses. A reader sees "error" and a score that leaves those mutants out, with no word that a covering test detected
-  them.
-- Under isolation "auto" (R896/R921) the codeunits whose baseline shows the need run one test per session; PR-107
-  measured 450 of 451 such errors become kills on DO, at +21 min of baseline and ~3x per mutant in moved codeunits. That is
-  the remedy to name. The ruling (orchestrator, 2026-11-17): DO's default stays "test"; auto is a measured opt-in.
+  refuses. A reader sees "error", and a score that leaves those mutants out, with no word that a covering test failed.
+- Per-test isolation recovers them: PR-107 measured 450 of 451 such errors become kills on DO under isolation "auto", at
+  +21 min of baseline and ~3x per mutant in moved codeunits. The ruling (orchestrator, 2026-11-17): DO's default stays
+  "test"; "auto" is a measured opt-in.
 
-## What a withheld kill is (the one detection rule)
-An `error` mutant whose `failureNote` contains al-runner v3's phrase `this failure is not trusted: ` (the trust rule; v3
-writes it after an earlier refused test, R1102, and after an earlier failure, R967/R978, and after a timeout, R-637's
-contract fact). The text after the phrase, up to v3's ` [al-runner v3 did not run this test` suffix when present, is the
-withheld failure. When the note has the form `an earlier test of this codeunit was refused while it ran (<T>: ...` or
-`a test before this one in the codeunit did not pass (<T>: ...`, `<T>` is the earlier test.
+## 1. The detection rule (one pure function)
+`withheldKillOf(verdict, cause, failureNote)` returns `{ failure, afterTest? }` or `undefined`. It returns a value
+only when all of these hold:
+- `verdict === "error"` and `cause === "runner-refused"`;
+- the note starts with `NotRun: out-of-scope: ` (the covering loop's row as v3 wrote it; confirm and reproduce notes carry
+  a prefix);
+- the note contains `this failure is not trusted: `;
+- the note is not the manual-binding cascade (`left a manual event subscription bound`, R1019, `al-runner-server.ts`).
 
-Only v3 writes the phrase. A mutant whose cause is not `runner-refused` is never a withheld kill (a guard against the
-phrase appearing in a test's own assertion text: a `killed` mutant's `killingTestFailure` is never read).
+The values:
+- **`failure`:** the text after the LAST occurrence of the phrase, up to the first of v3's suffix
+  (` [al-runner v3 did not run this test`, `V3_NOT_RUN_SUFFIX`) or LethAL's appended held-note and cap-note markers; trimmed.
+- **`afterTest`:** the earlier test, when the note starts with
+  `NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (<T>: ` or
+  `NotRun: out-of-scope: a test before this one in the codeunit did not pass (<T>: `. Otherwise absent.
 
-## The change
-1. **Per mutant:** `MutantRecord.withheldKill?: { readonly failure: string; readonly afterTest?: string }`, set only on
-   such an error mutant. `cause`, `verdict` and `failureNote` are unchanged.
-2. **Counts:** `counts.withheldKills: number`, the number of mutants with `withheldKill` (always present, 0 when none).
-3. **Caveat** `withheld-kills`, pushed when `counts.withheldKills > 0`, with its `CAVEAT_INTERPRETATIONS` entry:
-   - meaning: a covering test failed under each of these mutants, but al-runner v3 withheld the failure (the trust rule),
-     so the mutant is `error`, outside `mutationScore`; the score is LOWER than it would be had al-runner trusted them
-     (each is a kill BC would likely score);
-   - remedy: run with `"alRunnerV3.isolation": "auto"` (the default; a config that forces "test" opts out), which runs
-     the codeunits whose baseline shows refused tests one test per session; measured on DO: 450 of 451 such errors became
-     kills, at about 21 min more baseline and about 3x the time per mutant in moved codeunits (R1102);
-   - entailedNegative: not a kill LethAL counts, not a wrong verdict, not a statement that BC would kill every one (the
-     earlier test's state is unknown); under isolation auto some remain (a codeunit auto keeps on "test").
-   - basis: R1108.
-   Never with `all-errors`? It may come with either `all-errors` or `some-errors` (a withheld kill is an error).
-4. **Console:** one line after the score's error-range line, when the count is > 0:
-   `N of the E error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust
-   the failure after an earlier refused test of its codeunit; the score leaves them out (validity.caveats "withheld-kills";
-   isolation "auto" scores most of them, R1102).`
-5. **`lethal explain`:** the caveat by reference (as every caveat), and a withheld-kill mutant's `withheldKill` in its
-   not-measured entry if explain lists per-mutant causes.
+Computed in the report builder from the mutant's recorded fields, so it cannot move a verdict, and works the same on a
+report rebuilt from a store.
 
-## The ripple (CLAUDE.md "Adding a SessionReport field")
-`events.ts` (if the mutant event carries the record), `report-fold.ts`, `report.ts` (type, builder, banner), `bun
-scripts/generate-schemas.ts`, `tests/schemas.test.ts` (root-required list for `counts.withheldKills`; older reports
-without it), `report-equality` snapshots, committed sample reports regenerated if the schema test requires the new count,
-`CAVEAT_INTERPRETATIONS` and the caveat counts in `interpretation.test.ts` and `report.test.ts`.
+## 2. The change
+1. **Per mutant:** `MutantRecord.withheldKill?: { readonly failure: string; readonly afterTest?: string }`. It is
+   optional in the schema, absent on every other mutant and on older reports.
+2. **Caveat `withheld-kills`**, pushed when at least one mutant has `withheldKill`, with its `CAVEAT_INTERPRETATIONS` entry:
+   - **meaning:** at least one `error` mutant is a withheld kill. A covering test failed under it, but al-runner v3 did not
+     trust the failure, because an earlier test of its codeunit was refused, failed or ran out of time and the state it
+     left is not BC's. Such a mutant is outside `mutationScore`, so the score leaves out a kill candidate. Each such mutant
+     carries `withheldKill` (the withheld failure, and the earlier test when v3 names it). The count is a lower bound:
+     some are hidden behind a direct refusal met first.
+   - **remedy (LethAL's own machinery):** per-test isolation runs each test in its own session, where the earlier test is
+     never sent.
+     - Under a config that forces `"alRunnerV3.isolation": "test"`, the default `"auto"` moves to method the codeunits
+       whose baseline passes strictly more tests so, or ties with a test v3 refused by name. On DO it scored 450 of 451
+       such errors, at about 21 min more baseline and about 3x the time per mutant in moved codeunits (R1102).
+     - Under "auto", the ones left are in codeunits auto kept on "test". `"method"` runs every codeunit one test per
+       session, which moves other baseline outcomes (R1102 measured 156 on DO). al-runner's own rule is asked about in
+       #8218.
+   - **entailedNegative:** not a kill LethAL counts, not a wrong verdict, and not a claim that BC would kill each one: the
+     earlier test's effect on the state is unknown, and a trusted failure would still be confirmed and reproduced.
+   - **basis:** R1108. It comes with `some-errors` or `all-errors` (every withheld kill is an error).
+3. **Console**, one line after the error-range line, when at least one mutant has `withheldKill`:
+   - `at least N of the E error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did
+     not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves
+     them out (validity.caveats "withheld-kills").`
+   - followed, when `SessionReport.isolation` is absent (the run forced a mode), by
+     ` Isolation "auto" scores most of them (R1102).`
+   - or, when it is present, by
+     ` They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).`
+4. **`lethal explain`:** the caveat by reference, as every caveat. Its not-measured entries are unchanged (no
+   `withheldKill` there, so explain's path pin does not move beyond the caveat enum).
 
-## Tests (each red-checked both ways)
-- detection: a `runner-refused` error whose note carries the phrase gets `withheldKill` with `failure` and `afterTest`;
-  one without it does not; a `killed` mutant whose killingTestFailure contains the phrase does not; a non-`runner-refused`
-  error with the phrase does not.
-- counts and caveat: present iff count > 0; with `some-errors` and with `all-errors`.
-- console line: printed iff count > 0, with N and E.
-- the three v3 note shapes (after a refused test, after a failure, after a timeout) all detect.
+## 3. The ripple
+- `report.ts`: the `MutantRecord` type, its builder, the caveat union and `CAVEAT_INTERPRETATIONS`, and the banner.
+- `bun scripts/generate-schemas.ts`: report-v3 gains the optional property and the caveat value.
+- **The explain schema:** `EXPLAIN_SCHEMA_VERSION` 29 → 30, the new `explain-v30` schema file, v29 kept, the
+  `schemas/README.md` row, and the R233 literal enum list.
+- `tests/schemas.test.ts`: the caveat enum and the explain version. No root-required list moves, because the field is
+  optional; the committed sample reports still validate.
+- `interpretation.test.ts` and `report.test.ts`: the caveat counts.
+- The `report-equality` snapshot, updated on purpose with `bun test --update-snapshots <file>`.
+- `report-fold.ts`, `events.ts`: unchanged, since the field is derived in the builder from recorded fields. If the
+  builder does not see `cause` or `failureNote` there, the field is added to the fold instead, and this spec says so in
+  the build notes.
 
-## Gates
-- The v3 gate: no pinned figure moves (verdict, cause/errorClass, killing test, note set, refusal set, warning codes are
-  unchanged by construction; the new field and caveat are not compared). A moved figure is a BLOCK.
-- No BC gate: the bcdev backend never writes the phrase, so a bcdev report gains only `counts.withheldKills: 0`.
+## 4. Tests (each red-checked both ways)
+- **Detection:**
+  - all three v3 shapes (after a refused test, after a failure, after a timeout) are detected, with `failure` and
+    `afterTest`;
+  - excluded: a note without the phrase; a `killed` mutant; an error with another cause; the manual-binding cascade; a
+    "confirming ...: " note;
+  - the last occurrence is used when the phrase appears twice;
+  - the PR-51 / PR-108 suffixes are cut.
+- **Caveat:** present iff at least one `withheldKill`; it comes with `some-errors`, and with `all-errors`.
+- **Console:** the line iff at least one, with N and E; the "auto" variant iff `isolation` is present.
+
+## 5. Gates
+- **The v3 gate:** no pinned figure moves. It compares verdict, `killingTest`, `coverageFiltered`, `errorClass`,
+  `mutatedTextSha256` and the killed/survived/noCoverage counts, and checks named caveats only for presence. A moved
+  figure is a BLOCK.
+- **No BC gate:** bcdev never sets cause `runner-refused`.
