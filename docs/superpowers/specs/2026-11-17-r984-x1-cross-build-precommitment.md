@@ -4,6 +4,12 @@ Lane lethal-bugs, 2026-11-17, committed before the window starts. The DO campaig
 covered mutants, all scored). By the orchestrator's ruling (2026-11-16, after the t10 build-move question), one fresh-store window now
 runs on the then-current build, as a per-mutant cross-build comparison. It starts after preproc's PR-107 run on 847b1fa5a ends.
 
+**Amendment 1 (orchestrator, 2026-11-17, before the window starts):** a fresh store has no kill history, so R197's covering order
+starts from scratch and the killing test can move for that reason alone. **A killing-test-only change (same verdict, another
+killing test) is its own allowed class (D)**, counted and named, not a BLOCK. (C) keeps killed <-> survived and every class change
+outside the walk cap and the PR-51/PR-108 rules. #8028's no-client move: predicted 0 (confirmed). Where this amendment and the text
+below disagree, the amendment wins.
+
 **Setup.** Head: master 42c84fbe or later (contains PR-108 2b2bddaf, PR-109 5711fe12, PR-105, PR-99, PR-102, PR-103). al-runner:
 **edge-4ebfe7913** (`current`), pinned by path in `/coord/handoff/R-984/v3.do-serve-xb.json` (v3.do-serve.json with only the path
 changed). Driver `/coord/handoff/R-984/run-xb.sh 1`: a fresh store `dos4.sqlite` (dos3.sqlite, the 847b1fa5a campaign, is never
