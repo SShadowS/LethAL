@@ -25,8 +25,12 @@ export const BATCH_FORBIDDEN_FIELDS = [
 export function batchBody(
   base: Record<string, unknown>,
   excludeTests: readonly string[],
+  withCoverage = true,
 ): Record<string, unknown> {
-  return { ...base, excludeTests, coverage: true, perTestCoverage: true };
+  // PR-126: the re-check's no-coverage batch LEAVES OUT both fields, as a request without coverage does.
+  return withCoverage
+    ? { ...base, excludeTests, coverage: true, perTestCoverage: true }
+    : { ...base, excludeTests };
 }
 
 /**
@@ -112,6 +116,9 @@ export function exclusionsFor(
     .map(exclusionOf);
 }
 
+/** PR-126: why a no-coverage batch's answers carry no coverage. */
+export const NO_COVERAGE_WHY = "PR-126 re-check rows only";
+
 /** A top-level coverage list that is the union of these per-test lists (hits add up per file and line). */
 export function unionCoverage(
   lists: readonly (readonly ServerCoverageFile[])[],
@@ -157,7 +164,10 @@ export function decodeBatchAnswer<R extends RowLike>(a: {
   readonly coverage: V3CoverageRead;
   readonly isKept: (row: R) => boolean;
   readonly hasEveryRow: (rows: readonly R[], id: number) => boolean;
+  /** PR-126: false skips step 5 and gives every codeunit `coverage: unavailable` (the re-check's non-sample batches). */
+  readonly withCoverage?: boolean;
 }): BatchDecode<R> {
+  const withCoverage = a.withCoverage !== false;
   const inBatch = new Set(a.ids);
   const bad = (why: string): BatchDecode<R> => ({ ok: false, why });
   // 2. every row's codeunit is in the batch
@@ -173,14 +183,16 @@ export function decodeBatchAnswer<R extends RowLike>(a: {
   // 4. every row is one R612 keeps
   for (const r of a.rows) if (!a.isKept(r)) return bad(`row ${r.name} is one R612 does not keep`);
   // 5. every per-test coverage entry names a row of the batch, and no row has two entries
-  if (a.coverage.kind !== "doc") return bad(`coverage unavailable: ${a.coverage.why}`);
-  const rowNames = new Set(a.rows.map((r) => r.name));
   const entryOf = new Map<string, V3PerTestCoverage>();
-  for (const e of a.coverage.perTestCoverage) {
-    if (!rowNames.has(e.test))
-      return bad(`a coverage entry for ${e.test}, which is no row of the batch`);
-    if (entryOf.has(e.test)) return bad(`two coverage entries for ${e.test}`);
-    entryOf.set(e.test, e);
+  if (withCoverage) {
+    if (a.coverage.kind !== "doc") return bad(`coverage unavailable: ${a.coverage.why}`);
+    const rowNames = new Set(a.rows.map((r) => r.name));
+    for (const e of a.coverage.perTestCoverage) {
+      if (!rowNames.has(e.test))
+        return bad(`a coverage entry for ${e.test}, which is no row of the batch`);
+      if (entryOf.has(e.test)) return bad(`two coverage entries for ${e.test}`);
+      entryOf.set(e.test, e);
+    }
   }
   // 6. per codeunit: rows sliced by codeunit, entries by the exact row name
   const byId = new Map<number, { rows: R[]; coverage: V3CoverageRead }>();
@@ -192,11 +204,13 @@ export function decodeBatchAnswer<R extends RowLike>(a: {
       .filter((e): e is V3PerTestCoverage => e !== undefined);
     byId.set(id, {
       rows,
-      coverage: {
-        kind: "doc",
-        coverage: unionCoverage(own.map((e) => e.coverage)),
-        perTestCoverage: own,
-      },
+      coverage: withCoverage
+        ? {
+            kind: "doc",
+            coverage: unionCoverage(own.map((e) => e.coverage)),
+            perTestCoverage: own,
+          }
+        : { kind: "unavailable", why: NO_COVERAGE_WHY },
     });
   }
   return { ok: true, byId };

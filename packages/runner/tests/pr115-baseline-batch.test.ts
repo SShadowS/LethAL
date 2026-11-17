@@ -129,6 +129,7 @@ describe("PR-115: the decode, in order", () => {
     isKept?: (r: R) => boolean;
     ids?: number[];
     have?: (rows: readonly R[], id: number) => boolean;
+    withCoverage?: boolean;
   }) =>
     decodeBatchAnswer<R>({
       ids: o.ids ?? [1, 2],
@@ -136,6 +137,7 @@ describe("PR-115: the decode, in order", () => {
       coverage: o.coverage ?? doc(),
       isKept: o.isKept ?? (() => true),
       hasEveryRow: o.have ?? (() => true),
+      ...(o.withCoverage !== undefined ? { withCoverage: o.withCoverage } : {}),
     });
   const why = (d: ReturnType<typeof decode>) => ("why" in d ? d.why : "ok");
 
@@ -187,5 +189,87 @@ describe("PR-115: the decode, in order", () => {
   });
   test("the checks run in order: a duplicate in an outside row is reported as outside first", () => {
     expect(why(decode({ rows: [row(3, "A"), row(3, "A")] }))).toContain("outside the batch");
+  });
+});
+
+describe("PR-126: the no-coverage decode", () => {
+  interface R {
+    codeunit: number;
+    name: string;
+    method: string;
+  }
+  const row = (codeunit: number, method: string): R => ({
+    codeunit,
+    method,
+    name: `Codeunit${codeunit}.${method}`,
+  });
+  const unavailable: V3CoverageRead = { kind: "unavailable", why: "x" };
+  const ghost: V3CoverageRead = {
+    kind: "doc",
+    coverage: [],
+    perTestCoverage: [{ test: "Codeunit9.Z", coverage: [] }],
+  };
+  const decode = (o: {
+    rows: R[];
+    coverage?: V3CoverageRead;
+    isKept?: (r: R) => boolean;
+    have?: (rows: readonly R[], id: number) => boolean;
+    withCoverage?: boolean;
+  }) =>
+    decodeBatchAnswer<R>({
+      ids: [1, 2],
+      rows: o.rows,
+      coverage: o.coverage ?? unavailable,
+      isKept: o.isKept ?? (() => true),
+      hasEveryRow: o.have ?? (() => true),
+      withCoverage: o.withCoverage ?? false,
+    });
+  const why = (d: ReturnType<typeof decode>) => ("why" in d ? d.why : "ok");
+
+  test("steps 2-4 and the per-codeunit slice still discard", () => {
+    expect(why(decode({ rows: [row(1, "A"), row(3, "A")] }))).toContain("outside the batch");
+    expect(why(decode({ rows: [row(1, "A"), row(1, "A")] }))).toContain("appears twice");
+    expect(
+      why(decode({ rows: [row(1, "A"), row(2, "B")], isKept: (r) => r.method !== "B" })),
+    ).toContain("R612");
+    expect(why(decode({ rows: [row(1, "A"), row(2, "B")], have: (_r, id) => id !== 2 }))).toContain(
+      "codeunit 2 lacks",
+    );
+  });
+
+  test("missing coverage and a ghost entry do NOT discard", () => {
+    const rows = [row(1, "A"), row(2, "B")];
+    expect(decode({ rows, coverage: unavailable }).ok).toBe(true);
+    expect(decode({ rows, coverage: ghost }).ok).toBe(true);
+  });
+
+  test("each answer is sliced by codeunit and carries coverage unavailable with the PR-126 reason", () => {
+    const d = decode({ rows: [row(1, "A"), row(2, "B"), row(2, "C")], coverage: ghost });
+    if (!d.ok) throw new Error(d.why);
+    expect(d.byId.get(1)?.rows.map((r) => r.name)).toEqual(["Codeunit1.A"]);
+    expect(d.byId.get(2)?.rows.map((r) => r.name)).toEqual(["Codeunit2.B", "Codeunit2.C"]);
+    for (const id of [1, 2])
+      expect(d.byId.get(id)?.coverage).toEqual({
+        kind: "unavailable",
+        why: "PR-126 re-check rows only",
+      });
+  });
+
+  test("the default mode is unchanged: the same ghost entry discards", () => {
+    expect(why(decode({ rows: [row(1, "A")], coverage: ghost, withCoverage: true }))).toContain(
+      "no row of the batch",
+    );
+  });
+
+  test("the no-coverage body leaves out both fields; the default body keeps both true", () => {
+    const base = { command: "runTests" };
+    const off = batchBody(base, ["Codeunit9."], false);
+    expect(off).toEqual({ ...base, excludeTests: ["Codeunit9."] });
+    expect(off).not.toHaveProperty("coverage");
+    expect(off).not.toHaveProperty("perTestCoverage");
+    expect(batchBody(base, ["Codeunit9."])).toMatchObject({
+      coverage: true,
+      perTestCoverage: true,
+    });
   });
 });
