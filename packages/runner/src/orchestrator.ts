@@ -2740,6 +2740,29 @@ const REAL_TIMERS: LeaseTimers = {
 /** Bounded acquire retry budget (design §6 step 1: backoff-with-jitter is the default, not optional). */
 /** PR-108 (R1057): the non-replay hang that PAUSES a mutant's walk for the held replay (provisional cap). */
 const WALK_HANG_CAP = 3;
+
+/**
+ * PR-108: the note of a walk the 3rd hang ended. `k`: the ordered covering refs after the 3rd hang's
+ * ref, minus the codeunits in `skip`. A ref missing from `ordered` throws: never a silent k.
+ */
+export function cappedWalkNote(
+  ordered: readonly TestMethodRef[],
+  capRef: TestMethodRef,
+  skip: ReadonlySet<number>,
+  mutantId: string,
+): { readonly k: number; readonly note: string } {
+  const capKey = testKeyOf(capRef);
+  const at3 = ordered.findIndex((r) => testKeyOf(r) === capKey);
+  if (at3 < 0)
+    throw new Error(
+      `walk cap: the 3rd hang's test ${capKey} (mutant ${mutantId}) is not in the ordered covering list — caller-contract violation (PR-108)`,
+    );
+  const k = ordered.slice(at3 + 1).filter((r) => !skip.has(r.codeunitId)).length;
+  return {
+    k,
+    note: `the walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); ${k} covering test(s) after them were not run`,
+  };
+}
 const LEASE_ACQUIRE_ATTEMPTS_DEFAULT = 6;
 const LEASE_BACKOFF_BASE_MS = 500;
 const LEASE_BACKOFF_CAP_MS = 8_000;
@@ -12522,60 +12545,12 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let replaying = false;
     let walkClosed = false;
     let heldNote: string | undefined;
-    // PR-108 (R1057's cap, PROVISIONAL): the 3rd non-replay hang PAUSES the feed (the walker is kept)
-    // and the held and noted steps are replayed as at a natural end. If that gives `timeout-killed` the
-    // walk ends there, capped. Otherwise the walk RESUMES from the next step under today's rules (no
-    // second cap): the state is put back as it was at the pause, and what the replays learned is kept
-    // as `capFallback`, applied if the rest of the walk finds nothing. So the cap can never turn a
-    // kill into an error: the only moves are killed -> timeout-killed, and a terminal answer past the
-    // 3rd hang that is not reached.
+    // PR-108 (R1057's cap, addendum 2): the 3rd non-replay hang ENDS the walk as a natural end does.
+    // Moves it can cause (a lost kill, never a false one): killed -> timeout-killed or error,
+    // timeout-killed -> error (only a later hang reproduces), a terminal answer past the cap not
+    // reached. Every capped walk is noted on its `failureNote` and warned by name below.
     let hangs = 0; // non-replay timeouts met so far
-    let capTried = false; // the cap fires at most once per mutant
-    let capPaused = false; // the feed is paused (replay in progress)
-    let capResumed = false; // the walk resumed after a failed cap replay
-    let capRef: TestMethodRef | undefined; // the 3rd hang's ref
-    let capHeldName: string | undefined;
-    const captureState = () => ({
-      verdict,
-      cause,
-      failureNote,
-      permissionRefusedTest,
-      runnerDisagreement,
-      runnerDisagreementTest,
-      notReproduced,
-      refusedPending,
-      transportErrorRef,
-      abortAfterRecord,
-      killingTest,
-      killingTestRef,
-      killingTestFailure,
-      killPosition,
-      reproduction,
-      stopEvidence,
-    });
-    type WalkState = ReturnType<typeof captureState>;
-    const restoreState = (s: WalkState): void => {
-      ({
-        verdict,
-        cause,
-        failureNote,
-        permissionRefusedTest,
-        runnerDisagreement,
-        runnerDisagreementTest,
-        notReproduced,
-        refusedPending,
-        transportErrorRef,
-        abortAfterRecord,
-        killingTest,
-        killingTestRef,
-        killingTestFailure,
-        killPosition,
-        reproduction,
-        stopEvidence,
-      } = s);
-    };
-    let capPre: WalkState | undefined; // the state at the pause
-    let capFallback: WalkState | undefined; // the state the failed cap replay left
+    let capRef: TestMethodRef | undefined; // the 3rd hang's ref: set only on a capped walk
     // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop) ran out between two covering
     // steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
     let budgetCut = false;
@@ -12600,7 +12575,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         yield again;
         return;
       }
-      while (!walkClosed && !capPaused) {
+      while (!walkClosed) {
         if (!replaying && clockSpent()) {
           budgetCut = true;
           return;
@@ -12630,7 +12605,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         } = step;
         // PR-51: the replay of the held step was counted when it was first met.
         if (!replaying) {
-          if (held !== undefined || capResumed) afterHeld.push(qualifiedTestName(ref));
+          if (held !== undefined) afterHeld.push(qualifiedTestName(ref));
           testResultBuffer.push({
             mutantCode: m.mutantId,
             ref,
@@ -12838,11 +12813,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           if (held === undefined) held = entry;
           else noted.push(entry);
           hangs += 1;
-          capFallback = undefined; // a later hang takes over from a failed cap replay
-          if (hangs === WALK_HANG_CAP && !capTried) {
-            capTried = true;
-            capPaused = true;
+          // The 3rd hang ENDS the walk as a natural end does: nothing more is fed, and the after-walk
+          // code below replays the held step (then the noted ones) unchanged.
+          if (hangs === WALK_HANG_CAP) {
             capRef = ref;
+            walkClosed = true;
           }
           continue;
         }
@@ -13252,70 +13227,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           );
         break mutantLoop;
       }
-      if (capPaused && capPre === undefined) {
-        capPre = captureState();
-        capHeldName = held !== undefined ? qualifiedTestName(held.step.ref) : undefined;
-      }
       // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
       const h: HeldTimeout | undefined =
         held ?? (replaying && verdict === "survived" ? noted.shift() : undefined);
-      if (h === undefined && capPaused && capPre !== undefined) {
-        // PR-108: the cap's replay of the held and noted steps is over.
-        if (verdict === "timeout-killed") {
-          // Capped. `k`: the covering tests after the 3rd hang's ref that were never run.
-          const capKey = capRef !== undefined ? testKeyOf(capRef) : undefined;
-          const at3 = ordered.findIndex((r) => testKeyOf(r) === capKey);
-          const k =
-            at3 < 0 ? 0 : ordered.slice(at3 + 1).filter((r) => !skip.has(r.codeunitId)).length;
-          if (k > 0) {
-            const capNote = `the walk stopped after ${WALK_HANG_CAP} timeouts (PR-108, R1057's cap); ${k} covering test(s) after them were not run`;
-            heldNote = heldNote !== undefined ? `${heldNote} ${capNote}` : capNote;
-          }
-          break;
-        }
-        if (
-          args.safety.isUnsafe ||
-          transportErrorRef !== undefined ||
-          abortAfterRecord !== undefined ||
-          cause === "stranded" ||
-          cause === "result-lost" ||
-          cause === "deadline-exceeded"
-        ) {
-          break; // a terminal answer keeps its handling; no walk goes on over a failed session
-        }
-        // Not a kill: RESUME as if the replay had not happened, keeping what it learned.
-        capFallback = captureState();
-        const earliest = capPre.notReproduced ?? notReproduced;
-        restoreState(capPre);
-        notReproduced = earliest;
-        heldNote = undefined;
-        // The replays ran unmutated (the confirm): the mutant is active again for the rest of the walk.
-        // The replays ran unmutated (the confirm): the mutant is active again for the rest of the walk.
-        await activateOnce(args.backend, args.safety, m.mutantId);
-        capPaused = false;
-        capResumed = true;
-        walkClosed = false;
-        replaying = false;
-        continue;
-      }
-      if (h === undefined && capFallback !== undefined) {
-        // PR-108: the resumed walk met no later hang. Today's rule for a held timeout, with the
-        // earlier held one (replayed already) as that timeout.
-        const name = capHeldName ?? "a covering test";
-        if (verdict === "survived") {
-          const earliest = notReproduced;
-          restoreState(capFallback);
-          notReproduced = earliest;
-          heldNote =
-            afterHeld.length > 0
-              ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
-              : undefined;
-        } else if (verdict === "killed") {
-          heldNote = `the timeout of ${name} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`;
-        } else {
-          heldNote = `a timeout of ${name} was held earlier in this walk and not scored`;
-        }
-      }
       if (h === undefined) break;
       const carried = replaying ? notReproduced : undefined;
       const heldName = qualifiedTestName(h.step.ref);
@@ -13384,6 +13298,16 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // PR-51: names only, after any strand prefix (`--resume` reads it) and any other note.
     if (heldNote !== undefined) {
       failureNote = failureNote !== undefined ? `${failureNote} ${heldNote}` : heldNote;
+    }
+    // PR-108: a walk the 3rd hang ended says so, even with nothing left to run (k = 0). `k`: the
+    // ordered covering refs after the 3rd hang's ref, minus the skipped codeunits. A ref that is not in
+    // the ordered list is a caller-contract violation: it throws, never a silent k.
+    let capK: number | undefined;
+    if (capRef !== undefined) {
+      const cap = cappedWalkNote(ordered, capRef, skip, m.mutantId);
+      capK = cap.k;
+      const capNote = cap.note;
+      failureNote = failureNote !== undefined ? `${failureNote} ${capNote}` : capNote;
     }
     // R198: a survivor is a mutant EVERY covering test ran against. On the group path a chunking
     // bug could skip tests and still answer all-pass; on the sequential path the set is complete
@@ -13517,6 +13441,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       if (args.sink === undefined) budgetSpent(at);
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
       break;
+    }
+    if (capK !== undefined) {
+      args.emit({
+        type: "warning",
+        code: "held-walk-capped",
+        message: `[lethal] held-walk-capped: mutant ${m.mutantId}'s walk stopped after ${WALK_HANG_CAP} timeouts (R1057's cap, PR-108); verdict ${verdict}; ${capK} covering test(s) after them were not run`,
+      });
     }
     if (args.sink === undefined) commitRecord();
     else args.sink.finish(m.mutantId, commitRecord, stopAfterRecord);

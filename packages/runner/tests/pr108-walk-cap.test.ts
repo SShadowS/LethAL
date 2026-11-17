@@ -8,16 +8,17 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
-import { runSession } from "../src/orchestrator";
+import { createEmitter } from "../src/events";
+import type { RunEvent } from "../src/events";
+import { cappedWalkNote, runSession } from "../src/orchestrator";
 import type { SessionConfig } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
 
 /**
- * PR-108: (1) R1057's cap on PR-51's held-timeout walk is PROVISIONAL: the 3rd hang pauses the walk
- * and replays the held (then noted) steps; `timeout-killed` ends it, anything else resumes the walk
- * under today's rules. (2) R1014: the CLOCK budget (or a signal, never a memory stop) is checked
+ * PR-108: (1) R1057's cap on PR-51's held-timeout walk: the 3rd hang ends the walk as a natural end
+ * does, and today's after-walk code replays the held step. (2) R1014: the CLOCK budget (or a signal, never a memory stop) is checked
  * before each covering step; a spent one drops the mutant unrecorded. The stub is a trimmed copy of
  * `pr51-held-timeout.test.ts`'s `HeldStub` chain (those classes are not exported).
  */
@@ -157,7 +158,7 @@ class CapStub implements ExecutionBackend {
   }
 }
 
-describe("PR-108: the provisional 3-hang cap", () => {
+describe("PR-108: the 3-hang cap ends the walk (addendum 2)", () => {
   type Outcome = TestVerdict["outcome"];
   type Plan = Record<string, Outcome | ((nth: number) => Outcome)>;
   const make = (plan: Plan): CapStub => {
@@ -188,6 +189,14 @@ describe("PR-108: the provisional 3-hang cap", () => {
     }
   };
   const m1 = (r: SessionReport) => r.mutants.find((m) => m.mutantCode === "M0001");
+  const sessionWithWarnings = async (backend: ExecutionBackend) => {
+    const events: RunEvent[] = [];
+    const report = await session(backend, { emit: [createEmitter([(e) => events.push(e)])] });
+    const capWarnings = events.flatMap((e) =>
+      e.type === "warning" && e.code === "held-walk-capped" ? [e.message] : [],
+    );
+    return { report, capWarnings };
+  };
   const CAP_NOTE = "the walk stopped after 3 timeouts (PR-108, R1057's cap)";
 
   test("C1: 4 covering tests that all hang -> exactly 3 hang steps and the replay, timeout-killed, with the cap note", async () => {
@@ -233,7 +242,7 @@ describe("PR-108: the provisional 3-hang cap", () => {
     expect(nthOf(b, "T5")).toBe(1);
   });
 
-  test("C5: the held hang's confirm fails, a later test fails -> killed (the walk resumed), no cap note", async () => {
+  test("C5: the held confirm fails at the cap, a later test would fail -> error (move 2), named in the warning, T4 never fed", async () => {
     const b = make({ T1: "timeout", T2: "timeout", T3: "timeout", T4: "fail" });
     // T1's unmutated confirm (its second null run; the first is the baseline) hangs too.
     b.answer = (mutant, _n, v) =>
@@ -242,31 +251,18 @@ describe("PR-108: the provisional 3-hang cap", () => {
       b.trace.filter((t) => t.startsWith("run null T1 ")).length >= 1
         ? { ...v, outcome: "timeout" }
         : undefined;
-    const report = await session(b);
-    // red without the resume: the confirm's error stands
-    expect(m1(report)?.verdict).toBe("killed");
-    expect(m1(report)?.killingTest).toContain("T4");
-    expect(m1(report)?.failureNote ?? "").not.toContain(CAP_NOTE);
-    expect(nthOf(b, "T5")).toBe(0);
-  });
-
-  test("C5b: the resumed walk finds nothing -> the failed replay's error stands, as today, after the rest ran", async () => {
-    const b = make({ T1: "timeout", T2: "timeout", T3: "timeout" });
-    b.answer = (mutant, _n, v) =>
-      mutant === null &&
-      v.ref.method === "T1" &&
-      b.trace.filter((t) => t.startsWith("run null T1 ")).length >= 1
-        ? { ...v, outcome: "timeout" }
-        : undefined;
-    const report = await session(b);
+    const { report, capWarnings } = await sessionWithWarnings(b);
     expect(m1(report)?.verdict).toBe("error");
     expect(m1(report)?.cause).toBe("unstable");
-    expect(m1(report)?.failureNote).toContain("unstable test T1");
-    expect(nthOf(b, "T4")).toBe(1);
-    expect(nthOf(b, "T5")).toBe(1);
+    expect(m1(report)?.failureNote).toContain(`${CAP_NOTE}; 2 covering test(s)`);
+    expect(nthOf(b, "T4")).toBe(0);
+    expect(capWarnings).toHaveLength(1);
+    expect(capWarnings[0]).toContain("M0001");
+    expect(capWarnings[0]).toContain("verdict error");
+    expect(capWarnings[0]).toContain("2 covering test(s)");
   });
 
-  test("C6: none of the first 3 hangs reproduces, the 4th does -> timeout-killed by the 4th (the walk resumed)", async () => {
+  test("C6: none of the 3 hangs reproduces, only a 4th would -> error (move 3), the 4th never fed", async () => {
     const b = make({
       T1: (n) => (n === 1 ? "timeout" : "pass"),
       T2: (n) => (n === 1 ? "timeout" : "pass"),
@@ -274,11 +270,37 @@ describe("PR-108: the provisional 3-hang cap", () => {
       T4: "timeout",
     });
     const report = await session(b);
-    // red without the resume: error kill-not-reproduced
+    expect(m1(report)?.verdict).toBe("error");
+    expect(m1(report)?.cause).toBe("kill-not-reproduced");
+    expect(m1(report)?.failureNote).toContain(CAP_NOTE);
+    expect(nthOf(b, "T4")).toBe(0);
+  });
+
+  test("C8: the 3rd hang is the last covering test (k = 0): the walk is still noted and warned", async () => {
+    const b = make({ T3: "timeout", T4: "timeout", T5: "timeout" });
+    const { report, capWarnings } = await sessionWithWarnings(b);
     expect(m1(report)?.verdict).toBe("timeout-killed");
-    expect(m1(report)?.killingTest).toContain("T4");
-    expect(m1(report)?.failureNote ?? "").not.toContain(CAP_NOTE);
-    expect(nthOf(b, "T5")).toBe(1);
+    expect(m1(report)?.failureNote).toContain(`${CAP_NOTE}; 0 covering test(s) after them`);
+    expect(capWarnings).toHaveLength(1);
+  });
+
+  test("C9: a walk with fewer than 3 hangs has no cap warning", async () => {
+    const b = make({ T1: "timeout", T2: "timeout" });
+    const { capWarnings } = await sessionWithWarnings(b);
+    expect(capWarnings).toEqual([]);
+  });
+
+  test("C10: cappedWalkNote counts the ordered refs after the 3rd hang minus skipped codeunits, and a missing ref throws", () => {
+    const ref = (codeunitId: number, method: string): TestMethodRef => ({
+      codeunitId,
+      codeunitName: `CU${codeunitId}`,
+      method,
+    });
+    const ordered = [ref(1, "A"), ref(1, "B"), ref(2, "C"), ref(2, "D"), ref(3, "E")];
+    expect(cappedWalkNote(ordered, ref(1, "B"), new Set(), "M1").k).toBe(3);
+    expect(cappedWalkNote(ordered, ref(1, "B"), new Set([2]), "M1").k).toBe(1);
+    expect(cappedWalkNote(ordered, ref(3, "E"), new Set(), "M1").k).toBe(0);
+    expect(() => cappedWalkNote(ordered, ref(9, "Z"), new Set(), "M1")).toThrow("caller-contract");
   });
 
   test("C7: a 3rd hang that alone reproduces -> timeout-killed by the 3rd, with the cap note", async () => {

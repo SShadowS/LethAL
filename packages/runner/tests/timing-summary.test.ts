@@ -105,6 +105,28 @@ describe("PR-100: foldTiming", () => {
     expect(text).not.toContain("x".repeat(41));
   });
 
+  test("PR-108: capped walks are counted by verdict from the cap note, and the line is omitted at 0", () => {
+    const note =
+      "the walk stopped after 3 timeouts (PR-108, R1057's cap); 2 covering test(s) after them were not run";
+    const cappedScore = (verdict: string, mutantId: string) =>
+      ev({
+        type: "mutant-scored",
+        verdict,
+        batchIndex: 0,
+        mutant: { mutantId },
+        failureNote: note,
+      });
+    const text = foldTiming([
+      cappedScore("timeout-killed", "A"),
+      cappedScore("timeout-killed", "B"),
+      cappedScore("error", "C"),
+      scored("killed"),
+      finished,
+    ]);
+    expect(text).toContain("  capped walks: 3 (timeout-killed 2, error 1)");
+    expect(foldTiming([scored("killed"), finished]) ?? "").not.toContain("capped walks");
+  });
+
   test("per covered mutant excludes no-coverage and known-survivor", () => {
     const base = [phase("mutants", 10_000), finished];
     const one = foldTiming([

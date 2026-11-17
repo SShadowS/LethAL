@@ -679,6 +679,22 @@ describe("R1014: a stop signal is honoured inside a window, and the mutant it cu
     });
   }
 
+  test("PR-108 --workers 2: a signal that cuts the LAST mutant mid-walk leaves it out through the sink's stop, never a 'never finished' error", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const total = one.mutants.length;
+    const stub = new ParStub({ procOf, delay: () => 3 });
+    const extra = signalAt(stub, total);
+    // red when the lane exits by `budgetSpent(at)` instead of `sink.memoryStop`: the commit throws
+    // "mutant(s) were never finished or recorded" (R766)
+    const r = await session(root, stub, { workers: 2, ...extra });
+    const cut = cutOf(extra);
+    expect(cut).toBeDefined();
+    expect(stub.runs.filter((x) => x.mutant === cut)).toEqual([]);
+    expect(r.mutants.map((m) => m.mutantCode)).not.toContain(cut);
+    expect(r.mutants.length + (r.timeBudget?.unscheduledCount ?? 0)).toBe(total);
+  });
+
   // PR-108: the budget is also checked BEFORE each covering step, and a lane leaves through the sink's stop.
   for (const workers of [1, 2]) {
     test(`PR-108 --workers ${workers}: a signal that arrives as a mutant starts runs none of its covering steps and records nothing`, async () => {
