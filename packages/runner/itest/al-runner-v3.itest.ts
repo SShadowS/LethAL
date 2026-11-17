@@ -187,7 +187,7 @@ import {
   recordRequested,
 } from "./baseline-guard";
 import { prepareFixtureSymbols } from "./fixture-symbols";
-import { GATE_WARNINGS } from "./gate-expected";
+import { DBM_FIGURES, GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   WarningsObservedError,
@@ -817,8 +817,11 @@ async function legDBI(scratch: string, version: string): Promise<void> {
   must(b.baselineDaemon, "DBI: the backend does not report a daemon baseline");
 }
 
-/** PR-114a: leg DBM's selector ids (free: 77300-78799 hold no fixture range and no other leg's ids). */
-const DBM_IDS = { selectorId: 78049, controlId: 78048, tableId: 78047 } as const;
+/**
+ * PR-114a: leg DBM's selector ids. They must lie inside the TARGET's idRanges (sandbox-optin: 77200-77249,
+ * objects 77200 and 77201 used), or alc rejects the instrumented app and every mutant reads `error`.
+ */
+const DBM_IDS = { selectorId: 77249, controlId: 77248, tableId: 77247 } as const;
 
 /**
  * PR-114a: leg DBM, the daemon baseline over a fixture with SEVERAL test codeunits that 114b will batch
@@ -830,7 +833,31 @@ const DBM_IDS = { selectorId: 78049, controlId: 78048, tableId: 78047 } as const
  * OFF in 114a (no pin allows it), so these are today's request counts; 114b moves them. No fixture
  * file is edited (R-307's golden list).
  */
-async function legDBM(scratch: string): Promise<void> {
+async function legDBM(scratch: string, version: string): Promise<void> {
+  try {
+    await legDBMRun(scratch);
+  } catch (e) {
+    // A build with no serve path refuses `entries` by name: not applicable, as DBI reads it.
+    if (!isGateWarningsError(e) && isNoServeRefusal(version, String(e))) {
+      console.log("  DBM: not applicable: this build has no serve-entries path");
+      return;
+    }
+    throw e;
+  }
+}
+
+/** The procedures of sandbox-optin that its tests call (directly or through `Greet`/`Store`); every other one is never run. */
+const DBM_CALLED_PROCEDURES = new Set([
+  "KilledGuard",
+  "SurvivingGuard",
+  "Welcome",
+  "Greet",
+  "Remember",
+  "Store",
+  "Remembered",
+]);
+
+async function legDBMRun(scratch: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
   const run = async (name: "dbm-daemon" | "dbm-oneshot") => {
     // Own scratch per session: GATE_WARNINGS keys on its name, and the two sessions warn differently.
@@ -861,16 +888,41 @@ async function legDBM(scratch: string): Promise<void> {
       testDir: fixture("sandbox-optin-tests"),
       selectorIds: DBM_IDS,
     });
-    assertCleanLeg(r, b, `DBM ${name}`);
     console.log(`  DBM ${name}: ${counts(r)} over ${r.mutants.length}`);
+    must(r.mutants.length > 0, `DBM ${name}: the session measured no mutant`);
+    // M3: both sessions read the pre-committed figures, so equality cannot pass on two equally empty sessions.
+    assertCounts(
+      r,
+      `DBM ${name}`,
+      DBM_FIGURES.killed,
+      DBM_FIGURES.survived,
+      DBM_FIGURES.noCoverage,
+      DBM_FIGURES.totalMutantSites,
+    );
+    assertCleanLeg(r, b, `DBM ${name}`);
+    // R164, L1: sandbox-optin's refused loop procedures are never called by a test; what keeps a mutant that
+    // could loop for ever off a server is that none of them is covered. Every mutant outside the called
+    // procedures must read no-coverage.
+    const stray = r.mutants.filter(
+      (m) => !DBM_CALLED_PROCEDURES.has(m.procedureName) && m.verdict !== "no-coverage",
+    );
+    must(
+      stray.length === 0,
+      `DBM ${name}: ${stray.length} mutant(s) in a procedure no test calls were run (${stray
+        .slice(0, 5)
+        .map((m) => `${m.mutantCode} ${m.procedureName} ${m.verdict}`)
+        .join(", ")}); R164 keeps hang-capable sites off a server`,
+    );
     return { r, b };
   };
   const one = await run("dbm-oneshot");
   const dm = await run("dbm-daemon");
   // Empty-vs-empty must not pass: both sessions measured mutants.
   must(one.r.mutants.length > 0, "DBM: the one-shot session measured no mutant");
-  // R164: a hang-capable site never enters a gate other than itest:hang. sandbox-optin was written for opt-in operators, so
-  // its default-operator mutant set is checked here, by name, on every run.
+  // R164: a hang-capable site never enters a gate other than itest:hang. NOTE: the built-in operators refuse hang
+  // sites (R196) and never tag a mutant `hangCapable`, so this check cannot fire on today's operators; it only
+  // guards an operator that does tag one. The real guard is the per-session "no mutant outside the called
+  // procedures ran" check above.
   const hangy = [...one.r.mutants, ...dm.r.mutants].filter((m) => m.hangCapable !== undefined);
   must(
     hangy.length === 0,
@@ -2730,7 +2782,7 @@ async function main(): Promise<void> {
         else if (leg === V3_S1E_LEG) await legS1(scratch, V3_S1E_LEG, version);
         else if (leg === V3_DB_LEG) await legS1(scratch, V3_DB_LEG, version);
         else if (leg === V3_DBI_LEG) await legDBI(scratch, version);
-        else if (leg === V3_DBM_LEG) await legDBM(scratch);
+        else if (leg === V3_DBM_LEG) await legDBM(scratch, version);
         else if (leg === "S3") await legS3(scratch);
         else if (leg === "N1") await legN1(scratch);
         else if (leg === V3_N1E_LEG) await legN1E(scratch, version);

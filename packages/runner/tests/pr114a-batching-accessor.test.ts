@@ -152,14 +152,22 @@ describe("PR-114a: a capability fact in leg C and in a session", () => {
 describe("PR-114a: the probe cache holds the capability kind", () => {
   const ARGS = ["0.0.0", SHA] as const;
 
-  test("unmeasurable is never cached (measured again next session); matches and diverged are", () => {
-    expect(uncacheableReason(result(cap("batch-no-cross-row", "unmeasurable")), ...ARGS)).toMatch(
-      /batch-no-cross-row = unmeasurable/,
-    );
-    expect(uncacheableReason(result(cap("batch-no-cross-row")), ...ARGS)).toBeUndefined();
+  test("M2: a capability fact never makes the probe uncacheable, whatever it reads (fail-safe: batching needs matches)", () => {
+    for (const v of ["matches", "diverged", "unmeasurable"] as const)
+      expect(uncacheableReason(result(cap("batch-no-cross-row", v)), ...ARGS), v).toBeUndefined();
+    // a contract fact that diverges still does
     expect(
-      uncacheableReason(result(cap("batch-no-cross-row", "diverged")), ...ARGS),
-    ).toBeUndefined();
+      uncacheableReason(
+        result(cap("batch-no-cross-row", "unmeasurable"), {
+          fact: "version",
+          kind: "contract",
+          verdict: "diverged",
+          expected: "x",
+          measured: "m",
+        }),
+        ...ARGS,
+      ),
+    ).toBeDefined();
   });
 
   test("a result with capability facts round-trips through the cache file", async () => {

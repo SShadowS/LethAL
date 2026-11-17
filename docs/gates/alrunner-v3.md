@@ -26,7 +26,7 @@ The legs:
 - C: the contract probe, 36 facts (`runV3ContractProbe`, `V3_LEG_C_FACTS`) of four kinds: 9 defect, 18 contract,
   1 warn and 8 capability (r9, below; capability since PR-114a). The 8 capability facts
   (`V3_CAPABILITY_FACTS`, spec `docs/superpowers/specs/2026-11-17-pr114a-batching-capability-facts.md`) are what
-  baseline batching (PR-114b) will rest on, each one serve request or three of LethAL's batch body over its own
+  baseline batching (PR-114b) will rest on, each one made of 1, 2 or 3 serve requests of LethAL's batch body over its own
   invented app (ids 50700-50779): `batch-no-cross-singleinstance`, `-library-global`, `-row` and `-subscriber` (no state
   crosses test codeunits in one plain request), `batch-onrun-excluded-no-carry` (an excluded OnRun writer carries
   nothing), `batch-onrun-included-duplicates` (an included one reaches later codeunits, which stream a second row),
@@ -149,7 +149,9 @@ The legs:
     frozen baseline file; the daemon baseline is not dropped; `requests === codeunits` (4); the sample count equals
     `baselineSampleIds(4).length`; `judgeDaemonBaseline("DBM", ...)` names every skip.
   - Batching is off, so these are today's counts. PR-114b turns batching on for this leg (batch size 2): requests 4 -> 2.
-  - Warning sets (`GATE_WARNINGS`, keys `dbm-daemon` and `dbm-oneshot`, one per session) are predicted, not yet observed.
+  - Warning sets (`GATE_WARNINGS`, keys `dbm-daemon` and `dbm-oneshot`, one per session), observed: daemon `al-runner-v3-memory-guard` and `al-runner-v3-serve-flagged-unknown`; one-shot `[]`.
+    Selector ids 77249/77248/77247 lie inside the target's id range (outside it alc rejects the app and all mutants read `error`).
+    First live reading: 15 killed / 3 survived / 104 no-coverage over 122, identical in both sessions; daemon baseline 4 requests for 4 codeunits, 2 sampled.
   - It is a default leg, outside `V3_GATE_LEGS`, as DB and DBI are.
 - O1 (R784; pre-commitment `docs/superpowers/specs/2026-10-25-r784-order-probe-leg-precommitment.md`, master 6aa7700c):
   - What it runs: ONE `al-runner serve` daemon takes five requests, each entry one codeunit of

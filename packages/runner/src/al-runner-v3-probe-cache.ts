@@ -132,9 +132,7 @@ export function uncacheableReason(
         ? f.verdict === "matches"
         : f.kind === "defect"
           ? f.verdict === "defect-present" || f.verdict === "gone"
-          : f.kind === "capability"
-            ? f.verdict !== "unmeasurable" // PR-114a: a flake is measured again; a move is cached (it only keeps batching off)
-            : true;
+          : true; // warn, and (PR-114a) capability: never uncacheable, whatever the reading. Fail-safe: batching needs `matches` anyway, and an always-unmeasurable fact (an older build) must not make every session re-run the probe.
     if (passes || (pin !== undefined && pinnedFactMatches(pin.legC, f))) continue;
     return `${f.fact} = ${f.verdict}, not the pinned reading`;
   }

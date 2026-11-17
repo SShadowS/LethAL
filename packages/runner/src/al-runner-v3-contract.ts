@@ -1391,6 +1391,8 @@ export interface V3ProbeEnv {
    * run, and the fact cannot refuse a session on other hardware.
    */
   readonly gateOnlyTrusted?: string;
+  /** PR-114a test hook: the deadline of one capability-fact request (default `SERVE_DEADLINE_MS`). */
+  readonly serveDeadlineMs?: number;
   /** R612 test hook: the `serve` daemon for `serve-keep-reasons` (default: the real binary). */
   readonly serveSpawn?: ServerSpawnFn;
   /**
@@ -1730,7 +1732,7 @@ codeunit ${b + 4} "Batch Reader Tests"
 
 ${batchSpareAl(b + 5)}`;
 
-/** A writer WITH an OnRun that inserts a row; a reader that fails on it; an other that counts rows. ids b..b+3. */
+/** A writer WITH an OnRun that inserts a row; a reader that fails on it; an other that counts rows; a spare. ids b..b+4. */
 const batchOnRunAl = (b: number): string => `table ${b} "Batch Setup"
 {
     fields
@@ -1798,7 +1800,8 @@ codeunit ${b + 3} "Batch Other Tests"
             Error('other: count %1', S.Count());
     end;
 }
-`;
+
+${batchSpareAl(b + 4)}`;
 
 /** A SingleInstance store, its writer and a reader that fails on a store the writer left. ids b..b+4. */
 const batchLaneAl = (b: number): string => `codeunit ${b + 1} "Batch Lane Store"
@@ -1960,7 +1963,7 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
     judge: async (ask) => {
       const reader = await ask({ test: "Codeunit50742." });
       const other = await ask({ test: "Codeunit50743." });
-      const batch = await ask({ excludeTests: ["Codeunit50741."] });
+      const batch = await ask({ excludeTests: ["Codeunit50741.", "Codeunit50744."] });
       const refs = [...rowsOf(reader, 50742), ...rowsOf(other, 50743)];
       const got = [...rowsOf(batch, 50742), ...rowsOf(batch, 50743)];
       const ok =
@@ -1978,10 +1981,11 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
     expected:
       "an OnRun writer (50751) INCLUDED reaches the later codeunits, and they stream a second row with the same name: the writer one row, the reader (50752) and other (50753) two each",
     judge: async (ask) => {
-      const batch = await ask({});
+      // LethAL's body: a non-empty complement (the spare) in excludeTests.
+      const batch = await ask({ excludeTests: ["Codeunit50754."] });
       const n = (id: number) => rowsOf(batch, id).length;
       return {
-        ok: n(50751) === 1 && n(50752) === 2 && n(50753) === 2,
+        ok: n(50751) === 1 && n(50752) === 2 && n(50753) === 2 && n(50754) === 0,
         measured: rowText(batch.rows),
       };
     },
@@ -2038,15 +2042,21 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
   const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
   const spawn: ServerSpawnFn = (argv) =>
     (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
-  const server = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
-  const out: V3Fact[] = [];
-  try {
-    await server.start(
+  const deadline = env.serveDeadlineMs ?? SERVE_DEADLINE_MS;
+  const begin = async (): Promise<AlRunnerServer> => {
+    const s = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
+    await s.start(
       SERVE_DEADLINE_MS,
       [],
       SERVE_TEST_TIMEOUT_S,
       env.environment !== undefined ? ["--environment", env.environment] : [],
     );
+    return s;
+  };
+  let server: AlRunnerServer | undefined;
+  const out: V3Fact[] = [];
+  try {
+    server = await begin();
     for (const spec of BATCH_FACTS) {
       const dir = join(root, spec.fact);
       await mkdir(join(dir, "src"), { recursive: true });
@@ -2061,6 +2071,7 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
       );
       await writeFile(join(dir, "src", "Batch.Codeunit.al"), spec.al);
       const ask: BatchAsk = async (extra) => {
+        if (server === undefined) throw new Error("no serve daemon");
         const a = await server.runEntries(
           {
             command: "runTests",
@@ -2070,7 +2081,7 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
             perTestCoverage: true,
             ...extra,
           },
-          SERVE_DEADLINE_MS,
+          deadline,
         );
         const hints: unknown[] = Array.isArray(a.summary.orderHints) ? a.summary.orderHints : [];
         return {
@@ -2092,6 +2103,12 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
         );
       } catch (err) {
         out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
+        // M1: a request that timed out (or broke the protocol) may still be running or leave late rows and a
+        // summary on the pipe, which the NEXT fact would read as its own. Stop this daemon; the next fact
+        // gets a fresh one (if none starts, the outer catch marks the rest unmeasurable).
+        await server?.close();
+        server = undefined;
+        if (spec !== BATCH_FACTS[BATCH_FACTS.length - 1]) server = await begin();
       }
     }
   } catch (err) {
@@ -2099,7 +2116,7 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
       if (!out.some((f) => f.fact === spec.fact))
         out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
   } finally {
-    await server.close();
+    await server?.close();
   }
   return out;
 }

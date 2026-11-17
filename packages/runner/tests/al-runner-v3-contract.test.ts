@@ -461,7 +461,9 @@ const TODAY_ROWS: Record<string, ServeRow> = {
 /** PR-114a: what a request of a capability fact gets back: test rows and a summary, or an error line. */
 type CapAnswer =
   | { tests: Record<string, unknown>[]; summary: Record<string, unknown> }
-  | { error: string };
+  | { error: string }
+  /** M1: the request is never answered in time; its rows and summary arrive LATE, before the next answer. */
+  | { hang: CapAnswer };
 
 /** PR-114a: each capability folder's test codeunits `[id, methods]`, as the probe writes them. */
 const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]> = {
@@ -489,11 +491,13 @@ const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]
     [50741, ["WriterSeesOwnRow"]],
     [50742, ["ReaderSeesNoRow"]],
     [50743, ["OtherInsertsAndSeesOne"]],
+    [50744, ["Spare"]],
   ],
   "batch-onrun-included-duplicates": [
     [50751, ["WriterSeesOwnRow"]],
     [50752, ["ReaderSeesNoRow"]],
     [50753, ["OtherInsertsAndSeesOne"]],
+    [50754, ["Spare"]],
   ],
   "batch-lane-hint-only": [
     [50762, ["StoresFive"]],
@@ -575,6 +579,7 @@ function fakeServe(
     };
     const emit = (l: string): void => push(new TextEncoder().encode(`${l}\n`));
     queueMicrotask(() => (o.ready === false ? push(null) : emit('{"ready":true}')));
+    let late: CapAnswer | undefined;
     return {
       write: (line: string) => {
         const req = JSON.parse(line) as Record<string, unknown>;
@@ -588,11 +593,19 @@ function fakeServe(
           // PR-114a: a capability fact's request (its own scratch folder is named for it).
           const def = capabilityAnswer(capFact, req);
           const ans = o.cap?.(capFact, req, def) ?? def;
-          if ("error" in ans) emit(JSON.stringify({ error: ans.error }));
-          else {
-            for (const t of ans.tests) emit(JSON.stringify({ type: "test", ...t }));
-            emit(JSON.stringify({ type: "summary", exitCode: 1, ...ans.summary }));
-          }
+          const send = (a: CapAnswer): void => {
+            if ("hang" in a) late = a.hang;
+            else if ("error" in a) emit(JSON.stringify({ error: a.error }));
+            else {
+              for (const t of a.tests) emit(JSON.stringify({ type: "test", ...t }));
+              emit(JSON.stringify({ type: "summary", exitCode: 1, ...a.summary }));
+            }
+          };
+          // a hung request's answer reaches the pipe only when the next request is written
+          const pending = late;
+          late = undefined;
+          if (pending !== undefined) send(pending);
+          send(ans);
         } else if (req.command === "runTests") {
           for (const [name, r] of Object.entries(rows))
             emit(JSON.stringify({ type: "test", name, ...r }));
@@ -709,9 +722,11 @@ const probe = (
   over: Over = {},
   serveSpawn = fakeServe().spawn,
   serveKeepMoved = false,
+  serveDeadlineMs?: number,
 ): Promise<V3ContractResult> =>
   runV3ContractProbe({
     ...(serveKeepMoved ? { serveKeepMoved: true } : {}),
+    ...(serveDeadlineMs !== undefined ? { serveDeadlineMs } : {}),
     alRunnerPath: "/fake/alrunner",
     expectedVersion: VERSION,
     packagesDir: "/fake/deps",
@@ -1292,6 +1307,21 @@ describe("PR-114a: the eight capability facts", () => {
     });
   }
 
+  test("M1: a request that never answers in time reads unmeasurable, and its LATE rows never reach the next fact", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (name, q, def) =>
+        name === "batch-no-cross-singleinstance" && q.test !== undefined ? { hang: def } : def,
+    });
+    const r = await probe({}, serve.spawn, false, 50);
+    const f = (n: string) => r.facts.find((x) => x.fact === n);
+    expect(f("batch-no-cross-singleinstance")?.verdict).toBe("unmeasurable");
+    expect(f("batch-no-cross-singleinstance")?.measured).toMatch(/no summary line within 50 ms/);
+    // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
+    for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
+      expect(f(n)?.verdict, n).toBe("matches");
+    expect(serve.argvs.length).toBe(3); // serve-keep-reasons, the capability daemon, and its replacement
+  });
+
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
     const { f } = await readOf((name, q, def) =>
       name === "batch-onrun-excluded-no-carry" && q.test === undefined && "tests" in def
@@ -1396,10 +1426,14 @@ describe("PR-114a: the eight capability facts", () => {
       "batch-lane-strict-reruns",
     ]);
     // the batch requests name the complement in excludeTests and carry no `test`
-    for (const q of cap.filter(
-      (x) => x.test === undefined && (x.sourcePaths as string[])[0]?.includes("batch-no-cross"),
-    ))
-      expect(q.excludeTests).toHaveLength(1);
+    // (L2) every batch request, of every fact, has a non-empty complement: LethAL's body
+    const batches = cap.filter((x) => x.test === undefined);
+    expect(batches).toHaveLength(8);
+    for (const q of batches)
+      expect(
+        (q.excludeTests as string[] | undefined)?.length ?? 0,
+        String((q.sourcePaths as string[])[0]),
+      ).toBeGreaterThan(0);
   });
 
   test("the invented AL: ids in 50700-50779, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
