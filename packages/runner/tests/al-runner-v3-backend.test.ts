@@ -55,7 +55,11 @@ import {
   V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
-import { MESSAGE_PREFIX_REASON, type V3ContractResult } from "../src/al-runner-v3-contract";
+import {
+  MESSAGE_PREFIX_REASON,
+  type V3ContractResult,
+  V3_CAPABILITY_FACTS,
+} from "../src/al-runner-v3-contract";
 import { serveRow } from "../src/al-runner-v3-entries";
 import { sha256OfFile } from "../src/al-runner-v3-pin";
 import * as pinsNs from "../src/al-runner-v3-pins";
@@ -899,6 +903,79 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
         warn.mockRestore();
       }
     });
+});
+
+// PR-117 (M1): status() hands the build's own gate record to the batching accessor.
+describe("PR-117: status() reads baseline batching from the build's own .gated", () => {
+  const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
+  const COMMIT = "a1".repeat(20);
+  async function batching(batchFacts: Record<string, string> | undefined) {
+    const sleepPin = pinsNs.V3_BUILD_PINS.find((p) => p.legC["sleep-is-noop"]?.verdict === "gone");
+    if (sleepPin === undefined) throw new Error("no pin records sleep-is-noop gone");
+    const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    await writeFile(
+      join(l.root, ".gated"),
+      JSON.stringify({
+        version: VERSION,
+        binarySha256: await sha256OfFile(bin),
+        lethalCommit: COMMIT,
+        readingsFrom: sleepPin.id,
+        ...(batchFacts !== undefined ? { batchFacts } : {}),
+      }),
+    );
+    const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
+    (b as unknown as { contract: V3ContractResult }).contract = {
+      facts: [
+        ...V3_CAPABILITY_FACTS.map((fact) => ({
+          fact,
+          kind: "capability" as const,
+          verdict: "matches" as const,
+          expected: "x",
+          measured: "m",
+        })),
+        {
+          fact: "sleep-is-noop",
+          kind: "defect" as const,
+          verdict: "gone" as const,
+          expected: "x",
+          measured: "m",
+        },
+      ],
+    };
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const s = await b.status();
+      expect(s.ok).toBe(true);
+      return b;
+    } finally {
+      warn.mockRestore();
+      pinsNs.resetAdoptedV3Pins();
+    }
+  }
+
+  test("a .gated with eight matches in batchFacts, a probe of eight matches and the Sleep rule retired: batching is on", async () => {
+    const b = await batching(Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"])));
+    expect(b.baselineBatchingOffWhy()).toBeUndefined();
+    expect(b.isBaselineBatching()).toBe(true);
+  });
+
+  test("the same .gated and probe without batchFacts: off, naming the gate's lethalCommit", async () => {
+    const b = await batching(undefined);
+    expect(b.isBaselineBatching()).toBe(false);
+    expect(b.baselineBatchingOffWhy()).toBe(
+      `this build's gate record (lethalCommit ${COMMIT}) has no batchFacts`,
+    );
+  });
 });
 
 describe("T3, T4, T23", () => {

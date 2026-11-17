@@ -1,7 +1,9 @@
-// PR-114a: the capability facts' consumers. The accessor `baselineBatchingFor` is true only for a build in
-// `V3_BASELINE_BATCHING_BUILDS` (PR-115: not a pin flag, which gated and adopted builds would inherit) AND
-// all eight capability facts `matches` AND the §6 Sleep rule retired; `classifyLegC` gate-fails a capability fact that does not read `matches`; the probe cache stores
-// the new kind. Pure: the only pin changed is a synthetic copy, removed in `finally`.
+// PR-114a: the capability facts' consumers. PR-117: the accessor `baselineBatchingFor` is true only when the
+// build's OWN gate record carries `batchFacts` with all eight capability facts `matches`, AND this session's
+// probe reads all eight `matches`, AND the §6 Sleep rule is retired. There is no list of builds and no candidate
+// rule. `classifyLegC` gate-fails a capability fact that does not read `matches`, except a `diverged` one whose
+// alone reference passed (batching off, not a failure); the probe cache stores the new kind. Pure: the only pin
+// changed is a synthetic copy, removed in `finally`.
 import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,15 +15,14 @@ import {
   V3_CAPABILITY_FACTS,
   v3ContractRefusals,
 } from "../src/al-runner-v3-contract";
+import * as pinsModule from "../src/al-runner-v3-pins";
 import {
   type V3BuildPin,
-  V3_BASELINE_BATCHING_BUILDS,
   V3_BUILD_PINS,
   adoptV3Pin,
   baselineBatchingFor,
   baselineBatchingOffReason,
   findV3Pin,
-  gatedBuilds,
   resetAdoptedV3Pins,
 } from "../src/al-runner-v3-pins";
 import {
@@ -48,6 +49,15 @@ const sleep = (verdict: string): V3Fact => ({
 const allMatch = (): V3Fact[] => V3_CAPABILITY_FACTS.map((n) => cap(n));
 const result = (...facts: V3Fact[]): V3ContractResult => ({ facts });
 
+/** A gate record (`.gated` or a manifest row) as the accessor reads it. */
+const COMMIT = "c0".repeat(20);
+const rec = (batchFacts?: Record<string, string>) => ({
+  lethalCommit: COMMIT,
+  ...(batchFacts !== undefined ? { batchFacts } : {}),
+});
+const recAll = (over: Record<string, string> = {}) =>
+  rec({ ...Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"])), ...over });
+
 /** A pin that retires the Sleep rule (every current pin records it gone), copied. */
 const base = (() => {
   const p = V3_BUILD_PINS.find((x) => x.legC["sleep-is-noop"]?.verdict === "gone");
@@ -57,111 +67,129 @@ const base = (() => {
 const SHA = "ab".repeat(32);
 const VERSION = "al-runner 3.0.0-pr114a-test (0000000)";
 
-/**
- * Runs `fn` with a synthetic pin for (VERSION, SHA) in the table, and (PR-115) in the batching list when
- * `listed`, then removes both.
- */
-function withPin(listed: boolean, extra: Partial<V3BuildPin>, fn: () => void): void {
+/** Runs `fn` with a synthetic pin for (VERSION, SHA) in the table, then removes it. */
+function withPin(extra: Partial<V3BuildPin>, fn: () => void): void {
   const table = V3_BUILD_PINS as V3BuildPin[];
-  const list = V3_BASELINE_BATCHING_BUILDS as { version: string; binarySha256: string }[];
   table.push({ ...base, id: "pr114a-test", version: VERSION, binarySha256: SHA, ...extra });
-  if (listed) list.push({ version: VERSION, binarySha256: SHA });
   try {
     fn();
   } finally {
     table.pop();
-    if (listed) list.pop();
   }
 }
 
-describe("PR-114a: baselineBatchingFor", () => {
-  test("PR-115: exactly one build is listed (edge-4ebfe7913's gated row, by version and sha); the accessor is false on every other pin and gated row", () => {
-    expect(V3_BASELINE_BATCHING_BUILDS).toHaveLength(1);
-    const gated = gatedBuilds().find((g) => g.id === "edge-4ebfe7913");
-    if (gated === undefined) throw new Error("no gated row for edge-4ebfe7913");
-    expect(V3_BASELINE_BATCHING_BUILDS[0]).toEqual({
-      version: gated.version,
-      binarySha256: gated.binarySha256,
-    });
-    const probe = result(...allMatch(), sleep("gone"));
-    expect(baselineBatchingFor(probe, gated.version, gated.binarySha256)).toBe(true);
-    for (const p of V3_BUILD_PINS) {
-      expect(baselineBatchingFor(probe, p.version, p.binarySha256), p.id).toBe(false);
-    }
-    for (const g of gatedBuilds()) {
-      expect(baselineBatchingFor(probe, g.version, g.binarySha256), g.id).toBe(
-        g.id === "edge-4ebfe7913",
-      );
-    }
-    // Named builds: alpha.13, alpha.14 releases and edge-d72d3197d.
-    for (const id of ["alpha.13-23e7631be", "alpha.14-ef00a6a8f", "edge-d72d3197d"]) {
-      const e = gatedBuilds().find((g) => g.id === id) ?? V3_BUILD_PINS.find((p) => p.id === id);
-      if (e === undefined) throw new Error(id);
-      expect(baselineBatchingFor(probe, e.version, e.binarySha256), id).toBe(false);
-    }
+describe("PR-117: baselineBatchingFor follows the build's own gate record", () => {
+  const probe = () => result(...allMatch(), sleep("gone"));
+
+  test("the hand list is gone", () => {
+    expect("V3_BASELINE_BATCHING_BUILDS" in pinsModule).toBe(false);
   });
 
-  test("PR-115 (H1): a build adopted or gated from ANY pin never batches, so the flag cannot spread through readingsFrom", () => {
-    const probe = result(...allMatch(), sleep("gone"));
+  test("on: a record of eight matches, the probe's eight matches, the Sleep rule retired", () => {
+    withPin({}, () => {
+      expect(baselineBatchingFor(probe(), VERSION, SHA, recAll())).toBe(true);
+      expect(baselineBatchingOffReason(probe(), VERSION, SHA, recAll())).toBeUndefined();
+    });
+  });
+
+  test("off: no record, or a record without batchFacts, names the build's gate commit", () => {
+    withPin({}, () => {
+      for (const g of [undefined, rec()]) {
+        expect(baselineBatchingFor(probe(), VERSION, SHA, g)).toBe(false);
+        expect(baselineBatchingOffReason(probe(), VERSION, SHA, g)).toMatch(
+          /this build's gate record \(lethalCommit .*\) has no batchFacts/,
+        );
+      }
+      expect(baselineBatchingOffReason(probe(), VERSION, SHA, rec())).toContain(COMMIT);
+    });
+  });
+
+  test("off: a fact missing from the record, each of the eight, by name", () => {
+    withPin({}, () => {
+      for (const name of V3_CAPABILITY_FACTS) {
+        const all = recAll().batchFacts as Record<string, string>;
+        const { [name]: _gone, ...rest } = all;
+        expect(baselineBatchingFor(probe(), VERSION, SHA, rec(rest)), name).toBe(false);
+        expect(baselineBatchingOffReason(probe(), VERSION, SHA, rec(rest))).toBe(
+          `${name} not recorded`,
+        );
+      }
+    });
+  });
+
+  test("off: a fact diverged or unmeasurable in the record, each of the eight, by name", () => {
+    withPin({}, () => {
+      for (const name of V3_CAPABILITY_FACTS) {
+        for (const v of ["diverged", "unmeasurable"]) {
+          const g = recAll({ [name]: v });
+          expect(baselineBatchingFor(probe(), VERSION, SHA, g), `${name} ${v}`).toBe(false);
+          expect(baselineBatchingOffReason(probe(), VERSION, SHA, g)).toBe(
+            `the gate read ${name} ${v}`,
+          );
+        }
+      }
+    });
+  });
+
+  test("L: an empty lethalCommit (a candidate's record) prints none in the off reason", () => {
+    withPin({}, () => {
+      expect(baselineBatchingOffReason(probe(), VERSION, SHA, { lethalCommit: "" })).toBe(
+        "this build's gate record (lethalCommit none) has no batchFacts",
+      );
+    });
+  });
+
+  test("M-3: off when the probe alone reads eight matches and there is no record (no candidate rule)", () => {
+    withPin({}, () => {
+      expect(baselineBatchingFor(probe(), VERSION, SHA, undefined)).toBe(false);
+      expect(baselineBatchingFor(probe(), VERSION, SHA, { lethalCommit: "" })).toBe(false);
+    });
+  });
+
+  test("H1: a build adopted from ANY pin never batches without its own record", () => {
     try {
       for (const p of V3_BUILD_PINS) {
         adoptV3Pin(VERSION, SHA, p.id);
         expect(findV3Pin(VERSION, SHA)?.id).toBe(p.id);
-        expect(baselineBatchingFor(probe, VERSION, SHA), `adopted from ${p.id}`).toBe(false);
+        expect(baselineBatchingFor(probe(), VERSION, SHA, undefined), `adopted from ${p.id}`).toBe(
+          false,
+        );
       }
     } finally {
       resetAdoptedV3Pins();
     }
   });
 
-  test("false when the build is not listed, though every fact matches and the Sleep rule is retired", () => {
-    withPin(false, {}, () => {
-      const c = result(...allMatch(), sleep("gone"));
-      expect(baselineBatchingFor(c, VERSION, SHA)).toBe(false);
-      expect(baselineBatchingOffReason(c, VERSION, SHA)).toMatch(
-        /not in V3_BASELINE_BATCHING_BUILDS/,
-      );
-    });
-  });
-
-  test("false when any one capability fact is not matches (each of the eight, each reading), or is missing", () => {
-    withPin(true, {}, () => {
+  test("off when any one capability fact is not matches in THIS session's probe (each of the eight), or is missing", () => {
+    withPin({}, () => {
       for (const name of V3_CAPABILITY_FACTS) {
         for (const v of ["diverged", "unmeasurable"] as const) {
           const facts = allMatch().map((f) => (f.fact === name ? cap(name, v) : f));
           const c = result(...facts, sleep("gone"));
-          expect(baselineBatchingFor(c, VERSION, SHA), `${name} ${v}`).toBe(false);
-          expect(baselineBatchingOffReason(c, VERSION, SHA)).toContain(`${name} read ${v}`);
+          expect(baselineBatchingFor(c, VERSION, SHA, recAll()), `${name} ${v}`).toBe(false);
+          expect(baselineBatchingOffReason(c, VERSION, SHA, recAll())).toContain(
+            `${name} read ${v}`,
+          );
         }
         const missing = result(...allMatch().filter((f) => f.fact !== name), sleep("gone"));
-        expect(baselineBatchingFor(missing, VERSION, SHA), `${name} missing`).toBe(false);
+        expect(baselineBatchingFor(missing, VERSION, SHA, recAll()), `${name} missing`).toBe(false);
       }
-      expect(baselineBatchingFor(undefined, VERSION, SHA)).toBe(false);
+      expect(baselineBatchingFor(undefined, VERSION, SHA, recAll())).toBe(false);
     });
   });
 
-  test("false when the §6 Sleep rule is not retired (the probe reads sleep-is-noop another way, or not at all)", () => {
-    withPin(true, {}, () => {
+  test("off when the §6 Sleep rule is not retired (the probe reads sleep-is-noop another way, or not at all)", () => {
+    withPin({}, () => {
       for (const c of [result(...allMatch(), sleep("defect-present")), result(...allMatch())]) {
-        expect(baselineBatchingFor(c, VERSION, SHA)).toBe(false);
-        expect(baselineBatchingOffReason(c, VERSION, SHA)).toMatch(/Sleep rule is not retired/);
+        expect(baselineBatchingFor(c, VERSION, SHA, recAll())).toBe(false);
+        expect(baselineBatchingOffReason(c, VERSION, SHA, recAll())).toMatch(
+          /Sleep rule is not retired/,
+        );
       }
     });
-    // and a pin that does not record sleep-is-noop gone, though listed
-    withPin(true, { legC: {} }, () => {
-      expect(baselineBatchingFor(result(...allMatch(), sleep("gone")), VERSION, SHA)).toBe(false);
-    });
-  });
-
-  test("true only when listed, all eight match, and the Sleep rule is retired; false for another sha", () => {
-    withPin(true, {}, () => {
-      const c = result(...allMatch(), sleep("gone"));
-      expect(baselineBatchingFor(c, VERSION, SHA)).toBe(true);
-      expect(baselineBatchingOffReason(c, VERSION, SHA)).toBeUndefined();
-      expect(baselineBatchingFor(c, VERSION, "cd".repeat(32))).toBe(false);
-      expect(baselineBatchingOffReason(c, VERSION, "cd".repeat(32))).toMatch(
-        /not in V3_BASELINE_BATCHING_BUILDS/,
-      );
+    // and a pin that does not record sleep-is-noop gone
+    withPin({ legC: {} }, () => {
+      expect(baselineBatchingFor(probe(), VERSION, SHA, recAll())).toBe(false);
     });
   });
 });
@@ -191,6 +219,54 @@ describe("PR-114a: a capability fact in leg C and in a session", () => {
   test("a session never refuses on a capability fact, whatever it reads", () => {
     for (const v of ["matches", "diverged", "unmeasurable"] as const)
       expect(v3ContractRefusals(result(cap("batch-no-cross-row", v)))).toEqual([]);
+  });
+});
+
+describe("PR-117 (M-2): a capability fact diverged only in its batch half passes", () => {
+  const F = "batch-no-cross-row";
+  const diverged = (reference?: "pass" | "fail" | "none"): V3Fact => ({
+    ...cap(F, "diverged"),
+    ...(reference !== undefined ? { reference } : {}),
+  });
+  const run = (f: V3Fact, caps: readonly string[] = V3_CAPABILITY_FACTS) =>
+    classifyLegC([f], [], 1, [], undefined, caps);
+
+  test("reference pass: passes with the off line, naming the fact", () => {
+    const c = run(diverged("pass"));
+    expect(c.outcome).toBe("pass");
+    expect(c.lines.join("\n")).toMatch(
+      /al-runner-v3-baseline-batching-off: batch-no-cross-row: diverged/,
+    );
+  });
+
+  test("reference fail: gate-fail (the single request is wrong)", () => {
+    expect(run(diverged("fail")).outcome).toBe("gate-fail");
+  });
+
+  test("reference none (it ran nothing): infra-fail", () => {
+    expect(run(diverged("none")).outcome).toBe("infra-fail");
+  });
+
+  test("no reference by design (the lane and OnRun-duplicate facts): diverged gate-fails, as before PR-117", () => {
+    expect(run(diverged()).outcome).toBe("gate-fail");
+  });
+
+  test("a fact outside the capability list that reads diverged still gate-fails, whatever its reference", () => {
+    expect(run({ ...diverged("pass"), fact: "some-contract-fact" }).outcome).toBe("gate-fail");
+    expect(run(diverged("pass"), []).outcome).toBe("gate-fail");
+  });
+
+  test("unmeasurable and unlike-bc behave as before", () => {
+    expect(run({ ...cap(F, "unmeasurable"), reference: "pass" }).outcome).toBe("infra-fail");
+    expect(run({ ...cap(F), verdict: "unlike-bc" as never, reference: "pass" }).outcome).toBe(
+      "gate-fail",
+    );
+  });
+
+  test("no hand pin's legC has a capability key (a pin mismatch would turn a passing diverged into held)", () => {
+    for (const p of V3_BUILD_PINS)
+      for (const n of V3_CAPABILITY_FACTS)
+        expect(Object.hasOwn(p.legC, n), `${p.id} ${n}`).toBe(false);
   });
 });
 

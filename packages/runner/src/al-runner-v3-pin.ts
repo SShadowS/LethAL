@@ -61,6 +61,9 @@ export interface GatedBuild {
   /** R612 M-2: what the gate's leg C read for each warn fact (`V3_WARN_FACTS`). A gate passes
    *  whatever these read, so a session shows them as read, never as `matches`. */
   readonly warnFacts?: Readonly<Record<string, string>>;
+  /** PR-117: leg C's capability readings, written only by a gate whose DBM batched and passed.
+   *  The build's own record of whether baseline batching is allowed (`baselineBatchingOffReason`). */
+  readonly batchFacts?: Readonly<Record<string, string>>;
   /** R639 M5: a pass of `--edge-rejudge`: the kept folder its binary came from (no tarball). */
   readonly rejudgedFrom?: string;
   /** R814: the hand pin whose readings this build passed on (a mechanical pin). */
@@ -101,6 +104,12 @@ export function warnFactReadings(x: unknown): Readonly<Record<string, string>> |
   return kept.length > 0 ? Object.fromEntries(kept) : undefined;
 }
 
+/** PR-117: `{ batchFacts }` with only the verdicts of `x`, or `{}` when none are left. */
+const batchFactsField = (x: unknown): { batchFacts?: Readonly<Record<string, string>> } => {
+  const b = warnFactReadings(x);
+  return b !== undefined ? { batchFacts: b } : {};
+};
+
 /** The binary is not a gated build. Extends `Error` directly. */
 export class AlRunnerV3UngatedBuildError extends Error {
   constructor(detail: string) {
@@ -129,6 +138,7 @@ export function parseGated(text: string, where: string): GatedBuild {
     throw new AlRunnerV3UngatedBuildError(`${where} has no lethalCommit`);
   }
   const warnFacts = warnFactReadings(g.warnFacts);
+  const batchFacts = warnFactReadings(g.batchFacts);
   const sc = g.dotnetSidecar as Record<string, unknown> | undefined;
   if (
     g.dotnetSidecar !== undefined &&
@@ -157,6 +167,7 @@ export function parseGated(text: string, where: string): GatedBuild {
     ...(typeof g.tarballSha256 === "string" ? { tarballSha256: g.tarballSha256 } : {}),
     ...(typeof g.gatedAt === "string" ? { gatedAt: g.gatedAt } : {}),
     ...(warnFacts !== undefined ? { warnFacts } : {}),
+    ...(batchFacts !== undefined ? { batchFacts } : {}),
     ...(typeof g.rejudgedFrom === "string" ? { rejudgedFrom: g.rejudgedFrom } : {}),
     ...(typeof g.readingsFrom === "string" ? { readingsFrom: g.readingsFrom } : {}),
   };
@@ -207,6 +218,7 @@ export async function checkGated(
         lethalCommit: listed.lethalCommit,
         gatedAt: listed.gatedAt,
         ...(listed.warnFacts !== undefined ? { warnFacts: listed.warnFacts } : {}),
+        ...batchFactsField(listed.batchFacts),
         readingsFrom: listed.readingsFrom,
         source: "manifest",
       };
