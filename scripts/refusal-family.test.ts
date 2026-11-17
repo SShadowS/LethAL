@@ -24,6 +24,7 @@ import {
   T12_REFUSALS,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
+  X2_REFUSALS,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -1143,10 +1144,41 @@ describe("PR-105: the t12-refusals family", () => {
     expect(classes.filter((c) => c.text.startsWith("Evaluate of"))).toHaveLength(3);
   });
 
-  test("last of FAMILIES (place 17, BC-check number 18, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("t12-refusals");
+  test("place 17 of FAMILIES, BC-check number 18, as 7 is skipped: its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(16);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051018");
+  });
+});
+
+describe("PR-133: the x2-refusals family", () => {
+  const f = X2_REFUSALS;
+  const TEXTS = ["SetFilter: `C*` is not a BigInteger", "RecordRef.GetTable of Integer 123"];
+
+  test("two cells, an OnPrem app, distinct cell names", () => {
+    expect(f.cells).toHaveLength(TEXTS.length);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("a run that gives the measured texts makes 2 refusal classes, none of them known", () => {
+    const rows = f.cells.map((_, i) => ({
+      name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+      status: "error",
+      notRun: true,
+      message: `NotRun: out-of-scope: ${TEXTS[i]}`,
+    }));
+    const results = classify(f, rows);
+    expect(results.filter((r) => r.outcome === "refused")).toHaveLength(TEXTS.length);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    expect(classes).toHaveLength(2);
+  });
+
+  test("last of FAMILIES (place 18, BC-check number 19, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("x2-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(17);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051019");
   });
 });
 

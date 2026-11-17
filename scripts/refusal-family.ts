@@ -2320,6 +2320,43 @@ dotnet
 };
 
 /**
+ * PR-133: two refusal texts DO's x2 window still closed its serve daemon on, each driven by an invented cell (no corpus source
+ * text). Cell i is codeunit BASE_ID + 1 + i (51001, 51002); the support table is 51000, as in the other families.
+ */
+export const X2_REFUSALS: Family = {
+  name: "x2-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "X2 Row"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Amount; BigInteger) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+`,
+  handles: {},
+  cells: [
+    t9(
+      "Filter",
+      "SetFilterBigIntWildcard",
+      "C*",
+      "R.SetFilter(Amount, 'C*'); if R.FindFirst() then;",
+      {
+        vars: ['R: Record "X2 Row";'],
+      },
+    ),
+    t9("RecordRef", "GetTable", "Integer 123", "RR.GetTable(V);", {
+      vars: ["RR: RecordRef;", "V: Variant;"],
+      setup: ["V := 123;"],
+    }),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -4731,6 +4768,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [T10_REFUSALS.name]: T10_REFUSALS,
   // PR-105: appended (BC-check number 18): the refusal texts t12 and t13 still closed on, for a keep census
   [T12_REFUSALS.name]: T12_REFUSALS,
+  // PR-133: appended (BC-check number 19): the two refusal texts DO's x2 window closed on, for a keep census
+  [X2_REFUSALS.name]: X2_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
