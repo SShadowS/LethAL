@@ -275,6 +275,22 @@ export function readProcessRssBytes(
   }
 }
 
+/**
+ * PR-98: a process's anonymous resident memory (`RssAnon` of `/proc/<pid>/status`) in bytes, or 0 when it
+ * cannot be read. `VmRSS` would count shared file pages, which the cgroup charges once. `read` is injectable.
+ */
+export function readProcessRssAnonBytes(
+  pid: number,
+  read: (path: string) => string = (p) => readFileSync(p, "utf8"),
+): number {
+  try {
+    const m = /^RssAnon:\s+(\d+)\s+kB$/m.exec(read(`/proc/${pid}/status`));
+    return m?.[1] === undefined ? 0 : Number(m[1]) * 1024;
+  } catch {
+    return 0;
+  }
+}
+
 /** PR-88: a process's `VmHWM` (peak resident) and `VmRSS` (current resident) in bytes; a missing line is absent. */
 export interface ProcMemory {
   readonly hwm?: number;

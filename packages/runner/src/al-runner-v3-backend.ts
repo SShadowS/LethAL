@@ -27,6 +27,7 @@ import {
   closeSync,
   existsSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -86,6 +87,7 @@ import {
   makeProcPeakProbe,
   memoryBoundBytes,
   readCgroupMemory,
+  readProcessRssAnonBytes,
   readProcessRssBytes,
 } from "./al-runner-v3-baseline-check";
 import {
@@ -118,6 +120,8 @@ import {
   encodeGroups,
   groupsThatFit,
   isolatedSelection,
+  missingKeptTests,
+  selectedOnlyDecision,
   serveRow,
 } from "./al-runner-v3-entries";
 import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
@@ -1575,6 +1579,11 @@ export interface V3EntriesStats {
   l4OrderBroken: number;
   /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
   keptDrifts: number;
+  /** PR-94: prefetch and live requests sent with `runSelectedOnly` (every entry whole or a prefix cut), the
+   *  excluded tests in them, and the requests with a cut entry that could not be flagged. */
+  selectedOnlyRequests: number;
+  selectedOnlyTestsSkipped: number;
+  selectedOnlyRefusedGapped: number;
   echoMismatches: number;
   /** §5 step 2 only (the echo BEFORE the coverage request); also counted in `echoMismatches`. */
   secondEchoMismatches: number;
@@ -1656,6 +1665,11 @@ export interface V3LaneView extends ExecutionBackend {
 export const LANE_MIN_AVAILABLE_BYTES = 10 * 2 ** 30;
 /** R766 (b): one serve daemon peaks about 2.2 GB RSS on D1 (measured); 2.3 GB is budgeted per lane. */
 export const LANE_RSS_BYTES = 2.3 * 2 ** 30;
+/** PR-98: the cgroup reserve kept free, and LethAL's own process charged up to this (R988 measured 3.9 GiB). */
+export const LANE_RESERVE_BYTES = 4 * 2 ** 30;
+export const LANE_LETHAL_BYTES = 4 * 2 ** 30;
+/** PR-98: heavy-slot's default peak for the `other` class, used when no class file names one. */
+export const LANE_DEFAULT_DECLARED_GIB = 8;
 
 /** A started serve daemon; `dirty` closes it after the §5 window in flight (R612 on a plain request). */
 interface Daemon {
@@ -2078,6 +2092,18 @@ class Lane {
     return [...this.daemons.values()].some((d) => d.baselineStop !== undefined);
   }
 
+  /** PR-98: true while this lane holds any daemon (of any mode). */
+  holdsDaemon(): boolean {
+    return this.daemons.size > 0;
+  }
+
+  /** PR-98: the pids of this lane's daemons (the cgroup lane gate subtracts their resident RSS). */
+  daemonPids(): number[] {
+    return [...this.daemons.values()].flatMap((d) =>
+      d.server.pid !== undefined ? [d.server.pid] : [],
+    );
+  }
+
   dropPair(): void {
     this.pair = undefined;
     this.pairVerdict = undefined;
@@ -2412,6 +2438,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private entries: boolean;
   /** R761: true once `decideTransport` ran or a v3 process started; `entries` never changes after. */
   private transportFrozen = false;
+  /** PR-94 (L5): each codeunit's discovered test names, lower-case, set with `discovered`. */
+  private discoveredNames: ReadonlyMap<number, readonly string[]> = new Map();
+  /** PR-94 (H1): codeunits whose flagged answer missed a kept test (v3's shallow scan); never flagged again. */
+  private neverFlag = new Set<number>();
   /** R857: why the default transport fell back, for `--isolate-tests`' refusal. */
   private fallbackReasons: readonly string[] = [];
   /**
@@ -2493,6 +2523,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
      * set and no probe, a request is read by the sampler alone (tests never read `/proc`).
      */
     peakProbe?: PeakProbe;
+    /** PR-98: replaces the `RssAnon` reader of the lane gate (tests never read `/proc`). */
+    anonReader?: (pid: number) => number;
+    /** PR-98: replaces LethAL's own resident size in the lane gate. */
+    lethalRss?: () => number;
+    /** PR-98: replaces the env read of `LETHAL_HEAVY_CLASS_FILE` (tests never read the real env). */
+    classFilePath?: () => string | undefined;
+    /** PR-98: replaces the read of the class file. */
+    readTextFile?: (path: string) => string;
     /** R948: replaces the guard's wait between two reads; tests count calls, never wait. */
     memorySleep?: (ms: number) => Promise<void>;
     /** R948: how many reads the guard waits through before it stops the session. Absent: `MEMORY_WAIT_POLLS`. */
@@ -2511,8 +2549,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly speculateOn: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
-  /** R766 (b): the `resume` fact `decideTransport` was given. */
-  private resumeSession = false;
+  /** PR-98: the highest peak reading (PR-88) any serve request of this session gave, and where it came from. */
+  private peakReading: { bytes: number; source: "hwm" | "sampled" } | undefined;
+  /** PR-98: the latest refusal of the lane gate and its parts, for the lane notices. */
+  private laneLimit: { rule: string; detail: string } | undefined;
+  private laneParts: string | undefined;
   /** §3 (N2): a live warm-up refusal; every later run is a transport failure. */
   private entriesRefused: string | undefined;
   /** §2: the echo codeunit, `selectorIds.controlId` of the deployed manifest. */
@@ -2593,6 +2634,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     l4Widened: 0,
     l4OrderBroken: 0,
     keptDrifts: 0,
+    selectedOnlyRequests: 0,
+    selectedOnlyTestsSkipped: 0,
+    selectedOnlyRefusedGapped: 0,
     entriesSent: 0,
     boundChecks: 0,
     pairRequests: 0,
@@ -3141,6 +3185,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const t of tests) m.set(t.codeunitId, (m.get(t.codeunitId) ?? 0) + 1);
     this.testsPerCodeunit = m;
     this.discovered = [...tests];
+    // PR-94 (L5): grouped once here, not per entry per request
+    const names = new Map<number, string[]>();
+    for (const t of tests)
+      names.set(t.codeunitId, [...(names.get(t.codeunitId) ?? []), t.method.toLowerCase()]);
+    this.discoveredNames = names;
   }
 
   /**
@@ -3172,7 +3221,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   private async pickTransport(facts: { readonly resume: boolean }): Promise<void> {
-    this.resumeSession = facts.resume; // R766 (b): `parallelRefusal` reads it, whatever the transport
     if (this.cfg.transportSource === undefined) return; // an internal caller's own transport
     if (this.cfg.transportSource === "explicit") {
       if (this.cfg.transport === "serve-entries") {
@@ -5045,19 +5093,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
-   * R766 (b): how many of `n` lanes to start. The largest k with k x 2.3 GB + 10 GB <= available, at
-   * least 1 (lane 0's own floor is the per-lane hold's business). One notice names N asked, k started
-   * and the available GB. The per-lane hold (`laneMayStart`) still applies to each lane.
+   * R766 (b), PR-98: how many of `n` lanes to start: the largest k (at least 1) whose lanes charged fit the
+   * lane gate (`decideLanes`). Before any peak reading it caps nothing: the per-lane hold (`laneMayStart`)
+   * refuses each lane until a reading exists. One notice names N asked, k started and the limiting rule.
    */
   affordableLanes(n: number): number {
-    const avail = (this.seams.availableBytes ?? freemem)();
+    this.laneLimit = undefined; // the notice of `noteLanes` speaks for this call only
+    // PR-98 review (build, #1): asked before the batch's first prefetch, when no serve request has been read
+    // yet. Unmeasured is then no cap here: each lane's own `laneMayStart` refuses until a reading exists.
+    if (this.peakReading === undefined) return n;
     let k = n;
-    while (k > 1 && k * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES > avail) k -= 1;
+    while (k > 1 && !this.decideLanes(this.lanesCharged(k - 1)).ok) k -= 1;
     if (k < n && !this.fitNoticed) {
       this.fitNoticed = true;
+      const why = this.laneLimitNow();
       this.notify(
         "al-runner-v3-lane-memory-fit",
-        `[lethal] al-runner-v3-lane-memory-fit: ${(avail / 2 ** 30).toFixed(1)} GB available; ${n} lanes asked, ${k} started (each lane needs ${(LANE_RSS_BYTES / 2 ** 30).toFixed(1)} GB, and ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB must stay free) (R766).`,
+        `[lethal] al-runner-v3-lane-memory-fit: ${n} lanes asked, ${k} started (rule: ${why?.rule ?? "?"}; ${why?.detail ?? ""}) (PR-98).`,
       );
     }
     return k;
@@ -5080,29 +5132,147 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** R785: the one-line notice of how many lanes started. */
   noteLanes(message: string): void {
+    // PR-98: the lane gate's part: bytes per lane and its parts, and the rule that limited the count.
+    // Review (build, #3): "limited by" only when the gate itself refused; a pacing limit is the message's own.
+    const gate =
+      this.laneParts === undefined
+        ? ""
+        : `; lane gate: ${this.laneParts}${this.laneLimit !== undefined ? `; limited by: ${this.laneLimit.rule}` : ""}`;
     this.notify(
       "al-runner-v3-lanes-started",
-      `[lethal] al-runner-v3-lanes-started: ${message} (R785).`,
+      `[lethal] al-runner-v3-lanes-started: ${message}${gate} (R785).`,
     );
   }
 
   /**
-   * R766 (b): the memory hold. A lane beyond lane 0 may start only while at least 10 GB is available;
-   * under that the caller stays at the lanes it has, and one notice says so. `os.freemem()` is the
-   * kernel's available figure on Linux (libuv reads MemAvailable).
+   * PR-98: the lane gate. Lane `k` (> 0) may start only while the lanes charged (lanes 0..k, and every lane
+   * that holds a daemon, each counted once: `lanesCharged`) fit; see `decideLanes`. One notice says so, once.
    */
   laneMayStart(k: number): boolean {
     if (k === 0) return true;
-    const avail = (this.seams.availableBytes ?? freemem)();
-    if (avail >= LANE_MIN_AVAILABLE_BYTES) return true;
+    const v = this.decideLanes(this.lanesCharged(k));
+    if (v.ok) return true;
     if (!this.memoryHoldNoticed) {
       this.memoryHoldNoticed = true;
       this.notify(
         "al-runner-v3-lane-memory-hold",
-        `[lethal] al-runner-v3-lane-memory-hold: ${(avail / 2 ** 30).toFixed(1)} GB available, under the ${LANE_MIN_AVAILABLE_BYTES / 2 ** 30} GB needed to start lane ${k}; this session stays at the lanes already running (R766).`,
+        `[lethal] al-runner-v3-lane-memory-hold: lane ${k} does not start (rule: ${v.rule}); ${v.detail}; this session stays at the lanes already running (PR-98).`,
       );
     }
     return false;
+  }
+
+  private laneLimitNow(): { rule: string; detail: string } | undefined {
+    return this.laneLimit;
+  }
+
+  /**
+   * PR-98 (review H2; build review #2): the lanes charged when lanes 0..`upto` run: those lanes, and every lane
+   * that holds a daemon (a lane of an earlier window stays resident), each ONCE. A resident lane k is not
+   * counted twice when it asks again in a later window, and a lane launched this window before its first
+   * daemon is still charged.
+   */
+  private lanesCharged(upto: number): number {
+    const charged = new Set<number>();
+    for (let i = 0; i <= upto; i++) charged.add(i);
+    this.laneList.forEach((l, i) => {
+      if (l.holdsDaemon()) charged.add(i);
+    });
+    return charged.size;
+  }
+
+  /**
+   * PR-98: the ONE lane decision. `charged` lanes (lane 0 and the asker included) each cost `bytes per lane`:
+   * the distinct request modes of this batch x the highest peak reading of the session, plus one one-shot
+   * process when the batch has one-shot codeunits. No reading yet: no lane above 0 ("unmeasured").
+   * Where the cgroup names a limit: (used less our daemons' RssAnon) + charged lanes + LethAL's own 4 GiB
+   * (less its RSS) must fit under memory.max less 4 GiB, and charged lanes + 4 GiB under the declared peak
+   * of the heavy-slot job (re-read each time). Elsewhere: charged lanes + 10 GB under `os.freemem()`.
+   * Limits (stated): the .NET sidecar is in neither term; R948's guard is the backstop between groups.
+   */
+  private decideLanes(charged: number): {
+    readonly ok: boolean;
+    readonly rule: "unmeasured" | "cgroup" | "declared peak" | "free memory";
+    readonly detail: string;
+  } {
+    const gib = (n: number) => (n / 2 ** 30).toFixed(1);
+    const peak = this.peakReading;
+    const modes = Math.max(
+      1,
+      new Set([...this.union].map((id) => modeKey(this.modeOfCall(id)))).size,
+    );
+    const oneShot = this.oneShotCodeunits.size > 0 ? this.memoryEstimate() : 0;
+    const bpl = peak === undefined ? 0 : modes * peak.bytes + oneShot;
+    const parts =
+      peak === undefined
+        ? "no peak reading yet"
+        : `${gib(bpl)} GiB per lane = ${modes} mode(s) x ${gib(peak.bytes)} GiB ${peak.source} peak${oneShot > 0 ? ` + ${gib(oneShot)} GiB one-shot` : ""}`;
+    const verdict = (
+      ok: boolean,
+      rule: "unmeasured" | "cgroup" | "declared peak" | "free memory",
+      more: string,
+    ) => {
+      const detail = `${charged} lanes charged; ${parts}${more}`;
+      if (!ok) this.laneLimit = { rule, detail };
+      this.laneParts = parts;
+      return { ok, rule, detail };
+    };
+    if (peak === undefined) return verdict(false, "unmeasured", "");
+    const sample = (this.seams.memoryReader ?? (() => readCgroupMemory()))();
+    if (sample === undefined || sample.maxBytes === undefined) {
+      const avail = (this.seams.availableBytes ?? freemem)();
+      const need = charged * bpl + LANE_MIN_AVAILABLE_BYTES;
+      return verdict(
+        need <= avail,
+        "free memory",
+        `; no cgroup limit, so ${gib(avail)} GB free must cover ${gib(need)} GB`,
+      );
+    }
+    const own = this.laneList
+      .flatMap((l) => l.daemonPids())
+      .reduce((s, pid) => s + (this.seams.anonReader ?? readProcessRssAnonBytes)(pid), 0);
+    const lethalRss = (this.seams.lethalRss ?? (() => process.memoryUsage().rss))();
+    const lethalTerm = Math.max(0, LANE_LETHAL_BYTES - lethalRss);
+    const room = sample.maxBytes - LANE_RESERVE_BYTES;
+    const cg = sample.usedBytes - own + charged * bpl + lethalTerm;
+    if (cg > room)
+      return verdict(
+        false,
+        "cgroup",
+        `; ${gib(cg)} GiB would be in use, over ${gib(room)} GiB (${sample.source} less ${gib(LANE_RESERVE_BYTES)} reserve)`,
+      );
+    const declared = this.declaredPeakGib();
+    const need = charged * bpl + LANE_LETHAL_BYTES;
+    if (need > declared.gib * 2 ** 30)
+      return verdict(
+        false,
+        "declared peak",
+        `; ${gib(need)} GiB needed (with LethAL's ${gib(LANE_LETHAL_BYTES)}), over the declared ${declared.gib} GiB (${declared.source})`,
+      );
+    return verdict(true, "cgroup", "");
+  }
+
+  /** PR-98: the heavy-slot job's declared peak, re-read from `LETHAL_HEAVY_CLASS_FILE` each time. */
+  private declaredPeakGib(): { readonly gib: number; readonly source: string } {
+    const path = (this.seams.classFilePath ?? (() => process.env.LETHAL_HEAVY_CLASS_FILE))();
+    if (path !== undefined && path !== "") {
+      try {
+        const m = /^\S+\s+\d+\s+(\d+(?:\.\d+)?)/.exec(
+          (this.seams.readTextFile ?? ((p) => readFileSync(p, "utf8")))(path),
+        );
+        if (m?.[1] !== undefined && Number(m[1]) > 0) return { gib: Number(m[1]), source: path };
+      } catch {
+        // an unreadable class file falls to the default below, named
+      }
+      return {
+        gib: LANE_DEFAULT_DECLARED_GIB,
+        source: `class file ${path} unreadable or without a peak: heavy-slot's default for the other class`,
+      };
+    }
+    return {
+      gib: LANE_DEFAULT_DECLARED_GIB,
+      source: "no class file: heavy-slot's default for the other class",
+    };
   }
 
   /**
@@ -5110,9 +5280,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * parallel. Asked after `decideTransport`.
    */
   parallelRefusal(): string | undefined {
-    if (this.resumeSession) {
-      return "al-runner-v3-workers-refused: --workers > 1 is refused with --resume / --resume-run: a resumed session's lanes were never measured on a re-run baseline (R766; a resume with --workers 1 runs on serve, R1008)";
-    }
+    // PR-98: a resume is allowed (R766's refusal is lifted; `splitBackend` forwards the resume hooks).
     if (!this.entries) {
       return 'al-runner-v3-workers-refused: --workers > 1 needs the serve-entries transport; this session runs one-shot (set "alRunnerV3.transport" to "serve-entries", or see the al-runner-v3-serve-default-fallback warning for why the default fell back) (R766)';
     }
@@ -6308,7 +6476,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     storedCoverage: ReadonlyMap<string, string>,
     timeoutMs: number,
   ): Promise<string | undefined> {
-    const lane = this.soleLane("recheckReusedBaseline");
+    // PR-98 (PR-89 fix 2): an owner method of the baseline phase, so it runs on lane 0 also once lanes exist
+    // (`soleLane` threw then). `deploy` closes every daemon first, so no other lane holds one here.
+    const busy = this.laneList.findIndex((l, k) => k > 0 && l.holdsDaemon());
+    if (busy > 0) {
+      throw new Error(
+        `al-runner-v3-lane-misuse: recheckReusedBaseline() was called while lane ${busy} holds a daemon; the re-check runs in the baseline phase, on lane 0, before any lane beyond it starts (PR-98)`,
+      );
+    }
+    const lane = this.lane;
     const s = parseL5State(state);
     if (s === undefined) return "no backend state (the snapshot was stored before PR-21)";
     if (!this.entries) return "the transport (this session does not run on serve-entries)";
@@ -6853,6 +7029,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<{
     readonly sent: readonly SentEntry[];
     readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+    /** PR-94: the request carried `runSelectedOnly`, so `suiteMissing` checks the order of every entry. */
+    readonly selectedOnly: boolean;
     /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
     readonly cut?: SentCut;
   }> {
@@ -6874,8 +7052,23 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
+    // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
+    // `runSelectedOnly`, so the excluded tail does not run. Never in `requestBase` (the baseline and the
+    // coverage windows can leave a gap), and an alone or isolated request keeps its own flag.
+    const selectedOnly =
+      kind !== "warmup" && alone === undefined && !mode.runSelectedOnly
+        ? selectedOnlyDecision(
+            sent,
+            (cu) => ({
+              baseline: this.baselineOrder(cu),
+              discovered: this.discoveredNames.get(cu) ?? [],
+            }),
+            this.neverFlag,
+          )
+        : { flag: false, refused: false, skipped: 0 };
     const body = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
+      ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
@@ -6890,6 +7083,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.stats.entriesSent += sent.length;
     if (kind === "prefetch") this.stats.prefetchRequests += 1;
     else if (kind === "live") this.stats.liveRequests += 1;
+    if (selectedOnly.flag) {
+      this.stats.selectedOnlyRequests += 1;
+      this.stats.selectedOnlyTestsSkipped += selectedOnly.skipped;
+    } else if (selectedOnly.refused) this.stats.selectedOnlyRefusedGapped += 1;
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // R1014: a stop signal ends a request that is still running (a hang waits out the whole test
     // timeout, 1,762 s on DO), by closing its daemon. The answer would be dropped anyway (R955: the
@@ -6971,7 +7168,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `every entry of the request was refused with one reason outside V3_SERVE_SAFE_REFUSALS: ${refused}. Nothing is re-sent`,
       );
     }
-    return { sent, rows: decoded.rows, ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}) };
+    return {
+      sent,
+      rows: decoded.rows,
+      selectedOnly: selectedOnly.flag,
+      ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}),
+    };
   }
 
   /**
@@ -7120,6 +7322,54 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     const { sent, rows, cut: partial } = answer;
+    // Review L1: a discarded send is not a request of the batch; the re-run counts in its place.
+    const uncount = () => {
+      for (const k of [
+        "entriesSent",
+        "prefetchRequests",
+        "liveRequests",
+        "boundChecks",
+        "cachedFalse",
+        "timeoutCuts",
+        "selectedOnlyRequests",
+        "selectedOnlyTestsSkipped",
+        "selectedOnlyRefusedGapped",
+      ] as const)
+        this.stats[k] = before[k];
+      if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
+        this.prefetchBatch.size = batchBefore.size;
+        this.prefetchBatch.ran = batchBefore.ran;
+      }
+    };
+    // PR-94 (H1): v3's test scan is shallow (a `[Test]` with another attribute on its line is missed), so
+    // under `runSelectedOnly` a test LethAL knows can fail to run, and the kept tests after it start from
+    // other state. Every kept test of a flagged entry needs its row; on a miss the answer is discarded,
+    // the codeunit is never flagged again, and the request is re-sent unflagged. An answer cut at a
+    // timeout has no rows to compare.
+    if (answer.selectedOnly && partial === undefined) {
+      const gaps = new Map<number, string[]>();
+      for (const e of sent) {
+        if (e.echo) continue;
+        const miss = missingKeptTests(
+          e.codeunit,
+          this.baselineOrder(e.codeunit),
+          e.excludeTests,
+          (rows.get(e.id) ?? []).map((r) => r.method),
+        );
+        if (miss.length > 0) gaps.set(e.codeunit, [...(gaps.get(e.codeunit) ?? []), ...miss]);
+      }
+      if (gaps.size > 0) {
+        uncount();
+        for (const [cu, miss] of gaps) {
+          this.neverFlag.add(cu);
+          this.notify(
+            "al-runner-v3-selected-only-scan-gap",
+            `[lethal] al-runner-v3-selected-only-scan-gap: with runSelectedOnly, codeunit ${cu}'s entry gave no row for ${[...new Set(miss)].join(", ")}, tests LethAL knows. al-runner's test scan is shallow and missed them. The answer was discarded, the request re-sent without the flag, and this codeunit is never flagged again this session (PR-94)`,
+          );
+        }
+        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
+      }
+    }
     // PR-56: the request after a kept refusal must not differ from the baseline where it cannot. On
     // drift no verdict is read from it: close the daemon and run the same request on a fresh one.
     // An answer cut at a timeout (`partial`) is not checked: its daemon is already killed and the rest
@@ -7128,20 +7378,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (prior !== undefined && partial === undefined) {
       const drift = this.keptRefusalDrift(sent, rows, alone);
       if (drift !== undefined) {
-        // Review L1: the drifted send is not a request of the batch; the re-run counts in its place.
-        for (const k of [
-          "entriesSent",
-          "prefetchRequests",
-          "liveRequests",
-          "boundChecks",
-          "cachedFalse",
-          "timeoutCuts",
-        ] as const)
-          this.stats[k] = before[k];
-        if (this.prefetchBatch !== undefined && batchBefore !== undefined) {
-          this.prefetchBatch.size = batchBefore.size;
-          this.prefetchBatch.ran = batchBefore.ran;
-        }
+        uncount();
         this.stats.keptDrifts += 1;
         const event: V3KeptDrift = { refusal: prior.text, ...drift };
         this.driftSink?.(event);
@@ -7157,6 +7394,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     daemon.keptRefusal = this.firstKeptRefusal(sent, rows);
+    // PR-98: the lane gate's per-daemon peak is the highest reading of the session.
+    if (
+      peakRss !== undefined &&
+      (this.peakReading === undefined || peakRss > this.peakReading.bytes)
+    )
+      this.peakReading = { bytes: peakRss, source: peakSource };
     this.noteEntryCost(startRss, daemon.floorRss, peakRss, sent, {
       source: peakSource,
       sampledPeak,
@@ -7205,7 +7448,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
-          : this.suiteMissing(callOf(e), mine, e.excludeTests);
+          : this.suiteMissing(callOf(e), mine, e.excludeTests, answer.selectedOnly);
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -7446,6 +7689,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     cu: number,
     rows: readonly V3Row[],
     excluded: readonly string[] = [],
+    /** PR-94: the request carried `runSelectedOnly`: the order check runs on this entry whatever it left out. */
+    selectedOnly = false,
   ): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
@@ -7457,7 +7702,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n.slice(`Codeunit${cu}.`.length).toLowerCase(),
       ),
     );
-    if (one === undefined && out.size > (this.mutantLeftOutNames(cu)?.length ?? 0)) {
+    if (
+      one === undefined &&
+      (selectedOnly || out.size > (this.mutantLeftOutNames(cu)?.length ?? 0))
+    ) {
       const at = new Map(this.baselineOrder(cu).map((m, i) => [m, i] as const));
       let prev = -1;
       for (const r of rows) {
@@ -8103,7 +8351,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}.`,
       );
     }
     await rm(join(this.cfg.instrumentedDir, "cov"), { recursive: true, force: true }).catch(

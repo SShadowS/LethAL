@@ -129,6 +129,8 @@ export interface ServeCtl {
   eofAt?: (n: number, req: Req) => boolean;
   /** The echo answer for a mutant; default vouches for it. */
   echo?: (m: string, daemon: number, n: number) => FakeRow;
+  /** PR-98: the fake child's pid for daemon `d`; absent (as in a real fake) unless a test asks. */
+  pid?: (daemon: number) => number;
 }
 
 function fakeServe(ctl: ServeCtl) {
@@ -145,6 +147,7 @@ function fakeServe(ctl: ServeCtl) {
     let compiled = new Set<number>();
     out.push(JSON.stringify({ ready: true }));
     const handle: ServerProcessHandle = {
+      ...(ctl.pid !== undefined ? { pid: ctl.pid(daemon) } : {}),
       stdout: out,
       stderr: err,
       kill: () => out.end(),

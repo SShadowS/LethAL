@@ -194,6 +194,11 @@ describe("R905 scripts/heavy-slot.sh", () => {
     expect(misplaced.exitCode).toBe(2);
     expect(existsSync(join(dir, "ran"))).toBe(false);
   });
+  test("PR-98: the job sees LETHAL_HEAVY_CLASS_FILE, the path of its slot's class file", () => {
+    const dir = fresh();
+    const r = run(dir, "other", "sh", "-c", 'echo "$LETHAL_HEAVY_CLASS_FILE"');
+    expect(r.stdout.toString()).toBe(`${join(dir, "heavy.1.class")}\n`);
+  });
   test("two held baseapp slots: the wrapper exits 75 and does not run the command", async () => {
     const dir = fresh();
     await hold(dir, 1, "baseapp");
