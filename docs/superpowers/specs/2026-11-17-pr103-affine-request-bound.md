@@ -54,3 +54,23 @@ Coord PR-103 (lethal-code, 2026-11-17). Measured first: `/coord/handoff/PR-103/m
   - `fresh` on a new daemon's first request;
   - `daemonRequest` counts as R952 does;
   - `lane` and `kind` are right on a prefetch and on a live request.
+
+## Addendum 1 (2026-11-17, after the Opus build review of 57f12574)
+- **`lane` already existed.** The probe adds five fields, not six.
+- **Running totals per daemon (review H1).** `noteEntryCost` emits no event when it takes no reading. That happens when the
+  daemon holds `RETAINED_SLACK_BYTES` or more over its floor and the request did not grow it, which is the regime R1100 needs
+  explained. So per-request `proved`/`proveGrowth` alone would undercount the proofs most where retention is largest.
+  - Each daemon keeps running totals of its lazy proofs AFTER its first request, and every emitted event carries them:
+    - `daemonProved`: the codeunits proved;
+    - `daemonProveGrowth`: the bytes of growth measured across them.
+  - The first request's proofs, like a union warm-up, sit BELOW the floor, which is the first request's start (review M1). So
+    they are not in the totals.
+  - The comparison for R1101 is a daemon's `start - floor` against its `daemonProveGrowth` at the same event.
+- **Field docs (M2, L4).**
+  - "First request" is read from `fresh`, not from `daemonRequest`: a union-warmed daemon starts at 2, as R952 counts.
+  - A gap in `daemonRequest` is a discarded re-send, not a lost event.
+- **Tests added:**
+  - a reused daemon whose request takes no reading (start >= 512 MiB over the floor, no growth) still has its proof counted in
+    the next emitted event's totals;
+  - the totals leave out the fresh request's proofs;
+  - `proved` equals the codeunits actually sent, in a case where it differs from those marked missing.
