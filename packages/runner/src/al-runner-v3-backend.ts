@@ -123,6 +123,7 @@ import {
   missingKeptTests,
   selectedOnlyDecision,
   serveRow,
+  withoutThrough,
 } from "./al-runner-v3-entries";
 import { type V3EnvironmentChoice, V3EnvironmentUnknownError } from "./al-runner-v3-environment";
 import {
@@ -2558,7 +2559,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   private pairStore = new Map<
     string,
-    { readonly cu: number; readonly seq: number; readonly none: CallRows; readonly m: CallRows }
+    {
+      readonly cu: number;
+      readonly seq: number;
+      readonly none: CallRows;
+      readonly m: CallRows;
+      /** PR-102: the killer the pair was cut after (its request may have been flagged); absent: uncut. */
+      readonly through?: string;
+    }
   >();
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
@@ -5871,13 +5879,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       call = made.call;
       alone = true;
     }
-    // PR-20 (L4): a ref the entry's cut left out was not in the mutant's plan. It joins the mutant's
-    // covering set, and the call is made again live (so that cut leaves it in), never read as missing.
+    // PR-20 (L4): a ref the entry's cut left out was not in the mutant's plan. Under a mutant it joins the
+    // mutant's covering set, and the call is made again live (so that cut leaves it in), never read as
+    // missing. PR-102: under NONE (`m4` null) the same holds for a kill pair's cut NONE call: a live NONE
+    // call, never the stored rows; no covering set and no `l4Widened` count.
     const leftOutByCut = `codeunit${ref.codeunitId}.${ref.method}`.toLowerCase();
     const m4 = lane.lastActivated;
     if (
       !alone &&
-      typeof m4 === "string" &&
       call.refusal === undefined && // review 3: an error the call already carries stands
       call.missing === undefined &&
       call.excluded?.some((n) => n.toLowerCase() === leftOutByCut) === true &&
@@ -5890,12 +5899,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.entries &&
       !this.inBaseline
     ) {
-      const byCu = this.coveringOf.get(m4) ?? new Map<number, Set<string>>();
-      const s = byCu.get(ref.codeunitId) ?? new Set<string>();
-      s.add(ref.method.toLowerCase());
-      byCu.set(ref.codeunitId, s);
-      this.coveringOf.set(m4, byCu);
-      this.stats.l4Widened += 1;
+      if (m4 !== null) {
+        const byCu = this.coveringOf.get(m4) ?? new Map<number, Set<string>>();
+        const s = byCu.get(ref.codeunitId) ?? new Set<string>();
+        s.add(ref.method.toLowerCase());
+        byCu.set(ref.codeunitId, s);
+        this.coveringOf.set(m4, byCu);
+        this.stats.l4Widened += 1;
+      }
       const made = await this.liveCall(lane, ref);
       if ("verdict" in made) return made.verdict;
       call = made.call;
@@ -7190,24 +7201,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // PR-24 (L2): a restarted daemon's lazy warm-up is not counted toward R952's request bound, so the
     // daemon serves `daemonMaxRequests` requests as a daemon warmed at its start did, not one fewer.
     if (!(kind === "warmup" && daemon.proven !== undefined)) daemon.requests += 1;
-    const sent = encodeGroups(
-      groups,
-      this.requireEchoId(),
-      (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
-      excluded,
-    );
-    const tests = sent.reduce(
-      (n, e) =>
-        n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
-      0,
-    );
+    const encode = (gs: readonly EntryGroup[]) =>
+      encodeGroups(
+        gs,
+        this.requireEchoId(),
+        (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+        excluded,
+      );
     // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
     // `runSelectedOnly`, so the excluded tail does not run. Never in `requestBase` (the baseline and the
     // coverage windows can leave a gap), and an alone or isolated request keeps its own flag.
-    const selectedOnly =
+    const decide = (es: readonly SentEntry[]) =>
       kind !== "warmup" && alone === undefined && !mode.runSelectedOnly
         ? selectedOnlyDecision(
-            sent,
+            es,
             (cu) => ({
               baseline: this.baselineOrder(cu),
               discovered: this.discoveredNames.get(cu) ?? [],
@@ -7215,6 +7222,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             this.neverFlag,
           )
         : { flag: false, refused: false, skipped: 0 };
+    let sent = encode(groups);
+    let selectedOnly = decide(sent);
+    // PR-102 (H1): a kill pair's `through` cut goes out only in a request sent with `runSelectedOnly`.
+    // Without the flag, `excludeTests` only hides rows while v3 still runs the tail (R1094), so a hidden
+    // refusal or hang would go unseen. Unflagged, the pair is today's request.
+    if (!selectedOnly.flag && groups.some((g) => g.through !== undefined)) {
+      sent = encode(groups.map(withoutThrough));
+      selectedOnly = decide(sent);
+    }
+    const tests = sent.reduce(
+      (n, e) =>
+        n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
+      0,
+    );
     const body = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
       ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
@@ -7475,7 +7496,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           alone,
           // R998: the warm-up's, at the codeunit's end only; PR-20 (L4): and the tests after the
           // mutant's last covering one
-          (cu, g) => this.mutantExcludes(cu, g.mutantId),
+          // PR-102: a kill pair's group is cut after its killer, uncounted
+          (cu, g) =>
+            g.through !== undefined
+              ? this.cutAfterKiller(cu, g.through)
+              : this.mutantExcludes(cu, g.mutantId),
         ),
       );
     } finally {
@@ -7544,6 +7569,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             `[lethal] al-runner-v3-selected-only-scan-gap: with runSelectedOnly, codeunit ${cu}'s entry gave no row for ${[...new Set(miss)].join(", ")}, tests LethAL knows. al-runner's test scan is shallow and missed them. The answer was discarded, the request re-sent without the flag, and this codeunit is never flagged again this session (PR-94)`,
           );
         }
+        // The codeunit is now in neverFlag, so `sendInFlight` strips any pair cut (PR-102, H1).
         return this.requestOne(lane, groups, phase, mode, groupCount, alone);
       }
     }
@@ -7573,7 +7599,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             test: drift.test,
           },
         );
-        return this.requestOne(lane, groups, phase, mode, groupCount, alone);
+        // PR-102 (H1): as the scan-gap re-send, no pair cut
+        return this.requestOne(lane, groups.map(withoutThrough), phase, mode, groupCount, alone);
       }
     }
     daemon.keptRefusal = this.firstKeptRefusal(sent, rows);
@@ -7841,7 +7868,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mutantId: string,
     base: readonly string[] | undefined,
   ): readonly string[] | undefined {
-    const covering = this.coveringOf.get(mutantId)?.get(cu);
+    return this.cutAfter(cu, this.coveringOf.get(mutantId)?.get(cu), base);
+  }
+
+  /**
+   * PR-102: the `excludeTests` of a kill pair's entry for `cu`: `cutAfterLastCovering`'s cut with the
+   * covering set `{killer}`, R998's run as the base, and none of `mutantExcludes`' counting.
+   */
+  private cutAfterKiller(cu: number, killer: string): readonly string[] | undefined {
+    return this.cutAfter(cu, new Set([killer.toLowerCase()]), this.mutantLeftOutNames(cu));
+  }
+
+  private cutAfter(
+    cu: number,
+    covering: ReadonlySet<string> | undefined,
+    base: readonly string[] | undefined,
+  ): readonly string[] | undefined {
     const order = this.baselineOrder(cu);
     if (covering === undefined || covering.size === 0 || order.length === 0) return base;
     const known = new Set(order);
@@ -8051,7 +8093,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       proof === undefined
     )
       return;
-    type Kill = { readonly mutantId: string; readonly cu: number };
+    type Kill = { readonly mutantId: string; readonly cu: number; readonly method: string };
     const kills: Kill[] = [];
     for (const p of plans) {
       for (const r of p.refs) {
@@ -8063,7 +8105,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
         const row = mine[0];
         if (mine.length === 1 && row?.status === "fail" && row.notRun !== true) {
-          kills.push({ mutantId: p.mutantId, cu: this.callId(r) });
+          // PR-102: the kill ledger can make ANY failing covering test of this codeunit the killer
+          // (R197), so the pair is cut after the LAST one in baseline order, never after `r` alone:
+          // every possible killer is then inside the prefix (`takeStoredPair` refuses one past it).
+          const id = this.callId(r);
+          const order = this.baselineOrder(id);
+          let through = r.method;
+          for (const q of p.refs) {
+            if (this.callId(q) !== id) continue;
+            const qm = q.method.toLowerCase();
+            const fails = call.rows.some(
+              (x) =>
+                x.codeunit === q.codeunitId &&
+                x.method.toLowerCase() === qm &&
+                x.status === "fail" &&
+                x.notRun !== true,
+            );
+            if (fails && order.indexOf(qm) > order.indexOf(through.toLowerCase()))
+              through = q.method;
+          }
+          kills.push({ mutantId: p.mutantId, cu: id, method: through });
           // R857: a pair holds only its one test, and the kill ledger can make any failing test
           // the killer, so under --isolate-tests each one gets a pair. R896: per codeunit.
           if (!this.perTest(r.codeunitId)) break;
@@ -8095,8 +8156,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           mutantId: SELECTOR_RESOURCE_NONE,
           key: `${SELECTOR_RESOURCE_NONE}#${tagOf(k)}`,
           codeunits: [k.cu],
+          through: k.method, // PR-102 (R1097)
         },
-        { mutantId: k.mutantId, key: `${tagOf(k)}#m`, codeunits: [k.cu] },
+        { mutantId: k.mutantId, key: `${tagOf(k)}#m`, codeunits: [k.cu], through: k.method },
       ]);
       const liveBefore = this.stats.liveRequests;
       let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
@@ -8127,6 +8189,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             seq: out.seq,
             none,
             m,
+            // PR-102: set only if the cut went out (an unflagged request carries none) and the
+            // call is a codeunit's, not a per-test id (L2)
+            ...(!this.isolatedRefs.has(k.cu) &&
+            (none.excluded?.length ?? 0) > (this.mutantLeftOutNames(k.cu)?.length ?? 0)
+              ? { through: k.method }
+              : {}),
           });
           this.stats.pairBatchStored += 1;
         } else if (!out.reached.has(noneKey) && !resent.has(tag)) {
@@ -8162,7 +8230,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (stored === undefined) return undefined;
     this.pairStore.delete(key);
     const killSeq = lane.rowsByCodeunit.get(id)?.prefetchSeq;
-    if (stored.cu !== id || killSeq === undefined || stored.seq <= killSeq) {
+    // PR-102 (L1): a stored pair cut after `through` holds the rows of `ref` only if `ref` is at or
+    // before it, and both names are in the codeunit's baseline order. Otherwise fail closed.
+    let cutOk = true;
+    if (stored.through !== undefined) {
+      const order = this.baselineOrder(id);
+      const at = order.indexOf(ref.method.toLowerCase());
+      const to = order.indexOf(stored.through.toLowerCase());
+      cutOk = at >= 0 && to >= 0 && at <= to;
+    }
+    if (stored.cu !== id || killSeq === undefined || stored.seq <= killSeq || !cutOk) {
       this.stats.pairBatchRefused += 1;
       return undefined;
     }
@@ -8208,8 +8285,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       out = await this.request(
         lane,
         [
-          { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu] },
-          { mutantId, codeunits: [cu] },
+          // PR-102 (R1097): both entries stop after the killer, if the request is flagged
+          { mutantId: SELECTOR_RESOURCE_NONE, codeunits: [cu], through: ref.method },
+          { mutantId, codeunits: [cu], through: ref.method },
         ],
         "liveMs",
       );
