@@ -76,3 +76,20 @@ master has gained PR-100 to PR-106 since.
 - If P0 differs, P1 and P2 are recounted by the run's own choice before the bar is read, and the difference is reported
   as P0's miss.
 - A crash, a budget stop or an infra failure makes the run not evidence. It is re-run, never counted.
+
+## Amendment 1 (2026-11-17 12:40Z, before the narrowed run): the auto leg narrowed to the P1 lines
+- **What happened.** The control leg ran the whole slice in 5,236 s, at about 2 s per mutant. The auto leg's baseline,
+  with the method re-baseline, took 1,737 s. Its mutant phase then ran at 9.7-15.6 s per mutant: each pass runs every test
+  of a moved codeunit in its own session, and per [[R1099]] each session pays the company login. At 470 of 2,656 it would
+  have needed about 6 h more, past its 6 h timeout.
+- On the orchestrator's instruction, it was stopped cleanly at 12:30Z: SIGTERM, report written, rc 7. **Under the rule
+  above that run is not evidence.** Its 471 scored mutants are reported only as a side observation.
+- **The control leg stands as run:** the whole slice, isolation test, N = 1, on the same head and build.
+- **The new auto leg.** The same config and build, and the head of lethal/pr107 at the time.
+  - **Scope:** the 353 lines of all 451 P1 mutants, as one-line `--lines` spans (`/coord/handoff/PR-107/lines-narrow.args`,
+    sha256 `b28d176f69f593b49e0a86509963f07f15e31d9222ebad55f48b0af49f630098`). Its dry run deploys 606 mutants, all of
+    them slice mutants with their committed class: P1 451, P4 149, P3 6.
+  - **`--workers 3`**, under `heavy-slot.sh --wait --peak 16 baseapp`. PR-99 proved N = 1 equal to N = 3 per mutant on DO.
+    Any lane effect would show as an unexplained move against the N = 1 control, and block.
+- **Unchanged:** the classes, the allowed exception, the killingTest rule, P0 and the bar. They are read over these 606
+  mutants, the 451 P1 included. P2 is not measured: the narrowed scope holds no P2 mutant.
