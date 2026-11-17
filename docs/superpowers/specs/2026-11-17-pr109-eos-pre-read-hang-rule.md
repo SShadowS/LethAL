@@ -61,3 +61,30 @@ Everything else keeps today's R173 ruling:
     - S not an InStream;
     - `not (S.EOS and X)`;
     - `until S.EOS`.
+
+## Addendum 1 (2026-11-17, the build's measurement; before any gate)
+**"Straight-line before the loop" means: a statement of a block that also contains the loop, ending before the loop starts.**
+- **Why the change.** Read as "a statement of the procedure's own block", the rule removed only ReadStreamToString and left both
+  hangs mutated. In ReadAsText and GetEMail, the pre-read and the loop sit together inside one `if ... then begin ... end`.
+- **The condition kept.** The loop can never run without the read before it.
+- **Still kept (not refused):**
+  - a read inside an `if` or loop that the `while` is not inside;
+  - a read in the other branch;
+  - a read after the loop.
+- **Not applicable.** `until S.EOS` has no `not`. The test uses `until not S.EOS`, a repeat and so not refused.
+
+**Measured** (`/coord/handoff/PR-109/measure.md`; dry-runs before and after on this head):
+
+| target | sites before | after | removed |
+|---|---|---|---|
+| corpus (72 BC.History modules) | — | byte-identical | 0 |
+| DO | 45021 | 45014 | 7 |
+| 15 `fixtures/*` targets | — | byte-identical | 0 (no emit golden moves) |
+
+- **The 7 DO sites, t13 verdicts.** All are `lethal.remove-not`:
+  - `GetEMail` (M25653) and `ReadAsText` (M36641): timeout-killed;
+  - `ReadStreamToString` (M36508): killed;
+  - 4 sibling `GetEMail`-style procedures: no-coverage.
+- **The bar.** 2 hangs per 3 scored sites lost, far above PR-37's 1 per 8. **Kept.**
+- **What stays mutated.** The 4 EOS sites with no pre-read or no loop.
+- **P1-P3 held** (P3's gates follow on the final head). P4 waits for a DO window. The 7 sites go to lethal-bugs before it.
