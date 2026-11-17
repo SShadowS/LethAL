@@ -191,6 +191,7 @@ import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   WarningsObservedError,
   assertGateWarnings,
+  assertLanesStarted,
   checkGateWarnings,
   collectWarnings,
   finishGate,
@@ -412,7 +413,7 @@ async function session(
   // R785: a `LETHAL_ITEST_V3_WORKERS > 1` D-leg run also says how many lanes started; that one code is
   // expected on top of the leg's N = 1 set. Unset (the gate), the pinned set is checked unchanged.
   const pinned = GATE_WARNINGS[`al-runner-v3/${leg}`];
-  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested())
+  if (V3_WORKERS > 1 && cfg.workers !== undefined && !observeRequested()) {
     assertGateWarnings(
       "al-runner-v3",
       leg,
@@ -420,7 +421,9 @@ async function session(
       pinned === undefined ? undefined : [...pinned, "al-runner-v3-lanes-started"],
       gateWarnings.examples(),
     );
-  else checkGateWarnings("al-runner-v3", leg, gateWarnings);
+    // PR-98: the notice must also report as many lanes as asked, or the leg fails by name.
+    assertLanesStarted(gateWarnings.examples()["al-runner-v3-lanes-started"], V3_WORKERS);
+  } else checkGateWarnings("al-runner-v3", leg, gateWarnings);
   const serveLeg = v3ItestLegTransport(leg, process.env).transport !== undefined;
   if (serveLeg) {
     console.log(`  ${leg}: entries ${JSON.stringify(backend.entriesStats())}`);

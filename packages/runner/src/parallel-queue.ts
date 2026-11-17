@@ -52,6 +52,29 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     get inRunStopMs() {
       return lane0.inRunStopMs;
     },
+    // PR-98 (PR-89 fix 1): the resume hooks are the owner's. Without them a reused snapshot was taken
+    // unchecked, the owner's baseline rows stayed empty and the first daemon start threw; a fresh N > 1
+    // run stored no backend state, so its later resume could not reuse the snapshot.
+    get resumeRunsBaseline() {
+      return owner.resumeRunsBaseline === true;
+    },
+    get isolatesTests() {
+      return owner.isolatesTests === true;
+    },
+    ...(owner.baselineState !== undefined
+      ? { baselineState: () => owner.baselineState?.() ?? Promise.resolve(undefined) }
+      : {}),
+    ...(owner.recheckReusedBaseline !== undefined
+      ? {
+          recheckReusedBaseline: (
+            state: unknown,
+            storedCoverage: ReadonlyMap<string, string>,
+            timeoutMs: number,
+          ) =>
+            owner.recheckReusedBaseline?.(state, storedCoverage, timeoutMs) ??
+            Promise.resolve("no re-check on this backend"),
+        }
+      : {}),
     capabilities: () => owner.capabilities(),
     status: () => owner.status(),
     deploy: (dir) => owner.deploy(dir),

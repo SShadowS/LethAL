@@ -74,6 +74,7 @@ import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/a
 import type { RunOpts, TestMethodRef, TestVerdict } from "../src/backend";
 import { buildBackend } from "../src/cli";
 import { baselineSourceTag } from "../src/orchestrator";
+import { splitBackend } from "../src/parallel-queue";
 import type { SpawnFn } from "../src/publisher";
 import { installResourceSelector } from "../src/resource-selector";
 import { backendBuildRefusal } from "../src/store";
@@ -581,9 +582,13 @@ interface Rig {
   readonly b: AlRunnerV3Backend;
   readonly serve: ReturnType<typeof fakeServe>;
   readonly one: ReturnType<typeof fakeOneShot>;
+  /** PR-98: the lane views (empty unless `lanes` was asked). */
+  readonly views: ReturnType<AlRunnerV3Backend["lanes"]>;
 }
 
 interface RigOpts {
+  /** PR-98: build this many lane views before the deploy. */
+  lanes?: number;
   /** PR-21: extra fields for the batch's app.json (e.g. a publisher). */
   appExtra?: Record<string, unknown>;
   serve?: ServeScript;
@@ -695,8 +700,9 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   );
   if (opts.notify !== undefined) b.setNotify(opts.notify);
   if (opts.stopHandle !== undefined) b.useStopHandle(opts.stopHandle);
+  const views = opts.lanes === undefined ? [] : b.lanes(opts.lanes);
   await b.deploy(l.batch);
-  return { l, b, serve, one };
+  return { l, b, serve, one, views };
 }
 
 /** The orchestrator's baseline step: the bracket, a null activation, one run per ref. */
@@ -9620,6 +9626,74 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
         (rs as Record<string, unknown>[]).map((x) => [x.method, x.status, x.notRun, x.message]),
       ]);
     expect(shape(r2)).toEqual(shape(r1));
+  });
+
+  test("PR-98: after lanes(2) the re-check runs on lane 0 and imports the rows; lane 1 holding a daemon throws by name", async () => {
+    const r1 = await firstOf(allPass);
+    const state = await r1.b.baselineState();
+    const r2 = await named({ serve: { rows: allPass, coverage: plainCoverage }, lanes: 2 });
+    r2.b.baselinePhase(true);
+    const why = await r2.b.recheckReusedBaseline(
+      JSON.parse(JSON.stringify(state)),
+      storedOf.get(r1) ?? new Map(),
+      1000,
+    );
+    expect(why).toBeUndefined();
+    expect(rowsOf(r2).size).toBeGreaterThan(0);
+    // a lane beyond lane 0 holding a daemon makes the call a misuse, by name
+    r2.b.baselinePhase(false);
+    const v1 = r2.views[1];
+    if (v1 === undefined) throw new Error("no lane 1");
+    await v1.activate("M0001");
+    await v1.run(SUITE1[0] as TestMethodRef, OPTS);
+    r2.b.baselinePhase(true);
+    await expect(
+      r2.b.recheckReusedBaseline(
+        JSON.parse(JSON.stringify(state)),
+        storedOf.get(r1) ?? new Map(),
+        1000,
+      ),
+    ).rejects.toThrow(
+      /al-runner-v3-lane-misuse: recheckReusedBaseline\(\) was called while lane 1 holds a daemon/,
+    );
+  });
+
+  // PR-98 (PR-89 fix 1): a --workers 2 run's backend is `splitBackend(owner, lane0)`. Tested at the
+  // backend level (no orchestrator fake exists for a lane-capable owner); the orchestrator's
+  // "resume-baseline-reused" event is r619-one-lend's, with a stub backend.
+  test("PR-98: through splitBackend, a fresh two-lane run stores backend state and a two-lane resume re-checks it", async () => {
+    const first = await named({ serve: { rows: allPass, coverage: plainCoverage }, lanes: 2 });
+    const v0 = first.views[0];
+    if (v0 === undefined) throw new Error("no lane 0");
+    const verdicts: TestVerdict[] = [];
+    first.b.baselinePhase(true);
+    try {
+      await v0.activate(null);
+      for (const t of SUITE1) verdicts.push(await v0.run(t, OPTS));
+    } finally {
+      first.b.baselinePhase(false);
+    }
+    const state = await splitBackend(first.b, v0).baselineState?.();
+    expect(state).toBeDefined();
+    const stored = new Map(
+      verdicts.map((v) => [
+        `codeunit${v.ref.codeunitId}.${v.ref.method}`.toLowerCase(),
+        JSON.stringify(v.coverage ?? null),
+      ]),
+    );
+    const resumed = await named({ serve: { rows: allPass, coverage: plainCoverage }, lanes: 2 });
+    const w0 = resumed.views[0];
+    if (w0 === undefined) throw new Error("no lane 0");
+    const split = splitBackend(resumed.b, w0);
+    expect(split.resumeRunsBaseline).toBe(resumed.b.resumeRunsBaseline);
+    resumed.b.baselinePhase(true);
+    const why = await split.recheckReusedBaseline?.(
+      JSON.parse(JSON.stringify(state)),
+      stored,
+      1000,
+    );
+    expect(why).toBeUndefined();
+    expect(rowsOf(resumed).size).toBeGreaterThan(0);
   });
 
   test("2: a row that differs refuses by name and imports nothing", async () => {

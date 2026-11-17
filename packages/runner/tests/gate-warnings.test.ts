@@ -11,6 +11,7 @@ import {
   OBSERVE_WARNINGS_ENV,
   WarningsObservedError,
   assertGateWarnings,
+  assertLanesStarted,
   checkGateWarnings,
   collectWarnings,
   finishGate,
@@ -23,6 +24,21 @@ import {
 import { HANG_BASELINE_WARNING_CODES } from "../itest/hang-baseline-leg";
 
 const warn = (code: string, message: string) => ({ type: "warning", code, message }) as never;
+
+describe("PR-98 assertLanesStarted", () => {
+  const said = (k: number, n: number) =>
+    `[lethal] al-runner-v3-lanes-started: ${k} of ${n} lanes started: x (R785).`;
+  test("as many lanes as asked passes; fewer, no notice or an unreadable one fails by name", () => {
+    expect(() => assertLanesStarted(said(4, 4), 4)).not.toThrow();
+    expect(() => assertLanesStarted(said(2, 4), 4)).toThrow(
+      /al-runner-v3-itest-lanes-short: 4 lanes asked.*says 2/,
+    );
+    expect(() => assertLanesStarted(undefined, 2)).toThrow(
+      /al-runner-v3-itest-lanes-short.*no notice/,
+    );
+    expect(() => assertLanesStarted("lanes happened", 2)).toThrow(/nothing readable/);
+  });
+});
 
 describe("assertGateWarnings", () => {
   test("an extra observed code fails and names it", () => {

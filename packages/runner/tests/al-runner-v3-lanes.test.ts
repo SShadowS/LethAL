@@ -5,12 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import {
-  AlRunnerV3Backend,
-  AlRunnerV3UnprovenBatchError,
-  LANE_MIN_AVAILABLE_BYTES,
-  LANE_RSS_BYTES,
-} from "../src/al-runner-v3-backend";
+import { AlRunnerV3Backend, AlRunnerV3UnprovenBatchError } from "../src/al-runner-v3-backend";
 import { hashAlTree } from "../src/baseline-snapshot";
 import {
   A,
@@ -418,13 +413,24 @@ describe("the parallel gate: refusals and the memory hold", () => {
     expect(b.parallelRefusal()).toBeUndefined();
   });
 
-  test("a resume session is refused by name, even with an explicit serve-entries transport", async () => {
+  // PR-98: R766's resume refusal is lifted; the transport and Sleep refusals stay (tests around this one).
+  test("PR-98: a resume session is allowed with an explicit serve-entries transport", async () => {
     const b = mk("serve-entries");
     b.seams.sleepRuleRetired = true;
     await b.decideTransport({ resume: false });
     expect(b.parallelRefusal()).toBeUndefined();
     await b.decideTransport({ resume: true });
-    expect(b.parallelRefusal()).toMatch(/refused with --resume/);
+    expect(b.parallelRefusal()).toBeUndefined();
+  });
+
+  test("PR-98: a resume does not lift the Sleep refusal or the transport refusal", async () => {
+    const sleeper = mk("serve-entries");
+    await sleeper.decideTransport({ resume: true });
+    expect(sleeper.parallelRefusal()).toMatch(/pin retires the §6 Sleep rule/);
+    const oneShot = mk("one-shot");
+    oneShot.seams.sleepRuleRetired = true;
+    await oneShot.decideTransport({ resume: true });
+    expect(oneShot.parallelRefusal()).toMatch(/needs the serve-entries transport/);
   });
 
   test("lanes() needs the serve-entries transport (R515's re-budget is per scope under lanes)", () => {
@@ -441,43 +447,257 @@ describe("the parallel gate: refusals and the memory hold", () => {
     }
   });
 
-  test("a lane beyond lane 0 starts only with 10 GB available; the hold is said once", () => {
+  // PR-98: the lane gate. Every input is a seam: no test reads the real /sys, /proc or env.
+  const G = 2 ** 30;
+  interface Priv {
+    peakReading: { bytes: number; source: "hwm" | "sampled" } | undefined;
+    union: Set<number>;
+    oneShotCodeunits: ReadonlySet<number>;
+  }
+  const gated = (o: {
+    peakGiB?: number;
+    /** The cgroup: used and max in GiB; `max` absent = no limit; `used` absent = no cgroup. */
+    usedGiB?: number;
+    maxGiB?: number;
+    /** The class file's declared GiB; `null` = no class file. */
+    classGiB?: number | null;
+    lethalGiB?: number;
+    availGiB?: number;
+  }) => {
     const b = mk("serve-entries");
-    let avail = LANE_MIN_AVAILABLE_BYTES - 1;
-    b.seams.availableBytes = () => avail;
-    const notices: string[] = [];
-    b.setNotify((code) => notices.push(code));
-    expect(b.laneMayStart(0)).toBe(true); // lane 0 is never held
-    expect(b.laneMayStart(1)).toBe(false);
-    expect(b.laneMayStart(2)).toBe(false);
-    expect(notices).toEqual(["al-runner-v3-lane-memory-hold"]);
-    avail = LANE_MIN_AVAILABLE_BYTES;
-    expect(b.laneMayStart(1)).toBe(true);
-    expect(notices).toHaveLength(1);
-  });
-
-  test("the fit check: N lanes start when N x 2.3 GB + 10 GB is available", () => {
-    const b = mk("serve-entries");
-    b.seams.availableBytes = () => 4 * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES;
+    const p = b as unknown as Priv;
+    if (o.peakGiB !== undefined) p.peakReading = { bytes: o.peakGiB * G, source: "hwm" };
+    p.union = new Set([1]);
+    const cg =
+      o.usedGiB === undefined
+        ? undefined
+        : {
+            usedBytes: o.usedGiB * G,
+            ...(o.maxGiB !== undefined ? { maxBytes: o.maxGiB * G } : {}),
+            source: "cg/memory.max",
+          };
+    b.seams.memoryReader = () => cg;
+    b.seams.availableBytes = () => (o.availGiB ?? 90) * G;
+    b.seams.lethalRss = () => (o.lethalGiB ?? 4) * G;
+    b.seams.anonReader = () => 0;
+    const cls = { gib: o.classGiB === undefined ? 30 : o.classGiB };
+    b.seams.classFilePath = () => (cls.gib === null ? undefined : "/fake/heavy.class");
+    b.seams.readTextFile = () => `other 1 ${cls.gib}\n`;
     const notices: string[] = [];
     b.setNotify((code, message) => notices.push(`${code}: ${message}`));
-    expect(b.affordableLanes(4)).toBe(4);
-    expect(notices).toEqual([]);
+    return { b, p, notices, cls };
+  };
+
+  test("host freemem 90 GB but the cgroup at 26 of 32 GiB used starts no lane 1; a roomier cgroup does", () => {
+    const full = gated({ peakGiB: 2, usedGiB: 26, maxGiB: 32 }); // 26 + 2 x 2 = 30 > 28
+    expect(full.b.laneMayStart(0)).toBe(true); // lane 0 is never held
+    expect(full.b.laneMayStart(1)).toBe(false);
+    expect(full.notices).toHaveLength(1);
+    expect(full.notices[0]).toContain("al-runner-v3-lane-memory-hold");
+    expect(full.notices[0]).toContain("rule: cgroup");
+    full.b.laneMayStart(2);
+    expect(full.notices).toHaveLength(1); // said once
+    expect(gated({ peakGiB: 2, usedGiB: 10, maxGiB: 32 }).b.laneMayStart(1)).toBe(true);
   });
 
-  test("the fit check: fewer lanes start when they do not fit, one notice names N asked, n started and the GB", () => {
-    const b = mk("serve-entries");
-    b.seams.availableBytes = () => 3 * LANE_RSS_BYTES + LANE_MIN_AVAILABLE_BYTES + 1;
-    const notices: string[] = [];
-    b.setNotify((code, message) => notices.push(`${code}: ${message}`));
-    expect(b.affordableLanes(5)).toBe(3);
-    expect(b.affordableLanes(5)).toBe(3);
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("al-runner-v3-lane-memory-fit");
-    expect(notices[0]).toContain("5 lanes asked, 3 started");
-    expect(notices[0]).toContain("16.9 GB available");
-    // Not even two fit: one lane (lane 0 is never held by the fit check).
-    b.seams.availableBytes = () => 0;
-    expect(b.affordableLanes(5)).toBe(1);
+  test("no peak reading yet: no lane above 0 starts, and the notice says unmeasured; a reading opens it", () => {
+    const g = gated({ usedGiB: 1, maxGiB: 32 });
+    expect(g.b.laneMayStart(1)).toBe(false);
+    expect(g.notices[0]).toContain("unmeasured");
+    // build review #1: asked before the batch's first prefetch, unmeasured caps nothing (or batch 0 could
+    // never run lanes); each lane's laneMayStart still refuses until a reading exists, as above.
+    expect(g.b.affordableLanes(4)).toBe(4);
+    expect(g.b.laneMayStart(1)).toBe(false);
+    g.p.peakReading = { bytes: 1 * G, source: "sampled" };
+    expect(g.b.laneMayStart(1)).toBe(true);
+    expect(g.b.affordableLanes(4)).toBe(4);
+  });
+
+  test("H1: lane 1 asked is charged one peak per distinct request mode of the batch", () => {
+    // used 22, room 28, peak 2: one mode (4 GiB for 2 lanes) fits; two modes (8 GiB) do not.
+    const one = gated({ peakGiB: 2, usedGiB: 22, maxGiB: 32 });
+    expect(one.b.laneMayStart(1)).toBe(true);
+    const two = gated({ peakGiB: 2, usedGiB: 22, maxGiB: 32 });
+    two.p.union = new Set([7, 8]);
+    (two.b as unknown as { isolationOf: (cu: number) => string }).isolationOf = (cu) =>
+      cu === 7 ? "method" : "test";
+    expect(two.b.laneMayStart(1)).toBe(false);
+    expect(two.notices[0]).toContain("2 mode(s) x 2.0 GiB");
+  });
+
+  test("a batch with one-shot codeunits adds the one-shot estimate to each lane", () => {
+    const g = gated({ peakGiB: 2, usedGiB: 22, maxGiB: 32 }); // 22 + 2 x 2 = 26 fits
+    expect(g.b.laneMayStart(1)).toBe(true);
+    g.p.oneShotCodeunits = new Set([1]); // 22 + 2 x (2 + 3) = 32 does not
+    expect(g.b.laneMayStart(1)).toBe(false);
+    expect(g.notices[0]).toContain("one-shot");
+  });
+
+  test("H2: window 2 with lanes 2 and 3 still resident: lane 1 asked is charged every resident lane", async () => {
+    const r = await lanesRig({ lanes: 4 });
+    await laneBaseline(r);
+    for (const k of [0, 2, 3]) {
+      const v = r.views[k];
+      if (v === undefined) throw new Error(`no lane ${k}`);
+      await v.activate("M0001");
+      await v.run(A, OPTS);
+    }
+    const priv = r.b as unknown as Priv & { lanesCharged(upto: number): number };
+    expect(priv.lanesCharged(1)).toBe(4); // lanes 0 and 1, plus resident 2 and 3
+    priv.peakReading = { bytes: 2 * G, source: "hwm" };
+    r.b.seams.memoryReader = () => ({ usedBytes: 22 * G, maxBytes: 32 * G, source: "cg" });
+    r.b.seams.lethalRss = () => 4 * G;
+    r.b.seams.anonReader = () => 0;
+    r.b.seams.availableBytes = () => 90 * G;
+    // charged = {0, 1, 2, 3} = 4 lanes x 2 GiB: 22 + 8 = 30 > 28. (Charging k + 1 = 2 lanes would fit.)
+    r.b.seams.classFilePath = () => "/fake/class";
+    r.b.seams.readTextFile = () => "other 1 30\n";
+    expect(r.b.laneMayStart(1)).toBe(false);
+  });
+
+  test("build review #2: a lane that is itself resident and asks again in a later window is charged once", async () => {
+    const r = await lanesRig({ lanes: 2 });
+    await laneBaseline(r);
+    for (const k of [0, 1]) {
+      const v = r.views[k];
+      if (v === undefined) throw new Error(`no lane ${k}`);
+      await v.activate("M0001");
+      await v.run(A, OPTS);
+    }
+    const priv = r.b as unknown as Priv & { lanesCharged(upto: number): number };
+    expect(priv.lanesCharged(1)).toBe(2); // lanes 0 and 1, each once (max(k, holders) + 1 gave 3)
+    priv.peakReading = { bytes: 2 * G, source: "hwm" };
+    // used 24, room 28: 2 lanes x 2 GiB = 28 fits; 3 lanes (the double count) = 30 would not.
+    r.b.seams.memoryReader = () => ({ usedBytes: 24 * G, maxBytes: 32 * G, source: "cg" });
+    r.b.seams.lethalRss = () => 4 * G;
+    r.b.seams.anonReader = () => 0;
+    r.b.seams.availableBytes = () => 90 * G;
+    r.b.seams.classFilePath = () => "/fake/class";
+    r.b.seams.readTextFile = () => "other 1 30\n";
+    expect(r.b.laneMayStart(1)).toBe(true);
+  });
+
+  test("M4: the lane's daemons' RssAnon is subtracted from the used memory, read per pid; unreadable counts 0", async () => {
+    const r = await lanesRig({ lanes: 2, serve: { pid: (d) => 4000 + d } });
+    // The fake pids are made up: nothing reads /proc for them.
+    r.b.seams.requestRssReader = () => undefined;
+    r.b.seams.rssReader = () => undefined;
+    await laneBaseline(r);
+    const v1 = r.views[1];
+    if (v1 === undefined) throw new Error("no lane 1");
+    await v1.activate("M0001");
+    await v1.run(A, OPTS);
+    const priv = r.b as unknown as Priv;
+    priv.peakReading = { bytes: 2 * G, source: "hwm" };
+    r.b.seams.memoryReader = () => ({ usedBytes: 26 * G, maxBytes: 32 * G, source: "cg" });
+    r.b.seams.lethalRss = () => 4 * G;
+    r.b.seams.classFilePath = () => "/fake/class";
+    r.b.seams.readTextFile = () => "other 1 30\n";
+    const asked: number[] = [];
+    let anon = 0; // unreadable
+    r.b.seams.anonReader = (pid) => {
+      asked.push(pid);
+      return anon;
+    };
+    // 26 + 2 x 2 = 30 > 28 with nothing subtracted (an unreadable pid counts 0).
+    expect(r.b.laneMayStart(1)).toBe(false);
+    expect(asked).toContain(4000); // lane 1's daemon (the baseline ran one-shot) was read by pid
+    anon = 3 * G; // lane 1's daemon holds 3 GiB anonymous: 26 - 3 + 4 = 27 <= 28
+    expect(r.b.laneMayStart(1)).toBe(true);
+  });
+
+  test("the declared peak is re-read at each decision: a lowered class file stops the next lane", () => {
+    const g = gated({ peakGiB: 2, usedGiB: 5, maxGiB: 32, classGiB: 30 });
+    expect(g.b.laneMayStart(1)).toBe(true);
+    g.cls.gib = 6; // PR-73 lowered it: 2 lanes x 2 + 4 = 8 > 6
+    expect(g.b.laneMayStart(1)).toBe(false);
+    expect(g.notices[0]).toContain("rule: declared peak");
+    expect(g.notices[0]).toContain("declared 6");
+  });
+
+  test("no class file in a limited cgroup uses 8 GiB, and the notice names that default", () => {
+    const g = gated({ peakGiB: 2, usedGiB: 5, maxGiB: 32, classGiB: null });
+    expect(g.b.laneMayStart(1)).toBe(true); // 2 x 2 + 4 = 8 <= 8
+    expect(g.b.laneMayStart(2)).toBe(false); // 3 x 2 + 4 = 10 > 8
+    expect(g.notices[0]).toContain("rule: declared peak");
+    expect(g.notices[0]).toContain("default");
+    expect(g.notices[0]).toContain("declared 8");
+  });
+
+  test("no readable cgroup, or an unlimited one: the freemem path, with the new bytes per lane", () => {
+    for (const cgroup of [{}, { usedGiB: 5 }]) {
+      // peak 4 GiB: 2 lanes = 8 GiB + the 10 GB that stays free = 18; the old 2.3 GiB rule would start it at 17.
+      const tight = gated({ peakGiB: 4, availGiB: 17, ...cgroup });
+      expect(tight.b.laneMayStart(1)).toBe(false);
+      expect(tight.notices[0]).toContain("rule: free memory");
+      expect(gated({ peakGiB: 4, availGiB: 18, ...cgroup }).b.laneMayStart(1)).toBe(true);
+      // and the unmeasured rule holds here too
+      expect(gated({ availGiB: 90, ...cgroup }).b.laneMayStart(1)).toBe(false);
+    }
+  });
+
+  test("L1: LethAL's own process is charged up to 4 GiB, less its RSS, and never below zero", () => {
+    // used 22.5, room 28, 2 lanes x 2 = 4: LethAL at 4 GiB adds 0 (26.5 fits); at 1 GiB it adds 3 (29.5 does not).
+    expect(gated({ peakGiB: 2, usedGiB: 22.5, maxGiB: 32, lethalGiB: 4 }).b.laneMayStart(1)).toBe(
+      true,
+    );
+    expect(gated({ peakGiB: 2, usedGiB: 22.5, maxGiB: 32, lethalGiB: 1 }).b.laneMayStart(1)).toBe(
+      false,
+    );
+    // a LethAL bigger than 4 GiB adds nothing (not a negative term): 25.5 + 4 = 29.5 does not fit at 10 GiB either
+    expect(gated({ peakGiB: 2, usedGiB: 25.5, maxGiB: 32, lethalGiB: 10 }).b.laneMayStart(1)).toBe(
+      false,
+    );
+  });
+
+  test("affordableLanes is the largest count the gate allows (at least 1), with one notice naming the rule", () => {
+    const g = gated({ peakGiB: 2, usedGiB: 20, maxGiB: 32 }); // 20 + 2c <= 28: c <= 4
+    expect(g.b.affordableLanes(6)).toBe(4);
+    expect(g.b.affordableLanes(6)).toBe(4);
+    expect(g.notices).toHaveLength(1);
+    expect(g.notices[0]).toContain("al-runner-v3-lane-memory-fit");
+    expect(g.notices[0]).toContain("6 lanes asked, 4 started");
+    expect(g.notices[0]).toContain("rule: cgroup");
+    expect(gated({ peakGiB: 2, usedGiB: 20, maxGiB: 32 }).b.affordableLanes(3)).toBe(3);
+    expect(gated({ peakGiB: 2, usedGiB: 31, maxGiB: 32 }).b.affordableLanes(5)).toBe(1);
+  });
+
+  test("the lanes-started notice names bytes per lane, its parts, and the rule that limited the count", () => {
+    const g = gated({ peakGiB: 2, usedGiB: 20, maxGiB: 32 });
+    g.b.affordableLanes(6);
+    g.b.noteLanes("4 of 6 lanes started: x (lane 0's warm-up 1.0 s)");
+    const said = g.notices.find((n) => n.startsWith("al-runner-v3-lanes-started"));
+    expect(said).toContain("lane gate: 2.0 GiB per lane = 1 mode(s) x 2.0 GiB hwm peak");
+    expect(said).toContain("limited by: cgroup");
+    const free = gated({ peakGiB: 2, usedGiB: 1, maxGiB: 32 });
+    free.b.affordableLanes(3);
+    free.b.noteLanes("3 of 3 lanes started: y (lane 0's warm-up 1.0 s)");
+    // build review #3: with no gate refusal there is no "limited by" (a pacing limit is the message's own text)
+    const freeSaid = free.notices.find((n) => n.startsWith("al-runner-v3-lanes-started"));
+    expect(freeSaid).toContain("lane gate: 2.0 GiB per lane");
+    expect(freeSaid).not.toContain("limited by");
+  });
+
+  test("the session's peak reading is the highest a serve request gave, with its source", async () => {
+    const r = await lanesRig({ lanes: 2, serve: { pid: (d) => 5000 + d } });
+    let rss = 3 * G;
+    r.b.seams.requestRssReader = () => rss; // sampled alone: no peak probe
+    r.b.seams.rssReader = () => undefined;
+    await laneBaseline(r);
+    const priv = r.b as unknown as Priv;
+    expect(priv.peakReading).toBeUndefined(); // no serve request has run yet
+    const v1 = r.views[1];
+    if (v1 === undefined) throw new Error("no lane 1");
+    await v1.activate("M0001");
+    await v1.run(A, OPTS);
+    expect(priv.peakReading).toEqual({ bytes: 3 * G, source: "sampled" });
+    rss = 2 * G; // a lower reading never lowers it
+    await v1.activate("M0003");
+    await v1.run(A, OPTS);
+    expect(priv.peakReading?.bytes).toBe(3 * G);
+    rss = 5 * G;
+    await v1.activate("M0002");
+    await v1.run(A, OPTS);
+    expect(priv.peakReading?.bytes).toBe(5 * G);
   });
 });

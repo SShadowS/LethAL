@@ -102,6 +102,19 @@ export function assertGateWarnings(
   );
 }
 
+/**
+ * PR-98: a `LETHAL_ITEST_V3_WORKERS > 1` leg must start as many lanes as it asked. Throws by name when the
+ * `al-runner-v3-lanes-started` notice is missing, unreadable, or reports fewer lanes than `asked`.
+ */
+export function assertLanesStarted(message: string | undefined, asked: number): void {
+  const m = message === undefined ? null : /(\d+) of (\d+) lanes started/.exec(message);
+  const started = m?.[1] === undefined ? undefined : Number(m[1]);
+  if (started === undefined || started < asked)
+    throw new Error(
+      `al-runner-v3-itest-lanes-short: ${asked} lanes asked, the lanes-started notice says ${started ?? "nothing readable"} (${message ?? "no notice"})`,
+    );
+}
+
 /** Observe mode: print the line and one example per code. Asserts nothing. */
 export function printObserved(gate: string, leg: string, w: WarningCollector): void {
   console.log(`[gate-warnings] ${gate}/${leg}: ${JSON.stringify(w.codes())}`);
