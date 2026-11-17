@@ -29,6 +29,25 @@ describe("ndjson sink", () => {
     expect(parsed[2]).toMatchObject({ type: "phase-entered", seq: 2 });
   });
 
+  test("PR-121: with a clock, each event line carries atMs (rounded); without one, none", () => {
+    const chunks: string[] = [];
+    let now = 1234.6;
+    const sink = createNdjsonSink(
+      (c) => chunks.push(c),
+      () => now,
+    );
+    sink(ev({ type: "phase-entered", phase: "deploy" }, 1));
+    now = 5000.2;
+    sink(ev({ type: "phase-entered", phase: "baseline" }, 2));
+    const lines = chunks.map((l) => JSON.parse(l));
+    expect(lines[0]).not.toHaveProperty("atMs"); // the header
+    expect(lines[1]).toMatchObject({ seq: 1, atMs: 1235 });
+    expect(lines[2]).toMatchObject({ seq: 2, atMs: 5000 });
+    const plain: string[] = [];
+    createNdjsonSink((c) => plain.push(c))(ev({ type: "phase-entered", phase: "deploy" }, 1));
+    expect(JSON.parse(plain[1] ?? "")).not.toHaveProperty("atMs");
+  });
+
   test("the header line is written on construction, before any event is forwarded", () => {
     const chunks: string[] = [];
     // No event pushed at all — the header must already be there.

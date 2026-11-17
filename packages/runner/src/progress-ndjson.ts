@@ -59,10 +59,16 @@ interface NdjsonHeader {
  * wires it to a synchronous file write so a killed process still has whatever was written to the
  * OS before the kill, not whatever sat buffered in a stream.
  */
-export function createNdjsonSink(write: (chunk: string) => void): EventSubscriber {
+export function createNdjsonSink(
+  write: (chunk: string) => void,
+  /** PR-121: milliseconds since the file was opened; each line then carries it as `atMs`. */
+  clock?: () => number,
+): EventSubscriber {
   const header: NdjsonHeader = { ndjsonHeader: true, streamSchemaVersion: STREAM_SCHEMA_VERSION };
   write(`${JSON.stringify(header)}\n`);
   return (event: RunEvent): void => {
-    write(`${JSON.stringify(event)}\n`);
+    // The emitter calls subscribers synchronously, so the stamp is the emit time.
+    const line = clock === undefined ? event : { ...event, atMs: Math.round(clock()) };
+    write(`${JSON.stringify(line)}\n`);
   };
 }
