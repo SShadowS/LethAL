@@ -16,7 +16,10 @@
  * Log: `$SHELL_WRITE_ADVISORY_LOG`, else `/coord/logs/shell-write-advisory.tsv`. Tests always set the variable.
  */
 import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, posix } from "node:path";
+
+// Bash commands carry POSIX paths, also under Git Bash on Windows, so targets resolve as POSIX paths on every host.
+const { isAbsolute, resolve } = posix;
 
 const SCRATCH = [/^\/tmp\/claude-/, /^\/coord\/handoff(\/|$)/];
 const HARMLESS = [/^\/dev\/(null|stdout|stderr|tty)$/, /^\/dev\/fd\//];
