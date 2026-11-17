@@ -21,6 +21,7 @@ import {
   SET_TEST,
   T9_REFUSALS,
   T10_REFUSALS,
+  T12_REFUSALS,
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   bcCheckApp,
@@ -1088,10 +1089,64 @@ describe("PR-93: the t10-refusals family", () => {
     expect(classes.find((c) => c.text === "SetFilter")?.cells).toHaveLength(7);
   });
 
-  test("last of FAMILIES (place 16, BC-check number 17, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("t10-refusals");
+  test("place 16, BC-check number 17, as 7 is skipped: its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(15);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051017");
+  });
+});
+
+describe("PR-105: the t12-refusals family", () => {
+  const f = T12_REFUSALS;
+  const nul = (n: number) => "\u0000".repeat(n);
+  // each cell's refusal text as al-runner `current` gave it (the cell order is the codeunit order). The three Evaluate texts are
+  // runs of NUL characters, which the cells build in AL.
+  const TEXTS = [
+    "FieldRef.CalcField of a field that is not a FlowField",
+    "SetFilter: `C10000` is not a BigInteger",
+    `Evaluate of \`${nul(6)}\` into Decimal (form not pinned by the corpus)`,
+    `Evaluate of \`${nul(5)}\` into Decimal (form not pinned by the corpus)`,
+    `Evaluate of \`${nul(4)}\` into Decimal (form not pinned by the corpus)`,
+    `conversion of Text '<?xml version="1.0" encoding="...' to Blob`,
+    "an action left another row (another primary key) in Rec with changes to save",
+    "conversion of Text '=18' to Integer",
+    "conversion of Text '1=18' to Integer",
+    "CopyStream from an untouched handle into a DotNet stream",
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.body.ccRecipients[0].emailAddress'.; the text AL would see is not pinned (ADR-014 section 7)",
+    "Report.SaveAs#2 to an untouched handle, which is not an OutStream",
+  ];
+
+  test("one cell per text, an OnPrem app, distinct cell names, the Evaluate widths built as NULs", () => {
+    expect(f.cells).toHaveLength(TEXTS.length);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const widths = f.cells.filter((c) => c.method === "NulDecimal");
+    expect(widths.map((c) => c.setup?.at(-1))).toEqual([
+      "for I := 1 to 6 do T += Format(Ch);",
+      "for I := 1 to 5 do T += Format(Ch);",
+      "for I := 1 to 4 do T += Format(Ch);",
+    ]);
+  });
+
+  test("a run that gives the measured texts makes 12 refusal classes (one per text), none of them known", () => {
+    const rows = f.cells.map((_, i) => ({
+      name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+      status: "error",
+      notRun: true,
+      message: `NotRun: out-of-scope: ${TEXTS[i]}`,
+    }));
+    const results = classify(f, rows);
+    expect(results.filter((r) => r.outcome === "refused")).toHaveLength(TEXTS.length);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    expect(classes).toHaveLength(12);
+    expect(classes.filter((c) => c.text.startsWith("Evaluate of"))).toHaveLength(3);
+  });
+
+  test("last of FAMILIES (place 17, BC-check number 18, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("t12-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(16);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051018");
   });
 });
 

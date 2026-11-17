@@ -2184,6 +2184,142 @@ dotnet
 };
 
 /**
+ * PR-105: the refusal texts DO windows t12 and t13 still closed on after PR-93, each driven by an invented cell (no corpus source
+ * text; the JSON path and the filter code are names only). Cell i is codeunit BASE_ID + 1 + i; the support objects share id
+ * 51000 as in the other families. Not driven: the SaveAs-with-layout errors and the placeholder Pdf read (they need Base
+ * Application's reports) and RunRequestPage (PR-74 review H1, PR-93). Not produced either: "a list without the new-row line
+ * that lost its only row to an action" (class 7). Every cell tried (a list page opened by OpenView, a read-only page, a page
+ * with InsertAllowed = false) either passed or gave the "a filtered list without the new-row line ..." text, a different one.
+ */
+const T12_JSON_VARS = ["SW: DotNet T12StringWriter;", "JW: DotNet T12JsonTextWriter;"];
+const T12_JSON_SETUP = ["SW := SW.StringWriter();", "JW := JW.JsonTextWriter(SW);"];
+const T12_ROW = ['R: Record "T12 Row";'];
+const T12_LIST_VARS = ['R: Record "T12 Row";', 'TP: TestPage "T12 List";'];
+export const T12_REFUSALS: Family = {
+  name: "t12-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "T12 Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Amount; Decimal) { }
+        field(3; Count; BigInteger) { }
+        field(4; Blob; Blob) { }
+        field(5; Num; Integer) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+page 51000 "T12 List"
+{
+    PageType = List;
+    SourceTable = "T12 Row";
+    layout { area(Content) { repeater(Rows) { field(CodeCol; Rec."Code") { } } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(TouchOther) { trigger OnAction() begin Rec.Get('B'); Rec.Amount := 7; end; }
+        }
+    }
+}
+
+report 51000 "T12 Report"
+{
+    ProcessingOnly = true;
+    dataset { dataitem(Row; "T12 Row") { } }
+    requestpage { layout { area(Content) { } } }
+}
+
+dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.IO.StringWriter; T12StringWriter) { }
+        type(System.IO.MemoryStream; T12MemoryStream) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.JsonTextWriter; T12JsonTextWriter) { }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9("FieldRef", "CalcField", "not a FlowField", "FR.CalcField();", {
+      vars: ["RR: RecordRef;", "FR: FieldRef;"],
+      setup: ['RR.Open(Database::"T12 Row");', "FR := RR.Field(2);"],
+    }),
+    t9("Filter", "SetFilterBigInt", "C10000", "R.SetFilter(Count, 'C10000');", { vars: T12_ROW }),
+    // the texts are runs of NUL characters (code 0), built in AL: a literal cannot hold one
+    ...[6, 5, 4].map((n) =>
+      t9("Evaluate", "NulDecimal", `${n} NULs`, "if Evaluate(D, T) then;", {
+        vars: ["D: Decimal;", "T: Text;", "Ch: Char;", "I: Integer;"],
+        setup: ["Ch := 0;", `for I := 1 to ${n} do T += Format(Ch);`],
+      }),
+    ),
+    t9("Conversion", "TextToBlob", "xml", "RR.Field(4).Value := T;", {
+      vars: ["RR: RecordRef;", "T: Text;"],
+      setup: [
+        'RR.Open(Database::"T12 Row");',
+        'T := \'<?xml version="1.0" encoding="utf-8"?><a/>\';',
+      ],
+    }),
+    t9("Page", "Action", "another row in Rec", "TP.TouchOther.Invoke();", {
+      vars: T12_LIST_VARS,
+      setup: [
+        "R.Code := 'A';",
+        "R.Insert();",
+        "R.Code := 'B';",
+        "R.Insert();",
+        "TP.OpenView();",
+        "TP.GoToKey('A');",
+      ],
+    }),
+    t9("Conversion", "TextToInteger", "=18", "RR.Field(5).SetRange(T);", {
+      vars: ["RR: RecordRef;", "T: Text;"],
+      setup: ['RR.Open(Database::"T12 Row");', "T := '=18';"],
+    }),
+    t9("Conversion", "TextToInteger", "1=18", "RR.Field(5).SetRange(T);", {
+      vars: ["RR: RecordRef;", "T: Text;"],
+      setup: ['RR.Open(Database::"T12 Row");', "T := '1=18';"],
+    }),
+    t9("CopyStream", "DotNetStream", "untouched handle", "CopyStream(MS, InS);", {
+      vars: ["MS: DotNet T12MemoryStream;", "InS: InStream;"],
+      setup: ["MS := MS.MemoryStream();"],
+    }),
+    t9("JsonTextWriter", "WriteStartObject", "state Object", "JW.WriteStartObject();", {
+      vars: T12_JSON_VARS,
+      setup: [
+        ...T12_JSON_SETUP,
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('message');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('body');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('ccRecipients');",
+        "JW.WriteStartArray();",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('emailAddress');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('address');",
+        "JW.WriteValue('a');",
+      ],
+    }),
+    t9(
+      "Report",
+      "SaveAs",
+      "untouched handle",
+      "Report.SaveAs(Report::\"T12 Report\", '<a/>', ReportFormat::Xml, OutS);",
+      { vars: ["OutS: OutStream;"] },
+    ),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -4593,6 +4729,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [JSON_TEXT.name]: JSON_TEXT,
   // PR-93: appended (BC-check number 17): the refusal texts t10 and t11 still closed on, for a keep census
   [T10_REFUSALS.name]: T10_REFUSALS,
+  // PR-105: appended (BC-check number 18): the refusal texts t12 and t13 still closed on, for a keep census
+  [T12_REFUSALS.name]: T12_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
