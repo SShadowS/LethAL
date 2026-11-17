@@ -24413,9 +24413,10 @@ describe("R653: the orchestrator asks for the kill pair only before a cold fail 
       "activate null",
       `run null ${KILLER} fail`,
     ]);
-    // PR-81 (R1066): the unstable error is held and the mutant re-activated for the walk's next test. This
-    // covering set has none, so nothing more runs (one row); the re-activation sends nothing on its own.
-    expect(b.trace.filter((x) => x === "activate M0001")).toHaveLength(2);
+    // PR-81 (R1066): the unstable error is held and the mutant would be re-activated for the walk's next
+    // test. This covering set has none, so no test runs (one row) and, since the re-activation is sent
+    // only just before a test (L1), none is sent: one activation.
+    expect(b.trace.filter((x) => x === "activate M0001")).toHaveLength(1);
     const rows = store.db
       .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_code = 'M0001'")
       .get() as { n: number };

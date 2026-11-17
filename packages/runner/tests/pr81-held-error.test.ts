@@ -658,6 +658,57 @@ describe("PR-81: a non-terminal error is held while the walk looks for a kill", 
     expect(nthOf(b, "T5")).toBe(1);
   });
 
+  /** T1 fails under the mutant (a kill candidate); its unmutated confirm answers `confirm`. */
+  const withConfirm = (confirm: (v: TestVerdict) => TestVerdict) => {
+    const b = build({ T1: "fail", T2: "fail" }, HeldStub);
+    const prev = b.answer;
+    b.answer = (mutant, n, v) =>
+      mutant === null && v.ref.method === "T1" && b.trace.includes("run M0001 T1 fail")
+        ? confirm(v)
+        : prev?.(mutant, n, v);
+    return b;
+  };
+
+  test("E19 (M2): a confirm that is an ERROR (v3 runner-test-error row) is terminal: no later covering test runs", async () => {
+    const b = withConfirm((v) => ({
+      ref: v.ref,
+      outcome: "error",
+      durationMs: 1,
+      failureMessage: "contract violation",
+      operation: "completed-accepted",
+      runnerRow: "runner-test-error",
+    }));
+    const row = m1(await session(b));
+    expect(row?.verdict).toBe("error");
+    expect(nthOf(b, "T2")).toBe(0);
+  });
+
+  test("E20 (M2): a pre-dispatch-rejected confirm (after runFenced's retry) is terminal: no later covering test runs", async () => {
+    const b = withConfirm((v) => ({
+      ref: v.ref,
+      outcome: "error",
+      durationMs: 1,
+      failureMessage: "rejected before dispatch",
+      operation: "pre-dispatch-rejected",
+    }));
+    const row = m1(await session(b));
+    expect(row?.verdict).toBe("error");
+    expect(nthOf(b, "T2")).toBe(0);
+  });
+
+  test("E21 (L1): a held confirm with the clock then spent sends no re-activation", async () => {
+    const b = build({ T1: "unstable", T2: "fail" }, HookStub);
+    // 10 s of clock per mutated run: a 5 s budget is spent after the first step.
+    const report = await session(b, {
+      timeBudgetSeconds: 5,
+      clockMs: () => b.sent.filter((s) => s.mutant === "M0001").length * 10_000,
+    });
+    expect(m1(report)).toBeUndefined();
+    expect(nthOf(b, "T2")).toBe(0);
+    expect(b.trace.filter((t) => t === "activate M0001")).toHaveLength(1);
+    expect(b.trace.at(-1)).not.toBe("activate M0001");
+  });
+
   test("E8c: a backend without the hook still gets the re-activation", async () => {
     const b = build({ T1: "unstable", T2: "fail" }, HeldStub);
     await session(b);
