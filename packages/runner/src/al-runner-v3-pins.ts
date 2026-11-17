@@ -11,7 +11,7 @@
  * set only by `checkGated` (`adoptV3Pin`).
  */
 import { createHash } from "node:crypto";
-import { type V3ContractResult, v3MuteKey } from "./al-runner-v3-contract";
+import { type V3ContractResult, V3_CAPABILITY_FACTS, v3MuteKey } from "./al-runner-v3-contract";
 import RAW_GATED_BUILDS from "./al-runner-v3-gated-builds.json";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 
@@ -117,6 +117,12 @@ export interface V3BuildPin {
     readonly issue: string;
     readonly evidence: string;
   };
+  /**
+   * PR-114a: this build may batch the baseline's test codeunits into one request, if the session's
+   * eight capability facts all read `matches` and the pin retires the §6 Sleep rule
+   * (`baselineBatchingFor`). Set on NO pin in 114a, so no build batches.
+   */
+  readonly baselineBatching?: true;
 }
 
 const ROW = (cu: number, method: string) =>
@@ -971,6 +977,36 @@ export function sleepRuleRetiredFor(
   if (findV3Pin(version, binarySha256)?.legC["sleep-is-noop"]?.verdict !== "gone") return false;
   return contract?.facts.find((f) => f.fact === "sleep-is-noop")?.verdict === "gone";
 }
+
+/**
+ * PR-114a: why baseline batching is OFF for this session, or `undefined` when it is allowed. Allowed
+ * only when ALL hold: the build's pin carries `baselineBatching: true`; this session's probe reads
+ * every `V3_CAPABILITY_FACTS` fact `matches`; and `sleepRuleRetiredFor` is true (§6 of draft 3). No pin
+ * carries the flag in 114a, so this is a reason on every build.
+ */
+export function baselineBatchingOffReason(
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): string | undefined {
+  const pin = findV3Pin(version, binarySha256);
+  if (pin === undefined) return "no pin names this build";
+  if (pin.baselineBatching !== true) return `pin ${pin.id} does not allow it`;
+  for (const name of V3_CAPABILITY_FACTS) {
+    const read = contract?.facts.find((f) => f.fact === name)?.verdict;
+    if (read !== "matches") return `${name} read ${read ?? "unmeasured"}`;
+  }
+  if (!sleepRuleRetiredFor(contract, version, binarySha256))
+    return "the §6 Sleep rule is not retired";
+  return undefined;
+}
+
+/** PR-114a: may this session batch the baseline's test codeunits? False on every build until a pin says so. */
+export const baselineBatchingFor = (
+  contract: V3ContractResult | undefined,
+  version: string,
+  binarySha256: string,
+): boolean => baselineBatchingOffReason(contract, version, binarySha256) === undefined;
 
 /** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
 export function serveRowFieldsFor(version: string, binarySha256: string): boolean {

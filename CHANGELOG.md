@@ -13,6 +13,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **Eight capability facts for `al-runner-v3`, and a gate leg for the daemon baseline over several test codeunits** (PR-114a,
+  the first half of R1106). Leg C of `itest:alrunner-v3` goes from 28 to 36 facts: a new kind, `capability`, checks that
+  no state crosses test codeunits in one request, that an excluded OnRun carries nothing, and how the SingleInstance
+  lane behaves. A capability fact that does not read `matches` fails the update gate; it never stops a session. Leg
+  `DBM` runs the daemon baseline over `sandbox-optin`'s four codeunits against the one-shot baseline. **No behaviour
+  change:** nothing batches the baseline yet, and the session details now say `baseline batching: off (<reason>)`.
+  Sessions re-run their contract probe once, for the new facts.
 - **`--resume-run` keeps its verdicts across `force-reset-lease` on a database that survived** (R969). LethAL Control
   1.0.0.26 reports a database id that a lease reset does not change; a run records it, and a resume across a changed
   server generation carries verdicts only when the id is the same, with a `resume-across-lease-reset` warning. A lost

@@ -3029,6 +3029,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
       "S1E",
       "DB",
       "DBI",
+      "DBM",
       "S3",
       "N1",
       "N1E",
