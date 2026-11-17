@@ -1055,6 +1055,33 @@ function readSequentialSamples(): boolean {
   throw new AlRunnerV3SequentialSamplesRefusedError(v);
 }
 
+/** PR-127: `LETHAL_V3_SAMPLES_IN_FLIGHT=1|2` caps how many cross-check samples run beside the daemon fill. Default 2. */
+export const SAMPLES_IN_FLIGHT_ENV = "LETHAL_V3_SAMPLES_IN_FLIGHT";
+const DEFAULT_SAMPLES_IN_FLIGHT = 2;
+
+export class AlRunnerV3SamplesInFlightRefusedError extends Error {
+  constructor(source: string, value: string) {
+    super(
+      `al-runner-v3-samples-in-flight-refused: ${source} is "${value}"; use 1 or 2, or leave it unset`,
+    );
+    this.name = "AlRunnerV3SamplesInFlightRefusedError";
+  }
+}
+
+/** Refuses anything but 1 or 2, by name. */
+function checkSamplesInFlight(source: string, v: number): 1 | 2 {
+  if (v === 1 || v === 2) return v;
+  throw new AlRunnerV3SamplesInFlightRefusedError(source, String(v));
+}
+
+function readSamplesInFlight(): 1 | 2 {
+  const v = process.env[SAMPLES_IN_FLIGHT_ENV];
+  if (v === undefined || v === "") return DEFAULT_SAMPLES_IN_FLIGHT;
+  if (v === "1") return 1;
+  if (v === "2") return 2;
+  throw new AlRunnerV3SamplesInFlightRefusedError(SAMPLES_IN_FLIGHT_ENV, v);
+}
+
 /** What `crossCheckSample` returns (R951). */
 type CrossCheckResult =
   | { readonly kind: "compared"; readonly shot: BaselineAnswer }
@@ -2679,6 +2706,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** PR-119: samples started beside the loop, samples run in place, and `memory.current` at the fill's start. */
     samplesOverlapped: 0,
     samplesSequential: 0,
+    /** PR-127: samples that started while an older one's process still ran; and the cap K of the last fill. */
+    samplesPaired: 0,
+    samplesInFlight: 0,
     sampleMemoryAtStart: undefined as number | undefined,
   };
 
@@ -2824,6 +2854,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     memoryWatchClock?: (tick: () => void) => () => void;
     /** PR-119: false runs every daemon-fill cross-check sample in place. Absent: true, unless `LETHAL_V3_SEQUENTIAL_SAMPLES=1`. */
     concurrentSamples?: boolean;
+    /** PR-127: how many samples may be in flight (1 or 2; anything else is refused at the fill's start). Absent: the environment's, else 2. */
+    samplesInFlight?: number;
     /** PR-119: the baseline daemon's RSS for a sample's admission (the DBM gate leg fixes it). Absent: read per pid. */
     sampleRss?: () => number;
     /** R948: runs the daemon baseline's codeunits last to first (the order proof's second order). */
@@ -2833,6 +2865,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly speculateOn: boolean;
   /** PR-119: `LETHAL_V3_SEQUENTIAL_SAMPLES=1`, read at construction; `seams.concurrentSamples` overrides it. */
   private readonly sequentialSamplesEnv: boolean;
+  /** PR-127: `LETHAL_V3_SAMPLES_IN_FLIGHT`, read at construction; `seams.samplesInFlight` overrides it. */
+  private readonly samplesInFlightEnv: 1 | 2;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /** PR-98: the highest peak reading (PR-88) any serve request of this session gave, and where it came from. */
@@ -3085,6 +3119,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (typeof cfg.dotnetSidecar === "string") this.sidecarPath = resolve(cfg.dotnetSidecar); // R886
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     this.sequentialSamplesEnv = readSequentialSamples();
+    this.samplesInFlightEnv = readSamplesInFlight();
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
@@ -4771,6 +4806,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): Promise<void> {
     const f = this.budgetFloor;
     if (this.daemonBaselineFilled || f === undefined) return;
+    // PR-127: the seam is checked here; the environment value was checked at construction.
+    const K =
+      this.seams.samplesInFlight !== undefined
+        ? checkSamplesInFlight("the samplesInFlight seam", this.seams.samplesInFlight)
+        : this.samplesInFlightEnv;
     this.daemonBaselineFilled = true;
     const all = [...this.suitePerCodeunit.keys()]
       .filter((id) => !this.perTest(id) && !this.oneShotCodeunits.has(id)) // R937: one-shot codeunits stay out
@@ -4797,23 +4837,28 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R1001: the fill's own watch, so answers a dropped fill never kept cannot count toward a later stop.
     const uniformWatch = new UniformRefusalWatch();
     type Step = "ok" | "stop" | "dropped";
-    // PR-119: at most one cross-check sample runs beside the loop. Its promise holds the raw result
-    // and nothing is applied until the loop settles it (`settle`), so one-shots never run beside a
-    // daemon request the memory read did not admit, and the first drop still wins.
+    // PR-119/127: at most K cross-check samples run beside the loop, oldest first. A promise holds the
+    // raw result and nothing is applied until the loop settles it (`settleOldest`), in start order, so
+    // one-shots never run beside a daemon request the memory read did not admit, and the oldest drop wins.
     const concurrent = this.seams.concurrentSamples ?? !this.sequentialSamplesEnv;
-    let inflight:
-      | {
-          readonly id: number;
-          readonly size: number;
-          /** A daemon request started while this sample was in flight. */
-          overlapped: boolean;
-          readonly promise: Promise<{ raw: CrossCheckResult } | { threw: unknown }>;
-        }
-      | undefined;
+    interface InFlight {
+      readonly id: number;
+      readonly size: number;
+      /** A daemon request started while this sample was in flight. */
+      overlapped: boolean;
+      /** Set when the promise resolves: the one-shot process has ended. */
+      done: boolean;
+      readonly promise: Promise<{ raw: CrossCheckResult } | { threw: unknown }>;
+    }
+    const inflight: InFlight[] = [];
+    /** Entries a step-ending result threw away: never applied, awaited in `finally`. */
+    const discarded: InFlight[] = [];
     let cleanCompared = 0; // R1001: samples that compared with no difference (a differing one always drops)
     let curPos = 0; // the loop's position, for a `replace` at a settle
     this.baselineStats.samplesOverlapped = 0;
     this.baselineStats.samplesSequential = 0;
+    this.baselineStats.samplesPaired = 0;
+    this.baselineStats.samplesInFlight = K;
     this.announceMemoryGuard();
     const guard = this.memoryGuard;
     // (read only when samples may overlap, so a sequential fill makes the guard's reads it always did)
@@ -4863,17 +4908,47 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const r = await this.crossCheckSample(lane, stopSeconds, coverage, sampleArgs(id, daemon));
       return apply(id, r, pos, "place");
     };
-    /** Applies the in-flight sample's result, if any. A sample that threw throws its original error here. */
-    const settle = async (when: "settle" | "stop" = "settle"): Promise<Step> => {
-      const s = inflight;
+    /** Moves every queued entry to `discarded` (a result ended the step, or a stop): none is ever applied. */
+    const discardAll = () => {
+      discarded.push(...inflight.splice(0));
+    };
+    /** PR-127 (§2.7): after a wait, nothing new starts once the budget is spent, a signal came or memory stopped. */
+    const stopNow = (): boolean =>
+      this.stopHandle?.spent() === true ||
+      this.stopHandle?.signalled() === true ||
+      this.memoryStopped;
+    /**
+     * Applies the OLDEST in-flight sample's result, if any. A sample that threw throws its original error
+     * here. A result that ends the step (a throw, a drop, a stop) discards every younger entry (§2.3).
+     */
+    const settleOldest = async (when: "settle" | "stop" = "settle"): Promise<Step> => {
+      const s = inflight.shift();
       if (s === undefined) return "ok";
-      inflight = undefined;
       // Overlapped only if a request really started beside it; else it was sequential in effect.
       if (s.overlapped) this.baselineStats.samplesOverlapped += 1;
       else this.baselineStats.samplesSequential += 1;
       const res = await s.promise;
-      if ("threw" in res) throw res.threw;
-      return apply(s.id, res.raw, curPos, when);
+      if ("threw" in res) {
+        discardAll();
+        throw res.threw;
+      }
+      let step: Step;
+      try {
+        step = await apply(s.id, res.raw, curPos, when);
+      } catch (err) {
+        discardAll(); // the error came from applying this entry (or its pick): it stands
+        throw err;
+      }
+      if (step !== "ok") discardAll();
+      return step;
+    };
+    /** Settles the whole queue, oldest first; the first result that is not ok ends it. */
+    const settleAll = async (when: "settle" | "stop" = "settle"): Promise<Step> => {
+      while (inflight.length > 0) {
+        const step = await settleOldest(when);
+        if (step !== "ok") return step;
+      }
+      return "ok";
     };
     /** The most the baseline daemon's resident memory says one more one-shot needs, or undefined when it cannot be read. */
     const sampleSize = (): number | undefined => {
@@ -4884,32 +4959,43 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           .reduce((t, pid) => t + (this.seams.anonReader ?? readProcessRssAnonBytes)(pid), 0);
       return rss > 0 ? Math.max(this.memoryEstimate(), rss) : undefined;
     };
-    /** Side-effect-free admission of a sample beside the loop (§3): its size, or undefined for "run it in place". */
-    const admit = (pos: number): number | undefined => {
+    /** The part of the queued entries' sizes that their reservations at the estimate do not cover (§3). */
+    const queuedExtra = (est: number): number =>
+      inflight.reduce((t, e) => t + Math.max(0, e.size - est), 0);
+    /** Admission of a sample beside the loop (§3): its size, or undefined for "run it in place". */
+    const admit = async (pos: number): Promise<number | undefined> => {
       if (!concurrent || pos >= ids.length - 1) return undefined; // the last sample has no request to overlap
       const g = this.memoryGuard;
       if (g === undefined || g === "off") return this.memoryEstimate();
+      // With entries queued, wait for their gates so every reservation is in `memoryHeld`.
+      if (inflight.length > 0) await this.memoryChain;
       const size = sampleSize();
       const s = g.read();
       if (size === undefined || s === undefined) return undefined;
       const est = this.memoryEstimate();
-      return s.usedBytes + this.memoryHeld * est + size + est <= g.boundBytes ? size : undefined;
+      return s.usedBytes + this.memoryHeld * est + queuedExtra(est) + size + est <= g.boundBytes
+        ? size
+        : undefined;
     };
-    /** The same read before a daemon request while a sample is in flight; no is settled first. */
-    const roomForRequest = (size: number): boolean => {
+    /** The same read before a daemon request while samples are in flight; no is settled first. */
+    const roomForRequest = (): boolean => {
       const g = this.memoryGuard;
       if (g === undefined || g === "off") return true;
       const s = g.read();
       if (s === undefined) return false;
       const est = this.memoryEstimate();
-      return s.usedBytes + this.memoryHeld * est + Math.max(0, size - est) + est <= g.boundBytes;
+      return s.usedBytes + this.memoryHeld * est + queuedExtra(est) + est <= g.boundBytes;
     };
+    /** Settles the oldest entry until the read says yes, or the queue is empty; a non-ok result is returned. */
     const beforeRequest = async (): Promise<Step> => {
-      const size = inflight?.size;
-      if (size === undefined) return "ok";
-      // The sample's own gate is queued on the chain: wait for it, so its reservation is in `memoryHeld`.
-      await this.memoryChain;
-      return roomForRequest(size) ? "ok" : settle();
+      while (inflight.length > 0) {
+        // The samples' own gates are queued on the chain: wait for them, so their reservations are in `memoryHeld`.
+        await this.memoryChain;
+        if (roomForRequest()) return "ok";
+        const step = await settleOldest();
+        if (step !== "ok") return step;
+      }
+      return "ok";
     };
     // R951 (R5): a skipped sample is replaced by the next unsampled codeunit after the loop's
     // position; the LAST one, with none after it, by the last earlier one a daemon answered.
@@ -4923,6 +5009,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (forward !== undefined || daemon === undefined) {
         pending.set(pick, skipped);
         return "ok";
+      }
+      // PR-127: no one-shot runs in place beside a running one. Wait for the younger entries (without
+      // applying them), then re-check the stop; a younger `stop` cancels the pick (it is applied next).
+      if (inflight.length > 0) {
+        const younger = await Promise.all(inflight.map((e) => e.promise));
+        if (stopNow()) return "stop";
+        if (younger.some((y) => "raw" in y && y.raw.kind === "stop")) return "ok";
       }
       const r = await check(pick, daemon, pos);
       if (r !== "stop") this.baselineStats.replacements[skipped] = `Codeunit${pick}`;
@@ -4966,19 +5059,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       | { readonly got: BaselineAnswer | undefined; readonly batchFailed?: true }
     > => {
       if (this.stopHandle?.spent() === true) return { stop: true }; // R955
-      // PR-119: with a sample in flight, a request the memory read does not admit settles it first.
+      // PR-119/127: with samples in flight, a request the memory read does not admit settles the oldest first.
+      const queued = inflight.length > 0;
       const before = await beforeRequest();
       if (before === "dropped") return { dropped: true };
       if (before === "stop") return { stop: true };
       // The settle may have run a replacement one-shot, long enough to spend the budget (R955).
       if (this.stopHandle?.spent() === true) return { stop: true };
+      if (queued && stopNow()) return { stop: true }; // PR-127 §2.7: after a wait, a signal or memory stop too
       if (!(await this.memoryGate(true))) return { stop: true }; // R948: no new request over the bound
       let got: BaselineAnswer | undefined;
       let batchFailed = false;
       try {
         await this.checkBound(lane); // R652 (inside the try: a throw still releases the hold)
         this.baselineStats.requests += 1;
-        if (inflight !== undefined) inflight.overlapped = true; // a request started beside the sample
+        for (const e of inflight) e.overlapped = true; // a request started beside the samples
         if (group !== undefined && scan !== undefined) {
           try {
             const answers = await this.batchRequest(
@@ -5044,7 +5139,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           const uniform = uniformWatch.observe(id, got.rows);
           if (uniform !== undefined) {
             // PR-119: the in-flight sample may be the one that proves the daemon agrees, or the one that drops it.
-            const settled = await settle();
+            const settled = await settleAll();
             if (settled === "dropped") return;
             if (settled === "stop") {
               stopped = true;
@@ -5063,7 +5158,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           this.noteSkip("error", `Codeunit${id}`, isSample, "daemon-error");
           unusable += 1;
           if (unusable >= 2) {
-            const settled = await settle();
+            const settled = await settleAll();
             if (settled === "dropped") return;
             if (settled === "stop") {
               stopped = true;
@@ -5077,9 +5172,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             return;
           }
           if (isSample) {
-            const settled = await settle(); // PR-119: a backward pick must not run beside the sample
+            const settled = await settleAll(); // PR-119: a backward pick must not run beside a sample
             if (settled === "dropped") return;
-            if (settled === "stop") {
+            if (settled === "stop" || (concurrent && stopNow())) {
+              discardAll();
               stopped = true;
               break;
             }
@@ -5097,31 +5193,62 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const tooSlow = durationCouldMoveBudget(got.rows, got.wallMs, f.floorMs);
         if (tooSlow && !isSample) this.noteSkip("tooSlow", `Codeunit${id}`, false);
         if (isSample) {
-          const settled = await settle();
-          if (settled === "dropped") return;
-          if (settled === "stop") {
+          // PR-127: a full queue settles its oldest entry; a result that ends the step is handled as before.
+          if (inflight.length >= K) {
+            const settled = await settleOldest();
+            if (settled === "dropped") return;
+            if (settled === "stop") {
+              stopped = true;
+              break;
+            }
+            if (stopNow()) {
+              discardAll();
+              stopped = true;
+              break;
+            }
+          }
+          const size = await admit(pos);
+          // R955: admission may have waited on `memoryChain`; nothing starts after a stop.
+          if (concurrent && stopNow()) {
+            discardAll();
             stopped = true;
             break;
           }
-          const size = admit(pos);
           if (size !== undefined) {
             const chainBefore = this.memoryChain;
             const p = this.crossCheckSample(lane, stopSeconds, coverage, sampleArgs(id, got));
+            if (inflight.some((e) => !e.done)) this.baselineStats.samplesPaired += 1;
+            const entry: InFlight = {
+              id,
+              size,
+              overlapped: false,
+              done: false,
+              promise: p.then(
+                (raw) => {
+                  entry.done = true;
+                  return { raw };
+                },
+                (threw: unknown) => {
+                  entry.done = true;
+                  return { threw };
+                },
+              ),
+            };
+            // Queued BEFORE the check below: a throw there leaves the started sample for `finally` to await.
+            inflight.push(entry);
             // `beforeRequest` waits on `memoryChain` to see this sample's reservation: its gate must be queued now.
             if (this.memoryChain === chainBefore)
               throw new Error(
                 "al-runner-v3-sample-gate-not-queued: a concurrent cross-check sample did not queue its memory gate before its first await (PR-119)",
               );
-            inflight = {
-              id,
-              size,
-              overlapped: false,
-              promise: p.then(
-                (raw) => ({ raw }),
-                (threw: unknown) => ({ threw }),
-              ),
-            };
             continue;
+          }
+          const settled = await settleAll();
+          if (settled === "dropped") return;
+          if (settled === "stop" || (concurrent && stopNow())) {
+            discardAll();
+            stopped = true;
+            break;
           }
           const r = await check(id, got, pos);
           if (r === "dropped") return;
@@ -5132,9 +5259,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           continue;
         }
         if (tooSlow) {
-          const settled = await settle();
+          const settled = await settleAll();
           if (settled === "dropped") return;
-          if (settled === "stop") {
+          if (settled === "stop" || (concurrent && stopNow())) {
+            discardAll();
             stopped = true;
             break;
           }
@@ -5159,8 +5287,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
         answers.set(id, this.keptAnswer(got));
       }
-      // PR-119: every `break` lands here; a sample still in flight is settled (at a stop: no new one-shot).
-      const last = await settle(stopped ? "stop" : "settle");
+      // PR-119: every `break` lands here; samples still in flight are settled (at a stop: no new one-shot).
+      // A discarded queue is empty, so nothing is applied after a discard.
+      const last = await settleAll(stopped ? "stop" : "settle");
       if (last === "dropped") return;
       if (last === "stop") stopped = true;
       // R951 (R5): enough samples compared clean, else the daemon baseline drops by name.
@@ -5179,13 +5308,28 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       loopError = { e: err };
       throw err;
     } finally {
-      // PR-119: the sample never outlives the fill. Only a throw is acted on here: a skipped, dropped
-      // or compared result is not applied (no replacement, no drop notice, no keep).
+      // PR-119/127: no sample outlives the fill. Nothing is applied here (no replacement, no drop notice,
+      // no keep). Walk the queue oldest first: the first entry that is not ok decides. A throw is
+      // thrown below; a drop or a stop lets the loop's error stand. Every later entry, and every
+      // discarded one, is only warned about.
       let sampleError: { readonly e: unknown } | undefined;
-      if (inflight !== undefined) {
-        const res = await inflight.promise;
-        inflight = undefined;
-        if ("threw" in res) sampleError = { e: res.threw };
+      let decided = false;
+      const warnDiscarded = (e: unknown) =>
+        console.warn(
+          `[lethal] al-runner-v3-baseline-sample-discarded-error: a cross-check sample that a sequential fill would not have started threw (${e instanceof Error ? e.message : String(e)}); not thrown.`,
+        );
+      for (const entry of inflight.splice(0)) {
+        const res = await entry.promise;
+        if (decided) {
+          if ("threw" in res) warnDiscarded(res.threw);
+        } else if ("threw" in res) {
+          sampleError = { e: res.threw };
+          decided = true;
+        } else if (res.raw.kind === "dropped" || res.raw.kind === "stop") decided = true;
+      }
+      for (const entry of discarded.splice(0)) {
+        const res = await entry.promise;
+        if ("threw" in res) warnDiscarded(res.threw);
       }
       // The test-mode daemon is not needed again; the per-test baseline starts its own.
       await this.closeLane(lane, "baseline-end");
@@ -5195,7 +5339,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `[lethal] al-runner-v3 baseline batching (PR-115): ${groupAt.size > 0 ? `${s.batches} batch(es) kept, ${s.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}, ${s.orderHints} orderHints ignored` : `off (${coverage ? (off ?? "no batch to send") : "no coverage asked"})`}.`,
       );
       console.warn(
-        `[lethal] al-runner-v3 baseline samples (PR-119): ${s.samplesOverlapped} overlapped, ${s.samplesSequential} sequential.`,
+        `[lethal] al-runner-v3 baseline samples (PR-119): ${s.samplesOverlapped} overlapped, ${s.samplesSequential} sequential, ${s.samplesPaired} paired (in flight at most ${K}).`,
       );
       if (sampleError !== undefined) {
         // The sample's error comes first in sequential order, so it wins; the loop's is named.
@@ -5558,6 +5702,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     readonly samplesOverlapped: number;
     /** PR-119: every other sample: run in place (admission said no, the seam was off, the last, a backward pick), or started in flight with no request beside it. */
     readonly samplesSequential: number;
+    /** PR-127: samples that started while an older sample's process still ran. */
+    readonly samplesPaired: number;
+    /** PR-127: the cap K of the last fill (0: no fill yet). */
+    readonly samplesInFlight: number;
     /** PR-119: `memory.current` at the fill's start, or undefined (no guard, or unreadable). */
     readonly sampleMemoryAtStart: number | undefined;
   } {
@@ -5565,6 +5713,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return {
       samplesOverlapped: s.samplesOverlapped,
       samplesSequential: s.samplesSequential,
+      samplesPaired: s.samplesPaired,
+      samplesInFlight: s.samplesInFlight,
       sampleMemoryAtStart: s.sampleMemoryAtStart,
       replaced: Object.keys(s.replacements).length,
       replacements: { ...s.replacements },

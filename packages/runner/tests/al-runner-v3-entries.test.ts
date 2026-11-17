@@ -43,6 +43,7 @@ import {
   AlRunnerV3IsolateTestsWithAutoRefusedError,
   AlRunnerV3NoTestRanError,
   AlRunnerV3RowMissingError,
+  AlRunnerV3SamplesInFlightRefusedError,
   AlRunnerV3ServeFallbackWarmupError,
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
@@ -12518,6 +12519,567 @@ describe("PR-119: cross-check samples beside the daemon", () => {
       const t = await guarded(() => 20 * GIBS, { sampleRss: () => 0 });
       await baseline(t.r.b, SUITE);
       expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR-127 (R1112): up to two cross-check samples in flight. Event logs and call counters on the
+// fakes, never the clock. A "hold" waits for an event, with a cap only so a flow where the event
+// can never come (the point of the test) cannot hang.
+// ---------------------------------------------------------------------------------------------
+describe("PR-127: up to two cross-check samples in flight", () => {
+  // 24 codeunits: the plan samples positions 1, 10, 20 and 23 (the last, which is never admitted).
+  const CUS = Array.from({ length: 24 }, (_, i) => 79200 + i);
+  for (const c of CUS) SUITE_METHODS[c] = ["T"];
+  const SUITE = CUS.map((c) => ref("T", c));
+  const at = (i: number) => CUS[i] ?? 0;
+  const [S1, S2, S3] = [at(1), at(10), at(20)];
+  const GIBS = 2 ** 30;
+  const until = async (pred: () => boolean) => {
+    for (let i = 0; i < 150 && !pred(); i += 1) await Bun.sleep(1);
+  };
+  const memSample = (usedBytes: number) => ({
+    usedBytes,
+    maxBytes: 32 * GIBS,
+    source: "/sys/fs/cgroup/memory.max",
+  });
+  const timedOut = { timedOut: true, wallMs: 1 };
+  /** The first one-shot of these codeunits differs from the daemon's. */
+  const differsAt =
+    (...ids: number[]): RowsFn =>
+    (_m, cu) =>
+      ids.includes(cu)
+        ? [{ method: "T", status: "fail" as const, message: "differs" }]
+        : (SUITE_METHODS[cu] ?? []).map((method) => ({ method, status: "pass" as const }));
+  interface Hooks {
+    /** A codeunit's FIRST one-shot process waits (event or cap) until this holds. */
+    hold?: Record<number, (log: string[]) => boolean>;
+    /** Gives that first process this result instead of running it. */
+    stub?: Record<number, unknown>;
+    /** That first process throws this message. */
+    boom?: Record<number, string>;
+    /** Runs inside the daemon request of this codeunit. */
+    onReq?: (cu: number) => void;
+  }
+  type Rigged = Awaited<ReturnType<typeof setup>>;
+  /** One test's rig with an event log: `req:<cu>`, `start:`/`end:<cu>`, and how many one-shots run at once. */
+  async function setup(o: RigOpts & Hooks = {}) {
+    const log: string[] = [];
+    const { hold, stub, boom, onReq, ...rest } = o;
+    const r = await dbRig({
+      suite: SUITE,
+      ...rest,
+      serve: {
+        coverage: plainCoverage,
+        stderr: (req) => {
+          const cu = Number(/Codeunit(\d+)/.exec(req.ids[0] ?? "")?.[1]);
+          log.push(`req:${cu}`);
+          onReq?.(cu);
+          return undefined;
+        },
+        ...(rest.serve ?? {}),
+      },
+    });
+    const holder = r.b as unknown as {
+      spawnCodeunit: (...a: { id: number }[]) => Promise<unknown>;
+    };
+    const real = holder.spawnCodeunit.bind(r.b);
+    const seen = new Map<number, number>();
+    const run = { now: 0, max: 0 };
+    holder.spawnCodeunit = async (...a) => {
+      const id = a[0]?.id ?? 0;
+      const n = (seen.get(id) ?? 0) + 1;
+      seen.set(id, n);
+      log.push(`start:${id}`);
+      run.now += 1;
+      run.max = Math.max(run.max, run.now);
+      try {
+        const pred = n === 1 ? hold?.[id] : undefined;
+        if (pred !== undefined) await until(() => pred(log));
+        const msg = n === 1 ? boom?.[id] : undefined;
+        if (msg !== undefined) throw new Error(msg);
+        const made = n === 1 ? stub?.[id] : undefined;
+        const out = made ?? (await real(...a));
+        log.push(`end:${id}`);
+        return out;
+      } finally {
+        run.now -= 1;
+      }
+    };
+    const idx = (e: string) => log.indexOf(e);
+    return { r, log, idx, maxRunning: () => run.max, rep: () => r.b.daemonBaselineReport() };
+  }
+  /** Only the fill (the first baseline call): later live calls would start one-shots for their own sake. */
+  const fillOnly = async (t: Rigged) => {
+    t.r.b.baselinePhase(true);
+    await t.r.b.activate(null);
+    await t.r.b.run(SUITE[0] ?? ref("T"), OPTS).catch(() => {});
+    t.r.b.baselinePhase(false);
+  };
+  /** The loop's own error: the baseline request of the n-th call (1-based) throws. */
+  const loopThrowsAt = (t: Rigged, n: number) => {
+    const h = t.r.b as unknown as { baselineRequest: (...a: unknown[]) => Promise<unknown> };
+    const realReq = h.baselineRequest.bind(t.r.b);
+    let calls = 0;
+    h.baselineRequest = async (...a) => {
+      if (++calls === n) throw new Error("loop boom");
+      return realReq(...a);
+    };
+  };
+  const stopOf = (o: {
+    spent?: () => boolean;
+    signalled?: () => boolean;
+  }): NonNullable<RigOpts["stopHandle"]> => ({
+    spent: o.spent ?? (() => false),
+    signalled: o.signalled ?? (() => false),
+    stopForMemory: () => {},
+  });
+  const warned = (warn: { mock: { calls: unknown[][] } }, code: string) =>
+    warn.mock.calls.filter((c) => String(c[0]).includes(code));
+  const withWarn = async (f: (warn: ReturnType<typeof spyOn>) => Promise<void>) => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await f(warn);
+    } finally {
+      warn.mockRestore();
+    }
+  };
+
+  // ---- I1: first in, first applied ----
+  test("I1: a younger sample that finishes first is applied second; the older drop wins and the younger is discarded", async () => {
+    const t = await setup({
+      oneShotRows: differsAt(S1, S2),
+      hold: { [S1]: (l) => l.includes(`end:${S2}`) },
+    });
+    await baseline(t.r.b, SUITE).catch(() => {});
+    expect(t.idx(`end:${S2}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${S2}`)).toBeLessThan(t.idx(`end:${S1}`)); // the younger ended first
+    expect(t.rep().dropped).toContain(`codeunit ${S1}`); // and the older one's drop is the reading
+    expect(t.rep().dropped).not.toContain(`codeunit ${S2}`);
+  });
+
+  // ---- I2: at most K one-shots at once ----
+  test("I2: a backward pick waits for a running younger sample (quiesce)", async () => {
+    // The second sample is skipped. It settles at the last sample (position 23), where no codeunit is
+    // left ahead, so its replacement is the last earlier one a daemon answered (position 22): a backward pick.
+    const t = await setup({
+      stub: { [S2]: timedOut },
+      // the third sample is held until the pick starts, which it can only do after this sample has ended
+      hold: { [S3]: (l) => l.includes(`start:${at(22)}`) },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.idx(`start:${at(22)}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${S3}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${S3}`)).toBeLessThan(t.idx(`start:${at(22)}`));
+    expect(t.rep().replacements).toEqual({ [`Codeunit${S2}`]: `Codeunit${at(22)}` });
+  });
+
+  test("I2: at most K one-shots run at once (K = 2 allows two, never three)", async () => {
+    const t = await setup({
+      hold: {
+        [S1]: (l) => l.includes(`start:${S3}`),
+        [S2]: (l) => l.includes(`start:${S3}`),
+      },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.maxRunning()).toBe(2);
+    expect(t.rep().samplesInFlight).toBe(2);
+  });
+
+  test("I2: K = 1 behaves as PR-119: one sample at a time, none paired, the line says so", async () => {
+    await withWarn(async (warn) => {
+      const t = await setup({
+        seams: { samplesInFlight: 1 },
+        hold: { [S1]: (l) => l.includes(`start:${S2}`) }, // never, while the loop settles it first
+      });
+      await baseline(t.r.b, SUITE);
+      expect(t.maxRunning()).toBe(1);
+      expect(t.idx(`end:${S1}`)).toBeLessThan(t.idx(`start:${S2}`));
+      expect(t.rep()).toMatchObject({
+        dropped: undefined,
+        samplesOverlapped: 3,
+        samplesSequential: 1, // the last, in place
+        samplesPaired: 0,
+        samplesInFlight: 1,
+      });
+      expect(
+        warned(
+          warn,
+          "baseline samples (PR-119): 3 overlapped, 1 sequential, 0 paired (in flight at most 1).",
+        ).length,
+      ).toBe(1);
+    });
+  });
+
+  // ---- I3: after a stop, nothing new starts ----
+  test("I3: the budget spent during the queue-full wait starts no third one-shot", async () => {
+    const held: { log?: string[] } = {};
+    const t = await setup({
+      hold: { [S1]: (l) => l.includes(`req:${S3}`) },
+      stopHandle: stopOf({ spent: () => held.log?.includes(`end:${S1}`) === true }),
+    });
+    held.log = t.log;
+    await fillOnly(t);
+    expect(t.log).toContain(`start:${S2}`);
+    expect(t.log).toContain(`end:${S1}`); // the wait that spent the budget
+    expect(t.log).not.toContain(`start:${S3}`);
+  });
+
+  test("I3: the budget spent during admission's chain wait starts nothing, and admission does wait on the chain", async () => {
+    const flag = { spent: false };
+    const held: { r?: Rig } = {};
+    const t = await setup({
+      extra: { memoryHeadroomGb: 4 },
+      seams: {
+        memoryReader: () => memSample(18 * GIBS),
+        memorySleep: async () => {},
+        anonReader: () => GIBS,
+      },
+      // Inside the request of position 10, the chain gets one more link, which spends the budget when it runs.
+      onReq: (cu) => {
+        if (cu !== S2) return;
+        const b = held.r?.b as unknown as { memoryChain: Promise<void> } | undefined;
+        if (b !== undefined)
+          // (a macrotask later, so only a caller that awaits the chain sees the budget spent)
+          b.memoryChain = b.memoryChain
+            .then(() => Bun.sleep(5))
+            .then(() => {
+              flag.spent = true;
+            });
+      },
+      stopHandle: stopOf({ spent: () => flag.spent }),
+    });
+    held.r = t.r;
+    await fillOnly(t);
+    expect(flag.spent).toBe(true);
+    expect(t.log).toContain(`start:${S1}`);
+    expect(t.log).not.toContain(`start:${S2}`);
+  });
+
+  test("I3: a younger stop found at quiesce cancels the backward pick", async () => {
+    const held: { log?: string[]; fired: boolean; polls: number } = { fired: false, polls: 0 };
+    const t = await setup({
+      stub: { [S2]: timedOut }, // skipped; settles at the last sample, where its pick is a backward one (22)
+      hold: {
+        // the third sample is still running when the pick would quiesce (20 polls after the last request)
+        [S3]: (l) => l.includes(`req:${at(23)}`) && ++held.polls > 20,
+      },
+      // A signal that shows once, right after the younger sample ended: that sample resolves to `stop`,
+      // and nothing else sees it, so only the quiesce can know.
+      stopHandle: stopOf({
+        signalled: () => {
+          if (held.fired || held.log?.includes(`end:${S3}`) !== true) return false;
+          held.fired = true;
+          return true;
+        },
+      }),
+    });
+    held.log = t.log;
+    await fillOnly(t);
+    expect(held.fired).toBe(true);
+    expect(t.log).toContain(`end:${S3}`);
+    expect(t.log).not.toContain(`start:${at(22)}`); // the pick did not run
+    expect(t.rep().replacements).toEqual({});
+  });
+
+  test("I3: a stop from the oldest discards the younger: its drop is never applied", async () => {
+    const held: { log?: string[]; polls: number } = { polls: 0 };
+    const t = await setup({
+      oneShotRows: differsAt(S2),
+      // The older sample ends while the loop waits for it (the queue is full at position 20).
+      hold: { [S1]: (l) => l.includes(`req:${S3}`) && ++held.polls > 20 },
+      // after the older sample ended, the signal shows: it resolves to `stop`; the younger one (a drop) ended before
+      stopHandle: stopOf({ signalled: () => held.log?.includes(`end:${S1}`) === true }),
+    });
+    held.log = t.log;
+    await fillOnly(t);
+    expect(t.idx(`end:${S2}`)).toBeLessThan(t.idx(`end:${S1}`));
+    expect(t.rep().dropped).toBeUndefined();
+  });
+
+  // (A skipped result applied after a stop starts nothing: the PR-119 test of that name runs here with K = 2.)
+
+  // ---- I4: nothing outlives the fill ----
+  test("I4: finally awaits the queue (the loop's own error)", async () => {
+    const t = await setup({
+      hold: { [S1]: () => false, [S2]: () => false }, // both outlast the throw (capped waits)
+    });
+    loopThrowsAt(t, 14);
+    await expect(baseline(t.r.b, SUITE)).rejects.toThrow("loop boom");
+    expect(t.log).toContain(`end:${S1}`);
+    expect(t.log).toContain(`end:${S2}`);
+  });
+
+  test("I4: finally awaits the discarded list (an older drop returns the fill with a younger sample still running)", async () => {
+    const t = await setup({
+      oneShotRows: differsAt(S1),
+      hold: { [S2]: () => false },
+    });
+    // What the log held when the fill closed its lane (the first thing after the sample awaits).
+    const h = t.r.b as unknown as {
+      closeLane: (l: unknown, reason: string, ...rest: unknown[]) => Promise<unknown>;
+    };
+    const realClose = h.closeLane.bind(t.r.b);
+    const atClose: boolean[] = [];
+    h.closeLane = (l, reason, ...rest) => {
+      if (reason === "baseline-end") atClose.push(t.log.includes(`end:${S2}`));
+      return realClose(l, reason, ...rest);
+    };
+    await baseline(t.r.b, SUITE).catch(() => {});
+    expect(t.rep().dropped).toContain(`codeunit ${S1}`);
+    expect(t.log).toContain(`start:${S2}`);
+    expect(atClose[0]).toBe(true); // the younger sample had ended before the fill finished
+  });
+
+  // ---- I5: the request pre-check counts every queued entry ----
+  describe("I5: the pre-check before a daemon request", () => {
+    // Admission is fine for both samples (14 GiB). Once both hold a reservation, the reading
+    // rises to 16 GiB: with S = 5 GiB each, 16 + 2 x 3 + 2 x 2 + 3 = 29 > 28 says no, and one entry
+    // alone (16 + 3 + 2 + 3 = 24) would say yes.
+    const guarded = (o: RigOpts & Hooks = {}) => {
+      const held: { r?: Rig } = {};
+      return setup({
+        extra: { memoryHeadroomGb: 4 },
+        seams: {
+          memoryReader: () => {
+            const n = (held.r?.b as unknown as { memoryHeld: number } | undefined)?.memoryHeld ?? 0;
+            return memSample((n >= 2 ? 16 : 14) * GIBS);
+          },
+          memorySleep: async () => {},
+          anonReader: () => 5 * GIBS,
+          sampleRss: () => 5 * GIBS,
+        },
+        ...o,
+      }).then((t) => {
+        held.r = t.r;
+        return t;
+      });
+    };
+
+    test("it counts both entries and settles only the oldest, then the request goes", async () => {
+      const t = await guarded({
+        hold: {
+          [S1]: (l) => l.includes(`req:${at(11)}`),
+          [S2]: (l) => l.includes(`req:${at(11)}`),
+        },
+      });
+      await baseline(t.r.b, SUITE);
+      expect(t.rep().dropped).toBeUndefined();
+      expect(t.idx(`req:${at(11)}`)).toBeGreaterThan(-1);
+      expect(t.idx(`end:${S1}`)).toBeLessThan(t.idx(`req:${at(11)}`)); // the oldest was settled first
+      expect(t.idx(`end:${S2}`)).toBeGreaterThan(t.idx(`req:${at(11)}`)); // and only the oldest
+    });
+
+    test("it settles the oldest again while the read still says no", async () => {
+      const held: { r?: Rig; log?: string[]; two?: boolean } = {};
+      // 14 GiB until both samples hold a reservation, then 27 GiB until the second one has ended: no room
+      // for a request until both samples are settled.
+      const t = await setup({
+        extra: { memoryHeadroomGb: 4 },
+        seams: {
+          memoryReader: () => {
+            const n = (held.r?.b as unknown as { memoryHeld: number } | undefined)?.memoryHeld ?? 0;
+            if (n >= 2) held.two = true;
+            const high = held.two === true && held.log?.includes(`end:${S2}`) !== true;
+            return memSample((high ? 27 : 14) * GIBS);
+          },
+          memorySleep: async () => {},
+          anonReader: () => GIBS,
+        },
+        hold: {
+          [S1]: (l) => l.includes(`req:${at(11)}`),
+          [S2]: (l) => l.includes(`req:${at(11)}`),
+        },
+      });
+      held.log = t.log;
+      held.r = t.r;
+      await baseline(t.r.b, SUITE);
+      expect(t.idx(`end:${S1}`)).toBeLessThan(t.idx(`req:${at(11)}`));
+      expect(t.idx(`end:${S2}`)).toBeLessThan(t.idx(`req:${at(11)}`)); // both, one after the other
+    });
+
+    test("a non-ok settle returns from the request: no daemon request follows a drop", async () => {
+      const t = await guarded({
+        oneShotRows: differsAt(S1),
+        hold: { [S1]: (l) => l.includes(`start:${S2}`) },
+      });
+      await baseline(t.r.b, SUITE).catch(() => {});
+      expect(t.rep().dropped).toContain(`codeunit ${S1}`);
+      expect(t.log).not.toContain(`req:${at(11)}`);
+      expect(t.r.serve.requests).toHaveLength(11); // positions 0 to 10
+    });
+  });
+
+  // ---- I6: errors ----
+  test("I6: A threw and B threw: A's error is thrown, B's is only warned about", async () => {
+    await withWarn(async (warn) => {
+      const t = await setup({ boom: { [S1]: "boom A", [S2]: "boom B" } });
+      await expect(baseline(t.r.b, SUITE)).rejects.toThrow("boom A");
+      const w = warned(warn, "al-runner-v3-baseline-sample-discarded-error");
+      expect(w).toHaveLength(1);
+      expect(String(w[0]?.[0])).toContain("boom B");
+    });
+  });
+
+  test("I6: A stop and B threw: a clean stop, and a warning", async () => {
+    await withWarn(async (warn) => {
+      const held: { log?: string[] } = {};
+      const t = await setup({
+        boom: { [S2]: "boom B" },
+        hold: { [S1]: (l) => l.includes(`start:${S2}`) },
+        stopHandle: stopOf({ signalled: () => held.log?.includes(`end:${S1}`) === true }),
+      });
+      held.log = t.log;
+      await fillOnly(t); // would reject through nothing: a thrown B would surface as a failed fill
+      expect(t.log).toContain(`start:${S2}`);
+      expect(t.rep().dropped).toBeUndefined();
+      expect(warned(warn, "discarded-error")).toHaveLength(1);
+      expect(warned(warn, "baseline-sample-error-order")).toHaveLength(0);
+    });
+  });
+
+  test("I6: the loop's own error with B threw: B's error is thrown, with the order warning", async () => {
+    await withWarn(async (warn) => {
+      const t = await setup({ boom: { [S2]: "boom B" } });
+      loopThrowsAt(t, 14);
+      await expect(baseline(t.r.b, SUITE)).rejects.toThrow("boom B");
+      expect(warned(warn, "al-runner-v3-baseline-sample-error-order")).toHaveLength(1);
+    });
+  });
+
+  test("I6: the loop's own error with A dropped (unapplied) and B threw: the loop's error stands and B is warned about", async () => {
+    await withWarn(async (warn) => {
+      const t = await setup({ oneShotRows: differsAt(S1), boom: { [S2]: "boom B" } });
+      loopThrowsAt(t, 14);
+      await expect(baseline(t.r.b, SUITE)).rejects.toThrow("loop boom");
+      expect(warned(warn, "al-runner-v3-baseline-sample-discarded-error")).toHaveLength(1);
+      expect(warned(warn, "baseline-sample-error-order")).toHaveLength(0);
+      expect(t.rep().dropped).toBeUndefined(); // finally applied nothing
+    });
+  });
+
+  test("I6: a sample-gate-not-queued throw still awaits the started sample", async () => {
+    const t = await setup();
+    const log = t.log;
+    // A sample that never queues its memory gate, and takes a while to end.
+    (t.r.b as unknown as { crossCheckSample: () => Promise<unknown> }).crossCheckSample =
+      async () => {
+        log.push("fake:start");
+        await until(() => false);
+        log.push("fake:end");
+        return { kind: "skipped" };
+      };
+    await expect(baseline(t.r.b, SUITE)).rejects.toThrow(/sample-gate-not-queued/);
+    expect(log).toContain("fake:start");
+    expect(log).toContain("fake:end");
+  });
+
+  // ---- The queue-full settle ----
+  test("a third sample settles only the oldest", async () => {
+    const t = await setup({
+      hold: {
+        [S1]: (l) => l.includes(`req:${S3}`),
+        [S2]: (l) => l.includes(`start:${S3}`), // never, while only the oldest is settled
+      },
+    });
+    await baseline(t.r.b, SUITE);
+    expect(t.idx(`end:${S1}`)).toBeGreaterThan(-1);
+    expect(t.idx(`end:${S1}`)).toBeLessThan(t.idx(`start:${S3}`));
+    expect(t.idx(`start:${S3}`)).toBeLessThan(t.idx(`end:${S2}`));
+  });
+
+  test("a queue-full settle among a batch's cached answers: the skip's forward pick is the next codeunit of the same batch", async () => {
+    const t = await setup({
+      seams: { baselineBatching: true, baselineBatchSize: 8 },
+      stub: { [S1]: timedOut },
+    });
+    await baseline(t.r.b, SUITE);
+    // 24 codeunits in batches of 8: the samples at 1, 10 and 20 all sit among cached answers.
+    // Settled at position 20 the forward pick is 21; settled later (the last sample, 23) it would be 22.
+    expect(t.r.serve.requests.filter((q) => q.body.test === undefined)).toHaveLength(3);
+    expect(t.rep()).toMatchObject({ dropped: undefined, compared: 4 });
+    // settled at position 20 (the third sample's start): the first unsampled codeunit after it is 21
+    expect(t.rep().replacements).toEqual({ [`Codeunit${S1}`]: `Codeunit${at(21)}` });
+  });
+
+  // ---- samplesPaired ----
+  test("samplesPaired counts a start beside a running older sample, not one whose older sample had already ended", async () => {
+    // (a) the older sample is still running when the younger one starts
+    const a = await setup({ hold: { [S1]: (l) => l.includes(`start:${S2}`) } });
+    await baseline(a.r.b, SUITE);
+    expect(a.rep().samplesPaired).toBeGreaterThanOrEqual(1);
+    // (b) the older sample ended (and its promise resolved) before the younger one starts
+    const b = await setup();
+    const h = b.r.b as unknown as { baselineRequest: (...a: unknown[]) => Promise<unknown> };
+    const realReq = h.baselineRequest.bind(b.r.b);
+    let calls = 0;
+    h.baselineRequest = async (...args) => {
+      if (++calls === 6) {
+        await until(() => b.log.includes(`end:${S1}`));
+        await Bun.sleep(5); // let the sample's own promise chain finish
+      }
+      return realReq(...args);
+    };
+    await baseline(b.r.b, SUITE);
+    expect(b.log).toContain(`end:${S1}`);
+    expect(b.idx(`end:${S1}`)).toBeLessThan(b.idx(`start:${S2}`));
+    expect(b.rep().samplesPaired).toBe(0);
+  });
+
+  // ---- The environment and the seam ----
+  describe("K from the environment and the seam", () => {
+    const withEnv = async (value: string | undefined, f: () => Promise<void>) => {
+      const before = process.env.LETHAL_V3_SAMPLES_IN_FLIGHT;
+      if (value === undefined) Reflect.deleteProperty(process.env, "LETHAL_V3_SAMPLES_IN_FLIGHT");
+      else process.env.LETHAL_V3_SAMPLES_IN_FLIGHT = value;
+      try {
+        await f();
+      } finally {
+        if (before === undefined)
+          Reflect.deleteProperty(process.env, "LETHAL_V3_SAMPLES_IN_FLIGHT");
+        else process.env.LETHAL_V3_SAMPLES_IN_FLIGHT = before;
+      }
+    };
+    const kOf = async (o: RigOpts = {}) => {
+      const t = await setup(o);
+      await fillOnly(t);
+      return t.rep().samplesInFlight;
+    };
+
+    test("the default is 2; the environment says 1 or 2; the seam overrides the environment", async () => {
+      await withEnv(undefined, async () => {
+        expect(await kOf()).toBe(2);
+      });
+      await withEnv("1", async () => {
+        expect(await kOf()).toBe(1);
+        expect(await kOf({ seams: { samplesInFlight: 2 } })).toBe(2);
+      });
+      await withEnv("2", async () => {
+        expect(await kOf()).toBe(2);
+        expect(await kOf({ seams: { samplesInFlight: 1 } })).toBe(1);
+      });
+    });
+
+    test("any other environment value is refused at construction, by name", async () => {
+      for (const bad of ["0", "3", "yes", "1.5"]) {
+        await withEnv(bad, async () => {
+          await expect(setup()).rejects.toThrow(/al-runner-v3-samples-in-flight-refused/);
+        });
+      }
+    });
+
+    test("any other seam value is refused at the fill's start, by name; the error extends Error directly", async () => {
+      for (const bad of [0, 3, 1.5, Number.NaN]) {
+        const t = await setup({ seams: { samplesInFlight: bad } });
+        await expect(baseline(t.r.b, SUITE)).rejects.toThrow(
+          /al-runner-v3-samples-in-flight-refused/,
+        );
+      }
+      expect(Object.getPrototypeOf(AlRunnerV3SamplesInFlightRefusedError)).toBe(Error);
+      expect(new AlRunnerV3SamplesInFlightRefusedError("x", "3").name).toBe(
+        "AlRunnerV3SamplesInFlightRefusedError",
+      );
     });
   });
 });
