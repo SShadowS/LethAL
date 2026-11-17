@@ -1020,6 +1020,7 @@ export function openItemHangRefuses(
     assignmentCallHangs(node, ctx, op) ||
     toggledExitBlankHangs(node, ctx, op) ||
     removedBoundHangs(node, ctx, op) ||
+    removeNotEosAfterReadHangs(node, ctx, op) ||
     (op === "lethal.empty-block" &&
       (emptiedProgressCalleeHangs(node, ctx) ||
         emptiedRefusedBlockHangs(node, ctx) ||
@@ -1428,6 +1429,86 @@ function loopBodyWrites(loop: ALSyntaxNode, name: string, ctx: SemanticContext):
     });
   }
   return writes;
+}
+
+/** PR-109 switch: `removeNotEosAfterReadHangs` refuses. Set false only for a red check. */
+const PR109_RULE = true;
+
+/** `S.Member` or `S.Member(...)` on a plain name S: [S, member] (lowercase), else null. */
+function plainMemberCall(n: ALSyntaxNode): [ALSyntaxNode, string] | null {
+  const m = n.rawKind === "call_expression" ? n.childForFieldName("function") : n;
+  if (m === null || m.rawKind !== "member_expression") return null;
+  const [recv, member] = m.namedChildren;
+  if (recv === undefined || member === undefined || !isIdentifierLike(recv)) return null;
+  if (member.rawKind !== "identifier") return null;
+  return [recv, member.text.trim().toLowerCase()];
+}
+
+/**
+ * PR-109: `remove-not` on `while not S.EOS do` (or `S.EOS()`, or `not (S.EOS)`), with S an
+ * `InStream` (a local, parameter or global, a bare or quoted name) that a straight-line
+ * `S.Read(..)` / `S.ReadText(..)` (also `N := S.ReadText(T)`) has read BEFORE the loop, in a
+ * procedure or trigger. R173 ruled the removal safe because EOS is false at the start; after a
+ * pre-read of a short stream it is true, and reading at the end never moves it, so the loop never
+ * ends. Straight-line: the read is a statement of a block that also holds the loop, so the loop
+ * cannot run without it (`if H then begin S.ReadText(T); while not S.EOS do ..; end` counts; a
+ * read in an `if`, loop or `case` the loop is not inside does not). The LAST such read counts,
+ * and the rule gives up when a statement between it and the loop writes S (`CreateInStream(S)`,
+ * `S := ..`, S as a `var` argument) or tests `S.EOS` (a guard such as `if S.EOS then exit`).
+ * A member or call receiver (`X.S.EOS`), `until S.EOS` and `not (S.EOS and X)` are not this shape.
+ * Accepted over-refusal, no measured site has it: a `break` or `exit` in the loop body that ends
+ * the loop anyway.
+ */
+function removeNotEosAfterReadHangs(
+  node: ALSyntaxNode,
+  ctx: SemanticContext,
+  op: string | undefined,
+): boolean {
+  if (!PR109_RULE || op !== "lethal.remove-not" || node.rawKind !== "unary_expression")
+    return false;
+  const loop = node.parent;
+  // the `not` is the whole condition: its parent is the loop itself
+  if (loop === null || loop.rawKind !== "while_statement") return false;
+  let operand = node.namedChildren[node.namedChildren.length - 1];
+  if (operand?.rawKind === "parenthesized_expression") operand = operand.namedChildren[0];
+  const eos = operand === undefined ? null : plainMemberCall(operand);
+  if (eos === null || eos[1] !== "eos") return false;
+  const name = normalizeAlName(eos[0].text);
+  const decl = resolveVarRef(eos[0], ctx);
+  if (decl === null || decl.typeText.trim().toLowerCase() !== "instream") return false;
+  let proc: ALSyntaxNode | null = node.parent;
+  while (proc !== null && !isScope(proc)) proc = proc.parent;
+  if (proc === null) return false;
+  const names = new Set([name]);
+  // the last straight-line pre-read: its statement ends where "between" starts
+  let readEnd = -1;
+  visitAll(proc, (n) => {
+    if (n.endIndex > loop.startIndex || n.rawKind !== "call_expression") return;
+    const c = plainMemberCall(n);
+    if (c === null || normalizeAlName(c[0].text) !== name || !["read", "readtext"].includes(c[1]))
+      return;
+    // `N := S.ReadText(T)`: the statement is the assignment
+    const stmt = n.parent?.rawKind === "assignment_statement" ? n.parent : n;
+    const blk = stmt.parent;
+    if (
+      blk !== null &&
+      blk.rawKind === "statement_block" &&
+      blk.startIndex <= loop.startIndex &&
+      blk.endIndex >= loop.endIndex
+    )
+      readEnd = Math.max(readEnd, stmt.endIndex);
+  });
+  if (readEnd < 0) return false;
+  let reopened = false;
+  visitAll(proc, (n) => {
+    if (reopened || n.startIndex < readEnd || n.endIndex > loop.startIndex) return;
+    // `S := ..`, `Blob.CreateInStream(S)`, S as a `var` argument
+    if (directWrite(n, names, ctx)) reopened = true;
+    // a guard: anything that tests `S.EOS` between the read and the loop
+    const m = plainMemberCall(n);
+    if (m !== null && m[1] === "eos" && normalizeAlName(m[0].text) === name) reopened = true;
+  });
+  return !reopened;
 }
 
 /**
