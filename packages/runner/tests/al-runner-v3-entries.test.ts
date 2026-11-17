@@ -4,7 +4,16 @@
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { appendFileSync, existsSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { initParser } from "@lethal/engine";
@@ -54,6 +63,7 @@ import {
   v3DaemonClosesText,
   warmupCause,
 } from "../src/al-runner-v3-backend";
+import { BATCH_FORBIDDEN_FIELDS } from "../src/al-runner-v3-baseline-batch";
 import type { PeakProbe } from "../src/al-runner-v3-baseline-check";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import {
@@ -161,6 +171,9 @@ interface Layout {
   readonly scratch: string;
 }
 
+/** PR-115: test codeunits `layout` writes with a `trigger OnRun`; a test sets and clears it. */
+const ONRUN_CUS = new Set<number>();
+
 async function layout(
   targetAl: string,
   suite: readonly TestMethodRef[],
@@ -194,7 +207,17 @@ async function layout(
   const byCu = new Map<number, string[]>();
   for (const r of suite) byCu.set(r.codeunitId, [...(byCu.get(r.codeunitId) ?? []), r.method]);
   for (const [cu, methods] of byCu) {
-    await writeFile(join(testDir, `Tests${cu}.Codeunit.al`), testAl(cu, methods));
+    const text = testAl(cu, methods);
+    // PR-115: a test codeunit named in ONRUN_CUS gets a `trigger OnRun` (the scan sends it alone).
+    await writeFile(
+      join(testDir, `Tests${cu}.Codeunit.al`),
+      ONRUN_CUS.has(cu)
+        ? text.replace(
+            "Subtype = Test;",
+            "Subtype = Test;\n    trigger OnRun()\n    begin\n    end;\n",
+          )
+        : text,
+    );
   }
   await writeFile(
     join(deps, "Microsoft_System.app"),
@@ -432,6 +455,8 @@ interface ServeScript {
   delayMs?: (req: Req, n: number) => number;
   /** PR-88: daemons whose server has no pid any more (as after a cut answer, R895). The test adds to it. */
   pidGone?: Set<number>;
+  /** PR-115: a plain request with no `test` is a batch; it answers these codeunits less the `excludeTests` ones (default: every `Tests<cu>.Codeunit.al` in the test dir). */
+  batchCus?: readonly number[];
 }
 const goodEcho: Echo = (m) => ({
   method: "Echo",
@@ -559,6 +584,35 @@ function fakeServe(script: ServeScript = {}) {
               per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
             }
             lines.push(...per);
+          } else if (body.test === undefined) {
+            // PR-115: a batch (no `test`): every codeunit's rows, less what `excludeTests` hides (a substring of the full name).
+            const out = ((body.excludeTests as string[] | undefined) ?? []).map((x) =>
+              x.toLowerCase(),
+            );
+            selected = new Set();
+            const cov = { coverage: [] as unknown[], perTestCoverage: [] as unknown[] };
+            const present = (await readdir(testDir))
+              .map((f) => /^Tests(\d+)\.Codeunit\.al$/.exec(f)?.[1])
+              .filter((x): x is string => x !== undefined)
+              .map(Number);
+            for (const cu of script.batchCus ?? present) {
+              const rs = rowsOf(onDisk, cu).filter(
+                (r) => !out.some((x) => `Codeunit${cu}.${r.method}`.toLowerCase().includes(x)),
+              );
+              if (rs.length === 0) continue;
+              selected.add(cu);
+              for (const r of rs) lines.push(testLine(cu, r));
+              count(rs);
+              if (body.coverage === true) {
+                const doc = (script.coverage?.(onDisk, cu, active, testDir) ?? {
+                  coverage: [],
+                  perTestCoverage: [],
+                }) as { coverage: unknown[]; perTestCoverage: unknown[] };
+                cov.coverage.push(...doc.coverage);
+                cov.perTestCoverage.push(...doc.perTestCoverage);
+              }
+            }
+            if (body.coverage === true) extra = cov;
           } else {
             const cu = cuOf(body.test);
             selected = new Set([cu]);
@@ -11433,3 +11487,244 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
     expect(warmupCause("refusal")).toBe("after-refusal");
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// PR-115 (R1106 part b): the baseline's test codeunits in batches. The batch size is a seam (2 or 3), the
+// decision a seam (`baselineBatching`); the pin and probe side is pr114a-batching-accessor.test.ts.
+// ---------------------------------------------------------------------------------------------
+const CU4 = 79103;
+SUITE_METHODS[CU4] = ["E"];
+const SUITE4 = [...SUITE3, ref("E", CU4)];
+
+describe("PR-115: batching the daemon baseline", () => {
+  const bRig = (o: RigOpts = {}, size = 2): Promise<Rig> =>
+    dbRig({
+      ...o,
+      seams: { baselineBatching: true, baselineBatchSize: size, ...(o.seams ?? {}) },
+    });
+  const isBatch = (q: Req) => q.body.test === undefined;
+  // A batch answer that names an EXTRA row (no suite test) twice: only decode step 3 catches it, since the
+  // per-codeunit row check ignores extra rows (the first row of the answer is copied under another name).
+  const dupFirstRow = (q: Req, _n: number, lines: Record<string, unknown>[]) => {
+    const first = lines[0];
+    if (!isBatch(q) || first === undefined) return undefined;
+    const extra = { ...first, name: `Codeunit${CU}.Extra` };
+    return { lines: [extra, extra, ...lines] };
+  };
+
+  test("the batch body is requestBase's plus excludeTests and coverage, with none of the forbidden fields; the lone codeunit is today's request", async () => {
+    const r = await bRig({ extra: { daemonBaseline: true, noClient: true } });
+    const v = await baseline(r.b, SUITE3);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(r.serve.requests).toHaveLength(2);
+    const [batch, single] = r.serve.requests;
+    if (batch === undefined || single === undefined) throw new Error("two requests");
+    expect(isBatch(batch)).toBe(true);
+    expect(single.body.test).toBe(`Codeunit${CU3}.`);
+    const { excludeTests, ...batchRest } = batch.body;
+    const { test: _t, ...singleRest } = single.body;
+    // every OTHER Subtype=Test codeunit of both trees: CU3, and the control echo codeunit deployed into active/
+    expect(excludeTests).toEqual([`Codeunit${CU3}.`, `Codeunit${ECHO}.`]);
+    expect(batchRest).toEqual(singleRest); // sourcePaths, testIsolation, noClient, coverage, perTestCoverage
+    expect(batch.body.noClient).toBe(true);
+    for (const f of BATCH_FORBIDDEN_FIELDS) expect(batch.body).not.toHaveProperty(f);
+    expect(r.b.daemonBaselineReport()).toMatchObject({ requests: 2, dropped: undefined });
+  });
+
+  test("a one-codeunit suite sends its codeunit alone: a batch of 1 is today's request (the empty-complement rule itself is pinned in pr115-baseline-batch.test.ts)", async () => {
+    const r = await bRig({ suite: SUITE1 });
+    await baseline(r.b, SUITE1);
+    expect(r.serve.requests.map((q) => q.body.test)).toEqual([`Codeunit${CU}.`]);
+    expect(r.serve.requests.every((q) => q.body.excludeTests === undefined)).toBe(true);
+  });
+
+  test("a test codeunit with trigger OnRun goes alone, and the other batch is shorter", async () => {
+    ONRUN_CUS.add(CU2);
+    try {
+      const r = await bRig();
+      await baseline(r.b, SUITE3);
+      expect(r.serve.requests.map((q) => q.body.test)).toEqual([
+        `Codeunit${CU}.`,
+        `Codeunit${CU2}.`,
+        `Codeunit${CU3}.`,
+      ]);
+    } finally {
+      ONRUN_CUS.delete(CU2);
+    }
+  });
+
+  test("the accessor false (no seam, no pin) means no batching", async () => {
+    const r = await dbRig({ seams: { baselineBatchSize: 2 } });
+    expect(r.b.isBaselineBatching()).toBe(false);
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests.every((q) => q.body.test !== undefined)).toBe(true);
+    expect(r.serve.requests).toHaveLength(3);
+  });
+
+  test("batching needs coverage: a fill without it sends every codeunit alone", async () => {
+    const r = await bRig();
+    const priv = r.b as unknown as {
+      lane: unknown;
+      fillDaemonBaseline(l: unknown, s: number, c: boolean): Promise<void>;
+    };
+    await priv.fillDaemonBaseline(priv.lane, 1, false);
+    expect(r.serve.requests).toHaveLength(3);
+    for (const q of r.serve.requests) {
+      expect(q.body.test).toBeDefined();
+      expect(q.body).not.toHaveProperty("coverage");
+    }
+  });
+
+  test("a batch request that fails keeps nothing: each codeunit is re-sent alone", async () => {
+    const r = await bRig({
+      serve: { answer: (q) => (isBatch(q) ? { lines: [], eof: true } : undefined) },
+    });
+    const v = await baseline(r.b, SUITE3);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass"]);
+    expect(r.serve.requests.map((q) => q.body.test)).toEqual([
+      undefined,
+      `Codeunit${CU}.`,
+      `Codeunit${CU2}.`,
+      `Codeunit${CU3}.`,
+    ]);
+  });
+
+  test("a duplicate test name discards the batch WITHOUT throwing, closes the daemon, re-sends alone, and turns batching off for the session", async () => {
+    const r = await bRig({ suite: SUITE4, serve: { answer: dupFirstRow } });
+    const v = await baseline(r.b, SUITE4);
+    expect(v.map((x) => x.outcome)).toEqual(["pass", "pass", "pass", "pass", "pass"]);
+    // one discarded batch, then four singles: the second group [CU3, CU4] is never batched (the first discard turned it off)
+    expect(r.serve.requests.map((q) => q.body.test)).toEqual([
+      undefined,
+      `Codeunit${CU}.`,
+      `Codeunit${CU2}.`,
+      `Codeunit${CU3}.`,
+      `Codeunit${CU4}.`,
+    ]);
+    expect(r.serve.requests.map((q) => q.daemon)).toEqual([0, 1, 1, 1, 1]); // closed after the discard
+  });
+
+  test("R1001's watch sees only decoded rows: a discarded batch's duplicate rows never reach it", async () => {
+    const seen: { id: number; names: string[] }[] = [];
+    const spy = spyOn(UniformRefusalWatch.prototype, "observe").mockImplementation(function (
+      this: unknown,
+      id: number,
+      rows: readonly { name: string }[],
+    ) {
+      seen.push({ id, names: rows.map((x) => x.name) });
+      return undefined;
+    });
+    try {
+      const r = await bRig({ serve: { answer: dupFirstRow } });
+      await baseline(r.b, SUITE3);
+    } finally {
+      spy.mockRestore();
+    }
+    // The fill's own watch saw each codeunit once, after the discard (later entries are the per-call watch's).
+    expect(seen.slice(0, 3).map((s) => s.id)).toEqual([CU, CU2, CU3]);
+    for (const s of seen) expect(new Set(s.names).size).toBe(s.names.length);
+  });
+
+  test("verdicts and coverage equal the unbatched baseline's", async () => {
+    const run = async (batched: boolean) => {
+      const r = await dbRig({
+        suite: SUITE4,
+        extra: { coverage: "al-runner", daemonBaseline: true },
+        ...(batched ? { seams: { baselineBatching: true, baselineBatchSize: 3 } } : {}),
+      });
+      const v = await baseline(r.b, SUITE4);
+      return { r, seen: v.map((x) => ({ outcome: x.outcome, coverage: x.coverage })) };
+    };
+    const plain = await run(false);
+    const batched = await run(true);
+    expect(batched.r.serve.requests.some((q) => q.body.test === undefined)).toBe(true);
+    expect(batched.seen).toEqual(plain.seen);
+    expect(plain.seen.some((x) => x.coverage !== undefined)).toBe(true);
+  });
+
+  test("R948: a batched sample is compared by rows and per-test sets, not by its top level (the union of its tests)", async () => {
+    const r = await bRig();
+    await baseline(r.b, SUITE3);
+    // CU2 (a sample) sits in the batch; its one-shot top level has lines 7 and 12, the union of its one test only 7.
+    expect(r.b.daemonBaselineReport()).toMatchObject({ dropped: undefined, compared: 2 });
+  });
+
+  test("R790 is per codeunit: a slow codeunit in a batch does not make its neighbour re-run", async () => {
+    const slow =
+      (which: number): RowsFn =>
+      (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          cu === which ? { ...x, message: "Test exceeded 3s timeout." } : x,
+        );
+    // CU is not a sample: slow, so skipped as too slow. CU2 slow instead: CU stays served.
+    const a = await bRig({ serve: { rows: slow(CU) } });
+    await baseline(a.b, SUITE3);
+    expect(a.b.daemonBaselineReport().skippedTooSlow).toEqual([`Codeunit${CU}`]);
+    const b = await bRig({ serve: { rows: slow(CU2) } });
+    await baseline(b.b, SUITE3);
+    expect(b.b.daemonBaselineReport().skippedTooSlow).toEqual([]);
+    expect(b.b.daemonBaselineReport().served).toBe(1); // CU, from the batch
+  });
+
+  test("the deadline is v3CallDeadlineMs over the batch's total tests", async () => {
+    const spy = spyOn(AlRunnerServer.prototype, "runEntries");
+    try {
+      const r = await bRig();
+      await baseline(r.b, SUITE3);
+      const s = Number(/--test-timeout (\d+)/.exec(r.serve.daemons[0]?.join(" ") ?? "")?.[1]);
+      const deadlines = spy.mock.calls.map((c) => c[1]);
+      expect(deadlines[0]).toBe(v3CallDeadlineMs(s, 3)); // A, B, C
+      expect(deadlines[1]).toBe(v3CallDeadlineMs(s, 1)); // D
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("one callId covers a batch: its codeunits' verdicts share it, the wall time is charged once", async () => {
+    // rows with no own time of their own are the ones that carry a call id (R963)
+    const noOwnTime: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) => ({ ...x, noDuration: true }));
+    const r = await bRig({ suite: SUITE4, serve: { rows: noOwnTime } }, 3);
+    const v = await baseline(r.b, SUITE4);
+    // groups [CU, CU2, CU3] and [CU4]; CU and CU3 are served from the batch, CU2 and CU4 are samples (one-shot).
+    const ids = (cu: number) =>
+      v.filter((_, i) => SUITE4[i]?.codeunitId === cu).map((x) => x.callId);
+    const shared = new Set([...ids(CU), ...ids(CU3)]);
+    expect(shared.size).toBe(1);
+    expect([...shared][0]).toBeDefined();
+    expect(shared.has(ids(CU2)[0])).toBe(false);
+  });
+
+  test("a stop signal after the batch request drops the whole batch", async () => {
+    const held: { rig?: Rig } = {};
+    const asked = () => held.rig?.serve.requests.length ?? 0;
+    const r = await bRig({
+      stopHandle: { spent: () => false, signalled: () => asked() >= 1, stopForMemory: () => {} },
+    });
+    held.rig = r;
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests).toHaveLength(1);
+    expect(r.b.daemonBaselineReport().served).toBe(0);
+    expect(oneShotCodeunits(r)).toHaveLength(3); // nothing kept: all three run live
+  });
+
+  test("R951: a skipped sample inside a batch is replaced by a later codeunit of the same batch", async () => {
+    const r = await bRig({ suite: SUITE4 }, 3);
+    const holder = r.b as unknown as { spawnCodeunit: (...a: unknown[]) => Promise<unknown> };
+    const real = holder.spawnCodeunit.bind(r.b);
+    let first = true;
+    holder.spawnCodeunit = async (...a) => {
+      if (!first) return real(...a);
+      first = false;
+      return { timedOut: true, wallMs: 1 }; // CU2's cross-check run gives no answer
+    };
+    await baseline(r.b, SUITE4).catch(() => {});
+    expect(r.b.daemonBaselineReport().replacements).toEqual({
+      [`Codeunit${CU2}`]: `Codeunit${CU3}`,
+    });
+    // one batch [CU, CU2, CU3] and CU4 alone: the replacement CU3 was served from the batch's answer, not re-asked
+    expect(r.serve.requests).toHaveLength(2);
+    expect(r.serve.requests[0] !== undefined && isBatchReq(r.serve.requests[0])).toBe(true);
+  });
+});
+const isBatchReq = (q: Req) => q.body.test === undefined;
