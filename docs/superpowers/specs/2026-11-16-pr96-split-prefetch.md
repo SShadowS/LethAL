@@ -1,8 +1,10 @@
-# PR-96/PR-97 (R1093): split the serve prefetch across lanes, per procedure scope, r4
+# PR-96/PR-97 (R1093): split the serve prefetch across lanes, per procedure scope, r6
 
-Status: r4 (coord PR-97, 2026-11-16, lethal-preproc). Not built.
-- **What answers what:** §10 (r4) answers the r3 delta review, §9 (r3) answers r2, §8 (r2) answers r1. Where they differ, §10
-  overrides the earlier text.
+Status: r6 (coord PR-99, 2026-11-17, lethal-preproc). Built on lethal/pr99; this is the pre-commitment of its proof runs.
+- **What answers what:** §13 (r6) changes the windows and the launch rule and overrides §12's N = 3 run, bar and peak;
+  §12 (r5) is the pre-commitment and overrides §6; §11 (r5) is the build and its two reviews; §10 (r4)
+  answers the r3 delta review, §9 (r3) answers r2, §8 (r2) answers r1. Where they differ, the later section overrides the
+  earlier text.
 - **Before the pre-commitment:** a final short delta review of §10, right before it is committed. The pre-commitment's
   counts, mutant identities and bound come from DO run 13 (t12) and from PR-94's and PR-89's landed code, none of which exist
   yet.
@@ -308,3 +310,235 @@ A move blocks; it is never re-recorded.
   - the reservation `finally` rule (to be re-checked against PR-89's code);
   - three lanes get work if the slice is one window (6 units). If `cutWindows` makes two, the pre-commitment checks that
     the first window still feeds 3 lanes.
+
+## 11. The build (r5, PR-99): where it differs from §2-§10, and what its two reviews found
+The build is lethal/pr99 (phase A 96b0455d, the PR-94 merge bd6cbbd2, phase B df6838bb, build-review fixes b3f9c12f and
+0ff689ef, the delta review's bound fix ff4c5cfc). An Opus build review of the code and a short Opus delta review of §10 and
+this section found no verdict risk; their findings are answered below. Where this section differs from §2-§10, it overrides
+them.
+
+1. **Lanes ≥ 1 start after the first peak reading, not at the barrier.** PR-89's (PR-98's) gate gives no lane above 0 while
+   it has no peak reading, and a warm-up gives none. So lanes ≥ 1 start at lane 0's first measured prefetch request, which
+   comes just after the barrier. In a window where lane 0 makes no measured request (one-shot-only units), no lane above 0
+   starts. That costs time only.
+2. **R960's guard (§10.6).** It is not `firstWarmupDone`. It is the session's warm-ups summed over every lane, equal to 1
+   (build review #4). The sum is session-scoped, as §10.6 asks.
+   - The flag changed N = 1: a first warm-up lost to a request error leaves the flag unset, so the second warm-up took
+     R960's fallback. With the sum, it fails by name, as on master.
+   - At N > 1, lanes ≥ 1 start only after the first warm-up passed, so the sum is 1 only at lane 0's first warm-up.
+   - It holds only because the counters only grow: `uncount()` never restores `warmups` (item 6) and `Lane.resetLayout`
+     never resets `stats`. A change to either must re-check R960 (delta review #4).
+   - `firstWarmupDone` stays as the barrier.
+   - Not new: a batch 1 of one-shot units only passes the barrier with no warm-up, so batch 2's first warm-up still sees a
+     sum of 1, after batch 1 was scored. N = 1 does the same.
+3. **The warm-up fallback through the queue (build review #1).** At N > 1, a serve fallback
+   (`AlRunnerV3ServeFallbackWarmupError`) thrown inside a queue unit arrives wrapped in `ParallelStopError`. The session's
+   catch unwraps it, from any lane and at any point (R786's named-row fallback in `judgeWarmup` has no first-warm-up guard,
+   and lazy proofs share it). Each one refuses the session by name and marks the run abandoned, as N = 1 abandons it and
+   re-runs one-shot. No verdict comes from it; verdicts scored before it are in an abandoned run, which `--resume` never
+   reuses (delta review #2).
+4. **The batch-refusal residual (§10.1) is wider than stated (build review #2, delta review #3).** `prepareBatch` sets `ran`
+   false each batch. A request speaks for the batch whenever a lane ≥ 1 sends before any prefetch entry ran (always from
+   batch 2 on, where lanes ≥ 1 launch at queue start, §10.5; in batch 1 too when lane 0's first measured request was not a
+   prefetch that ran), and every lazy proof (kind `warmup`) speaks for it. Each can then be judged a batch refusal, not
+   only lane 0's.
+   - Effect: a procedure's unit whose entries all fail with one reason outside `V3_SERVE_SAFE_REFUSALS` stops the session
+     by name (`entries-batch-refused`). At N = 1 the same entries sit in a 256-entry chunk where others ran, so they would
+     be per-mutant `error`.
+   - No wrong verdict; a stop by name. It is not changed: a wide judgement is the safe direction. (OrderedCommit already
+     discards mutants after a stop in manifest order, so narrowing would cost little only when lane 0's first unit sends a
+     prefetch; it would let a broken batch score errors on lanes ≥ 1 when it does not.)
+   - In the proof, any `entries-batch-refused` stop at N = 3 that N = 1 does not have is a BLOCK, as a verdict move is.
+5. **The k + 1 rule under-starts (build review #3, delta review #1).** `tryLaunch` counts the untaken units after lane 0
+   took one, and once a lane is short the window drains (no lane above it starts there). So 2 units run on lane 0 alone,
+   3 or 4 units feed 2 lanes, and lane 2 needs at least 5 units in its window, at least 4 of them still untaken when the
+   gate opens (lane 1 takes one first). It follows §2.5's text and costs time only.
+   - **The bound (§10.2) now applies these rules** (`scripts/simulate-lanes.ts`, fixed after the delta review: the r4
+     version gave every free lane the next unit, a wall the queue cannot reach). Its `--barrier-ms` is the time of lane
+     0's first measured request (item 1). It reports the lanes per window.
+   - **The pre-commitment states, per window of the slice, the lanes it expects and why** (§12).
+6. **The R652 identity may drift (build review #6).** `uncount()` restores `boundChecks` and `entriesSent` but not
+   `warmups` or `lazyProofs`. A lazy proof inside a request that is then re-run (PR-56's drift, PR-94's gap) keeps its
+   warm-up. This was already true at N = 1 for restarted daemons; at N > 1 every launched lane proves lazily inside its
+   first request, so it is routine. It touches counters only. The proof reads no floor from `boundChecks`.
+7. **Item 11's unit times** are written only when `LETHAL_UNIT_TIMES_OUT` names a file, so an ordinary N = 1 run's output
+   is unchanged. They are not in `SessionReport`.
+8. **§2.6 needed no code.** After the PR-94 merge, the decision is made per request, and the counters go to the sending
+   lane. Test 10 pins the decision and the counters at N = 1 and N = 3, red both ways.
+
+## 12. The pre-commitment (r5; overrides §6), from DO run 13
+Run 13 is window t12 of R-984 (head 4763e43d, `dos3.sqlite`). It ended on its time budget (exit 7, the normal end of a
+window). The per-mutant key file is `/coord/handoff/PR-99/slice-keys.tsv` (243 rows, sha256
+`3058ae43d629927c297d86a84ccac5db16d956f708a4a9311d3d5eb9c7ad4b04`).
+
+**The slice: six (file, procedure) scopes, 243 mutants in run 13.**
+
+| File | Procedure | Mutants |
+|---|---|---|
+| `CDODocumentTemplateLine.Table.al` | `CopyAttachmentsTo` | 7 |
+| `CDOEMailTemplateHeader.Table.al` | `GetRecipients` | 10 |
+| `CDOEMailTemplateManagement.Codeunit.al` | `CreateReports` | 72 |
+| `CDOEMailTemplateManagement.Codeunit.al` | `CreateReportUsingReportSelection` | 30 |
+| `CDOEMailTemplateManagement.Codeunit.al` | `GetReportParameters` | 22 |
+| `CDOEMailTemplateManagement.Codeunit.al` | `CreateDocumentsForRecord` | 102 |
+
+- A scope is (file, procedure): `CDODocumentTemplateLine.Table.al` has a `GetRecipients` of its own (6 mutants), which is
+  NOT in the slice.
+- **The pin (corrects §10.3):** (file, procedure, operator, `ast_hash`, `identity_ordinal`). Over the slice it is unique;
+  without `identity_ordinal`, 82 mutants share 35 keys. The proof head's dry-run listing (`--lines` spans from it) must show
+  exactly the 243 keys. A key missing or extra means the slice is re-planned before any run.
+
+**Run 13's facts (expectations, not the bar).** Run 13 re-scored 24 slice mutants and carried 219. Its verdicts: killed 42,
+survived 177, `timeout-killed` 2, error 16, no-coverage 6.
+- **The timeout kills:** M13125 (`CopyAttachmentsTo`, `lethal.void-method-call`, `878a34d713ea`) and M14760
+  (`GetRecipients`, `lethal.negate-conditional`, `a04daf56d57a`), `timeout-killed` in every window t9-t12.
+- **The texts PR-93 does not keep, which close a daemon:** 6 mutants in run 13, not 5 (§10.4):
+  - a read of the content of a placeholder Pdf: 1 (`CreateDocumentsForRecord`, M18293);
+  - an error in a SaveAs of a report with a layout: 3 (`CreateReportUsingReportSelection` M17376 and M17377, `CreateReports`
+    M17235);
+  - a parameters string without the XML declaration: 2 (`CreateReportUsingReportSelection` M17382, new in run 13;
+    `GetReportParameters` M17977).
+- **The drift codeunits** (68859, 68996): run 10, the last run that scored the whole slice (228 of 243), ran their rows for
+  53 slice mutants (r2 said 62); run 13 re-scored 24, and 6 of them ran those rows. The drift floor stays a floor on the
+  guard ARMING.
+- These codes are run 13's numbering. The proof runs use `--lines`, which renumbers, so mutants are joined by the pin.
+
+**The units and the lanes (§11.5).** Expected: one window. The units in manifest order are `CopyAttachmentsTo`,
+`GetRecipients`, `CreateReports`, `CreateReportUsingReportSelection`, `GetReportParameters`, `CreateDocumentsForRecord`.
+- Lane 0 takes `CopyAttachmentsTo`. Its first measured prefetch request opens the gate with 5 units untaken, so lane 1
+  (`GetRecipients`, 5 ≥ 2) and lane 2 (`CreateReports`, 4 ≥ 3) start: **3 lanes in the one window**.
+- If the dry run or the N = 1 run shows two or more windows, or the simulation of the N = 1 unit times gives fewer than 3
+  lanes, the slice is re-planned before the N = 3 run.
+
+**The runs.**
+- Head: the final lethal/pr99 head. Build: the `current` pin at the time (named in the receipt; both runs on the same one).
+  Config: `/coord/handoff/R-984/v3.do-serve.json`. Each run has a fresh scratch store (never `dos3.sqlite`), and `--lines`
+  for the six scopes.
+- **N = 1 first**, under `scripts/heavy-slot.sh --wait --peak serve other`, with `LETHAL_UNIT_TIMES_OUT` set.
+- **Then the bound, written into the receipt before the N = 3 run:**
+  `bun scripts/simulate-lanes.ts <unit-times> --lanes 3 --barrier-ms G --lane-start-ms L`.
+  - L is the N = 1 run's warm-up wall from its stats line. That over-counts by any restart's lazy proof, which loosens the
+    bar. The receipt also gives the bar with L = 26,000 ms (the #8143 recompile), as the tight figure.
+  - G is L plus unit 0's prefetch share (its time in the unit-times file minus its scoring time).
+  - The simulation's lanes per window are written too, and must say 3 (above).
+- **Then N = 3** (`--workers 3`), under `scripts/heavy-slot.sh --wait --peak 24 other` (3 x serve).
+- Compared per mutant over the pin with `scripts/report-diff.ts`: verdict and `killingTest`. Also the gift card and D1 at
+  N = 1 against N = 3, as §6.
+
+**The floors** (§6's, read from the N = 3 run). If one is missed, the run is NOT evidence and is re-planned, never counted as
+a pass:
+- lanes started = 3, and `units prefetched` ≥ 1 on each of lanes 0, 1 and 2 (the split stats line);
+- `lazy proofs` ≥ 1 on a lane ≥ 1;
+- at least 1 `timeout-killed` of M13125's or M14760's pin, at both N;
+- at least 1 `serve-daemon-closed` event with reason `refusal` and `lane` ≥ 1;
+- `requestOne-armed requests` ≥ 1 on a lane ≥ 1 (warm-ups that held a kept refusal are counted apart and do not meet it).
+- Reported, not floors: `selectedOnlyRequests` and `selectedOnlyRefusedGapped` per N (a 0 gapped is "§2.6 not exercised by
+  the slice"); `keptDrifts` per N.
+
+**Committed figures:**
+- 0 verdict or `killingTest` moves over the 243 pins (and on the gift card and D1);
+- 0 `entries-batch-refused` stops at N = 3 that N = 1 does not have (§11.4);
+- the mutant-phase wall at N = 3 at most 1.2 x the simulated wall above. The simulation now includes the gate time G, so
+  §6's "plus the barrier" is inside it;
+- the tree peak under the gate's bound, with no R948 stop.
+
+A move blocks; it is never re-recorded. A verdict move found here is diagnosed with PR-94's one-shot arbiter (§2.6), and
+still blocks.
+
+## 13. r6 (orchestrator ruling, 2026-11-17): windows sized for N lanes, the k + 1 rule dropped
+**Why.** §12's N = 1 run (659c28f0) cut the slice into 6 windows of 1-3 unit pieces (`cutWindows`: 600 s of estimated
+covering-test time, or 256 entries, per window; R912). Under r5's launch rule (§11.5, k + 1 untaken units) the simulation of
+its unit times gave lanes per window [2, 1, 2, 1, 1, 1]: lane 2 never started. The full DO run cuts the same windows, so this
+capped R1093's saving everywhere, not only on the slice. Re-planning only the slice would prove verdict identity on a layout
+DO rarely has. The orchestrator ruled for the code change below. Where this section differs from §2-§12, it overrides them.
+A short Opus delta review checked this section against the code; its three findings are folded in.
+
+**The change** (lethal/pr99 01a77e70, d8ce7868):
+1. **Windows.** Under the split (N > 1), `runMutantsParallel` cuts its windows with `splitWindowCaps(N)`: N x 600 s and
+   N x 256 entries. N lanes share a window, so it still takes about 600 s of wall when the lanes run. The time budget is still
+   checked between windows (a lane's mutant cannot be left out of an ordered commit), so it is still read about every 600 s of
+   wall. N is the lanes asked for (`--workers`): the gate's `affordableLanes` caps nothing before the first reading
+   (PR-98 build review #1). When PR-98's gate admits fewer lanes, a window can take up to N x 600 s, and the budget is read
+   that much less often. That costs time precision, never a verdict.
+2. **The launch rule.** A lane above 0 starts while ANY unit of its window is untaken. The k + 1 rule is dropped. PR-98's
+   cgroup lane gate (`mayStart`: modes x the highest peak reading per resident lane, no lane before a reading) stays the only
+   memory brake. A lane started for a single unit pays its start (~30 s: #8143's recompile, plus lazy proofs); DO units take
+   minutes.
+3. **The bound.** `scripts/simulate-lanes.ts` applies both:
+   - the r6 launch rule;
+   - `--merge-windows M`, which groups M consecutive N = 1 windows into one simulated window. This is an ESTIMATE of
+     the N-lane cut, not a bound (delta review #2): the greedy cut at M x the caps moves the boundaries rather than
+     cutting at the groups' ends; a mutant over a cap sits alone, so an N = 1 window can exceed a cap; and the N-lane
+     run cuts with its own baseline's durations. A later boundary can lengthen the wall (a long piece late in one
+     window delays the next). A scope split across merged windows becomes one unit, and each piece keeps its own N = 1
+     window's prefetch share.
+   - It reports the units and lanes per simulated window.
+   - Tests: the r6 rule both ways (a unit left starts a lane; none left starts none), the merge, the caps through
+     `runSession` (with 300 s mutants, 4 windows at 3 x the caps against 11 at 1 x). All red-checked.
+
+**Why no verdict moves.** §3's argument is per mutant: its group, echo, codeunit entries and `mutantExcludes` do not depend
+on the window. A bigger window changes only which units are queued together, as the split already does. The batch latch
+(§10.1, §11.4) is per BATCH, not per window, so it is unchanged. N = 1 is untouched. The two non-structural risks r5 already
+named stay: daemon history differs by lane (PR-56's guard), and CPU contention against the two `timeout-killed` pins, now
+with up to 3 lanes at once. The per-mutant comparison covers both.
+
+**The N = 1 run of §12 stays valid, and is the comparison's N = 1 side.**
+- The r6 diff changes only code that N = 1 never runs:
+  - `runMutantsParallel` runs only at N > 1 (`scope.parallel` needs `workers > 1` on al-runner-v3), and the caps are passed
+    only under its `split` condition;
+  - `tryLaunch` returns at once without the split;
+  - N = 1's own `cutWindows` call (in `runMutantsOnBackend`) keeps the default caps;
+  - `simulate-lanes.ts` is a script, not run by `lethal run`.
+- So an N = 1 run on the r6 head runs the same code path as the run on 659c28f0.
+- Its outputs are all recorded under `/coord/handoff/PR-99/proof/`: the per-mutant table (`n1.sqlite`, `n1.report.json`),
+  the unit times (`n1.unit-times.json`), the stats line and the peak.
+- Its verdict counts equal run 13's: killed 42, survived 177, `timeout-killed` 2 (the M13125 and M14760 pins), error 16,
+  no-coverage 6.
+
+**The re-simulation** (N = 1's unit times, `--lanes 3 --merge-windows 3`):
+
+| Gate G, start L | Simulated wall | Units per window | Lanes per window |
+|---|---|---|---|
+| G = 101,672 ms, L = 84,967 ms (§12's rule: L = N = 1's warm-up wall; G = L + unit 0's prefetch share, 16,705 ms) | 683,077 ms | [5, 2] | [3, 2] |
+| G = 42,705 ms, L = 26,000 ms (the tight figure, the #8143 recompile) | 565,143 ms | [5, 2] | [3, 2] |
+| for reference, N = 1 (the sum of its unit times) | 1,025,168 ms | [3, 1, 3, 2, 1, 1] | 1 each |
+
+So **the bar is 1.2 x 683,077 = 819,693 ms** of mutant-phase wall at N = 3 (678,172 ms with the tight L, reported beside it).
+3 lanes start in the first window, so the floor "lanes started = 3" is reachable.
+- The figure is an estimate (above). The delta review simulated the cut this slice most likely gets at 3 x 600 s
+  (`GetReportParameters` and part of `CreateDocumentsForRecord` moving into the first window: units [6, 1], lanes [3, 1]):
+  605,000-683,000 ms with §12's L, all within 683,077 ms; with the tight L up to 576,318 ms, above the tight figure. The
+  committed bar is the one above, on that basis. The receipt records the N = 3 run's actual cut (its lanes notice and the
+  per-lane units prefetched).
+
+**The N = 3 run** (overrides §12's run lines):
+- Head: the final lethal/pr99 head (at least d8ce7868). Same build (`edge-847b1fa5a`, from the config), same config, a
+  fresh scratch store, the same six `--lines` spans (`/coord/handoff/PR-99/proof/lines.args`).
+- `--workers 3`, under `scripts/heavy-slot.sh --wait --peak 16 baseapp` (the orchestrator's ruling (b), from the N = 1
+  measurement, replacing §12's `--peak 24`). The figure is set by PR-98's gate, not by the tree peak alone (delta review
+  #1):
+  - `decideLanes` refuses lane k when lanes charged x modes x the highest peak reading + 4 GiB (`LANE_LETHAL_BYTES`) is over
+    the declared peak.
+  - N = 1's highest reading (`sampledPeak` in its events) is 3,327,078,400 B (3.10 GiB). With one mode, 3 lanes need
+    3 x 3.10 + 4 = 13.3 GiB. 16 leaves 2.7 GiB, so a reading of up to 4.0 GiB still starts lane 2.
+  - heavy-slot's own tree measurement of N = 1 was 3.75 GiB, so 3 x 3.75 = 11.3 GiB also fits under 16.
+  - If lane 2 is still refused "declared peak", the floor is missed and the run is re-planned, never counted.
+- Not queued while it cannot be admitted: before queueing, check that `memory.current` + 16 + 4 GiB and the held slots'
+  declared peaks + 16 + 4 GiB both fit under `memory.max`. If not, wait for the holding job's end, then queue.
+- Compared with N = 1 per mutant with `scripts/report-diff.ts`: verdict and `killingTest` identical. Both runs generate
+  from the same spans on the same generation code, so their codes agree; the five-part pin (§12) is checked on both stores
+  before the comparison is read.
+- The gift card and D1 at N = 1 against N = 3, as §6.
+
+**The floors** (§12's, unchanged), read from the N = 3 run. "Lanes started = 3" is read from the lanes notice that
+`runMutantsParallel` writes once per batch, from the window that started the most lanes (`lanesNotice`: its started
+count must be 3 of 3 asked; delta review #3), with the split stats line's per-lane `units prefetched` (each ≥ 1). If the
+real cut differs from the simulated one so that no window starts 3 lanes, the run is not evidence and is re-planned.
+
+**Committed figures** (§12's, with the new bar):
+- 0 verdict or `killingTest` moves over the 243 pins (and on the gift card and D1);
+- 0 `entries-batch-refused` stops at N = 3 that N = 1 lacks;
+- the mutant-phase wall at N = 3 at most 819,693 ms;
+- the tree peak under 16 GiB, with no R948 stop.
+
+A move blocks; it is never re-recorded.
