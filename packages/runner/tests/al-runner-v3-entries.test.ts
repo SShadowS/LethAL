@@ -77,7 +77,13 @@ import {
 } from "../src/al-runner-v3-entries";
 import { AlRunnerV3SeedError } from "../src/al-runner-v3-seed";
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
-import type { RunOpts, TestMethodRef, TestVerdict, V3RequestTimed } from "../src/backend";
+import type {
+  RunOpts,
+  TestMethodRef,
+  TestVerdict,
+  V3BaselineOneShotTimed,
+  V3RequestTimed,
+} from "../src/backend";
 import { buildBackend } from "../src/cli";
 import { baselineSourceTag } from "../src/orchestrator";
 import { splitBackend } from "../src/parallel-queue";
@@ -11110,6 +11116,73 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
       expect(e.tests).toBeGreaterThan(0);
     }
     expect(timed.some((e) => e.failed === true || e.cut === true)).toBe(false);
+  });
+
+  test("PR-113: each baseline plain request is timed as kind baseline, and nothing else is", async () => {
+    const r = await dbRig();
+    const timed: V3RequestTimed[] = [];
+    r.b.setRequestTimedSink((e) => timed.push(e));
+    await baseline(r.b, SUITE3);
+    expect(r.serve.requests).toHaveLength(3);
+    expect(timed.map((e) => e.kind)).toEqual(["baseline", "baseline", "baseline"]);
+    for (const e of timed) {
+      expect(e.lane).toBe(0);
+      expect(e.entries).toBe(1);
+      expect(e.tests).toBeGreaterThan(0);
+      expect(e.wallMs).toBeGreaterThanOrEqual(0);
+      expect(e.cause).toBeUndefined();
+    }
+  });
+
+  test("PR-113: the mutant phase's coverage and echo windows (plain requests outside the baseline) keep no event", async () => {
+    const r = await rig({
+      targetAl: SLEEPER_AL,
+      serve: { rows: killsM1, coverage: sleepCoverage() },
+    });
+    const timed: V3RequestTimed[] = [];
+    r.b.setRequestTimedSink((e) => timed.push(e));
+    await baseline(r.b, SUITE1);
+    await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+    await r.b.activate("M0001");
+    await r.b.run(ref("A"), OPTS);
+    await r.b.activate("M0002");
+    await r.b.run(ref("A"), OPTS);
+    await r.b.run(ref("B"), OPTS);
+    const s = r.b.entriesStats();
+    // the windows really ran as plain requests ...
+    expect(s.coverageRequests + s.echoRequests).toBeGreaterThan(0);
+    // ... and are the only serve requests without an event
+    expect(timed.some((e) => e.kind === "baseline")).toBe(false);
+    expect(timed).toHaveLength(r.serve.requests.length - s.coverageRequests - s.echoRequests);
+  });
+
+  test("PR-113: a cross-check one-shot is timed with reason cross-check", async () => {
+    const r = await dbRig();
+    const shots: V3BaselineOneShotTimed[] = [];
+    r.b.setBaselineOneShotSink((e) => shots.push(e));
+    await baseline(r.b, SUITE3);
+    // the sample: the 2nd and the last codeunit, one process each (see R948 A)
+    expect(shots.map((e) => [e.codeunit, e.reason])).toEqual([
+      [CU2, "cross-check"],
+      [CU3, "cross-check"],
+    ]);
+    for (const e of shots) expect(e.wallMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("PR-113: R790's too-slow re-run is timed with reason too-slow", async () => {
+    const slowCu: RowsFn = (m, cu, d, n) =>
+      allPass(m, cu, d, n).map((x) =>
+        cu === CU ? { ...x, message: "Test exceeded 3s timeout." } : x,
+      );
+    const r = await dbRig({ serve: { rows: slowCu } });
+    const shots: V3BaselineOneShotTimed[] = [];
+    r.b.setBaselineOneShotSink((e) => shots.push(e));
+    await baseline(r.b, SUITE3);
+    expect(shots.filter((e) => e.reason === "too-slow").map((e) => e.codeunit)).toEqual([CU]);
+    expect(shots.filter((e) => e.reason === "cross-check").map((e) => e.codeunit)).toEqual([
+      CU2,
+      CU3,
+    ]);
   });
 
   test("a thrown send is timed with failed, and has no timings", async () => {

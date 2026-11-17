@@ -27,6 +27,7 @@ import type {
   StopEvidence,
   TestMethodRef,
   TestOutcome,
+  V3BaselineOneShotTimed,
   V3RequestSized,
   V3RequestTimed,
 } from "./backend";
@@ -585,6 +586,13 @@ export type RunEventInput =
        */
       readonly type: "serve-request-timed";
     } & V3RequestTimed)
+  | ({
+      /**
+       * PR-113: one baseline one-shot call (a fresh process during the daemon baseline) and its wall time;
+       * `reason` is `cross-check`, `too-slow` or `other`. Events stream only, not the report.
+       */
+      readonly type: "baseline-one-shot-timed";
+    } & V3BaselineOneShotTimed)
   | {
       /**
        * PR-56: the request after a kept refusal (a `V3_SERVE_SAFE_REFUSALS` row) on one al-runner-v3

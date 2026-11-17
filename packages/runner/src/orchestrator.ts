@@ -4996,7 +4996,10 @@ function handNotify(backend: ExecutionBackend, emit: RunEmitter): () => void {
   backend.setRequestSizedSink?.((s) => emit({ type: "serve-request-sized", ...s }));
   // PR-100: each serve request's wall time and al-runner's own timings (events stream only).
   backend.setRequestTimedSink?.((t) => emit({ type: "serve-request-timed", ...t }));
+  // PR-113: each baseline one-shot call's wall time (events stream only).
+  backend.setBaselineOneShotSink?.((t) => emit({ type: "baseline-one-shot-timed", ...t }));
   return () => {
+    backend.setBaselineOneShotSink?.(undefined);
     backend.setRequestTimedSink?.(undefined);
     backend.setNotify?.(undefined);
     backend.setDaemonCloseSink?.(undefined);
