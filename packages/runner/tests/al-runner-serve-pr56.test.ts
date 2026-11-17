@@ -83,9 +83,9 @@ describe("PR-56 keep entries", () => {
       if (exact !== undefined && matched.length > 0) exactHits += 1;
     }
     // 84 from PR-54's coverage.tsv, plus 9 ledger keys PR-130 added to two of its classes (RecordRef.* not open: 6;
-    // FieldRef.* never assigned: 3), and 1 PR-131 added ("Error with an ErrorInfo nobody created"), each matched by that
-    // class's own entry.
-    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(94);
+    // FieldRef.* never assigned: 3), 1 PR-131 added ("Error with an ErrorInfo nobody created") and 1 PR-135 added (the
+    // DeleteAll global filter group), each matched by that class's own entry.
+    expect(Object.values(frozen).filter((f) => f.cls !== undefined).length).toBe(95);
     expect(hits).toBeGreaterThan(0);
     expect(exactHits).toBeGreaterThan(5); // the Company keys etc. are really tested, not only the guesses
   });

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1078 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1079 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -386,6 +386,7 @@ that ordering is the priority.
 - **R1104** · Hang refusal for remove-not on `while not S.EOS` when the InStream S is read earlier in a block that holds the loop (R173's 'EOS is false at the start' fails after a pre-read): 7 DO sites refused, 2 hangs per 3 scored lost; P4 waits for a DO window · [R1104.md](docs/roadmap/R1104.md) · open — built (PR-109); P4 waits for the first DO window on a head with it
 - **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · closed 2026-11-17 — measured (PR-110): the only static rule fails PR-37's bar (0 hangs in 3 scored sites)…
 - **R1114** · x2 drifted after a kept RecordRef.Duplicate refusal (a fail -> pass on a test the mutant cannot reach): check the keep directly · [R1114.md](docs/roadmap/R1114.md) · closed 2026-11-17 — checked directly (PR-134): the Duplicate keep is clean; the drift was mutant M17235…
+- **R1116** · al-runner v3 raises no error on a bare Insert() of an existing key (upstream #8267): a mutant that inserts a duplicate key can score SURVIVED where BC kills it · [R1116.md](docs/roadmap/R1116.md) · open
 
 ## Product gaps a real project hits
 
