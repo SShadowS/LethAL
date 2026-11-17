@@ -12560,6 +12560,42 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let budgetCut = false;
     const clockSpent = (): boolean =>
       args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
+    // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
+    type WalkSnap = HeldTimeout["snap"];
+    const snapNow = (): WalkSnap => ({
+      verdict,
+      cause,
+      failureNote,
+      permissionRefusedTest,
+      runnerDisagreement,
+      runnerDisagreementTest,
+      notReproduced,
+      refusedPending,
+      transportErrorRef,
+      abortAfterRecord,
+    });
+    const restoreWalk = (s: WalkSnap): void => {
+      verdict = s.verdict;
+      cause = s.cause;
+      failureNote = s.failureNote;
+      permissionRefusedTest = s.permissionRefusedTest;
+      runnerDisagreement = s.runnerDisagreement;
+      runnerDisagreementTest = s.runnerDisagreementTest;
+      notReproduced = s.notReproduced;
+      refusedPending = s.refusedPending;
+      transportErrorRef = s.transportErrorRef;
+      abortAfterRecord = s.abortAfterRecord;
+    };
+    // The FIRST non-terminal error met (its own fields and its test); later ones are only named.
+    let heldErr: { readonly test: string; readonly snap: WalkSnap } | undefined;
+    const notedErr: string[] = [];
+    const afterErr: string[] = []; // the tests a later step answered, names only
+    let stepSnap: WalkSnap = snapNow();
+    let stepDeactivated = false; // this step ran a confirm and left the mutant NOT active
+    let stepRef: TestMethodRef | undefined;
+    let heldRounds = 0;
+    let errNoted = false; // the held error is already named in the note
+    let errNote: string | undefined;
     const walker = coveringRuns({
       backend: args.backend,
       safety: args.safety,
@@ -12607,9 +12643,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           testBudgetMs: budget,
           groupBudgetMs,
         } = step;
+        // PR-81: this step's start state, so a held error leaves none of its fields on a later kill.
+        stepSnap = snapNow();
+        stepDeactivated = false;
+        stepRef = ref;
         // PR-51: the replay of the held step was counted when it was first met.
         if (!replaying) {
           if (held !== undefined) afterHeld.push(qualifiedTestName(ref));
+          if (heldErr !== undefined) afterErr.push(qualifiedTestName(ref));
           testResultBuffer.push({
             mutantCode: m.mutantId,
             ref,
@@ -12671,18 +12712,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             `covering loop: mutant ${m.mutantId}'s ${ref.method} is marked alone at group position ${step.groupPosition} — caller-contract violation (an alone request runs one test, so its position is 1) (PR-55)`,
           );
         }
-        const reproduce = (): Promise<ReproDecision | undefined> =>
-          args.backend.killsMustReproduce === true
-            ? reproduceKill({
-                args,
-                m,
-                step,
-                leaseSession,
-                resyncOpSeq,
-                testResultBuffer,
-                ...(aloneKill ? { alone: true as const } : {}),
-              })
-            : Promise.resolve(undefined);
+        const reproduce = async (): Promise<ReproDecision | undefined> => {
+          if (args.backend.killsMustReproduce !== true) return undefined;
+          const r = await reproduceKill({
+            args,
+            m,
+            step,
+            leaseSession,
+            resyncOpSeq,
+            testResultBuffer,
+            ...(aloneKill ? { alone: true as const } : {}),
+          });
+          stepDeactivated = false; // reproduceKill re-activates the mutant first
+          return r;
+        };
         // R577: a kill that did not reproduce. `true`: the covering loop goes on (I4).
         const notKilled = (r: KillErrorDecision): boolean => {
           if (r.cause === "kill-not-reproduced") {
@@ -12726,6 +12769,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             v.operation === undefined &&
             isRunMutantFoundNone(v.failureMessage)
           ) {
+            stepDeactivated = true;
             const d = await confirmFoundNone({
               args,
               m,
@@ -12801,18 +12845,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           const entry: HeldTimeout = {
             step,
             cut: args.backend.cutState?.(m.mutantId),
-            snap: {
-              verdict,
-              cause,
-              failureNote,
-              permissionRefusedTest,
-              runnerDisagreement,
-              runnerDisagreementTest,
-              notReproduced,
-              refusedPending,
-              transportErrorRef,
-              abortAfterRecord,
-            },
+            snap: snapNow(),
           };
           if (held === undefined) held = entry;
           else noted.push(entry);
@@ -12827,6 +12860,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         }
         if (v.outcome === "timeout") {
           if (step.groupPosition > 1) {
+            stepDeactivated = true;
             const warm = await confirmWarm({
               args,
               m,
@@ -12867,6 +12901,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         if (v.outcome === "fail" && step.groupPosition > 1) {
           // R206 §2.2: a kill at group position k > 1 was measured WARM. Confirm it by replaying
           // methods 1..k of the SAME call unmutated, in another fresh session.
+          stepDeactivated = true;
           const warm = await confirmWarm({
             args,
             m,
@@ -12928,6 +12963,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               message: `[lethal] alone-confirm: ${ref.method} (mutant ${m.mutantId}) was measured alone under the mutant (${v.outcome}); its unmutated confirm and its reproduction run alone too, and no kill pair is sent (R1067)`,
             });
           }
+          stepDeactivated = true;
           await activateOnce(args.backend, args.safety, null);
           // Layer 5C-B2: `runFenced` here too — the confirm rerun earns the same single fresh
           // attempt after a proven-complete lost ack, so an intermittent unreadable answer during
@@ -13231,6 +13267,45 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           );
         break mutantLoop;
       }
+      // PR-81 (R1066): a step that ended the mutant as a non-terminal error is HELD, like a timeout:
+      // the walk goes on from the next covering test, with the fields as this step found them.
+      // L4 reliance: a `runner-refused` not after a stop is held although R639 once stopped there.
+      // That is safe because v3 marks every later FAIL row of the same call `V3_REFUSAL_PREFIX`,
+      // so it cannot become a kill (measured on DO's store: 0 unmarked fail rows after a
+      // walk-ending refusal; /coord/handoff/PR-81/cost.md, section L4; spec addendum A).
+      if (
+        !replaying &&
+        capRef === undefined && // PR-108: a capped walk has ended; a hold never continues it
+        stepRef !== undefined &&
+        verdict === "error" &&
+        cause !== undefined &&
+        HELD_ERROR_CAUSES.has(cause) &&
+        transportErrorRef === undefined &&
+        abortAfterRecord === undefined &&
+        !args.safety.isUnsafe // checked first: a latched session is terminal, nothing re-activated
+      ) {
+        // Each hold consumes a step the walker had not yielded before, so a walk holds at most
+        // once per covering test. More means the fields were not restored and the walk would loop.
+        heldRounds += 1;
+        if (heldRounds > ordered.length + noted.length + 1) {
+          throw new Error(
+            `covering loop: mutant ${m.mutantId} held ${heldRounds} errors for ${ordered.length} covering test(s) — the walk is not advancing (PR-81)`,
+          );
+        }
+        const name = qualifiedTestName(stepRef);
+        if (heldErr === undefined) heldErr = { test: name, snap: snapNow() };
+        else notedErr.push(name);
+        restoreWalk(stepSnap);
+        if (stepDeactivated) {
+          // Only a step that deactivated the mutant (a confirm) re-activates it. An error met on the
+          // covering row leaves it active, and re-activating would throw away v3's prefetched rows.
+          // The pair a failed cold confirm left pending is dropped first, or `activateOn` would read
+          // this activation as the pair's reproduction.
+          args.backend.dropPendingPair?.(m.mutantId);
+          await activateOnce(args.backend, args.safety, m.mutantId);
+        }
+        continue;
+      }
       // PR-51: the walk ended. With nothing held, or after the held step's replay, that is final.
       const h: HeldTimeout | undefined =
         held ?? (replaying && verdict === "survived" ? noted.shift() : undefined);
@@ -13274,10 +13349,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       transportErrorRef = h.snap.transportErrorRef;
       abortAfterRecord = h.snap.abortAfterRecord;
       if (wasFirst) {
-        heldNote =
-          afterHeld.length > 0
-            ? `after the timeout: ${[...new Set(afterHeld)].join(", ")}`
-            : undefined;
+        // PR-81: a held error's test (and a later one's) is named here too, names only.
+        const errNames = heldErr !== undefined ? [heldErr.test, ...notedErr] : [];
+        const names = [...new Set([...errNames, ...afterHeld])];
+        errNoted = heldErr !== undefined;
+        heldNote = names.length > 0 ? `after the timeout: ${names.join(", ")}` : undefined;
       }
       // v3: the cut state this step met, so its reproduction routes as it did in the old walk.
       args.backend.restoreCutState?.(m.mutantId, h.cut);
@@ -13286,6 +13362,22 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       replayStep = h.step;
     }
     await walker.return(undefined);
+    // PR-81: the held error becomes the outcome when nothing else decided the mutant. It goes
+    // BEFORE the two resolutions below, so a pending `kill-not-reproduced` or R639 refusal does not
+    // outrank an error met earlier; after a held timeout's replay, that replay's result stands.
+    const adoptHeldError = (): void => {
+      if (heldErr === undefined) return;
+      verdict = heldErr.snap.verdict;
+      cause = heldErr.snap.cause;
+      failureNote = heldErr.snap.failureNote;
+      permissionRefusedTest = heldErr.snap.permissionRefusedTest;
+      runnerDisagreement = heldErr.snap.runnerDisagreement;
+      runnerDisagreementTest = heldErr.snap.runnerDisagreementTest;
+      const later = [...new Set(afterErr)];
+      errNote = later.length > 0 ? `after the error: ${later.join(", ")}` : undefined;
+      errNoted = true;
+    };
+    if (verdict === "survived" && !replaying) adoptHeldError();
     // R577 (I4): the loop ended with no other verdict after a kill that did not reproduce, so the
     // mutant is that error, never `survived`. Before R198's check below, which guards survivors
     // only: a group timeout's earlier methods are never in `attempted`, and this is no survivor.
@@ -13299,9 +13391,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       cause = "runner-refused";
       failureNote = refusedPending;
     }
+    // PR-81 (L5), the safety net: a mutant with a held error is never a survivor.
+    if (verdict === "survived") adoptHeldError();
+    if (heldErr !== undefined && !errNoted) {
+      // A kill (names only, never the error's diagnosis) or a terminal answer ended the walk.
+      const names = [...new Set([heldErr.test, ...notedErr])].join(", ");
+      errNote =
+        verdict === "killed" || verdict === "timeout-killed"
+          ? `the error of ${names} was not scored: ${killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : "a later test"} failed under the mutant and the failure reproduced`
+          : `an error of ${names} was held earlier in this walk and not scored`;
+    }
     // PR-51: names only, after any strand prefix (`--resume` reads it) and any other note.
-    if (heldNote !== undefined) {
-      failureNote = failureNote !== undefined ? `${failureNote} ${heldNote}` : heldNote;
+    for (const note of [heldNote, errNote]) {
+      if (note !== undefined)
+        failureNote = failureNote !== undefined ? `${failureNote} ${note}` : note;
     }
     // PR-108: a walk the 3rd hang ended says so, even with nothing left to run (k = 0). `k`: the
     // ordered covering refs after the 3rd hang's ref, minus the skipped codeunits. A ref that is not in
@@ -14245,6 +14348,23 @@ function nearestAlDir(alDirs: ReadonlySet<string>, rel: string): string | undefi
   }
   return best;
 }
+
+/**
+ * PR-81 (R1066): the closed whitelist N of error causes the covering walk HOLDS (goes on past)
+ * instead of ending the mutant. Each is an error whose code's own notes say the server is clean
+ * and the answer is not about the mutant. A cause not listed here is terminal. NOT
+ * `runner-test-error` (it covers contract violations, a missing row, an echo mismatch and
+ * R-435's untrusted timeout, which must never let the walk go on). `op-stopped`,
+ * `stopped-after-completion` and `confirm-stopped` are terminal conservatively.
+ */
+const HELD_ERROR_CAUSES: ReadonlySet<MutantErrorCause> = new Set<MutantErrorCause>([
+  "session-reused",
+  "unstable",
+  "warm-prefix-unstable",
+  "warm-timeout-unconfirmed",
+  "warm-confirmation-incomplete",
+  "runner-refused",
+]);
 
 /**
  * One activation attempt. Retries ONLY a `pre-dispatch-rejected` failure (provably never reached

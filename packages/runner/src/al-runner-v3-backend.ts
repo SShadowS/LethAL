@@ -1787,6 +1787,8 @@ export interface V3LaneView extends ExecutionBackend {
   close(): Promise<void>;
   /** The per-mutant calls a lane view always has (optional on `ExecutionBackend`). */
   sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void>;
+  /** PR-81: required, so a lane view cannot forget it (a forgotten hook would skew `pairRequests` on parallel runs only). */
+  dropPendingPair(mutantId: string): void;
   useCoveringBudgets(
     mutantId: string,
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
@@ -5629,6 +5631,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       mayStartGroup: () => b.mayStartGroup(), // R948: per activation, shared gate, one turn at a time
       run: (ref, opts) => b.runOn(lane, ref, opts),
       sendKillPair: (id, ref) => b.sendKillPairOn(lane, id, ref),
+      dropPendingPair: (id) => b.dropPendingPairOn(lane, id),
       cutState: (id) => b.cutStateOn(lane, id),
       restoreCutState: (id, state) => b.restoreCutStateOn(lane, id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
@@ -8908,6 +8911,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   async sendKillPair(mutantId: string, ref: TestMethodRef): Promise<void> {
     return this.sendKillPairOn(this.soleLane("sendKillPair"), mutantId, ref);
+  }
+
+  /** PR-81: see `ExecutionBackend.dropPendingPair`. */
+  dropPendingPair(mutantId: string): void {
+    this.dropPendingPairOn(this.soleLane("dropPendingPair"), mutantId);
+  }
+
+  private dropPendingPairOn(lane: Lane, mutantId: string): void {
+    if (lane.pair?.mutantId === mutantId) lane.dropPair();
   }
 
   private async sendKillPairOn(lane: Lane, mutantId: string, ref: TestMethodRef): Promise<void> {

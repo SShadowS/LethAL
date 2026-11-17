@@ -1056,4 +1056,12 @@ export interface ExecutionBackend {
    * before.
    */
   sendKillPair?(mutantId: string, ref: TestMethodRef): Promise<void>;
+
+  /**
+   * PR-81 (R1066), OPTIONAL: drop the kill pair `sendKillPair` left pending for this mutant. The
+   * covering loop calls it before it re-activates a mutant after a cold confirm that did not pass
+   * (a held error), so the next `activate(mutantId)` is not read as the pair's reproduction. A
+   * no-op when no pair is pending for that mutant. bcdev has no pair and does not implement it.
+   */
+  dropPendingPair?(mutantId: string): void;
 }

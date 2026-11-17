@@ -195,3 +195,18 @@ row that do NOT carry the marker. The result goes in addendum A.
   (H1) is covered by PR-55's condition when PR-55 lands first (delta review, L2).
 - The cause stability of an `error` across orders (only the class is made stable).
 - `group-*` causes stay terminal. They describe the group call itself, so walking on through the same call is not attempted.
+
+## Addendum A (2026-11-16, before the build merged): the L4 count and the hang-gate check
+
+**L4 measurement** (source: `/coord/handoff/PR-81/cost.md`, section L4; DO's stored R-984 runs). Marker: `V3_REFUSAL_PREFIX`.
+- Scope: 1,670 mutants scored `error` (the walks a non-after-stop refusal ended), 1,848 refusal rows. Every error row in them carries the marker.
+- Rows after a refusal, same mutant and codeunit (1,680): 1,483 pass; 197 error, refused again and marked; 0 fail without the marker; 0 fail with it. Widened to any codeunit of the same mutant: also 0 fail rows.
+- The store has no call id, so "the same call" is approximated by mutant, codeunit and row order. It covers walks that ended as `error` only.
+- **Result: the count is 0, so the reliance is stated in the code beside the hold** and `runner-refused` is held without the "last row of its call" restriction.
+
+**Hang-gate row check.** No stored hang-gate store (ON or SINGLE) was found quickly, so no stored test row was checked for an N error. The prediction rests on the PR-51 argument: its list of every hang-gate walk after its held timeout shows only further hangs or nothing, and no frozen baseline holds an `error`.
+
+**Build notes.**
+- PR-51's `P5a`, `P5b` and `P11c` assert that the walk stops at a session-reused or unstable error that follows a held timeout (`nthOf(T3) === 0`). Under this rule that error is held and the walk goes on (`nthOf(T3) === 1`); the class (`timeout-killed`) is unchanged. These three assertions need updating by the owner of PR-51's file.
+- The L5 net (a `survived` verdict still standing while an error is held) is defence in depth: no walk reaches it, because a replay ending with no verdict always leaves `notReproduced` set.
+- A guard throws when a walk holds more errors than it has covering tests, so a walk that fails to advance stops by name instead of looping.
