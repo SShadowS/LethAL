@@ -5175,7 +5175,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             const settled = await settleAll(); // PR-119: a backward pick must not run beside a sample
             if (settled === "dropped") return;
             if (settled === "stop" || (concurrent && stopNow())) {
-              discardAll();
               stopped = true;
               break;
             }
@@ -5201,16 +5200,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
               stopped = true;
               break;
             }
-            if (stopNow()) {
-              discardAll();
-              stopped = true;
-              break;
-            }
           }
           const size = await admit(pos);
-          // R955: admission may have waited on `memoryChain`; nothing starts after a stop.
+          // R955: a wait (the queue-full settle, or admission's chain await) may have spent the budget;
+          // nothing starts after a stop. The queue is not discarded: the after-loop settle applies it in stop mode.
           if (concurrent && stopNow()) {
-            discardAll();
             stopped = true;
             break;
           }
@@ -5246,7 +5240,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           const settled = await settleAll();
           if (settled === "dropped") return;
           if (settled === "stop" || (concurrent && stopNow())) {
-            discardAll();
             stopped = true;
             break;
           }
@@ -5262,7 +5255,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           const settled = await settleAll();
           if (settled === "dropped") return;
           if (settled === "stop" || (concurrent && stopNow())) {
-            discardAll();
             stopped = true;
             break;
           }

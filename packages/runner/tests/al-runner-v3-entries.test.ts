@@ -12618,12 +12618,15 @@ describe("PR-127: up to two cross-check samples in flight", () => {
     t.r.b.baselinePhase(false);
   };
   /** The loop's own error: the baseline request of the n-th call (1-based) throws. */
-  const loopThrowsAt = (t: Rigged, n: number) => {
+  const loopThrowsAt = (t: Rigged, n: number, onThrow?: () => void) => {
     const h = t.r.b as unknown as { baselineRequest: (...a: unknown[]) => Promise<unknown> };
     const realReq = h.baselineRequest.bind(t.r.b);
     let calls = 0;
     h.baselineRequest = async (...a) => {
-      if (++calls === n) throw new Error("loop boom");
+      if (++calls === n) {
+        onThrow?.();
+        throw new Error("loop boom");
+      }
       return realReq(...a);
     };
   };
@@ -12713,7 +12716,7 @@ describe("PR-127: up to two cross-check samples in flight", () => {
   });
 
   // ---- I3: after a stop, nothing new starts ----
-  test("I3: the budget spent during the queue-full wait starts no third one-shot", async () => {
+  test("I3: the budget spent during the queue-full wait starts no third one-shot (the post-admission re-check catches it)", async () => {
     const held: { log?: string[] } = {};
     const t = await setup({
       hold: { [S1]: (l) => l.includes(`req:${S3}`) },
@@ -12755,6 +12758,38 @@ describe("PR-127: up to two cross-check samples in flight", () => {
     expect(flag.spent).toBe(true);
     expect(t.log).toContain(`start:${S1}`);
     expect(t.log).not.toContain(`start:${S2}`);
+  });
+
+  test("I3: a stop at admission does not lose an older drop: the queue is applied in stop mode, not discarded", async () => {
+    const flag = { spent: false };
+    const held: { r?: Rig } = {};
+    const t = await setup({
+      oneShotRows: differsAt(S1), // A (the older sample) resolves dropped
+      extra: { memoryHeadroomGb: 4 },
+      seams: {
+        memoryReader: () => memSample(18 * GIBS),
+        memorySleep: async () => {},
+        anonReader: () => GIBS,
+      },
+      // Inside the request of position 10, the chain gets a link that spends the budget a macrotask later,
+      // so only B's admission (which awaits the chain, A being queued) sees it.
+      onReq: (cu) => {
+        if (cu !== S2) return;
+        const b = held.r?.b as unknown as { memoryChain: Promise<void> } | undefined;
+        if (b !== undefined)
+          b.memoryChain = b.memoryChain
+            .then(() => Bun.sleep(5))
+            .then(() => {
+              flag.spent = true;
+            });
+      },
+      stopHandle: stopOf({ spent: () => flag.spent }),
+    });
+    held.r = t.r;
+    await fillOnly(t);
+    expect(flag.spent).toBe(true);
+    expect(t.log).not.toContain(`start:${S2}`); // no new one-shot
+    expect(t.rep().dropped).toContain(`codeunit ${S1}`); // and A's drop was applied
   });
 
   test("I3: a younger stop found at quiesce cancels the backward pick", async () => {
@@ -12802,20 +12837,27 @@ describe("PR-127: up to two cross-check samples in flight", () => {
 
   // ---- I4: nothing outlives the fill ----
   test("I4: finally awaits the queue (the loop's own error)", async () => {
-    const t = await setup({
-      hold: { [S1]: () => false, [S2]: () => false }, // both outlast the throw (capped waits)
+    // Both samples are held until the loop has thrown (plus a few ticks): only an awaiting finally sees them end.
+    const thrown = { at: false, ticks: 0 };
+    const release = () => thrown.at && ++thrown.ticks > 5;
+    const t = await setup({ hold: { [S1]: release, [S2]: release } });
+    loopThrowsAt(t, 14, () => {
+      thrown.at = true;
     });
-    loopThrowsAt(t, 14);
     await expect(baseline(t.r.b, SUITE)).rejects.toThrow("loop boom");
     expect(t.log).toContain(`end:${S1}`);
     expect(t.log).toContain(`end:${S2}`);
   });
 
   test("I4: finally awaits the discarded list (an older drop returns the fill with a younger sample still running)", async () => {
+    // B is held until A's drop was applied (the fill is returning), plus a few ticks.
+    const ticks = { n: 0 };
+    const held: { rep?: () => { dropped: string | undefined } } = {};
     const t = await setup({
       oneShotRows: differsAt(S1),
-      hold: { [S2]: () => false },
+      hold: { [S2]: () => held.rep?.().dropped !== undefined && ++ticks.n > 5 },
     });
+    held.rep = t.rep;
     // What the log held when the fill closed its lane (the first thing after the sample awaits).
     const h = t.r.b as unknown as {
       closeLane: (l: unknown, reason: string, ...rest: unknown[]) => Promise<unknown>;
