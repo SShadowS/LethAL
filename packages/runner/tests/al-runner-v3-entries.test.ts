@@ -9604,9 +9604,9 @@ describe("R951 R2-R6: replacement samples, kept one-shot answers", () => {
     let n = 0;
     const r = await six({
       seams: { concurrentSamples: false }, // PR-119: the spent() read count below is the in-place flow's
-      // spent() is read at each loop top and once after the skipped sample's run: the 4th read is
-      // the loop top before the replacement (CUS[2]), where the fill stops.
-      stopHandle: { spent: () => ++n >= 4, signalled: () => false, stopForMemory: () => {} },
+      // spent() is read twice per request (PR-119: again after the pre-check) and once after the skipped
+      // sample's run: the 6th read is the loop top before the replacement (CUS[2]), where the fill stops.
+      stopHandle: { spent: () => ++n >= 6, signalled: () => false, stopForMemory: () => {} },
     });
     stubCus(r.b, { [CUS[1] ?? 0]: { timedOut: true, wallMs: 1 } });
     await baseline(r.b, SUITE6);
@@ -12021,7 +12021,12 @@ describe("PR-119: cross-check samples beside the daemon", () => {
   describe("memory (the guard on, a fixed reader)", () => {
     const guarded = (
       used: (held: { r?: Rig }) => number | undefined,
-      o: { rss?: number; hooks?: Hooks } = {},
+      o: {
+        rss?: number;
+        hooks?: Hooks;
+        sampleRss?: () => number;
+        stopHandle?: RigOpts["stopHandle"];
+      } = {},
     ) => {
       const held: { r?: Rig } = {};
       return setup({
@@ -12033,7 +12038,9 @@ describe("PR-119: cross-check samples beside the daemon", () => {
           },
           memorySleep: async () => {},
           anonReader: () => o.rss ?? GIBS,
+          ...(o.sampleRss !== undefined ? { sampleRss: o.sampleRss } : {}),
         },
+        ...(o.stopHandle !== undefined ? { stopHandle: o.stopHandle } : {}),
         ...(o.hooks !== undefined ? { hooks: o.hooks } : {}),
       }).then((t) => {
         held.r = t.r;
@@ -12086,6 +12093,60 @@ describe("PR-119: cross-check samples beside the daemon", () => {
       // admitted (started in flight), but settled before the request started: sequential in effect
       expect(t.idx(`start:${at(1)}`)).toBeGreaterThan(-1);
       expect(t.idx(`end:${at(1)}`)).toBeLessThan(t.idx(`req:${at(2)}`));
+      expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
+    });
+
+    const heldOf = (h: { r?: Rig }) =>
+      (h.r?.b as unknown as { memoryHeld: number } | undefined)?.memoryHeld ?? 0;
+
+    test("a settle at the pre-check whose replacement one-shot spends the stop handle: no daemon request follows (R955)", async () => {
+      const seen: { log?: string[] } = {};
+      // The sample (index 1) stays in flight, held, until the request for index 5 would arrive. That request's
+      // pre-check says no (26 GiB while the sample holds), so the sample settles: skipped, and its backward
+      // replacement (index 4, nothing is left after index 5's position) runs one-shot and spends the stop handle.
+      const t = await guarded(
+        (h) => (heldOf(h) > 0 && (h.r?.serve.requests.length ?? 0) >= 5 ? 26 * GIBS : 20 * GIBS),
+        {
+          hooks: { stub: { [at(1)]: timedOut }, hold: holdUntilReq(at(1), 5) },
+          stopHandle: {
+            spent: () => seen.log?.includes(`end:${at(4)}`) === true,
+            signalled: () => false,
+            stopForMemory: () => {},
+          },
+        },
+      );
+      seen.log = t.log;
+      // Only the fill (the first baseline call): later live calls would send requests of their own.
+      t.r.b.baselinePhase(true);
+      await t.r.b.activate(null);
+      await t.r.b.run(SUITE[0] ?? ref("T"), OPTS).catch(() => {});
+      t.r.b.baselinePhase(false);
+      expect(t.log).toContain(`end:${at(4)}`); // the replacement ran, inside the settle
+      expect(t.r.serve.requests).toHaveLength(5); // and the request for index 5 never went out
+    });
+
+    test("the pre-check reads with the in-flight sample's reservation already held (its gate was queued first)", async () => {
+      const reads: { req: number; held: boolean }[] = [];
+      const t = await guarded(
+        (h) => {
+          reads.push({ req: h.r?.serve.requests.length ?? 0, held: heldOf(h) > 0 });
+          return 20 * GIBS;
+        },
+        { hooks: { hold: holdUntilReq(at(1), 3) } },
+      );
+      await baseline(t.r.b, SUITE);
+      // after request 1 is answered (2 requests in): admission, the sample's own gate, the pre-check, the gate of request 2
+      expect(reads.filter((x) => x.req === 2).map((x) => x.held)).toEqual([
+        false,
+        false,
+        true,
+        true,
+      ]);
+    });
+
+    test("the sampleRss seam replaces the per-pid read in admission: 0 means the sample runs in place", async () => {
+      const t = await guarded(() => 20 * GIBS, { sampleRss: () => 0 });
+      await baseline(t.r.b, SUITE);
       expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
     });
   });

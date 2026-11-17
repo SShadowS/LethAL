@@ -1,6 +1,31 @@
 # PR-119 (R1107): run the daemon fill's cross-check samples beside the daemon
 
-Status: r4 (coord PR-119, lethal-preproc, 2026-11-17). r4 answers lethal-code's review of r3 (§0b). r3 answered the delta
+Status: r5 (coord PR-119, lethal-preproc, 2026-11-17). r5 answers the two reviews of the built diff (§0c). r4 answers
+lethal-code's review of r3 (§0b).
+
+## 0c. The two reviews of the built diff (lethal-code; opus), finding by finding
+- **R955 after a settle (low-medium, lethal-code).** In `send()`, the settle in `beforeRequest()` can run a replacement
+  one-shot long enough to spend the budget. The request then went on.
+  - Fixed: `send()` checks `spent()` again after the settle, as the sequential fill does before every request.
+- **DBM's admission read the real daemon RSS (medium, opus; low, lethal-code).** With no live daemon pid (a dirty-row close
+  on the unbatched path, or no pid), S reads 0, the sample runs in place, and DBM fails, which under R1109 blocks every
+  update.
+  - Fixed: a seam `sampleRss` that DBM fixes at 1 GiB (§7.1).
+- **The build sat on a base without PR-117 (medium, opus).** Merged. The overlap check sits before the accessor check and
+  before `dbmBatched = dbmSeam`.
+- **The sample's memory gate must be queued before its first await (low, both).** `beforeRequest` waits on `memoryChain` to
+  see the sample's reservation.
+  - Pinned twice: a comment on `oneShotBaselineAnswer`'s first line, and a check where the sample starts.
+  - If `memoryChain` did not change, the fill throws `al-runner-v3-sample-gate-not-queued`.
+- **A loop throw while a `dropped` sample is in flight (low, opus).** `finally` acts on `threw` alone, so the loop's error
+  stands, and the session is refused where the sequential fill would have dropped and run one-shot. That is the safe
+  direction (no verdicts), and §4.9 chose it. It is now in §7.2's allowed differences.
+- **Test strength (low, opus):**
+  - "applied only at the settle" pins that the loop runs on, not where the result is applied. The backward-pick and
+    too-slow tests pin that.
+  - "a differing compare does not unlock R1001" cannot be written: a differing compare always drops first.
+  - Settle point 5 is pinned by the existing R1001 "before the 11th request" test, which now runs concurrent.
+ r3 answered the delta
 review of r2 (§0a), and r2 answered the spec-adversary review of r1 (§0). The pre-commitment of the proof runs (§7) is
 committed to master, with this spec's final text, before any proof run.
 
@@ -182,7 +207,8 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
    - DB and DBI cannot overlap: DB has 1 codeunit, and DBI's codeunits are all per-test.
    - **The DBM change, a gate change of its own (r3, delta review #2):**
      - DBM, the only leg with more than one sample over more than one request, gets a fixed `memoryReader` seam (as DBI has)
-       and asserts `samplesOverlapped >= 1`.
+       and a fixed `sampleRss` seam (1 GiB, r5), and asserts `samplesOverlapped >= 1`. So admission reads no host's and
+       no daemon's real memory.
      - DBM sets the `concurrentSamples` seam to `true` itself and never relies on the default (r4, review A), so a default of
        `false` (§7.3) cannot fail DBM and switch off PR-117's `batchFacts`. The overlap check is one of the leg's checks, so
        it runs before the leg's final `dbmBatched = true`.
@@ -212,7 +238,9 @@ No lane daemon lives during a fill: `deploy` closes them, and lanes start after 
    - `replacements` (a skipped sample's forward pick is taken after the settle position);
    - the order of `skippedError` / `sampledSkipped`;
    - `skippedTooSlow` (only more, from longer durations);
-   - `served`, in either direction (a re-run, or a different replacement pick).
+   - `served`, in either direction (a re-run, or a different replacement pick);
+   - a session refused by a loop error while a `dropped` sample was in flight, where the sequential fill would have
+     dropped first and run one-shot (r5; the safe direction, since no verdicts are produced).
 
    **The wall:** if (b) has `samplesOverlapped >= 6` (9 samples; the last never overlaps), its baseline wall is at most
    (a)'s minus 15 s. With fewer, the wall is reported, not judged, with `sampleMemoryAtStart` and the admission refusals.

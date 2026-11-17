@@ -148,8 +148,9 @@ The legs:
   - Asserts: per mutant the two sessions agree (verdict, `killingTest`, note), a self-relative check with no new
     frozen baseline file; the daemon baseline is not dropped; `requests === codeunits` (4); the sample count equals
     `baselineSampleIds(4).length`; `judgeDaemonBaseline("DBM", ...)` names every skip.
-  - PR-119: the daemon session's memory reader is fixed (1 GiB used of 32 GiB, as in DBI), so the admission of a
-    concurrent cross-check sample is the same on every host, and the leg asserts `samplesOverlapped >= 1` (samples at
+  - PR-119: the daemon session's memory reader is fixed (1 GiB used of 32 GiB, as in DBI), and so is the sample size it
+    admits on (`sampleRss`, 1 GiB). The session sets `concurrentSamples` to true itself. So the admission of a
+    concurrent cross-check sample is the same on every host and every build, and the leg asserts `samplesOverlapped >= 1` (samples at
     index 1 and 3; codeunit 2 always needs a request of its own). `DBM_FIGURES` and `GATE_WARNINGS` do not change.
   - Batching is off, so these are today's counts. PR-114b turns batching on for this leg (batch size 2): requests 4 -> 2.
   - Warning sets (`GATE_WARNINGS`, keys `dbm-daemon` and `dbm-oneshot`, one per session), observed: daemon `al-runner-v3-memory-guard` and `al-runner-v3-serve-flagged-unknown`; one-shot `[]`.
