@@ -1642,6 +1642,8 @@ describe("runSession --resume (R47)", () => {
     expect(batch0After.map((m) => m.mutantCode).sort()).toEqual(
       batch0Before.map((m) => m.mutantCode).sort(),
     );
+    // PR-147: the attribution compare below is not undefined vs undefined throughout
+    expect(batch0Before.some((m) => m.coverageAttribution !== undefined)).toBe(true);
     for (const after of batch0After) {
       const before = batch0Before.find((m) => m.mutantCode === after.mutantCode);
       if (before === undefined) throw new Error(`no prior verdict for ${after.mutantCode}`);
