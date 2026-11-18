@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1081 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**47 of 1082 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1126,6 +1126,7 @@ that ordering is the priority.
 - **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · open
 - **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · closed 2026-11-17 — measured by PR-127: correct (0 moves) but no wall gain…
 - **R1115** · The kept-refusal drift check counts a test that is red at baseline as unreachable, though a mutant can reach it: false drifts cost a daemon restart · [R1115.md](docs/roadmap/R1115.md) · open
+- **R1119** · TIMING has no figure for lane barrier time or lane idle time: PR-121a's barrier and a window running on one lane are invisible unless PR-121's offline gaps.ts is run on the events · [R1119.md](docs/roadmap/R1119.md) · open — filed by lethal-bugs from DO window x3, 2026-11-18 (orchestrator)
 
 ---
 
