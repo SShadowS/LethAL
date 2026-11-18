@@ -20,7 +20,14 @@
  * with `tar --format=ustar`.
  */
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, lstatSync, readdirSync, realpathSync } from "node:fs";
+import {
+  cpSync,
+  createReadStream,
+  existsSync,
+  lstatSync,
+  readdirSync,
+  realpathSync,
+} from "node:fs";
 import { type FileHandle, mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
@@ -114,6 +121,31 @@ export const GATE_ALPACKAGES = [
   "fixtures/sandbox-tests/.alpackages",
   "fixtures/sandbox-data-tests/.alpackages",
 ] as const;
+
+/**
+ * PR-165: the test dir the v3 itest hands al-runner. v3 also reads a test project's OWN `.alpackages`,
+ * beside `packagesDir`. A full symbol-tar extraction (compile:fixtures, kraken's lane setup) leaves one in
+ * test projects such as `sandbox-names-tests`. Measured: its Base Application 28.0 made v3 turn test data
+ * off for N1, N1E, N1S, WR and WRE, while a fresh worktree passed. So such a test dir is copied to `to`
+ * without any `.alpackages`, and the legs read what a fresh worktree reads. A dir whose `.alpackages` is
+ * one of `gate` (the folders the itest prepares and means to use), or that has none, is returned as is.
+ */
+export function v3GateTestDir(
+  repo: string,
+  testDir: string,
+  to: () => string,
+  gate: readonly string[] = GATE_ALPACKAGES,
+): string {
+  const own = join(testDir, ".alpackages");
+  if (!existsSync(own)) return testDir;
+  if (gate.some((g) => join(repo, g) === own)) return testDir;
+  const dest = to();
+  cpSync(testDir, dest, {
+    recursive: true,
+    filter: (p) => !relative(testDir, p).split(/[\\/]/).includes(".alpackages"),
+  });
+  return dest;
+}
 
 /** At the worktree root: the sha256 of the tar the folders came from (or were verified against). */
 export const SYMBOLS_MARKER = ".fixture-symbols.sha256";

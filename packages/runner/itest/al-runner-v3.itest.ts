@@ -39,7 +39,7 @@
  * No leg needs a BC server.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync } from "node:fs";
 import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -198,7 +198,7 @@ import {
   readGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { prepareFixtureSymbols } from "./fixture-symbols";
+import { prepareFixtureSymbols, v3GateTestDir } from "./fixture-symbols";
 import { DBM_FIGURES, GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -355,6 +355,20 @@ async function microsoftDeps(scratch: string): Promise<string> {
   return dir;
 }
 
+/** PR-165: each test dir staged without its own `.alpackages`, once per run (see `v3GateTestDir`). */
+const stagedTestDirs = new Map<string, string>();
+let testDirStage: string | undefined;
+function gateTestDir(testDir: string): string {
+  const hit = stagedTestDirs.get(testDir);
+  if (hit !== undefined) return hit;
+  const dir = v3GateTestDir(REPO, testDir, () => {
+    testDirStage ??= mkdtempSync(join(tmpdir(), "lethal-v3-testdirs-"));
+    return join(testDirStage, String(stagedTestDirs.size), basename(testDir));
+  });
+  stagedTestDirs.set(testDir, dir);
+  return dir;
+}
+
 function backendCfg(
   o: Partial<AlRunnerV3Config> &
     Pick<
@@ -371,7 +385,7 @@ function backendCfg(
       transport: TRANSPORT,
       environment: ENVIRONMENT,
     },
-    o,
+    { ...o, testDir: gateTestDir(o.testDir) },
   );
 }
 
