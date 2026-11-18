@@ -233,6 +233,41 @@ describe("R826: the large-method warning", () => {
     expect(message).toContain("--only");
   });
 
+  test("R1118: each listed operator's figure, and the all-out one, match a real emit without them", async () => {
+    const files = await project(150);
+    const [f] = files;
+    if (f === undefined) throw new Error("no file");
+    const big = largeMethodOf(f, tierOf);
+    const without = big?.without ?? [];
+    expect(without.length).toBeGreaterThan(0); // not an empty list passing for want of data
+    const used = [...new Set(f.specs.map((s) => s.operatorName))];
+    for (const w of without) {
+      const g = (
+        await project(
+          150,
+          used.filter((o) => o !== `lethal.${w.operator}`),
+        )
+      )[0];
+      if (g === undefined) throw new Error("no file");
+      expect(w.methodBytes).toBe(largestMethodBytes(emitted(g)));
+    }
+    const listed = new Set(without.map((w) => `lethal.${w.operator}`));
+    const h = (
+      await project(
+        150,
+        used.filter((o) => !listed.has(o)),
+      )
+    )[0];
+    if (h === undefined) throw new Error("no file");
+    expect(big?.allOutBytes).toBe(largestMethodBytes(emitted(h)));
+    expect(big?.allOutBytes ?? Number.POSITIVE_INFINITY).toBeLessThan(LARGE_METHOD_BYTES);
+    const message = largeFoldWarning(files, tierOf) ?? "";
+    expect(message).toContain("without empty-block ");
+    expect(message).toContain("without all of them together ");
+    expect(message).toContain("--lines narrows which mutants run");
+    expect(message).toContain("System.OutOfMemoryException");
+  });
+
   test("it stays quiet below both figures", async () => {
     const files = await project(10);
     expect(largeFoldWarning(files, tierOf)).toBeUndefined();

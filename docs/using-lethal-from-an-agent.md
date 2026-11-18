@@ -157,6 +157,11 @@ suspect, not a proven cause. The 512 KB is not a measured limit: it is the size 
 and the warning refuses nothing. If a run is quarantined because a run's fate on the server is unknown, as when the tier stops, and
 its batch holds such a method, the quarantine reason names that method as one suspect. To shrink the method, leave out the
 operators the warning lists, with one `--exclude-operator` each, or narrow the run with `--only`.
+- **What each would save (R1118):** the warning gives, per file, the largest method with each listed operator left out, and with all
+  of them out together. Each figure is a real emit, so pick from it rather than trying one dry run per operator.
+- **`--lines` is not the lever here:** it narrows which mutants run, but a fold inside one procedure shrinks only guard by guard.
+- **Measured once:** a 23.9 MB method's publish was refused on BC 29 for Linux (System.OutOfMemoryException), and the tier stayed up
+  (R826).
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
