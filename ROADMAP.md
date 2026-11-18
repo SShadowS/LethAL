@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**42 of 1094 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**43 of 1095 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1139,6 +1139,7 @@ that ordering is the priority.
 - **R1128** · The fixture symbol tar has two gaps: build-fixture-symbols-tar.sh builds sandbox-wrapped without WRAPDEF (its tests then fail AL0185), and sandbox-dates, -optin and -order (with their tests) are in no tar, so compile:fixtures SKIPs them everywhere · [R1128.md](docs/roadmap/R1128.md) · done (9219e265; gap 2 in 7032d367)
 - **R1129** · Two R622 watchdog tests in scripts/verify.test.ts carry wall-clock bounds that a slow Windows CI runner missed (isChildOf timed out at 60 s; the serial spin run took 17.5 s against a 15 s bound): a flake that reddens the Windows check on unrelated changes · [R1129.md](docs/roadmap/R1129.md) · done (7848be53)
 - **R1130** · A fixture test project's own .alpackages (from a full symbol-tar extraction) silently changed itest:alrunner-v3's readings: v3 reads it beside packagesDir, so N1, N1E, N1S, WR and WRE turned test data off; the itest now hands v3 a copy without it · [R1130.md](docs/roadmap/R1130.md) · done (bb021380)
+- **R1132** · Shell writes into source (`cat >> file <<EOF`) still pass: no-shell-edits blocks only `sed -i`, and the advisory hook (PR-122) only warns; a PR-179 builder appended test code by heredoc. Proposal: block such writes into the repo, for the owner to rule at the advisory's week review (2026-11-24) · [R1132.md](docs/roadmap/R1132.md) · open — a proposal (hook changes need the owner's word); filed by lethal-preproc from coord PR-179, 2026-11-18
 
 ---
 
