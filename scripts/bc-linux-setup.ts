@@ -119,10 +119,10 @@ export {
 const REPO = join(import.meta.dir, "..");
 export const SECRET_PATH = "/coord/secrets/bc-linux.env";
 export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
-// R-990 (R969, R999): the 1.0.0.26 build (`databaseId`, `InherentPermissions = X` on LC Control
-// State), compiled clean with alc 18.1.43.
-export const CONTROL_APP = "/coord/handoff/R-990/control/LethAL_LethAL Control_1.0.0.26.app";
-export const CONTROL_SHA256 = "12dafd1212d87a83a4860769957bd947af799284c1b7358ba2658a5a08e8701d";
+// PR-180 (R1127): the 1.0.0.27 build (each test method starts on the client's default WorkDate),
+// compiled clean with alc 18.1.43 against the 28.4 packages (`/coord/handoff/PR-180/control/alc.log`).
+export const CONTROL_APP = "/coord/handoff/PR-180/control/LethAL_LethAL Control_1.0.0.27.app";
+export const CONTROL_SHA256 = "505f4515b39e28d70e27747c497bd4e29f670aede8cc228d61840c3e266ec577";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";
