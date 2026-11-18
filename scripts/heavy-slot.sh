@@ -3,11 +3,16 @@
 #
 #   scripts/heavy-slot.sh [--wait] [--peak serve|baseline|gate|build|<GiB>] <baseapp|other> <cmd...>
 #
-# R952 (R953) `--peak`: the job's expected memory peak (serve 8, baseline 12, gate 2, build 1 GiB, or
-# a number); none = the class default (other 8, baseapp 12). It goes into the class file
+# R952 (R953) `--peak`: the job's expected memory peak (serve 8, baseline 12, gate 2, build 3 GiB, or
+# a number); none = the class default (other 8, baseapp 12). PR-179, from R992's measurement of 2,060
+# jobs: a build uses 2.2-3.0 GiB; a DO single `lethal run` on v3 declares at least 8 GiB, and a Base
+# Application Fixed Asset run at least 10 GiB (both went above lower declarations). It goes into the class file
 # ("<class> <pid> <peak>") and the guard admits the job only when the container's cgroup has room for
 # it: used + peak + reserve and the held slots' peaks + peak + reserve both fit under memory.max
 # (scripts/heavy-slot-class.ts, memoryVerdict). A memory refusal is a guard refusal like any other.
+# PR-179 (R992 ruling, f = 0.8, revisit 2026-11-25): in the held-peaks sum a held slot counts at
+# max(its measured process-tree RSS, 0.8 x its declared peak). The reading is heavy.<n>.peak.rss, written by
+# the sampler every 5 s; one older than 30 s, or missing or unreadable, counts the full declared peak.
 # R960 (owner ruling 2026-11-13): where the cgroup names a limit, memory is the ONLY rule: no job
 # count, no BaseApp-class cap; a heavy job in no slot counts at its class default peak. The six slot
 # files are a ceiling that binds only when six small jobs run at once. On a
@@ -56,7 +61,7 @@ if [ "${1:-}" = "--peak" ]; then
   serve) peak=8 ;;
   baseline) peak=12 ;;
   gate) peak=2 ;;
-  build) peak=1 ;;
+  build) peak=3 ;;
   *)
     # a zero peak passes here and is refused by the guard (exit 2, the command never runs)
     if [[ "${2:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -118,7 +123,7 @@ cleanup() {
     printf '%s\t%s\theavy.%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$job_started" "$(date -u +%FT%TZ)" "$job_slot" "$cls" \
       "$peak" "$([ -s "$peakfile" ] && awk '{printf "%.2f", $1 / 1048576}' "$peakfile" || echo '?')" "$rc" \
       "$(cat "$class" 2>/dev/null)" "$job_cmd" >>"$dir/heavy-peaks.tsv"
-    rm -f "$peakfile"
+    rm -f "$peakfile" "$peakfile.rss"
   fi
   [ -n "$ticket" ] && rm -f "$qdir/$ticket" "$qdir/$ticket.refused"
   [ -n "$class" ] && rm -f "$class"
@@ -180,6 +185,8 @@ try_once() {
       job_slot="$n"
       job_cmd="$(printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-160)"
       peakfile="$dir/heavy.$n.peak"
+      # PR-179: a reading left by a job that died without cleanup must never count for this one.
+      rm -f "$peakfile.rss"
       "${BUN:-bun}" "$(dirname "$0")/heavy-slot-peak.ts" "$$" "$peakfile" "${LETHAL_HEAVY_SAMPLE_S:-5}" &
       sampler=$!
       job_started=$(date -u +%FT%TZ)

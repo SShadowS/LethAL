@@ -359,7 +359,7 @@ const targets = [
         "Confirmation",
         `confirmation-v${CONFIRMATION_VERSION}.schema.json`,
         "LethAL confirmation",
-        "The JSON `lethal confirm-merge` writes with --out (PR-171, R1122): every mutant of an al-runner-v3 run, joined to the BC run made from it with --confirm-from. NOT a SessionReport. GENERATED from the Confirmation TypeScript declaration by scripts/generate-schemas.ts. A mutant BC did not measure keeps v3's verdict with measuredBy al-runner-v3. A BC `error` is not a measurement and does not override. Read `totals.provenance` beside every score.",
+        "The JSON `lethal confirm-merge` writes with --out (PR-171, R1122): every mutant of an al-runner-v3 run, joined to the BC run made from it with --confirm-from. NOT a SessionReport. GENERATED from the Confirmation TypeScript declaration by scripts/generate-schemas.ts. A mutant BC did not measure keeps v3's verdict with measuredBy al-runner-v3. A BC `error` is not a measurement and does not override. Read `totals.provenance` beside every score. `dependencySourceSha256` holds each run's dependency-symbols hash; when they differ, `flags` holds `dependency-symbols-differ` (PR-177): v3 and BC normally read different symbol builds, so the merge records the difference and does not refuse.",
       ),
       "confirmationVersion",
       CONFIRMATION_VERSION,

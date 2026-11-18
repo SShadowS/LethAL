@@ -4,11 +4,12 @@
  * under /coord (the ledger writer is a stub).
  */
 import { afterEach, test as bunTest, describe, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gateMemoryVerdict } from "./al-runner-v3-update";
 import { slotHeld } from "./corpus-snapshot";
+import { RSS_FRESH_MS, slotRssFile } from "./heavy-slot-class";
 import { heldInputs } from "./heavy-slot-guard";
 
 // Real flock holders need Linux's flock(1); the Windows CI job has none (as heavy-slot-class.test.ts).
@@ -118,5 +119,19 @@ describe("PR-60 gateMemoryVerdict", () => {
       appendLedger: () => {},
     });
     expect(v).toBeUndefined();
+  });
+});
+
+describe("PR-179 heldInputs counts a held slot at max(fresh RSS, 0.8 x declared)", () => {
+  test("fresh reading below 0.8 x declared, above it, stale, and missing", async () => {
+    const dir = mk();
+    for (const n of [1, 2, 3, 4]) await hold(dir, n, `other ${process.pid} 10\n`);
+    writeFileSync(slotRssFile(dir, 1), `${2 * 2 ** 20}\n`); // 2 GiB: counts 8
+    writeFileSync(slotRssFile(dir, 2), `${9 * 2 ** 20}\n`); // 9 GiB: counts 9
+    writeFileSync(slotRssFile(dir, 3), `${2 * 2 ** 20}\n`); // stale: counts 10
+    const old = new Date(Date.now() - RSS_FRESH_MS - 5000);
+    utimesSync(slotRssFile(dir, 3), old, old);
+    // slot 4: no reading: counts 10
+    expect(heldInputs(dir, process.pid, PS_HEAD).heldPeaks).toEqual([8, 9, 10, 10]);
   });
 });

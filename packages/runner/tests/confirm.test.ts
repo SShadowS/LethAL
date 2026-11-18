@@ -14,6 +14,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { hashSourceSnapshot } from "../src/baseline-snapshot";
 import { confirmMergeFromCli, parseCliConfig } from "../src/cli";
 import {
   CONFIRMATION_VERSION,
@@ -504,11 +505,34 @@ describe("assertSameScope", () => {
     }
   });
 
-  test("refuses a differing source sha, dependency sha or identity scheme, and an absent one", () => {
+  test("PR-177: a differing or absent dependency sha does not refuse", () => {
+    expect(() => assertSameScope(base, { ...base, dependencySourceSha256: "z" })).not.toThrow();
+    expect(() =>
+      assertSameScope(base, { ...base, dependencySourceSha256: undefined }),
+    ).not.toThrow();
+  });
+
+  test("PR-177: the scope check follows hashSourceSnapshot: an .al change refuses, a version-only app.json change passes", () => {
+    const snap = (al: string, appJson: string) =>
+      new Map([
+        ["A.Codeunit.al", Buffer.from(al)],
+        ["app.json", Buffer.from(appJson)],
+      ]);
+    const facts = (m: ReadonlyMap<string, Buffer>) => ({
+      ...base,
+      sourceSha256: hashSourceSnapshot(m, []),
+    });
+    const ref = facts(snap("codeunit 1 A { }", '{"id":"x","version":"1.0.0.0"}'));
+    expect(() =>
+      assertSameScope(ref, facts(snap("codeunit 1 A { } ", '{"id":"x","version":"1.0.0.0"}'))),
+    ).toThrow(ConfirmSourceMismatchError);
+    expect(() =>
+      assertSameScope(ref, facts(snap("codeunit 1 A { }", '{"id":"x","version":"9.9.9.9"}'))),
+    ).not.toThrow();
+  });
+
+  test("refuses a differing source sha or identity scheme, and an absent one", () => {
     expect(() => assertSameScope(base, { ...base, sourceSha256: "z" })).toThrow(
-      ConfirmSourceMismatchError,
-    );
-    expect(() => assertSameScope(base, { ...base, dependencySourceSha256: "z" })).toThrow(
       ConfirmSourceMismatchError,
     );
     expect(() => assertSameScope(base, { ...base, identityScheme: 1 })).toThrow(
@@ -777,16 +801,18 @@ describe("runSession with --confirm-from", () => {
       expect(r.deploys).toBe(0);
     });
 
-    test("a differing source sha, dependency sha or identity scheme", async () => {
-      for (const edit of [
-        { sourceSha256: "e".repeat(64) },
-        { dependencySourceSha256: "e".repeat(64) },
-        { identityScheme: 1 },
-      ]) {
+    test("a differing source sha or identity scheme", async () => {
+      for (const edit of [{ sourceSha256: "e".repeat(64) }, { identityScheme: 1 }]) {
         const r = await refused((v) => ({ ...v, ...edit }) as SessionReport);
         expect(r.error, JSON.stringify(edit)).toBeInstanceOf(ConfirmSourceMismatchError);
         expect(r.deploys).toBe(0);
       }
+    });
+
+    test("PR-177: a differing dependency sha is no refusal: the run goes on and deploys", async () => {
+      const r = await refused((v) => ({ ...v, dependencySourceSha256: "e".repeat(64) }));
+      expect(r.error).toBeUndefined();
+      expect(r.deploys).toBeGreaterThan(0);
     });
 
     test("a selected key that matches no mutant of this run", async () => {
@@ -1071,6 +1097,35 @@ describe("mergeConfirmation: every join refusal is made by name", () => {
 
   test("the happy pair merges", () => {
     expect(() => merge(ok())).not.toThrow();
+  });
+
+  test("PR-177: a dependency sha difference merges with the artifact flag and both shas", () => {
+    const p = ok();
+    const same = merge(p);
+    expect(same.flags).toEqual([]);
+    const c = merge({
+      ...p,
+      bc: { ...p.bc, dependencySourceSha256: "e".repeat(64) } as SessionReport,
+    });
+    expect(c.flags).toEqual(["dependency-symbols-differ"]);
+    expect(c.dependencySourceSha256).toEqual({ v3: "d".repeat(64), bc: "e".repeat(64) });
+    expect(renderConfirmation(c).join("\n")).toContain("dependency-symbols-differ");
+    expect(renderConfirmation(same).join("\n")).not.toContain("dependency-symbols-differ");
+  });
+
+  test("PR-177 review: an absent dependency sha on one side or both is flagged, never read as the same", () => {
+    const p = ok();
+    const { dependencySourceSha256: _v3, ...v3NoDep } = p.v3 as SessionReport & {
+      dependencySourceSha256?: string;
+    };
+    const { dependencySourceSha256: _bc, ...bcNoDep } = p.bc as SessionReport & {
+      dependencySourceSha256?: string;
+    };
+    const oneAbsent = merge({ ...p, bc: bcNoDep as SessionReport });
+    expect(oneAbsent.flags).toEqual(["dependency-symbols-differ"]);
+    const bothAbsent = merge({ ...p, v3: v3NoDep as SessionReport, bc: bcNoDep as SessionReport });
+    expect(bothAbsent.flags).toEqual(["dependency-symbols-differ"]);
+    expect(bothAbsent.dependencySourceSha256).toEqual({});
   });
 
   test("bc.json is not a bcdev report", () => {
