@@ -115,3 +115,14 @@ guard.
 - **P1-P3 are unchanged.**
 - **P4 becomes:** the verdicts of covered mutants scored both here and in x1 (`/coord/handoff/R-984/x1.run.report.json`) are compared
   per (file, line, operator). Under 20 shared is inconclusive. Any difference is investigated per mutant.
+
+### Amendment 2 (2026-11-18, before the run ends or is scored): amendment 1 is withdrawn; the original run stands
+- **Amendment 1's premise was wrong.** The resumed run on the dos4 copy (started 04:44:36Z, `/coord/handoff/PR-140/dow/`) is in a
+  real mutant phase on 3 lanes. Read at about 05:10Z: 29,992 mutants scored and 11,872 carried. The orchestrator spotted it.
+  - x4's rc 0 did not mean DO's campaign was complete.
+- **So the original pre-commitment above is the measurement:** the resumed copy, `--peak 15`, `--time-budget 7200`, with P1-P4 as
+  first written.
+  - P4 compares covered mutants that ran live both here and in x1-x3.
+- **The fresh run (`do-window2.sh`) never started.** Its waiting script was stopped before the first run ended.
+- **What was read before this amendment:** only counts (the events, one hold warning, one `lane-idle` close, requests per lane).
+  No prediction was scored, and the run is still going.

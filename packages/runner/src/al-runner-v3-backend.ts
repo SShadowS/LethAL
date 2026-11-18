@@ -1502,7 +1502,9 @@ export type V3DaemonCloseReason =
   /** R1014: a stop signal arrived while a request ran; its answer is dropped (R955). */
   | "stop-signal"
   /** PR-56: the request after a kept refusal gave a row that differs from the baseline where it cannot (`keptRefusalDrift`). */
-  | "kept-refusal-drift";
+  | "kept-refusal-drift"
+  /** PR-140 (R1120): a lane-gate hold closed this daemon of a lane that was not running (idle), which the gate charged. */
+  | "lane-idle";
 
 /**
  * PR-56: what the drift sink gets (`ExecutionBackend.setKeptDriftSink`): the kept refusal text the
@@ -2835,6 +2837,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly sequentialSamplesEnv: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
+  /**
+   * PR-140 (R1120): lanes above 0 the split queue launched and has not ended (`launchLane` .. `releaseLane`).
+   * A lane outside it that holds a daemon is idle; a hold closes such daemons (`closeIdleLanes`).
+   */
+  private readonly activeLanes = new Set<number>();
+  /** PR-140: lanes whose idle daemons are closing; still charged until their processes are gone. */
+  private readonly closingLanes = new Set<number>();
   /** PR-98: the highest peak reading (PR-88) any serve request of this session gave, and where it came from. */
   private peakReading: { bytes: number; source: "hwm" | "sampled" } | undefined;
   /** PR-98: the latest refusal of the lane gate and its parts, for the lane notices. */
@@ -5954,16 +5963,48 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    */
   laneMayStart(k: number): boolean {
     if (k === 0) return true;
+    // PR-140 (delta review 6): a lane whose idle close has not finished waits for it (its `gateChanged`).
+    if (this.closingLanes.has(k)) return false;
     const v = this.decideLanes(this.lanesCharged(k));
     if (v.ok) return true;
+    const idle = this.closeIdleLanes(k);
     if (!this.memoryHoldNoticed) {
       this.memoryHoldNoticed = true;
+      const closing =
+        idle.length > 0
+          ? `; closing the idle daemons of lane(s) ${idle.join(", ")}, which it charged (PR-140)`
+          : "";
       this.notify(
         "al-runner-v3-lane-memory-hold",
-        `[lethal] al-runner-v3-lane-memory-hold: lane ${k} does not start (rule: ${v.rule}); ${v.detail}; this session stays at the lanes already running (PR-98).`,
+        `[lethal] al-runner-v3-lane-memory-hold: lane ${k} does not start (rule: ${v.rule}); ${v.detail}${closing}; the lane is asked again after each measured request (PR-98).`,
       );
     }
     return false;
+  }
+
+  /**
+   * PR-140 (R1120): a hold of lane `k` closes the daemons it charges that do no work: every lane j > k that
+   * holds a daemon and is not active. Only while a split queue runs (a gate watcher is registered), since
+   * only that queue keeps `activeLanes`. Each close ends with `gateChanged`, so the queue asks for `k` again.
+   * It only ever takes memory away. Returns the lanes it started closing.
+   */
+  private closeIdleLanes(k: number): number[] {
+    if (this.gateWatchers.size === 0) return [];
+    const idle = this.laneList.flatMap((l, j) =>
+      j > k && l.holdsDaemon() && !this.activeLanes.has(j) && !this.closingLanes.has(j) ? [j] : [],
+    );
+    for (const j of idle) {
+      const lane = this.laneList[j];
+      if (lane === undefined) continue;
+      this.closingLanes.add(j);
+      void this.closeLane(lane, "lane-idle")
+        .catch(() => {}) // a failed close leaves the daemon map cleared (`closeDaemon`); nothing to retry
+        .finally(() => {
+          this.closingLanes.delete(j);
+          this.gateChanged();
+        });
+    }
+    return idle;
   }
 
   private laneLimitNow(): { rule: string; detail: string } | undefined {
@@ -5983,6 +6024,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (l.holdsDaemon()) charged.add(i);
     });
     for (const k of this.reservedLanes) charged.add(k); // PR-99 (§2.5): launched, first request not measured
+    for (const k of this.closingLanes) charged.add(k); // PR-140: an idle close not finished yet
     return charged.size;
   }
 
@@ -7912,6 +7954,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (lane === undefined || k === 0) return;
     this.lazyLanes.add(lane);
     this.reservedLanes.add(k);
+    this.activeLanes.add(k); // PR-140: never closed as idle until `releaseLane`
   }
 
   /** PR-99: lanes marked by `launchLane`, for the current layout. */
@@ -7919,6 +7962,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   /** PR-99: ends lane `k`'s reservation (its first request was measured, or the lane ended without one). */
   releaseLane(k: number): void {
+    this.activeLanes.delete(k); // PR-140: the lane ended; a daemon it still holds is idle from now
     if (this.reservedLanes.delete(k)) this.gateChanged();
   }
 

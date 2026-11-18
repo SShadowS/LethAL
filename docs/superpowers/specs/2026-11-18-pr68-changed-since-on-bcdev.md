@@ -50,3 +50,21 @@ This task measures the bcdev half on `bc4` (BC 29 W1), where Continia Document O
 - **P3, cost:** the changed run deploys a strict subset (80 of 1,324). Its wall time falls less than its mutant share, since the
   publish and the baseline are fixed costs.
 - **If all hold:** R227's bcdev half is recorded as measured, and the roadmap item stays closed.
+
+## Amendment 1 (2026-11-18, before any scored run): the hang-capable baseline, and a 4-file test set
+- **What happened:** two baseline attempts on bc4 were quarantined by a DO test that never answered. Neither was in the scope:
+  - the full arm (first try) on `CDO ABS Auth Settings Tests` (Azure);
+  - the changed arm (second try, after the restart and with the Azure files out) on `StaleExpiryUpgrade_ClearsOnlyTheCurrentCompany`.
+  - Each quarantine costs an owner restart (sql then bc) and a full republish.
+  - The first changed arm (`changed-v1`, 105 files, 1,839 tests) completed. It is kept as a reference and is not one of the scored
+    arms.
+- **The test set for both arms:** the 4 test files that declare a test covering or killing any changed mutant in BC's own
+  `changed-v1` report (`/coord/handoff/PR-68/tests-only-v3.txt`):
+  - `CDODuplicateEDocSendGuardTests`;
+  - `CDOSendonPostingTests`;
+  - `CDOServicePostingTests`;
+  - `CDOFunctionsTests`.
+  - Fixed before both arms run. Both arms use the same set, so P1-P3 compare like with like.
+  - Full-arm mutants covered only by other files read as no-coverage or survived in the full arm, the same in both arms where
+    they are shared.
+- **P1-P3 unchanged.** The v3 hang check of the full scope stands (`v3full`).
