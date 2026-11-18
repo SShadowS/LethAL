@@ -75,6 +75,14 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
 - **Existing legs:** every other leg's frozen figures stay exactly as they are; RC adds a baseline file of its own. The
   gate page `docs/gates/alrunner-v3.md` gains RC's section with these figures.
 
+## 0c. Amendment 3: leg RC's warning set
+- **RC's warning set is `[]`:** `GATE_WARNINGS["al-runner-v3/RC"]` in `gate-expected.ts`.
+- RC's first live run (record mode, edge-4ebfe7913, branch head aaa7c4e2) stopped as INFRA-FAIL at the warnings check,
+  before the table, because the set was not committed. It observed `[]`.
+- No session warning is expected: RC's session is a plain serve session on the pinned build. The recheck's nested
+  session reports through the caveat and its own events, not the session's warning set.
+- The table (§0b) is unchanged and is judged on the next run.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
