@@ -773,11 +773,13 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // /coord/handoff/PR-133/census2/ with two refusers: a plain SetFilter, and one that unwinds through a TryFunction,
   // an OnValidate, a ModalPageHandler and an open TestPage (the state DO reaches it in).
   BIGCODE: String.raw`(?:GL00000000|GU00000001|C10000|C\*)`,
-  // PR-139 added the widths DO window x3 closed on (3, 10, 12, 14, 30, 37, 40), each by name: family `x3-refusals`, census
-  // CLEAN per width at /coord/handoff/PR-139/census/ (its width-10 class with an array, a TryFunction, a nested modal-page and
-  // an OnInsert refuser), and a direct check on DO (a daemon kept through 207 refusals gave the same 443 rows as fresh
-  // daemons). Spec: docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
-  NULS: String.raw`(?:\x00{3}|\x00{4,6}|\x00{10}|\x00{12}|\x00{14}|\x00{30}|\x00{37}|\x00{40})`,
+  // PR-139 added every NUL width M28736's DO requests hold (3, 7, 9-14, 16, 21, 25, 27, 30, 37, 40), each by name: x3 closed on
+  // 7 of them, and the rest share those requests, which a daemon keeps only if every refusal in it is kept. Family
+  // `x3-refusals` measured every width CLEAN (/coord/handoff/PR-139/census2/; the width-10 class with an array, a TryFunction,
+  // a nested modal-page and an OnInsert refuser). Direct checks on DO: a daemon kept through 207 refusals gave the same 443
+  // rows as fresh daemons, and its next request with no mutant matched fresh ones too.
+  // Spec (with amendment 1): docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
+  NULS: String.raw`(?:\x00{3}|\x00{4,6}|\x00{7}|\x00{9}|\x00{10}|\x00{11}|\x00{12}|\x00{13}|\x00{14}|\x00{16}|\x00{21}|\x00{25}|\x00{27}|\x00{30}|\x00{37}|\x00{40})`,
   INTTEXT: "(?:=18|1=18)",
   // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
   ARRAYSTATE: "(?:ArrayStart|Array)",

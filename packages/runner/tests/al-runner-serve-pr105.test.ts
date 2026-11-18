@@ -38,9 +38,9 @@ describe("PR-105 keep entries", () => {
   test("only the measured variants: other widths, texts and codes close", () => {
     const k = (m: string) => keeps(P + m);
     const ev = (v: string) => `Evaluate of \`${v}\` into Decimal (form not pinned by the corpus)`;
-    // measured widths are 4, 5 and 6 NUL characters (PR-139 measured and kept 3, 10, 12, 14, 30, 37 and 40 as well:
-    // al-runner-serve-pr139.test.ts pins those)
-    for (const n of [0, 1, 7]) expect([n, k(ev(nul(n)))]).toEqual([n, false]);
+    // measured widths are 4, 5 and 6 NUL characters (PR-139 measured and kept 3, 7, 9-14, 16, 21, 25, 27, 30, 37 and 40
+    // as well: al-runner-serve-pr139.test.ts pins those)
+    for (const n of [0, 1, 8]) expect([n, k(ev(nul(n)))]).toEqual([n, false]);
     for (const v of [" ".repeat(5), `${nul(2)}  ${nul(2)}`, `${nul(4)}1`, `${nul(3)}\n`])
       expect([v, k(ev(v))]).toEqual([v, false]);
     for (const v of ["=19", "=1", "18", "2=18", "=18 ", "1=18=18", ""])

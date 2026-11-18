@@ -1,6 +1,6 @@
-// PR-139: the NUL-run widths DO window x3 closed its serve daemon on, kept by name after family `x3-refusals` measured
-// each width CLEAN (/coord/handoff/PR-139/census/) and a direct check on DO matched a kept daemon to fresh ones row for row.
-// Spec: docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
+// PR-139: every NUL-run width M28736's DO requests hold, kept by name after family `x3-refusals` measured each width CLEAN
+// (/coord/handoff/PR-139/census2/) and direct checks on DO matched a kept daemon to fresh ones row for row.
+// Spec (with amendment 1): docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
 import { describe, expect, test } from "bun:test";
 import { V3_SERVE_SAFE_REFUSALS, serveDaemonReusable } from "../src/al-runner-server";
 
@@ -14,7 +14,7 @@ const ev = (v: string, into = "Decimal") =>
 
 describe("PR-139 NUL-run widths", () => {
   test("every measured width is kept, by the NUL-run entry alone", () => {
-    for (const n of [3, 4, 5, 6, 10, 12, 14, 30, 37, 40]) {
+    for (const n of [3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16, 21, 25, 27, 30, 37, 40]) {
       const t = P + ev(nul(n));
       expect([n, keeps(t)]).toEqual([n, true]);
       expect([n, names.filter((e) => V3_SERVE_SAFE_REFUSALS[e]?.test(t))]).toEqual([
@@ -25,7 +25,7 @@ describe("PR-139 NUL-run widths", () => {
   });
 
   test("unmeasured widths close: no open range", () => {
-    for (const n of [0, 1, 2, 7, 8, 9, 11, 13, 15, 29, 31, 36, 38, 39, 41, 300])
+    for (const n of [0, 1, 2, 8, 15, 17, 20, 22, 24, 26, 28, 29, 31, 36, 38, 39, 41, 300])
       expect([n, keeps(P + ev(nul(n)))]).toEqual([n, false]);
   });
 

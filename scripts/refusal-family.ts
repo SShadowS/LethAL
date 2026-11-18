@@ -2437,9 +2437,10 @@ page 51001 "X2 Card"
 /**
  * PR-139: the NUL-run Evaluate text at the widths DO's x3 window closed on (3, 10, 12, 14, 30, 37, 40), each driven by an
  * invented cell: the plain shape, a bare array-element Evaluate, a TryFunction, a nested TestPage/modal/TryFunction/OnValidate
- * chain (as X2's NestedValidate) and an OnInsert trigger after writes to a SingleInstance Dictionary. Every cell must give
- * "Evaluate of `<N NULs>` into Decimal (form not pinned by the corpus)". Cell i is codeunit BASE_ID + 1 + i (51001 to 51011);
- * support codeunits 51000 and 51012, tables 51000 and 51001, pages 51000 and 51001 (the id block is 51000 to 51012).
+ * chain (as X2's NestedValidate) and an OnInsert trigger after writes to a SingleInstance Dictionary. Amendment 1 appends the
+ * widths 7, 9, 11, 13, 16, 21, 25 and 27 (the other NUL widths in M28736's DO requests). Every cell must give
+ * "Evaluate of `<N NULs>` into Decimal (form not pinned by the corpus)". Cell i is codeunit BASE_ID + 1 + i (51001 to 51019);
+ * support codeunits 51000 and 51020, tables 51000 and 51001, pages 51000 and 51001 (the id block is 51000 to 51020).
  */
 const X3_VARS = ["T: Text;", "Ch: Char;", "I: Integer;"];
 const x3Nul = (n: number): string[] => ["Ch := 0;", `for I := 1 to ${n} do T += Format(Ch);`];
@@ -2511,7 +2512,7 @@ ${X3_NUL_BODY}
     end;
 }
 
-codeunit 51012 "X3 Cache"
+codeunit 51020 "X3 Cache"
 {
     SingleInstance = true;
 
@@ -2598,6 +2599,14 @@ page 51001 "X3 Card"
       vars: ['R: Record "X3 Ins";', 'Cache: Codeunit "X3 Cache";'],
       setup: ["Cache.Put('a', 1);", "R.Id := 1;"],
     }),
+    // amendment 1: the other NUL widths M28736's DO requests hold (7, 9, 11, 13, 16, 21, 25, 27), appended so C0-C10 keep
+    // their codeunit ids
+    ...[7, 9, 11, 13, 16, 21, 25, 27].map((n) =>
+      t9("Evaluate", "NulInteger", `${n} NULs`, "if not Evaluate(V, T) then;", {
+        vars: ["V: Integer;", ...X3_VARS],
+        setup: x3Nul(n),
+      }),
+    ),
   ],
 };
 
