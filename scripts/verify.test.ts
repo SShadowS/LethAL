@@ -884,8 +884,10 @@ describe("R622 the per-file watchdog", () => {
   );
 
   // R1129: judged on what the watchdog did, not on wall-clock time. SPIN ends ITSELF after 25 s and
-  // then passes, so a spin that did not pass and a stop line printed by the watchdog show the watchdog
-  // stopped it, however slow the machine.
+  // then passes, and bun writes junit only when its run ends. So a stop line printed by the watchdog,
+  // and a junit with no `spins` row (the serial run was killed before it wrote one), show the
+  // watchdog stopped it, however slow the machine. Left alone, the run would end at 25 s with
+  // `spins` = pass in junit.
   test(
     "serial: a file that spins past the limit is stopped by the watchdog, named once",
     async () => {
@@ -896,7 +898,7 @@ describe("R622 the per-file watchdog", () => {
         /^watchdog: (sent SIGTERM to the bun test process \d+ \(serial\)|backstop, .*bun test process)/m,
       );
       const spin = parseJunit(r.junit).find((c) => c.file.endsWith("spin.test.ts"));
-      expect(spin?.status, r.output).not.toBe("pass");
+      expect(spin, r.output).toBeUndefined();
     },
     ownTimeout(40_000),
   );
@@ -926,7 +928,10 @@ describe("R622 the per-file watchdog", () => {
       expect(r.code, r.text).toBe(1);
       expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
       expect(r.text).toContain("watchdog: backstop");
-      expect(r.seconds, r.text).toBeLessThan(15);
+      // R1129: no wall-clock bound (this test runs on Windows). The backstop killed the serial run
+      // before bun wrote junit; left alone, the spin would end at 25 s as `spins` = pass.
+      const spin = parseJunit(r.junit).find((c) => c.file.endsWith("spin.test.ts"));
+      expect(spin, r.output).toBeUndefined();
     },
     ownTimeout(40_000),
   );
