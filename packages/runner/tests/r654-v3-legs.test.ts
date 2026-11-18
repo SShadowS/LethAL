@@ -116,7 +116,6 @@ describe("R654 S2: the leg sets", () => {
       "WR",
       "MOE", // R918: also in V3_GATE_LEGS (MO and WR on serve-entries)
       "WRE",
-      "RC", // PR-144: the withheld-kill recheck; not in V3_GATE_LEGS
       "K",
     ]);
     expect(v3DefaultLegs({ cdo: true, tables: true })).toEqual([
@@ -140,7 +139,6 @@ describe("R654 S2: the leg sets", () => {
       "WR",
       "MOE",
       "WRE",
-      "RC",
       "K",
       "D1",
       "D1c",
@@ -195,7 +193,6 @@ describe("R654 S2, condition (1): on a candidate K is skipped with its summary, 
     ...Object.fromEntries(V3_GATE_LEGS.map((l) => [l, "pass"])),
     ISO: "pass", // R857: a default leg outside V3_GATE_LEGS
     DB: "pass", // R948: so is DB
-    RC: "pass", // PR-144: and RC
     DBI: "pass", // and DBI
     DBM: "pass", // and DBM (PR-114a)
     ...(k !== undefined ? { K: k } : {}),

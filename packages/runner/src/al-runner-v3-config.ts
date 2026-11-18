@@ -92,6 +92,13 @@ export interface AlRunnerV3ConfigSection {
 export const RECHECK_WARNING =
   "kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.";
 
+/**
+ * PR-144: said beside `RECHECK_WARNING` wherever it is. The recheck is covered by unit and real-path tests and by an
+ * approximation on a real project (arm M); no live gate leg runs it end to end yet.
+ */
+export const RECHECK_UNEXERCISED =
+  "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.";
+
 /** PR-144: THE default of `alRunnerV3.recheckBudgetSeconds`. */
 export const V3_RECHECK_BUDGET_SECONDS_DEFAULT = 3600;
 

@@ -3,7 +3,7 @@ import { tier2Operators } from "@lethal/builtin-tier2";
 import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { V3_NOT_RUN_SUFFIX } from "./al-runner-v3-backend";
-import { RECHECK_WARNING } from "./al-runner-v3-config";
+import { RECHECK_UNEXERCISED, RECHECK_WARNING } from "./al-runner-v3-config";
 import {
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
@@ -773,7 +773,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "At least one `killed` mutant was recovered by the opt-in recheck (`alRunnerV3.recheckWithheldKills`, " +
       "PR-144): the main pass withheld its kill, and a second step re-ran it under method isolation, " +
       "one test per session, and the kill reproduced. Each such mutant carries `isolatedRecheck`. " +
-      `${RECHECK_WARNING} ` +
+      `${RECHECK_WARNING} ${RECHECK_UNEXERCISED} ` +
       "Method isolation removes the state an earlier test left; it does not give BC's state back. " +
       "A kill is recovered only if every test of the killing test's codeunit that passed in the main baseline " +
       "still passes alone. That check cannot judge tests v3 refused at baseline, so it does not answer " +

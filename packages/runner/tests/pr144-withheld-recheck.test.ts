@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { V3_NOT_RUN_SUFFIX } from "../src/al-runner-v3-backend";
 import {
+  RECHECK_UNEXERCISED,
   RECHECK_WARNING,
   V3_RECHECK_BUDGET_SECONDS_DEFAULT,
   validateAlRunnerV3Config,
@@ -825,6 +826,18 @@ describe("config and docs", () => {
     const read = (p: string) => readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8");
     expect(read("README.md")).toContain(`Warning: ${RECHECK_WARNING}`);
     expect(read("packages/runner/src/al-runner-v3-config.ts")).toContain(RECHECK_WARNING);
+  });
+
+  test("the not-yet-exercised-live sentence is pinned beside the warning, in the README and the caveat", async () => {
+    expect(RECHECK_UNEXERCISED).toBe(
+      "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.",
+    );
+    const read = (p: string) => readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8");
+    expect(read("README.md")).toContain(`${RECHECK_WARNING} ${RECHECK_UNEXERCISED}`);
+    const { CAVEAT_INTERPRETATIONS } = await import("../src/report");
+    expect(CAVEAT_INTERPRETATIONS["isolated-recheck-kills"].meaning).toContain(
+      `${RECHECK_WARNING} ${RECHECK_UNEXERCISED}`,
+    );
   });
 });
 

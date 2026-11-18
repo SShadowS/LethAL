@@ -337,23 +337,6 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 **agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selected the retired `alrunner` leg (R654). A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
 
-### Leg RC: the withheld-kill recheck (PR-144)
-
-Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0b (master 590d2417), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, has not been recorded: the leg REFUSES to start until it is (R332), and the figure block below names it with no totals until then.
-
-- **Fixture:** `fixtures/sandbox-recheck` and `fixtures/sandbox-recheck-tests` (runtime 17, invented code, ids 76000-76099).
-  - Codeunit "Recheck Logic": `Double(X)` is `exit(X * 2)`, `Triple(X)` is `exit(X * 3)`, and `Bump()` and `Count()` run over a counter in the SingleInstance codeunit "Recheck State".
-  - "Recheck A Tests", in order: `A0_Refuses` (an `Evaluate` of a 10-NUL text into Decimal, refused on edge-4ebfe7913, PR-139's probe), `A1_Doubles` (asserts `Double(2) = 4`).
-  - "Recheck B Tests", in order: `B0_Refuses` (the same refusal), `B1_TriplesAndBumps` (`Bump()`, then asserts `Triple(2) = 6`), `B2_SeesTheBump` (asserts `Count() = 1`: passes after B1 in one codeunit session, fails alone).
-- **Session:** al-runner v3 on the gate's pinned build, `"isolation": "test"` (explicit, so `auto` cannot move the codeunits), serve transport, `"recheckWithheldKills": true`, `--workers 1`. The recheck is built by `v3RecheckOf`, the CLI's own code.
-- **Pre-committed figures, per mutant at the two sites** (`exit(X * 2)` in `Double`, `exit(X * 3)` in `Triple`):
-  - Main pass: every mutant at those sites that changes the returned value is `error` with `withheldKill` (afterTest `A0_Refuses` or `B0_Refuses`).
-  - After the recheck: each `Double` mutant whose main row was a withheld kill is `killed` by `A1_Doubles`, with `killReproduced` and `isolatedRecheck`. Each `Triple` withheld kill stays `error`, its note naming rule (e) and the lost test `B2_SeesTheBump`.
-  - Mutants elsewhere (`Bump`, `Count`) are recorded in the leg's baseline and are not part of this prediction.
-  - Caveats: `isolated-recheck-kills` is present for the recovered `Double` mutants, and `withheld-kills` for the `Triple` ones.
-- **The leg fails by name** (`judgeRecheckLeg`, checked BEFORE the own-baseline compare): when the main pass has 0 withheld kills, when no `Double` mutant is recovered, or when any `Triple` mutant is recovered. It also fails on a `Double` mutant that is recovered by another test or left withheld, and on a `Triple` note that does not name rule (e) and `B2_SeesTheBump`.
-- Every other leg's frozen figures stay exactly as they are.
-
 ## `--workers N` (R766 step b)
 
 `lethal run --backend al-runner-v3 --workers N` (N 2 to 8) runs the mutants on N serve lanes of one backend. No gate
@@ -681,8 +664,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 },
-    "al-runner-v3.recheck.baseline.json": {}
+    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 }
   }
 }
 ```

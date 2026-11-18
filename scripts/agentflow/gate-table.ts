@@ -312,13 +312,11 @@ const RULES: readonly Rule[] = [
       "fixtures/sandbox-optin/",
       "fixtures/sandbox-optin-tests/",
       "fixtures/sandbox-order-tests/",
-      "fixtures/sandbox-recheck/",
-      "fixtures/sandbox-recheck-tests/",
       "fixtures/sandbox-symbols/",
       "fixtures/sandbox-symbols-tests/",
     ),
     legs: ["alrunner-v3"],
-    why: "fixtures only the v3 gate's legs read (sandbox-optin: leg DBM, PR-114a; sandbox-recheck: leg RC, PR-144)",
+    why: "fixtures only the v3 gate's legs read (sandbox-optin: leg DBM, PR-114a)",
   },
   {
     test: startsWith(
