@@ -25,6 +25,7 @@ import {
   TABLE_CONNECTION,
   UNTOUCHED_HANDLE,
   X2_REFUSALS,
+  X3_REFUSALS,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -1181,10 +1182,54 @@ describe("PR-133: the x2-refusals family", () => {
     expect(classes).toHaveLength(2);
   });
 
-  test("last of FAMILIES (place 18, BC-check number 19, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("x2-refusals");
+  test("place 18 of FAMILIES (BC-check number 19, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(17);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051019");
+  });
+});
+
+describe("PR-139: the x3-refusals family", () => {
+  const f = X3_REFUSALS;
+  const nul = (n: number) => "\u0000".repeat(n);
+  const WIDTHS = [3, 10, 12, 14, 30, 37, 40];
+  // 7 widths, then the width-10 array, TryFunction, nested-state and OnInsert cells
+  const WIDTH_OF = [...WIDTHS, 10, 10, 10, 10];
+  const text = (n: number) =>
+    `Evaluate of \`${nul(n)}\` into Decimal (form not pinned by the corpus)`;
+
+  test("11 cells, an OnPrem app, distinct names, the NULs built in AL, the nested cell binds a handler", () => {
+    expect(f.cells).toHaveLength(WIDTH_OF.length);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    expect(f.cells.slice(0, 7).map((c) => c.setup?.at(-1))).toEqual(
+      WIDTHS.map((n) => `for I := 1 to ${n} do T += Format(Ch);`),
+    );
+    expect(f.cells.at(-2)?.handlers).toHaveLength(1);
+    expect(f.cells.at(-3)?.call).toContain("Helper.EvalBare()");
+    expect(f.support).toContain("trigger OnInsert()");
+    expect(f.support).toContain("SingleInstance = true;");
+  });
+
+  test("a run that gives the exact texts makes 7 refusal classes, the width-10 class with 5 cells, none known", () => {
+    const rows = f.cells.map((_, i) => ({
+      name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+      status: "error",
+      notRun: true,
+      message: `NotRun: out-of-scope: ${text(WIDTH_OF[i] ?? 0)}`,
+    }));
+    const results = classify(f, rows);
+    expect(results.filter((r) => r.outcome === "refused")).toHaveLength(WIDTH_OF.length);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    expect(classes).toHaveLength(7);
+    expect(classes.find((c) => c.text === text(10))?.cells).toHaveLength(5);
+  });
+
+  test("last of FAMILIES (place 19, BC-check number 20, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("x3-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(18);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051020");
   });
 });
 
