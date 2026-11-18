@@ -1,5 +1,5 @@
 # R670: the files of the pinned fixture-symbols tar, in archive order (tar -tf, directories left out).
-# sha256 2279aee3857bc2f123f602bb9dc265b1be783a782486d9982ddd37fd50d46359
+# sha256 9b0f76f8d89d0616ac038d52b8bb72587fb91526714389ed2b03bc9b7da32e1b
 examples/credit-limit/.alpackages/Microsoft_Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
@@ -150,6 +150,9 @@ fixtures/sandbox-probes/.alpackages/Microsoft_Base Application_28.0.46665.47126.
 fixtures/sandbox-probes/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
 fixtures/sandbox-probes/.alpackages/Microsoft_System Application_28.0.46665.47126.app
 fixtures/sandbox-probes/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-recheck/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-recheck-tests/.alpackages/LethAL_LethAL Sandbox Recheck_1.0.0.0.app
+fixtures/sandbox-recheck-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-symbols/.alpackages/Microsoft_Application_28.0.46665.47126.app
 fixtures/sandbox-symbols/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 fixtures/sandbox-symbols/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
