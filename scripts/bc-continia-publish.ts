@@ -28,6 +28,7 @@ import { basename, join } from "node:path";
 import { outOfUseDir } from "../packages/runner/itest/out-of-use.ts";
 import { appInputsOfPackage } from "../packages/runner/src/digest-inputs.ts";
 import { readAppIdentity } from "../packages/runner/src/published-test-app.ts";
+import { textSearchApp, textSearchNote } from "../packages/runner/src/text-search-fields.ts";
 import {
   type AppItem,
   type Decided,
@@ -257,6 +258,12 @@ export async function run(args: Args, d: Deps): Promise<void> {
       await d.ops.rows(id.id),
     );
     d.log(`  ${decision.line}`);
+    // PR-128 (R1110): an app that would be installed and declares text-optimized fields needs SQL Server Full-Text Search,
+    // which no call here can read; say so before the publish, not after its HTTP 422.
+    if (decision.line.trimStart().startsWith("publish")) {
+      const ts = textSearchApp(bytes);
+      if (ts !== undefined) d.log(`  note      ${textSearchNote(ts)}`);
+    }
     const item: AppItem = { dir: file, local: bytes, role: "target", gateDeploys: false };
     decided.push({ item, decision });
   }

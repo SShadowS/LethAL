@@ -198,6 +198,56 @@ describe("decisions", () => {
     expect(f.published).toEqual([]);
   });
 
+  test("PR-128 (R1110): an app it would publish that declares a text-optimized field gets the Full-Text Search note; others do not", async () => {
+    const onboarding = buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="id-Onb" Name="Onb" Publisher="${CS}" Version="30.0.0.0" /><Dependencies></Dependencies><Build Timestamp="t" CompilerVersion="18.0.1.1" /></Package>`,
+      "SymbolReference.json": JSON.stringify({
+        Tables: [
+          {
+            Id: 5,
+            Name: "KYC Company",
+            Fields: [
+              { Id: 1, Name: "Name", Properties: [{ Name: "OptimizeForTextSearch", Value: "1" }] },
+            ],
+          },
+        ],
+      }),
+    });
+    const f = fake({}, MS);
+    const { err, log } = await run1(
+      { ...files, "onb.app": onboarding },
+      ["sys.app", "onb.app"],
+      f,
+      ["--predict"],
+    );
+    expect(err).toBeUndefined();
+    const notes = log.split("\n").filter((l) => l.trimStart().startsWith("note"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain("Onb");
+    expect(notes[0]).toContain("KYC Company.Name");
+    expect(notes[0]).toContain("Full-Text Search");
+  });
+
+  test("PR-128: an app already resident with the same content (skipped) gets no note", async () => {
+    const onboarding = buildFakeAppWithEntries({
+      "NavxManifest.xml": `<Package><App Id="id-Onb" Name="Onb" Publisher="${CS}" Version="30.0.0.0" /><Dependencies></Dependencies><Build Timestamp="t" CompilerVersion="18.0.1.1" /></Package>`,
+      "SymbolReference.json": JSON.stringify({
+        Tables: [
+          {
+            Id: 5,
+            Name: "T",
+            Fields: [
+              { Id: 1, Name: "N", Properties: [{ Name: "OptimizeForTextSearch", Value: "1" }] },
+            ],
+          },
+        ],
+      }),
+    });
+    const f = fake({ [`${CS}|Onb`]: onboarding }, MS);
+    const { log } = await run1({ "onb.app": onboarding }, ["onb.app"], f, ["--predict"]);
+    expect(log).not.toContain("Full-Text Search");
+  });
+
   test("a read-back that does not match fails loudly", async () => {
     const f = fake({}, MS);
     f.skipStore.add("Sys");
