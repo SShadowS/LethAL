@@ -699,30 +699,62 @@ describe("R622 the per-file watchdog", () => {
     expect(stuckWorkers([beat(10, 99, 0)], 5000, 2000, 10, 1)).toEqual([]);
   });
 
+  // R1129: isChildOf's own logic is judged on a fake parent table, so no OS timing can redden it.
+  test("isChildOf: a live child of this process is one; this process, a wrong parent and a gone pid are not", () => {
+    const table = new Map<number, number>([
+      [11, 10],
+      [10, 1],
+    ]);
+    const asked: number[][] = [];
+    const read = (pids: readonly number[]): Map<number, number> => {
+      asked.push([...pids]);
+      const out = new Map<number, number>();
+      for (const p of pids) {
+        const parent = table.get(p);
+        if (parent !== undefined) out.set(p, parent);
+      }
+      return out;
+    };
+    expect(isChildOf(11, 10, read)).toBe(true); // a live child
+    expect(isChildOf(10, 10, read)).toBe(false); // the process itself
+    expect(isChildOf(11, 11, read)).toBe(false); // a live pid with the wrong parent (a reused pid)
+    expect(isChildOf(12, 10, read)).toBe(false); // a pid that is gone
+    expect(asked).toEqual([[11], [10], [11], [12]]); // one read per question, for that pid only
+  });
+
   test(
-    "isChildOf: a live child of this process is one; this process and a dead child are not",
+    "parentTable: one real OS read maps a live child to this process and this process elsewhere",
     async () => {
       const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)"], {
         stdout: "ignore",
         stderr: "ignore",
       });
       try {
-        // One OS read for both pids (one PowerShell call on Windows).
+        // One OS read for both pids (one PowerShell call on Windows, 1 to 3 s when cold).
         const table = parentTable([child.pid, process.pid]);
         expect(table.get(child.pid)).toBe(process.pid);
         // The direction that keeps the kill off a process verify did not start (a reused pid).
         expect(table.get(process.pid)).not.toBe(process.pid);
-        expect(table.get(child.pid)).not.toBe(child.pid);
-        // A live pid with the wrong parent is not a child (isChildOf must compare the parent).
-        expect(isChildOf(child.pid, child.pid)).toBe(false);
       } finally {
         child.kill();
         await child.exited;
       }
-      expect(isChildOf(child.pid, process.pid)).toBe(false);
     },
     ownTimeout(30_000),
-  ); // three PowerShell calls on Windows (was four), 1 to 3 s each when cold
+  );
+
+  // A gone pid is absent from the real table. Linux only: a /proc read, no PowerShell call.
+  test.if(process.platform === "linux")(
+    "parentTable: a child that has ended is absent (Linux)",
+    async () => {
+      const child = Bun.spawn([process.execPath, "-e", "0"], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      await child.exited;
+      expect(parentTable([child.pid]).has(child.pid)).toBe(false);
+    },
+  );
 
   test("parseCimParents: reads `pid ppid` lines, ignores the rest", () => {
     expect(parseCimParents("10 1\r\n  20   10  \n")).toEqual(
@@ -851,13 +883,20 @@ describe("R622 the per-file watchdog", () => {
     40_000,
   );
 
+  // R1129: judged on what the watchdog did, not on wall-clock time. SPIN ends ITSELF after 25 s and
+  // then passes, so a spin that did not pass and a stop line printed by the watchdog show the watchdog
+  // stopped it, however slow the machine.
   test(
-    "serial: a file that spins past the limit stops the run in seconds, named once",
+    "serial: a file that spins past the limit is stopped by the watchdog, named once",
     async () => {
       const r = await watched({ "ok.test.ts": OK, "spin.test.ts": SPIN }, 1, 2);
       expect(r.code, r.text).toBe(1);
       expect(failLines(r.text, "spin.test.ts", 2), r.text).toBe(1);
-      expect(r.seconds, r.text).toBeLessThan(15);
+      expect(r.text).toMatch(
+        /^watchdog: (sent SIGTERM to the bun test process \d+ \(serial\)|backstop, .*bun test process)/m,
+      );
+      const spin = parseJunit(r.junit).find((c) => c.file.endsWith("spin.test.ts"));
+      expect(spin?.status, r.output).not.toBe("pass");
     },
     ownTimeout(40_000),
   );
