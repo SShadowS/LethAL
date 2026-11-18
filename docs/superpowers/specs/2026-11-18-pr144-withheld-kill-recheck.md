@@ -321,6 +321,47 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
     - a carried withheld row is rechecked, or, without `cause`, it is counted in the one warning;
     - the skip warning appears once per run with the right count.
 
+## 0k. Amendment 11 (coord PR-185, 2026-11-18, before any build): amendment 10's cause was wrong; corrected
+- **Measured by the builder before writing code:**
+  - A REUSED baseline snapshot's observations go into the same `baseline` array as a fresh run's.
+    `baseline-batch-finished` is then emitted from it unconditionally (orchestrator.ts `scoreBatch`).
+  - Probe: in resume.test.ts's "R192 (second half)" test, both batches reused their snapshots (`baselineRuns` 0, two
+    `resume-baseline-reused` warnings), and the stream still held 2 `baseline-batch-finished`.
+  - So `mainBaselineOf` is NOT empty on a reused-baseline session, and amendment 10's "why it skips" is false. It came from
+    a code comment and a unit-test name, not a measurement. Also measured by lethal-preproc:
+    - no recorded run has ever printed `withheld-recheck-skipped`;
+    - leg RC's fixture run twice on one store rechecked 8 of 8 both times, with no skip;
+    - reuse happens only on `--resume`.
+- **What is really missed, read from the code:** a `--resume`/`--resume-run` session CARRIES the interrupted run's scored
+  rows (`mutant-carried`). `recheckTargetsOf` reads only `mutant-scored`, so a carried withheld row is never a target.
+  Its own run was interrupted before the session-end recheck, so it is never rechecked anywhere, and nothing says so.
+  - The store does not hold `cause` for mutant rows (`recordMutant`, `CarriedVerdict` have none), so `withheldKillOf`
+    cannot match a carried row as it stands.
+- **The change, replacing amendment 10's items 1-3** (item 4, the `RECHECK_UNEXERCISED` text, stands):
+  1. **Item 1 is dropped:** no change to `mainBaselineOf`. The unit test "no main-baseline results (a reused baseline)"
+     and the `ruleELosesNothing` comment are re-worded to the real condition: a session with no baseline results at all.
+  2. **Carried withheld rows become targets.**
+     - The store records `cause` for each mutant row (a new nullable column, migrated like earlier columns), and resume's
+       `CarriedVerdict` and `mutant-carried` carry it.
+     - A carried row then matches `withheldKillOf` exactly as a scored one does, and takes the same recheck and
+       `mutant-rechecked` path.
+     - A row carried from a run stored BEFORE this column exists has no `cause`. Those rows are not guessed from the
+       note: the run prints ONE warning, `withheld-recheck-carried-unknown`, with the count of carried `error` rows whose
+       note carries the withheld prefix ("these were not rechecked: their run predates PR-185; re-run them fresh").
+  3. **The `withheld-recheck-skipped` warning** stays for the real skips only (method isolation, non-serve transport, no
+     baseline results at all), once per run, with the reason and the row count.
+- **Pre-committed:**
+  - **No frozen gate figure moves** (leg RC runs fresh; no other leg builds the recheck).
+  - **Unit tests, each red-checked:**
+    - a carried withheld row with `cause` is rechecked and recovered like a scored one;
+    - a carried row without `cause` is counted in the one warning and not rechecked;
+    - the store migration keeps old rows readable;
+    - the re-worded skip test.
+  - **A live resume probe** (interrupting a run, then `--resume`) was NOT run. lethal-preproc's kill command was denied
+    by the session's guard, rightly, because its pattern would have matched other lanes' al-runner daemons. The unit
+    tests above pin the path.
+- **Amendment 10's manual-run prediction is withdrawn.** It rested on reuse without `--resume`, which does not happen.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
