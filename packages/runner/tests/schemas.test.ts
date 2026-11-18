@@ -1265,6 +1265,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R870: the bc-toolbox envelope, vendored; its root is a oneOf, so nothing is required there.
       "cli-envelope-v1.schema.json": [],
+      // PR-171 (R1122): the `lethal confirm-merge` artifact. Not a report; its own version.
+      "confirmation-v1.schema.json": [
+        "confirmationVersion",
+        "kind",
+        "mutants",
+        "sample",
+        "seed",
+        "totals",
+        "v3Sha256",
+      ],
       "doctor-v1.schema.json": ["checks", "doctorSchemaVersion", "notChecked", "ok"],
       "explain-v4.schema.json": [
         "caveats",
