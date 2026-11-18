@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME, type MutantManifest, type MutantManifestEntry } from "@lethal/schemata";
@@ -127,11 +127,11 @@ interface Violation {
   readonly problem: string;
 }
 
-/** See this file's doc comment: a small validator, not a JSON Schema implementation. */
 /**
  * PR-147: every keyword `conformsTo` handles or may ignore (annotations). Any other keyword throws: a
  * keyword it silently skipped would make every document "conform" to that rule (minimum, pattern,
- * oneOf, propertyNames and minLength were skipped until PR-147).
+ * oneOf, propertyNames and minLength were skipped until PR-147). The throw sees only the nodes a
+ * document reaches, so `schemaKeywordsUnknown` walks every node of every schema file as well.
  */
 const KNOWN_KEYWORDS = new Set([
   "type",
@@ -157,6 +157,25 @@ const KNOWN_KEYWORDS = new Set([
   "$defs",
 ]);
 
+/** PR-147 (review 1): every keyword outside KNOWN_KEYWORDS, at any node of `schema`, reached or not. */
+function schemaKeywordsUnknown(schema: unknown, at = "$", out: string[] = []): string[] {
+  if (schema === null || typeof schema !== "object") return out;
+  if (Array.isArray(schema)) {
+    schema.forEach((s, i) => schemaKeywordsUnknown(s, `${at}[${i}]`, out));
+    return out;
+  }
+  for (const [k, v] of Object.entries(schema)) {
+    if (!KNOWN_KEYWORDS.has(k)) out.push(`${at}.${k}`);
+    if (k === "properties" || k === "$defs")
+      for (const [name, sub] of Object.entries(v as object))
+        schemaKeywordsUnknown(sub, `${at}.${k}.${name}`, out);
+    else if (["items", "additionalProperties", "propertyNames", "anyOf", "oneOf"].includes(k))
+      schemaKeywordsUnknown(v, `${at}.${k}`, out);
+  }
+  return out;
+}
+
+/** See this file's doc comment: a small validator, not a JSON Schema implementation. */
 function conformsTo(root: Schema, value: unknown, node: Schema = root, path = "$"): Violation[] {
   const schema = deref(root, node);
   const out: Violation[] = [];
@@ -178,7 +197,8 @@ function conformsTo(root: Schema, value: unknown, node: Schema = root, path = "$
     out.push({ path, problem: `${value} is below the minimum ${schema.minimum}` });
   }
   if (typeof value === "string") {
-    if (typeof schema.minLength === "number" && value.length < schema.minLength) {
+    // code points, as JSON Schema counts them (review 3)
+    if (typeof schema.minLength === "number" && [...value].length < schema.minLength) {
       out.push({ path, problem: `shorter than ${schema.minLength} character(s)` });
     }
     if (typeof schema.pattern === "string" && !new RegExp(schema.pattern, "u").test(value)) {
@@ -195,14 +215,14 @@ function conformsTo(root: Schema, value: unknown, node: Schema = root, path = "$
   const anyOf = schema.anyOf as Schema[] | undefined;
   if (anyOf !== undefined) {
     const branches = anyOf.map((branch) => conformsTo(root, value, branch, path));
-    if (branches.some((v) => v.length === 0)) return [];
-    const best = branches.reduce((a, b) => (a.length <= b.length ? a : b));
-    return [
-      {
+    // PR-147 (review 2): sibling keywords must hold too, so a passing branch keeps `out` and the checks below run
+    if (!branches.some((v) => v.length === 0)) {
+      const best = branches.reduce((a, b) => (a.length <= b.length ? a : b));
+      out.push({
         path,
         problem: `matches no branch of anyOf; closest complaint: ${best[0]?.problem ?? "?"}`,
-      },
-    ];
+      });
+    }
   }
 
   const enumValues = schema.enum as unknown[] | undefined;
@@ -326,6 +346,19 @@ describe("conformsTo itself (PR-147): every keyword the schemas use is checked, 
   });
   test("a keyword it does not implement throws, never passes", () => {
     expect(() => conformsTo({ type: "string", maxLength: 3 }, "abcd")).toThrow(/maxLength/);
+  });
+  test("anyOf keeps its sibling keywords (review 2)", () => {
+    expect(conformsTo({ anyOf: [{ type: "string" }], minLength: 2 }, "a")).not.toEqual([]);
+  });
+  test("every node of every committed schema uses only keywords conformsTo knows (review 1)", () => {
+    const files = readdirSync(join(REPO_ROOT, "schemas")).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThan(0);
+    const unknown = files.flatMap((f) => schemaKeywordsUnknown(loadSchema(f), f));
+    expect(unknown).toEqual([]);
+    // and the walk sees what it must: a keyword hidden under an optional property is found
+    expect(
+      schemaKeywordsUnknown({ properties: { opt: { type: "string", maxLength: 3 } } }),
+    ).toEqual(["$.properties.opt.maxLength"]);
   });
 });
 
