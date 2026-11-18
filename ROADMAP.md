@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1092 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1093 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1137,6 +1137,7 @@ that ordering is the priority.
 - **R1125** · PR-144's withheld-kill recheck has no live gate leg: a fixture needs an earlier test that reaches an unknown-reach v3 refusal only under the mutant; then leg RC, the symbol-tar rebuild, and the BC differential (P5) that gates any default-on · [R1125.md](docs/roadmap/R1125.md) · open — steps 1-3 done…
 - **R1128** · The fixture symbol tar has two gaps: build-fixture-symbols-tar.sh builds sandbox-wrapped without WRAPDEF (its tests then fail AL0185), and sandbox-dates, -optin and -order (with their tests) are in no tar, so compile:fixtures SKIPs them everywhere · [R1128.md](docs/roadmap/R1128.md) · open — gap 2 done…
 - **R1129** · Two R622 watchdog tests in scripts/verify.test.ts carry wall-clock bounds that a slow Windows CI runner missed (isChildOf timed out at 60 s; the serial spin run took 17.5 s against a 15 s bound): a flake that reddens the Windows check on unrelated changes · [R1129.md](docs/roadmap/R1129.md) · done (7848be53)
+- **R1130** · A fixture test project's own .alpackages (from a full symbol-tar extraction) silently changed itest:alrunner-v3's readings: v3 reads it beside packagesDir, so N1, N1E, N1S, WR and WRE turned test data off; the itest now hands v3 a copy without it · [R1130.md](docs/roadmap/R1130.md) · open — coord PR-165 (2026-11-18), lethal-preproc
 
 ---
 

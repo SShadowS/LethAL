@@ -535,6 +535,15 @@ after the whole baseline (R927). No gate figure counts it, since no leg sets the
   the outcome on each gate run: `<time> <tag>: fixture .alpackages: extracted|verified|marked`.
 - Every leg selection needs the two fixture folders or the tar, CDO-only legs (`D1`, `D1c`) included: the itest
   prepares them before any leg.
+- **Other fixture `.alpackages` never reach v3 (PR-165).** al-runner v3 reads a test project's own `.alpackages`
+  besides `packagesDir`. A full tar extraction (`compile:fixtures`, kraken's lane setup) leaves one in test projects
+  such as `sandbox-names-tests`, and its Base Application 28.0 made v3 turn test data off for N1, N1E, N1S, WR and WRE.
+  A fresh worktree passed (`/coord/handoff/PR-162/gate-n1-master-fresh.log`, `gate-n1-master-fulltar.log`,
+  `gate-n1-no-namestests.log`). So every backend built by the itest's `backendCfg` gets its test dir through
+  `v3GateTestDir`: a test dir with its own `.alpackages` is copied, once per run, to a temp folder without it. The
+  dirs of the gate's two prepared folders, and dirs without one, are used as they are. In a fresh worktree nothing
+  changes. With the whole tar extracted the five legs pass (`/coord/handoff/PR-165/gate-5legs-fulltar.log`), so
+  `compile:fixtures` and the gate can share a worktree.
 - Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses EVERY worktree whose two folders came
   from the old tar, not only the gate worktree: its marker names the old pin (`bdf460e2…` before R670), so the
   next `itest:alrunner-v3` or gate run there stops with `al-runner-v3-gate-symbols-unverified`. Nothing is
