@@ -1135,6 +1135,7 @@ that ordering is the priority.
 - **R1120** · PR-98's lane gate over-charges (sampled peak x lanes + 4 GiB: 16.2 GiB charged where the tree peaked at 12.6), and one hold costs the lane for the rest of the window: DO windows x1-x3 ran on one lane after their hold · [R1120.md](docs/roadmap/R1120.md) · done (this commit) — PR-140: a hold closes the idle daemons it charges (lane-idle); the DO window at 15 GiB…
 - **R1123** · Under al-runner v3 `"coverage": "none"`, the reused-baseline re-check's coverage guard compares null with null and counts it as a comparison (an empty-vs-empty pass) · [R1123.md](docs/roadmap/R1123.md) · done (this commit) — PR-146: under "none" the re-check compares no map and says so by name; with coverage on…
 - **R1125** · PR-144's withheld-kill recheck has no live gate leg: a fixture needs an earlier test that reaches an unknown-reach v3 refusal only under the mutant; then leg RC, the symbol-tar rebuild, and the BC differential (P5) that gates any default-on · [R1125.md](docs/roadmap/R1125.md) · open — filed by lethal-preproc from coord PR-144 (2026-11-18, orchestrator ruling (B))
+- **R1128** · The fixture symbol tar has two gaps: build-fixture-symbols-tar.sh builds sandbox-wrapped without WRAPDEF (its tests then fail AL0185), and sandbox-dates, -optin and -order (with their tests) are in no tar, so compile:fixtures SKIPs them everywhere · [R1128.md](docs/roadmap/R1128.md) · open — filed by lethal-preproc from coord PR-162 (2026-11-18)
 
 ---
 
