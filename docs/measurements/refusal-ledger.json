@@ -7,8 +7,8 @@
   },
   {
     "key": "Microsoft Dynamics N Business Central Server attempted to issue a client callback to show a confirmation dialog box: <text>",
-    "state": "open",
-    "note": "PR-28: not an unhandled Confirm. It is al-runner's text under --no-client (which LethAL passes) for a Confirm WITH a ConfirmHandler bound: family 5's cell C3 (and C7 for StrMenu) gives it under --no-client on edge-5a58a0f16 and passes without it. Measured on BC in a web-service session (lethal-bugs, bc2, /coord/handoff/PR-17/ws-run/result.md): BC calls the bound handler, so this is a wrong answer, filed as #8154 (R1039). R-908's BC run of the same Bank Deposits tests agrees: they reach Bank Deposit-Post past the Confirm. Its 2,290 standing sightings (6 stores; 2,080 from R-911's run) are mostly mutants whose baseline had no green test; 17 distinct tests raise it, all binding a ConfirmHandler. #7480 upstream is another shape (an unhandled Confirm in OnClosePage) (was: PR-05: not re-run on edge-a184cfc79; family issue (client callback (Confirm without handler)), this instance not named in it)",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913, which is #8154's closing commit): the issue's repro (Confirm, StrMenu and Message with handlers bound) passes with and without --no-client, and an unhandled Message fails 'Unhandled UI' in both (/coord/handoff/PR-142/repros/8154/) (was: PR-28: not an unhandled Confirm. It is al-runner's text under --no-client (which LethAL passes) for a Confirm WITH a ConfirmHandler bound: family 5's cell C3 (and C7 for StrMenu) gives it under --no-client on edge-5a58a0f16 and passes without it. Measured on BC in a web-service session (lethal-bugs, bc2, /coord/handoff/PR-17/ws-run/result.md): BC calls the bound handler, so this is a wrong answer, filed as #8154 (R1039). R-908's BC run of the same Bank Deposits tests agrees: they reach Bank Deposit-Post past the Confirm. Its 2,290 standing sightings (6 stores; 2,080 from R-911's run) are mostly mutants whose baseline had no green test; 17 distinct tests raise it, all binding a ConfirmHandler. #7480 upstream is another shape (an unhandled Confirm in OnClosePage) (was: PR-05: not re-run on edge-a184cfc79; family issue (client callback (Confirm without handler)), this instance not named in it))",
     "issue": "#8154",
     "repro": "scripts/upstream-repros/u8154-noclient-handlers"
   },
@@ -125,9 +125,9 @@
   },
   {
     "key": "NotRun: out-of-scope: a DateTime before N-N-N in a database table, other than the pinned ones (not pinned)",
-    "state": "open",
+    "state": "fixed",
     "issue": "#7834",
-    "note": "R-983: filed"
+    "note": "PR-142: fixed in current (edge-4ebfe7913 contains #7834's closing commit): the issue's repro now fails with BC's own text ('Cannot write the value ... because the value is either too long or the content is invalid'), and 0DT stores (/coord/handoff/PR-142/repros/7834/) (was: R-983: filed)"
   },
   {
     "key": "NotRun: out-of-scope: a drill-down that changed the row without storing it on a list whose ModifyAllowed is false (the save BC tries later is not built)",
@@ -330,8 +330,8 @@
   },
   {
     "key": "NotRun: out-of-scope: an earlier test of this codeunit, <test>, changed number sequence <x> that existed before it: what the rollback of TestIsolation = Function leaves of it is not measured (only a new NumberSequence.In",
-    "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913 contains both closing commits): #8002's and #6638's repros run every later test after a test that advanced an existing number sequence, with and without --isolation test (/coord/handoff/PR-142/repros/8002/, 6638/) (was: PR-05: seen on edge-a184cfc79 (R-993 stores) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#8002, #6638"
   },
   {
@@ -383,14 +383,14 @@
   },
   {
     "key": "NotRun: out-of-scope: BaseN conversion with code page N and TextEncoding::UTFN (only N, N, N and N are pinned)",
-    "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 1 test(s) (PR-05 re-run); family issue (Base64 conversion encoding), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913 contains #8069's closing commit): 6 of #8069's cases pass, including FromBase64 with UTF8 and code page 1252, UTF16 and the euro sign (/coord/handoff/PR-142/repros/8069/) (was: PR-05: still refused on edge-a184cfc79 for 1 test(s) (PR-05 re-run); family issue (Base64 conversion encoding), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#8069, #7997"
   },
   {
     "key": "NotRun: out-of-scope: Blob.Length before CalcFields of a stored blob of N bytes (the stored size is not pinned)",
-    "state": "open",
-    "note": "PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined))",
+    "state": "by-design",
+    "note": "PR-142: by design upstream: #6896 is closed with the sign use fixed (Length is positive for any stored content; the issue's repro passes on edge-4ebfe7913), while the VALUE before CalcFields stays refused on purpose, since a compressed blob's stored size differs between hosts (upstream's comment). Measured: a 7-byte value still refuses with this text (/coord/handoff/PR-142/repros/6896/) (was: PR-39: still seen on edge-5a58a0f16 (2 mutant sighting(s); 0 run now; apps: email) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983: not examined)))",
     "issue": "#6896"
   },
   {
@@ -512,8 +512,8 @@
   },
   {
     "key": "NotRun: out-of-scope: CurrPage.Close() in an action that left another row in Rec, on this page (not pinned)",
-    "state": "open",
-    "note": "PR-05: seen on edge-a184cfc79 (R-993 stores); family issue (CurrPage.Close after action), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913; #7368 closed 2026-11-11, no closing commit found): the issue's shape (an action deletes the rows and closes the page) runs to the end (/coord/handoff/PR-142/repros/7368/) (was: PR-05: seen on edge-a184cfc79 (R-993 stores); family issue (CurrPage.Close after action), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7368"
   },
   {
@@ -1675,8 +1675,8 @@
   },
   {
     "key": "NotRun: out-of-scope: SetValue on a page variable control of a row set to the values it holds (whether the row is saved first is not pinned)",
-    "state": "open",
-    "note": "PR-05: still refused on edge-a184cfc79 for 2 test(s) (PR-05 re-run); family issue (SetValue page-variable control), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913 contains #7432's closing commit): the issue's wizard shape (SetValue on page-variable controls, then an action) runs and enables Finish (/coord/handoff/PR-142/repros/7432/) (was: PR-05: still refused on edge-a184cfc79 for 2 test(s) (PR-05 re-run); family issue (SetValue page-variable control), this instance not named in it (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7432"
   },
   {
@@ -1687,8 +1687,8 @@
   },
   {
     "key": "NotRun: out-of-scope: store error Language Selection: the rows in session language N are not pinned (only those in N are)",
-    "state": "open",
-    "note": "PR-39: no standing sighting in any store (R1036 reader), so nothing to re-run (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current (edge-4ebfe7913 contains both closing commits): Validate of a Language Code under GlobalLanguage 1031 sets Format Region de-DE, and #5687's default-region repro passes (/coord/handoff/PR-142/repros/7463/, 5687/) (was: PR-39: no standing sighting in any store (R1036 reader), so nothing to re-run (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))))",
     "issue": "#7463, #5687"
   },
   {
@@ -1758,8 +1758,8 @@
   },
   {
     "key": "NotRun: out-of-scope: the CaptionClass expression of field Dimension N Filter of table Acc. Schedule Line calls Dialog.Message, and how many times BC runs it with an empty record during a page open is not pinned (al-runn",
-    "state": "open",
-    "note": "PR-05: not observed on edge-a184cfc79: its 5 test(s) stop earlier (5 another refusal, 0 not reached), so neither fixed nor seen (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only))",
+    "state": "fixed",
+    "note": "PR-142: fixed in current for Dialog.Message (edge-4ebfe7913 contains #7391's closing commit, which covers expressions that write nothing): the issue's Acc. Schedule Overview open now passes the Message and refuses at the expression's Record.Modify, the ledger's Record.Modify key. The issue's case stays refused: reopen material, a draft comment to the orchestrator (/coord/handoff/PR-142/repros/7391/) (was: PR-05: not observed on edge-a184cfc79: its 5 test(s) stop earlier (5 another refusal, 0 not reached), so neither fixed nor seen (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7391"
   },
   {
@@ -2024,8 +2024,9 @@
   },
   {
     "key": "NotRun: out-of-scope: the CaptionClass expression of field Dimension N Filter of table Acc. Schedule Line calls Record.Modify, and how many times BC runs it with an empty record during a page open is not pinned (al-runne",
-    "state": "unexamined",
-    "note": "PR-06: NEW on edge-a184cfc79, 3 sighting(s) from a baseline test that is not a freed test, in the scoring store of project 18"
+    "state": "open",
+    "issue": "#7391",
+    "note": "PR-142: #7391's own case on edge-4ebfe7913: its closing fix covers CaptionClass expressions that write nothing, so the Acc. Schedule Overview open passes Dialog.Message and now refuses here, at the expression's Record.Modify (an invented setup of the issue's snippet, /coord/handoff/PR-142/repros/7391/). Reopen material, drafted to the orchestrator (was: PR-06: NEW on edge-a184cfc79, 3 sighting(s) from a baseline test that is not a freed test, in the scoring store of project 18)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.MoveNext: <x> is an instance member and the variable holds no object",
