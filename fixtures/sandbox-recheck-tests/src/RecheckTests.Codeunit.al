@@ -5,7 +5,7 @@
 // cover no mutant, so a covering test's failure after them is the mutant's FIRST non-pass row, and is withheld.
 // The baseline is therefore 3 of 5 passing by design: A0 and B0 are refused.
 // A1_OneSeven is the only covering test of the Sevens mutant, so the recheck recovers it. B2_SeesTheMark passes
-// after B1_OneSevenAndMarks in one codeunit run (TestIsolation = Function keeps the codeunit's variables) and
+// after B1_OneSevenAndMarks in one codeunit run (one instance of the test codeunit runs all its tests, so its global variables carry over; TestIsolation only governs database rollback) and
 // fails alone: that is what the recheck's rule (e) must notice for the SevensB mutant.
 codeunit 76050 "Recheck A Tests"
 {

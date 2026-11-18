@@ -618,8 +618,8 @@ const isSevenSite = (r: RcRow, procedureName: string): boolean =>
  * Other mutants are outside the judge (the leg's baseline holds them). Pure, so it is red-checked offline.
  *  - the main pass held at least one withheld kill (any row recovered, or still withheld);
  *  - the `Sevens` mutant is `killed` by `A1_OneSeven` with `killReproduced` and `isolatedRecheck` (its main-pass
- *    withheld kill came after `A0_ParsesSevens`);
- *  - the `SevensB` mutant stays `error` as a withheld kill after `B0_ParsesSevens`, its note naming rule (e) and
+ *    withheld kill came after `A0_RefusedWithUnknownReach`);
+ *  - the `SevensB` mutant stays `error` as a withheld kill after `B0_RefusedWithUnknownReach`, its note naming rule (e) and
  *    `B2_SeesTheMark`, and is not recovered;
  *  - the caveats `isolated-recheck-kills` and `withheld-kills` are present.
  */

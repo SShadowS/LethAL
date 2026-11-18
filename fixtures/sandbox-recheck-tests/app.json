@@ -4,7 +4,7 @@
   "publisher": "LethAL",
   "version": "1.0.0.0",
   "brief": "LethAL PR-144 fixture: tests for the withheld-kill recheck leg (RC).",
-  "description": "Two test codeunits, each starting with a test that, under the mutant, is refused mid-run with an unknown construct (Page.RunModal) left in its reach, so the next failure is a withheld kill. Recheck B Tests holds a test that passes only after another test of its codeunit set state. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
+  "description": "Two test codeunits, each starting with a test that is refused at every baseline (its own NUL text) and covers no mutant, with a Page.RunModal left in its reach, so a covering test's failure after it is a withheld kill. Recheck B Tests holds a test that passes only after another test of its codeunit set state. Asserts via Error(), no Library Assert. Not for production use, see fixtures/README.md.",
   "privacyStatement": "",
   "EULA": "",
   "help": "",

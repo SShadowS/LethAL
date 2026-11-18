@@ -1899,7 +1899,7 @@ async function legRC(scratch: string): Promise<SessionReport> {
   const [first] = fails;
   if (first !== undefined) throw new LegFailure(first);
   console.log(
-    `  RC: ${r.mutants.filter((m) => m.isolatedRecheck !== undefined).length} recovered (the Sevens mutant), ${r.mutants.filter((m) => m.withheldKill !== undefined).length} still withheld (including the SevensB mutant), as pre-committed`,
+    `  RC: ${r.mutants.filter((m) => m.isolatedRecheck !== undefined).length} recovered (the Sevens mutants), ${r.mutants.filter((m) => m.withheldKill !== undefined).length} still withheld (the SevensB mutants), as pre-committed`,
   );
   return r;
 }

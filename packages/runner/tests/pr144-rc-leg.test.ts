@@ -82,6 +82,22 @@ describe("judgeRecheckLeg: the pre-committed table", () => {
     ).toBe(true);
   });
 
+  test("fails by name when a SevensB row is killed, even without isolatedRecheck", () => {
+    const killed: RcRow = { ...sevensB("M8"), verdict: "killed" };
+    const f = judgeRecheckLeg([sevens(), killed], CAVEATS);
+    expect(
+      f.some(
+        (x) => x.includes("SevensB remove-assignment mutant was recovered") && x.includes("M8"),
+      ),
+    ).toBe(true);
+  });
+
+  test("fails by name when a withheld SevensB row is not verdict error", () => {
+    const survived: RcRow = { ...sevensB("M7"), verdict: "survived" };
+    const f = judgeRecheckLeg([sevens(), survived], CAVEATS);
+    expect(f.some((x) => x.includes("SevensB M7 is survived"))).toBe(true);
+  });
+
   test("a Sevens kill by another test, or not reproduced, or without isolatedRecheck, fails", () => {
     for (const bad of [
       { killingTest: RC_SEVENS_AFTER_TEST },
