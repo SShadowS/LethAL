@@ -11053,6 +11053,46 @@ describe("PR-56: drift after a kept refusal", () => {
     expect(events).toEqual([]);
   });
 
+  test("R1115: in a mutant entry, a test red at baseline that now passes is not drift (its reach is unknown)", async () => {
+    // A fails at baseline and everywhere, except under M0002 on daemon 0, where the mutant makes it pass
+    const { r, events } = await driftRig((m, x, d) => {
+      if (x.method === "A") return m === "M0002" && d === 0 ? x : failed(x);
+      return m === "M0001" && x.method === "C" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0001"], [ref("C")])); // kept refusal
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")])); // A is before B, the first covering test
+    // red without the R1115 skip: one drift event and a second daemon
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("R1115: a NONE entry still compares a test red at baseline", async () => {
+    // A fails at baseline; on daemon 0 from the 3rd request on, a NONE run of A passes (carried state)
+    const { r, events } = await driftRig((m, x, d, n) => {
+      if (x.method === "A") return m === "NONE" && d === 0 && n >= 2 ? x : failed(x);
+      return m === "M0002" && x.method === "B" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B")])); // kept refusal
+    await r.b.activate("M0002");
+    await r.b.sendKillPair("M0002", ref("B"));
+    // red if the skip ignored the entry kind: no event
+    expect(events.map((e) => [e.test, e.baselineRow, e.row])).toEqual([
+      [`Codeunit${CU}.A`, "a=fail", "a=pass"],
+    ]);
+  });
+
+  test("R1115: in a mutant entry, a test green at baseline that now fails is still drift", async () => {
+    const { r, events } = await driftRig((m, x, d) => {
+      if (x.method === "A") return m === "M0002" && d === 0 ? failed(x) : x;
+      return m === "M0001" && x.method === "C" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0001"], [ref("C")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(events.map((e) => [e.test, e.baselineRow, e.row])).toEqual([
+      [`Codeunit${CU}.A`, "a=pass", "a=fail"],
+    ]);
+  });
+
   test("review M1: a NONE confirm run alone after a kept refusal is not compared", async () => {
     const { r, events } = await driftRig((m, x, d, n) =>
       keptsIn(m, m === "NONE" && d === 0 && n >= 2 && x.method === "A" ? failed(x) : x),
