@@ -518,6 +518,42 @@ baseline in a covering test's codeunit, so a kill it might make on BC is not mea
   noted survivors were killed that way, and they are not counted as real kills above. When you
   confirm on BC, read the killing failure before crediting the kill.
 
+**Confirm only the noted survivors on BC** (`--confirm-from`, `lethal confirm-merge`). You do not
+have to run the whole project on BC. Run v3 first, then ask BC about the mutants the note marks:
+
+```text
+lethal run --backend al-runner-v3 ... --out v3.json
+lethal run --backend bcdev ... --confirm-from v3.json [--confirm-sample 30] [--confirm-seed <text>] --out bc.json
+lethal confirm-merge v3.json bc.json --out confirmed.json
+```
+
+The BC run deploys only: the noted survivors, the `no-coverage` rows whose note says v3 refused the
+covering tests, and a seeded sample (default 30) of unnoted survivors. The sample re-measures, for
+your project, how often an unnoted survivor is wrong. `--confirm-sample 0` turns it off. The merge
+writes a separate `lethal-confirmation` file ([schema](schemas/confirmation-v1.schema.json)), not a
+report. Each mutant is marked with who measured it: BC, or v3. A BC `error` is not a measurement, so
+that mutant keeps v3's verdict. A kill on the Linux RDLC stub stays a kill but is counted apart. The
+merge prints "N survivors, M of them measured on BC" beside every score, and refuses by name when the
+two runs do not belong together (different source, flags, suite or identity scheme).
+
+**Limits:**
+- **A mutant v3 killed is never re-checked.** A false v3 kill stays in the final score.
+- **A refused test can hide a survivor from the note.** A refused test in a codeunit that has no
+  passing covering test of the mutant leaves that mutant unnoted. Only the sample can catch it.
+- **The note marks a codeunit, not a test,** so some noted mutants cost BC time and change nothing.
+- **Unnoted survivors outside the sample keep v3's verdict.** The sample bounds that error; it does
+  not remove it. When fewer survivors were drawn than there are unnoted survivors, the merge prints
+  a one-sided 95% upper bound on the unnoted kill rate (3 divided by the number BC scored `killed`
+  or `survived`, printed beside it, when BC killed none). When every unnoted survivor was drawn, it
+  says "all unnoted survivors measured" instead. The BC run must be `--backend bcdev`, and the merge
+  recomputes the selection from the v3 report and refuses if the BC report recorded another. If BC kills any sampled survivor, the merge
+  prints `unnoted-disagreement`: run the whole scope on BC.
+- **Same source, same build.** Run both from one commit. The two runs must agree on source hash,
+  `--only`, `--exclude`, `--operator`, `--lines`, preprocessor symbols, `--tests-only` and
+  `--exclude-test`. An edit that changes behaviour but keeps every identity key is not caught.
+- **Not allowed with `--confirm-from`:** `--resume`, `--resume-run`, `--skip-known-survivors`,
+  `--dry-run`.
+
 ## Commands
 
 Each command in one line, then the detail. [Quick start](#quick-start) has the first-run sequence.
