@@ -4,6 +4,7 @@
 # Keeps every non-LethAL member of <old.tar> byte for byte; replaces every LethAL app copy (LethAL_*.app,
 # target.app) with an alc build of the dependency's CURRENT source from <repo>, named LethAL_<name>_<version>.app,
 # in each project that declares it. A project's copy of its own app (never a dependency, R148) is dropped.
+# A dependency with a symbol-sets.json is built under its first set (R1128).
 # <workdir> is scratch (its tree/ and built/ are replaced). Packs reproducibly: ustar (the R614 reader),
 # sorted names, fixed mtime, owner and mode. alc is not byte-stable, so the sha256 pin is the identity.
 # Then name the result fixture-symbols-<first 12 hex of its sha256>.tar and follow docs/gates/alrunner-v3.md.
@@ -41,8 +42,15 @@ for proj in $(cd "$tree" && ls -d fixtures/*/ examples/*/ | sed 's#/$##'); do
     if [ ! -f "$built" ]; then
       mkdir -p "$work/built"
       rel=${target#"$repo"/}
-      "$alc" "/project:$target" "/packagecachepath:$tree/$rel/.alpackages" "/out:$built" >"$work/built/$dep.log" 2>&1 ||
-        { cat "$work/built/$dep.log" >&2; exit 1; }
+      # R1128: a target with a symbol-sets.json is built under its FIRST set, the build its dependents compile
+      # against (sandbox-wrapped: WRAPDEF; without it the tests app fails AL0185). No /define for an empty set.
+      defs=()
+      if [ -f "$target/symbol-sets.json" ]; then
+        set_csv=$(jq -r '.[0] | join(",")' "$target/symbol-sets.json")
+        [ -z "$set_csv" ] || defs=("/define:$set_csv")
+      fi
+      "$alc" "/project:$target" "/packagecachepath:$tree/$rel/.alpackages" "${defs[@]}" "/out:$built" \
+        >"$work/built/$dep.log" 2>&1 || { cat "$work/built/$dep.log" >&2; exit 1; }
     fi
     cp "$built" "$tree/$proj/.alpackages/"
     echo "$proj <- LethAL_${dep}_${ver}.app"
