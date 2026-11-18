@@ -20,7 +20,18 @@ import {
   parsePs,
   slotHeld,
 } from "./corpus-snapshot.ts";
-import { memoryVerdict, parsePeak, readSlot, readSlotClass } from "./heavy-slot-class.ts";
+import {
+  PEAK_GIB,
+  RSS_FRESH_MS,
+  SMALL_JOB_MAX_GIB,
+  countedPeakGiB,
+  memoryVerdict,
+  parsePeak,
+  readSlot,
+  readSlotClass,
+  readSlotRssGiB,
+  slotRssFile,
+} from "./heavy-slot-class.ts";
 import { treeRssKb } from "./heavy-slot-peak.ts";
 
 // R905. Every lock dir here is a temp dir; nothing touches /coord.
@@ -703,7 +714,7 @@ describe("R952 (R953) admission by memory", () => {
   });
   test("parsePeak: the four names, a positive number, nothing else", () => {
     expect(["serve", "baseline", "gate", "build", "2.5"].map(parsePeak)).toEqual([
-      8, 12, 2, 1, 2.5,
+      8, 12, 2, 3, 2.5,
     ]);
     expect(["0", "-1", "x", "", "toString", "1e3"].map(parsePeak)).toEqual([
       undefined,
@@ -1046,5 +1057,45 @@ describe("R952 (R953) admission by memory", () => {
         if (v === undefined) Reflect.deleteProperty(process.env, k);
         else process.env[k] = v;
     }
+  });
+});
+
+describe("PR-179 (R992 ruling) partial counting of held slots", () => {
+  const GIB = 2 ** 30;
+  const sample = (usedGiB: number) => ({
+    usedBytes: usedGiB * GIB,
+    maxBytes: 32 * GIB,
+    source: "/fake/memory.max",
+  });
+  test("build declares 3 GiB, over the small-job allowance", () => {
+    expect(parsePeak("build")).toBe(3);
+    expect(PEAK_GIB.build).toBeGreaterThan(SMALL_JOB_MAX_GIB);
+  });
+  test("a reading below 0.8 x declared counts 0.8 x declared; above it, the reading as is", () => {
+    expect(countedPeakGiB(12, 3)).toBeCloseTo(9.6);
+    expect(countedPeakGiB(12, 11)).toBe(11);
+    expect(countedPeakGiB(8, 9)).toBe(9); // over its declaration: counted as measured
+  });
+  test("partial counting admits a job the full declared sum refuses", () => {
+    const declared = [12, 8, 8]; // 28 GiB held, used 16.9
+    const full = memoryVerdict(sample(16.9), declared, 3); // 28 + 3 + 4 = 35 > 32
+    expect(full.refuse).toBe(true);
+    const counted = declared.map((d) => countedPeakGiB(d, 4)); // 9.6 + 6.4 + 6.4 = 22.4; 29.4 <= 32
+    expect(memoryVerdict(sample(16.9), counted, 3).refuse).toBe(false);
+  });
+  test("a missing reading counts the full declared peak", () => {
+    expect(countedPeakGiB(12, undefined)).toBe(12);
+  });
+  test("readSlotRssGiB: fresh reading in GiB; missing, stale or garbage is undefined", () => {
+    const dir = fresh();
+    expect(readSlotRssGiB(dir, 1)).toBeUndefined(); // no file
+    const file = slotRssFile(dir, 1);
+    writeFileSync(file, `${6 * 2 ** 20}\n`); // KiB
+    expect(readSlotRssGiB(dir, 1)).toBe(6);
+    const old = new Date(Date.now() - RSS_FRESH_MS - 5000);
+    utimesSync(file, old, old);
+    expect(readSlotRssGiB(dir, 1)).toBeUndefined(); // stale
+    writeFileSync(file, "abc\n");
+    expect(readSlotRssGiB(dir, 1)).toBeUndefined(); // unreadable content
   });
 });
