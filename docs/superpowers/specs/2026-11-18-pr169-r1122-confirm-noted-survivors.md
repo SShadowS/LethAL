@@ -40,8 +40,9 @@ duplicate and no unmatched keys).
      the 8 kills it is a BLOCK.
    - **The upper bound is printed only when the sample is smaller than the unnoted set.** At n = 30 on PR-155 all 29 are
      measured, so the merge prints "all unnoted survivors measured" instead of a bound.
-   - The `nocov-noted` group adds its own rows. Its PR-155 count is taken before the first live use and pre-committed
-     then.
+   - **The `nocov-noted` group is empty on PR-155:** v3 scored no mutant there `no-coverage`. So the confirm run selects
+     exactly 64.
+   - The counts were re-checked independently by lethal-preproc with a site-key join; the unnoted `error` is M0081.
 6. **(should) A v3 kill BC does not confirm.** The merge does not re-check v3 kills. But when bc.json has a row for a
    v3-`killed` mutant (only possible for an overlap) whose BC verdict is `error` because its killing test is not green
    on BC, that row is flagged `v3-kill-unconfirmed`. PR-155's M0080 is such a case, named here. It is not in the confirm
