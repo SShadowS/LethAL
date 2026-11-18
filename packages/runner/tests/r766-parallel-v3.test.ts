@@ -950,8 +950,30 @@ describe("PR-99: the split prefetch, through a session", () => {
     expect(table(par)).toEqual(table(one));
     const n = one.mutants.length;
     expect(n).toBeGreaterThan(6); // so the two caps give different counts
-    // red with the 600 s cap under the split: ceil(n / 2) windows
-    expect(split.state.watches).toBe(Math.ceil(n / 6));
+    // PR-151: one queue per batch under the split (no window barrier), so one watch whatever the cap
+    expect(split.state.watches).toBe(1);
+  });
+
+  test("PR-151 F1: one lane, the time budget spent between two units: no throw, the first unit is recorded, the rest is counted", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const first = codesOf(procOf, "P1").length;
+    const lastP1 = codesOf(procOf, "P1").at(-1);
+    // the clock jumps past the budget once P1's last mutant has run (it is killed by its first test)
+    let late = false;
+    const stub = new ParStub({
+      procOf,
+      delay: () => 1,
+      fails: (code) => {
+        if (code === lastP1) late = true;
+        return true;
+      },
+    });
+    splitOwner(stub, {}); // the barrier never passes: lane 0 only
+    const clockMs = () => (late ? 100_000 : 0);
+    const r = await session(root, stub, { workers: 3, timeBudgetSeconds: 50, clockMs });
+    expect(r.mutants).toHaveLength(first);
+    expect(r.timeBudget?.unscheduledCount).toBe(one.mutants.length - first);
   });
 
   test("lane 0's session-first warm-up fallback (R960/R786) reaches the caller raw, and the run is marked abandoned", async () => {
