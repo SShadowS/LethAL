@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**43 of 1095 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**42 of 1095 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -605,7 +605,7 @@ that ordering is the priority.
 - **R1117** · `lethal init` says a selector-id clash with a dependency is "NOT ruled out" when the dependency packages are missing, but does not say how to make it check · [R1117.md](docs/roadmap/R1117.md) · closed 2026-11-18 — already fixed by PR-84 (b093054f, 9b23f4fd): dependencyCheckWarning names the folder and…
 - **R1118** · The large-method note cannot say how far each listed operator would shrink the file, and does not say that `--lines` will not shrink a fold inside one procedure · [R1118.md](docs/roadmap/R1118.md) · done (this commit) — PR-157: the note gives each listed operator's largest method from a real emit, the…
 - **R1121** · On Linux BC, a mutant that newly routes a test into an RDLC report render is scored KILLED by the platform's stub error ("RDLC report rendering is not implemented on Linux BC"), a false kill · [R1121.md](docs/roadmap/R1121.md) · done (this commit) — PR-143: R72's screen lists these kills under mechanism `linux-rdlc-stub`, kept killed…
-- **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · open — built (coord PR-171, d3ba626d: --confirm-from and confirm-merge, spec PR-169 with amendments 1-2); the…
+- **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · done (d3ba626d, 7a062e09) — live proof on bc4 matched every pre-committed row (PR-171 retry, 2026-11-18)
 - **R1124** · Not measured: does Azure DevOps' PublishMutationReport@2 build tab render `lethal export --format mutation-elements-html`'s page, which loads its bundle from jsDelivr? Waits on Azure DevOps access · [R1124.md](docs/roadmap/R1124.md) · open — waiting on Azure DevOps access (an organisation with the Stryker Mutator extension); split from R1080…
 
 ## Backends and tooling
