@@ -201,7 +201,7 @@ import {
   readGateBaseline,
   recordRequested,
 } from "./baseline-guard";
-import { prepareFixtureSymbols, v3GateTestDir } from "./fixture-symbols";
+import { copyTestDirForV3, prepareFixtureSymbols, v3GateTestDir } from "./fixture-symbols";
 import { DBM_FIGURES, GATE_WARNINGS } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
@@ -1241,7 +1241,7 @@ async function legN1E(scratch: string, version: string): Promise<void> {
 async function legN1S(scratch: string, version: string): Promise<void> {
   const deps = await microsoftDeps(scratch);
   const tests = join(scratch, "names-tests-reduced");
-  await cp(fixture("sandbox-names-tests"), tests, { recursive: true });
+  await copyTestDirForV3(REPO, fixture("sandbox-names-tests"), tests);
   const al = join(tests, "src", "NamesTests.Codeunit.al");
   const text = await readFile(al, "utf8");
   const at = text.indexOf('procedure "Dot.Step"()');
@@ -1417,7 +1417,7 @@ async function o1SeedCheck(
 async function legISO(scratch: string, version: string): Promise<void> {
   const cache = await microsoftDeps(scratch);
   const tests = join(scratch, "sandbox-order-tests");
-  await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+  await copyTestDirForV3(REPO, fixture("sandbox-order-tests"), tests);
   await writeFile(join(tests, "src", "IsolateProbe.al"), ISO_PROBE_AL);
   const server = new AlRunnerServer(
     BIN,
@@ -1527,7 +1527,7 @@ async function legO1(scratch: string, version: string): Promise<void> {
     const dep = join(scratch, "cdo-src", "sandbox-order");
     const tests = join(scratch, "cdo-src", "sandbox-order-tests");
     await cp(fixture("sandbox-order"), dep, { recursive: true });
-    await cp(fixture("sandbox-order-tests"), tests, { recursive: true });
+    await copyTestDirForV3(REPO, fixture("sandbox-order-tests"), tests);
     const cdoApp = JSON.parse(await readFile(join(CDO, "Test", "app.json"), "utf8")) as {
       dependencies?: { id: string; name: string; publisher: string; version: string }[];
     };

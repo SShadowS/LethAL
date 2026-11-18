@@ -539,11 +539,19 @@ after the whole baseline (R927). No gate figure counts it, since no leg sets the
   besides `packagesDir`. A full tar extraction (`compile:fixtures`, kraken's lane setup) leaves one in test projects
   such as `sandbox-names-tests`, and its Base Application 28.0 made v3 turn test data off for N1, N1E, N1S, WR and WRE.
   A fresh worktree passed (`/coord/handoff/PR-162/gate-n1-master-fresh.log`, `gate-n1-master-fulltar.log`,
-  `gate-n1-no-namestests.log`). So every backend built by the itest's `backendCfg` gets its test dir through
-  `v3GateTestDir`: a test dir with its own `.alpackages` is copied, once per run, to a temp folder without it. The
-  dirs of the gate's two prepared folders, and dirs without one, are used as they are. In a fresh worktree nothing
-  changes. With the whole tar extracted the five legs pass (`/coord/handoff/PR-165/gate-5legs-fulltar.log`), so
-  `compile:fixtures` and the gate can share a worktree.
+  `gate-n1-no-namestests.log`). So:
+  - **Backends built by `backendCfg`:** each gets its test dir through `v3GateTestDir`. A test dir under `fixtures/`
+    with its own `.alpackages` is copied, once per run, to a temp folder without it. Used as they are:
+    - the dirs of the gate's two prepared folders;
+    - dirs without an `.alpackages`;
+    - dirs outside `fixtures/`, such as a leg's scratch copy, which leg X (c2) edits after building its backend.
+  - **The legs that copy a fixture test dir to scratch** (N1S, and the two order legs) copy it with
+    `copyTestDirForV3`, without a stray `.alpackages`.
+  - **The CLI leg** builds its backend through the CLI's own code from `sandbox-tests`, a gate dir, so it is not
+    affected.
+  - **A fresh worktree** has none of these folders, so its legs read the same inputs as before.
+  - **With the whole tar extracted,** the full gate's default legs pass (`/coord/handoff/PR-165/gate-full-fulltar2.log`),
+    so `compile:fixtures` and the gate can share a worktree.
 - Re-pinning the symbol tar (a new `FIXTURE_SYMBOLS_TAR_SHA256`) refuses EVERY worktree whose two folders came
   from the old tar, not only the gate worktree: its marker names the old pin (`bdf460e2…` before R670), so the
   next `itest:alrunner-v3` or gate run there stops with `al-runner-v3-gate-symbols-unverified`. Nothing is

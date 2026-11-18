@@ -18,6 +18,7 @@ import {
   GATE_ALPACKAGES,
   SYMBOLS_MARKER,
   SymlinkedAlpackagesError,
+  copyTestDirForV3,
   prepareFixtureSymbols,
   symbolTarDrift,
   symlinkedAlpackages,
@@ -459,6 +460,28 @@ describe("PR-165: v3GateTestDir", () => {
     const gate = await project("fixtures/sandbox-tests", true);
     expect(v3GateTestDir(worktree, gate, to)).toBe(gate);
     expect(calls).toBe(0);
+  });
+
+  test("a leg's scratch copy outside fixtures/ is used as is, so an edit after construction reaches v3 (leg X c2)", async () => {
+    await setup();
+    calls = 0;
+    const scratch = join(root, "scratch", "x-c2", "tests");
+    await mkdir(join(scratch, ".alpackages"), { recursive: true });
+    expect(v3GateTestDir(worktree, scratch, to)).toBe(scratch);
+    expect(calls).toBe(0);
+  });
+
+  test("copyTestDirForV3 drops a stray .alpackages and keeps a gate one", async () => {
+    await setup();
+    const stray = await project("fixtures/sandbox-names-tests", true);
+    const a = join(root, "copy-a");
+    await copyTestDirForV3(worktree, stray, a);
+    expect(existsSync(join(a, ".alpackages"))).toBe(false);
+    expect(existsSync(join(a, "src", "T.Codeunit.al"))).toBe(true);
+    const gate = await project("fixtures/sandbox-tests", true);
+    const b = join(root, "copy-b");
+    await copyTestDirForV3(worktree, gate, b);
+    expect(existsSync(join(b, ".alpackages", "Microsoft_Base Application.app"))).toBe(true);
   });
 });
 
