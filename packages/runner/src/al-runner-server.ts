@@ -789,7 +789,14 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-74 review M2: the measured path `a`, plus t9's three paths by name (the path is the writer's own
   // nesting, not engine state; a widening by name, not a measurement).
   // PR-105 added the path t12/t13 met, measured by its own cell.
-  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\]|message\.body\.ccRecipients\[0\]\.emailAddress)`,
+  // PR-159 added message.body.toRecipients[0].emailAddress, measured by family `y1-refusals`, census CLEAN at
+  // /coord/handoff/PR-159/census/. Not measured: DO's `CDO Microsoft Graph Rest Api`, reached from
+  // `CDO Send Mail Management.SendMSGraphMail`, can reach the same text in a deeper state (spec L4; no DO test reaches it
+  // today, and the kept ccRecipients[0] path has the same exposure).
+  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\]|message\.body\.ccRecipients\[0\]\.emailAddress|message\.body\.toRecipients\[0\]\.emailAddress)`,
+  // PR-159: the Integer values the GetTable keep covers, each by name: 123 (PR-133) and 12345 (family `y1-refusals`, census
+  // CLEAN at /coord/handoff/PR-159/census/, a plain call and one behind an `IsRecord` guard). No integer pattern.
+  GETTABLEINT: "(?:123|12345)",
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1124,7 +1131,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // Not kept: Report.RunRequestPage (DO reaches it with no request-page handler, on a BaseApp report, inside an
   // open write transaction, and nothing measured what report code runs before the refusal: spec r2 H1/H2), the
   // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
-  ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer 123"],
+  // PR-159 (spec 2026-11-18-pr159-y1-sibling-keeps-precommitment.md): 12345 joins 123 by name (slot %GETTABLEINT%).
+  ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer %GETTABLEINT%"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

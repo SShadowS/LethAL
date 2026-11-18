@@ -2611,6 +2611,73 @@ page 51001 "X3 Card"
 };
 
 /**
+ * PR-159: the two sibling texts DO's y1 window still closed on, each driven by an invented cell (no corpus source text):
+ * `RecordRef.GetTable of Integer 12345` plainly and through a procedure that first checks `IsRecord` (the remove-not mutant
+ * of DO's guard), and the JSON writer's WriteStartObject at path `message.body.toRecipients[0].emailAddress`. Cell i is
+ * codeunit BASE_ID + 1 + i (51001 to 51003); the support codeunit is 51000 (the family's id block is 51000 to 51003).
+ */
+export const Y1_REFUSALS: Family = {
+  name: "y1-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `codeunit 51000 "Y1 Helper"
+{
+    procedure GetLog(VariantRecord: Variant)
+    var
+        RecRef: RecordRef;
+    begin
+        if VariantRecord.IsRecord then
+            exit;
+        RecRef.GetTable(VariantRecord);
+    end;
+}
+
+dotnet
+{
+    assembly(mscorlib)
+    {
+        type(System.IO.StringWriter; Y1StringWriter) { }
+    }
+    assembly(Newtonsoft.Json)
+    {
+        type(Newtonsoft.Json.JsonTextWriter; Y1JsonTextWriter) { }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    t9("RecordRef", "GetTable", "Integer 12345", "RR.GetTable(V);", {
+      vars: ["RR: RecordRef;", "V: Variant;"],
+      setup: ["V := 12345;"],
+    }),
+    t9("RecordRef", "GetTableGuarded", "Integer 12345", "Helper.GetLog(V);", {
+      vars: ['Helper: Codeunit "Y1 Helper";', "V: Variant;"],
+      setup: ["V := 12345;"],
+    }),
+    t9("JsonTextWriter", "WriteStartObject", "state Object", "JW.WriteStartObject();", {
+      vars: ["SW: DotNet Y1StringWriter;", "JW: DotNet Y1JsonTextWriter;"],
+      setup: [
+        "SW := SW.StringWriter();",
+        "JW := JW.JsonTextWriter(SW);",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('message');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('body');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('toRecipients');",
+        "JW.WriteStartArray();",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('emailAddress');",
+        "JW.WriteStartObject();",
+        "JW.WritePropertyName('address');",
+        "JW.WriteValue('a');",
+      ],
+    }),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -5026,6 +5093,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [X2_REFUSALS.name]: X2_REFUSALS,
   // PR-139: appended (BC-check number 20): the NUL-run Evaluate widths DO's x3 window closed on, for a keep census
   [X3_REFUSALS.name]: X3_REFUSALS,
+  // PR-159: appended (BC-check number 21): the two sibling texts DO's y1 window closed on, for a keep census
+  [Y1_REFUSALS.name]: Y1_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
