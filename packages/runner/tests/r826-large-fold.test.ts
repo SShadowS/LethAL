@@ -224,7 +224,8 @@ describe("R826: the large-method warning", () => {
     expect(message).toContain("P.Codeunit.al");
     expect(message).toMatch(/chain \d+, \d+ KB in one method/);
     expect(message).toContain("not proven");
-    expect(message).toContain("not measured");
+    // PR-157 (review 1): only one size on one build is measured; the text says the rest is not
+    expect(message).toContain("No other size or build is measured");
     // R827, R828: a body's `empty-block`, an `if` condition and a `case` arm are no longer the cause,
     // so the text names what is.
     expect(message).toContain("Loops and statements holding a `#if`");

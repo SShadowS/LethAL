@@ -40,9 +40,11 @@ export interface LargeMethod {
    * R1118 (PR-157): the largest method with each listed root operator this file uses left out, one at a
    * time (same order as `FOLD_ROOT_OPERATORS`), from a real emit each. Absent when it was not computed.
    */
-  readonly without?: readonly { readonly operator: string; readonly methodBytes: number }[];
+  readonly without?: readonly { readonly operator: string; readonly methodBytes?: number }[];
   /** R1118: the largest method with every listed root operator left out together. */
   readonly allOutBytes?: number;
+  /** R1118: true when the all-out re-emit failed (named in the note rather than left out). */
+  readonly allOutFailed?: boolean;
 }
 
 /**
@@ -138,9 +140,11 @@ export function largeMethodOf(file: FileIn, tierOf: TierResolver): LargeMethod |
   };
   const used = new Set(file.specs.map((s) => bare(s.operatorName)));
   const listed = FOLD_ROOT_OPERATORS.filter((o) => used.has(o));
-  const without = listed.flatMap((operator) => {
+  // review 2: a re-emit that fails is named (methodBytes absent), never dropped: a missing operator would read
+  // as "not used in this file".
+  const without = listed.map((operator) => {
     const b = largestWithout(new Set([operator]));
-    return b === undefined ? [] : [{ operator, methodBytes: b }];
+    return b === undefined ? { operator } : { operator, methodBytes: b };
   });
   const allOutBytes = listed.length > 0 ? largestWithout(new Set(listed)) : undefined;
   return {
@@ -149,6 +153,7 @@ export function largeMethodOf(file: FileIn, tierOf: TierResolver): LargeMethod |
     methodBytes,
     ...(without.length > 0 ? { without } : {}),
     ...(allOutBytes !== undefined ? { allOutBytes } : {}),
+    ...(listed.length > 0 && allOutBytes === undefined ? { allOutFailed: true } : {}),
   };
 }
 
@@ -175,10 +180,19 @@ const kb = (bytes: number): string => `${Math.round(bytes / 1024).toLocaleString
 /** R1118 (PR-157): one line per file: the largest method with each listed operator left out, and with all of them. */
 function savings(large: readonly LargeMethod[]): string {
   const lines = large.flatMap((f) => {
-    if (f.without === undefined && f.allOutBytes === undefined) return [];
-    const each = (f.without ?? []).map((w) => `without ${w.operator} ${kb(w.methodBytes)}`);
+    if (f.without === undefined && f.allOutBytes === undefined && f.allOutFailed !== true)
+      return [];
+    const each = (f.without ?? []).map((w) =>
+      w.methodBytes === undefined
+        ? `without ${w.operator}: the re-emit failed`
+        : `without ${w.operator} ${kb(w.methodBytes)}`,
+    );
     const all =
-      f.allOutBytes !== undefined ? [`without all of them together ${kb(f.allOutBytes)}`] : [];
+      f.allOutBytes !== undefined
+        ? [`without all of them together ${kb(f.allOutBytes)}`]
+        : f.allOutFailed === true
+          ? ["without all of them together: the re-emit failed"]
+          : [];
     return [` ${f.path}'s largest method: ${[...each, ...all].join("; ")}.`];
   });
   return lines.length > 0
@@ -191,14 +205,13 @@ export function largeMethodWarning(large: readonly LargeMethod[]): string | unde
   if (large.length === 0) return undefined;
   return [
     `[lethal] ${large.length} file(s) emit a very large method: ${named(large)}. A method this size may stop a BC`,
-    " service tier with a stack overflow (GitHub #28). That is not proven. On BC 29 for Linux a 23.9 MB method was",
-    " measured once: its publish was refused (System.OutOfMemoryException) and the tier stayed up (R826); on other",
-    " builds this size is not measured: it is a warning only. Loops and statements holding a `#if` cause the largest",
+    " service tier with a stack overflow (GitHub #28). That is not proven. One size was measured once: on BC 29 for",
+    " Linux a 23.9 MB method's publish was refused (System.OutOfMemoryException) and the tier stayed up (R826). No",
+    " other size or build is measured: it is a warning only. Loops and statements holding a `#if` cause the largest",
     " folds (everything inside one joins its chain). To shrink them, leave out the operators that root them, one",
-    " --exclude-operator each: empty-block, negate-conditional, conditional-boundary, negate-guard,",
-    " remove-not, loop-skip, loop-truncate, delete-logical-right, delete-logical-left, delete-additive-right,",
-    " delete-additive-left, and the opt-in condition-true and blank-argument when you named them. Or narrow the",
-    " run with --only.",
+    ` --exclude-operator each: ${FOLD_ROOT_OPERATORS.slice(0, -2).join(", ")}, and the opt-in`,
+    ` ${FOLD_ROOT_OPERATORS.slice(-2).join(" and ")} when you named them (with --operator, drop them from its list`,
+    " instead: the two flags do not combine). Or narrow the run with --only.",
     savings(large),
     " --lines narrows which mutants run, but a fold inside one procedure shrinks only guard by guard: leaving the",
     " listed operators out together is the lever. --max-guards-per-batch will not help: it splits by file.",
