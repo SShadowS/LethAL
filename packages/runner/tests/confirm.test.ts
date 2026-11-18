@@ -411,6 +411,15 @@ describe("selection: planConfirm", () => {
     ]) {
       expect(() => planConfirm({ ...basePlan(), input: bad })).toThrow(ConfirmInputNotReportError);
     }
+    // Each field alone: the other three are present, so only that one check can refuse.
+    const ok = { mutants: [], backend: "al-runner-v3", schemaVersion: 3 };
+    for (const [field, bad] of [
+      ["mutants", { ...ok, mutants: "x" }],
+      ["backend", { ...ok, backend: 1 }],
+      ["schemaVersion", { ...ok, schemaVersion: "3" }],
+    ] as const) {
+      expect(() => planConfirm({ ...basePlan(), input: bad }), field).toThrow(`no \`${field}\``);
+    }
   });
 
   test("refuses: the input's run was not al-runner-v3", () => {
