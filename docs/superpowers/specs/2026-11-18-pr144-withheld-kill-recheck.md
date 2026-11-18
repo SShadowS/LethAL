@@ -245,6 +245,38 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   `.alpackages` for sandbox-dates, -optin and -order with their tests (R1128), so `compile:fixtures` skips nothing.
   The recheck pair's files are as in amendment 6.
 
+## 0i. Amendment 9 (coord PR-182, 2026-11-18): the recheck ON by default (owner ruling)
+- **The ruling** (kraken for the owner, from the mantra, q-20261118T211712-33a8f746; principles 1, 2, 17, 6):
+  - turn it on by default, with an opt-out for speed;
+  - report the rows BC could not measure as unmeasured, never as kills.
+- **The evidence, as stated in help and docs:**
+  - **PR-170 (DO sample on bc4, bcdev):** of 58 sampled recovered kills, BC confirmed 42 (K) and found 0 false (S). 16
+    could not be measured on BC (N): 9 are `no-coverage` because the killer is a TestPage test bcdev skips, and 7 have a
+    killer red at BC's baseline.
+  - **PR-156 (a):** the recheck fixture on bc2. The 4 recovered Sevens kills were confirmed. Rule (e) kept SevensB `error`
+    (the conservative side).
+  - **The cost** (the orchestrator's ask): about 12 s per withheld row, about 10% of a DO run (about 295 rows). The gain:
+    DO errors from 446 to about 150.
+  - **What it does not show** (PR-170): for 56 of the 58 rows the sample does not test H1, the earlier test's state.
+    Rule (e) stays as the guard for that (ruling of amendment P5(a), R1125).
+- **The change:**
+  1. `alRunnerV3.recheckWithheldKills` defaults to `true` (al-runner-v3-config.ts). `false` is the opt-out, documented
+     with its saving (about 10% of a run with many withheld rows; nothing when a run has none). It is the only
+     difference between the two settings.
+  2. The help text and the README describe it as the default, with the evidence above. The warning every description
+     must carry (`al-runner-v3-config.ts`, PR-144) stays verbatim; only "opt-in" wording changes. The report caveat text
+     (`report.ts`, `isolated-recheck-kills`) drops "opt-in".
+  3. "Unmeasured, never kills": nothing in the recheck's verdicts changes. A row it does not recover stays `error` with
+     its withheld note (rules (a)-(e)); only a reproduced kill becomes `killed`. The docs say so in those words.
+- **Pre-committed: NO frozen gate figure moves.**
+  - The recheck is built only on the CLI path (`v3RecheckOf`, cli.ts) or where a leg builds it, and leg RC already sets
+    the option explicitly.
+  - In the most recent full v3 gate (PR-177, `/coord/handoff/PR-177/gate.log`), no leg other than RC printed a withheld
+    kill.
+  - So with the default on, every v3 gate leg's per-mutant table and warning set must be byte-identical to today's. Any
+    difference is investigated before anything is re-recorded.
+  - The BC gates (bcdev and the rest) do not read this option.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
