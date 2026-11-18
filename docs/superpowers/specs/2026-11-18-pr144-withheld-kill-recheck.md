@@ -144,6 +144,58 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
 - **The recheck counts as unproven live until R1125's leg passes.** P5 (the BC differential) depends on such a fixture,
   and still gates any default-on.
 
+## 0f. Amendment 6 (coord PR-162, R1125): the shape that makes v3 withhold a kill, and leg RC's figures
+- **Found by probe** (`/coord/handoff/PR-162/p3/`, `al-runner serve`, edge-4ebfe7913).
+  - A test refused MID-RUN withholds the next test's failure only when its REMAINING reach, what BC would still run
+    after the refusal point, holds a construct al-runner cannot know. Measured with `Page.RunModal(0, R)` ("runs page 0,
+    which is not in the program") and a `Codeunit.Run` whose id is known only at run time.
+  - The same constructs before the refusal point, or in an untaken earlier branch, leave the next failure a plain trusted
+    `fail` (runs s2 and s4). That is why amendments 2 and 4 could not produce a withheld kill.
+- **The fixture, `fixtures/sandbox-recheck` and `-tests`** (invented code, runtime 17):
+  - **App, codeunit "Recheck Logic":**
+    - `Sevens(N: Integer) T: Text` and `SevensB(N: Integer) T: Text`, each a loop of `C := '7'; T += Format(C);`.
+  - **"Recheck A Tests", in declared order:**
+    - `A0_ParsesSevens`: `T := Sevens(10)`; `if not Evaluate(D, T) then Error(...)`; then `if D < 0 then
+      Page.RunModal(0, R)` (`R` a record of an app table), after the refusal point;
+    - `A1_OneSeven`: `Sevens(1) = '7'`.
+  - **"Recheck B Tests", in declared order:**
+    - `B0_ParsesSevens`, as A0 over `SevensB`;
+    - `B1_OneSevenAndMarks`: sets a GLOBAL Boolean of the test codeunit (`Marked := true`), then asserts
+      `SevensB(1) = '7'`;
+    - `B2_SeesTheMark`: asserts `Marked`. It passes after B1 in one codeunit run, because TestIsolation = Function keeps
+      the codeunit's variables, and fails alone, under `"method"` isolation's fresh session per test. This is the
+      README's `IsInitialized` case.
+  - Unmutated, every test passes. Probe s5's B control passes with the same A0 shape.
+- **Leg RC** (as amendment 2, with these objects):
+  - an al-runner-v3 session on the gate's pinned build, `"isolation": "test"`, serve, `"recheckWithheldKills": true`,
+    `--workers 1`;
+  - its warning set `[]` (amendment 3).
+- **Pre-committed figures, per mutant:**
+  - **The remove-assignment mutant of `C := '7'` in `Sevens`:**
+    - **main pass:** `error` with `withheldKill` (afterTest `A0_ParsesSevens`; the note names "part of its reach is not
+      known (runs page 0, which is not in the program)");
+    - **after the recheck:** `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`. Codeunit A's
+      main-baseline tests, A0 and A1, both pass alone.
+  - **The remove-assignment mutant of `C := '7'` in `SevensB`:**
+    - **main pass:** `error` with `withheldKill` (afterTest `B0_ParsesSevens`);
+    - **after the recheck:** it stays `error`, its note naming rule (e) and `B2_SeesTheMark`, which passed in the main
+      baseline and fails alone.
+  - **Other mutants** of the two procedures are recorded in RC's own baseline, not predicted.
+  - **The caveats:** `isolated-recheck-kills` names the `Sevens` mutant, and `withheld-kills` names the `SevensB` one.
+  - **The leg fails by name:**
+    - on 0 withheld kills;
+    - when the `Sevens` mutant is not recovered;
+    - when the `SevensB` mutant is recovered.
+- **The symbol tar:**
+  - rebuilt with both projects (`build-fixture-symbols-tar.sh`, after adding the new projects' Microsoft symbols to its
+    input);
+  - `FIXTURE_SYMBOLS_TAR`, `FIXTURE_SYMBOLS_TAR_SHA256` and the manifest updated;
+  - `compile:fixtures` compiles both with no SKIP on this machine.
+  - CI gets the tar only through the owner's secret swap (a kraken ask, kind config). **Until the swap and a green CI
+    compile, leg RC is recorded but not counted as proven** (the orchestrator, 2026-11-18).
+- **Unchanged:** every other leg's figures, and P5 gating any default-on.
+  and still gates any default-on.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
