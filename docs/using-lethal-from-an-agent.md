@@ -556,10 +556,10 @@ Each `gaps` row can also carry `source`. Given `--project`, it holds `startLine`
 member in `members` order, each `{ mutantCode, startLine, startColumn, endLine, endColumn }`. Lines and
 columns start at 1; a column counts UTF-16 code units (a tab is one), and the end is exclusive, so a
 site can span lines. Explain first hashes `<dir>` the way the run hashed its source (every .al
-file the target build compiles plus app.json, raw bytes, with the config's preprocessor symbols)
+file the target build compiles plus app.json without its version field, with the config's preprocessor symbols)
 and compares that with the report's sourceSha256. Any difference refuses by name (a
 ProjectSourceRefusedError, reason source-mismatch) with nothing on stdout: a CRLF/LF checkout
-difference, an app.json version bump, a changed preprocessor symbol or an edit to a test project
+difference, a changed app.json id or dependency, a changed preprocessor symbol or an edit to a test project
 nested inside the target all count. A report from before R274 has no sourceSha256 and refuses with
 reason no-source-hash. The output then holds TARGET SOURCE: do not publish it for a third party's
 code.

@@ -770,7 +770,7 @@ export async function assertSourceUnchanged(
   if (now !== source.sourceSha256) {
     throw new VerifyError(
       "source-changed",
-      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump counts too); run lethal run again, then verify with its artifact id.`,
+      `the installed build was made from other source than ${source.projectPath} holds now (a .al file, app.json or a preprocessor symbol changed; a version-only bump does not count); run lethal run again, then verify with its artifact id.`,
     );
   }
 }

@@ -534,7 +534,11 @@ writes a separate `lethal-confirmation` file ([schema](schemas/confirmation-v1.s
 report. Each mutant is marked with who measured it: BC, or v3. A BC `error` is not a measurement, so
 that mutant keeps v3's verdict. A kill on the Linux RDLC stub stays a kill but is counted apart. The
 merge prints "N survivors, M of them measured on BC" beside every score, and refuses by name when the
-two runs do not belong together (different source, flags, suite or identity scheme).
+two runs do not belong together (different source, flags, suite or identity scheme). "Source" is
+the `.al` files and `app.json` without its `version`, so a version bump alone is not a difference.
+The two runs often read different dependency symbols (v3 and BC are different builds). That is not a
+refusal: the file records both hashes, sets the flag `dependency-symbols-differ`, and the merge
+prints one line about it.
 
 **Limits:**
 - **A mutant v3 killed is never re-checked.** A false v3 kill stays in the final score.

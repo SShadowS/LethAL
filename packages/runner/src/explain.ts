@@ -1911,7 +1911,7 @@ function verifiedProjectText(
   if (actual !== report.sourceSha256) {
     throw new ProjectSourceRefusedError(
       "source-mismatch",
-      `lethal explain --project: the project is not the source this report's positions refer to (sourceSha256 ${report.sourceSha256}, the project hashes to ${actual}). Every .al file the target build compiles and app.json are hashed as raw bytes, with the config's preprocessor symbols: a CRLF/LF checkout difference, an app.json version bump, a changed symbol, or an edit to a test project nested inside the target all count. Check out the commit the run measured.`,
+      `lethal explain --project: the project is not the source this report's positions refer to (sourceSha256 ${report.sourceSha256}, the project hashes to ${actual}). Every .al file the target build compiles and app.json (without its version) are hashed, with the config's preprocessor symbols: a CRLF/LF checkout difference, a changed app.json id or dependency, a changed symbol, or an edit to a test project nested inside the target all count. Check out the commit the run measured.`,
     );
   }
   return new Map([...files].map(([rel, bytes]) => [rel, decodeSource(bytes)]));

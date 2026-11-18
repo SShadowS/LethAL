@@ -1268,6 +1268,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       // PR-171 (R1122): the `lethal confirm-merge` artifact. Not a report; its own version.
       "confirmation-v1.schema.json": [
         "confirmationVersion",
+        "dependencySourceSha256",
+        "flags",
         "kind",
         "mutants",
         "sample",

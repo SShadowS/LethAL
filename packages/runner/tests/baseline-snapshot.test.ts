@@ -7,6 +7,7 @@ import { IDENTITY_SCHEME } from "@lethal/schemata";
 import {
   hashAlTree,
   hashPackage,
+  hashSourceSnapshot,
   hashTargetSource,
   hashTestDir,
   snapshotApplies,
@@ -142,7 +143,7 @@ describe("hashTargetSource (C02-06)", () => {
   test("hashTargetSource includes app.json and a nested test project's .al, because the target build copies them", async () => {
     const a = await hashTargetSource(tree(PROJECT), []);
     const appJson = await hashTargetSource(
-      tree({ ...PROJECT, "app.json": '{"id":"x","version":"1.0.0.1"}' }),
+      tree({ ...PROJECT, "app.json": '{"id":"y","version":"1.0.0.0"}' }),
       [],
     );
     expect(appJson).not.toBe(a);
@@ -154,6 +155,57 @@ describe("hashTargetSource (C02-06)", () => {
     // The stated ceiling: a resource is not hashed.
     const xlf = await hashTargetSource(tree({ ...PROJECT, "Translations/x.xlf": "<xliff/>" }), []);
     expect(xlf).toBe(a);
+  });
+
+  describe("PR-177: app.json is hashed without its version, canonicalised", () => {
+    const h = (appJson: string | Buffer, al = "codeunit 1 A { }") =>
+      hashSourceSnapshot(
+        new Map([
+          ["A.Codeunit.al", Buffer.from(al)],
+          ["app.json", Buffer.from(appJson)],
+        ]),
+        [],
+      );
+    const BASE = '{"id":"x","version":"1.0.0.0","dependencies":[{"id":"d1"},{"id":"d2"}]}';
+
+    test("an .al change moves the hash", () => {
+      expect(h(BASE, "codeunit 1 A { } ")).not.toBe(h(BASE));
+    });
+
+    test("a version-only change, whitespace, key order and a BOM do not", () => {
+      const want = h(BASE);
+      expect(h(BASE.replace("1.0.0.0", "9.9.9.9"))).toBe(want);
+      expect(
+        h(
+          '{\n  "dependencies": [ {"id":"d1"}, {"id":"d2"} ],\n  "id": "x",\n  "version": "2.0"\n}',
+        ),
+      ).toBe(want);
+      expect(h(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(BASE)]))).toBe(want);
+    });
+
+    test("an id or dependencies change, or a reordered array, moves it", () => {
+      const want = h(BASE);
+      expect(h(BASE.replace('"x"', '"y"'))).not.toBe(want);
+      expect(h(BASE.replace('"d2"', '"d3"'))).not.toBe(want);
+      expect(h(BASE.replace('{"id":"d1"},{"id":"d2"}', '{"id":"d2"},{"id":"d1"}'))).not.toBe(want);
+    });
+
+    test("PR-177 review: only the TOP-level version is dropped; a dependency's version still moves it", () => {
+      const dep = (v: string) =>
+        `{"id":"x","version":"1.0.0.0","dependencies":[{"id":"d1","version":"${v}"}]}`;
+      expect(h(dep("2.0.0.0"))).not.toBe(h(dep("1.0.0.0")));
+    });
+
+    test("an unparsable app.json hashes raw, so a whitespace edit still differs", () => {
+      expect(h("{not json")).not.toBe(h("{not json "));
+    });
+  });
+
+  test("PR-177: baseline-snapshot reuse is keyed by the instrumented .al tree, so a version-only app.json change reuses and an .al change does not", async () => {
+    const base = { "A.Codeunit.al": "codeunit 1 A { }", "app.json": '{"version":"1.0.0.1"}' };
+    const key = (files: Record<string, string>) => hashAlTree(tree(files));
+    expect(await key({ ...base, "app.json": '{"version":"2.0.0.0"}' })).toBe(await key(base));
+    expect(await key({ ...base, "A.Codeunit.al": "codeunit 1 A { } " })).not.toBe(await key(base));
   });
 
   test("hashTargetSource changes when preprocessorSymbols change, not when their order does", async () => {
