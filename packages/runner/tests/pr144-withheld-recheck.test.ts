@@ -525,12 +525,16 @@ describe("runWithheldRecheck: the driver", () => {
     expect(closes).toBe(0);
   });
 
-  test("no main-baseline results (a reused baseline): skipped with a warning, nothing sent", async () => {
-    const fake = fakeRunner(() => nestedFor(["M1"]));
-    const { emitted, summary } = await drive(seqOf([scored("M1")]), fake);
+  test("no baseline results at all: ONE skip warning with the reason and the row count, nothing sent", async () => {
+    const fake = fakeRunner(() => nestedFor(["M1", "M2"]));
+    const { emitted, summary } = await drive(seqOf([scored("M1"), scored("M2")]), fake);
     expect(fake.calls).toHaveLength(0);
+    expect(emitted).toHaveLength(1);
     expect(emitted).toMatchObject([{ type: "warning", code: "withheld-recheck-skipped" }]);
-    expect(summary.skipped).toContain("reused baseline");
+    const msg = emitted[0]?.type === "warning" ? emitted[0].message : "";
+    expect(msg).toContain("no baseline results at all");
+    expect(msg).toContain("2 withheld kill(s)");
+    expect(summary.skipped).toContain("no baseline results at all");
   });
 
   test("the recheck baseline folds strictly: fail then pass across two batches is not passed", async () => {
@@ -834,7 +838,7 @@ describe("config and docs", () => {
 
   test("the not-yet-exercised-live sentence is pinned beside the warning, in the README and the caveat", async () => {
     expect(RECHECK_UNEXERCISED).toBe(
-      "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.",
+      "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false).",
     );
     const read = (p: string) => readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8");
     expect(read("README.md")).toContain(`${RECHECK_WARNING} ${RECHECK_UNEXERCISED}`);

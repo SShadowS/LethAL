@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifest, MutantManifestEntry } from "@lethal/schemata";
 import { verdictFromRunnerTest } from "../src/al-runner-rows";
+import { V3_NOT_RUN_SUFFIX } from "../src/al-runner-v3-backend";
 import { reserveAppVersion } from "../src/app-version";
 import type { CompiledArtifact } from "../src/artifact";
 import type {
@@ -31,7 +32,7 @@ import {
   runSession as runSessionRaw,
 } from "../src/orchestrator";
 import type { AttestationLedger } from "../src/orchestrator";
-import { ERROR_CAUSE_INTERPRETATIONS, renderConsole } from "../src/report";
+import { ERROR_CAUSE_INTERPRETATIONS, renderConsole, withheldKillOf } from "../src/report";
 import type { SessionReport } from "../src/report";
 import {
   CARRYABLE_VERDICTS,
@@ -48,6 +49,7 @@ import { RUNNER_DISAGREEMENT_NOTE } from "../src/runner-disagreement";
 import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
+import { recheckTargetsOf } from "../src/withheld-recheck";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -1655,6 +1657,75 @@ describe("runSession --resume (R47)", () => {
     expect(report.quarantined).toBeUndefined();
     // And the batch that DID have work still ran its baseline and mutants normally.
     expect(report.counts.survived + report.counts.killed).toBeGreaterThan(batch0Before.length);
+  });
+
+  test("PR-185: --resume re-scores a stored withheld-kill error row (never carries it), and the recheck takes it as a target", async () => {
+    // Every mutant run answers as v3's withheld kill: a refused row whose note carries the withheld phrase.
+    const withheld = `NotRun: out-of-scope: a test before this one in the codeunit did not pass (T2: failed with X) and left state; this failure is not trusted: Expected 1 got 2 ${V3_NOT_RUN_SUFFIX}`;
+    class WithheldBackend extends CountingBackend {
+      /** The first run withholds only its 2nd mutant run: a run of errors alone is not resumable at all. */
+      onlySecond = false;
+      private seen = 0;
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const r = await super.run(ref, opts);
+        const isMutantRun = r.coverage === undefined && r.operation !== "in-flight-unknown";
+        if (isMutantRun) this.seen += 1;
+        return !isMutantRun || (this.onlySecond && this.seen !== 2)
+          ? r // the baseline, the base class's abort, or a plain row
+          : {
+              ...r,
+              outcome: "error",
+              runnerRow: "runner-refused",
+              failureMessage: withheld,
+            };
+      }
+    }
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    const firstBackend = new WithheldBackend("pass", undefined, 2); // batch 0 scored, then batch 1 aborts
+    firstBackend.onlySecond = true;
+    const first = await runSession({
+      backend: firstBackend,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    const stored = first.mutants.filter((m) => withheldKillOf(m.verdict, m.cause, m.failureNote));
+    expect(stored.length).toBeGreaterThan(0); // the control: the first run really stored withheld rows
+
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: new WithheldBackend("pass"),
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    // Mutant ids are minted per session, so a site is matched by file, line and operator.
+    const site = (m: { file: string; operatorName: string }, line: number) =>
+      `${m.file}|${line}|${m.operatorName}`;
+    const carriedSites = new Set(
+      events.flatMap((e) =>
+        e.type === "mutant-carried" ? [site(e.mutant, e.mutant.startLine)] : [],
+      ),
+    );
+    const scoredSites = new Set(
+      events.flatMap((e) =>
+        e.type === "mutant-scored" ? [site(e.mutant, e.mutant.startLine)] : [],
+      ),
+    );
+    const targetSites = new Set(
+      recheckTargetsOf(events).map((t) => site(t.mutant, t.mutant.startLine)),
+    );
+    for (const s of stored) {
+      const k = site(s, s.line);
+      expect(carriedSites.has(k)).toBe(false);
+      expect(scoredSites.has(k)).toBe(true);
+      expect(targetSites.has(k)).toBe(true);
+    }
   });
 
   test("R192 (second half): a batch with work left is deployed but its baseline is NOT re-run when nothing it measured changed", async () => {

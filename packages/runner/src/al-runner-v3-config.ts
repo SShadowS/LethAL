@@ -93,11 +93,11 @@ export const RECHECK_WARNING =
   "kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.";
 
 /**
- * PR-144: said beside `RECHECK_WARNING` wherever it is. The recheck is covered by unit and real-path tests and by an
- * approximation on a real project (arm M); no live gate leg runs it end to end yet.
+ * PR-144: said beside `RECHECK_WARNING` wherever it is. The al-runner-v3 gate's leg RC (PR-162) runs it live, and
+ * PR-170 measured it against BC on a DO sample.
  */
 export const RECHECK_UNEXERCISED =
-  "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.";
+  "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false).";
 
 /** PR-182 (owner ruling): THE default of `alRunnerV3.recheckWithheldKills`. The only place it is decided; `false` opts out. */
 export const V3_RECHECK_DEFAULT = true;
