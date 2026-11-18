@@ -983,7 +983,7 @@ export function readContinia(app: (typeof CONTINIA_APPS)[number]): Buffer {
  * `a < b`, part by part. Not `compareAppVersions`: that refuses a part above 65535 (LethAL's own
  * minted versions), and Continia's builds carry revisions like 336834.
  */
-function versionBelow(a: string, b: string): boolean {
+export function versionBelow(a: string, b: string): boolean {
   const pa = a.split(".").map(Number);
   const pb = b.split(".").map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
