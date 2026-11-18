@@ -478,6 +478,46 @@ Two more fields worth knowing. `operatorName` names the rule that produced a cha
 entry under [`docs/roadmap/`](docs/roadmap/) holding the evidence for a claim, so nothing in the
 output asserts something you cannot go and check.
 
+### When an `al-runner-v3` survivor is a good lead
+
+The `al-runner-v3` backend is not authoritative (see [Limits](#limits)), but most of its survivors
+are still worth acting on. One note tells you which ones are not.
+
+**The note.** A v3 survivor's `failureNote` can start with `[v3-refused-test-nearby]`, followed by
+test names. It means al-runner refused one or more tests at baseline in the same test codeunit as a
+test that covers the mutant. Those refused tests never ran under the mutant, so a kill one of them
+would make on BC was **not measured**. For example:
+
+```text
+[v3-refused-test-nearby] Invoice Send Tests.Post_WhenRenderedAsPdf_SendsOnce: refused by v3 at
+baseline in a covering test's codeunit, so a kill it might make on BC is not measured here
+```
+
+**What to do with a survivor:**
+
+| v3 survivor | Read it as | Do this |
+|---|---|---|
+| no `[v3-refused-test-nearby]` note | survived | act on it: add or strengthen a test |
+| with the note | not measured | confirm it on BC (`--backend bcdev`) before acting |
+
+**How this was measured** (coord PR-137, 2026-11-18): three scopes of one private customer project,
+1,494 mutants, each run on al-runner v3 and on BC (`bcdev`), compared mutant by mutant.
+- **Without the note:** 947 survivors. BC agreed on 945 (99.8%). The other 2 are one mutant counted
+  in two runs, and its cause is an al-runner wrong answer: `Evaluate` of an empty text into an
+  Option field whose `OptionCaption` has empty entries returns true on al-runner and false on BC.
+- **With the note:** 78 survivors. BC killed 10 of them with a real failure (12.8%). Each of those
+  10 killing tests was one al-runner had refused at baseline.
+
+**Limits of that measurement:**
+- It is one project. Another project's code may reach al-runner differences this one did not.
+- The note marks the test **codeunit**, not the test. A noted survivor whose real killer is in
+  another, unrefused codeunit is still measured. You cannot tell which from the note alone.
+- The BC side ran on BC on Linux. There, a test that renders an RDLC report fails with "RDLC report
+  rendering is not implemented on Linux BC", so a mutant that sends a test into a report render is
+  scored killed by the server, not by your test ([R1121](docs/roadmap/R1121.md)). 11 more of the 78
+  noted survivors were killed that way, and they are not counted as real kills above. When you
+  confirm on BC, read the killing failure before crediting the kill.
+
 ## Commands
 
 Each command in one line, then the detail. [Quick start](#quick-start) has the first-run sequence.

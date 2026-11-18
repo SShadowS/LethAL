@@ -103,3 +103,26 @@ guard.
   mutant.
 - **Out of scope for this run:** the run is single-mode DO, so it does not show a peak that rises after lanes are admitted. The
   charge is unchanged, so this needs no test here.
+
+### Amendment 1 (2026-11-18, before any mutant of the PR-140 run): a fresh store, not a resume
+- **Why:** window x4 ended at 04:44Z with rc 0. It completed DO's campaign in `dos4.sqlite`, so a resume of a copy has no mutant
+  left to run, and P1-P2 could only be inconclusive.
+  - The resumed run started at 04:44:36Z. It is left to end on its own, since it scores nothing; it is not evidence.
+- **The run instead:** a FRESH store (`/coord/handoff/PR-140/dow2/fresh.sqlite`), no `--resume`, `--time-budget 9000`. Otherwise as
+  above (`--workers 3`, `--peak 15 baseapp`, the same config and build, the watchdog).
+  - This is window x1's shape. x1 ran fresh at the same declaration and held lane 1 ("3 lanes charged", 15.3 GiB).
+  - A fresh baseline takes about 25-40 minutes, hence the larger budget.
+- **P1-P3 are unchanged.**
+- **P4 becomes:** the verdicts of covered mutants scored both here and in x1 (`/coord/handoff/R-984/x1.run.report.json`) are compared
+  per (file, line, operator). Under 20 shared is inconclusive. Any difference is investigated per mutant.
+
+### Amendment 2 (2026-11-18, before the run ends or is scored): amendment 1 is withdrawn; the original run stands
+- **Amendment 1's premise was wrong.** The resumed run on the dos4 copy (started 04:44:36Z, `/coord/handoff/PR-140/dow/`) is in a
+  real mutant phase on 3 lanes. Read at about 05:10Z: 29,992 mutants scored and 11,872 carried. The orchestrator spotted it.
+  - x4's rc 0 did not mean DO's campaign was complete.
+- **So the original pre-commitment above is the measurement:** the resumed copy, `--peak 15`, `--time-budget 7200`, with P1-P4 as
+  first written.
+  - P4 compares covered mutants that ran live both here and in x1-x3.
+- **The fresh run (`do-window2.sh`) never started.** Its waiting script was stopped before the first run ended.
+- **What was read before this amendment:** only counts (the events, one hold warning, one `lane-idle` close, requests per lane).
+  No prediction was scored, and the run is still going.

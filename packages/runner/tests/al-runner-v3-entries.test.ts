@@ -10737,7 +10737,14 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
       allPass(m, cu, d, n).map((x) =>
         x.method === "B" ? { ...x, status: "fail" as const, message: text } : x,
       );
-  const named = (opts: RigOpts) => rig({ ...opts, appExtra: { publisher: PUB } });
+  // R1123 (PR-146): coverage on, so the re-check's coverage guard compares real maps (under "none" it compares none)
+  const named = (opts: RigOpts) =>
+    rig({
+      ...opts,
+      appExtra: { publisher: PUB },
+      extra: { coverage: "al-runner", ...opts.extra },
+      oneShotCoverage: plainCoverage,
+    });
   const rowsOf = (r: Rig) =>
     (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
   /** Each first session's stored coverage, as the orchestrator builds it from the baseline verdicts. */
@@ -10913,6 +10920,45 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
     expect(why).toContain("no stored coverage to compare");
   });
 
+  test("R1123: under coverage none no map is compared, and the re-check says so by name instead of passing null vs null", async () => {
+    const state = await (await firstOf(allPass)).b.baselineState();
+    const r2 = await named({
+      serve: { rows: allPass, coverage: plainCoverage },
+      extra: { coverage: "none" },
+    });
+    r2.b.baselinePhase(true);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // nothing stored to compare: under coverage on this refuses (test 7); under none the rows decide
+      const why = await r2.b.recheckReusedBaseline(
+        JSON.parse(JSON.stringify(state)),
+        new Map(),
+        1000,
+      );
+      expect(why).toBeUndefined();
+      expect(
+        warn.mock.calls.some((c) => String(c[0]).includes("re-check: coverage not compared")),
+      ).toBe(true);
+      // the samples ask for no coverage either (build review): nothing would read it
+      expect(r2.serve.requests.length).toBeGreaterThan(0);
+      expect(r2.serve.requests.every((q) => q.body.coverage !== true)).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("R1123: a failing test's null vs null is not a comparison: with the passing test's map missing, it refuses", async () => {
+    const rows = rowsWith("boom"); // B fails, A passes
+    const r1 = await firstOf(rows);
+    // keep only B's stored entry ("null"): A's map is missing, so nothing real is compared
+    const onlyB = new Map(
+      [...(storedOf.get(r1) ?? new Map<string, string>())].filter(([k]) => k.endsWith(".b")),
+    );
+    expect([...onlyB.values()]).toEqual(["null"]);
+    const { why } = await recheck(r1, rows, (s) => s, onlyB);
+    expect(why).toContain("no stored coverage to compare");
+  });
+
   test("8 (review 1): the rows imported are this session's re-check rows, not the stored ones", async () => {
     const r1 = await firstOf(allPass);
     // the stored rows carry a tail the re-check does not compare (a refusal's first line only):
@@ -11051,6 +11097,46 @@ describe("PR-56: drift after a kept refusal", () => {
     await r.b.prefetchMutants(plans(["M0001"], [ref("B")]));
     await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
     expect(events).toEqual([]);
+  });
+
+  test("R1115: in a mutant entry, a test red at baseline that now passes is not drift (its reach is unknown)", async () => {
+    // A fails at baseline and everywhere, except under M0002 on daemon 0, where the mutant makes it pass
+    const { r, events } = await driftRig((m, x, d) => {
+      if (x.method === "A") return m === "M0002" && d === 0 ? x : failed(x);
+      return m === "M0001" && x.method === "C" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0001"], [ref("C")])); // kept refusal
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")])); // A is before B, the first covering test
+    // red without the R1115 skip: one drift event and a second daemon
+    expect(events).toEqual([]);
+    expect(r.serve.daemons.length).toBe(1);
+  });
+
+  test("R1115: a NONE entry still compares a test red at baseline", async () => {
+    // A fails at baseline; on daemon 0 from the 3rd request on, a NONE run of A passes (carried state)
+    const { r, events } = await driftRig((m, x, d, n) => {
+      if (x.method === "A") return m === "NONE" && d === 0 && n >= 2 ? x : failed(x);
+      return m === "M0002" && x.method === "B" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B")])); // kept refusal
+    await r.b.activate("M0002");
+    await r.b.sendKillPair("M0002", ref("B"));
+    // red if the skip ignored the entry kind: no event
+    expect(events.map((e) => [e.test, e.baselineRow, e.row])).toEqual([
+      [`Codeunit${CU}.A`, "a=fail", "a=pass"],
+    ]);
+  });
+
+  test("R1115: in a mutant entry, a test green at baseline that now fails is still drift", async () => {
+    const { r, events } = await driftRig((m, x, d) => {
+      if (x.method === "A") return m === "M0002" && d === 0 ? failed(x) : x;
+      return m === "M0001" && x.method === "C" ? refused(x) : x;
+    });
+    await r.b.prefetchMutants(plans(["M0001"], [ref("C")]));
+    await r.b.prefetchMutants(plans(["M0002"], [ref("B"), ref("C")]));
+    expect(events.map((e) => [e.test, e.baselineRow, e.row])).toEqual([
+      [`Codeunit${CU}.A`, "a=pass", "a=fail"],
+    ]);
   });
 
   test("review M1: a NONE confirm run alone after a kept refusal is not compared", async () => {
@@ -11759,8 +11845,15 @@ interface BatchReq {
 }
 describe("PR-123: the batched re-check of a reused baseline", () => {
   const isBatch = (q: Req) => q.body.test === undefined;
+  // R1123 (PR-146): coverage on, so a sample's coverage is a real map (under "none" the re-check compares none)
   const named = (opts: RigOpts) =>
-    rig({ suite: SUITE7, ...opts, appExtra: { publisher: "Acme Pub" } });
+    rig({
+      suite: SUITE7,
+      oneShotCoverage: plainCoverage,
+      ...opts,
+      appExtra: { publisher: "Acme Pub" },
+      extra: { coverage: "al-runner", ...opts.extra },
+    });
   const rowsOf = (r: Rig) =>
     (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
   const priv = (r: Rig) =>
@@ -11827,7 +11920,7 @@ describe("PR-123: the batched re-check of a reused baseline", () => {
     const why = await r2.b.recheckReusedBaseline(o.patch?.(state) ?? state, f.coverage, 1000);
     return { why, r2 };
   };
-  /** The stored coverage of sample CU2's test C is another map (as the L5 test 6 does it; the rig reads no coverage index). */
+  /** The stored coverage of sample CU2's test C is another map (as the L5 test 6 does it). */
   const otherCoverage = (f: Awaited<ReturnType<typeof stored>>) =>
     new Map([...f.coverage, [`codeunit${CU2}.c`, JSON.stringify({ not: "it" })]]);
   const lineOf = (warn: { mock: { calls: unknown[][] } }) =>

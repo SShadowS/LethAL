@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IDENTITY_SCHEME, type MutantManifest, type MutantManifestEntry } from "@lethal/schemata";
@@ -50,6 +50,12 @@ import {
 import { REACH_FILTER_OFF_REASONS, REACH_FILTER_STATES } from "../src/verify-reach";
 import { bundleFor } from "./helpers/bundle";
 import { makeGitRepo } from "./helpers/git-repo";
+import {
+  type Schema,
+  conformsTo,
+  deref,
+  schemaKeywordsUnknown,
+} from "./helpers/json-schema-subset";
 import { removeScratchDir } from "./helpers/scratch";
 import { typeLeafPaths } from "./helpers/type-leaf-paths";
 
@@ -76,33 +82,17 @@ import { typeLeafPaths } from "./helpers/type-leaf-paths";
  *     the schema is checked against output rather than only against a type. Its blind spot is a
  *     field no real report reaches, which is exactly what the declaration walk above covers.
  *
- * `conformsTo` below is a deliberately small validator: type, const, enum, required, properties,
- * additionalProperties, items, minItems and local `$ref`. It is not a JSON Schema implementation and
- * must not grow into one — if a schema here needs a keyword it does not support, that is a signal to
- * add the dependency rather than to keep extending this.
+ * `conformsTo` (`helpers/json-schema-subset.ts`, the tests' one validator since PR-148) is deliberately
+ * small: the keywords in its `KNOWN_KEYWORDS` and local `$ref`; any other keyword throws. It is not a
+ * JSON Schema implementation and must not grow into one — if a schema here needs a keyword it does not
+ * support, that is a signal to add the dependency rather than to keep extending this.
  */
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const SRC = join(import.meta.dir, "..", "src");
 
-type Schema = Record<string, unknown>;
-
 function loadSchema(name: string): Schema {
   return JSON.parse(readFileSync(join(REPO_ROOT, "schemas", name), "utf8")) as Schema;
-}
-
-/** Resolves a local `#/$defs/x` pointer. Anything else throws: a schema reaching outside this file
- *  would make the leaf walk and the validator quietly incomplete. */
-function deref(root: Schema, node: Schema): Schema {
-  const ref = node.$ref;
-  if (ref === undefined) return node;
-  if (typeof ref !== "string" || !ref.startsWith("#/$defs/")) {
-    throw new Error(`unsupported $ref ${JSON.stringify(ref)} — only #/$defs/<name> is handled`);
-  }
-  const defs = root.$defs as Record<string, Schema> | undefined;
-  const found = defs?.[ref.slice("#/$defs/".length)];
-  if (found === undefined) throw new Error(`$ref ${ref} does not resolve`);
-  return found;
 }
 
 /**
@@ -120,95 +110,6 @@ function schemaLeafPaths(root: Schema, node: Schema = root, path = "$"): string[
   const items = resolved.items as Schema | undefined;
   if (items !== undefined) return schemaLeafPaths(root, items, `${path}[]`);
   return [path];
-}
-
-interface Violation {
-  readonly path: string;
-  readonly problem: string;
-}
-
-/** See this file's doc comment: a small validator, not a JSON Schema implementation. */
-function conformsTo(root: Schema, value: unknown, node: Schema = root, path = "$"): Violation[] {
-  const schema = deref(root, node);
-  const out: Violation[] = [];
-
-  if (schema.const !== undefined && value !== schema.const) {
-    out.push({ path, problem: `expected const ${JSON.stringify(schema.const)}` });
-  }
-  // `anyOf` — the stream's root is a union of event shapes, and a validator that ignored it would
-  // return [] for EVERY document against that schema. That is exactly the empty-vs-empty pass this
-  // file exists to prevent, and it was a real bug here until the header line failed to fail.
-  const anyOf = schema.anyOf as Schema[] | undefined;
-  if (anyOf !== undefined) {
-    const branches = anyOf.map((branch) => conformsTo(root, value, branch, path));
-    if (branches.some((v) => v.length === 0)) return [];
-    const best = branches.reduce((a, b) => (a.length <= b.length ? a : b));
-    return [
-      {
-        path,
-        problem: `matches no branch of anyOf; closest complaint: ${best[0]?.problem ?? "?"}`,
-      },
-    ];
-  }
-
-  const enumValues = schema.enum as unknown[] | undefined;
-  if (enumValues !== undefined && !enumValues.includes(value)) {
-    out.push({
-      path,
-      problem: `${JSON.stringify(value)} is not one of ${JSON.stringify(enumValues)}`,
-    });
-  }
-
-  const declared = schema.type;
-  const allowed = declared === undefined ? [] : Array.isArray(declared) ? declared : [declared];
-  const actual =
-    value === null
-      ? "null"
-      : Array.isArray(value)
-        ? "array"
-        : typeof value === "number"
-          ? "number"
-          : typeof value;
-  const typeOk =
-    allowed.length === 0 ||
-    allowed.some((t) =>
-      t === "integer" ? typeof value === "number" && Number.isInteger(value) : t === actual,
-    );
-  if (!typeOk) {
-    out.push({ path, problem: `expected type ${allowed.join("|")}, got ${actual}` });
-    return out;
-  }
-
-  if (allowed.includes("array") && Array.isArray(value)) {
-    const minItems = schema.minItems;
-    if (typeof minItems === "number" && value.length < minItems) {
-      out.push({ path, problem: `expected at least ${minItems} item(s), got ${value.length}` });
-    }
-    const items = schema.items as Schema | undefined;
-    if (items !== undefined) {
-      value.forEach((entry, i) => out.push(...conformsTo(root, entry, items, `${path}[${i}]`)));
-    }
-    return out;
-  }
-
-  if (allowed.includes("object") && typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    const properties = (schema.properties ?? {}) as Record<string, Schema>;
-    for (const key of (schema.required as string[] | undefined) ?? []) {
-      if (!(key in record)) out.push({ path: `${path}.${key}`, problem: "required but absent" });
-    }
-    for (const [key, entry] of Object.entries(record)) {
-      const child = properties[key];
-      if (child === undefined) {
-        if (schema.additionalProperties === false) {
-          out.push({ path: `${path}.${key}`, problem: "not described by the schema" });
-        }
-        continue;
-      }
-      out.push(...conformsTo(root, entry, child, `${path}.${key}`));
-    }
-  }
-  return out;
 }
 
 /** Pulls a named enum out of a schema by leaf path, so the assertion names the field rather than an
@@ -235,6 +136,47 @@ function enumAt(root: Schema, path: string): unknown[] {
   if (values === undefined) throw new Error(`no enum at ${path}`);
   return values;
 }
+
+describe("conformsTo itself (PR-147): every keyword the schemas use is checked, none skipped", () => {
+  const s: Schema = {
+    type: "object",
+    propertyNames: { type: "string", pattern: "^[a-z]+$" },
+    properties: {
+      n: { type: "integer", minimum: 0 },
+      s: { type: "string", minLength: 2, pattern: "^v" },
+      u: { oneOf: [{ type: "string" }, { type: "integer" }] },
+    },
+    additionalProperties: { type: "boolean" },
+  };
+  test("a document that keeps every rule conforms", () => {
+    expect(conformsTo(s, { n: 0, s: "v1", u: "x", extra: true })).toEqual([]);
+  });
+  test("each rule, broken alone, is reported", () => {
+    const one = (doc: unknown) => conformsTo(s, doc).map((v) => v.problem);
+    expect(one({ n: -1 })).toEqual(["-1 is below the minimum 0"]);
+    expect(one({ s: "v" })).toEqual(["shorter than 2 character(s)"]);
+    expect(one({ s: "x1" })).toEqual(['"x1" does not match ^v']);
+    expect(one({ u: true })).toEqual(["matches 0 branches of oneOf, not exactly 1"]);
+    expect(one({ Bad: true })).toEqual(['"Bad" does not match ^[a-z]+$']);
+    expect(one({ extra: 1 })).toEqual(["expected type boolean, got number"]);
+  });
+  test("a keyword it does not implement throws, never passes", () => {
+    expect(() => conformsTo({ type: "string", maxLength: 3 }, "abcd")).toThrow(/maxLength/);
+  });
+  test("anyOf keeps its sibling keywords (review 2)", () => {
+    expect(conformsTo({ anyOf: [{ type: "string" }], minLength: 2 }, "a")).not.toEqual([]);
+  });
+  test("every node of every committed schema uses only keywords conformsTo knows (review 1)", () => {
+    const files = readdirSync(join(REPO_ROOT, "schemas")).filter((f) => f.endsWith(".json"));
+    expect(files.length).toBeGreaterThan(0);
+    const unknown = files.flatMap((f) => schemaKeywordsUnknown(loadSchema(f), f));
+    expect(unknown).toEqual([]);
+    // and the walk sees what it must: a keyword hidden under an optional property is found
+    expect(
+      schemaKeywordsUnknown({ properties: { opt: { type: "string", maxLength: 3 } } }),
+    ).toEqual(["$.properties.opt.maxLength"]);
+  });
+});
 
 describe("published JSON Schemas (R152)", () => {
   const explainSchema = loadSchema(`explain-v${EXPLAIN_SCHEMA_VERSION}.schema.json`);

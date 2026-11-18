@@ -255,6 +255,14 @@ is republished. `lethal run` refuses at that point with `UpgradeNotRestoredError
    the old target build, after a strip with dependents ("a newer version ... was already installed"), and the same dependent build
    ("A duplicate package ID is detected") unless it was unpublished first.
 
+### BC for Linux cannot render RDLC reports (R908, R1121)
+Every server here runs BC for Linux. Its startup hook stubs out the Windows Reporting Service, so any test that renders an RDLC
+report fails with "RDLC report rendering is not implemented on Linux BC".
+- **At baseline**, such a test is red and is left out (R908).
+- **Under a mutant**, a test that newly reaches a render fails on the stub, not on an assertion. LethAL keeps the kill and lists it
+  under `platformArtifactKills`, mechanism `linux-rdlc-stub` (R1121), so a reader can discount it.
+- **To score these mutants honestly**, use BC for Windows, or tests that do not render the report.
+
 ## How a gate reads a server
 
 - `LETHAL_ITEST_CONFIG=lethal.config.<x>.json` selects the config file in one of the four fixture
