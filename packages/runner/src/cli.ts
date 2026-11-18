@@ -4563,7 +4563,8 @@ export async function runFromCliWithAccept(
             // examined yet.
             const equivalenceMarks = await loadEquivalenceMarks(parsed.projectDir);
             // PR-100: folds the run's events into the TIMING section printed once, below.
-            const timingFold = createTimingFold();
+            // R1119: the in-process events carry no atMs, so the fold reads this clock for the lane line
+            const timingFold = createTimingFold({ now: () => performance.now() });
             runTimingFold = timingFold;
             const emitSubscribers: EventSubscriber[] = [
               progress,

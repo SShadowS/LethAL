@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent } from "../src/events";
-import { foldTiming, foldTimingFile } from "../src/timing-summary";
+import { createTimingFold, foldTiming, foldTimingFile } from "../src/timing-summary";
 
 const ev = (e: Record<string, unknown>): RunEvent => e as unknown as RunEvent;
 const phase = (p: string, elapsedMs: number) => ev({ type: "phase-left", phase: p, elapsedMs });
@@ -321,5 +321,104 @@ describe("PR-100: foldTimingFile streams the events file", () => {
     } finally {
       cut.done();
     }
+  });
+});
+
+describe("R1119 (PR-150): per-lane busy and idle time over the mutants phase", () => {
+  const at = (atMs: number, e: Record<string, unknown>) => ev({ ...e, atMs });
+  const req = (lane: number, endMs: number, wallMs: number) =>
+    at(endMs, { type: "serve-request-timed", kind: "live", lane, wallMs, entries: 1, tests: 1 });
+  const bracket = (inner: RunEvent[], toMs: number) => [
+    at(0, { type: "phase-entered", phase: "mutants" }),
+    ...inner,
+    at(toMs, { type: "phase-left", phase: "mutants", elapsedMs: toMs }),
+    finished,
+  ];
+  const laneLine = (s: string | undefined) =>
+    (s ?? "").split("\n").find((l) => l.includes("lanes over the mutants phase")) ?? "";
+
+  test("a balanced run: every lane busy all phase, no wait, nothing after its last request", () => {
+    const evs: RunEvent[] = [];
+    for (let t = 1_000; t <= 100_000; t += 1_000) evs.push(req(0, t, 1_000), req(1, t, 1_000));
+    const line = laneLine(foldTiming(bracket(evs, 100_000)));
+    expect(line).toContain("lane 0 busy 100.0 s (100.0%), waiting at window boundaries 0 (0.0 s)");
+    expect(line).toContain(
+      "lane 1 busy 100.0 s (100.0%), waiting at window boundaries 0 (0.0 s), after its last request 0.0 s",
+    );
+  });
+
+  test("a held lane: idle after its last request, a boundary wait, and the hold counted", () => {
+    const evs: RunEvent[] = [
+      req(0, 10_000, 10_000),
+      req(1, 10_000, 10_000),
+      req(0, 40_000, 20_000), // lane 0 waits 10 s at a boundary, then works
+      req(0, 100_000, 60_000),
+      at(41_000, { type: "warning", code: "al-runner-v3-lane-memory-hold", message: "x" }),
+      at(42_000, { type: "serve-daemon-closed", reason: "lane-idle", lane: 1, phase: "idle" }),
+    ];
+    const out = foldTiming(bracket(evs, 100_000)) ?? "";
+    const line = laneLine(out);
+    expect(line).toContain("lane 0 busy 90.0 s (90.0%), waiting at window boundaries 1 (10.0 s)");
+    expect(line).toContain(
+      "lane 1 busy 10.0 s (10.0%), waiting at window boundaries 0 (0.0 s), after its last request 90.0 s (90.0%)",
+    );
+    expect(out).toContain("lane memory holds 1 (printed once per session), idle daemons closed 1");
+  });
+
+  test("two batches: each mutants phase counts, the time between them does not", () => {
+    const evs: RunEvent[] = [
+      at(0, { type: "phase-entered", phase: "mutants" }),
+      req(0, 10_000, 10_000),
+      req(1, 10_000, 10_000),
+      at(10_000, { type: "phase-left", phase: "mutants", elapsedMs: 10_000 }),
+      at(20_000, { type: "phase-entered", phase: "mutants" }),
+      req(0, 30_000, 10_000), // lane 1 has no request in batch 2
+      at(30_000, { type: "phase-left", phase: "mutants", elapsedMs: 10_000 }),
+      finished,
+    ];
+    const line = laneLine(foldTiming(evs));
+    expect(line).toContain("lanes over the mutants phase (20.0 s)");
+    expect(line).toContain("lane 0 busy 20.0 s (100.0%), waiting at window boundaries 0 (0.0 s)");
+    expect(line).toContain(
+      "lane 1 busy 10.0 s (50.0%), waiting at window boundaries 0 (0.0 s), after its last request 10.0 s (50.0%)",
+    );
+  });
+
+  test("lethal run's own fold (no atMs) reads the clock it is given", () => {
+    let now = 0;
+    const f = createTimingFold({ now: () => now });
+    f.add(ev({ type: "phase-entered", phase: "mutants" }));
+    for (const lane of [0, 1]) {
+      now = 5_000;
+      f.add(
+        ev({
+          type: "serve-request-timed",
+          kind: "live",
+          lane,
+          wallMs: 5_000,
+          entries: 1,
+          tests: 1,
+        }),
+      );
+    }
+    now = 10_000;
+    f.add(ev({ type: "phase-left", phase: "mutants", elapsedMs: 10_000 }));
+    expect(laneLine(f.render())).toContain("lane 1 busy 5.0 s (50.0%)");
+    // without a clock or atMs it says so, rather than printing zeros
+    const g = createTimingFold();
+    g.add(ev({ type: "phase-entered", phase: "mutants" }));
+    for (const lane of [0, 1])
+      g.add(
+        ev({
+          type: "serve-request-timed",
+          kind: "live",
+          lane,
+          wallMs: 5_000,
+          entries: 1,
+          tests: 1,
+        }),
+      );
+    g.add(ev({ type: "phase-left", phase: "mutants", elapsedMs: 10_000 }));
+    expect(g.render()).toContain("lanes: no per-lane times");
   });
 });
