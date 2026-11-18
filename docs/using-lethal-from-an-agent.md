@@ -632,6 +632,17 @@ The loop that turns a survivor into a killed mutant: `lethal run`, `lethal expla
 that should kill a survivor, `lethal verify`, and repeat until verify exits `0`. Then a fresh
 `lethal run` makes the record. LethAL never writes the test; you do.
 
+### Writing a test whose failure says what it found (guidance)
+
+When a test fails on BC, the failure message LethAL records (`killingTestFailure`, a baseline
+failure) keeps only the FIRST line of the test's `Error()` text, followed by the call stack.
+Anything after a line feed is lost. So a test that collects several findings, such as every field
+that did not survive an export and an import, should join them on one line (`; ` between items),
+not one per line. Otherwise the report says that the test failed but not what it found.
+- **Measured on a BC 29 server** (coord PR-67), with an app's real export/import round-trip tests: the list after the first
+  line feed was gone.
+- **Joined with `; `,** the whole list came back on al-runner v3. The joined form was not re-run on BC.
+
 ### From an explain row to a verify command (checked)
 
 The three values verify needs come from one `explain` survivor row: `artifactId`, `batchIndex` and

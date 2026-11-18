@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1079 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1081 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -599,6 +599,8 @@ that ordering is the priority.
 - **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
 - **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · done (e93270e9) — PR-128: doctor check text-search-dependencies over the project's dependency closure; live…
 - **R1113** · One hanging test anywhere in a user's suite quarantines a whole bcdev run at baseline, with no recovery steps printed; nothing warns before the run about tests that can make real outbound HTTP calls · [R1113.md](docs/roadmap/R1113.md) · open — fix 1 (recovery steps on a quarantine) and a dry-run whole-suite note landed in PR-132; fix 2…
+- **R1117** · `lethal init` says a selector-id clash with a dependency is "NOT ruled out" when the dependency packages are missing, but does not say how to make it check · [R1117.md](docs/roadmap/R1117.md) · closed 2026-11-18 — already fixed by PR-84 (b093054f, 9b23f4fd): dependencyCheckWarning names the folder and…
+- **R1118** · The large-method note cannot say how far each listed operator would shrink the file, and does not say that `--lines` will not shrink a fold inside one procedure · [R1118.md](docs/roadmap/R1118.md) · open — filed by PR-67 (the DO pilot), 2026-11-17
 
 ## Backends and tooling
 
