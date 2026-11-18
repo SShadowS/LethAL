@@ -19,7 +19,7 @@
  *     "daemonMaxRequests": 0,                                 // R952 (R948); a serve daemon is replaced after this many requests. 0 (default) = off
  *     "license": "<optional .bclicense file>",             // R956; passed as --license on every al-runner call that runs tests; its sha256 is in the fingerprint and the report
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
- *     "recheckWithheldKills": false,                         // PR-144; true: after the main pass, re-run the withheld-kill rows under method isolation. Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
+ *     "recheckWithheldKills": true,                          // PR-144, ON by default (PR-182); false opts out and saves about 10% of a run with many withheld rows (nothing when there are none). After the main pass, re-run the withheld-kill rows under method isolation. A row the recheck does not recover stays `error`: unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9 TestPage-only killers, 7 killers red at BC's baseline). Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
  *     "recheckBudgetSeconds": 3600                           // PR-144; the recheck's own time budget (the main pass's --time-budget does not cover it)
  *   }
  *
@@ -78,7 +78,7 @@ export interface AlRunnerV3ConfigSection {
   readonly daemonMaxRssGb: number;
   /** R952 (R948): replace a serve daemon after this many requests; 0 (default) = off. */
   readonly daemonMaxRequests: number;
-  /** PR-144: re-run the withheld-kill rows alone after the main pass. Default `false`. See `RECHECK_WARNING`. */
+  /** PR-144: re-run the withheld-kill rows alone after the main pass. Default `true` (PR-182); `false` opts out. See `RECHECK_WARNING`. */
   readonly recheckWithheldKills: boolean;
   /** PR-144: the recheck's own time budget, whole seconds. Default `V3_RECHECK_BUDGET_SECONDS_DEFAULT`. */
   readonly recheckBudgetSeconds: number;
@@ -93,11 +93,14 @@ export const RECHECK_WARNING =
   "kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.";
 
 /**
- * PR-144: said beside `RECHECK_WARNING` wherever it is. The recheck is covered by unit and real-path tests and by an
- * approximation on a real project (arm M); no live gate leg runs it end to end yet.
+ * PR-144: said beside `RECHECK_WARNING` wherever it is. The al-runner-v3 gate's leg RC (PR-162) runs it live, and
+ * PR-170 measured it against BC on a DO sample.
  */
 export const RECHECK_UNEXERCISED =
-  "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.";
+  "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false).";
+
+/** PR-182 (owner ruling): THE default of `alRunnerV3.recheckWithheldKills`. The only place it is decided; `false` opts out. */
+export const V3_RECHECK_DEFAULT = true;
 
 /** PR-144: THE default of `alRunnerV3.recheckBudgetSeconds`. */
 export const V3_RECHECK_BUDGET_SECONDS_DEFAULT = 3600;
@@ -367,7 +370,7 @@ export function validateAlRunnerV3Config(
     );
   }
   return {
-    recheckWithheldKills: r.recheckWithheldKills ?? false,
+    recheckWithheldKills: r.recheckWithheldKills ?? V3_RECHECK_DEFAULT,
     recheckBudgetSeconds: r.recheckBudgetSeconds ?? V3_RECHECK_BUDGET_SECONDS_DEFAULT,
     memoryHeadroomGb: r.memoryHeadroomGb ?? MEMORY_HEADROOM_GB_DEFAULT,
     daemonMaxRssGb: r.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT,

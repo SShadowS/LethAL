@@ -359,7 +359,13 @@ describe("R274: refusals, by name", () => {
       const edited = new Map(fixture.source);
       const bytes = edited.get(key);
       if (bytes === undefined) throw new Error(`no ${key}`);
-      edited.set(key, Buffer.concat([bytes, Buffer.from(" ")]));
+      // PR-177: app.json is hashed normalised, so a trailing space is no edit there: change its id.
+      edited.set(
+        key,
+        key === "app.json"
+          ? Buffer.from(APP_JSON.replace("4a7d1c52", "5a7d1c52"))
+          : Buffer.concat([bytes, Buffer.from(" ")]),
+      );
       let err: unknown;
       try {
         explain(fixture.report, { projectSource: edited });

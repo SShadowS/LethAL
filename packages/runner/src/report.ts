@@ -45,7 +45,7 @@ import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsup
 export type { BatchArtifact };
 
 /**
- * PR-144: on a row the opt-in recheck recovered. `withheldFailure` and `afterTest` are what the main pass
+ * PR-144: on a row the recheck recovered. `withheldFailure` and `afterTest` are what the main pass
  * withheld (`withheldKillOf`). `killerGreenInMainBaseline` is whether the killing test passed in the main
  * pass's baseline; `false` means the recheck killed with a test the main pass never trusted.
  */
@@ -283,7 +283,7 @@ export type Caveat =
   | "time-budget-reached"
   | "nondebuggable-no-coverage"
   | "withheld-kills"
-  // PR-144: the opt-in recheck recovered at least one withheld kill.
+  // PR-144: the recheck recovered at least one withheld kill.
   | "isolated-recheck-kills";
 
 /**
@@ -772,17 +772,20 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "isolated-recheck-kills": {
     meaning:
-      "At least one `killed` mutant was recovered by the opt-in recheck (`alRunnerV3.recheckWithheldKills`, " +
-      "PR-144): the main pass withheld its kill, and a second step re-ran it under method isolation, " +
+      "At least one `killed` mutant was recovered by the recheck (`alRunnerV3.recheckWithheldKills`, on by default, " +
+      "`false` opts out; PR-144, PR-182): the main pass withheld its kill, and a second step re-ran it under method isolation, " +
       "one test per session, and the kill reproduced. Each such mutant carries `isolatedRecheck`. " +
       `${RECHECK_WARNING} ${RECHECK_UNEXERCISED} ` +
       "Method isolation removes the state an earlier test left; it does not give BC's state back. " +
       "A kill is recovered only if every test of the killing test's codeunit that passed in the main baseline " +
       "still passes alone. That check cannot judge tests v3 refused at baseline, so it does not answer " +
       "whether a refused test's state mattered; only a BC comparison does. " +
+      "A row the recheck does not recover stays `error`, unmeasured, never a kill. " +
+      "Evidence (PR-170): of 58 sampled recovered kills, BC confirmed 42 and found 0 false; 16 could not be measured " +
+      "(9 TestPage-only killers, 7 killers red at BC's baseline). " +
       "The count of `withheld-kills` rows is the ones still withheld.",
     entailedNegative:
-      "Not a wrong verdict, and not a claim that BC would kill each one: no recovered kill has been run on BC. " +
+      "Not a wrong verdict, and not a claim that BC would kill each one: no kill in this report has been run on BC. " +
       "Not a change to any kill or survivor the main pass scored.",
     basis: "R1108",
   },
@@ -2311,7 +2314,7 @@ export interface MutantOutcome {
    */
   readonly withheldKill?: { readonly failure: string; readonly afterTest?: string };
   /**
-   * PR-144: present on a `killed` row the opt-in recheck recovered from a withheld kill (caveat
+   * PR-144: present on a `killed` row the recheck recovered from a withheld kill (caveat
    * `isolated-recheck-kills`). Not measured against BC. Absent on every other row.
    */
   readonly isolatedRecheck?: IsolatedRecheck;

@@ -445,14 +445,8 @@ export function assertSameScope(a: ScopeFacts, b: ScopeFacts): void {
   if (a.sourceSha256 === undefined || a.sourceSha256 !== b.sourceSha256) {
     source.push(`sourceSha256 ${a.sourceSha256 ?? "absent"} vs ${b.sourceSha256 ?? "absent"}`);
   }
-  if (
-    a.dependencySourceSha256 === undefined ||
-    a.dependencySourceSha256 !== b.dependencySourceSha256
-  ) {
-    source.push(
-      `dependencySourceSha256 ${a.dependencySourceSha256 ?? "absent"} vs ${b.dependencySourceSha256 ?? "absent"}`,
-    );
-  }
+  // PR-177: `dependencySourceSha256` is NOT compared. A v3-versus-BC pair normally reads different
+  // symbol builds; the merge records both and flags a difference (`dependency-symbols-differ`).
   if (a.identityScheme !== b.identityScheme) {
     source.push(`identityScheme ${a.identityScheme} vs ${b.identityScheme}`);
   }
@@ -585,11 +579,18 @@ export interface ConfirmationSample {
   readonly disagreementKeys: readonly string[];
 }
 
+/** `dependency-symbols-differ`: the two runs read different dependency symbol builds (PR-177). */
+export type ConfirmationArtifactFlag = "dependency-symbols-differ";
+
 export interface Confirmation {
   readonly kind: "lethal-confirmation";
   readonly confirmationVersion: number;
   readonly v3Sha256: string;
   readonly bcSha256?: string;
+  /** Artifact-level flags; empty when there is nothing to flag. */
+  readonly flags: readonly ConfirmationArtifactFlag[];
+  /** Each run's `dependencySourceSha256`; a side that recorded none is absent. */
+  readonly dependencySourceSha256: { readonly v3?: string; readonly bc?: string };
   readonly seed: string;
   readonly mutants: readonly ConfirmationMutant[];
   readonly totals: ConfirmationTotals;
@@ -620,7 +621,11 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
   }
   const why = partialReason(bc);
   if (why !== undefined) throw new ConfirmMergeBcPartialError(why);
-  assertSameScope(scopeOfReport(v3), scopeOfReport(bc));
+  const v3Scope = scopeOfReport(v3);
+  const bcScope = scopeOfReport(bc);
+  assertSameScope(v3Scope, bcScope);
+  const v3Dep = v3Scope.dependencySourceSha256;
+  const bcDep = bcScope.dependencySourceSha256;
 
   // Recompute the selection from v3.json with the n and seed bc.json recorded, and refuse unless it
   // is exactly the selection bc.json recorded. The recomputed groups are the ones used below, so a
@@ -703,6 +708,15 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
     confirmationVersion: CONFIRMATION_VERSION,
     v3Sha256: p.v3Sha256,
     ...(p.bcSha256 !== undefined ? { bcSha256: p.bcSha256 } : {}),
+    // An absent sha on either side is not "the same symbols": nothing is known, so it is flagged too.
+    flags:
+      v3Dep === undefined || bcDep === undefined || v3Dep !== bcDep
+        ? ["dependency-symbols-differ"]
+        : [],
+    dependencySourceSha256: {
+      ...(v3Dep !== undefined ? { v3: v3Dep } : {}),
+      ...(bcDep !== undefined ? { bc: bcDep } : {}),
+    },
     seed: block.seed,
     mutants,
     totals: totalsOf(mutants),
@@ -777,6 +791,11 @@ export function renderConfirmation(c: Confirmation): string[] {
   lines.push(
     `score ${t.score === null ? "n/a" : `${(t.score * 100).toFixed(1)}%`} (${t.provenance}); of which ${t.bcStubKills} are R1121 platform-stub kills`,
   );
+  if (c.flags.includes("dependency-symbols-differ")) {
+    lines.push(
+      `dependency-symbols-differ: v3 read dependency symbols ${c.dependencySourceSha256.v3 ?? "absent"}, BC ${c.dependencySourceSha256.bc ?? "absent"}; the two runs read different symbol builds, so a difference between them can come from that.`,
+    );
+  }
   const s = c.sample;
   if (s.verdict === "disagreement") {
     lines.push(

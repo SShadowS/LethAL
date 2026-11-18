@@ -85,7 +85,8 @@ next free id right before writing).
   `/coord/locks/heavy.<n>.class` (`<class> <pid> <peak GiB>`), runs the same guard as `corpus-snapshot.ts`
   (exit 75 and no command when it refuses), and removes the class on exit. `--wait` queues in FIFO
   order instead of exit 75. `--peak` declares the job's expected memory peak: `serve` 8 (a serve run with
-  the default 6 GiB daemon cap, R948), `baseline` 12, `gate` 2, `build` 1 GiB, or a number; none means the
+  the default 6 GiB daemon cap, R948), `baseline` 12, `gate` 2, `build` 3 GiB, or a number (R992's measurement: a DO single `lethal run` on v3 declares at
+  least 8, a Base Application Fixed Asset run at least 10); none means the
   class default (`other` 8, `baseapp` 12). The guard's rule (R953, the only one under a cgroup limit): the
   container's cgroup (`memory.max`, 32 GiB) must hold what is used now plus the job's peak plus a 4 GiB
   reserve, and the held slots' declared peaks plus the job's peak plus the reserve. Declare the smallest honest peak;

@@ -1,5 +1,5 @@
 /**
- * PR-144: the opt-in recheck of "withheld kill" error rows (`withheldKillOf`, R1108) after an al-runner-v3
+ * PR-144: the recheck (on by default, PR-182) of "withheld kill" error rows (`withheldKillOf`, R1108) after an al-runner-v3
  * session's main pass (`alRunnerV3.recheckWithheldKills`).
  *
  * A withheld kill is an `error` row where a covering test FAILED under the mutant, but v3 did not trust the
@@ -156,8 +156,7 @@ export function ruleDSameBuild(
  * baseline; one that failed, was refused, or has no recheck result is lost. It cannot judge a test v3 refused
  * at baseline (it never "passed in the main baseline"), so it does not say whether that test's state mattered.
  * With no main baseline row for the
- * codeunit at all (a reused baseline emits none), nothing proves a test "passed in the main baseline", so the
- * rule fails closed.
+ * codeunit at all, nothing proves a test "passed in the main baseline", so the rule fails closed.
  */
 export function ruleELosesNothing(
   mainBaseline: ReadonlyMap<string, boolean>,
@@ -313,9 +312,9 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   if (d.backend.methodIsolation === true) return skip('isolation is already "method"');
   if (d.backend.serveEntries !== true) return skip("the transport is not serve-entries");
   const mainBaseline = mainBaselineOf(d.events);
-  // A reused main baseline emits no baseline-batch-finished: nothing proves what passed, so (e) could recover nothing.
-  if (mainBaseline.size === 0)
-    return skip("the main pass has no baseline results (a reused baseline)");
+  // A session with no baseline results at all: nothing proves what passed, so (e) could recover nothing.
+  // (A reused snapshot still emits baseline-batch-finished, so reuse alone never lands here.)
+  if (mainBaseline.size === 0) return skip("the main pass has no baseline results at all");
   // The covering tests, plus every main-baseline test of a codeunit that holds one (rule (e) judges the whole codeunit).
   const covering = new Set(targets.flatMap((t) => t.coveringTests));
   const codeunits = new Set([...covering].map(codeunitOfQualified));
