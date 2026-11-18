@@ -1,0 +1,69 @@
+{
+  "identityScheme": 48,
+  "entries": [
+    {
+      "key": "1c883034b4ab281359901532ce58378fa42d670267703c710069b9de998d6052|Recheck Logic|Sevens|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "A1_OneSeven",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "1c883034b4ab281359901532ce58378fa42d670267703c710069b9de998d6052|Recheck Logic|SevensB|lethal.remove-assignment|1",
+      "verdict": "error",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": "runner-refused",
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "5c91e417a9e4a87dbc3e5a369d8aad8f1a9202afc5c9ba85b950b25c5ede3ec1|Recheck Logic|Sevens|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "A1_OneSeven",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "5c91e417a9e4a87dbc3e5a369d8aad8f1a9202afc5c9ba85b950b25c5ede3ec1|Recheck Logic|SevensB|lethal.empty-block|1",
+      "verdict": "error",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": "runner-refused",
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "a36f594dafb75e08007735201b62672b88d9f5cf22279583918db7aa46b8e371|Recheck Logic|Sevens|lethal.empty-block|1",
+      "verdict": "killed",
+      "killingTest": "A1_OneSeven",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "a36f594dafb75e08007735201b62672b88d9f5cf22279583918db7aa46b8e371|Recheck Logic|SevensB|lethal.empty-block|1",
+      "verdict": "error",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": "runner-refused",
+      "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "e4b23d178d08191888607431fee6bb93064fc9e5feeb3643896a4039415c29fa|Recheck Logic|Sevens|lethal.remove-assignment|1",
+      "verdict": "killed",
+      "killingTest": "A1_OneSeven",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "e4b23d178d08191888607431fee6bb93064fc9e5feeb3643896a4039415c29fa|Recheck Logic|SevensB|lethal.remove-assignment|1",
+      "verdict": "error",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": "runner-refused",
+      "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
