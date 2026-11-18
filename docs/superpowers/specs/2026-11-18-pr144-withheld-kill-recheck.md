@@ -125,6 +125,25 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   - when the `SevensB` one is recovered.
 - **Unchanged:** the warning set `[]` (amendment 3) and every other leg.
 
+## 0e. Amendment 5: leg RC leaves PR-144 (orchestrator ruling, option (B), 2026-11-18)
+- **Why:** probes on edge-4ebfe7913 (`/coord/handoff/PR-144/rcprobe*`, serve and one-shot) showed amendment 4's shape
+  cannot produce a withheld kill either.
+  - A test refused only under the mutant with a KNOWN-reach refusal (the NUL `Evaluate`) leaves the next failure a plain
+    trusted `fail`, with or without a write first.
+  - x3's real withheld rows all follow a refusal whose reach is unknown ("part of its reach is not known ... so the state
+    it would have left is not BC's": `GoToKey` on a list, `FindSet` on Company, `Codeunit.Run` with a run-time id).
+  - A fixture needs an earlier test that passes at baseline and reaches such a refusal only under the mutant. That is a
+    probe-and-iterate job.
+- **So PR-144 lands WITHOUT leg RC and without its fixtures:**
+  - nothing that `compile:fixtures` skips;
+  - nothing a gate cannot run;
+  - no symbol-tar change.
+- §0b, §0c and §0d move to the follow-up item R1125, together with the symbol-tar rebuild.
+- **The option's help text and docs say,** beside the H1 warning, that the recheck has not yet been exercised live end
+  to end. It is covered by unit and real-path tests and by arm M's approximation.
+- **The recheck counts as unproven live until R1125's leg passes.** P5 (the BC differential) depends on such a fixture,
+  and still gates any default-on.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**42 of 1087 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**43 of 1088 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1132,6 +1132,7 @@ that ordering is the priority.
 - **R1119** · TIMING has no figure for lane barrier time or lane idle time: PR-121a's barrier and a window running on one lane are invisible unless PR-121's offline gaps.ts is run on the events · [R1119.md](docs/roadmap/R1119.md) · done (this commit) — PR-150: TIMING prints per lane busy, waiting at window boundaries, and idle after its…
 - **R1120** · PR-98's lane gate over-charges (sampled peak x lanes + 4 GiB: 16.2 GiB charged where the tree peaked at 12.6), and one hold costs the lane for the rest of the window: DO windows x1-x3 ran on one lane after their hold · [R1120.md](docs/roadmap/R1120.md) · done (this commit) — PR-140: a hold closes the idle daemons it charges (lane-idle); the DO window at 15 GiB…
 - **R1123** · Under al-runner v3 `"coverage": "none"`, the reused-baseline re-check's coverage guard compares null with null and counts it as a comparison (an empty-vs-empty pass) · [R1123.md](docs/roadmap/R1123.md) · done (this commit) — PR-146: under "none" the re-check compares no map and says so by name; with coverage on…
+- **R1125** · PR-144's withheld-kill recheck has no live gate leg: a fixture needs an earlier test that reaches an unknown-reach v3 refusal only under the mutant; then leg RC, the symbol-tar rebuild, and the BC differential (P5) that gates any default-on · [R1125.md](docs/roadmap/R1125.md) · open — filed by lethal-preproc from coord PR-144 (2026-11-18, orchestrator ruling (B))
 
 ---
 
