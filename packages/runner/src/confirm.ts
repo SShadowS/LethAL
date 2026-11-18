@@ -708,7 +708,11 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
     confirmationVersion: CONFIRMATION_VERSION,
     v3Sha256: p.v3Sha256,
     ...(p.bcSha256 !== undefined ? { bcSha256: p.bcSha256 } : {}),
-    flags: v3Dep !== bcDep ? ["dependency-symbols-differ"] : [],
+    // An absent sha on either side is not "the same symbols": nothing is known, so it is flagged too.
+    flags:
+      v3Dep === undefined || bcDep === undefined || v3Dep !== bcDep
+        ? ["dependency-symbols-differ"]
+        : [],
     dependencySourceSha256: {
       ...(v3Dep !== undefined ? { v3: v3Dep } : {}),
       ...(bcDep !== undefined ? { bc: bcDep } : {}),

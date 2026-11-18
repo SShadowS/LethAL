@@ -190,6 +190,12 @@ describe("hashTargetSource (C02-06)", () => {
       expect(h(BASE.replace('{"id":"d1"},{"id":"d2"}', '{"id":"d2"},{"id":"d1"}'))).not.toBe(want);
     });
 
+    test("PR-177 review: only the TOP-level version is dropped; a dependency's version still moves it", () => {
+      const dep = (v: string) =>
+        `{"id":"x","version":"1.0.0.0","dependencies":[{"id":"d1","version":"${v}"}]}`;
+      expect(h(dep("2.0.0.0"))).not.toBe(h(dep("1.0.0.0")));
+    });
+
     test("an unparsable app.json hashes raw, so a whitespace edit still differs", () => {
       expect(h("{not json")).not.toBe(h("{not json "));
     });

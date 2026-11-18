@@ -1113,6 +1113,21 @@ describe("mergeConfirmation: every join refusal is made by name", () => {
     expect(renderConfirmation(same).join("\n")).not.toContain("dependency-symbols-differ");
   });
 
+  test("PR-177 review: an absent dependency sha on one side or both is flagged, never read as the same", () => {
+    const p = ok();
+    const { dependencySourceSha256: _v3, ...v3NoDep } = p.v3 as SessionReport & {
+      dependencySourceSha256?: string;
+    };
+    const { dependencySourceSha256: _bc, ...bcNoDep } = p.bc as SessionReport & {
+      dependencySourceSha256?: string;
+    };
+    const oneAbsent = merge({ ...p, bc: bcNoDep as SessionReport });
+    expect(oneAbsent.flags).toEqual(["dependency-symbols-differ"]);
+    const bothAbsent = merge({ ...p, v3: v3NoDep as SessionReport, bc: bcNoDep as SessionReport });
+    expect(bothAbsent.flags).toEqual(["dependency-symbols-differ"]);
+    expect(bothAbsent.dependencySourceSha256).toEqual({});
+  });
+
   test("bc.json is not a bcdev report", () => {
     const p = ok();
     for (const backend of ["al-runner-v3", "other"]) {
