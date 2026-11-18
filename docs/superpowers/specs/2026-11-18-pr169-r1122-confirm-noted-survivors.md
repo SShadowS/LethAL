@@ -49,7 +49,19 @@ duplicate and no unmatched keys).
    set, so the first live use does not show it.
 7. **(should) A partial bc.json is refused by name** (an unfinished run, or stranded mutants), like the v3 input.
 
-## 1. The problem, and the measured basis
+## 0b. Amendment 2 (the Opus review of the PR-171 build, 2026-11-18)
+1. **Item 6 above is dropped.** It cannot be reached: selection never picks a v3 kill, and the merge refuses any bc key
+   that was not selected. So bc.json never has a row for a v3-killed mutant. Re-checking v3 kills stays out of scope
+   (§7). M0080 remains the example of why.
+2. **The confirm run must be a bcdev run.** `--confirm-from` is refused on any other backend, and the merge refuses a
+   bc.json whose backend is not bcdev. Without this, a v3 run's kills could be merged as "confirmed on BC".
+3. **The merge recomputes the selection** from v3.json and the `n` and seed recorded in bc.json, and refuses by name if
+   its keys or groups differ from bc.json's recorded selection. It never trusts bc.json's own labels.
+4. **Item 5's bound rule, made exact:**
+   - "all unnoted survivors measured" is printed when the number DRAWN equals the unnoted count;
+   - otherwise the bound is printed, computed over sampled rows that BC scored `killed` or `survived` (a BC `error` or
+     `no-coverage` is not a measurement), with that count beside it.
+   - So on PR-155 (29 drawn of 29, M0081 a BC `error`), the prediction "all unnoted survivors measured" stands.
 A v3 run is fast and offline but not authoritative ([[R586]]). When v3 refuses a test at baseline, that test cannot
 kill anything. A mutant it would have killed is then scored `survived` on the other covering tests. Such a survivor
 carries the `[v3-refused-test-nearby]` note: some test of a covering codeunit was refused at baseline.
