@@ -2435,6 +2435,182 @@ page 51001 "X2 Card"
 };
 
 /**
+ * PR-139: the NUL-run Evaluate text at the widths DO's x3 window closed on (3, 10, 12, 14, 30, 37, 40), each driven by an
+ * invented cell: the plain shape, a bare array-element Evaluate, a TryFunction, a nested TestPage/modal/TryFunction/OnValidate
+ * chain (as X2's NestedValidate) and an OnInsert trigger after writes to a SingleInstance Dictionary. Amendment 1 appends the
+ * widths 7, 9, 11, 13, 16, 21, 25 and 27 (the other NUL widths in M28736's DO requests). Every cell must give
+ * "Evaluate of `<N NULs>` into Decimal (form not pinned by the corpus)". Cell i is codeunit BASE_ID + 1 + i (51001 to 51019);
+ * support codeunits 51000 and 51020, tables 51000 and 51001, pages 51000 and 51001 (the id block is 51000 to 51020).
+ */
+const X3_VARS = ["T: Text;", "Ch: Char;", "I: Integer;"];
+const x3Nul = (n: number): string[] => ["Ch := 0;", `for I := 1 to ${n} do T += Format(Ch);`];
+const X3_NUL_BODY = `        T := '';
+        Ch := 0;
+        for I := 1 to 10 do T += Format(Ch);`;
+export const X3_REFUSALS: Family = {
+  name: "x3-refusals",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  target: "OnPrem",
+  known: [],
+  support: `table 51000 "X3 Row"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(3; Trig; Integer)
+        {
+            trigger OnValidate()
+            var
+                T: Text;
+                Ch: Char;
+                I: Integer;
+                V: Integer;
+            begin
+${X3_NUL_BODY}
+                if not Evaluate(V, T) then;
+            end;
+        }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+table 51001 "X3 Ins"
+{
+    fields { field(1; Id; Integer) { } }
+    keys { key(PK; Id) { Clustered = true; } }
+
+    trigger OnInsert()
+    var
+        T: Text;
+        Ch: Char;
+        I: Integer;
+        V: Integer;
+    begin
+${X3_NUL_BODY}
+        if not Evaluate(V, T) then;
+    end;
+}
+
+codeunit 51000 "X3 Helper"
+{
+    [TryFunction]
+    procedure ValidateTrig(var R: Record "X3 Row")
+    begin
+        R.Validate(Trig, 1);
+    end;
+
+    [TryFunction]
+    procedure EvalBare()
+    var
+        T: Text;
+        Ch: Char;
+        I: Integer;
+        V: Integer;
+    begin
+${X3_NUL_BODY}
+        Evaluate(V, T);
+    end;
+}
+
+codeunit 51020 "X3 Cache"
+{
+    SingleInstance = true;
+
+    var
+        Seen: Dictionary of [Text, Integer];
+
+    procedure Put(K: Text; V: Integer)
+    begin
+        Seen.Set(K, V);
+    end;
+}
+
+page 51000 "X3 Wizard"
+{
+    PageType = Card;
+    SourceTable = "X3 Row";
+    UsageCategory = None;
+    layout { area(Content) { field(IdCtl; Rec.Id) { ApplicationArea = All; } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(Go)
+            {
+                ApplicationArea = All;
+                trigger OnAction()
+                var
+                    Helper: Codeunit "X3 Helper";
+                    Row: Record "X3 Row";
+                begin
+                    Row.Id := 1;
+                    if not Helper.ValidateTrig(Row) then;
+                end;
+            }
+        }
+    }
+}
+
+page 51001 "X3 Card"
+{
+    PageType = Card;
+    SourceTable = "X3 Row";
+    UsageCategory = None;
+    layout { area(Content) { field(IdCtl; Rec.Id) { ApplicationArea = All; } } }
+    actions
+    {
+        area(Processing)
+        {
+            action(OpenWizard)
+            {
+                ApplicationArea = All;
+                trigger OnAction()
+                begin
+                    Page.RunModal(Page::"X3 Wizard");
+                end;
+            }
+        }
+    }
+}
+`,
+  handles: {},
+  cells: [
+    ...[3, 10, 12, 14, 30, 37, 40].map((n) =>
+      t9("Evaluate", "NulInteger", `${n} NULs`, "if not Evaluate(V, T) then;", {
+        vars: ["V: Integer;", ...X3_VARS],
+        setup: x3Nul(n),
+      }),
+    ),
+    t9("Evaluate", "NulIntArray", "10 NULs", "Evaluate(A[1], T);", {
+      vars: ["A: array[3] of Integer;", ...X3_VARS],
+      setup: x3Nul(10),
+    }),
+    t9("Evaluate", "NulTryFunction", "10 NULs", "if not Helper.EvalBare() then;", {
+      vars: ['Helper: Codeunit "X3 Helper";'],
+    }),
+    t9("Page", "NestedEvaluate", "10 NULs", "TP.OpenWizard.Invoke();", {
+      vars: ['R: Record "X3 Row";', 'TP: TestPage "X3 Card";'],
+      setup: ["R.Id := 1;", "R.Insert();", "TP.OpenView();"],
+      handlers: [
+        '    [ModalPageHandler]\n    procedure WizHandler(var W: TestPage "X3 Wizard")\n    begin\n        W.Go.Invoke();\n    end;\n',
+      ],
+    }),
+    t9("Evaluate", "NulOnInsert", "10 NULs", "R.Insert(true);", {
+      vars: ['R: Record "X3 Ins";', 'Cache: Codeunit "X3 Cache";'],
+      setup: ["Cache.Put('a', 1);", "R.Id := 1;"],
+    }),
+    // amendment 1: the other NUL widths M28736's DO requests hold (7, 9, 11, 13, 16, 21, 25, 27), appended so C0-C10 keep
+    // their codeunit ids
+    ...[7, 9, 11, 13, 16, 21, 25, 27].map((n) =>
+      t9("Evaluate", "NulInteger", `${n} NULs`, "if not Evaluate(V, T) then;", {
+        vars: ["V: Integer;", ...X3_VARS],
+        setup: x3Nul(n),
+      }),
+    ),
+  ],
+};
+
+/**
  * PR-83: record filters. Invented header and line tables; every cell reloads a fixed data set (`Seed.Load`: DeleteAll, then the
  * inserts), does one operation, and reports its answer as `V:[...]` (the ordered primary keys joined with ',', counts and
  * numbers through Format(x, 0, 9), filter text as returned). Cell i is codeunit BASE_ID + 1 + i; the support codeunit is 51000.
@@ -4848,6 +5024,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [T12_REFUSALS.name]: T12_REFUSALS,
   // PR-133: appended (BC-check number 19): the two refusal texts DO's x2 window closed on, for a keep census
   [X2_REFUSALS.name]: X2_REFUSALS,
+  // PR-139: appended (BC-check number 20): the NUL-run Evaluate widths DO's x3 window closed on, for a keep census
+  [X3_REFUSALS.name]: X3_REFUSALS,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
