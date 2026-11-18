@@ -195,6 +195,38 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
     compile, leg RC is recorded but not counted as proven** (the orchestrator, 2026-11-18).
 - **Unchanged:** every other leg's figures, and P5 gating any default-on.
 
+## 0g. Amendment 7 (coord PR-162): the refused test must NOT cover the mutant
+- **What happened:** RC's live record run with amendment 6's fixture (`/coord/handoff/PR-162/rc-record.log`) was
+  GATE-FAIL by name, "0 withheld kills". A manual run of the same session (`/coord/handoff/PR-162/manual/report.json`)
+  shows why.
+  - `A0_ParsesSevens` calls `Sevens`, so it is itself a covering test of the mutant. Its own refusal is the mutant's
+    FIRST non-pass row, so the row's note is that direct refusal, and `A1`'s withheld failure only follows it ("after
+    the error").
+  - So `withheldKillOf` does not match, by design: a row is a withheld kill only when the withheld failure is its first.
+- **The fix,** which is DO's real shape (x3's refused earlier tests are refused at every baseline and cover none of the
+  mutants they spoil):
+  - `A0_RefusedWithUnknownReach` and `B0_RefusedWithUnknownReach` build their own 10-NUL text (a `Char` 0 loop), not
+    from `Sevens`/`SevensB`, `Evaluate` it into a Decimal (refused), then `if D < 0 then Page.RunModal(0, R)`.
+    - They are refused at EVERY baseline and cover no mutant.
+    - They still run first in each codeunit call, because serve sends a codeunit's tests as a prefix in declared order.
+  - `A1_OneSeven` is the only covering test of the `Sevens` mutant. `B1_OneSevenAndMarks` and `B2_SeesTheMark` are
+    unchanged.
+- **Measured by the manual run** (the scratch copy `/coord/handoff/PR-162/manual/fx`, `report2.json`, `recheckWithheldKills`
+  on, edge-4ebfe7913, serve, isolation test, `--workers 1`):
+  - the baseline is 3 of 5 passing, with A0 and B0 refused;
+  - **the `Sevens` remove-assignment mutant:** `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`;
+  - **the `SevensB` one:** `error`, a withheld kill (afterTest `B0_RefusedWithUnknownReach`, "part of its reach is not
+    known (runs page 0, which is not in the program)"). Its note ends "[recheck kept error: rule (e): the recheck
+    baseline lost Recheck B Tests.B2_SeesTheMark, which passed in the main baseline]";
+  - the caveats include `withheld-kills` and `isolated-recheck-kills`, plus `baseline-red`, because A0 and B0 are
+    refused at baseline by design.
+- **Leg RC's figures are amendment 6's,** with these names: the `Sevens` mutant recovered by `A1_OneSeven`; the `SevensB`
+  mutant kept `error` by rule (e) naming `B2_SeesTheMark`, afterTest `B0_RefusedWithUnknownReach`. Its baseline is 3 of 5
+  passing.
+  - The warning set stays `[]` (amendment 3). The CLI run also warned `al-runner-v3-memory-guard` and
+    `al-runner-v3-serve-flagged-unknown`, but the leg builds its backend without the CLI, as before.
+- **The symbol tar is unchanged by this amendment:** the same projects and apps.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
