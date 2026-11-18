@@ -388,6 +388,9 @@ evidence `/coord/handoff/PR-156/a/`):
 - **`SevensB` is killed on BC** by `B1_OneSevenAndMarks`. Rule (e)'s `error` there is the conservative side, not a false kill.
 - **bcdev does not carry a test codeunit's globals between test methods:** `B2_SeesTheMark` is red at BC's baseline (R890,
   measured).
+  - **The orchestrator ruled to keep rule (e)** (R1125, R890; master 4e9a64be). BC's standard test runner keeps codeunit state
+    across methods (PR-161), so bcdev's per-method run is the exception. Rule (e) never creates a kill, the option is off by
+    default, and the 4 SevensB kills it withholds are accepted.
   - So the recheck's run-alone matches bcdev's model.
   - A v3 kill that rests on a global set by an earlier test is exactly the case BC never sees, and the one part (b), the DO
     sample (coord PR-170), must count.
