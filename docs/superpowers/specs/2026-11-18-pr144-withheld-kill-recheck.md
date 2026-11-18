@@ -5,6 +5,76 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   ruling of 2026-11-18: build opt-in and default OFF, with rule (e); the BC differential (P5) gates any default-on.
 - Evidence: `/coord/handoff/PR-144/` (`result.md`, `prep.py`, `run-m.sh`, `m.report.json`).
 
+## 0a. Amendment 1 (the opus review of the built change, c7182521; the orchestrator's ruling of 2026-11-18)
+- **Rule (e) is codeunit-wide.**
+  - The recheck baseline runs the targets' covering tests PLUS every main-baseline test of each covering codeunit.
+  - A test of the killer's codeunit that passed in the main baseline and has no recheck result counts as LOST (fail
+    closed), as does one that failed or was refused.
+  - The built r2 skipped un-run tests, a pass with no evidence (review B1).
+  - **The cost:** on arm M's data, 928 tests in place of 410, about 1,690 s of baseline in place of about 750 s. It is
+    paid only when the option is on.
+- **P1 is restated: 198 recovered, 96 kept by (e).**
+  - Joined from x3's main baseline: exactly one test passed in the main baseline and fails alone,
+    `CDO Variant Setup UI Tests.U_CopyCriteriaFromLine_TakesTheCriteriaOfThePickedLine`, a covering test of the targets.
+  - So (e) keeps the 96 kills whose killer is in that codeunit as `error`, and recovers 198. M18076 stays `error`, as a
+    direct refusal.
+  - Both forms of (e) give the same answer on arm M.
+- **Neither form of (e) tests H1.**
+  - In H1, a test v3 REFUSED left state the killer depended on.
+  - (e) only judges tests that passed in the main baseline, so it can never judge a refused one. In arm M, the 50 tests of
+    the 11 killer codeunits that do not pass alone are all non-covering, and all failed in x3's main baseline too.
+  - (e) catches order dependence among tests al-runner runs, nothing more. **Only P5 (the BC differential) answers H1,
+    and P5 still gates any default-on.**
+- **Rule (d), as built:**
+  - It compares the al-runner version, the binary sha256, `sourceSha256` and `dependencySourceSha256`. The recheck's
+    artifact must differ (it compiles only the targets), so the artifact and alc proof hashes are not compared.
+  - The recheck backends come from the run's pinned `effectiveConfig` (R1018).
+  - Any missing hash fails (d).
+- **The store, as built:** the recheck never writes the store. The main pass's stored row stays `error`, which is never
+  carried, so `--resume` rederives recovered kills by construction. That replaces r2's "stored with a recheck marker".
+- **Other review fixes in the build:**
+  - the main session's daemons close before the recheck starts (review B3, memory);
+  - a reused main baseline (no main baseline rows) skips the recheck with a warning;
+  - the recheck baseline is folded strictly ("passed in every batch");
+  - the stream doc names `mutant-rechecked` as a verdict-replacing event;
+  - `excludeTests` is kept in the recheck's config;
+  - tests reach the real nested path (`exactSites`, `keepOnlyTests` refusals, the session hook).
+- **The al-runner-v3 gate leg** (§3.7): its figures are pre-committed in amendment 2, before it is built or run.
+
+## 0b. Amendment 2: the gate leg RC, pre-committed before it is built or run
+- **The fixture `fixtures/sandbox-recheck`** (an app and a test app, runtime 17, invented code).
+  - **App:** codeunit "Recheck Logic", with:
+    - `Double(X: Integer): Integer` (`exit(X * 2)`);
+    - `Triple(X: Integer): Integer` (`exit(X * 3)`);
+    - `Bump()` and `Count(): Integer` over a counter in a `SingleInstance` codeunit "Recheck State".
+  - **Test codeunit "Recheck A Tests"**, in declared order:
+    - `A0_Refuses`: an `Evaluate` of a 10-NUL text into Decimal, a refusal on edge-4ebfe7913 (PR-139's probe);
+    - `A1_Doubles`: asserts `Double(2) = 4`.
+  - **Test codeunit "Recheck B Tests"**, in declared order:
+    - `B0_Refuses`: the same refusal;
+    - `B1_TriplesAndBumps`: calls `Bump()`, then asserts `Triple(2) = 6`;
+    - `B2_SeesTheBump`: asserts `Count() = 1`. It passes after B1 in one codeunit session, and fails alone.
+- **The leg's session:**
+  - backend al-runner-v3 on the gate's pinned build, `"isolation": "test"` (explicit, so `auto` cannot move the
+    codeunits), serve transport;
+  - `"recheckWithheldKills": true`, `--workers 1`.
+- **Pre-committed figures, per mutant at the two sites** (`exit(X * 2)` in `Double` and `exit(X * 3)` in `Triple`):
+  - **Main pass:** every mutant at those sites that changes the returned value is `error` with `withheldKill` (afterTest
+    `A0_Refuses` or `B0_Refuses`).
+  - **After the recheck:**
+    - each `Double` mutant whose main row was a withheld kill is `killed` by `A1_Doubles`, with `killReproduced` and
+      `isolatedRecheck`;
+    - each `Triple` withheld kill stays `error`, its note naming rule (e) and the lost test `B2_SeesTheBump`;
+    - mutants elsewhere (`Bump`, `Count`) are recorded in the leg's baseline. They are not part of this prediction.
+  - **Caveats:** `isolated-recheck-kills` counts exactly the recovered `Double` mutants, and `withheld-kills` counts
+    exactly the `Triple` ones.
+- **The leg fails by name:**
+  - when the main pass has 0 withheld kills (a fixed refusal would make the leg empty);
+  - when no `Double` mutant is recovered;
+  - when any `Triple` mutant is recovered.
+- **Existing legs:** every other leg's frozen figures stay exactly as they are; RC adds a baseline file of its own. The
+  gate page `docs/gates/alrunner-v3.md` gains RC's section with these figures.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
