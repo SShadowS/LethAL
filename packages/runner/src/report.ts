@@ -14,6 +14,7 @@ import {
 } from "./assertion-screen";
 import { isBcdev } from "./backend";
 import type { BackendCapabilities, CoverageMode, StopEvidence, TestMethodRef } from "./backend";
+import type { ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import {
   EQUIVALENCE_MARKS_FILENAME,
@@ -334,7 +335,8 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   narrowed: {
     meaning:
-      "The run was scoped by `--only`. `mutationScore` covers what was RUN, and a narrowed " +
+      "The run was scoped by `--only` (or `--exclude`, or `--confirm-from`, which deploys only the " +
+      "mutants a v3 report selected: see `confirm`). `mutationScore` covers what was RUN, and a narrowed " +
       "run's score describes the chosen slice, not the project.",
     entailedNegative:
       "`only` selects which mutants run and cannot itself change a verdict — unlike " +
@@ -1567,6 +1569,14 @@ export interface SessionReport {
     readonly excludedSiteCount: number;
     readonly changedSince?: ChangedSinceSource;
   };
+  /**
+   * PR-171 (R1122): the `--confirm-from` narrowing, if any. The run deployed only the mutants whose
+   * identity key is in `selected` (the noted v3 survivors, v3's R609 no-coverage rows, and a seeded
+   * sample of unnoted survivors), so its score covers those ONLY. `lethal confirm-merge` joins this
+   * report to the v3 one on those keys. Absent on every other run, so an older report validates
+   * unchanged. Raises the `narrowed` caveat.
+   */
+  readonly confirm?: ConfirmRecord;
   /**
    * R45: the `--tests-only` narrowing, if any. Absent means the whole suite ran at baseline. See
    * `CAVEAT_INTERPRETATIONS["tests-narrowed"]` for what this means to a reader.
@@ -3228,7 +3238,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
   // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
   // score", and that is one fact however many flags produced it.
-  if (input.only !== undefined || input.exclude !== undefined) caveats.push("narrowed");
+  // PR-171: `--confirm-from` narrows to a chosen slice of mutants, which is the same fact.
+  if (input.only !== undefined || input.exclude !== undefined || input.confirm !== undefined)
+    caveats.push("narrowed");
   // See CAVEAT_INTERPRETATIONS["operator-narrowed"] for what this caveat means to a reader.
   if (input.operators !== undefined) caveats.push("operator-narrowed");
   if (input.lines !== undefined) caveats.push("line-narrowed");
@@ -3489,6 +3501,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     input.exclude !== undefined ||
     input.operators !== undefined ||
     input.lines !== undefined ||
+    input.confirm !== undefined ||
     (input.testsOnly !== undefined && input.testsOnly.length > 0) ||
     testsExcludedByName ||
     // R307: a refused file's sites were never mutated, so the score is not a whole-project score.
@@ -3537,6 +3550,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       : fileScope) +
     (input.lines !== undefined
       ? `, ${input.lines.ranges.length} line range(s) only (${input.lines.excludedSiteCount} site(s) on other lines excluded)`
+      : "") +
+    (input.confirm !== undefined
+      ? `, ${input.confirm.selected.length} mutant(s) selected by --confirm-from (${input.confirm.excludedSiteCount} site(s) excluded)`
       : "");
   const refusedFilesText =
     refusedRows.length > 0
@@ -3693,6 +3709,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     ...(input.exclude !== undefined ? { exclude: input.exclude } : {}),
     ...(input.operators !== undefined ? { operators: input.operators } : {}),
     ...(input.lines !== undefined ? { lines: input.lines } : {}),
+    ...(input.confirm !== undefined ? { confirm: input.confirm } : {}),
     ...(input.testsOnly !== undefined ? { testsOnly: input.testsOnly } : {}),
     ...(input.staleTestApp !== undefined ? { staleTestApp: input.staleTestApp } : {}),
     ...(input.resumedFrom !== undefined ? { resumedFrom: input.resumedFrom } : {}),
@@ -4312,6 +4329,12 @@ export function renderConsole(r: SessionReport): string {
     const more = r.lines.ranges.length > 5 ? ` and ${r.lines.ranges.length - 5} more` : "";
     lines.push(
       `NARROWED (lines): ${shown.join(", ")}${more} — ${r.lines.excludedSiteCount} mutation site(s) on other lines were excluded. The score above covers those lines ONLY, it is not a project score.`,
+    );
+  }
+  // PR-171: the confirm axis. The score covers the selected mutants only; the merge joins it to v3's.
+  if (r.confirm !== undefined) {
+    lines.push(
+      `NARROWED (--confirm-from): ${r.confirm.selected.length} mutant(s) selected from ${r.confirm.inputPath} (sha256 ${r.confirm.inputSha256.slice(0, 12)}) — ${r.confirm.excludedSiteCount} mutation site(s) were excluded. The score above covers those mutants ONLY, it is not a project score. Join it to the v3 report with \`lethal confirm-merge\`.`,
     );
   }
   // Same reasoning as NOT INSTRUMENTED above: a qualifier on the score belongs next to the score.

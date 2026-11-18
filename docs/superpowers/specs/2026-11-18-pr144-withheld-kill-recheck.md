@@ -380,3 +380,19 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   - If the recheck says `killed` there, the option stays off and the rules are revisited.
   - The orchestrator files it for lethal-code (bc4).
 - **The gates:** the al-runner-v3 gate on the final head, with the new leg.
+
+## Note: what P5's first part showed (coord PR-156 (a), lethal-code, 2026-11-18; added after the fact, not a prediction)
+On bc2 (bcdev), with PR-162's `sandbox-recheck` fixture (`docs/superpowers/specs/2026-11-18-pr156-recheck-bc-differential.md`;
+evidence `/coord/handoff/PR-156/a/`):
+- **The recheck's `Sevens` kill is confirmed on BC.** `A1_OneSeven` kills all 4 `Sevens` mutants.
+- **`SevensB` is killed on BC** by `B1_OneSevenAndMarks`. Rule (e)'s `error` there is the conservative side, not a false kill.
+- **bcdev does not carry a test codeunit's globals between test methods:** `B2_SeesTheMark` is red at BC's baseline (R890,
+  measured).
+  - **The orchestrator ruled to keep rule (e)** (R1125, R890; master 4e9a64be). BC's standard test runner keeps codeunit state
+    across methods (PR-161), so bcdev's per-method run is the exception. Rule (e) never creates a kill, the option is off by
+    default, and the 4 SevensB kills it withholds are accepted.
+  - So the recheck's run-alone matches bcdev's model.
+  - A v3 kill that rests on a global set by an earlier test is exactly the case BC never sees, and the one part (b), the DO
+    sample (coord PR-170), must count.
+- **This fixture cannot show P5's false-kill shape,** because B1 kills before B2's dependence matters. Part (b) samples it on real
+  code.

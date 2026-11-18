@@ -983,6 +983,32 @@
         "Codeunit58380.OSlashAfterARing": { "status": "pass" },
         "Codeunit58380.CodeAeBeforeTextZ": { "status": "pass" }
       }
+    },
+    {
+      "id": "u8267-bare-insert-duplicate",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8267",
+      "bcEvidence": "inferred, not measured on BC: documented AL behaviour, a bare Insert() of an existing primary key raises 'The record in table ... already exists', so both asserterror tests pass; the return-value form answers false (it passes on al-runner too). On edge-4ebfe7913 the two asserterror tests fail (no error raised). PR-175",
+      "rerun": [
+        "R1116: re-score its 125 candidates (50 DO, measured clean in PR-155; 75 non-DO, not measured) on the build that fixes #8267"
+      ],
+      "tests": {
+        "Codeunit51831.BareInsertTwiceRaises": { "status": "pass" },
+        "Codeunit51832.InsertSameKeyFromSecondVariable": { "status": "pass" },
+        "Codeunit51833.InsertTwiceReturnsFalse": { "status": "pass" }
+      }
+    },
+    {
+      "id": "u8333-session-app-areas",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8333",
+      "bcEvidence": "measured on BC 28.4 W1 (build 28.4.53241.56646, Linux, the developer endpoint's test runner, CRONUS International Ltd., an Essential company; the issue body's repro, renumbered here): the Premium-only control is not found ('The field with ID = ... is not found on the page.'), so SetControlInPremiumOnlyArea fails; SetControlInAreaAll passes. On edge-4ebfe7913 both pass. PR-175",
+      "rerun": [
+        "R1126: the BC.History Subcontracting WIP adjustment tests (7 pass on al-runner, fail on BC) and any page test whose control's area the company's tier does not enable"
+      ],
+      "apps": ["A", "T"],
+      "tests": {
+        "Codeunit51850.SetControlInPremiumOnlyArea": { "status": "fail" },
+        "Codeunit51851.SetControlInAreaAll": { "status": "pass" }
+      }
     }
   ]
 }

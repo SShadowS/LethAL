@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SShadowS/LethAL/blob/master/schemas/confirmation-v1.schema.json",
+  "title": "LethAL confirmation",
+  "description": "The JSON `lethal confirm-merge` writes with --out (PR-171, R1122): every mutant of an al-runner-v3 run, joined to the BC run made from it with --confirm-from. NOT a SessionReport. GENERATED from the Confirmation TypeScript declaration by scripts/generate-schemas.ts. A mutant BC did not measure keeps v3's verdict with measuredBy al-runner-v3. A BC `error` is not a measurement and does not override. Read `totals.provenance` beside every score.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "confirmationVersion",
+    "v3Sha256",
+    "seed",
+    "mutants",
+    "totals",
+    "sample"
+  ],
+  "properties": {
+    "kind": {
+      "const": "lethal-confirmation"
+    },
+    "confirmationVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "v3Sha256": {
+      "type": "string"
+    },
+    "bcSha256": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "string"
+    },
+    "mutants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "file",
+          "line",
+          "operatorName",
+          "procedureName",
+          "v3Verdict",
+          "group",
+          "finalVerdict",
+          "measuredBy",
+          "flags"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "number"
+          },
+          "operatorName": {
+            "type": "string"
+          },
+          "procedureName": {
+            "type": "string"
+          },
+          "v3Verdict": {
+            "type": "string"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "noted",
+                  "nocov-noted",
+                  "sample"
+                ]
+              },
+              {
+                "const": "unconfirmed"
+              }
+            ]
+          },
+          "bcVerdict": {
+            "type": "string"
+          },
+          "finalVerdict": {
+            "type": "string"
+          },
+          "measuredBy": {
+            "type": "string",
+            "enum": [
+              "bcdev",
+              "al-runner-v3"
+            ]
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "linux-rdlc-stub",
+                "bc-error"
+              ]
+            }
+          },
+          "killingTest": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "byFinalVerdict",
+        "byMeasuredBy",
+        "bcStubKills",
+        "score",
+        "provenance"
+      ],
+      "properties": {
+        "byFinalVerdict": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "byMeasuredBy": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "bcStubKills": {
+          "type": "number"
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "provenance": {
+          "type": "string"
+        }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested",
+        "drawn",
+        "measured",
+        "unnotedSurvivors",
+        "killedOnBc",
+        "stubKilledOnBc",
+        "upperBound95",
+        "allUnnotedDrawn",
+        "verdict",
+        "disagreementKeys"
+      ],
+      "properties": {
+        "requested": {
+          "type": "number"
+        },
+        "drawn": {
+          "type": "number"
+        },
+        "measured": {
+          "type": "number"
+        },
+        "unnotedSurvivors": {
+          "type": "number"
+        },
+        "killedOnBc": {
+          "type": "number"
+        },
+        "stubKilledOnBc": {
+          "type": "number"
+        },
+        "upperBound95": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "allUnnotedDrawn": {
+          "type": "boolean"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "agreement",
+            "disagreement",
+            "none"
+          ]
+        },
+        "disagreementKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

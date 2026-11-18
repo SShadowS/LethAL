@@ -195,6 +195,55 @@
             }
           }
         },
+        "confirm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inputPath",
+            "inputSha256",
+            "sample",
+            "seed",
+            "selected"
+          ],
+          "properties": {
+            "inputPath": {
+              "type": "string"
+            },
+            "inputSha256": {
+              "type": "string"
+            },
+            "sample": {
+              "type": "number"
+            },
+            "seed": {
+              "type": "string"
+            },
+            "selected": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "key",
+                  "group"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "group": {
+                    "type": "string",
+                    "enum": [
+                      "noted",
+                      "nocov-noted",
+                      "sample"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
         "testsOnly": {
           "type": "array",
           "items": {
@@ -458,6 +507,9 @@
           "type": "number"
         },
         "excludedByLines": {
+          "type": "number"
+        },
+        "excludedByConfirm": {
           "type": "number"
         },
         "refusedFiles": {
