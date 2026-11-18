@@ -363,7 +363,12 @@ import {
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 import { describeWebServiceHttpText } from "./webservice-http-text";
-import { type RecheckRunner, recheckSiteKey, runWithheldRecheck } from "./withheld-recheck";
+import {
+  type RecheckRunner,
+  recheckSiteKey,
+  runWithheldRecheck,
+  shouldRunRecheck,
+} from "./withheld-recheck";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -9434,7 +9439,10 @@ async function runSessionBody(
   // implementation, R583's dependency drops): no remaining backend reports any of them.
   // PR-144: the opt-in withheld-kill recheck, its own step after the main pass and its own budget. Never on a
   // quarantined session (its verdicts are not trusted), and never changes a row except through its events.
-  if (cfg.recheck !== undefined && !safety.isUnsafe) {
+  if (
+    cfg.recheck !== undefined &&
+    shouldRunRecheck({ recheck: cfg.recheck, unsafe: safety.isUnsafe })
+  ) {
     await runWithheldRecheck({
       events: [...collectedEvents],
       emit: (e) => emit(e),

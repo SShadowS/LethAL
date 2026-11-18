@@ -376,6 +376,14 @@
       "sha256": "684af7358023e8aaa850d88900a8d2f989c829941bd3452e0a5202945310502e",
       "mutants": 6
     },
+    "fixtures/sandbox-recheck-tests/src/RecheckTests.Codeunit.al": {
+      "sha256": "c29a946341b86a9788e0d5d7cbb1e6ac91539098dde2a69dbbb48c715a8b82ee",
+      "mutants": 23
+    },
+    "fixtures/sandbox-recheck/src/RecheckLogic.Codeunit.al": {
+      "sha256": "e7855f66c3eecb0ae0cda74e630d62381bbb54eee154fd7cd8774d7f5b53452c",
+      "mutants": 14
+    },
     "fixtures/sandbox-symbols-tests[LETHALA]/src/SymbolTests.Codeunit.al": {
       "sha256": "362b733cc45235bb6777b37a8632aa12f1b548fbba6485827f028121b3d66f01",
       "mutants": 4

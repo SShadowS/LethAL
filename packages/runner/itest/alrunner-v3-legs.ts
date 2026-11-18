@@ -557,6 +557,90 @@ export function judgeN1Serve(
   return { outcome: "pass", lines: [`N1E: failed closed as pre-committed (#5798): ${line}`] };
 }
 
+/**
+ * PR-144, leg RC: `sandbox-recheck` under `"isolation": "test"`, serve, `recheckWithheldKills`, one worker.
+ * Pre-commitment: `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0b (master 590d2417).
+ * Not in `V3_GATE_LEGS` (a build gated before this leg stays gated); every gate runs it from now on.
+ */
+export const V3_RC_LEG = "RC";
+
+/** The test the recovered `Double` kills must name, and the test whose loss (rule (e)) keeps every `Triple` withheld. */
+export const RC_DOUBLE_KILLER = "A1_Doubles";
+export const RC_TRIPLE_LOST_TEST = "B2_SeesTheBump";
+
+/** The report row's fields the RC judge reads. */
+export interface RcRow {
+  readonly mutantCode: string;
+  readonly procedureName: string;
+  readonly verdict: string;
+  readonly killingTest?: string;
+  readonly killReproduced?: boolean;
+  readonly failureNote?: string;
+  readonly withheldKill?: { readonly failure: string; readonly afterTest?: string };
+  readonly isolatedRecheck?: unknown;
+}
+
+/**
+ * RC's pre-committed table, per mutant at the `Double` and `Triple` sites (§0b). Returns every failure,
+ * each starting `RC:`, the three the pre-commitment names first. Pure, so it is red-checked offline.
+ *  - the main pass held at least one withheld kill (a row recovered, or one still withheld);
+ *  - at least one `Double` mutant is recovered, and no `Double` mutant is left withheld;
+ *  - each recovered `Double` is `killed` by `A1_Doubles` with `killReproduced`;
+ *  - no `Triple` mutant is recovered, and each `Triple` withheld kill stays `error` with a note naming rule (e)
+ *    and `B2_SeesTheBump`;
+ *  - the caveats `isolated-recheck-kills` and `withheld-kills` are present beside the recovered `Double` and the
+ *    kept `Triple` rows. Rows in `Bump` and `Count` are outside the prediction (the leg's baseline holds them).
+ */
+export function judgeRecheckLeg(
+  rows: readonly RcRow[],
+  caveats: readonly string[],
+): readonly string[] {
+  const fails: string[] = [];
+  const recovered = rows.filter((r) => r.isolatedRecheck !== undefined);
+  const withheld = rows.filter((r) => r.withheldKill !== undefined);
+  const doubles = recovered.filter((r) => r.procedureName === "Double");
+  const triplesRecovered = recovered.filter((r) => r.procedureName === "Triple");
+  const triplesKept = withheld.filter((r) => r.procedureName === "Triple");
+  if (recovered.length + withheld.length === 0)
+    fails.push(
+      "RC: the main pass held 0 withheld kills (a fixed refusal would make the leg empty)",
+    );
+  if (doubles.length === 0) fails.push("RC: no Double mutant was recovered");
+  if (triplesRecovered.length > 0)
+    fails.push(
+      `RC: ${triplesRecovered.length} Triple mutant(s) recovered (${triplesRecovered.map((r) => r.mutantCode).join(", ")}): rule (e) must keep them error`,
+    );
+  if (triplesKept.length === 0 && triplesRecovered.length === 0)
+    fails.push("RC: no Triple mutant is a withheld kill");
+  for (const r of doubles) {
+    if (r.verdict !== "killed" || r.killReproduced !== true || r.killingTest !== RC_DOUBLE_KILLER)
+      fails.push(
+        `RC: Double ${r.mutantCode} is ${r.verdict} by ${r.killingTest ?? "no test"} (reproduced ${r.killReproduced === true}), pre-committed killed by ${RC_DOUBLE_KILLER}, reproduced`,
+      );
+  }
+  for (const r of withheld.filter((w) => w.procedureName === "Double"))
+    fails.push(`RC: Double ${r.mutantCode} is still a withheld kill`);
+  for (const r of triplesKept) {
+    const note = r.failureNote ?? "";
+    if (r.verdict !== "error" || !note.includes("rule (e)") || !note.includes(RC_TRIPLE_LOST_TEST))
+      fails.push(
+        `RC: Triple ${r.mutantCode} is ${r.verdict}; its note must name rule (e) and ${RC_TRIPLE_LOST_TEST}`,
+      );
+  }
+  const has = (c: string) => caveats.includes(c);
+  // Mutants in Bump and Count are outside the prediction (they sit in the leg's baseline), so the caveats
+  // are judged by what the Double and Triple rows require of them, not by an exact count over every row.
+  if (doubles.length > 0 && !has("isolated-recheck-kills"))
+    fails.push(
+      `RC: caveat isolated-recheck-kills is absent with ${doubles.length} recovered Double mutant(s)`,
+    );
+  if (triplesKept.length > 0 && !has("withheld-kills"))
+    fails.push(
+      `RC: caveat withheld-kills is absent with ${triplesKept.length} Triple withheld kill(s)`,
+    );
+  return fails;
+}
+
 /** The legs the itest runs when `LETHAL_ITEST_V3_LEGS` is unset, in run order. */
 export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boolean }): string[] {
   return [
@@ -582,6 +666,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     // R918: the same two on serve-entries, per mutant equal to the one-shot legs' baselines.
     "MOE",
     "WRE",
+    V3_RC_LEG, // PR-144: the withheld-kill recheck; not in V3_GATE_LEGS, as ISO and DB are not
     V3_K_LEG,
     ...(o.cdo ? ["D1", "D1c"] : []),
     ...(o.tables ? ["T"] : []),

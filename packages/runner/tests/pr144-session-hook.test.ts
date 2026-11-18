@@ -16,7 +16,20 @@ import type {
 import type { RunEvent } from "../src/events";
 import { generateMutationSet, runSession } from "../src/orchestrator";
 import { ResultsStore } from "../src/store";
-import { type RecheckRequest, recheckSiteKey } from "../src/withheld-recheck";
+import { type RecheckRequest, recheckSiteKey, shouldRunRecheck } from "../src/withheld-recheck";
+
+describe("shouldRunRecheck: the decision runSessionBody takes", () => {
+  const recheck = { budgetSeconds: 1, runner: async () => ({}) };
+  test("configured and safe: runs", () => {
+    expect(shouldRunRecheck({ recheck, unsafe: false })).toBe(true);
+  });
+  test("a quarantined (unsafe) session: never runs", () => {
+    expect(shouldRunRecheck({ recheck, unsafe: true })).toBe(false);
+  });
+  test("not configured: never runs", () => {
+    expect(shouldRunRecheck({ recheck: undefined, unsafe: false })).toBe(false);
+  });
+});
 
 /**
  * PR-144, at the runSession level with a stub backend: the nested session's two narrowing knobs

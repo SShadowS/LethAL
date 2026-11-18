@@ -279,6 +279,17 @@ export interface RecheckSummary {
   readonly skipped?: string;
 }
 
+/**
+ * Whether the session runs the recheck at all: it is configured, and the session is not quarantined (an
+ * unsafe session's verdicts are not trusted, so nothing is built on them).
+ */
+export function shouldRunRecheck(a: {
+  readonly recheck: unknown;
+  readonly unsafe: boolean;
+}): boolean {
+  return a.recheck !== undefined && !a.unsafe;
+}
+
 /** The word the skip warning carries. */
 export const RECHECK_SKIPPED_CODE = "withheld-recheck-skipped";
 export const RECHECK_FAILED_CODE = "withheld-recheck-failed";

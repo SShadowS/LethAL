@@ -92,7 +92,7 @@ import {
 } from "../src/al-runner-v3-seed";
 import { SLEEP_NOTE_TAG } from "../src/al-runner-v3-sleep";
 import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/artifact";
-import { buildBackend } from "../src/cli";
+import { type RunCliConfig, buildBackend, v3RecheckOf } from "../src/cli";
 import type { EventSubscriber } from "../src/events";
 import { formatFailure } from "../src/format-failure";
 import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig, runSession } from "../src/orchestrator";
@@ -160,6 +160,7 @@ import {
   V3_N1E_LEG,
   V3_N1S_LEG,
   V3_O1_LEG,
+  V3_RC_LEG,
   V3_S1E_LEG,
   V3_WR_KILLERS,
   V3_WR_STATE_NOTES,
@@ -173,6 +174,7 @@ import {
   judgeN1Serve,
   judgeO1Seed,
   judgeOrderProbe,
+  judgeRecheckLeg,
   judgeStateNotes,
   judgeWrArms,
   legKSection,
@@ -254,6 +256,8 @@ const SYMBOLS_B_BASELINE_PATH = join(HERE, "al-runner-v3.symbols-lethalb.baselin
 // R602: legs MO (multi-object files) and WR (`#if`-wrapped files), each recorded once under R332.
 const MULTIOBJECT_BASELINE_PATH = join(HERE, "al-runner-v3.multiobject.baseline.json");
 const WRAPPED_BASELINE_PATH = join(HERE, "al-runner-v3.wrapped.baseline.json");
+// PR-144: leg RC (the withheld-kill recheck), recorded once under R332 by the owner of the live gate.
+const RECHECK_BASELINE_PATH = join(HERE, "al-runner-v3.recheck.baseline.json");
 // R814: resolved once, so `current` moving during a gate cannot swap the binary under it.
 const BIN = resolveV3Binary(process.env.LETHAL_ALRUNNER_V3_PATH ?? AL_RUNNER_V3_DEFAULT_PATH);
 const CANDIDATE = process.env.LETHAL_ALRUNNER_V3_CANDIDATE === "1";
@@ -1829,6 +1833,73 @@ async function legMO(scratch: string, serve = false): Promise<SessionReport> {
   return r;
 }
 
+/**
+ * RC (PR-144): the withheld-kill recheck on `sandbox-recheck`, pre-committed in
+ * `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0b. The main pass runs under
+ * `"isolation": "test"` on serve, one worker, with `recheckWithheldKills` on; the recheck is `v3RecheckOf`, the
+ * same code the CLI uses, with a nested backend under method isolation. The table (`judgeRecheckLeg`) is checked
+ * FIRST, by name, before the own-baseline compare.
+ */
+async function legRC(scratch: string): Promise<SessionReport> {
+  const projectDir = fixture("sandbox-recheck");
+  const testDir = fixture("sandbox-recheck-tests");
+  const ids = { selectorId: 76049, controlId: 76048, tableId: 76047 };
+  const packagesDir = await microsoftDeps(scratch);
+  const make = (isolation: "test" | "method", dir: string) =>
+    new AlRunnerV3Backend(
+      backendCfg({
+        instrumentedDir: dir,
+        testDir,
+        packagesDir,
+        bcVersion: SANDBOX_BC,
+        selectorObjectId: ids.selectorId,
+        sourceProjectDir: projectDir,
+        transport: "serve-entries",
+        isolation,
+      }),
+    );
+  const mainConfig = {
+    projectDir,
+    testDir,
+    selectorIds: ids,
+    workers: 1,
+  } as unknown as SessionConfig;
+  const recheck = v3RecheckOf({
+    parsed: { backendKind: "al-runner-v3" } as RunCliConfig,
+    effectiveConfig: {
+      alRunnerV3: {
+        path: BIN,
+        packagesDir,
+        bcVersion: SANDBOX_BC,
+        recheckWithheldKills: true,
+        recheckBudgetSeconds: 1800,
+      },
+    } as never,
+    mainConfig,
+    build: async (_config, dir) => make("method", dir),
+    runSession,
+    newStore: () => new ResultsStore(join(scratch, "recheck.sqlite")),
+    scratchRoot: scratch,
+  });
+  if (recheck === undefined) throw new LegFailure("RC: the recheck was not built from its config");
+  const b = make("test", join(scratch, "backend"));
+  const r = await session(scratch, b, {
+    projectDir,
+    testDir,
+    selectorIds: ids,
+    workers: 1,
+    recheck,
+  });
+  const fails = judgeRecheckLeg(r.mutants, r.validity.caveats);
+  for (const f of fails) console.log(`    - ${f}`);
+  const [first] = fails;
+  if (first !== undefined) throw new LegFailure(first);
+  console.log(
+    `  RC: ${r.mutants.filter((m) => m.isolatedRecheck !== undefined).length} recovered, ${r.mutants.filter((m) => m.withheldKill !== undefined).length} kept withheld, as pre-committed`,
+  );
+  return r;
+}
+
 /** R918: the serve legs' counters, pre-committed in
  *  `docs/superpowers/specs/2026-11-11-r918-moe-wre-precommitment.md` (master e1ca5d11). */
 const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
@@ -2838,6 +2909,9 @@ async function main(): Promise<void> {
     preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MO");
   if (LEGS.includes("WR"))
     preflightGateBaseline(WRAPPED_BASELINE_PATH, "al-runner-v3 itest leg WR");
+  // PR-144: leg RC refuses at start while its baseline is missing (R332).
+  if (LEGS.includes(V3_RC_LEG))
+    preflightGateBaseline(RECHECK_BASELINE_PATH, "al-runner-v3 itest leg RC");
   // R918: MOE and WRE compare with the same two files, so they refuse at start without them too.
   if (LEGS.includes("MOE"))
     preflightGateBaseline(MULTIOBJECT_BASELINE_PATH, "al-runner-v3 itest leg MOE");
@@ -2881,6 +2955,7 @@ async function main(): Promise<void> {
     ["Y-B", SYMBOLS_B_BASELINE_PATH],
     ["MO", MULTIOBJECT_BASELINE_PATH],
     ["WR", WRAPPED_BASELINE_PATH],
+    [V3_RC_LEG, RECHECK_BASELINE_PATH],
   ]);
   const recordPaths = LEGS.flatMap((l) => {
     const p = recordBaselines.get(l);
@@ -2993,6 +3068,22 @@ async function main(): Promise<void> {
           } catch (e) {
             if (e instanceof BaselineRecordedError) throw e;
             throw new LegFailure(`MO: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        } else if (leg === V3_RC_LEG) {
+          // PR-144: the pre-committed table ran inside the leg (nothing is written on a difference); then
+          // the own-baseline compare, which a record run writes (R332).
+          const r = await legRC(scratch);
+          try {
+            await assertGateBaseline(
+              r,
+              RECHECK_BASELINE_PATH,
+              "al-runner-v3 itest leg RC",
+              process.env,
+              pinnedRecord(),
+            );
+          } catch (e) {
+            if (e instanceof BaselineRecordedError) throw e;
+            throw new LegFailure(`RC: ${e instanceof Error ? e.message : String(e)}`);
           }
         } else if (leg === "MOE") {
           // R918: the serve legs, compared with the ONE-SHOT legs' frozen baselines and never
