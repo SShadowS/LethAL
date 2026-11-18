@@ -75,6 +75,75 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
 - **Existing legs:** every other leg's frozen figures stay exactly as they are; RC adds a baseline file of its own. The
   gate page `docs/gates/alrunner-v3.md` gains RC's section with these figures.
 
+## 0c. Amendment 3: leg RC's warning set
+- **RC's warning set is `[]`:** `GATE_WARNINGS["al-runner-v3/RC"]` in `gate-expected.ts`.
+- RC's first live run (record mode, edge-4ebfe7913, branch head aaa7c4e2) stopped as INFRA-FAIL at the warnings check,
+  before the table, because the set was not committed. It observed `[]`.
+- No session warning is expected: RC's session is a plain serve session on the pinned build. The recheck's nested
+  session reports through the caveat and its own events, not the session's warning set.
+- The table (§0b) is unchanged and is judged on the next run.
+
+## 0d. Amendment 4: the fixture redesigned (§0b's design cannot produce a withheld kill)
+- **What happened:** RC's second live run (record mode, edge-4ebfe7913, branch head fdd396be) was GATE-FAIL by name: "the
+  main pass held 0 withheld kills". The empty-leg guard worked.
+- **The cause:** §0b's design is wrong.
+  - `A0_Refuses` is refused at BASELINE (measured: `rcprobe/run1.json`), so it is in no mutant's plan and is never sent
+    under a mutant.
+  - So under a `Double` mutant, `A1_Doubles` is the first test sent, and its failure is a trusted kill (the run shows 8
+    kill pairs).
+  - A withheld kill needs a test that PASSES at baseline and is refused, or fails, only under the mutant. That is DO's
+    own shape: M28736's removed assignment left NUL characters.
+- **The fixture, redesigned (replaces §0b's objects):**
+  - **App, codeunit "Recheck Logic":**
+    - `Sevens(N: Integer) T: Text`, a loop of `C := '7'; T += Format(C);`;
+    - `SevensB(N: Integer) T: Text`, the same body in its own procedure;
+    - `Bump()` and `Count(): Integer` over the SingleInstance "Recheck State".
+  - **"Recheck A Tests":**
+    - `A0_ParsesSevens`: `Evaluate` of `Sevens(10)` into Decimal must succeed and give 7777777777;
+    - `A1_OneSeven`: `Sevens(1) = '7'`.
+  - **"Recheck B Tests":**
+    - `B0_ParsesSevens`, as A0 with `SevensB`;
+    - `B1_OneSevenAndBump`: `Bump()`, then `SevensB(1) = '7'`;
+    - `B2_SeesTheBump`: `Count() = 1`.
+- **Pre-committed figures, per mutant, for the `lethal.remove-assignment` mutant of `C := '7'` in each procedure:**
+  - **In `Sevens`:**
+    - Under the mutant, `Sevens(10)` is 10 NULs: `A0_ParsesSevens` is refused (the NUL text), and `A1_OneSeven` fails
+      after it.
+    - **Main pass:** `error` with `withheldKill`, afterTest `A0_ParsesSevens`.
+    - **After the recheck:** `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`. Codeunit A's
+      main-baseline tests, A0 and A1, both pass alone.
+  - **In `SevensB`:**
+    - **Main pass:** `error` with `withheldKill`, afterTest `B0_ParsesSevens`.
+    - **After the recheck:** it stays `error`, its note naming rule (e) and `B2_SeesTheBump`, which passed in the main
+      baseline and fails alone.
+  - **Other mutants** (the loop, `Format`, `Bump`, `Count`) are recorded in the baseline only. Some may also be withheld;
+    the caveats name them.
+  - **The caveats:** `isolated-recheck-kills` names the `Sevens` mutant, and `withheld-kills` names the `SevensB` one.
+- **The leg fails by name:**
+  - when the main pass has 0 withheld kills;
+  - when the `Sevens` remove-assignment mutant is not recovered;
+  - when the `SevensB` one is recovered.
+- **Unchanged:** the warning set `[]` (amendment 3) and every other leg.
+
+## 0e. Amendment 5: leg RC leaves PR-144 (orchestrator ruling, option (B), 2026-11-18)
+- **Why:** probes on edge-4ebfe7913 (`/coord/handoff/PR-144/rcprobe*`, serve and one-shot) showed amendment 4's shape
+  cannot produce a withheld kill either.
+  - A test refused only under the mutant with a KNOWN-reach refusal (the NUL `Evaluate`) leaves the next failure a plain
+    trusted `fail`, with or without a write first.
+  - x3's real withheld rows all follow a refusal whose reach is unknown ("part of its reach is not known ... so the state
+    it would have left is not BC's": `GoToKey` on a list, `FindSet` on Company, `Codeunit.Run` with a run-time id).
+  - A fixture needs an earlier test that passes at baseline and reaches such a refusal only under the mutant. That is a
+    probe-and-iterate job.
+- **So PR-144 lands WITHOUT leg RC and without its fixtures:**
+  - nothing that `compile:fixtures` skips;
+  - nothing a gate cannot run;
+  - no symbol-tar change.
+- §0b, §0c and §0d move to the follow-up item R1125, together with the symbol-tar rebuild.
+- **The option's help text and docs say,** beside the H1 warning, that the recheck has not yet been exercised live end
+  to end. It is covered by unit and real-path tests and by arm M's approximation.
+- **The recheck counts as unproven live until R1125's leg passes.** P5 (the BC differential) depends on such a fixture,
+  and still gates any default-on.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
