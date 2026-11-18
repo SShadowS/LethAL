@@ -132,6 +132,14 @@ import {
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
+import {
+  V3_NOCOV_REFUSAL_LEAD,
+  assertSameScope,
+  narrowToConfirmed,
+  planConfirm,
+  scopeOfReport,
+  scopeOfRun,
+} from "./confirm";
 import { rewriteControlAddInPaths } from "./controladdin-paths";
 import {
   type DependencyReportSourceRecord,
@@ -1752,6 +1760,20 @@ export interface SessionConfig {
   readonly keepOnlyTests?: readonly string[];
   /** PR-144, the nested session only: see `MutationSetOptions.exactSites`. */
   readonly exactSites?: ReadonlySet<string>;
+  /**
+   * PR-171 (R1122, `--confirm-from`): deploy only the mutants a v3 report selected (its noted
+   * survivors, its R609 no-coverage rows, and a seeded sample of unnoted survivors). The CLI reads the
+   * file; this holds its parsed JSON and the sha256 of its bytes. The filter runs after identity
+   * ordinals are numbered over the full set (see `narrowToConfirmed`), and every refusal is made
+   * before anything is deployed. Refused beside `skipKnownSurvivors`, `resume` and `exactSites`.
+   */
+  readonly confirm?: {
+    readonly inputPath: string;
+    readonly input: unknown;
+    readonly inputSha256: string;
+    readonly sample?: number;
+    readonly seed?: string;
+  };
   /**
    * PR-144 (`alRunnerV3.recheckWithheldKills`): after the main pass, re-run this session's withheld-kill
    * rows through `runner` (a nested session on a method-isolation backend) as its own step, with its own
@@ -6648,9 +6670,20 @@ async function runSessionBody(
   // report treat it as the same scope as naming them all.
   const admittedForRun = admittedOperatorNames(cfg, [...operatorTiers.keys()]);
   const resolvedOperators = admittedForRun === undefined ? undefined : [...admittedForRun].sort();
+  // PR-171: every refusal that needs only the flags and the v3 file, before the run is announced.
+  const confirmPlan =
+    cfg.confirm === undefined
+      ? undefined
+      : planConfirm({
+          ...cfg.confirm,
+          skipKnownSurvivors: cfg.skipKnownSurvivors === true,
+          resume: cfg.resume !== undefined,
+          exactSites: cfg.exactSites !== undefined,
+        });
   emit({
     type: "run-configured",
     caps,
+    ...(confirmPlan !== undefined ? { confirm: confirmPlan.given } : {}),
     ...(cfg.only !== undefined ? { only: { patterns: cfg.only } } : {}),
     ...(cfg.exclude !== undefined ? { exclude: { patterns: cfg.exclude } } : {}),
     ...(resolvedOperators !== undefined ? { operators: { names: resolvedOperators } } : {}),
@@ -7233,7 +7266,7 @@ async function runSessionBody(
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
-    files: allFiles,
+    files: generatedFiles,
     duplicateObjects,
     skipped: notInstrumentedFiles,
     totalFiles: totalAlFiles,
@@ -7274,7 +7307,7 @@ async function runSessionBody(
   // R826: a warning only, once per session, and only for a BC tier: it changes no deploy decision.
   // R875: from the real emitted text; the list also names a batch's suspect in a quarantine.
   const largeMethods = isBcdev(caps.kind)
-    ? largeMethodsOf(allFiles, (name) => operatorTiers.get(name))
+    ? largeMethodsOf(generatedFiles, (name) => operatorTiers.get(name))
     : [];
   const foldWarning = largeMethodWarning(largeMethods);
   if (foldWarning !== undefined) {
@@ -7287,8 +7320,43 @@ async function runSessionBody(
   // R374: numbered once over the whole run, here and not inside `generateMutationSet`'s file loop,
   // which then held one entry per mutant until its end (R400). Still inside the generate phase.
   // `identityOrdinalsOf`'s numbering, from entries kept long enough to read the twins below.
-  const identityEntries = runIdentityEntries(allFiles, operatorTiers, reservedIdentityEntries);
+  const identityEntries = runIdentityEntries(
+    generatedFiles,
+    operatorTiers,
+    reservedIdentityEntries,
+  );
   const identityOrdinals = numberIdentityOrdinals(identityEntries);
+  // PR-171 (R1122): the confirm filter runs HERE, after the ordinals above were numbered over the
+  // FULL generated set, so a twin keeps the ordinal the v3 report holds. Never before the numbering
+  // (that is `exactSites`' place, and the two are refused together). Every refusal is made before
+  // anything is deployed.
+  let excludedByConfirm = 0;
+  let allFiles = generatedFiles;
+  if (confirmPlan !== undefined) {
+    assertSameScope(
+      scopeOfReport(confirmPlan.report),
+      scopeOfRun({
+        only: cfg.only,
+        exclude: cfg.exclude,
+        operators: resolvedOperators,
+        lines: cfg.lines,
+        preprocessorSymbols: cfg.preprocessorSymbols,
+        testsOnly: cfg.testsOnly,
+        excludeTests: cfg.excludeTests,
+        sourceSha256: sourceHashAtGeneration,
+        dependencySourceSha256,
+        identityScheme: IDENTITY_SCHEME,
+      }),
+    );
+    const narrowed = narrowToConfirmed(
+      generatedFiles,
+      identityOrdinals,
+      tierOf,
+      confirmPlan.given.selected,
+    );
+    allFiles = narrowed.files;
+    excludedByConfirm = narrowed.excluded;
+  }
   // R391: which tuples have a twin in their FILE, from exactly the set the ordinals number. A fact
   // of the run, written before any mutant row (known-survivor and stranded rows included): an
   // interrupted run's rows undercount it. `carryCurrent` is this session's side of every carry.
@@ -7397,6 +7465,7 @@ async function runSessionBody(
     excludedByExclude,
     excludedByOperator,
     ...(cfg.lines !== undefined ? { excludedByLines } : {}),
+    ...(confirmPlan !== undefined ? { excludedByConfirm } : {}),
     // R307: no looseTuples in the stream: they are a carry detail, not report data.
     ...(refusedFiles.length > 0
       ? {
@@ -7450,7 +7519,11 @@ async function runSessionBody(
   assertRunSizeAcceptable({
     mutantCount: siteCount,
     fileCount: allFiles.length,
-    narrowed: cfg.only !== undefined || resolvedOperators !== undefined || cfg.lines !== undefined,
+    narrowed:
+      cfg.only !== undefined ||
+      resolvedOperators !== undefined ||
+      cfg.lines !== undefined ||
+      confirmPlan !== undefined,
     allowLargeRun: cfg.allowLargeRun ?? false,
   });
   const artifacts = planArtifacts(allFiles, {
@@ -9490,6 +9563,7 @@ async function runSessionBody(
           },
         }
       : {}),
+    ...(confirmPlan !== undefined ? { confirm: confirmPlan.given } : {}),
     ...(cfg.testsOnly !== undefined && cfg.testsOnly.length > 0
       ? { testsOnly: cfg.testsOnly }
       : {}),
@@ -10568,7 +10642,7 @@ export function unsupportedCoverageNote(
   const v3 = qualified.filter((n) => v3RefusedThisBatch.has(n));
   if (v3.length > 0) {
     return describe(
-      "al-runner v3 refusal",
+      V3_NOCOV_REFUSAL_LEAD,
       v3,
       "the test reaches this code (or its object, for a trigger mutant) before v3 refused it; v3 refused it, so the mutant is not measured here, and this is not evidence of a gap in your suite",
       "al-runner v3 refused at baseline",

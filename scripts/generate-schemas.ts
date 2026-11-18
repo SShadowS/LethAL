@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "@typescript/typescript6";
 import { CAMPAIGN_COMPARE_SCHEMA_VERSION } from "../packages/runner/src/campaign-subcommands";
+import { CONFIRMATION_VERSION } from "../packages/runner/src/confirm";
 import { STREAM_SCHEMA_VERSION } from "../packages/runner/src/events";
 import { REPORT_SCHEMA_VERSION } from "../packages/runner/src/report";
 
@@ -42,6 +43,7 @@ const FILES = [
   "campaign-subcommands.ts",
   "dependency-report-source.ts",
   "isolation-auto.ts",
+  "confirm.ts",
 ].map((f) => join(SRC, f));
 
 /** Types the report references from OTHER packages. Listed explicitly for the same reason as above:
@@ -348,6 +350,19 @@ const targets = [
       ),
       "campaignCompareSchemaVersion",
       CAMPAIGN_COMPARE_SCHEMA_VERSION,
+    ),
+  },
+  {
+    file: `confirmation-v${CONFIRMATION_VERSION}.schema.json`,
+    schema: pinVersion(
+      build(
+        "Confirmation",
+        `confirmation-v${CONFIRMATION_VERSION}.schema.json`,
+        "LethAL confirmation",
+        "The JSON `lethal confirm-merge` writes with --out (PR-171, R1122): every mutant of an al-runner-v3 run, joined to the BC run made from it with --confirm-from. NOT a SessionReport. GENERATED from the Confirmation TypeScript declaration by scripts/generate-schemas.ts. A mutant BC did not measure keeps v3's verdict with measuredBy al-runner-v3. A BC `error` is not a measurement and does not override. Read `totals.provenance` beside every score.",
+      ),
+      "confirmationVersion",
+      CONFIRMATION_VERSION,
     ),
   },
 ];

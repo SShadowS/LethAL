@@ -913,6 +913,59 @@
         }
       }
     },
+    "confirm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputPath",
+        "inputSha256",
+        "sample",
+        "seed",
+        "selected",
+        "excludedSiteCount"
+      ],
+      "properties": {
+        "inputPath": {
+          "type": "string"
+        },
+        "inputSha256": {
+          "type": "string"
+        },
+        "sample": {
+          "type": "number"
+        },
+        "seed": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "group"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string",
+                "enum": [
+                  "noted",
+                  "nocov-noted",
+                  "sample"
+                ]
+              }
+            }
+          }
+        },
+        "excludedSiteCount": {
+          "type": "number"
+        }
+      }
+    },
     "testsOnly": {
       "type": "array",
       "items": {

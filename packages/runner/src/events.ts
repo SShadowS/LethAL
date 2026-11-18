@@ -31,6 +31,7 @@ import type {
   V3RequestSized,
   V3RequestTimed,
 } from "./backend";
+import type { ConfirmGiven } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
 import type { IsolationChoiceRow } from "./isolation-auto";
@@ -151,6 +152,9 @@ export type RunEventInput =
         /** GH-25: present exactly when `--changed-since` was given. */
         readonly changedSince?: ChangedSinceSource;
       };
+      /** PR-171: the `--confirm-from` narrowing this run was GIVEN. Present only when the flag was
+       *  used. The site count it excluded is LEARNED and rides `mutation-set-generated.excludedByConfirm`. */
+      readonly confirm?: ConfirmGiven;
       readonly testsOnly?: readonly string[];
       readonly stopHungSessions?: boolean;
     }
@@ -211,6 +215,9 @@ export type RunEventInput =
       /** Issue #19: post-dedup sites the line filter excluded. Present exactly when a line filter
        *  was given, so a measured 0 and "no filter" do not look alike. */
       readonly excludedByLines?: number;
+      /** PR-171: post-dedup sites the `--confirm-from` narrowing left out. Present exactly when the
+       *  flag was used. The LEARNED half of `run-configured.confirm`. */
+      readonly excludedByConfirm?: number;
       /** R307: files the instrumentation trial refused whole. Present only when non-empty, so a
        *  stream from before R307 stays valid and folds to the same report bytes. */
       readonly refusedFiles?: readonly RefusedExcludedFile[];

@@ -1,5 +1,6 @@
 import { compareCodeUnits } from "@lethal/schemata";
 import type { BackendCapabilities, TestMethodRef } from "./backend";
+import type { ConfirmGiven, ConfirmRecord } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { EquivalenceMark } from "./equivalence-marks";
 import type { RunEvent } from "./events";
@@ -92,6 +93,9 @@ export interface FoldStatics {
     /** GH-25: present exactly when `--changed-since` was given. */
     readonly changedSince?: ChangedSinceSource;
   };
+  /** PR-171: the `--confirm-from` narrowing this run was GIVEN, if any. Its excluded site count is
+   *  LEARNED from `mutation-set-generated.excludedByConfirm`. */
+  readonly confirm?: ConfirmGiven;
   /** R45: the `--tests-only` narrowing this run was GIVEN, if any. */
   readonly testsOnly?: readonly string[];
   /** R53: whether this run was allowed to end BC sessions to score a non-terminating mutant. */
@@ -174,6 +178,8 @@ export interface FoldedReport {
     readonly excludedSiteCount: number;
     readonly changedSince?: ChangedSinceSource;
   };
+  /** PR-171: the confirm narrowing, with the LEARNED site count reunited onto it. */
+  readonly confirm?: ConfirmRecord;
   readonly testsOnly?: readonly string[];
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   readonly permissionsRefusedTests?: readonly string[];
@@ -364,6 +370,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let excludedByExclude = 0;
   let excludedByOperator = 0;
   let excludedByLines = 0;
+  let excludedByConfirm = 0;
   let numbering: FoldedNumbering | undefined;
   let sourceSha256: string | undefined;
   let dependencyReportSources: readonly DependencyReportSourceRecord[] | undefined;
@@ -486,6 +493,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         excludedByExclude = e.excludedByExclude;
         excludedByOperator = e.excludedByOperator;
         excludedByLines = e.excludedByLines ?? 0;
+        excludedByConfirm = e.excludedByConfirm ?? 0;
         sourceSha256 = e.sourceSha256;
         // R565: written together by the producer, so a stream with only one is corrupt.
         if ((e.dependencyReportSources === undefined) !== (e.dependencySourceSha256 === undefined))
@@ -927,6 +935,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
               : {}),
           },
         }
+      : {}),
+    ...(statics.confirm !== undefined
+      ? { confirm: { ...statics.confirm, excludedSiteCount: excludedByConfirm } }
       : {}),
     ...(statics.testsOnly !== undefined && statics.testsOnly.length > 0
       ? { testsOnly: statics.testsOnly }

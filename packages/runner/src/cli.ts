@@ -81,6 +81,13 @@ import {
   cliOk,
   wantsEnvelope,
 } from "./cli-envelope";
+import {
+  ConfirmInputNotReportError,
+  type Confirmation,
+  mergeConfirmation,
+  renderConfirmation,
+  sha256Hex,
+} from "./confirm";
 import { dependencyCheckWarning, dependencyCodeunitsOf } from "./dependency-codeunits";
 import { DeploymentVerifier } from "./deployment-verifier";
 import { ENV_STATUS_REACHABLE_NO_VENDOR_STATUS, dependencyClosure, runDoctor } from "./doctor";
@@ -450,6 +457,9 @@ export const DRY_RUN_REFUSED = [
   "fresh-probe",
   "isolate-tests",
   "fail-on-survivors",
+  "confirm-from",
+  "confirm-sample",
+  "confirm-seed",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -636,6 +646,15 @@ export interface RunCliConfig {
   readonly isolateTests?: boolean;
   /** PR-77: `--fail-on-survivors`: exit `SURVIVORS_ON_CHANGED_LINES_EXIT_CODE` when a counted survivor sits on the changed lines. Needs a line filter. */
   readonly failOnSurvivors?: true;
+  /**
+   * PR-171 (R1122): `--confirm-from <v3 report.json> [--confirm-sample <n>] [--confirm-seed <s>]`.
+   * Deploy only the mutants that report selects. Absent means an ordinary run. See `SessionConfig.confirm`.
+   */
+  readonly confirm?: {
+    readonly path: string;
+    readonly sample?: number;
+    readonly seed?: string;
+  };
   /**
    * R47: `--resume` (most recent unfinished run) or `--resume-run <id>` (a named one). Absent means
    * a fresh run. See `SessionConfig.resume`.
@@ -860,6 +879,18 @@ export interface VerifyCliConfig {
   readonly noReachFilter?: boolean;
 }
 
+/**
+ * PR-171 (R1122): `lethal confirm-merge <v3.json> <bc.json> --out <file>`. Joins a v3 report to the
+ * report of the `--confirm-from` run made from it and writes the `lethal-confirmation` artifact.
+ * Reads those two files only: no server, database or config.
+ */
+export interface ConfirmMergeCliConfig {
+  readonly mode: "confirm-merge";
+  readonly v3Path: string;
+  readonly bcPath: string;
+  readonly outPath: string;
+}
+
 export interface ExplainCliConfig {
   readonly mode: "explain";
   readonly reportPath: string;
@@ -940,6 +971,7 @@ export type CliConfig =
   | ExplainCliConfig
   | VerifyCliConfig
   | ExportCliConfig
+  | ConfirmMergeCliConfig
   | CampaignCliConfig
   | InitCliConfig
   | HelpCliConfig
@@ -954,6 +986,7 @@ export const VALID_SUBCOMMANDS = [
   "doctor",
   "explain",
   "export",
+  "confirm-merge",
   "campaign",
   "verify",
   "native-check",
@@ -976,6 +1009,7 @@ const CAMPAIGN_ACTIONS = ["freeze", "anchors", "compare"] as const;
  */
 const SUBCOMMANDS_TAKING_POSITIONALS: ReadonlySet<string> = new Set([
   "campaign",
+  "confirm-merge",
   "explain",
   "export",
 ]);
@@ -1059,6 +1093,7 @@ USAGE
   lethal explain           <report.json> [--top <n>] [--project <dir>] [--suggest] [--events <path>]
   lethal export            <report.json> --format mutation-elements --project <dir> --out <path>
                                          [--thresholds <high,low>]
+  lethal confirm-merge     <v3.json> <bc.json> --out <path>
   lethal campaign freeze   --manifest <path> --stage <name> --report <path> --expect-mutants <n>
   lethal campaign anchors  --manifest <path> --stage <name> --report <path> [--project <dir>]
   lethal campaign compare  --manifest <path> --stage <name> --report <path> [--json]
@@ -1130,7 +1165,15 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              --tests-only; the report flags 'tests-narrowed' and lists it in
                              excludedTests
   --skip-known-survivors     skip mutants a prior finished run recorded as survivors
-  --allow-large-run          run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
+  --confirm-from <v3.json>   deploy only the mutants an al-runner-v3 report selects: its survivors
+                             noted '[v3-refused-test-nearby]', its no-coverage rows noted by R609,
+                             and a seeded sample of its unnoted survivors (R1122). Join the result
+                             with 'lethal confirm-merge'. Refused by name beside --resume,
+                             --skip-known-survivors, --exclude-test, a different scope or source
+  --confirm-sample <n>       how many unnoted survivors to add (default 30; 0 turns it off). Needs
+                             --confirm-from
+  --confirm-seed <text>      the sample's seed (default: the sha256 of the report). Needs --confirm-from
+  --allow-large-run        run more than ${LARGE_RUN_MUTANT_THRESHOLD} mutation sites (refused by default — a whole
                              real app costs days and usually cannot publish at all)
   --dry-run                  list what would be mutated; execute no tests. Reports both the raw
                              mutation-site count and the DEPLOYED count (they differ), plus this
@@ -1312,6 +1355,13 @@ EXPLAIN — what a finished report MEANS, as JSON on stdout
   --events <path>            a run's --progress-out file: print its TIMING section (where the time
                              went) on stderr. Stdout stays the one JSON document; --json is refused.
                              Refused on a report without gap ids
+
+CONFIRM-MERGE — join an al-runner-v3 report to the BC run made from it (R1122)
+  Writes a 'lethal-confirmation' JSON (not a report): every v3 mutant with its v3 verdict, its
+  BC verdict when BC measured it, a final verdict and who measured it. A BC error is not a
+  measurement and keeps v3's verdict. BC kills on the Linux RDLC stub (R1121) stay kills and are
+  counted apart. It refuses by name when the two reports do not belong together. A kill by an
+  unnoted survivor in the sample prints 'unnoted-disagreement': run the whole scope on BC then.
 
 CAMPAIGN — the measurement gates, with 'committed before the run' machine-checked
   A measurement campaign states what it expects in a file, COMMITS it, and only then runs. These
@@ -1519,6 +1569,10 @@ export const RUN_FLAGS = {
   "no-reach-filter": { type: "boolean", default: false },
   // PR-77: see `RunCliConfig.failOnSurvivors`.
   "fail-on-survivors": { type: "boolean", default: false },
+  // PR-171 (R1122): see `RunCliConfig.confirm`. Owned by `run` alone in FLAG_OWNERS.
+  "confirm-from": { type: "string" },
+  "confirm-sample": { type: "string" },
+  "confirm-seed": { type: "string" },
 } as const;
 
 /** Flags only `lethal run` reads. One sentence serves them all: none has a second home. */
@@ -1553,6 +1607,9 @@ const RUN_ONLY_FLAGS = [
   "isolate-tests",
   "progress-out",
   "fail-on-survivors",
+  "confirm-from",
+  "confirm-sample",
+  "confirm-seed",
 ] as const;
 
 /**
@@ -1607,7 +1664,7 @@ export const FLAG_OWNERS: ReadonlyArray<{
   { flag: "db", owners: ["run", "clear-ceiling", "verify"] },
   {
     flag: "out",
-    owners: ["run", "init", "export"],
+    owners: ["run", "init", "export", "confirm-merge"],
     instead:
       "`lethal explain`, `lethal doctor --json` and `lethal verify` print JSON on stdout; redirect it to a file.",
   },
@@ -2043,6 +2100,25 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     };
   }
 
+  if (subcommand === "confirm-merge") {
+    const [, v3Path, bcPath, ...stray] = positionals;
+    if (v3Path === undefined || v3Path === "" || bcPath === undefined || bcPath === "") {
+      throw new Error(
+        "missing required <v3.json> <bc.json>: the al-runner-v3 report, then the report of the `lethal run --confirm-from <v3.json>` run made from it. `lethal confirm-merge` reads only those two files.",
+      );
+    }
+    if (stray.length > 0) {
+      throw new Error(
+        `\`lethal confirm-merge\` takes exactly two reports, <v3.json> <bc.json>; got stray argument(s): ${stray.join(" ")}`,
+      );
+    }
+    const outPath = values.out;
+    if (outPath === undefined || outPath === "") {
+      throw new Error("missing required --out <file> (where the confirmation JSON is written).");
+    }
+    return { mode: "confirm-merge", v3Path, bcPath, outPath };
+  }
+
   if (subcommand === "export") {
     const [, reportPath] = positionals;
     if (reportPath === undefined || reportPath === "") {
@@ -2452,6 +2528,23 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       "--fail-on-survivors needs --lines or --changed-since: it fails on survivors on the changed lines, and a whole-app survivor count is a different quantity",
     );
   }
+  // PR-171 (R1122): the sample and seed mean nothing without the report they draw from.
+  const confirmFrom = values["confirm-from"];
+  if (confirmFrom === "") {
+    throw new Error("--confirm-from needs the path of an al-runner-v3 report (a run's --out file)");
+  }
+  if (confirmFrom === undefined) {
+    for (const f of ["confirm-sample", "confirm-seed"] as const) {
+      if (values[f] !== undefined) throw new Error(`--${f} needs --confirm-from`);
+    }
+  }
+  const confirmSampleRaw = values["confirm-sample"];
+  const confirmSample = confirmSampleRaw === undefined ? undefined : Number(confirmSampleRaw);
+  if (confirmSample !== undefined && (!Number.isInteger(confirmSample) || confirmSample < 0)) {
+    throw new Error("--confirm-sample must be an integer of 0 or more (0 turns the sample off)");
+  }
+  if (values["confirm-seed"] === "") throw new Error("--confirm-seed must not be empty");
+  const confirmSeed = values["confirm-seed"];
   // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
@@ -2495,6 +2588,15 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
     ...(values["fail-on-survivors"] === true ? { failOnSurvivors: true as const } : {}),
+    ...(confirmFrom !== undefined
+      ? {
+          confirm: {
+            path: confirmFrom,
+            ...(confirmSample !== undefined ? { sample: confirmSample } : {}),
+            ...(confirmSeed !== undefined ? { seed: confirmSeed } : {}),
+          },
+        }
+      : {}),
     ...(values["isolate-tests"] === true && values.workers !== undefined
       ? { baselineProcesses: workers }
       : {}),
@@ -3268,6 +3370,8 @@ export function v3RecheckOf(a: {
       resume: _resume,
       retryStranded: _retryStranded,
       skipKnownSurvivors: _skip,
+      // PR-171: the nested run is narrowed to the targets' exact sites, which `--confirm-from` refuses.
+      confirm: _confirm,
       lines: _lines,
       changedSince: _changedSince,
       emit: _emit,
@@ -4702,6 +4806,9 @@ export async function runFromCliWithAccept(
             }
             // R360: kept for the scratch-folder decision after the session, see above.
             tier = resourceIdentityFor(parsed, effectiveConfig);
+            // PR-171: the v3 report `--confirm-from` selects from, read once here.
+            const confirmInput =
+              parsed.confirm === undefined ? undefined : await readConfirmFile(parsed.confirm.path);
             const mainConfig: SessionConfig = {
               backend,
               store,
@@ -4750,6 +4857,19 @@ export async function runFromCliWithAccept(
                 : {}),
               ...(parsed.groupRuns !== undefined ? { groupRuns: parsed.groupRuns } : {}),
               ...(parsed.resume !== undefined ? { resume: parsed.resume } : {}),
+              ...(parsed.confirm !== undefined && confirmInput !== undefined
+                ? {
+                    confirm: {
+                      inputPath: parsed.confirm.path,
+                      input: confirmInput.value,
+                      inputSha256: confirmInput.sha256,
+                      ...(parsed.confirm.sample !== undefined
+                        ? { sample: parsed.confirm.sample }
+                        : {}),
+                      ...(parsed.confirm.seed !== undefined ? { seed: parsed.confirm.seed } : {}),
+                    },
+                  }
+                : {}),
               ...(parsed.retryStranded === true ? { retryStranded: true } : {}),
               ...(parsed.stopHungSessions === true ? { stopHungSessions: true } : {}),
               ...(equivalenceMarks !== undefined ? { equivalenceMarks } : {}),
@@ -6287,6 +6407,37 @@ export async function doctorFromCli(
  * below is printed every time rather than documented once, because the person who needs it is the
  * one about to commit the output somewhere.
  */
+/** PR-171: read one report file for `confirm-merge`; its bytes' sha256 is the join the merge checks. */
+async function readConfirmFile(path: string): Promise<{ value: unknown; sha256: string }> {
+  const bytes = await readFile(path);
+  try {
+    return { value: JSON.parse(bytes.toString("utf8")), sha256: sha256Hex(bytes) };
+  } catch (err) {
+    throw new ConfirmInputNotReportError(
+      `${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * PR-171 (R1122): `lethal confirm-merge <v3.json> <bc.json> --out <file>`. Every join refusal is
+ * made before the output is written, so a refused merge leaves no artifact behind.
+ */
+export async function confirmMergeFromCli(parsed: ConfirmMergeCliConfig): Promise<number> {
+  const v3 = await readConfirmFile(parsed.v3Path);
+  const bc = await readConfirmFile(parsed.bcPath);
+  const confirmation: Confirmation = mergeConfirmation({
+    v3: v3.value,
+    v3Sha256: v3.sha256,
+    bc: bc.value,
+    bcSha256: bc.sha256,
+  });
+  await writeFile(parsed.outPath, `${JSON.stringify(confirmation, null, 2)}\n`, "utf8");
+  console.log(`wrote ${parsed.outPath}`);
+  for (const line of renderConfirmation(confirmation)) console.log(line);
+  return 0;
+}
+
 export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
   let raw: string;
   try {
@@ -6927,6 +7078,9 @@ async function main(): Promise<number> {
   }
   if (parsed.mode === "export") {
     return await exportFromCli(parsed);
+  }
+  if (parsed.mode === "confirm-merge") {
+    return await confirmMergeFromCli(parsed);
   }
   if (parsed.mode === "campaign") {
     return await campaignFromCli(parsed);
