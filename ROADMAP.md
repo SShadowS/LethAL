@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**47 of 1086 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**47 of 1087 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -591,7 +591,7 @@ that ordering is the priority.
 - **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
 - **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · closed 2026-11-18 — measured by PR-136: the leftover candidates move 0 real sites…
 - **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · done (fe099d4a)
-- **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
+- **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · closed 2026-11-18 — the hint and the renderer landed in PR-76 fe099d4a; only the Azure DevOps tab remains…
 - **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (cc9d602e)
 - **R1084** · CI threshold, first step (owner ruling: option 3, advisory first): survivors on the changed lines are listed, and --fail-on-survivors exits 9; v3-caveated survivors never fail · [R1084.md](docs/roadmap/R1084.md) · done (77b657a5)
 - **R1085** · CI threshold, part 2 (owner ruling: option 3): lethal.accepted.json takes a reviewed survivor on the changed lines out of the counted list, anchored to its site, its member and its build · [R1085.md](docs/roadmap/R1085.md) · done (cc9d602e)
@@ -603,6 +603,7 @@ that ordering is the priority.
 - **R1118** · The large-method note cannot say how far each listed operator would shrink the file, and does not say that `--lines` will not shrink a fold inside one procedure · [R1118.md](docs/roadmap/R1118.md) · open — filed by PR-67 (the DO pilot), 2026-11-17
 - **R1121** · On Linux BC, a mutant that newly routes a test into an RDLC report render is scored KILLED by the platform's stub error ("RDLC report rendering is not implemented on Linux BC"), a false kill · [R1121.md](docs/roadmap/R1121.md) · done (this commit) — PR-143: R72's screen lists these kills under mechanism `linux-rdlc-stub`, kept killed…
 - **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · open — proposed by coord PR-141 (lethal-preproc), 2026-11-18; not built
+- **R1124** · Not measured: does Azure DevOps' PublishMutationReport@2 build tab render `lethal export --format mutation-elements-html`'s page, which loads its bundle from jsDelivr? Waits on Azure DevOps access · [R1124.md](docs/roadmap/R1124.md) · open — waiting on Azure DevOps access (an organisation with the Stryker Mutator extension); split from R1080…
 
 ## Backends and tooling
 
