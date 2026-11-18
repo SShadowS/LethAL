@@ -1,5 +1,5 @@
 # R670: the files of the pinned fixture-symbols tar, in archive order (tar -tf, directories left out).
-# sha256 9b0f76f8d89d0616ac038d52b8bb72587fb91526714389ed2b03bc9b7da32e1b
+# sha256 165b17dd3aae07fbe02f1e918e5d6d3bba97d5fa5e5e295b94772f33de65b662
 examples/credit-limit/.alpackages/Microsoft_Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 examples/credit-limit/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
@@ -78,6 +78,9 @@ fixtures/sandbox-data-tests/.alpackages/Microsoft_System Application_28.0.46665.
 fixtures/sandbox-data-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-data-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
 fixtures/sandbox-data-tests/.alpackages/System.app
+fixtures/sandbox-dates/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-dates-tests/.alpackages/LethAL_LethAL Sandbox Dates_1.0.0.0.app
+fixtures/sandbox-dates-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-hang/.alpackages/Microsoft_Application_28.0.46665.47126.app
 fixtures/sandbox-hang/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 fixtures/sandbox-hang/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app
@@ -145,6 +148,12 @@ fixtures/sandbox-names-tests/.alpackages/Microsoft_Business Foundation_28.0.4666
 fixtures/sandbox-names-tests/.alpackages/Microsoft_System Application_28.0.46665.47126.app
 fixtures/sandbox-names-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-names-tests/.alpackages/Microsoft_Test Runner_28.0.46665.50383.app
+fixtures/sandbox-optin/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-optin-tests/.alpackages/LethAL_LethAL Sandbox Optin_1.0.0.0.app
+fixtures/sandbox-optin-tests/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-order/.alpackages/Microsoft_System_28.0.47067.0.app
+fixtures/sandbox-order-tests/.alpackages/LethAL_LethAL Sandbox Order_1.0.0.0.app
+fixtures/sandbox-order-tests/.alpackages/Microsoft_System_28.0.47067.0.app
 fixtures/sandbox-probes/.alpackages/Microsoft_Application_28.0.46665.47126.app
 fixtures/sandbox-probes/.alpackages/Microsoft_Base Application_28.0.46665.47126.app
 fixtures/sandbox-probes/.alpackages/Microsoft_Business Foundation_28.0.46665.47126.app

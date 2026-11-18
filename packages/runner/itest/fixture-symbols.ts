@@ -28,13 +28,15 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
  * Where the symbol tar lives (gitignored, never committed). R670: named by its sha256's first 12
  * hex digits, so a rebuilt tar sits beside the one older worktrees still pin and never replaces it.
  */
-export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-9b0f76f8d89d.tar";
+export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-165b17dd3aae.tar";
 
 /**
- * F5: the tar, pinned by sha256 (PR-162, 2026-11-18, 2,111,569,920 bytes: the R673 tar, `2279aee3…`,
- * every member byte for byte, plus `.alpackages` for sandbox-recheck and sandbox-recheck-tests, leg
- * RC's fixture; not rebuilt by build-fixture-symbols-tar.sh, which drops sandbox-wrapped's WRAPDEF
- * objects from its LethAL app copy;
+ * F5: the tar, pinned by sha256 (PR-162, 2026-11-18, 2,137,016,320 bytes: the R673 tar, `2279aee3…`,
+ * every member byte for byte, plus `.alpackages` for sandbox-recheck and -recheck-tests (leg RC's
+ * fixture) and for sandbox-dates, -optin and -order with their tests (R1128: in no tar before, so
+ * compile:fixtures skipped them); each new project holds Microsoft_System and, for a tests project,
+ * an alc build of its target. Not rebuilt by build-fixture-symbols-tar.sh, which drops
+ * sandbox-wrapped's WRAPDEF objects from its LethAL app copy (R1128);
  * R673's was 2,103,091,200 bytes: the R670 tar, `26f680ae…`, plus `.alpackages` for sandbox-names,
  * -names-tests, -wrapped, -wrapped-tests, -codefree and -codefree-tests; that replaced
  * `fixture-symbols.tar`, `bdf460e2…`). A different tar is refused by name; changing it is a
@@ -46,7 +48,7 @@ export const FIXTURE_SYMBOLS_TAR = "/work/lethal/.kraken-local/fixture-symbols-9
  * its `SYMBOLS_MARKER`, and the next run extracts them from the new tar.
  */
 export const FIXTURE_SYMBOLS_TAR_SHA256 =
-  "9b0f76f8d89d0616ac038d52b8bb72587fb91526714389ed2b03bc9b7da32e1b";
+  "165b17dd3aae07fbe02f1e918e5d6d3bba97d5fa5e5e295b94772f33de65b662";
 
 /**
  * R670: the pinned tar's files in archive order (`tar -tf`, directories left out), committed, with
