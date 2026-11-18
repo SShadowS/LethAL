@@ -33,6 +33,10 @@
  *     fire on any platform-stopped transaction and mislabel genuine kills. It also localises (R66),
  *     which would make the screen English-only. R121 measured how much that ceiling costs: on a real
  *     73-kill corpus the only 100%-precision rule anyone found was a message text.
+ *   - ONE EXCEPTION, R1121 (PR-143): `PLATFORM_FAILURE_TEXT_MECHANISMS` keys `linux-rdlc-stub` on the
+ *     killing failure text. Neither objection above holds for it: the text names one cause (BC for
+ *     Linux's stubbed RDLC rendering), and the bc-linux startup hook's patch writes it in English,
+ *     whatever BC's language. Its verdicts never move either.
  *
  * WHAT IT CANNOT SEE, stated because a screen that hides its own reach is worse than none:
  *
@@ -56,12 +60,52 @@ import type { PlatformKillMechanism } from "@lethal/engine";
  *  reading the constant cannot drift into two accounts of one fact. */
 export const PLATFORM_ARTIFACT_KILL_DIAGNOSIS =
   "These mutants were scored `killed`, and they stay killed — this is an annotation, not a " +
-  "re-score. What it adds is that each one sits at a site where Business Central can refuse the " +
-  "mutated program outright, so a kill there can be the platform rather than anything your tests " +
-  "assert. Read them before crediting them to the suite. LethAL does not claim any particular one " +
-  "of them is false: it screens on the site, which it can prove, not on the reason the test went " +
-  "red, which it cannot. How strongly each mechanism is evidenced differs, and each says so in " +
-  "its own explanation below.";
+  "re-score. What it adds is that each one can be the platform rather than anything your tests " +
+  "assert: it sits at a site where Business Central can refuse the mutated program outright, or " +
+  "(`linux-rdlc-stub`) its killing test failed on a fixed message of BC for Linux. Read them " +
+  "before crediting them to the suite. LethAL does not claim any particular one of them is false: " +
+  "every mechanism but `linux-rdlc-stub` screens on the site, which it can prove, not on the " +
+  "reason the test went red, which it cannot. How strongly each mechanism is evidenced differs, " +
+  "and each says so in its own explanation below.";
+
+/**
+ * R1121 (PR-143): mechanisms keyed on the killing test's FAILURE TEXT, not on the site. R72 refuses a
+ * text rule for BC's own refusal, which is generic and localises (R66). Neither holds for the text
+ * here: it names one cause, and the bc-linux startup hook's patch writes it, in English, on every
+ * BC for Linux. A killed mutant whose `killingTestFailure` contains `needle` is listed; its verdict
+ * never moves (R72's rule).
+ */
+export const PLATFORM_FAILURE_TEXT_MECHANISMS: ReadonlyArray<{
+  readonly mechanism: string;
+  readonly needle: string;
+  readonly explanation: string;
+}> = [
+  {
+    // Measured from bc-linux's StartupHook.cs Patch #19 (bc4, BC 29, 2026-11-18). If a later bc-linux build rewords it, the
+    // screen goes quiet (under-reports, the safe direction): re-check this text when a server's BC build changes.
+    // Known false listing, not handled: a test whose own assertion quotes this text (an ExpectedError written against the stub).
+    mechanism: "linux-rdlc-stub",
+    needle: "RDLC report rendering is not implemented on Linux BC",
+    explanation:
+      "the killing test failed on BC for Linux's stub for RDLC report rendering (\"RDLC report " +
+      'rendering is not implemented on Linux BC": the Windows Reporting Service is stubbed out). ' +
+      "On BC for Linux every test that renders an RDLC report fails there, so under this mutant the " +
+      "test reached a render whose stub error was not caught, and the platform, not an assertion, " +
+      "made it red. LethAL cannot tell " +
+      "whether any assertion would have failed had the render worked. KEYED ON THE FAILURE TEXT, " +
+      "not on the site, unlike the other mechanisms. To score these mutants, run them on BC for " +
+      "Windows, or use a test that does not render the report. Measured: R1121 (11 of 22 kills " +
+      "in one real run).",
+  },
+];
+
+/** R1121: the failure-text mechanisms `text` matches, in table order (none for undefined). */
+export function failureTextMechanisms(text: string | undefined): string[] {
+  if (text === undefined) return [];
+  return PLATFORM_FAILURE_TEXT_MECHANISMS.filter((m) => text.includes(m.needle)).map(
+    (m) => m.mechanism,
+  );
+}
 
 /**
  * What each recognised mechanism means, keyed on the tag an operator writes into

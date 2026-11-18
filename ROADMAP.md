@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1081 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**49 of 1085 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -601,6 +601,8 @@ that ordering is the priority.
 - **R1113** · One hanging test anywhere in a user's suite quarantines a whole bcdev run at baseline, with no recovery steps printed; nothing warns before the run about tests that can make real outbound HTTP calls · [R1113.md](docs/roadmap/R1113.md) · open — fix 1 (recovery steps on a quarantine) and a dry-run whole-suite note landed in PR-132; fix 2…
 - **R1117** · `lethal init` says a selector-id clash with a dependency is "NOT ruled out" when the dependency packages are missing, but does not say how to make it check · [R1117.md](docs/roadmap/R1117.md) · closed 2026-11-18 — already fixed by PR-84 (b093054f, 9b23f4fd): dependencyCheckWarning names the folder and…
 - **R1118** · The large-method note cannot say how far each listed operator would shrink the file, and does not say that `--lines` will not shrink a fold inside one procedure · [R1118.md](docs/roadmap/R1118.md) · open — filed by PR-67 (the DO pilot), 2026-11-17
+- **R1121** · On Linux BC, a mutant that newly routes a test into an RDLC report render is scored KILLED by the platform's stub error ("RDLC report rendering is not implemented on Linux BC"), a false kill · [R1121.md](docs/roadmap/R1121.md) · done (this commit) — PR-143: R72's screen lists these kills under mechanism `linux-rdlc-stub`, kept killed…
+- **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · open — proposed by coord PR-141 (lethal-preproc), 2026-11-18; not built
 
 ## Backends and tooling
 
@@ -1126,6 +1128,8 @@ that ordering is the priority.
 - **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · open
 - **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · closed 2026-11-17 — measured by PR-127: correct (0 moves) but no wall gain…
 - **R1115** · The kept-refusal drift check counts a test that is red at baseline as unreachable, though a mutant can reach it: false drifts cost a daemon restart · [R1115.md](docs/roadmap/R1115.md) · open
+- **R1119** · TIMING has no figure for lane barrier time or lane idle time: PR-121a's barrier and a window running on one lane are invisible unless PR-121's offline gaps.ts is run on the events · [R1119.md](docs/roadmap/R1119.md) · open — filed by lethal-bugs from DO window x3, 2026-11-18 (orchestrator)
+- **R1120** · PR-98's lane gate over-charges (sampled peak x lanes + 4 GiB: 16.2 GiB charged where the tree peaked at 12.6), and one hold costs the lane for the rest of the window: DO windows x1-x3 ran on one lane after their hold · [R1120.md](docs/roadmap/R1120.md) · open — filed by lethal-bugs from DO windows x1-x3, 2026-11-18 (orchestrator); the fix goes to a lane
 
 ---
 

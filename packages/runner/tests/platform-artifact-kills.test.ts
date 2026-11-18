@@ -277,3 +277,81 @@ describe("SessionReport.platformArtifactKills with two mechanisms (R138)", () =>
     }
   });
 });
+
+// R1121 (PR-143): a mechanism keyed on the killing test's failure text, not on the site.
+describe("SessionReport.platformArtifactKills, failure-text mechanism linux-rdlc-stub (R1121)", () => {
+  const RDLC =
+    "The report could not be created as a Pdf document.\\Sales Invoice Header: X0001\\Error Code: Report\\Error Text: RDLC report rendering is not implemented on Linux BC: the Windows Reporting Service is stubbed out (bc-linux StartupHook.cs Patch #19).";
+  const withText = (killingTestFailure: string) => ({ killingTestFailure });
+
+  test("a killed mutant carrying the stub text is listed, caveated, and not re-scored", () => {
+    const flagged = build([
+      { mutant: entry("M0001"), verdict: "killed", batchIndex: 0, ...withText(RDLC) },
+      { mutant: entry("M0002"), verdict: "survived", batchIndex: 0 },
+    ]);
+    const plain = build([
+      { mutant: entry("M0001"), verdict: "killed", batchIndex: 0 },
+      { mutant: entry("M0002"), verdict: "survived", batchIndex: 0 },
+    ]);
+    expect(flagged.platformArtifactKills?.killedCount).toBe(1);
+    expect(flagged.platformArtifactKills?.byMechanism).toEqual([
+      {
+        mechanism: "linux-rdlc-stub",
+        mutants: ["0/M0001"],
+        explanation: expect.stringContaining("KEYED ON THE FAILURE TEXT") as unknown as string,
+      },
+    ]);
+    expect(flagged.validity.caveats).toContain("platform-artifact-kills");
+    expect(flagged.mutants[0]?.verdict).toBe("killed");
+    expect(flagged.mutationScore).toBe(plain.mutationScore);
+    expect(plain.platformArtifactKills).toBeUndefined();
+  });
+
+  test("an assertion failure and BC's generic stop text are not listed", () => {
+    const r = build([
+      {
+        mutant: entry("M0001"),
+        verdict: "killed",
+        batchIndex: 0,
+        ...withText("Assert.AreEqual failed. Expected:<1>. Actual:<0>."),
+      },
+      {
+        mutant: entry("M0002"),
+        verdict: "killed",
+        batchIndex: 0,
+        ...withText("An error occurred and the transaction is stopped."),
+      },
+    ]);
+    expect(r.platformArtifactKills).toBeUndefined();
+    expect(r.validity.caveats).not.toContain("platform-artifact-kills");
+  });
+
+  test("a survivor or a timeout-killed mutant carrying the text is not listed", () => {
+    const r = build([
+      { mutant: entry("M0001"), verdict: "survived", batchIndex: 0, ...withText(RDLC) },
+      { mutant: entry("M0002"), verdict: "timeout-killed", batchIndex: 0, ...withText(RDLC) },
+    ]);
+    expect(r.platformArtifactKills).toBeUndefined();
+    expect(r.validity.caveats).not.toContain("platform-artifact-kills");
+  });
+
+  test("a site-tagged kill that also carries the text is listed under both, counted once", () => {
+    const r = build([
+      { mutant: entry("M0001", TAG), verdict: "killed", batchIndex: 0, ...withText(RDLC) },
+    ]);
+    expect(r.platformArtifactKills?.killedCount).toBe(1);
+    expect(r.platformArtifactKills?.byMechanism.map((g) => [g.mechanism, g.mutants])).toEqual([
+      ["linux-rdlc-stub", ["0/M0001"]],
+      ["write-txn-codeunit-run", ["0/M0001"]],
+    ]);
+  });
+
+  test("the banner claims no measured site for a stub kill (review 1)", () => {
+    const out = renderConsole(
+      build([{ mutant: entry("M0001"), verdict: "killed", batchIndex: 0, ...withText(RDLC) }]),
+    );
+    expect(out).toContain("PLATFORM-ARTIFACT KILL SCREEN: 1 killed mutant(s) may be the platform");
+    expect(out).not.toContain("measured to refuse");
+    expect(out).toContain("linux-rdlc-stub (1)");
+  });
+});

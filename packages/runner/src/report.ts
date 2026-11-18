@@ -29,7 +29,9 @@ import type { ChangedSinceSource, LineRange } from "./line-filter";
 import { type PermissionCanaryResult, permissionCanaryWarnings } from "./permission-canary";
 import {
   PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
+  PLATFORM_FAILURE_TEXT_MECHANISMS,
   PLATFORM_KILL_MECHANISM_EXPLANATIONS,
+  failureTextMechanisms,
 } from "./platform-artifact-kills";
 import { type FoldStatics, foldEvents } from "./report-fold";
 import { RESTRICTIVE_DEFAULT_DIAGNOSIS } from "./restrictive-default";
@@ -518,8 +520,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
     entailedNegative:
       "Does NOT mean those verdicts are wrong, and does not change one: they stay `killed` and " +
       "they stay in `mutationScore`. Nor does its absence mean every other kill was earned by an " +
-      "assertion — only `lethal.remove-commit` tags sites today, so the screen's reach is one " +
-      "operator wide.",
+      "assertion: only a few operators tag sites (`remove-commit`, `swap-modify-flag`, " +
+      "`flip-boolean-literal`), and the one failure-text mechanism (`linux-rdlc-stub`, any " +
+      "operator) knows one message of BC for Linux.",
     basis: "R72",
   },
   "kills-without-assertion": {
@@ -1632,14 +1635,15 @@ export interface SessionReport {
     readonly budgetMs: number;
   };
   /**
-   * R72: KILLED mutants whose site carries a recognised platform kill mechanism — a SCREEN over the
+   * R72: KILLED mutants whose site carries a recognised platform kill mechanism, or (R1121) whose
+   * killing failure text matches a `PLATFORM_FAILURE_TEXT_MECHANISMS` entry — a SCREEN over the
    * kills, not a classification of them. See `CAVEAT_INTERPRETATIONS["platform-artifact-kills"]`
    * for what this means to a reader, and `platform-artifact-kills.ts` for what it deliberately
-   * cannot see.
+   * cannot see. A mutant can be listed under two mechanisms; `killedCount` counts it once.
    *
    * Absent when no killed mutant carries one. That is NOT the statement "every kill was earned by
-   * an assertion": only `lethal.remove-commit` tags sites today, and R82's arm E is a live example
-   * of a platform-produced kill from a different operator that nothing here screens.
+   * an assertion": only a few operators tag sites, the text table knows one message, and R82's arm
+   * E is a live example of a platform-produced kill that nothing here screens.
    *
    * The verdicts do not move and `mutationScore` is unchanged — deliberately, per design §6.7's
    * timeout precedent. Re-scoring on a diagnosis would invalidate every frozen gate figure and
@@ -1653,7 +1657,8 @@ export interface SessionReport {
       /** R231 `<batchIndex>/<mutantCode>` ids (`mutantRef`), sorted by batch then code: a
        *  stable list a gate can assert on. */
       readonly mutants: readonly string[];
-      /** What this mechanism IS, from `PLATFORM_KILL_MECHANISM_EXPLANATIONS`, or a bare marker when
+      /** What this mechanism IS, from `PLATFORM_FAILURE_TEXT_MECHANISMS` or
+       *  `PLATFORM_KILL_MECHANISM_EXPLANATIONS`, or a bare marker when
        *  the run's manifest carried a tag this build has no explanation for (an older/newer engine
        *  wrote it). Naming the unknown tag beats dropping the mutant from the screen silently. */
       readonly explanation: string;
@@ -3298,11 +3303,16 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   const platformKillsByMechanism = new Map<string, MutantOutcome[]>();
   for (const m of mutants) {
     if (m.verdict !== "killed") continue;
-    const mechanism = m.platformKillMechanism;
-    if (mechanism === undefined) continue;
-    const list = platformKillsByMechanism.get(mechanism);
-    if (list === undefined) platformKillsByMechanism.set(mechanism, [m]);
-    else list.push(m);
+    // R72's site tag, then R1121's failure-text mechanisms (PR-143); a mutant can be listed under both.
+    const mechanisms = [
+      ...(m.platformKillMechanism !== undefined ? [m.platformKillMechanism] : []),
+      ...failureTextMechanisms(m.killingTestFailure),
+    ];
+    for (const mechanism of mechanisms) {
+      const list = platformKillsByMechanism.get(mechanism);
+      if (list === undefined) platformKillsByMechanism.set(mechanism, [m]);
+      else list.push(m);
+    }
   }
   if (platformKillsByMechanism.size > 0) caveats.push("platform-artifact-kills");
   // R172: survivors whose OPERATOR declares an elevated equivalence risk, looked up by operator NAME
@@ -3334,7 +3344,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     platformKillsByMechanism.size === 0
       ? undefined
       : {
-          killedCount: [...platformKillsByMechanism.values()].reduce((n, l) => n + l.length, 0),
+          // Distinct mutants: one listed under two mechanisms (PR-143) counts once.
+          killedCount: new Set([...platformKillsByMechanism.values()].flat()).size,
           byMechanism: [...platformKillsByMechanism.entries()]
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([mechanism, list]) => ({
@@ -3345,11 +3356,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
               // mutant because a string is unrecognised is the empty-vs-empty failure this repo is
               // named for.
               explanation:
-                mechanism in PLATFORM_KILL_MECHANISM_EXPLANATIONS
+                PLATFORM_FAILURE_TEXT_MECHANISMS.find((t) => t.mechanism === mechanism)
+                  ?.explanation ??
+                (mechanism in PLATFORM_KILL_MECHANISM_EXPLANATIONS
                   ? PLATFORM_KILL_MECHANISM_EXPLANATIONS[
                       mechanism as keyof typeof PLATFORM_KILL_MECHANISM_EXPLANATIONS
                     ]
-                  : `no explanation is registered in this build for the site tag "${mechanism}" — it was written by a different engine version`,
+                  : `no explanation is registered in this build for the site tag "${mechanism}" — it was written by a different engine version`),
             })),
           diagnosis: PLATFORM_ARTIFACT_KILL_DIAGNOSIS,
         };
@@ -4058,7 +4071,7 @@ export function renderConsole(r: SessionReport): string {
   }
   if (r.platformArtifactKills !== undefined) {
     lines.push(
-      `PLATFORM-ARTIFACT KILL SCREEN: ${r.platformArtifactKills.killedCount} killed mutant(s) sit at a site BC is measured to refuse. ${r.platformArtifactKills.diagnosis}`,
+      `PLATFORM-ARTIFACT KILL SCREEN: ${r.platformArtifactKills.killedCount} killed mutant(s) may be the platform rather than the suite; read them. ${r.platformArtifactKills.diagnosis}`,
     );
     for (const g of r.platformArtifactKills.byMechanism) {
       lines.push(`  ${g.mechanism} (${g.mutants.length}): ${g.explanation}`);
