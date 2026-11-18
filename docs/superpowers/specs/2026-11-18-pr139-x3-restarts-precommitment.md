@@ -37,6 +37,34 @@ The review checked §1's figures and found them right:
 - **L5: widths by name** stay, in the safe direction. The census and every check name the build: edge-4ebfe7913, the
   pinned `current`, which is the build x3 ran on.
 
+## 0b. Amendment 1, before a second census (the opus review of the built keep, 7103a216)
+- **HIGH: P2 was wrong.**
+  - A `serve-daemon-closed` event names ONE unkept row, but `serveDaemonReusable` keeps a daemon only if every refused
+    row of the request is kept.
+  - Measured with LethAL's own rule (`/coord/handoff/PR-139/keepcheck.ts` over arm K's rows): r2's widths keep only
+    requests 3, 5, 6 and 7 of x3's 7 live closes. Requests 1, 2 and 4 (68936, 68975, 68973) and the 68915 prefetch request
+    still close, on NUL widths 7, 9, 11, 13, 16, 21, 25 and 27 that the same requests also hold.
+  - **The change:** `NULS` also gets those 8 widths by name, each with its own census cell in family `x3-refusals` (the
+    `if not Evaluate(<Integer>, <NULs>)` shape). Each width is its own census class, and each must be CLEAN.
+  - With them, `keepcheck.ts` keeps all 15 of M28736's requests. Measured with a temporary local edit that was reverted
+    at once.
+  - These are the NUL widths DO's own requests hold, not a range. Other widths stay unkept.
+- **MEDIUM: arm K could not see the mutant leaving state behind,** since every request ran M28736. A real run's next
+  request runs another mutant or none.
+  - **Added: arm K2,** one daemon running each covering codeunit `<cu>@M28736` and then `<cu>@NONE`.
+  - **Added: arm F2,** a fresh daemon per `<cu>@NONE`.
+  - The NONE rows of K2 must equal F2's, which also checks that the hand selector resets.
+- **LOW:**
+  - the driver now writes each message in full (no 400-character cut) for K2 and F2;
+  - arm K was stricter than the keep (it never restarts), which is fine, and the census's `engineKept` covers the keep
+    path;
+  - the OnInsert cell's cache write is not read by the census (noted; the class rests on the standard writes);
+  - §2's step numbers are corrected.
+- **P2, restated:** with amendment 1's widths, all 9 of x3's NUL-run closes are kept (365.0 s of warm-up). With r2's
+  widths alone it would have been 5 of 9.
+- **New predictions:** P1 for the 8 new classes, each CLEAN with its cell refused under serve; **P1c:** K2's NONE rows
+  equal F2's.
+
 ## 1. The measurement (x2's and x3's own events, read-only: `/coord/handoff/R-984/x{2,3}.run.events.ndjson`)
 x3's after-refusal warm-ups: 27 (1,204 s), against x2's 17 (728 s).
 
@@ -105,14 +133,14 @@ prefetch close is not: a prefetch batch carries many mutants, and the next mutan
 4. **Only if step 2's 7 classes are all CLEAN (P1) AND step 3's rows are equal:** `NULS` becomes `\x00{4,6}` plus the
    measured widths by name: `(?:\x00{3}|\x00{4,6}|\x00{10}|\x00{12}|\x00{14}|\x00{30}|\x00{37}|\x00{40})`. No open range;
    widths 7-9, 11 and others stay unkept.
-4. **Not kept,** for the reasons PR-105 and PR-133 give:
+5. **Not kept,** for the reasons PR-105 and PR-133 give:
    - the SaveAs-with-layout and Report-parameters closes (M17377's 2 extra live closes);
    - the new-row-line text (no invented cell produces it).
-5. **Not built:** "defer the restart to the end of the mutant's walk". It is not provably verdict-neutral (a later step
+6. **Not built:** "defer the restart to the end of the mutant's walk". It is not provably verdict-neutral (a later step
    runs on a daemon whose state after a refusal is unmeasured), and the keep covers 9 of the 10 extra closes.
-6. A test file `al-runner-serve-pr139.test.ts` pins each kept width, plus the near misses (widths 1, 2, 7, 11, 41, and a
-   NUL run with a space in it).
-7. **Red checks both ways:**
+7. A test file `al-runner-serve-pr139.test.ts` pins each kept width, plus near misses. With amendment 1's widths, the
+   near misses are widths 1, 2, 8, 15, 41 and others not listed, and a NUL run with a space in it.
+8. **Red checks both ways:**
    - a kept width removed from the slot turns its test red;
    - an open range (`\x00+`) turns a near-miss test red.
 
