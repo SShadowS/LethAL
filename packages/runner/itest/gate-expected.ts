@@ -369,6 +369,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/WRE": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
   // R948 amendment 3 (master bf8a68cf): K builds through cli.ts, which turns the memory guard on.
   "al-runner-v3/K": ["al-runner-v3-memory-guard"],
+  // PR-144 amendment 3 (master fd8570ce): RC's session is a plain serve session; the recheck reports through its caveat.
+  "al-runner-v3/RC": [],
   // R866: leg ISO's own session runs under --isolate-tests, which says so.
   "al-runner-v3/ISO": ["al-runner-v3-isolate-tests"],
   "al-runner-v3/S1E": [],

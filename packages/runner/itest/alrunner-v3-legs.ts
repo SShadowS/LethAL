@@ -557,6 +557,131 @@ export function judgeN1Serve(
   return { outcome: "pass", lines: [`N1E: failed closed as pre-committed (#5798): ${line}`] };
 }
 
+/**
+ * PR-144, leg RC: `sandbox-recheck` under `"isolation": "test"`, serve, `recheckWithheldKills`, one worker.
+ * Pre-commitment: `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162) with
+ * §0g (amendment 7: the refused tests cover no mutant); §0b is the leg's design and §0c its warning set.
+ * Not in `V3_GATE_LEGS` (a build gated before this leg stays gated); every gate runs it from now on.
+ */
+export const V3_RC_LEG = "RC";
+
+/** The test the recovered `Sevens` kill must name, the test the main pass withheld after, and the test whose loss
+ *  (rule (e)) keeps the `SevensB` kill withheld. */
+export const RC_SEVENS_KILLER = "A1_OneSeven";
+export const RC_SEVENS_AFTER_TEST = "A0_RefusedWithUnknownReach";
+export const RC_SEVENSB_AFTER_TEST = "B0_RefusedWithUnknownReach";
+export const RC_SEVENSB_LOST_TEST = "B2_SeesTheMark";
+
+/**
+ * The baseline is 3 of 5 passing BY DESIGN (§0g): exactly A0 and B0 are refused, and nothing else. Returns the
+ * failures (each starting `RC:`), empty when `unsupportedTests` names exactly those two tests. A name may be
+ * qualified by its codeunit.
+ */
+export function judgeRecheckBaseline(unsupportedTests: readonly string[]): readonly string[] {
+  const fails: string[] = [];
+  for (const want of [RC_SEVENS_AFTER_TEST, RC_SEVENSB_AFTER_TEST])
+    if (unsupportedTests.filter((t) => t.endsWith(want)).length !== 1)
+      fails.push(
+        `RC: ${want} must be refused at baseline (refused: ${unsupportedTests.join(", ") || "none"})`,
+      );
+  const extra = unsupportedTests.filter(
+    (t) => !t.endsWith(RC_SEVENS_AFTER_TEST) && !t.endsWith(RC_SEVENSB_AFTER_TEST),
+  );
+  if (extra.length > 0)
+    fails.push(`RC: unexpected refused test(s) at baseline: ${extra.join(", ")}`);
+  return fails;
+}
+
+/** The report row's fields the RC judge reads. */
+export interface RcRow {
+  readonly mutantCode: string;
+  readonly procedureName: string;
+  readonly operatorName?: string;
+  readonly originalText?: string;
+  readonly verdict: string;
+  readonly killingTest?: string;
+  readonly killReproduced?: boolean;
+  readonly failureNote?: string;
+  readonly withheldKill?: { readonly failure: string; readonly afterTest?: string } | undefined;
+  readonly isolatedRecheck?: { readonly afterTest?: string } | undefined;
+}
+
+/** The `lethal.remove-assignment` mutant of `C := '7'` (whitespace-insensitive) in `procedureName`. */
+const isSevenSite = (r: RcRow, procedureName: string): boolean =>
+  r.procedureName === procedureName &&
+  r.operatorName === "lethal.remove-assignment" &&
+  (r.originalText ?? "").replace(/\s+/g, "").replace(/;$/, "") === "C:='7'";
+
+/**
+ * RC's pre-committed table, for the remove-assignment mutant of `C := '7'` in `Sevens` and in `SevensB`
+ * (§0f, amendment 6; names per §0g, amendment 7). Returns every failure, each starting `RC:`, the three the pre-commitment names first.
+ * Other mutants are outside the judge (the leg's baseline holds them). Pure, so it is red-checked offline.
+ *  - the main pass held at least one withheld kill (any row recovered, or still withheld);
+ *  - the `Sevens` mutant is `killed` by `A1_OneSeven` with `killReproduced` and `isolatedRecheck` (its main-pass
+ *    withheld kill came after `A0_RefusedWithUnknownReach`);
+ *  - the `SevensB` mutant stays `error` as a withheld kill after `B0_RefusedWithUnknownReach`, its note naming rule (e) and
+ *    `B2_SeesTheMark`, and is not recovered;
+ *  - the caveats `isolated-recheck-kills` and `withheld-kills` are present.
+ */
+export function judgeRecheckLeg(
+  rows: readonly RcRow[],
+  caveats: readonly string[],
+): readonly string[] {
+  const fails: string[] = [];
+  if (!rows.some((r) => r.isolatedRecheck !== undefined || r.withheldKill !== undefined))
+    fails.push(
+      "RC: the main pass held 0 withheld kills (a fixed refusal would make the leg empty)",
+    );
+  const sevens = rows.filter((r) => isSevenSite(r, "Sevens"));
+  const sevensB = rows.filter((r) => isSevenSite(r, "SevensB"));
+  const sevensOk = sevens.filter(
+    (r) =>
+      r.verdict === "killed" &&
+      r.killReproduced === true &&
+      r.killingTest === RC_SEVENS_KILLER &&
+      r.isolatedRecheck !== undefined,
+  );
+  if (sevensOk.length === 0)
+    fails.push(
+      `RC: the Sevens remove-assignment mutant was not recovered (${sevens.map((r) => `${r.mutantCode} ${r.verdict} by ${r.killingTest ?? "no test"}, reproduced ${r.killReproduced === true}`).join("; ") || "no such mutant"}), pre-committed killed by ${RC_SEVENS_KILLER}, reproduced, isolatedRecheck`,
+    );
+  for (const r of sevensOk)
+    if (r.isolatedRecheck?.afterTest !== RC_SEVENS_AFTER_TEST)
+      fails.push(
+        `RC: Sevens ${r.mutantCode} was withheld after ${r.isolatedRecheck?.afterTest ?? "no test"}, pre-committed ${RC_SEVENS_AFTER_TEST}`,
+      );
+  const recoveredB = sevensB.filter(
+    (r) => r.isolatedRecheck !== undefined || r.verdict === "killed",
+  );
+  if (recoveredB.length > 0)
+    fails.push(
+      `RC: the SevensB remove-assignment mutant was recovered (${recoveredB.map((r) => r.mutantCode).join(", ")}): rule (e) must keep it error`,
+    );
+  const keptB = sevensB.filter(
+    (r) => r.withheldKill !== undefined && r.isolatedRecheck === undefined,
+  );
+  if (keptB.length === 0 && recoveredB.length === 0)
+    fails.push("RC: the SevensB remove-assignment mutant is not a withheld kill");
+  for (const r of keptB) {
+    const note = r.failureNote ?? "";
+    if (
+      r.verdict !== "error" ||
+      r.withheldKill?.afterTest !== RC_SEVENSB_AFTER_TEST ||
+      !note.includes("rule (e)") ||
+      !note.includes(RC_SEVENSB_LOST_TEST)
+    )
+      fails.push(
+        `RC: SevensB ${r.mutantCode} is ${r.verdict} after ${r.withheldKill?.afterTest ?? "no test"}; pre-committed error after ${RC_SEVENSB_AFTER_TEST}, its note naming rule (e) and ${RC_SEVENSB_LOST_TEST}`,
+      );
+  }
+  const has = (c: string) => caveats.includes(c);
+  if (sevensOk.length > 0 && !has("isolated-recheck-kills"))
+    fails.push("RC: caveat isolated-recheck-kills is absent with the Sevens mutant recovered");
+  if (keptB.length > 0 && !has("withheld-kills"))
+    fails.push("RC: caveat withheld-kills is absent with the SevensB mutant withheld");
+  return fails;
+}
+
 /** The legs the itest runs when `LETHAL_ITEST_V3_LEGS` is unset, in run order. */
 export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boolean }): string[] {
   return [
@@ -582,6 +707,7 @@ export function v3DefaultLegs(o: { readonly cdo: boolean; readonly tables: boole
     // R918: the same two on serve-entries, per mutant equal to the one-shot legs' baselines.
     "MOE",
     "WRE",
+    V3_RC_LEG, // PR-144: the withheld-kill recheck; not in V3_GATE_LEGS, as ISO and DB are not
     V3_K_LEG,
     ...(o.cdo ? ["D1", "D1c"] : []),
     ...(o.tables ? ["T"] : []),
