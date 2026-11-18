@@ -56,7 +56,11 @@ reproduces with its test run alone. Its spec's P5: no default-on until BC confir
   3. **Restore:** DO, above the instrumented version.
   4. **Release:** the lease is released only when bc4 is healthy.
 - **Checks before any row is classified. Each one stops the count, named:**
-  - the bcdev report's `sourceSha256` is `84fb7d1f…` (x3's and arm M's), and its `identityScheme` is 48;
+  - the bcdev report's `sourceSha256` is `8e2db184…`, its `identityScheme` is 48 and its `preprocessorSymbols` are empty;
+    - **Corrected while the bcdev leg ran, before any row was classified.** This line first said `84fb7d1f…` (x3's and arm
+      M's). The hash covers `app.json` as well as the `.al` files.
+    - PR-67's `do-app` differs from x3's source only in `app.json`'s version (30.0.20775.33549, bumped for PR-155's DO
+      restore; measured by diff). PR-155's bcdev and v3 reports both carry `8e2db184…`.
   - every sampled site key is in the bcdev report;
   - every sampled verdict is `killed`, `survived`, `no-coverage` or `error`;
   - "the killer at BC's baseline" (green, red, refused or not run) is read from the bcdev run's baseline events
