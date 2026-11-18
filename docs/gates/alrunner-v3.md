@@ -339,7 +339,7 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ### Leg RC: the withheld-kill recheck (PR-144)
 
-Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162) and §0g (amendment 7; §0b is the leg's design and §0c its warning set `[]`), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, has not been recorded: the leg REFUSES to start until it is (R332), and the figure block below names it with no totals until then.
+Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162) and §0g (amendment 7; §0b is the leg's design and §0c its warning set `[]`), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, was recorded on 2026-11-18 on edge-4ebfe7913 by the R849 pinned-record route: its 8 rows were pre-committed in §0h (amendment 8) as an expected file, the record equalled it, and the confirm run passed (`/coord/handoff/PR-162/rc-record4.log`, `rc-confirm.log`). The 4 `Sevens` mutants are `killed` by `A1_OneSeven`; the 4 `SevensB` mutants are `error` (`runner-refused`).
 
 - **Fixture:** `fixtures/sandbox-recheck` and `fixtures/sandbox-recheck-tests` (runtime 17, invented code, ids 76000-76099).
   - Codeunit "Recheck Logic": `Sevens(N)` and `SevensB(N)`, each a loop of `C := '7'; T += Format(C);`. Table "Recheck Row" (76001) is only the record handed to `Page.RunModal`.
@@ -354,7 +354,7 @@ Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.
 - **The leg fails by name** (`judgeRecheckLeg`, checked BEFORE the own-baseline compare): when the main pass has 0 withheld kills, when the `Sevens` mutant is not recovered, or when the `SevensB` mutant is recovered. It also fails on a `SevensB` note that does not name rule (e) and `B2_SeesTheMark`, a wrong afterTest, or a missing caveat.
 - **The baseline is 3 of 5 passing by design** (§0g, amendment 7): A0 and B0 are refused at every baseline, so the session carries the `baseline-red` caveat. The leg checks, by name (`judgeRecheckBaseline`), that exactly those two tests are refused and no other. A0 and B0 cover no mutant; that is why a covering test's failure after them is the mutant's first non-pass row, and so a withheld kill.
 - **Warning set** `[]` (`GATE_WARNINGS["al-runner-v3/RC"]`, amendment 3).
-- **Symbols:** the two projects are in the fixture symbol tar only after the owner rebuilds it; until the tar swap reaches CI and its compile is green, RC is recorded but not counted as proven.
+- **Symbols:** the two projects are in the re-pinned fixture symbol tar (`165b17dd…`, which also adds R1128's six projects); until the tar swap reaches CI and its compile is green, RC is recorded but not counted as proven.
 - Every other leg's frozen figures stay exactly as they are.
 
 ## `--workers N` (R766 step b)
@@ -685,7 +685,7 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
     "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
     "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 },
-    "al-runner-v3.recheck.baseline.json": {}
+    "al-runner-v3.recheck.baseline.json": { "killed": 4, "error": 4 }
   }
 }
 ```

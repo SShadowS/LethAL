@@ -207,11 +207,11 @@ describe("the fixture is the one pre-committed", () => {
 
 describe("the leg is wired", () => {
   const itest = read("packages/runner/itest/al-runner-v3.itest.ts");
-  test("RC is a default leg and has a registered, pending baseline the leg refuses to start without", () => {
+  test("RC is a default leg with a registered, recorded baseline the leg refuses to start without", () => {
     expect(V3_RC_LEG).toBe("RC");
-    expect(PENDING_FIRST_RECORD).toContain("al-runner-v3.recheck.baseline.json");
+    expect(PENDING_FIRST_RECORD).not.toContain("al-runner-v3.recheck.baseline.json");
     expect(existsSync(join(REPO, "packages/runner/itest/al-runner-v3.recheck.baseline.json"))).toBe(
-      false,
+      true,
     );
     expect(itest).toContain(
       'preflightGateBaseline(RECHECK_BASELINE_PATH, "al-runner-v3 itest leg RC")',
