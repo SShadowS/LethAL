@@ -13788,6 +13788,8 @@ async function runMutantsParallel(
       needsLiveCall?: (mutantId: string) => boolean;
       laneDaemonStarts?: () => number;
       noteLanes?: (message: string) => void;
+      /** PR-151: test seam, called under the split with the size of each window `cutWindows` made. */
+      noteWindows?: (sizes: readonly number[]) => void;
       /**
        * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
        * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
@@ -13832,11 +13834,18 @@ async function runMutantsParallel(
   // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.
   const paced = !split && laneWarmupMs !== undefined && needsLiveCall !== undefined;
   let widest: Awaited<ReturnType<typeof runScopeQueue>> | undefined;
-  for (const [wi, window] of windows.entries()) {
+  // PR-151: under the split ONE queue and ONE commit run the whole batch (no window barrier); each unit
+  // carries the window of its first mutant for the look-ahead bound. Otherwise one group per window.
+  // An empty batch has no window: keep `windows` (no group) so no "1 of N lanes started" notice prints.
+  const groups = split && windows.length > 0 ? [windows.flat()] : windows;
+  if (split) owner.noteWindows?.(windows.map((w) => w.length)); // test seam: the window cut
+  const windowOfMutant = new Map<string, number>();
+  for (const [wi, w] of windows.entries()) for (const m of w) windowOfMutant.set(m.mutantId, wi);
+  for (const [wi, window] of groups.entries()) {
     if (args.safety.isUnsafe) break;
     const spent = (): boolean => {
       if (args.timeBudget?.exhausted !== true) return false;
-      const left = windows
+      const left = groups
         .slice(wi)
         .flat()
         .filter((x) => args.perMutantTests.get(x.mutantId) !== undefined).length;
@@ -13907,6 +13916,15 @@ async function runMutantsParallel(
             },
           }
         : {}),
+      ...(split
+        ? {
+            lookAhead: {
+              windowOf: (unit: readonly MutantManifestEntry[]) =>
+                windowOfMutant.get(unit[0]?.mutantId ?? "") ?? 0,
+              budgetSpent: () => args.timeBudget?.exhausted === true,
+            },
+          }
+        : {}),
       mayStart: (k) => owner.laneMayStart?.(k) ?? true,
       commit,
       isUnsafe: () => args.safety.isUnsafe,
@@ -13940,7 +13958,7 @@ async function runMutantsParallel(
         args.perMutantTests.get(x.mutantId) !== undefined;
       const left =
         commit.unrecorded(window.filter(covered).map((x) => x.mutantId)).length +
-        windows
+        groups
           .slice(wi + 1)
           .flat()
           .filter(covered).length;

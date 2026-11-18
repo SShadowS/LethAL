@@ -306,7 +306,7 @@ export class OrderedCommit {
   /** R948: true once a lane's refused group closed this commit (see `LaneSink.memoryStop`). */
   stoppedByGuard = false;
 
-  private memoryStop(code: string, why = "the memory guard stopped the session"): void {
+  memoryStop(code: string, why = "the memory guard stopped the session"): void {
     // R962: a stop already in place (an unsafe break, a throw) keeps its own accounting.
     if (this.stopInfo !== undefined) {
       this.also.push(why);
@@ -436,6 +436,17 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
    * `watch`'s source fires (barrier, a measured request, a released reservation) and after each unit.
    * R785's `pace` is off under it.
    */
+  /**
+   * PR-151: one queue over the whole batch under the split, with no window barrier. `windowOf(unit)` is
+   * the unit's window (non-decreasing in unit order). A unit is handed out only while its window is at
+   * most ONE past the oldest window that still has an unended unit; otherwise the lane waits (it does not
+   * end) until a unit ends or the commit closes. `budgetSpent` is checked at every unit edge: when it is
+   * spent and a unit is untaken, the commit is closed the memory guard's way (`memoryStop`).
+   */
+  readonly lookAhead?: {
+    readonly windowOf: (unit: readonly M[]) => number;
+    readonly budgetSpent: () => boolean;
+  };
   readonly split?: {
     readonly barrierPassed: () => boolean;
     readonly measured: () => boolean;
@@ -454,8 +465,32 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   const weights = o.units.map((u) => pace?.weight(u) ?? 0);
   let nextUnit = 0;
   let queuedW = weights.reduce((a, b) => a + b, 0);
-  const take = (): readonly M[] | undefined => {
+  const look = o.lookAhead;
+  const ended: boolean[] = [];
+  let oldest = 0; // the first unit not yet ended
+  const waiters: (() => void)[] = [];
+  // Lanes parked on the bound. Not `waiters.length`: `wake()` empties that before the woken lanes run.
+  let parked = 0;
+  const wake = (): void => {
+    for (const w of waiters.splice(0)) w();
+  };
+  const windowAt = (i: number): number => {
+    const u = o.units[i];
+    return look === undefined || u === undefined ? 0 : look.windowOf(u);
+  };
+  /** The next untaken unit is inside the look-ahead bound (always true without one). */
+  const inBound = (): boolean =>
+    look === undefined || nextUnit >= o.units.length || windowAt(nextUnit) <= windowAt(oldest) + 1;
+  const WAIT = Symbol("wait");
+  const take = (): readonly M[] | undefined | typeof WAIT => {
     if (o.commit.closed || o.isUnsafe() || nextUnit >= o.units.length) return undefined;
+    if (look?.budgetSpent() === true) {
+      const first = o.units[nextUnit]?.[0];
+      if (first !== undefined) o.commit.memoryStop(first.mutantId, "the time budget was used up");
+      wake();
+      return undefined;
+    }
+    if (!inBound()) return WAIT;
     queuedW -= weights[nextUnit] ?? 0;
     return o.units[nextUnit++];
   };
@@ -509,7 +544,16 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
     const { sink, current } = o.commit.laneSink();
     const runner = (async () => {
       try {
-        for (let unit = take(); unit !== undefined; unit = take()) {
+        for (let unit = take(); ; unit = take()) {
+          // PR-151: a lane that waits on the look-ahead is not ended; it asks again on every wake.
+          while (unit === WAIT) {
+            parked += 1;
+            await new Promise<void>((r) => waiters.push(r));
+            parked -= 1;
+            unit = take();
+          }
+          if (unit === undefined) break;
+          const idx = nextUnit - 1;
           const t0 = pace?.now() ?? 0;
           const w = pace?.weight(unit) ?? 0;
           const epoch0 = pace?.epoch?.();
@@ -518,6 +562,11 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
           } catch (err) {
             o.commit.fail(current() ?? unit[0]?.mutantId, err);
             throw err;
+          } finally {
+            // A unit that ended by a throw counts as ended: it must not hold the bound or a waiter.
+            ended[idx] = true;
+            while (ended[oldest] === true) oldest += 1;
+            wake();
           }
           // A unit that restarted lane 0's daemon carries a warm-up: it does not measure the work.
           if (pace !== undefined && k === 0 && w > 0 && pace.epoch?.() === epoch0) {
@@ -557,6 +606,12 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
         because("drained");
         return;
       }
+      // PR-151: a unit beyond the look-ahead bound cannot be taken now: the lane would only wait.
+      // A parked (warm) lane takes the next unit before any new (cold) lane is launched.
+      if (parked > 0 || !inBound()) {
+        because("bound");
+        return;
+      }
       if (!o.mayStart(k)) {
         reason = "memory";
         return;
@@ -586,7 +641,7 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
 }
 
 /** R785: why no more lanes started. */
-export type LaneReason = "cap" | "memory" | "cost" | "drained" | "closed" | "unmeasured";
+export type LaneReason = "cap" | "memory" | "cost" | "drained" | "closed" | "unmeasured" | "bound";
 
 /** R785: the one-line notice text (without the code prefix). */
 export function lanesNotice(
@@ -606,6 +661,7 @@ export function lanesNotice(
     drained: "the queue had no live work left",
     closed: "the queue closed (a stop or an unsafe session)",
     unmeasured: "no lane 0 live unit finished with a measured warm-up to give a cost",
+    bound: "the next unit was beyond the look-ahead bound or a waiting lane would take it",
   };
   return `${started} of ${asked} lanes started: ${why[reason]} (lane 0's warm-up ${(warmupMs / 1000).toFixed(1)} s)`;
 }
