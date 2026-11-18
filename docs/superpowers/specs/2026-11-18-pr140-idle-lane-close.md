@@ -103,3 +103,15 @@ guard.
   mutant.
 - **Out of scope for this run:** the run is single-mode DO, so it does not show a peak that rises after lanes are admitted. The
   charge is unchanged, so this needs no test here.
+
+### Amendment 1 (2026-11-18, before any mutant of the PR-140 run): a fresh store, not a resume
+- **Why:** window x4 ended at 04:44Z with rc 0. It completed DO's campaign in `dos4.sqlite`, so a resume of a copy has no mutant
+  left to run, and P1-P2 could only be inconclusive.
+  - The resumed run started at 04:44:36Z. It is left to end on its own, since it scores nothing; it is not evidence.
+- **The run instead:** a FRESH store (`/coord/handoff/PR-140/dow2/fresh.sqlite`), no `--resume`, `--time-budget 9000`. Otherwise as
+  above (`--workers 3`, `--peak 15 baseapp`, the same config and build, the watchdog).
+  - This is window x1's shape. x1 ran fresh at the same declaration and held lane 1 ("3 lanes charged", 15.3 GiB).
+  - A fresh baseline takes about 25-40 minutes, hence the larger budget.
+- **P1-P3 are unchanged.**
+- **P4 becomes:** the verdicts of covered mutants scored both here and in x1 (`/coord/handoff/R-984/x1.run.report.json`) are compared
+  per (file, line, operator). Under 20 shared is inconclusive. Any difference is investigated per mutant.

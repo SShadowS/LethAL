@@ -21,7 +21,11 @@ import {
   cliError,
   cliOk,
 } from "../src/cli-envelope";
-import { unknownKeywords, violations } from "./helpers/json-schema-subset";
+// PR-148: the tests' one validator (the stricter conformsTo replaced R870's own)
+import {
+  schemaKeywordsUnknown as unknownKeywords,
+  conformsTo as violations,
+} from "./helpers/json-schema-subset";
 
 const ROOT = join(import.meta.dir, "..", "..", "..");
 const SCHEMA_PATH = join(ROOT, "schemas", "cli-envelope-v1.schema.json");
