@@ -18,9 +18,11 @@ import {
   GATE_ALPACKAGES,
   SYMBOLS_MARKER,
   SymlinkedAlpackagesError,
+  copyTestDirForV3,
   prepareFixtureSymbols,
   symbolTarDrift,
   symlinkedAlpackages,
+  v3GateTestDir,
 } from "../itest/fixture-symbols";
 
 const A = "fx/a/.alpackages";
@@ -416,6 +418,71 @@ describe("R670: symbolTarDrift", () => {
       expect(r.stdout.split("\n").filter((l) => l !== "" && !l.endsWith("/"))).toEqual(members);
     },
   );
+});
+
+// PR-165: v3 reads a test project's own .alpackages, so the gate hands it a copy without one.
+describe("PR-165: v3GateTestDir", () => {
+  async function project(rel: string, withPackages: boolean): Promise<string> {
+    const dir = join(worktree, rel);
+    await mkdir(join(dir, "src"), { recursive: true });
+    await writeFile(join(dir, "app.json"), "{}");
+    await writeFile(join(dir, "src", "T.Codeunit.al"), "codeunit 1 T {}");
+    if (withPackages) {
+      await mkdir(join(dir, ".alpackages"), { recursive: true });
+      await writeFile(join(dir, ".alpackages", "Microsoft_Base Application.app"), "base");
+    }
+    return dir;
+  }
+  let calls = 0;
+  const to = () => {
+    calls++;
+    return join(root, "stage", String(calls));
+  };
+
+  test("a test dir with its own .alpackages is copied without it, every other file kept", async () => {
+    await setup();
+    calls = 0;
+    const dir = await project("fixtures/sandbox-names-tests", true);
+    const got = v3GateTestDir(worktree, dir, to);
+    expect(got).toBe(join(root, "stage", "1"));
+    expect(existsSync(join(got, ".alpackages"))).toBe(false);
+    expect(readFileSync(join(got, "src", "T.Codeunit.al"), "utf8")).toBe("codeunit 1 T {}");
+    expect(existsSync(join(got, "app.json"))).toBe(true);
+    // The fixture itself is untouched.
+    expect(existsSync(join(dir, ".alpackages", "Microsoft_Base Application.app"))).toBe(true);
+  });
+
+  test("a test dir without .alpackages, or with one the gate prepares, is used as is", async () => {
+    await setup();
+    calls = 0;
+    const plain = await project("fixtures/sandbox-optin-tests", false);
+    expect(v3GateTestDir(worktree, plain, to)).toBe(plain);
+    const gate = await project("fixtures/sandbox-tests", true);
+    expect(v3GateTestDir(worktree, gate, to)).toBe(gate);
+    expect(calls).toBe(0);
+  });
+
+  test("a leg's scratch copy outside fixtures/ is used as is, so an edit after construction reaches v3 (leg X c2)", async () => {
+    await setup();
+    calls = 0;
+    const scratch = join(root, "scratch", "x-c2", "tests");
+    await mkdir(join(scratch, ".alpackages"), { recursive: true });
+    expect(v3GateTestDir(worktree, scratch, to)).toBe(scratch);
+    expect(calls).toBe(0);
+  });
+
+  test("copyTestDirForV3 drops a stray .alpackages and keeps a gate one", async () => {
+    await setup();
+    const stray = await project("fixtures/sandbox-names-tests", true);
+    const a = join(root, "copy-a");
+    await copyTestDirForV3(worktree, stray, a);
+    expect(existsSync(join(a, ".alpackages"))).toBe(false);
+    expect(existsSync(join(a, "src", "T.Codeunit.al"))).toBe(true);
+    const gate = await project("fixtures/sandbox-tests", true);
+    const b = join(root, "copy-b");
+    await copyTestDirForV3(worktree, gate, b);
+    expect(existsSync(join(b, ".alpackages", "Microsoft_Base Application.app"))).toBe(true);
+  });
 });
 
 // R787: a fixture .alpackages that is a symlink into another worktree is refused by name.
