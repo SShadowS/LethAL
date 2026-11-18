@@ -62,6 +62,34 @@ duplicate and no unmatched keys).
    - otherwise the bound is printed, computed over sampled rows that BC scored `killed` or `survived` (a BC `error` or
      `no-coverage` is not a measurement), with that count beside it.
    - So on PR-155 (29 drawn of 29, M0081 a BC `error`), the prediction "all unnoted survivors measured" stands.
+
+## 0c. Amendment 3 (coord PR-177, 2026-11-18): the live proof refused on the two source hashes
+- **What happened.** PR-171's bc4 run refused in 15 s, before any publish, with `ConfirmSourceMismatchError`
+  (`/coord/handoff/PR-171/bc/`). It tripped on two hashes:
+  - `dependencySourceSha256` differs BY DESIGN: v3 reads Base Application 28.4 symbols, and bc4 runs BC 29. PR-155's own
+    v3/bc pair already differs there.
+  - `sourceSha256` differs only because DO's restore rewrote `app.json`. The `.al` tree is byte-identical (`diff -rq`).
+- **The fix (orchestrator ruling):**
+  1. **Dependency:** no refusal. The confirm run and the merge record both shas. The artifact flags
+     `dependency-symbols-differ` with both values: a v3-versus-BC comparison normally reads different symbol builds.
+  2. **Source:** `hashSourceSnapshot` (baseline-snapshot.ts) hashes `app.json` with its `version` field removed, and the
+     rest canonicalised (keys sorted), so the hash covers the `.al` tree and what decides the mutants (`id`,
+     `dependencies`, `idRanges`, preprocessor symbols), not the version that LethAL and restores rewrite.
+     - An `app.json` that does not parse is hashed raw, so it refuses.
+     - The refusal of real source drift stays. No accept flag (a manual override would be pasted by habit).
+     - The key and effective-symbols checks are unchanged.
+  3. **Red both ways:** an `.al` change refuses; a version-only `app.json` change passes.
+- **Effects beyond confirm.** The same hash is read by `explain --project`, `verify`, PR-144's recheck and baseline-snapshot
+  reuse.
+  - Every stored baseline snapshot (dos4, y1, y2's store) re-baselines once after the change.
+  - From then on, a version-only `app.json` change REUSES a snapshot, which is the point.
+  - A report written before the change no longer matches `explain --project` (no backward compatibility before the
+    release).
+- **The live proof** is re-run on bc4 (lethal-code) with the same pre-committed rows. The v3 input must be re-run on the
+  new build, so its report carries the new hash. Its rows are pre-committed to equal PR-155's v3 rows per mutant (keys,
+  verdicts); any difference is investigated before the bc run.
+
+## 1. The problem, and the measured basis
 A v3 run is fast and offline but not authoritative ([[R586]]). When v3 refuses a test at baseline, that test cannot
 kill anything. A mutant it would have killed is then scored `survived` on the other covering tests. Such a survivor
 carries the `[v3-refused-test-nearby]` note: some test of a covering codeunit was refused at baseline.
