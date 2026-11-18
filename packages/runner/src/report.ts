@@ -785,7 +785,7 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "(9 TestPage-only killers, 7 killers red at BC's baseline). " +
       "The count of `withheld-kills` rows is the ones still withheld.",
     entailedNegative:
-      "Not a wrong verdict, and not a claim that BC would kill each one: no recovered kill has been run on BC. " +
+      "Not a wrong verdict, and not a claim that BC would kill each one: no kill in this report has been run on BC. " +
       "Not a change to any kill or survivor the main pass scored.",
     basis: "R1108",
   },
