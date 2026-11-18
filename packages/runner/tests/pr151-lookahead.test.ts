@@ -144,7 +144,7 @@ describe("PR-151: the budget at the unit edge", () => {
       budgetSpent: () => spent,
       body: async (id) => {
         if (id === "M0") await hold.p;
-        else if (id === "M1") spent = true; // M0 and M1 are in flight when the budget runs out
+        else if (id === "M1") spent = true; // M1 finishes and spends the budget while M0 is still in flight
       },
     });
     await ticks();
@@ -228,5 +228,24 @@ describe("PR-151 F6: lane launching", () => {
     hold.open();
     await r.done;
     expect(r.recorded).toEqual(["M0", "M1"]);
+    // M0 ended, so the bound moved to window 2: M1 is now takeable and one lane launches for it
+    expect(h.launched).toEqual([1]);
+  });
+
+  test("10: while a lane is parked, no new lane is launched when the bound moves; a warm lane takes the unit", async () => {
+    const hold = gate();
+    const h = splitHarness();
+    const r = rig([0, 0, 2], 3, {
+      split: h,
+      body: (id) => (id === "M0" ? hold.p : Promise.resolve()),
+    });
+    await ticks(); // lane 1 took M1 and is parked on M2 (window 2 > 0 + 1)
+    expect(h.launched).toEqual([1]);
+    hold.open();
+    await r.done;
+    // red without `parked > 0` in tryLaunch: lane 0's end launches lane 2, which takes M2 cold
+    expect(h.launched).toEqual([1]);
+    expect(r.log.some((l) => /^take [01] M2$/.test(l))).toBe(true); // a warm lane, never lane 2
+    expect(r.recorded).toEqual(["M0", "M1", "M2"]);
   });
 });

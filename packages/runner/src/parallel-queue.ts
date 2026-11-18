@@ -469,6 +469,8 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
   const ended: boolean[] = [];
   let oldest = 0; // the first unit not yet ended
   const waiters: (() => void)[] = [];
+  // Lanes parked on the bound. Not `waiters.length`: `wake()` empties that before the woken lanes run.
+  let parked = 0;
   const wake = (): void => {
     for (const w of waiters.splice(0)) w();
   };
@@ -545,7 +547,9 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
         for (let unit = take(); ; unit = take()) {
           // PR-151: a lane that waits on the look-ahead is not ended; it asks again on every wake.
           while (unit === WAIT) {
+            parked += 1;
             await new Promise<void>((r) => waiters.push(r));
+            parked -= 1;
             unit = take();
           }
           if (unit === undefined) break;
@@ -603,8 +607,11 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
         return;
       }
       // PR-151: a unit beyond the look-ahead bound cannot be taken now: the lane would only wait.
-      // PR-151: a unit beyond the look-ahead bound cannot be taken now: the lane would only wait.
-      if (!inBound()) return;
+      // A parked (warm) lane takes the next unit before any new (cold) lane is launched.
+      if (parked > 0 || !inBound()) {
+        because("bound");
+        return;
+      }
       if (!o.mayStart(k)) {
         reason = "memory";
         return;
@@ -634,7 +641,7 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
 }
 
 /** R785: why no more lanes started. */
-export type LaneReason = "cap" | "memory" | "cost" | "drained" | "closed" | "unmeasured";
+export type LaneReason = "cap" | "memory" | "cost" | "drained" | "closed" | "unmeasured" | "bound";
 
 /** R785: the one-line notice text (without the code prefix). */
 export function lanesNotice(
@@ -654,6 +661,7 @@ export function lanesNotice(
     drained: "the queue had no live work left",
     closed: "the queue closed (a stop or an unsafe session)",
     unmeasured: "no lane 0 live unit finished with a measured warm-up to give a cost",
+    bound: "the next unit was beyond the look-ahead bound or a waiting lane would take it",
   };
   return `${started} of ${asked} lanes started: ${why[reason]} (lane 0's warm-up ${(warmupMs / 1000).toFixed(1)} s)`;
 }

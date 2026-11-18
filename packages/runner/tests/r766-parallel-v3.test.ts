@@ -823,8 +823,11 @@ function splitOwner(
   const watchers = new Set<() => void>();
   let passed = false;
   /** `watches`: one per window's queue (each `runScopeQueue` watches the gate once). */
-  const state = { activationsAtBarrier: -1, watches: 0 };
+  const state = { activationsAtBarrier: -1, watches: 0, windows: [] as readonly number[] };
   Object.assign(stub, {
+    noteWindows: (sizes: readonly number[]) => {
+      state.windows = sizes;
+    },
     prepareBatch: (p: readonly { mutantId: string }[]) =>
       void prepared.push(p.map((x) => x.mutantId)),
     barrierPassed: () => passed,
@@ -950,6 +953,8 @@ describe("PR-99: the split prefetch, through a session", () => {
     expect(table(par)).toEqual(table(one));
     const n = one.mutants.length;
     expect(n).toBeGreaterThan(6); // so the two caps give different counts
+    // The window cut still uses the split caps: ceil(n / 6) windows (ceil(n / 2) with the 600 s cap).
+    expect(split.state.windows).toHaveLength(Math.ceil(n / 6));
     // PR-151: one queue per batch under the split (no window barrier), so one watch whatever the cap
     expect(split.state.watches).toBe(1);
   });
@@ -959,6 +964,8 @@ describe("PR-99: the split prefetch, through a session", () => {
     const { procOf, report: one } = await learn(root);
     const first = codesOf(procOf, "P1").length;
     const lastP1 = codesOf(procOf, "P1").at(-1);
+    // This session test stays green without take()'s budget clause (R1014's per-mutant check also ends the
+    // run); the guard for the clause is the queue-level test 7 in pr151-lookahead.test.ts.
     // the clock jumps past the budget once P1's last mutant has run (it is killed by its first test)
     let late = false;
     const stub = new ParStub({

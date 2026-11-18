@@ -13696,6 +13696,8 @@ async function runMutantsParallel(
       needsLiveCall?: (mutantId: string) => boolean;
       laneDaemonStarts?: () => number;
       noteLanes?: (message: string) => void;
+      /** PR-151: test seam, called under the split with the size of each window `cutWindows` made. */
+      noteWindows?: (sizes: readonly number[]) => void;
       /**
        * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
        * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
@@ -13742,7 +13744,9 @@ async function runMutantsParallel(
   let widest: Awaited<ReturnType<typeof runScopeQueue>> | undefined;
   // PR-151: under the split ONE queue and ONE commit run the whole batch (no window barrier); each unit
   // carries the window of its first mutant for the look-ahead bound. Otherwise one group per window.
-  const groups = split ? [windows.flat()] : windows;
+  // An empty batch has no window: keep `windows` (no group) so no "1 of N lanes started" notice prints.
+  const groups = split && windows.length > 0 ? [windows.flat()] : windows;
+  if (split) owner.noteWindows?.(windows.map((w) => w.length)); // test seam: the window cut
   const windowOfMutant = new Map<string, number>();
   for (const [wi, w] of windows.entries()) for (const m of w) windowOfMutant.set(m.mutantId, wi);
   for (const [wi, window] of groups.entries()) {
