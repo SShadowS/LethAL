@@ -730,6 +730,7 @@ codeunit 50120 "Sub"
       test("control: an ordinary Integer handed out moves nothing", () => {
         const f = files(al(id), "", "        DepCU.RunById(42);\n");
         const was = digestA(f);
+        expect(was).toMatch(/^v3:/); // PR-147: a real digest, not undefined vs undefined
         expect(digestA(objEdit(f))).toBe(was);
         expect(digestA(unrelated(f))).toBe(was);
       });
@@ -737,6 +738,7 @@ codeunit 50120 "Sub"
       test("control: a 4+ digit literal that is no object's id moves nothing (only object ids fold)", () => {
         const f = files(al(id), ID, "        Id := 77777;\n        DepCU.RunById(Id);\n");
         const was = digestA(f);
+        expect(was).toMatch(/^v3:/); // PR-147: a real digest, not undefined vs undefined
         expect(digestA(objEdit(f))).toBe(was);
         expect(digestA(unrelated(f))).toBe(was);
       });
@@ -1674,6 +1676,7 @@ describe("R700/R701: install, upgrade and permission-set code in every digest", 
   function noneMove(a: Files, b: Files): void {
     const x = both(a);
     const y = both(b);
+    expect(Object.keys(x).sort()).toEqual(["50100::a", "50100::b"]); // PR-147: not an empty loop
     for (const k of Object.keys(x)) expect(y[k]).toBe(x[k]);
   }
 

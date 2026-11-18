@@ -1,6 +1,7 @@
 /**
  * R870: a JSON Schema validator for exactly the keywords the bc-toolbox envelope schema uses. The
- * shared one in `schemas.test.ts` has no `oneOf`, `pattern` or `propertyNames`. `KEYWORDS` is what
+ * shared one in `schemas.test.ts` (`conformsTo`) has covered `oneOf`, `pattern` and `propertyNames`
+ * too since PR-147; merging the two is a follow-up. `KEYWORDS` is what
  * this one knows, so a test can refuse a schema that uses any other: an ignored keyword would pass
  * whatever it was meant to stop.
  */
