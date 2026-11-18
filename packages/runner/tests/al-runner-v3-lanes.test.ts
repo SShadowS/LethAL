@@ -707,3 +707,94 @@ describe("the parallel gate: refusals and the memory hold", () => {
     expect(priv.peakReading?.bytes).toBe(5 * G);
   });
 });
+
+describe("PR-140: a hold closes idle daemons", () => {
+  const G = 2 ** 30;
+  const tick = () => new Promise<void>((res) => setImmediate(res));
+  interface P140 {
+    peakReading: { bytes: number; source: "hwm" | "sampled" } | undefined;
+    closingLanes: Set<number>;
+  }
+  /** x3's numbers: peak 4.07 GiB, declared 15, roomy cgroup: 3 lanes charged are refused by "declared peak". */
+  const rig140 = async (resident: readonly number[]) => {
+    const r = await lanesRig({ lanes: 3 });
+    await laneBaseline(r);
+    for (const k of resident) {
+      const v = r.views[k];
+      if (v === undefined) throw new Error(`no lane ${k}`);
+      await v.activate("M0001");
+      await v.run(A, OPTS);
+    }
+    (r.b as unknown as P140).peakReading = { bytes: 4.07 * G, source: "hwm" };
+    r.b.seams.memoryReader = () => ({ usedBytes: 1 * G, maxBytes: 64 * G, source: "cg" });
+    r.b.seams.lethalRss = () => 4 * G;
+    r.b.seams.anonReader = () => 0;
+    r.b.seams.availableBytes = () => 90 * G;
+    r.b.seams.classFilePath = () => "/fake/class";
+    r.b.seams.readTextFile = () => "other 1 15\n";
+    const notices: string[] = [];
+    r.b.setNotify((code, message) => notices.push(`${code}: ${message}`));
+    const closed: { lane?: number; reason: string }[] = [];
+    r.b.setDaemonCloseSink((c) =>
+      closed.push({ ...(c.lane !== undefined ? { lane: c.lane } : {}), reason: c.reason }),
+    );
+    let fired = 0;
+    let wake: () => void = () => {};
+    const woke = new Promise<void>((res) => {
+      wake = res;
+    });
+    r.b.watchLaneGate(() => {
+      fired += 1;
+      wake();
+    });
+    return { r, notices, closed, fired: () => fired, woke };
+  };
+
+  test("1: the idle lane 2 is closed with reason lane-idle, the watcher fires once, then lane 1 may start", async () => {
+    const g = await rig140([0, 2]);
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+    expect(g.notices).toHaveLength(1);
+    expect(g.notices[0]).toContain("rule: declared peak");
+    expect(g.notices[0]).toContain("closing the idle daemons of lane(s) 2");
+    expect(g.fired()).toBe(0); // the close has not finished yet
+    await g.woke;
+    await tick();
+    expect(g.closed).toEqual([{ lane: 2, reason: "lane-idle" }]);
+    expect(g.fired()).toBe(1);
+    expect(g.r.b.laneMayStart(1)).toBe(true);
+  });
+
+  test("2: an active lane is never closed", async () => {
+    const g = await rig140([0, 2]);
+    g.r.b.launchLane(2);
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+    expect(g.notices[0]).not.toContain("closing the idle");
+    await tick();
+    expect(g.closed).toEqual([]);
+    expect(g.fired()).toBe(0);
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+  });
+
+  test("3: lane 1 itself resident and idle, asking for lane 2: its own daemon is not closed", async () => {
+    const g = await rig140([0, 1]);
+    g.r.b.seams.memoryReader = () => ({ usedBytes: 60 * G, maxBytes: 64 * G, source: "cg" });
+    expect(g.r.b.laneMayStart(2)).toBe(false); // refused, and lane 1 is below lane 2
+    await tick();
+    expect(g.closed).toEqual([]);
+    expect(g.fired()).toBe(0);
+  });
+
+  test("6: nothing idle: refused, no close, no watcher; a lane in closingLanes is refused", async () => {
+    const g = await rig140([0]);
+    g.r.b.seams.memoryReader = () => ({ usedBytes: 60 * G, maxBytes: 64 * G, source: "cg" });
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+    await tick();
+    expect(g.closed).toEqual([]);
+    expect(g.fired()).toBe(0);
+    // a lane whose close has not finished is refused even when the gate would admit it
+    g.r.b.seams.memoryReader = () => ({ usedBytes: 1 * G, maxBytes: 64 * G, source: "cg" });
+    expect(g.r.b.laneMayStart(1)).toBe(true);
+    (g.r.b as unknown as P140).closingLanes.add(1);
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+  });
+});
