@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { basename } from "node:path";
 import { buildFakeAppWithEntries } from "../packages/runner/tests/helpers/fake-app.ts";
 import { type ExtensionRow, sha256Of } from "./bc-app-content.ts";
 import { type MainSeams, type PublishOps, parseArgs, run, runMain } from "./bc-continia-publish.ts";
@@ -109,7 +110,8 @@ const run1 = async (
   ]);
   const err = await run(args, {
     ops: f.ops,
-    read: (p) => files[p.replace("/d/", "")] as Buffer,
+    // basename, not a "/d/" strip: on Windows `join("/d", f)` uses backslashes (CI's check job).
+    read: (p) => files[basename(p)] as Buffer,
     log: (s) => log.push(s),
   }).then(
     () => undefined,
