@@ -129,9 +129,13 @@ export function readSlotRssGiB(
 ): number | undefined {
   try {
     const file = slotRssFile(lockDir, slot);
-    const kb = Number(readFileSync(file, "utf8").trim());
-    if (!(Number.isFinite(kb) && kb >= 0) || nowMs - statSync(file).mtimeMs > RSS_FRESH_MS)
-      return undefined;
+    const text = readFileSync(file, "utf8").trim();
+    // An empty file is a write caught half-way (the sampler truncates, then writes): missing, not 0.
+    if (text === "") return undefined;
+    const kb = Number(text);
+    const age = nowMs - statSync(file).mtimeMs;
+    // A future-dated reading (negative age) is not proof of freshness either.
+    if (!(Number.isFinite(kb) && kb >= 0) || age < 0 || age > RSS_FRESH_MS) return undefined;
     return kb / 2 ** 20;
   } catch {
     return undefined;

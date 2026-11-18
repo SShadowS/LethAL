@@ -185,6 +185,8 @@ try_once() {
       job_slot="$n"
       job_cmd="$(printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-160)"
       peakfile="$dir/heavy.$n.peak"
+      # PR-179: a reading left by a job that died without cleanup must never count for this one.
+      rm -f "$peakfile.rss"
       "${BUN:-bun}" "$(dirname "$0")/heavy-slot-peak.ts" "$$" "$peakfile" "${LETHAL_HEAVY_SAMPLE_S:-5}" &
       sampler=$!
       job_started=$(date -u +%FT%TZ)

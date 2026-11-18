@@ -1098,4 +1098,23 @@ describe("PR-179 (R992 ruling) partial counting of held slots", () => {
     writeFileSync(file, "abc\n");
     expect(readSlotRssGiB(dir, 1)).toBeUndefined(); // unreadable content
   });
+
+  test("readSlotRssGiB (review): an empty file (a write caught half-way) and a future-dated reading are missing, not 0 or fresh", () => {
+    const dir = fresh();
+    const file = slotRssFile(dir, 1);
+    writeFileSync(file, "");
+    expect(readSlotRssGiB(dir, 1)).toBeUndefined();
+    writeFileSync(file, `${6 * 2 ** 20}\n`);
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(file, future, future);
+    expect(readSlotRssGiB(dir, 1)).toBeUndefined();
+  });
+
+  test("heavy-slot.sh removes a previous job's .rss before starting the sampler", () => {
+    const sh = readFileSync(join(import.meta.dir, "heavy-slot.sh"), "utf8");
+    const rm = sh.indexOf('rm -f "$peakfile.rss"');
+    const start = sh.indexOf("heavy-slot-peak.ts");
+    expect(rm).toBeGreaterThan(-1);
+    expect(rm).toBeLessThan(start);
+  });
 });
