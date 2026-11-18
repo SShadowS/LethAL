@@ -213,9 +213,30 @@ describe("decideRecheck: all of (a) to (e) recover; each failing alone keeps err
     expect(d.kind).toBe("recovered");
   });
 
-  test("(e): a test the recheck did not run cannot be lost", () => {
+  test("(e): a main-baseline-passing test of the codeunit with NO recheck result is lost (fail closed)", () => {
     const d = decide({ mainBaseline: mainBase({ "T Codeunit.T9": true }) });
-    expect(d.kind).toBe("recovered");
+    expect(d).toMatchObject({ kind: "kept", failed: ["e"] });
+    expect(d.kind === "kept" && d.note).toContain("T Codeunit.T9");
+    // A test that did NOT pass in the main baseline and has no result is not judged.
+    expect(decide({ mainBaseline: mainBase({ "T Codeunit.T9": false }) }).kind).toBe("recovered");
+  });
+
+  test("(e) codeunit-wide: T0 refused, T1 the covering killer, T3 not covering, passed in main, fails alone: error", () => {
+    const main = new Map<string, boolean>([
+      ["T Codeunit.T0", false], // refused at the main baseline
+      ["T Codeunit.T1", true],
+      ["T Codeunit.T3", true],
+    ]);
+    const row = nestedRow("M1", { killingTest: "T1", coveringTests: ["T Codeunit.T1"] });
+    const re = (t3: TestOutcome) =>
+      new Map<string, TestOutcome>([
+        ["T Codeunit.T1", "pass"],
+        ["T Codeunit.T3", t3],
+      ]);
+    const bad = decide({ row, mainBaseline: main, recheckBaseline: re("fail") });
+    expect(bad).toMatchObject({ kind: "kept", failed: ["e"] });
+    expect(bad.kind === "kept" && bad.note).toContain("T Codeunit.T3");
+    expect(decide({ row, mainBaseline: main, recheckBaseline: re("pass") }).kind).toBe("recovered");
   });
 
   test("(e): no main baseline row for the codeunit fails closed (a reused baseline emits none)", () => {
@@ -311,7 +332,11 @@ function nestedFor(ids: string[], over: Partial<NestedRecheckResult> = {}): Nest
 async function drive(
   events: RunEvent[],
   fake: ReturnType<typeof fakeRunner>,
-  backend: { methodIsolation?: boolean; serveEntries?: boolean } = { serveEntries: true },
+  backend: {
+    methodIsolation?: boolean;
+    serveEntries?: boolean;
+    closeDaemons?: () => Promise<void>;
+  } = { serveEntries: true },
 ) {
   const emitted: RunEventInput[] = [];
   const summary = await runWithheldRecheck({
@@ -443,6 +468,94 @@ describe("runWithheldRecheck: the driver", () => {
     const { emitted } = await drive(mainEvents([scored("M1")]), fake);
     expect(emitted.find((e) => e.type === "mutant-rechecked")).toMatchObject({
       keptNote: expect.stringContaining("rule (b)"),
+    });
+  });
+
+  test("the recheck's test set: the covering tests plus every main-baseline test of a covering codeunit, nothing from other codeunits", async () => {
+    const fake = fakeRunner(() => nestedFor(["M1"]));
+    const events = seqOf([
+      {
+        type: "baseline-batch-finished",
+        batchIndex: 0,
+        verdicts: [
+          { name: "T Codeunit.T1", outcome: "pass", classification: [] },
+          { name: "T Codeunit.T2", outcome: "pass", classification: [] },
+          { name: "T Codeunit.T3", outcome: "pass", classification: [] },
+          { name: "T Codeunit.T0", outcome: "error", classification: [] },
+          { name: "Zed.Z1", outcome: "pass", classification: [] },
+        ],
+      },
+      scored("M1", { coveringTests: ["T Codeunit.T2", "T Codeunit.T2"] }),
+    ]);
+    await drive(events, fake);
+    expect(fake.calls[0]?.tests).toEqual([
+      "T Codeunit.T0",
+      "T Codeunit.T1",
+      "T Codeunit.T2",
+      "T Codeunit.T3",
+    ]);
+  });
+
+  test("closeDaemons is called once, before the runner", async () => {
+    const order: string[] = [];
+    const fake = fakeRunner(() => {
+      order.push("runner");
+      return nestedFor(["M1"]);
+    });
+    await drive(mainEvents([scored("M1")]), fake, {
+      serveEntries: true,
+      closeDaemons: async () => {
+        order.push("closeDaemons");
+      },
+    });
+    expect(order).toEqual(["closeDaemons", "runner"]);
+  });
+
+  test("a skipped recheck closes nothing", async () => {
+    let closes = 0;
+    const fake = fakeRunner(() => nestedFor(["M1"]));
+    await drive(mainEvents([scored("M1")]), fake, {
+      serveEntries: false,
+      closeDaemons: async () => {
+        closes += 1;
+      },
+    });
+    expect(closes).toBe(0);
+  });
+
+  test("no main-baseline results (a reused baseline): skipped with a warning, nothing sent", async () => {
+    const fake = fakeRunner(() => nestedFor(["M1"]));
+    const { emitted, summary } = await drive(seqOf([scored("M1")]), fake);
+    expect(fake.calls).toHaveLength(0);
+    expect(emitted).toMatchObject([{ type: "warning", code: "withheld-recheck-skipped" }]);
+    expect(summary.skipped).toContain("reused baseline");
+  });
+
+  test("the recheck baseline folds strictly: fail then pass across two batches is not passed", async () => {
+    const fake = fakeRunner(() =>
+      nestedFor(["M1"], {
+        baseline: [
+          { name: "T Codeunit.T1", outcome: "pass" },
+          { name: "T Codeunit.T2", outcome: "fail" }, // the killer, first batch
+          { name: "T Codeunit.T2", outcome: "pass" }, // second batch
+        ],
+      }),
+    );
+    // The killer was not green in the main baseline, so only rule (c) can object.
+    const events = seqOf([
+      {
+        type: "baseline-batch-finished",
+        batchIndex: 0,
+        verdicts: [
+          { name: "T Codeunit.T1", outcome: "pass", classification: [] },
+          { name: "T Codeunit.T2", outcome: "fail", classification: [] },
+        ],
+      },
+      scored("M1"),
+    ]);
+    const { emitted } = await drive(events, fake);
+    expect(emitted.find((e) => e.type === "mutant-rechecked")).toMatchObject({
+      keptNote: expect.stringContaining("rule (c)"),
     });
   });
 
@@ -804,13 +917,8 @@ describe("v3RecheckOf (cli wiring)", () => {
     expect(nested?.instrumentedDir).toBe("/scratch/recheck-instrumented");
     expect(nested?.projectDir).toBe("/proj");
     expect(nested?.only).toEqual(["src/**"]);
-    for (const k of [
-      "recheck",
-      "resume",
-      "excludeTests",
-      "skipKnownSurvivors",
-      "changedSince",
-    ] as const)
+    expect(nested?.excludeTests).toEqual(["A.B"]); // R488: kept
+    for (const k of ["recheck", "resume", "skipKnownSurvivors", "changedSince"] as const)
       expect(nested?.[k]).toBeUndefined();
     expect(nested?.emit).toHaveLength(1); // its own collector, never the main run's subscribers
     expect(res?.identity).toEqual({

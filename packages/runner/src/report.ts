@@ -775,6 +775,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "one test per session, and the kill reproduced. Each such mutant carries `isolatedRecheck`. " +
       `${RECHECK_WARNING} ` +
       "Method isolation removes the state an earlier test left; it does not give BC's state back. " +
+      "A kill is recovered only if every test of the killing test's codeunit that passed in the main baseline " +
+      "still passes alone. That check cannot judge tests v3 refused at baseline, so it does not answer " +
+      "whether a refused test's state mattered; only a BC comparison does. " +
       "The count of `withheld-kills` rows is the ones still withheld.",
     entailedNegative:
       "Not a wrong verdict, and not a claim that BC would kill each one: no recovered kill has been run on BC. " +

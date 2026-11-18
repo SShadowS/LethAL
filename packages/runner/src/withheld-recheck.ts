@@ -152,8 +152,10 @@ export function ruleDSameBuild(
 }
 
 /**
- * (e): no test of the killing test's codeunit that passed in the main baseline failed or was refused in the
- * recheck baseline. Only tests the recheck baseline ran can be judged. With no main baseline row for the
+ * (e): every test of the killing test's codeunit that passed in the main baseline passes alone in the recheck
+ * baseline; one that failed, was refused, or has no recheck result is lost. It cannot judge a test v3 refused
+ * at baseline (it never "passed in the main baseline"), so it does not say whether that test's state mattered.
+ * With no main baseline row for the
  * codeunit at all (a reused baseline emits none), nothing proves a test "passed in the main baseline", so the
  * rule fails closed.
  */
@@ -171,7 +173,8 @@ export function ruleELosesNothing(
     seen += 1;
     if (!passedMain) continue;
     const r = recheckBaseline.get(name);
-    if (r !== undefined && r !== "pass") lost.push(name);
+    // No result counts as lost (fail closed): the recheck's test set holds every such test.
+    if (r !== "pass") lost.push(name);
   }
   if (seen === 0) return `the main baseline has no row for codeunit ${cu}`;
   if (lost.length > 0)
@@ -263,7 +266,11 @@ export interface RecheckDeps {
   readonly budgetSeconds: number;
   readonly runner: RecheckRunner;
   /** The backend's own facts, read after `decideTransport`. */
-  readonly backend: { readonly methodIsolation?: boolean; readonly serveEntries?: boolean };
+  readonly backend: {
+    readonly methodIsolation?: boolean;
+    readonly serveEntries?: boolean;
+    readonly closeDaemons?: () => Promise<void>;
+  };
 }
 
 export interface RecheckSummary {
@@ -294,9 +301,23 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   };
   if (d.backend.methodIsolation === true) return skip('isolation is already "method"');
   if (d.backend.serveEntries !== true) return skip("the transport is not serve-entries");
-  const tests = [...new Set(targets.flatMap((t) => t.coveringTests))].sort();
+  const mainBaseline = mainBaselineOf(d.events);
+  // A reused main baseline emits no baseline-batch-finished: nothing proves what passed, so (e) could recover nothing.
+  if (mainBaseline.size === 0)
+    return skip("the main pass has no baseline results (a reused baseline)");
+  // The covering tests, plus every main-baseline test of a codeunit that holds one (rule (e) judges the whole codeunit).
+  const covering = new Set(targets.flatMap((t) => t.coveringTests));
+  const codeunits = new Set([...covering].map(codeunitOfQualified));
+  const tests = [
+    ...new Set([
+      ...covering,
+      ...[...mainBaseline.keys()].filter((n) => codeunits.has(codeunitOfQualified(n))),
+    ]),
+  ].sort();
   let result: NestedRecheckResult;
   try {
+    // The main session's daemons would otherwise stay alive beside the nested session's.
+    await d.backend.closeDaemons?.();
     result = await d.runner({ targets, tests, budgetSeconds: d.budgetSeconds });
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
@@ -307,14 +328,18 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     });
     return { targets: targets.length, recovered: 0, skipped: `failed: ${why}` };
   }
-  const recheckBaseline = new Map(result.baseline.map((b) => [b.name, b.outcome] as const));
+  // As the main side: a test counts as passed only if it passed in EVERY batch it ran in.
+  const recheckBaseline = new Map<string, TestOutcome>();
+  for (const b of result.baseline) {
+    const prev = recheckBaseline.get(b.name);
+    if (prev === undefined || prev === "pass") recheckBaseline.set(b.name, b.outcome);
+  }
   d.emit({
     type: "recheck-baseline-finished",
     tests: result.baseline.length,
     elapsedMs: result.baselineElapsedMs,
     verdicts: result.baseline,
   });
-  const mainBaseline = mainBaselineOf(d.events);
   const byKey = new Map<string, NestedRow[]>();
   for (const r of result.rows) {
     const k = recheckSiteKey(r);

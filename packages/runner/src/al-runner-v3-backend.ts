@@ -9689,6 +9689,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     };
   }
 
+  /** PR-144: see `ExecutionBackend.closeDaemons`. */
+  async closeDaemons(): Promise<void> {
+    await this.closeAllDaemons("session-end");
+  }
+
   async close(): Promise<void> {
     // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
     await this.closeAllDaemons("session-end");

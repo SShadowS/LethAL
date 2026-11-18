@@ -3275,7 +3275,7 @@ export function v3RecheckOf(a: {
       backend: _backend,
       store: _store,
       instrumentedDir: _dir,
-      excludeTests: _excludeTests,
+      // excludeTests stays in `base` (R488: the excluded look-alike tests are excluded in the nested run too).
       ...base
     } = a.mainConfig;
     const lines: LineRange[] = req.targets.map((t) => ({
