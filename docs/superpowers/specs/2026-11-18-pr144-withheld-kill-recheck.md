@@ -227,6 +227,24 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
     `al-runner-v3-serve-flagged-unknown`, but the leg builds its backend without the CLI, as before.
 - **The symbol tar is unchanged by this amendment:** the same projects and apps.
 
+## 0h. Amendment 8 (coord PR-162): RC's row table, for the R849 pinned-record route
+- **Why:** the build is pinned, so a record may write only rows committed before the run (R810/R849). A new baseline
+  file has no rows at HEAD, so RC's rows go in `packages/runner/itest/expected/al-runner-v3.recheck.baseline.json`,
+  committed on the task branch before the record run.
+- **The rows, derived from the fixture, not from a run.** `Sevens` and `SevensB` each yield four mutants: remove-assignment
+  of `C := '7'`, remove-assignment of `T += Format(C)`, and two empty-block mutants (the loop body and the procedure
+  body). Each makes `Sevens(1)`/`SevensB(1)` something other than `'7'` (an empty text, or a NUL character), so:
+  - the 4 `Sevens` mutants: A1_OneSeven fails after A0's refusal, withheld in the main pass, recovered alone by the
+    recheck: **`killed`, killingTest `A1_OneSeven`**;
+  - the 4 `SevensB` mutants: B1 fails after B0's refusal, withheld; the recheck loses B2_SeesTheMark, so rule (e)
+    keeps them: **`error`, errorClass `runner-refused`, killingTest null**;
+  - none is coverage-filtered.
+- **What a run supplied:** only the keys and `mutatedTextSha256`, from a refused record's dump (`/coord/handoff/PR-162/
+  rc-keys2.log`), as the gate page allows. That run's verdicts equal this table; they are not its source.
+- **The symbol tar changes after all:** `fixture-symbols-165b17dd3aae.tar` (sha256 `165b17dd…b662`) adds
+  `.alpackages` for sandbox-dates, -optin and -order with their tests (R1128), so `compile:fixtures` skips nothing.
+  The recheck pair's files are as in amendment 6.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
