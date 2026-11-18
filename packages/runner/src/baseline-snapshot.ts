@@ -228,8 +228,8 @@ export async function targetAlFiles(projectDir: string): Promise<string[]> {
  * whose installed build was made from other source. Every file `targetAlFiles` names plus
  * `app.json`, as `<forward-slash relative path> NUL <bytes> NUL` in sorted path order, then the
  * sorted preprocessor symbols as one line. A test project nested inside the target is IN, because
- * the target build copies its `.al` too. `app.json` is IN as a compile input: a version-only bump
- * also changes the hash, which costs one `lethal run`.
+ * the target build copies its `.al` too. `app.json` is IN as a compile input, normalised (PR-177):
+ * its `version` is left out and the rest canonicalised, so a version-only bump keeps the hash.
  *
  * ponytail: resources (`.xlf`, report layouts) and the rest of `lethal.config.json` are not hashed;
  * they do not change AL behaviour under test the way AL does. Add them if a measured case shows
@@ -291,6 +291,38 @@ export async function readTargetSource(
   return snapshot;
 }
 
+/** JSON text with object keys sorted at every depth; arrays keep their order. */
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/**
+ * PR-177: what of `app.json` the source hash covers. The top-level `version` is dropped and the
+ * rest is canonicalised (keys sorted, whitespace gone), so a version bump, a restore that rewrites
+ * the file, or a reformat does not move the hash, while `id`, `dependencies`, `idRanges` and the
+ * rest still do. A file that does not parse (or is not an object) hashes as its raw bytes, so it
+ * still counts as different.
+ */
+function normaliseAppJson(bytes: Buffer): Buffer {
+  try {
+    const text = bytes.toString("utf8").replace(/^﻿/, "");
+    const parsed: unknown = JSON.parse(text);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return bytes;
+    const { version: _version, ...rest } = parsed as Record<string, unknown>;
+    return Buffer.from(canonicalJson(rest), "utf8");
+  } catch {
+    return bytes;
+  }
+}
+
 /** `hashTargetSource` over a snapshot `readTargetSource` took. */
 export function hashSourceSnapshot(
   snapshot: ReadonlyMap<string, Buffer>,
@@ -300,7 +332,8 @@ export function hashSourceSnapshot(
     .map(([rel, bytes]) => [rel.replaceAll("\\", "/"), bytes] as const)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const h = createHash("sha256");
-  for (const [rel, bytes] of files) {
+  for (const [rel, raw] of files) {
+    const bytes = rel === "app.json" ? normaliseAppJson(raw) : raw;
     h.update(`${rel}\0`);
     h.update(bytes);
     h.update("\0");
