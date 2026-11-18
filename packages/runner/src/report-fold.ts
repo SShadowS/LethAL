@@ -20,6 +20,7 @@ import {
   type SessionOutcome,
   type TestMethodRecord,
   mutantRef,
+  withheldKillOf,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
 
@@ -733,6 +734,67 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "batch-invalidated":
         invalidations.push({ batchIndex: e.batchIndex, reason: e.reason });
         break;
+      case "recheck-baseline-finished":
+        // PR-144: the recheck's own baseline. Deliberately read into NOTHING: the session's baseline
+        // figures (`baselineGreen`, unsupported tests, timings) are the main pass's alone.
+        break;
+      case "mutant-rechecked": {
+        // PR-144: the ONLY event that replaces an earlier row, by (batchIndex, mutantId). A row that is
+        // not there, or is not a withheld kill, is a caller-contract violation, never a plausible default.
+        const at = outcomes.findIndex(
+          (o) => o.batchIndex === e.batchIndex && o.mutant.mutantId === e.mutant.mutantId,
+        );
+        const prior = at < 0 ? undefined : outcomes[at];
+        if (
+          prior === undefined ||
+          withheldKillOf(prior.verdict, prior.cause, prior.failureNote) === undefined
+        ) {
+          throw new Error(
+            `foldEvents: mutant-rechecked for ${e.mutant.mutantId} (batch ${e.batchIndex}) names no withheld-kill row of this session; refusing to replace another row (PR-144).`,
+          );
+        }
+        if (e.recovery === undefined) {
+          if (e.keptNote === undefined) {
+            throw new Error(
+              `foldEvents: mutant-rechecked for ${e.mutant.mutantId} carries neither a recovery nor a keptNote (PR-144).`,
+            );
+          }
+          // After the whole old note, so it still ends with V3_NOT_RUN_SUFFIX where `withheldKillOf` looks.
+          outcomes[at] = {
+            ...prior,
+            failureNote: `${prior.failureNote ?? ""} ${e.keptNote}`,
+            durationMs: (prior.durationMs ?? 0) + e.durationMs,
+          };
+          break;
+        }
+        const r = e.recovery;
+        const {
+          cause: _cause,
+          failureNote: _failureNote,
+          killingTest: _killingTest,
+          killingTestFailure: _killingTestFailure,
+          killPosition: _killPosition,
+          reproducedFailure: _reproducedFailure,
+          stopEvidence: _stopEvidence,
+          killingTestRef: _killingTestRef,
+          ...rest
+        } = prior;
+        outcomes[at] = {
+          ...rest,
+          verdict: "killed",
+          durationMs: (prior.durationMs ?? 0) + e.durationMs,
+          coveringTests: r.coveringTests,
+          killingTest: r.killingTest,
+          killReproduced: true as const,
+          ...(r.killingTestFailure !== undefined
+            ? { killingTestFailure: r.killingTestFailure }
+            : {}),
+          ...(r.killPosition !== undefined ? { killPosition: r.killPosition } : {}),
+          ...(r.reproducedFailure !== undefined ? { reproducedFailure: r.reproducedFailure } : {}),
+          isolatedRecheck: r.isolatedRecheck,
+        };
+        break;
+      }
       default:
         break; // unknown event type — ignored, not fatal (forward compatibility, events.ts)
     }

@@ -91,7 +91,8 @@
               "al-runner-v3-coverage-off",
               "time-budget-reached",
               "nondebuggable-no-coverage",
-              "withheld-kills"
+              "withheld-kills",
+              "isolated-recheck-kills"
             ]
           }
         },
@@ -498,6 +499,25 @@
               },
               "afterTest": {
                 "type": "string"
+              }
+            }
+          },
+          "isolatedRecheck": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "withheldFailure",
+              "killerGreenInMainBaseline"
+            ],
+            "properties": {
+              "withheldFailure": {
+                "type": "string"
+              },
+              "afterTest": {
+                "type": "string"
+              },
+              "killerGreenInMainBaseline": {
+                "type": "boolean"
               }
             }
           },

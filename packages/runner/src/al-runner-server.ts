@@ -773,7 +773,13 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // /coord/handoff/PR-133/census2/ with two refusers: a plain SetFilter, and one that unwinds through a TryFunction,
   // an OnValidate, a ModalPageHandler and an open TestPage (the state DO reaches it in).
   BIGCODE: String.raw`(?:GL00000000|GU00000001|C10000|C\*)`,
-  NULS: String.raw`\x00{4,6}`,
+  // PR-139 added every NUL width M28736's DO requests hold (3, 7, 9-14, 16, 21, 25, 27, 30, 37, 40), each by name: x3 closed on
+  // 7 of them, and the rest share those requests, which a daemon keeps only if every refusal in it is kept. Family
+  // `x3-refusals` measured every width CLEAN (/coord/handoff/PR-139/census2/; the width-10 class with an array, a TryFunction,
+  // a nested modal-page and an OnInsert refuser). Direct checks on DO: a daemon kept through 207 refusals gave the same 443
+  // rows as fresh daemons, and its next request with no mutant matched fresh ones too.
+  // Spec (with amendment 1): docs/superpowers/specs/2026-11-18-pr139-x3-restarts-precommitment.md.
+  NULS: String.raw`(?:\x00{3}|\x00{4,6}|\x00{7}|\x00{9}|\x00{10}|\x00{11}|\x00{12}|\x00{13}|\x00{14}|\x00{16}|\x00{21}|\x00{25}|\x00{27}|\x00{30}|\x00{37}|\x00{40})`,
   INTTEXT: "(?:=18|1=18)",
   // PR-93: the two writer states t10/t11 met for WritePropertyName, both measured.
   ARRAYSTATE: "(?:ArrayStart|Array)",
@@ -783,7 +789,14 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-74 review M2: the measured path `a`, plus t9's three paths by name (the path is the writer's own
   // nesting, not engine state; a widening by name, not a measurement).
   // PR-105 added the path t12/t13 met, measured by its own cell.
-  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\]|message\.body\.ccRecipients\[0\]\.emailAddress)`,
+  // PR-159 added message.body.toRecipients[0].emailAddress, measured by family `y1-refusals`, census CLEAN at
+  // /coord/handoff/PR-159/census/. Not measured: DO's `CDO Microsoft Graph Rest Api`, reached from
+  // `CDO Send Mail Management.SendMSGraphMail`, can reach the same text in a deeper state (spec L4; no DO test reaches it
+  // today, and the kept ccRecipients[0] path has the same exposure).
+  JSONPATH: String.raw`(?:a|message|message\.ccRecipients\[0\]|message\.toRecipients\[0\]|message\.body\.ccRecipients\[0\]\.emailAddress|message\.body\.toRecipients\[0\]\.emailAddress)`,
+  // PR-159: the Integer values the GetTable keep covers, each by name: 123 (PR-133) and 12345 (family `y1-refusals`, census
+  // CLEAN at /coord/handoff/PR-159/census/, a plain call and one behind an `IsRecord` guard). No integer pattern.
+  GETTABLEINT: "(?:123|12345)",
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1118,7 +1131,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // Not kept: Report.RunRequestPage (DO reaches it with no request-page handler, on a BaseApp report, inside an
   // open write transaction, and nothing measured what report code runs before the refusal: spec r2 H1/H2), the
   // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
-  ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer 123"],
+  // PR-159 (spec 2026-11-18-pr159-y1-sibling-keeps-precommitment.md): 12345 joins 123 by name (slot %GETTABLEINT%).
+  ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer %GETTABLEINT%"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
