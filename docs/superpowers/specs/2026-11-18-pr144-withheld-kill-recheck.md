@@ -277,6 +277,50 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
     difference is investigated before anything is re-recorded.
   - The BC gates (bcdev and the rest) do not read this option.
 
+## 0j. Amendment 10 (coord PR-185, 2026-11-18): the recheck on resumed and reused-baseline runs; the stale warning line
+- **The rulings** (orchestrator, 2026-11-18):
+  1. Update `RECHECK_UNEXERCISED` to say leg RC exists (PR-162).
+  2. `withheld-recheck-skipped` on resumed or reused-baseline runs means the owner's default-on does not apply to them.
+     Make the recheck run there if that can be sound; otherwise say so once per run, with the reason and the row count.
+- **Why it skips today** (`runWithheldRecheck`, withheld-recheck.ts):
+  - rule (e) needs the main baseline's per-test results;
+  - `mainBaselineOf` reads them only from `baseline-batch-finished` events;
+  - a batch whose baseline snapshot is REUSED emits none, so `mainBaseline` is empty and the recheck skips ("a reused
+    baseline").
+  - Separately, `recheckTargetsOf` reads only `mutant-scored`. A withheld row CARRIED by `--resume`/`--resume-run`
+    (`mutant-carried`) is never a target. Its own run was interrupted before the session-end recheck, so it is never
+    rechecked anywhere.
+- **Why it can be sound:**
+  - A reused snapshot stores the full baseline, one observation per test with its verdict (`BaselineSnapshot.baseline`),
+    taken on an identical instrumented tree and test app (the reuse key). It is exactly what rule (e) compares against.
+  - A carried row's withheld note and covering tests are what the recheck needs, if its `cause` is known.
+- **The change:**
+  1. **The main baseline for rule (e):** `mainBaselineOf` is the union of `baseline-batch-finished` verdicts and the
+     verdicts of every batch whose snapshot this session REUSED. The orchestrator hands the reused observations to the
+     recheck; the event stream does not change. The same stricter reading applies: a test is green only if it passed in
+     every batch it ran in.
+  2. **Carried targets:** a `mutant-carried` row is a target when `withheldKillOf` matches it. That needs `cause` on
+     `mutant-carried`, carried from the store like `failureNote`.
+     - If the store does not hold `cause` for such rows, the build does NOT guess from the note's text. Instead the
+       skip warning names the carried withheld rows: one warning per run, with the reason and the count.
+     - A carried row the recheck recovers takes the same `mutant-rechecked` path as a scored one.
+  3. **The skip warning stays only for the real skips:** method isolation, a non-serve transport, and no baseline
+     results at all. It is emitted once per run, with the reason and the row count, as today.
+  4. **`RECHECK_UNEXERCISED`** becomes: "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a
+     fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills
+     confirmed, 0 false)." The test that pins it changes in the same commit. RECHECK_WARNING stays verbatim.
+- **Pre-committed:**
+  - **No frozen gate figure moves.** Leg RC runs fresh (no reuse, no resume), and no other leg builds the recheck
+    (amendment 9).
+  - **A manual run of leg RC's fixture, twice on ONE store** (the second reuses the first's baseline snapshot): the second
+    run prints NO `withheld-recheck-skipped`, and its rows equal leg RC's baseline file per mutant. That is 4 Sevens
+    `killed` by A1_OneSeven (reproduced, `isolatedRecheck`) and 4 SevensB `error`, with the note naming rule (e) and
+    B2_SeesTheMark.
+  - **Unit tests, each red-checked:**
+    - a reused-baseline session runs the recheck, and rule (e) reads the reused verdicts;
+    - a carried withheld row is rechecked, or, without `cause`, it is counted in the one warning;
+    - the skip warning appears once per run with the right count.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
