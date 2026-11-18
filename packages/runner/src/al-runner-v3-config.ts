@@ -19,6 +19,8 @@
  *     "daemonMaxRequests": 0,                                 // R952 (R948); a serve daemon is replaced after this many requests. 0 (default) = off
  *     "license": "<optional .bclicense file>",             // R956; passed as --license on every al-runner call that runs tests; its sha256 is in the fingerprint and the report
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
+ *     "recheckWithheldKills": false,                         // PR-144; true: after the main pass, re-run the withheld-kill rows under method isolation. Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
+ *     "recheckBudgetSeconds": 3600                           // PR-144; the recheck's own time budget (the main pass's --time-budget does not cover it)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
@@ -76,7 +78,29 @@ export interface AlRunnerV3ConfigSection {
   readonly daemonMaxRssGb: number;
   /** R952 (R948): replace a serve daemon after this many requests; 0 (default) = off. */
   readonly daemonMaxRequests: number;
+  /** PR-144: re-run the withheld-kill rows alone after the main pass. Default `false`. See `RECHECK_WARNING`. */
+  readonly recheckWithheldKills: boolean;
+  /** PR-144: the recheck's own time budget, whole seconds. Default `V3_RECHECK_BUDGET_SECONDS_DEFAULT`. */
+  readonly recheckBudgetSeconds: number;
 }
+
+/**
+ * PR-144: the warning every description of `alRunnerV3.recheckWithheldKills` must carry, verbatim. The recheck
+ * recovers a withheld kill by running it under method isolation, which removes the state an earlier refused
+ * test left; it does not give BC's state back.
+ */
+export const RECHECK_WARNING =
+  "kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.";
+
+/**
+ * PR-144: said beside `RECHECK_WARNING` wherever it is. The recheck is covered by unit and real-path tests and by an
+ * approximation on a real project (arm M); no live gate leg runs it end to end yet.
+ */
+export const RECHECK_UNEXERCISED =
+  "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.";
+
+/** PR-144: THE default of `alRunnerV3.recheckBudgetSeconds`. */
+export const V3_RECHECK_BUDGET_SECONDS_DEFAULT = 3600;
 
 /**
  * R956: the license file's identity as the report and the fingerprint carry it: its path and the
@@ -120,6 +144,8 @@ export const V3_NO_CLIENT_DEFAULT = false;
 export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
+  "recheckWithheldKills",
+  "recheckBudgetSeconds",
   "memoryHeadroomGb",
   "daemonMaxRssGb",
   "daemonMaxRequests",
@@ -325,7 +351,24 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.daemonMaxRequests" must be a whole number, 0 or more (0 turns the request bound off), got ${JSON.stringify(r.daemonMaxRequests)} (R952).`,
     );
   }
+  if (r.recheckWithheldKills !== undefined && typeof r.recheckWithheldKills !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.recheckWithheldKills" must be a boolean, got ${JSON.stringify(r.recheckWithheldKills)} (PR-144). Note: ${RECHECK_WARNING}`,
+    );
+  }
+  if (
+    r.recheckBudgetSeconds !== undefined &&
+    (typeof r.recheckBudgetSeconds !== "number" ||
+      !Number.isInteger(r.recheckBudgetSeconds) ||
+      r.recheckBudgetSeconds < 1)
+  ) {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.recheckBudgetSeconds" must be a positive whole number of seconds, got ${JSON.stringify(r.recheckBudgetSeconds)} (PR-144).`,
+    );
+  }
   return {
+    recheckWithheldKills: r.recheckWithheldKills ?? false,
+    recheckBudgetSeconds: r.recheckBudgetSeconds ?? V3_RECHECK_BUDGET_SECONDS_DEFAULT,
     memoryHeadroomGb: r.memoryHeadroomGb ?? MEMORY_HEADROOM_GB_DEFAULT,
     daemonMaxRssGb: r.daemonMaxRssGb ?? V3_DAEMON_MAX_RSS_GB_DEFAULT,
     daemonMaxRequests: r.daemonMaxRequests ?? 0,

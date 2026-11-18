@@ -3,6 +3,7 @@ import { tier2Operators } from "@lethal/builtin-tier2";
 import { CARRIER_KINDS, IDENTITY_SCHEME } from "@lethal/schemata";
 import type { MutantManifestEntry, ReachGrain } from "@lethal/schemata";
 import { V3_NOT_RUN_SUFFIX } from "./al-runner-v3-backend";
+import { RECHECK_UNEXERCISED, RECHECK_WARNING } from "./al-runner-v3-config";
 import {
   ASSERTION_SCREEN_DIAGNOSIS,
   ASSERTION_SCREEN_DISCRIMINATION_NOTES,
@@ -41,6 +42,17 @@ import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
 import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
 
 export type { BatchArtifact };
+
+/**
+ * PR-144: on a row the opt-in recheck recovered. `withheldFailure` and `afterTest` are what the main pass
+ * withheld (`withheldKillOf`). `killerGreenInMainBaseline` is whether the killing test passed in the main
+ * pass's baseline; `false` means the recheck killed with a test the main pass never trusted.
+ */
+export interface IsolatedRecheck {
+  readonly withheldFailure: string;
+  readonly afterTest?: string;
+  readonly killerGreenInMainBaseline: boolean;
+}
 
 /**
  * Internal accumulation record produced while `runSession` walks batches and
@@ -87,6 +99,8 @@ export interface SessionOutcome {
    * match.
    */
   readonly cause?: MutantErrorCause;
+  /** PR-144: set by a `mutant-rechecked` event that recovered this row. See `IsolatedRecheck`. */
+  readonly isolatedRecheck?: IsolatedRecheck;
   /**
    * Summed duration of the test runs this mutant was scored by, in ms — the same value
    * `record()` already persists to `mutants.duration_ms`. 0 for a mutant nothing ran against
@@ -267,7 +281,9 @@ export type Caveat =
   | "al-runner-v3-coverage-off"
   | "time-budget-reached"
   | "nondebuggable-no-coverage"
-  | "withheld-kills";
+  | "withheld-kills"
+  // PR-144: the opt-in recheck recovered at least one withheld kill.
+  | "isolated-recheck-kills";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -750,6 +766,22 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a kill LethAL counts, not a wrong verdict, and not a claim that BC would kill each one: " +
       "the earlier test's effect on the state is unknown, and a trusted failure would still be " +
       "confirmed and reproduced.",
+    basis: "R1108",
+  },
+  "isolated-recheck-kills": {
+    meaning:
+      "At least one `killed` mutant was recovered by the opt-in recheck (`alRunnerV3.recheckWithheldKills`, " +
+      "PR-144): the main pass withheld its kill, and a second step re-ran it under method isolation, " +
+      "one test per session, and the kill reproduced. Each such mutant carries `isolatedRecheck`. " +
+      `${RECHECK_WARNING} ${RECHECK_UNEXERCISED} ` +
+      "Method isolation removes the state an earlier test left; it does not give BC's state back. " +
+      "A kill is recovered only if every test of the killing test's codeunit that passed in the main baseline " +
+      "still passes alone. That check cannot judge tests v3 refused at baseline, so it does not answer " +
+      "whether a refused test's state mattered; only a BC comparison does. " +
+      "The count of `withheld-kills` rows is the ones still withheld.",
+    entailedNegative:
+      "Not a wrong verdict, and not a claim that BC would kill each one: no recovered kill has been run on BC. " +
+      "Not a change to any kill or survivor the main pass scored.",
     basis: "R1108",
   },
 };
@@ -2269,6 +2301,11 @@ export interface MutantOutcome {
    */
   readonly withheldKill?: { readonly failure: string; readonly afterTest?: string };
   /**
+   * PR-144: present on a `killed` row the opt-in recheck recovered from a withheld kill (caveat
+   * `isolated-recheck-kills`). Not measured against BC. Absent on every other row.
+   */
+  readonly isolatedRecheck?: IsolatedRecheck;
+  /**
    * R72: a syntactic property of this mutant's SITE saying the platform is known to refuse the
    * mutated program here, so a kill can be BC rather than an assertion. Carried verbatim from
    * `MutantManifestEntry.platformKillMechanism`; see `PLATFORM_KILL_MECHANISM_EXPLANATIONS`
@@ -2989,6 +3026,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ...(o.reproducedFailure !== undefined ? { reproducedFailure: o.reproducedFailure } : {}),
       ...(o.cause !== undefined ? { cause: o.cause } : {}),
       ...(wk !== undefined ? { withheldKill: wk } : {}),
+      ...(o.isolatedRecheck !== undefined ? { isolatedRecheck: o.isolatedRecheck } : {}),
       // R72: a SITE property, so it comes off the manifest entry and never off the outcome — it is
       // true of this mutant whatever happened when it ran.
       ...(o.mutant.platformKillMechanism !== undefined
@@ -3185,6 +3223,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (counts.errors > 0 && !allErrors) caveats.push("some-errors");
   // R1108 - see CAVEAT_INTERPRETATIONS["withheld-kills"].
   if (mutants.some((m) => m.withheldKill !== undefined)) caveats.push("withheld-kills");
+  // PR-144 - see CAVEAT_INTERPRETATIONS["isolated-recheck-kills"].
+  if (mutants.some((m) => m.isolatedRecheck !== undefined)) caveats.push("isolated-recheck-kills");
   // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
   // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
   // score", and that is one fact however many flags produced it.

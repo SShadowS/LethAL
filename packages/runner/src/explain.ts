@@ -283,8 +283,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 30: PR-116 (R1108) added the caveat value `withheld-kills` to `$.caveats[].caveat`. A new value, so it
  * bumps (R233); v29 is frozen.
+ *
+ * 31: PR-144 added the caveat value `isolated-recheck-kills` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v30 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 30;
+export const EXPLAIN_SCHEMA_VERSION = 31;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

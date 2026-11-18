@@ -113,7 +113,7 @@ export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-
 import { type AcceptResult, computeAcceptResult, loadAcceptList } from "./accept-list";
 import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
 import type { ReportView } from "./changed-line-survivors";
-import type { EventSubscriber } from "./events";
+import type { EventSubscriber, RunEvent } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
@@ -183,6 +183,7 @@ import {
   testProjectNestedProblem,
 } from "./verify";
 import { setPackageCacheDirs, walkFiles } from "./walk";
+import { type RecheckRunner, recheckSiteKey } from "./withheld-recheck";
 
 /**
  * `cli.ts` is argument marshaling only — everything that decides pass/fail
@@ -3231,6 +3232,109 @@ export function pinV3Binary(parsed: RunCliConfig, config: LethalConfigFile): Let
 }
 
 /**
+ * PR-144: `SessionConfig.recheck` for a v3 run whose config sets `alRunnerV3.recheckWithheldKills`, else
+ * `undefined`. The nested session is the main pass's own config (the pinned binary and sidecar, R1018) with
+ * `isolation` forced to `"method"`, on a fresh backend and an in-memory store, narrowed to the targets'
+ * exact sites and covering tests, under the recheck's own budget. It carries no `recheck`, no `resume` and
+ * no event subscriber of the main run: its events never reach the main stream.
+ */
+export function v3RecheckOf(a: {
+  readonly parsed: RunCliConfig;
+  readonly effectiveConfig: LethalConfigFile;
+  readonly mainConfig: SessionConfig;
+  readonly build: (config: LethalConfigFile, scratchDir: string) => Promise<ExecutionBackend>;
+  readonly runSession: (cfg: SessionConfig) => Promise<SessionReport>;
+  readonly newStore: () => ResultsStore;
+  readonly scratchRoot: string;
+}): SessionConfig["recheck"] | undefined {
+  if (a.parsed.backendKind !== "al-runner-v3") return undefined;
+  // Only a config that names the option is validated here; every other config is judged by `buildBackend`.
+  const raw = a.effectiveConfig.alRunnerV3;
+  if (
+    typeof raw !== "object" ||
+    raw === null ||
+    (raw as { recheckWithheldKills?: unknown }).recheckWithheldKills === undefined
+  )
+    return undefined;
+  const section = validateAlRunnerV3Config(raw);
+  if (!section.recheckWithheldKills) return undefined;
+  const runner: RecheckRunner = async (req) => {
+    const methodConfig: LethalConfigFile = {
+      ...a.effectiveConfig,
+      alRunnerV3: { ...(a.effectiveConfig.alRunnerV3 as object), isolation: "method" },
+    };
+    const {
+      recheck: _recheck,
+      resume: _resume,
+      retryStranded: _retryStranded,
+      skipKnownSurvivors: _skip,
+      lines: _lines,
+      changedSince: _changedSince,
+      emit: _emit,
+      timeBudgetSeconds: _budget,
+      backend: _backend,
+      store: _store,
+      instrumentedDir: _dir,
+      // excludeTests stays in `base` (R488: the excluded look-alike tests are excluded in the nested run too).
+      ...base
+    } = a.mainConfig;
+    const lines: LineRange[] = req.targets.map((t) => ({
+      file: t.mutant.file.replaceAll("\\", "/"),
+      start: t.mutant.startLine,
+      end: t.mutant.startLine,
+    }));
+    const exactSites = new Set(req.targets.map((t) => recheckSiteKey(t.mutant)));
+    const backend = await a.build(methodConfig, join(a.scratchRoot, "recheck"));
+    const store = a.newStore();
+    const events: RunEvent[] = [];
+    try {
+      const report = await a.runSession({
+        ...base,
+        backend,
+        store,
+        instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
+        emit: [(e) => events.push(e)],
+        lines,
+        exactSites,
+        keepOnlyTests: req.tests,
+        timeBudgetSeconds: req.budgetSeconds,
+      });
+      const ctx = report.validity.executionContexts.find((c) => c.binarySha256 !== undefined);
+      return {
+        rows: report.mutants,
+        baseline: events.flatMap((e) =>
+          e.type === "baseline-batch-finished"
+            ? e.verdicts.map((v) => ({ name: v.name, outcome: v.outcome }))
+            : [],
+        ),
+        baselineElapsedMs: events.reduce(
+          (n, e) => (e.type === "phase-left" && e.phase === "baseline" ? n + e.elapsedMs : n),
+          0,
+        ),
+        identity: {
+          ...(ctx?.runnerBuild !== undefined ? { version: ctx.runnerBuild } : {}),
+          ...(ctx?.binarySha256 !== undefined ? { binarySha256: ctx.binarySha256 } : {}),
+          ...(report.sourceSha256 !== undefined ? { sourceSha256: report.sourceSha256 } : {}),
+          ...(report.dependencySourceSha256 !== undefined
+            ? { dependencySourceSha256: report.dependencySourceSha256 }
+            : {}),
+        },
+      };
+    } finally {
+      try {
+        store.close();
+        await backend.close?.();
+      } catch (err) {
+        console.warn(
+          `[lethal] recheck cleanup failed (best-effort): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  };
+  return { budgetSeconds: section.recheckBudgetSeconds, runner };
+}
+
+/**
  * Runs Task 6's `startEnvToolSession` lifecycle EXACTLY ONCE for a `run` invocation and returns a
  * `LethalConfigFile` with `bcdev` substituted by the resolved section — the object `buildBackend`,
  * `leaseSessionFor`, and `resourceIdentityFor` all read `configFile.bcdev` from (each calls
@@ -4598,7 +4702,7 @@ export async function runFromCliWithAccept(
             }
             // R360: kept for the scratch-folder decision after the session, see above.
             tier = resourceIdentityFor(parsed, effectiveConfig);
-            report = await runTheSession({
+            const mainConfig: SessionConfig = {
               backend,
               store,
               projectDir: parsed.projectDir,
@@ -4668,7 +4772,21 @@ export async function runFromCliWithAccept(
               ...tier,
               ...leaseSessionFor(parsed, effectiveConfig),
               ...permissionCanaryFor(parsed, effectiveConfig),
+            };
+            // PR-144: the opt-in withheld-kill recheck, from the run's pinned config.
+            const recheck = v3RecheckOf({
+              parsed,
+              effectiveConfig,
+              mainConfig,
+              build: (cfg, dir) =>
+                build(parsed, cfg, dir, deploy, {}, selectorIds, source, probing),
+              runSession: runTheSession,
+              newStore: () => new ResultsStore(":memory:"),
+              scratchRoot,
             });
+            report = await runTheSession(
+              recheck !== undefined ? { ...mainConfig, recheck } : mainConfig,
+            );
           } finally {
             // Best-effort cleanup — mirrors orchestrator.ts's own posture (~line 2056: "deliberately
             // swallow errors here... a failure here must not mask/replace whatever real error is already
