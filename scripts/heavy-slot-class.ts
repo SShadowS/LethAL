@@ -134,8 +134,9 @@ export function readSlotRssGiB(
     if (text === "") return undefined;
     const kb = Number(text);
     const age = nowMs - statSync(file).mtimeMs;
-    // A future-dated reading (negative age) is not proof of freshness either.
-    if (!(Number.isFinite(kb) && kb >= 0) || age < 0 || age > RSS_FRESH_MS) return undefined;
+    // A future-dated reading is not proof of freshness either. A file just written can carry an mtime a
+    // fraction of a millisecond past Date.now(), so only a reading more than 2 s ahead counts as future.
+    if (!(Number.isFinite(kb) && kb >= 0) || age < -2000 || age > RSS_FRESH_MS) return undefined;
     return kb / 2 ** 20;
   } catch {
     return undefined;
