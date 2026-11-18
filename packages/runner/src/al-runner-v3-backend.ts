@@ -8654,7 +8654,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * forward, R857, so a later non-covering test may differ). "Differs" is R612's warm-up compare
    * (`rowsClass`: status, and for a refusal its reason; a fail's text is not compared). Not compared:
    * a test the baseline refused or timed out, a row with no baseline row, an entry whose covering set
-   * is unknown or not in the baseline order.
+   * is unknown or not in the baseline order, and (R1115) in a mutant entry, a test red at baseline.
    */
   private keptRefusalDrift(
     sent: readonly SentEntry[],
@@ -8687,6 +8687,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const timedOut = (x: V3Row) =>
           x.status === "error" && V3_TIMEOUT_MESSAGE.test(x.message ?? "");
         if (b.notRun || timedOut(b) || timedOut(r)) continue;
+        // R1115 (PR-145): in a MUTANT entry, a test red at baseline is in no plan, so "before the first covering
+        // test" says nothing about its reach: the mutant can make it pass. Not compared. A NONE entry keeps it.
+        if (e.mutantId !== SELECTOR_RESOURCE_NONE && b.status !== "pass") continue;
         const want = rowsClass([b]);
         const got = rowsClass([r]);
         if (got !== want) return { test: r.name, baselineRow: want, row: got };
