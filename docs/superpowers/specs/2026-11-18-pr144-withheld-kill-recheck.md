@@ -362,6 +362,28 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
     tests above pin the path.
 - **Amendment 10's manual-run prediction is withdrawn.** It rested on reuse without `--resume`, which does not happen.
 
+## 0l. Amendment 12 (coord PR-185, 2026-11-18, after the Opus review of the build): there is no gap; item 2 withdrawn
+- **Found by the review, and checked by lethal-preproc in resume.ts:** resume NEVER carries an `error` row.
+  - `CARRYABLE_VERDICTS` is killed, survived, timeout-killed, no-coverage and known-survivor. "`error` is deliberately
+    absent … re-running it either reproduces the error (no loss) or scores it (a gain)".
+  - A withheld kill is always `error`. On `--resume` it is therefore RE-RUN, comes back as `mutant-scored`, and the
+    existing recheck already takes it as a target.
+- **So amendment 11's premise was false as well,** read from `recheckTargetsOf` and not from the carry rule. A resumed
+  DO window does recheck its withheld rows. Together with amendment 10's false cause, the orchestrator's concern behind
+  ruling (2) does not hold: the default-on applies to resumed runs. Only the real skips remain: method isolation, a
+  non-serve transport, and a session with no baseline results at all.
+- **The change, replacing amendment 11's item 2:**
+  1. The carried-row plumbing is NOT kept. It cannot run, and dormant code that tests pass on hand-built events is a
+     trap. Removed: the `cause` store column, `CarriedVerdict.cause`, `mutant-carried.cause`, the carried branch of
+     `recheckTargetsOf`, and `withheld-recheck-carried-unknown`.
+  2. **Kept:**
+     - the skip warning's real wording ("no baseline results at all"), with its once-per-run test;
+     - the new `RECHECK_UNEXERCISED` text (item 4).
+  3. **Added: the real guarantee, pinned end to end.** A test drives a resume of a store holding a withheld `error` row,
+     and asserts that the row is re-scored (`mutant-scored`, not `mutant-carried`) and is a recheck target.
+     - Red-checked by putting `error` into `CARRYABLE_VERDICTS`: the test must go red.
+- **Pre-committed:** no frozen gate figure moves; the stream schema is unchanged from master.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
