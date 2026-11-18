@@ -10939,6 +10939,9 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
       expect(
         warn.mock.calls.some((c) => String(c[0]).includes("re-check: coverage not compared")),
       ).toBe(true);
+      // the samples ask for no coverage either (build review): nothing would read it
+      expect(r2.serve.requests.length).toBeGreaterThan(0);
+      expect(r2.serve.requests.every((q) => q.body.coverage !== true)).toBe(true);
     } finally {
       warn.mockRestore();
     }
