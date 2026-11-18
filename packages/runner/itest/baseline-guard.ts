@@ -381,6 +381,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.wrapped.baseline.json",
     "itest:alrunner-v3",
   ),
+  // PR-144: leg RC (sandbox-recheck, the withheld-kill recheck), pre-committed in
+  // docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md section 0b; waits in PENDING_FIRST_RECORD.
+  "al-runner-v3.recheck.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=RC",
+    "al-runner-v3.recheck.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -416,7 +423,7 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * waited here and were recorded once on 2026-10-24 (R-602, after their pre-commitment c2f67f0a), equal to
  * it per mutant; the list is empty again.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = [];
+export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner-v3.recheck.baseline.json"];
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {

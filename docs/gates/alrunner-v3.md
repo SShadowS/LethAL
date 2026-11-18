@@ -337,6 +337,25 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 **agentflow.** `scripts/agentflow/gate-table.ts` selects the `alrunner-v3` leg wherever it selected the retired `alrunner` leg (R654). A challenged run (the four `LETHAL_GATE_*` variables) writes a receipt whose sublegs must equal the default legs, with no corpus and no tables leg (`V3_AGENTFLOW_LEGS`).
 
+### Leg RC: the withheld-kill recheck (PR-144)
+
+Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162; §0b is the leg's design and §0c its warning set `[]`), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, has not been recorded: the leg REFUSES to start until it is (R332), and the figure block below names it with no totals until then.
+
+- **Fixture:** `fixtures/sandbox-recheck` and `fixtures/sandbox-recheck-tests` (runtime 17, invented code, ids 76000-76099).
+  - Codeunit "Recheck Logic": `Sevens(N)` and `SevensB(N)`, each a loop of `C := '7'; T += Format(C);`. Table "Recheck Row" (76001) is only the record handed to `Page.RunModal`.
+  - "Recheck A Tests", in order: `A0_ParsesSevens` (`Evaluate` of `Sevens(10)` into Decimal must succeed, then `if D < 0 then Page.RunModal(0, R)`, which is after the refusal point and holds a construct al-runner cannot know), `A1_OneSeven` (asserts `Sevens(1) = '7'`).
+  - "Recheck B Tests", in order: `B0_ParsesSevens` (as A0 over `SevensB`), `B1_OneSevenAndMarks` (sets the global Boolean `Marked`, then asserts `SevensB(1) = '7'`), `B2_SeesTheMark` (asserts `Marked`: passes after B1 in one codeunit run, fails alone).
+- **Session:** al-runner v3 on the gate's pinned build, `"isolation": "test"` (explicit, so `auto` cannot move the codeunits), serve transport, `"recheckWithheldKills": true`, `--workers 1`. The recheck is built by `v3RecheckOf`, the CLI's own code.
+- **Pre-committed figures, per mutant** (the `lethal.remove-assignment` mutant of `C := '7'` in each procedure):
+  - `Sevens`: main pass `error` with `withheldKill` (afterTest `A0_ParsesSevens`); after the recheck `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`.
+  - `SevensB`: main pass `error` with `withheldKill` (afterTest `B0_ParsesSevens`); after the recheck it stays `error`, its note naming rule (e) and `B2_SeesTheMark`, which passed in the main baseline and fails alone.
+  - Other mutants of the two procedures are recorded in the leg's baseline and are not predicted.
+  - Caveats: `isolated-recheck-kills` for the `Sevens` mutant, `withheld-kills` for the `SevensB` one.
+- **The leg fails by name** (`judgeRecheckLeg`, checked BEFORE the own-baseline compare): when the main pass has 0 withheld kills, when the `Sevens` mutant is not recovered, or when the `SevensB` mutant is recovered. It also fails on a `SevensB` note that does not name rule (e) and `B2_SeesTheMark`, a wrong afterTest, or a missing caveat.
+- **Warning set** `[]` (`GATE_WARNINGS["al-runner-v3/RC"]`, amendment 3).
+- **Symbols:** the two projects are in the fixture symbol tar only after the owner rebuilds it; until the tar swap reaches CI and its compile is green, RC is recorded but not counted as proven.
+- Every other leg's frozen figures stay exactly as they are.
+
 ## `--workers N` (R766 step b)
 
 `lethal run --backend al-runner-v3 --workers N` (N 2 to 8) runs the mutants on N serve lanes of one backend. No gate
@@ -664,7 +683,8 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 }
+    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 },
+    "al-runner-v3.recheck.baseline.json": {}
   }
 }
 ```
