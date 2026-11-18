@@ -61,6 +61,13 @@ reproduces with its test run alone. Its spec's P5: no default-on until BC confir
       M's). The hash covers `app.json` as well as the `.al` files.
     - PR-67's `do-app` differs from x3's source only in `app.json`'s version (30.0.20775.33549, bumped for PR-155's DO
       restore; measured by diff). PR-155's bcdev and v3 reports both carry `8e2db184…`.
+    - **A second correction, after the bcdev leg and before any row was classified.** The check stopped by name: the run
+      carries `69fbb10d…`. PR-155's DO restore rewrote `app.json` at 19:05:41Z, after PR-155's runs, so `8e2db184…`
+      was the `app.json` state before that, not the one this run saw.
+    - **Measured with LethAL's own `readTargetSource` and `hashSourceSnapshot`:**
+      - `do-app` as it is hashes to `69fbb10d…`;
+      - the same snapshot with only `app.json` replaced by x3's hashes to `84fb7d1f…`, x3's hash exactly.
+    - So the `.al` tree is x3's, byte for byte, and the check is `69fbb10d…`. Evidence: `/coord/handoff/PR-170/srchash.txt`.
   - every sampled site key is in the bcdev report;
   - every sampled verdict is `killed`, `survived`, `no-coverage` or `error`;
   - "the killer at BC's baseline" (green, red, refused or not run) is read from the bcdev run's baseline events
