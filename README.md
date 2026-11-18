@@ -542,9 +542,11 @@ two runs do not belong together (different source, flags, suite or identity sche
   passing covering test of the mutant leaves that mutant unnoted. Only the sample can catch it.
 - **The note marks a codeunit, not a test,** so some noted mutants cost BC time and change nothing.
 - **Unnoted survivors outside the sample keep v3's verdict.** The sample bounds that error; it does
-  not remove it. When the sample is smaller than the unnoted set, the merge prints a one-sided 95%
-  upper bound on the unnoted kill rate (3 divided by the sample size, when BC killed none). When it
-  covers every unnoted survivor, it says so instead. If BC kills any sampled survivor, the merge
+  not remove it. When fewer survivors were drawn than there are unnoted survivors, the merge prints
+  a one-sided 95% upper bound on the unnoted kill rate (3 divided by the number BC scored `killed`
+  or `survived`, printed beside it, when BC killed none). When every unnoted survivor was drawn, it
+  says "all unnoted survivors measured" instead. The BC run must be `--backend bcdev`, and the merge
+  recomputes the selection from the v3 report and refuses if the BC report recorded another. If BC kills any sampled survivor, the merge
   prints `unnoted-disagreement`: run the whole scope on BC.
 - **Same source, same build.** Run both from one commit. The two runs must agree on source hash,
   `--only`, `--exclude`, `--operator`, `--lines`, preprocessor symbols, `--tests-only` and

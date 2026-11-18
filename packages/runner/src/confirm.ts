@@ -22,6 +22,7 @@ import {
   identitySiteKey,
 } from "@lethal/schemata";
 import { V3_REFUSED_NEARBY_TAG } from "./al-runner-v3-backend";
+import { type BackendKind, isBcdev } from "./backend";
 import { keyOf } from "./mutant-key";
 import { failureTextMechanisms } from "./platform-artifact-kills";
 import type { MutantOutcome, SessionReport } from "./report";
@@ -205,12 +206,28 @@ export class ConfirmMergeUnselectedKeyError extends Error {
     this.name = "ConfirmMergeUnselectedKeyError";
   }
 }
-export class ConfirmMergeSelectedNotInV3Error extends Error {
-  constructor(keys: readonly string[]) {
+export class ConfirmMergeSelectionMismatchError extends Error {
+  constructor(differences: readonly string[]) {
     super(
-      `confirm-merge-selected-not-in-v3: ${keys.length} selected key(s) are not in v3.json: ${keys.slice(0, 5).join(", ")}${keys.length > 5 ? ", ..." : ""}.`,
+      `confirm-merge-selection-mismatch: the selection bc.json recorded is not what v3.json gives with the sample size and seed bc.json recorded (${differences.length} difference(s)): ${differences.slice(0, 5).join("; ")}${differences.length > 5 ? "; ..." : ""}.`,
     );
-    this.name = "ConfirmMergeSelectedNotInV3Error";
+    this.name = "ConfirmMergeSelectionMismatchError";
+  }
+}
+export class ConfirmBackendNotBcdevError extends Error {
+  constructor(backend: string) {
+    super(
+      `confirm-backend-not-bcdev: --confirm-from runs on --backend bcdev, not ${backend}. The point is BC's answer for what v3 could not measure.`,
+    );
+    this.name = "ConfirmBackendNotBcdevError";
+  }
+}
+export class ConfirmMergeBcNotBcdevError extends Error {
+  constructor(backend: string) {
+    super(
+      `confirm-merge-bc-not-bcdev: bc.json is a "${backend}" report, not a bcdev one. Only BC's verdicts may override v3's.`,
+    );
+    this.name = "ConfirmMergeBcNotBcdevError";
   }
 }
 export class ConfirmMergeBcRowNotMeasuredError extends Error {
@@ -509,8 +526,8 @@ export const CONFIRMATION_VERSION = 1;
 export type ConfirmationGroup = ConfirmGroup | "unconfirmed";
 export type ConfirmationMeasuredBy = "bcdev" | "al-runner-v3";
 /** `linux-rdlc-stub`: R1121, copied from the killing failure text. `bc-error`: BC's verdict was
- *  `error`, which is not a measurement. `v3-kill-unconfirmed`: v3 killed it, BC errored on it. */
-export type ConfirmationFlag = "linux-rdlc-stub" | "bc-error" | "v3-kill-unconfirmed";
+ *  `error`, which is not a measurement. */
+export type ConfirmationFlag = "linux-rdlc-stub" | "bc-error";
 
 export interface ConfirmationMutant {
   readonly key: string;
@@ -546,7 +563,10 @@ export interface ConfirmationTotals {
 export interface ConfirmationSample {
   /** `n` the run was given. */
   readonly requested: number;
-  /** Sampled mutants BC measured (a BC `error` is not a measurement). */
+  /** Mutants the sample drew (the sample group of the recomputed selection). */
+  readonly drawn: number;
+  /** Drawn mutants BC scored `killed`, `timeout-killed` or `survived`. A BC `error` or
+   *  `no-coverage` is not a measurement of the unnoted kill rate. */
   readonly measured: number;
   /** Unnoted v3 survivors in all. */
   readonly unnotedSurvivors: number;
@@ -554,10 +574,11 @@ export interface ConfirmationSample {
   readonly killedOnBc: number;
   /** Sampled mutants BC killed on a stub (R1121), counted apart. */
   readonly stubKilledOnBc: number;
-  /** Rule of three, 3 / measured: only when nothing was killed and the sample is smaller than the
-   *  unnoted set. Otherwise null. */
+  /** Rule of three, 3 / `measured`: only when nothing was killed and the number DRAWN is smaller
+   *  than the unnoted set. Otherwise null. */
   readonly upperBound95: number | null;
-  readonly allMeasured: boolean;
+  /** Every unnoted survivor was drawn (so there is no bound to print). */
+  readonly allUnnotedDrawn: boolean;
   /** `none`: nothing measured. */
   readonly verdict: "agreement" | "disagreement" | "none";
   /** Keys that make a `disagreement`. */
@@ -587,6 +608,7 @@ export interface MergeInput {
 export function mergeConfirmation(p: MergeInput): Confirmation {
   const v3 = assertConfirmInput(p.v3);
   const bc = asSessionReport(p.bc);
+  if (!isBcdev(bc.backend as BackendKind)) throw new ConfirmMergeBcNotBcdevError(bc.backend);
   const dupV3 = duplicateKeys(v3);
   if (dupV3.length > 0) throw new ConfirmDuplicateKeyError("v3.json", dupV3);
   const dupBc = duplicateKeys(bc);
@@ -600,10 +622,29 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
   if (why !== undefined) throw new ConfirmMergeBcPartialError(why);
   assertSameScope(scopeOfReport(v3), scopeOfReport(bc));
 
-  const v3ByKey = new Map(v3.mutants.map((m) => [keyOf(m), m] as const));
-  const groupOf = new Map(block.selected.map((s) => [s.key, s.group] as const));
-  const notInV3 = [...groupOf.keys()].filter((k) => !v3ByKey.has(k)).sort();
-  if (notInV3.length > 0) throw new ConfirmMergeSelectedNotInV3Error(notInV3);
+  // Recompute the selection from v3.json with the n and seed bc.json recorded, and refuse unless it
+  // is exactly the selection bc.json recorded. The recomputed groups are the ones used below, so a
+  // relabelled group or a key added, dropped or changed cannot reach the artifact.
+  const recomputed = planConfirm({
+    inputPath: block.inputPath,
+    input: p.v3,
+    inputSha256: p.v3Sha256,
+    sample: block.sample,
+    seed: block.seed,
+    skipKnownSurvivors: false,
+    resume: false,
+    exactSites: false,
+  }).given.selected;
+  const asPairs = (s: readonly ConfirmSelectedKey[]) =>
+    new Set(s.map((x) => `${x.group} ${x.key}`));
+  const recordedPairs = asPairs(block.selected);
+  const recomputedPairs = asPairs(recomputed);
+  const differ = [
+    ...[...recomputedPairs].filter((x) => !recordedPairs.has(x)).map((x) => `not recorded: ${x}`),
+    ...[...recordedPairs].filter((x) => !recomputedPairs.has(x)).map((x) => `not recomputed: ${x}`),
+  ].sort();
+  if (differ.length > 0) throw new ConfirmMergeSelectionMismatchError(differ);
+  const groupOf = new Map(recomputed.map((s) => [s.key, s.group] as const));
   const bcByKey = new Map(bc.mutants.map((m) => [keyOf(m), m] as const));
   const unselected = [...bcByKey.keys()].filter((k) => !groupOf.has(k)).sort();
   if (unselected.length > 0) throw new ConfirmMergeUnselectedKeyError(unselected);
@@ -635,15 +676,13 @@ export function mergeConfirmation(p: MergeInput): Confirmation {
     }
     if (b.verdict === "error") {
       // A BC error is not a measurement, so it does not override v3's verdict.
-      const flags: ConfirmationFlag[] = ["bc-error"];
-      if (isKill(m.verdict)) flags.push("v3-kill-unconfirmed");
       return {
         ...base,
         group,
         bcVerdict: "error",
         finalVerdict: m.verdict,
         measuredBy: "al-runner-v3",
-        flags,
+        flags: ["bc-error"],
         ...(b.failureNote !== undefined ? { note: b.failureNote } : {}),
       };
     }
@@ -699,22 +738,23 @@ function sampleOf(
 ): ConfirmationSample {
   const unnotedSurvivors = v3.mutants.filter(isUnnotedSurvivor).length;
   const drawn = mutants.filter((m) => m.group === "sample");
-  const measured = drawn.filter((m) => m.bcVerdict !== undefined && m.bcVerdict !== "error");
+  const measured = drawn.filter((m) =>
+    ["killed", "timeout-killed", "survived"].includes(m.bcVerdict ?? ""),
+  );
   const kills = measured.filter((m) => isKill(m.bcVerdict ?? ""));
   const stub = kills.filter((m) => m.flags.includes("linux-rdlc-stub"));
   const real = kills.filter((m) => !m.flags.includes("linux-rdlc-stub"));
-  const allMeasured = measured.length === unnotedSurvivors;
+  const allUnnotedDrawn = drawn.length >= unnotedSurvivors;
   return {
     requested,
+    drawn: drawn.length,
     measured: measured.length,
     unnotedSurvivors,
     killedOnBc: real.length,
     stubKilledOnBc: stub.length,
     upperBound95:
-      real.length === 0 && measured.length > 0 && measured.length < unnotedSurvivors
-        ? 3 / measured.length
-        : null,
-    allMeasured,
+      real.length === 0 && measured.length > 0 && !allUnnotedDrawn ? 3 / measured.length : null,
+    allUnnotedDrawn,
     verdict: measured.length === 0 ? "none" : real.length > 0 ? "disagreement" : "agreement",
     disagreementKeys: real.map((m) => m.key).sort(),
   };
@@ -742,11 +782,13 @@ export function renderConfirmation(c: Confirmation): string[] {
     lines.push(
       `unnoted-disagreement: BC killed ${s.killedOnBc} sampled unnoted survivor(s): ${s.disagreementKeys.join(", ")}. Run the full scope on bcdev.`,
     );
-  } else if (s.allMeasured) {
-    lines.push(`sample: all unnoted survivors measured (${s.measured}); none killed on BC`);
+  } else if (s.allUnnotedDrawn && s.unnotedSurvivors > 0) {
+    lines.push(
+      `sample: all unnoted survivors measured (${s.drawn} drawn, ${s.measured} scored by BC); none killed on BC`,
+    );
   } else if (s.upperBound95 !== null) {
     lines.push(
-      `sample: ${s.measured} of ${s.unnotedSurvivors} unnoted survivors measured, none killed on BC; one-sided 95% upper bound on the unnoted kill rate: ${(s.upperBound95 * 100).toFixed(1)}%`,
+      `sample: ${s.measured} of ${s.unnotedSurvivors} unnoted survivors measured, none killed on BC; one-sided 95% upper bound on the unnoted kill rate: ${(s.upperBound95 * 100).toFixed(1)}% (3 / ${s.measured})`,
     );
   }
   for (const m of c.mutants) {

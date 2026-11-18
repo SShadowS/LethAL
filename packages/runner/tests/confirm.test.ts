@@ -17,6 +17,7 @@ import type {
 import { confirmMergeFromCli, parseCliConfig } from "../src/cli";
 import {
   CONFIRMATION_VERSION,
+  ConfirmBackendNotBcdevError,
   ConfirmDuplicateKeyError,
   ConfirmEmptySetError,
   ConfirmExactSitesError,
@@ -25,12 +26,13 @@ import {
   ConfirmInputNotV3Error,
   ConfirmInputPartialError,
   ConfirmKeyMatchError,
+  ConfirmMergeBcNotBcdevError,
   ConfirmMergeBcPartialError,
   ConfirmMergeBcRowNotMeasuredError,
   ConfirmMergeInputShaError,
   ConfirmMergeMissingKeyError,
   ConfirmMergeNotConfirmRunError,
-  ConfirmMergeSelectedNotInV3Error,
+  ConfirmMergeSelectionMismatchError,
   ConfirmMergeUnselectedKeyError,
   ConfirmResumeError,
   ConfirmSkipKnownSurvivorsError,
@@ -807,38 +809,37 @@ const STUB_TEXT = "Error: RDLC report rendering is not implemented on Linux BC";
 /** v3 rows, then a bc report holding the rows `bcRows` names (key index -> bc overrides). */
 function pair(opts: {
   v3: ReadonlyArray<Row>;
-  bc: Record<number, Row>;
-  groups?: Record<number, "noted" | "nocov-noted" | "sample">;
+  /** Overrides by v3 row index; a selected row without one is a BC `survived`. */
+  bc?: Record<number, Row>;
   sample?: number;
   bcExtra?: Partial<SessionReport>;
 }) {
   const v3 = v3Rows(opts.v3);
   const v3Sha = "a".repeat(64);
-  const selected = Object.keys(opts.bc)
-    .map(Number)
-    .map((i) => ({
-      key: keyOf(v3.mutants[i] as MutantOutcome),
-      group: opts.groups?.[i] ?? ("noted" as const),
-    }));
+  // The selection is the one the merge recomputes: the same planConfirm, with the same n and seed.
+  const given = planConfirm({
+    inputPath: "v3.json",
+    input: JSON.parse(JSON.stringify(v3)),
+    inputSha256: v3Sha,
+    sample: opts.sample ?? 0,
+    seed: "seed",
+    skipKnownSurvivors: false,
+    resume: false,
+    exactSites: false,
+  }).given;
+  const indexOf = new Map(v3.mutants.map((m, i) => [keyOf(m), i] as const));
+  const rows = given.selected.map((s) => {
+    const i = indexOf.get(s.key) as number;
+    return { ...(v3.mutants[i] as MutantOutcome), verdict: "survived", ...opts.bc?.[i] };
+  });
+  // bc.json is a BC run: a bcdev report holding exactly the selected rows.
   const bc = {
-    ...v3Rows(
-      Object.entries(opts.bc).map(([i, o]) => ({ ...(v3.mutants[Number(i)] as object), ...o })),
-    ),
-    confirm: {
-      inputPath: "v3.json",
-      inputSha256: v3Sha,
-      sample: opts.sample ?? 0,
-      seed: "seed",
-      selected,
-      excludedSiteCount: 0,
-    },
+    ...v3,
+    backend: "bcdev",
+    mutants: rows,
+    confirm: { ...given, excludedSiteCount: 0 },
     ...opts.bcExtra,
   } as unknown as SessionReport;
-  // v3Rows renumbers; restore each bc row's own identity from the v3 row it answers.
-  const bcRows = Object.keys(opts.bc).map(Number);
-  (bc as unknown as { mutants: MutantOutcome[] }).mutants = bcRows.map(
-    (i) => ({ ...(v3.mutants[i] as MutantOutcome), ...opts.bc[i] }) as MutantOutcome,
-  );
   return { v3, bc, v3Sha };
 }
 
@@ -864,7 +865,6 @@ describe("mergeConfirmation: the final-verdict rule", () => {
       5: { verdict: "killed", killingTest: "T.B", killingTestFailure: STUB_TEXT },
       6: { verdict: "survived" },
     },
-    groups: { 6: "nocov-noted" },
   });
   const c = merge(p);
   const row = (i: number) => c.mutants[i] as (typeof c.mutants)[number];
@@ -943,41 +943,20 @@ describe("mergeConfirmation: the final-verdict rule", () => {
     expect(c.totals.provenance).toBe("4 survivors, 2 of them measured on BC");
     expect(renderConfirmation(c).some((l) => l.includes(c.totals.provenance))).toBe(true);
   });
-
-  test("a v3 kill BC errored on is flagged v3-kill-unconfirmed and keeps v3's kill", () => {
-    const q = pair({
-      v3: [{ verdict: "killed" }, { verdict: "survived", failureNote: NOTE }],
-      bc: { 0: { verdict: "error" }, 1: { verdict: "survived" } },
-    });
-    const r = merge(q);
-    expect(r.mutants[0]).toMatchObject({
-      finalVerdict: "killed",
-      measuredBy: "al-runner-v3",
-      flags: ["bc-error", "v3-kill-unconfirmed"],
-    });
-  });
 });
 
 describe("mergeConfirmation: the sample and its stop rule", () => {
   const unnoted = (n: number): Row[] =>
     Array.from({ length: n }, () => ({ verdict: "survived" as const }));
-  const sampled = (n: number) =>
-    Object.fromEntries(Array.from({ length: n }, (_, i) => [i + 1, "sample" as const]));
-  const bcSurvived = (n: number): Record<number, Row> =>
-    Object.fromEntries(
-      Array.from({ length: n }, (_, i) => [i + 1, { verdict: "survived" as const }]),
-    );
+  /** The same BC row for v3 rows 1..n. */
+  const allBc = (n: number, row: Row): Record<number, Row> =>
+    Object.fromEntries(Array.from({ length: n }, (_, i) => [i + 1, row]));
 
   test("a sampled unnoted survivor killed on BC prints unnoted-disagreement with its key", () => {
     const p = pair({
       v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(5)],
-      bc: {
-        0: { verdict: "survived" },
-        ...bcSurvived(2),
-        2: { verdict: "killed", killingTest: "T.K", killingTestFailure: "Assert" },
-      },
-      groups: { 1: "sample", 2: "sample" },
-      sample: 2,
+      bc: { 2: { verdict: "killed", killingTest: "T.K", killingTestFailure: "Assert" } },
+      sample: 5,
     });
     const c = merge(p);
     expect(c.sample.verdict).toBe("disagreement");
@@ -990,13 +969,8 @@ describe("mergeConfirmation: the sample and its stop rule", () => {
   test("the same kill on the RDLC stub does NOT fire the stop rule", () => {
     const p = pair({
       v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(5)],
-      bc: {
-        0: { verdict: "survived" },
-        1: { verdict: "killed", killingTest: "T.K", killingTestFailure: STUB_TEXT },
-        2: { verdict: "survived" },
-      },
-      groups: { 1: "sample", 2: "sample" },
-      sample: 2,
+      bc: { 1: { verdict: "killed", killingTest: "T.K", killingTestFailure: STUB_TEXT } },
+      sample: 5,
     });
     const c = merge(p);
     expect(c.sample.verdict).toBe("agreement");
@@ -1006,34 +980,28 @@ describe("mergeConfirmation: the sample and its stop rule", () => {
     expect(renderConfirmation(c).some((l) => l.startsWith("unnoted-disagreement"))).toBe(false);
   });
 
-  test("the bound (3 / n) is printed only when the sample is smaller than the unnoted set", () => {
+  test("the bound (3 / n) is printed only when the number DRAWN is smaller than the unnoted set", () => {
     const small = merge(
-      pair({
-        v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(9)],
-        bc: { 0: { verdict: "survived" }, ...bcSurvived(3) },
-        groups: sampled(3),
-        sample: 3,
-      }),
+      pair({ v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(9)], sample: 3 }),
     );
     expect(small.sample).toMatchObject({
+      drawn: 3,
       measured: 3,
       unnotedSurvivors: 9,
-      allMeasured: false,
+      allUnnotedDrawn: false,
       upperBound95: 1,
     });
-    expect(renderConfirmation(small).some((l) => l.includes("upper bound"))).toBe(true);
+    const smallLines = renderConfirmation(small);
+    // the count the bound rests on is printed beside it
+    expect(smallLines.some((l) => l.includes("upper bound") && l.includes("(3 / 3)"))).toBe(true);
     const all = merge(
-      pair({
-        v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(3)],
-        bc: { 0: { verdict: "survived" }, ...bcSurvived(3) },
-        groups: sampled(3),
-        sample: 3,
-      }),
+      pair({ v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(3)], sample: 3 }),
     );
     expect(all.sample).toMatchObject({
+      drawn: 3,
       measured: 3,
       unnotedSurvivors: 3,
-      allMeasured: true,
+      allUnnotedDrawn: true,
       upperBound95: null,
     });
     const lines = renderConfirmation(all);
@@ -1041,22 +1009,56 @@ describe("mergeConfirmation: the sample and its stop rule", () => {
     expect(lines.some((l) => l.includes("upper bound"))).toBe(false);
   });
 
-  test("a BC error in the sample is not a measurement, and a sample of 0 says none", () => {
+  test("the PR-155 shape: 29 unnoted, 29 drawn, one BC error: all measured, and no bound", () => {
     const c = merge(
       pair({
-        v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(4)],
-        bc: { 0: { verdict: "survived" }, 1: { verdict: "error" }, 2: { verdict: "survived" } },
-        groups: sampled(2),
-        sample: 2,
+        v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(29)],
+        bc: { 5: { verdict: "error" } },
+        sample: 30,
       }),
     );
-    expect(c.sample.measured).toBe(1);
-    const none = merge(
-      pair({
-        v3: [{ verdict: "survived", failureNote: NOTE }],
-        bc: { 0: { verdict: "survived" } },
-      }),
-    );
+    expect(c.sample).toMatchObject({
+      drawn: 29,
+      measured: 28,
+      unnotedSurvivors: 29,
+      allUnnotedDrawn: true,
+      upperBound95: null,
+    });
+    const lines = renderConfirmation(c);
+    expect(lines.some((l) => l.includes("all unnoted survivors measured"))).toBe(true);
+    expect(lines.some((l) => l.includes("upper bound"))).toBe(false);
+  });
+
+  test("only killed and survived count as measured: a BC error or no-coverage does not", () => {
+    for (const verdict of ["error", "no-coverage"] as const) {
+      const c = merge(
+        pair({
+          v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(9)],
+          bc: allBc(9, { verdict }),
+          sample: 3,
+        }),
+      );
+      expect(c.sample, verdict).toMatchObject({ drawn: 3, measured: 0, upperBound95: null });
+      expect(c.sample.verdict, verdict).toBe("none");
+    }
+    // a mix: errors drop out of the count the bound rests on
+    const p = pair({
+      v3: [{ verdict: "survived", failureNote: NOTE }, ...unnoted(9)],
+      bc: { 1: { verdict: "error" }, 2: { verdict: "no-coverage" } },
+      sample: 8,
+    });
+    const mixed = merge(p);
+    const index = new Map(p.v3.mutants.map((m, i) => [keyOf(m), i] as const));
+    const drawnBad = mixed.mutants.filter(
+      (m) => m.group === "sample" && [1, 2].includes(index.get(m.key) ?? -1),
+    ).length;
+    expect(mixed.sample.drawn).toBe(8);
+    expect(mixed.sample.measured).toBe(8 - drawnBad);
+    expect(mixed.sample.upperBound95).toBe(3 / (8 - drawnBad));
+  });
+
+  test("a sample of 0 says none", () => {
+    const none = merge(pair({ v3: [{ verdict: "survived", failureNote: NOTE }] }));
     expect(none.sample.verdict).toBe("none");
   });
 });
@@ -1065,11 +1067,39 @@ describe("mergeConfirmation: every join refusal is made by name", () => {
   const ok = () =>
     pair({
       v3: [{ verdict: "survived", failureNote: NOTE }, { verdict: "survived" }],
-      bc: { 0: { verdict: "survived" } },
     });
 
   test("the happy pair merges", () => {
     expect(() => merge(ok())).not.toThrow();
+  });
+
+  test("bc.json is not a bcdev report", () => {
+    const p = ok();
+    for (const backend of ["al-runner-v3", "other"]) {
+      expect(() => merge({ ...p, bc: { ...p.bc, backend } as SessionReport }), backend).toThrow(
+        ConfirmMergeBcNotBcdevError,
+      );
+    }
+  });
+
+  test("bc.json's recorded selection is not the one v3.json gives: refused by name", () => {
+    const p = ok();
+    const rec = p.bc.confirm?.selected ?? [];
+    const withSelected = (selected: unknown) =>
+      ({ ...p.bc, confirm: { ...p.bc.confirm, selected } }) as unknown as SessionReport;
+    // a relabelled group
+    expect(() =>
+      merge({ ...p, bc: withSelected(rec.map((s) => ({ ...s, group: "sample" }))) }),
+    ).toThrow(ConfirmMergeSelectionMismatchError);
+    // a key dropped
+    expect(() => merge({ ...p, bc: withSelected([]) })).toThrow(ConfirmMergeSelectionMismatchError);
+    // a key that is not in v3.json at all
+    expect(() =>
+      merge({ ...p, bc: withSelected([...rec, { key: "ghost", group: "noted" }]) }),
+    ).toThrow(ConfirmMergeSelectionMismatchError);
+    // a sample size that selects more than was recorded
+    const bigger = { ...p.bc, confirm: { ...p.bc.confirm, sample: 5 } } as unknown as SessionReport;
+    expect(() => merge({ ...p, bc: bigger })).toThrow(ConfirmMergeSelectionMismatchError);
   });
 
   test("bc.json was not made with --confirm-from", () => {
@@ -1112,18 +1142,6 @@ describe("mergeConfirmation: every join refusal is made by name", () => {
     expect(() =>
       merge({ ...p, bc: { ...p.bc, mutants: [...p.bc.mutants, extra] } as SessionReport }),
     ).toThrow(ConfirmMergeUnselectedKeyError);
-  });
-
-  test("a selected key is not in v3.json", () => {
-    const p = ok();
-    const bc = {
-      ...p.bc,
-      confirm: {
-        ...p.bc.confirm,
-        selected: [...(p.bc.confirm?.selected ?? []), { key: "ghost", group: "noted" }],
-      },
-    } as SessionReport;
-    expect(() => merge({ ...p, bc })).toThrow(ConfirmMergeSelectedNotInV3Error);
   });
 
   test("a bc row is a known-survivor, which is not a measurement", () => {
@@ -1208,12 +1226,22 @@ describe("the CLI", () => {
     expect(() => parseCliConfig([...base, "--confirm-seed", "s"])).toThrow(
       "--confirm-seed needs --confirm-from",
     );
-    for (const bad of ["-1", "2.5", "x"]) {
-      expect(() =>
-        parseCliConfig([...base, "--confirm-from", "v3.json", `--confirm-sample=${bad}`]),
+    for (const bad of ["-1", "2.5", "x", "", "0x10", "1e1", " 5", "5 "]) {
+      expect(
+        () => parseCliConfig([...base, "--confirm-from", "v3.json", `--confirm-sample=${bad}`]),
+        JSON.stringify(bad),
       ).toThrow("--confirm-sample must be");
     }
     expect(() => parseCliConfig([...base, "--confirm-from", ""])).toThrow("--confirm-from needs");
+  });
+
+  test("--confirm-from runs on bcdev only; v3 is refused by name", () => {
+    const v3 = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner-v3"];
+    expect(() => parseCliConfig([...v3, "--confirm-from", "v3.json"])).toThrow(
+      ConfirmBackendNotBcdevError,
+    );
+    // without the flag the same invocation is not refused for this reason
+    expect(() => parseCliConfig([...v3])).not.toThrow(ConfirmBackendNotBcdevError);
   });
 
   test("--dry-run refuses --confirm-from by name", () => {

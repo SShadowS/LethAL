@@ -82,6 +82,7 @@ import {
   wantsEnvelope,
 } from "./cli-envelope";
 import {
+  ConfirmBackendNotBcdevError,
   ConfirmInputNotReportError,
   type Confirmation,
   mergeConfirmation,
@@ -1169,7 +1170,8 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              noted '[v3-refused-test-nearby]', its no-coverage rows noted by R609,
                              and a seeded sample of its unnoted survivors (R1122). Join the result
                              with 'lethal confirm-merge'. Refused by name beside --resume,
-                             --skip-known-survivors, --exclude-test, a different scope or source
+                             --skip-known-survivors, --exclude-test, a different scope or source,
+                             and any backend but bcdev
   --confirm-sample <n>       how many unnoted survivors to add (default 30; 0 turns it off). Needs
                              --confirm-from
   --confirm-seed <text>      the sample's seed (default: the sha256 of the report). Needs --confirm-from
@@ -2539,12 +2541,18 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     }
   }
   const confirmSampleRaw = values["confirm-sample"];
-  const confirmSample = confirmSampleRaw === undefined ? undefined : Number(confirmSampleRaw);
-  if (confirmSample !== undefined && (!Number.isInteger(confirmSample) || confirmSample < 0)) {
-    throw new Error("--confirm-sample must be an integer of 0 or more (0 turns the sample off)");
+  // Digits only: "", "0x10" and "1e1" are refused by name, not read as numbers.
+  if (confirmSampleRaw !== undefined && !/^\d+$/.test(confirmSampleRaw)) {
+    throw new Error(
+      `--confirm-sample must be a whole number written in digits, 0 or more (0 turns the sample off); got ${JSON.stringify(confirmSampleRaw)}`,
+    );
   }
+  const confirmSample = confirmSampleRaw === undefined ? undefined : Number(confirmSampleRaw);
   if (values["confirm-seed"] === "") throw new Error("--confirm-seed must not be empty");
   const confirmSeed = values["confirm-seed"];
+  // The confirm run is the BC run: v3 is what its report came from, never what confirms it.
+  if (confirmFrom !== undefined && !isBcdev(backendArg))
+    throw new ConfirmBackendNotBcdevError(backendArg);
   // R586 (T16): v3 is not measured on Windows.
   if (backendArg === "al-runner-v3") {
     refuseV3Platform();
@@ -6397,16 +6405,6 @@ export async function doctorFromCli(
  * `MalformedReportError`'s own message. There is no "explained what it could" path, deliberately —
  * see `assertExplainableReport`.
  */
-/**
- * R178: `lethal export`. Projects a finished report into the Stryker interchange schema and,
- * optionally, the self-contained HTML a CI system renders.
- *
- * SOURCE IS EMBEDDED, by the schema's own requirement, so the rendered report can highlight each
- * mutated span. Against a project's own code in its own pipeline that is necessary and fine; it is
- * also exactly what the 2026-08-09 redaction ruling forbids PUBLISHING for a third party. The notice
- * below is printed every time rather than documented once, because the person who needs it is the
- * one about to commit the output somewhere.
- */
 /** PR-171: read one report file for `confirm-merge`; its bytes' sha256 is the join the merge checks. */
 async function readConfirmFile(path: string): Promise<{ value: unknown; sha256: string }> {
   const bytes = await readFile(path);
@@ -6438,6 +6436,16 @@ export async function confirmMergeFromCli(parsed: ConfirmMergeCliConfig): Promis
   return 0;
 }
 
+/**
+ * R178: `lethal export`. Projects a finished report into the Stryker interchange schema and,
+ * optionally, the self-contained HTML a CI system renders.
+ *
+ * SOURCE IS EMBEDDED, by the schema's own requirement, so the rendered report can highlight each
+ * mutated span. Against a project's own code in its own pipeline that is necessary and fine; it is
+ * also exactly what the 2026-08-09 redaction ruling forbids PUBLISHING for a third party. The notice
+ * below is printed every time rather than documented once, because the person who needs it is the
+ * one about to commit the output somewhere.
+ */
 export async function exportFromCli(parsed: ExportCliConfig): Promise<number> {
   let raw: string;
   try {

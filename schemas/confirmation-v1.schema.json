@@ -101,8 +101,7 @@
               "type": "string",
               "enum": [
                 "linux-rdlc-stub",
-                "bc-error",
-                "v3-kill-unconfirmed"
+                "bc-error"
               ]
             }
           },
@@ -157,17 +156,21 @@
       "additionalProperties": false,
       "required": [
         "requested",
+        "drawn",
         "measured",
         "unnotedSurvivors",
         "killedOnBc",
         "stubKilledOnBc",
         "upperBound95",
-        "allMeasured",
+        "allUnnotedDrawn",
         "verdict",
         "disagreementKeys"
       ],
       "properties": {
         "requested": {
+          "type": "number"
+        },
+        "drawn": {
           "type": "number"
         },
         "measured": {
@@ -188,7 +191,7 @@
             "null"
           ]
         },
-        "allMeasured": {
+        "allUnnotedDrawn": {
           "type": "boolean"
         },
         "verdict": {
