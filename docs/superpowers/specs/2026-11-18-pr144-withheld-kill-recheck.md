@@ -194,7 +194,6 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   - CI gets the tar only through the owner's secret swap (a kraken ask, kind config). **Until the swap and a green CI
     compile, leg RC is recorded but not counted as proven** (the orchestrator, 2026-11-18).
 - **Unchanged:** every other leg's figures, and P5 gating any default-on.
-  and still gates any default-on.
 
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
