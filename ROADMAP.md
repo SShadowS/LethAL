@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1087 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**44 of 1087 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1129,7 +1129,7 @@ that ordering is the priority.
 - **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · closed 2026-11-18 — ruling (PR-145): under "none" the daemon cross-check still compares the baseline's…
 - **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · closed 2026-11-17 — measured by PR-127: correct (0 moves) but no wall gain…
 - **R1115** · The kept-refusal drift check counts a test that is red at baseline as unreachable, though a mutant can reach it: false drifts cost a daemon restart · [R1115.md](docs/roadmap/R1115.md) · done (this commit) — PR-145: in a mutant entry, a baseline-red test is not compared; NONE entries still…
-- **R1119** · TIMING has no figure for lane barrier time or lane idle time: PR-121a's barrier and a window running on one lane are invisible unless PR-121's offline gaps.ts is run on the events · [R1119.md](docs/roadmap/R1119.md) · open — filed by lethal-bugs from DO window x3, 2026-11-18 (orchestrator)
+- **R1119** · TIMING has no figure for lane barrier time or lane idle time: PR-121a's barrier and a window running on one lane are invisible unless PR-121's offline gaps.ts is run on the events · [R1119.md](docs/roadmap/R1119.md) · done (this commit) — PR-150: TIMING prints per lane busy, waiting at window boundaries, and idle after its…
 - **R1120** · PR-98's lane gate over-charges (sampled peak x lanes + 4 GiB: 16.2 GiB charged where the tree peaked at 12.6), and one hold costs the lane for the rest of the window: DO windows x1-x3 ran on one lane after their hold · [R1120.md](docs/roadmap/R1120.md) · open — filed by lethal-bugs from DO windows x1-x3, 2026-11-18 (orchestrator); the fix goes to a lane
 - **R1123** · Under al-runner v3 `"coverage": "none"`, the reused-baseline re-check's coverage guard compares null with null and counts it as a comparison (an empty-vs-empty pass) · [R1123.md](docs/roadmap/R1123.md) · done (this commit) — PR-146: under "none" the re-check compares no map and says so by name; with coverage on…
 

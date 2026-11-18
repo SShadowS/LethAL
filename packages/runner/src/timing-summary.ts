@@ -34,8 +34,28 @@ export type TimingFold = {
   render(): string | undefined;
 };
 
-export function createTimingFold(): TimingFold {
+/** R1119 (PR-150): a gap between one lane's requests longer than this counts as waiting at a window boundary. */
+const LANE_GAP_MS = 5000;
+
+/**
+ * `now`: the in-process clock (ms) for events that carry no `atMs` (`lethal run`'s own fold; the
+ * `--progress-out` file stamps `atMs`, PR-121a). Without either, the lane line says it has no times.
+ */
+export function createTimingFold(opts: { readonly now?: () => number } = {}): TimingFold {
   const phaseMs = new Map<string, number>();
+  // R1119: the mutants phase's edges and each lane's requests in it, for the lane line.
+  type Req = { start: number; end: number };
+  let mutantsFrom: number | undefined;
+  let mutantsTo: number | undefined;
+  /** Phase seen (entered / left), whether or not a time came with it. */
+  let inMutants = false;
+  let mutantsSeen = false;
+  let phaseReqs = new Map<number, Req[]>();
+  const mutantPhases: { from: number; to: number; reqs: Map<number, Req[]> }[] = [];
+  let untimed = false;
+  let memoryHolds = 0;
+  let idleCloses = 0;
+  const timeOf = (e: RunEvent): number | undefined => e.atMs ?? opts.now?.();
   const kinds = new Map<string, { n: number; ms: number }>();
   const causes = new Map<string, { n: number; ms: number }>();
   /** PR-113: al-runner's own timings, summed per request kind. */
@@ -61,8 +81,28 @@ export function createTimingFold(): TimingFold {
   return {
     add(e) {
       switch (e.type) {
+        case "phase-entered":
+          if (e.phase === "mutants") {
+            inMutants = true;
+            mutantsSeen = true;
+            mutantsFrom = timeOf(e);
+            if (mutantsFrom === undefined) untimed = true;
+          }
+          break;
         case "phase-left":
           phaseMs.set(e.phase, (phaseMs.get(e.phase) ?? 0) + e.elapsedMs);
+          if (e.phase === "mutants" && inMutants) {
+            inMutants = false;
+            mutantsTo = timeOf(e);
+            // R1119: one mutants phase per batch; each is its own interval
+            if (mutantsFrom !== undefined && mutantsTo !== undefined)
+              mutantPhases.push({ from: mutantsFrom, to: mutantsTo, reqs: phaseReqs });
+            else untimed = true;
+            phaseReqs = new Map();
+          }
+          break;
+        case "warning":
+          if (e.code === "al-runner-v3-lane-memory-hold") memoryHolds += 1;
           break;
         case "session-finished":
           finished = true;
@@ -76,6 +116,16 @@ export function createTimingFold(): TimingFold {
           break;
         case "serve-request-timed":
           lanes.add(e.lane);
+          // R1119: a request of the mutants phase, on its lane's timeline (baseline requests are not lane work)
+          if (e.kind !== "baseline" && inMutants) {
+            const end = timeOf(e);
+            if (end === undefined) untimed = true;
+            else {
+              const list = phaseReqs.get(e.lane) ?? [];
+              list.push({ start: end - e.wallMs, end });
+              phaseReqs.set(e.lane, list);
+            }
+          }
           bump(kinds, e.kind, e.wallMs);
           if (e.selectedOnly === true) selectedOnly += 1;
           if (e.cut === true) cuts += 1;
@@ -99,6 +149,7 @@ export function createTimingFold(): TimingFold {
             e.phase !== undefined && e.phase !== "idle" ? `${label} in ${e.phase}` : label;
           restarts.set(key, (restarts.get(key) ?? 0) + 1);
           restartTotal += 1;
+          if (e.reason === "lane-idle") idleCloses += 1; // R1119: PR-140's idle-lane closes
           break;
         }
         default:
@@ -180,6 +231,61 @@ export function createTimingFold(): TimingFold {
           .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
           .map(([v, n]) => `${v} ${n}`);
         lines.push(`  capped walks: ${capped.size} (${parts.join(", ")})`);
+      }
+
+      // R1119 (PR-150): per lane over the mutants phase: busy, waiting between requests at a window
+      // boundary (gaps over 5 s), and after its last request (no work left for it, or held). A lane that
+      // made no request in the phase is idle for all of it. The phase's edges come from the same clock.
+      if (lanes.size > 1 && mutantsSeen) {
+        if (untimed || inMutants || mutantPhases.length === 0)
+          lines.push(
+            "  lanes: no per-lane times (the events carry no atMs, or the mutants phase did not end)",
+          );
+        else {
+          // summed over every batch's mutants phase
+          const total = Math.max(
+            1,
+            mutantPhases.reduce((t, p) => t + (p.to - p.from), 0),
+          );
+          const pct = (ms: number): string => `${((100 * ms) / total).toFixed(1)}%`;
+          const parts = [...lanes]
+            .sort((a, b) => a - b)
+            .map((lane) => {
+              let busy = 0;
+              let gapN = 0;
+              let gapMs = 0;
+              let after = 0;
+              let any = false;
+              for (const p of mutantPhases) {
+                const mine = (p.reqs.get(lane) ?? []).slice().sort((a, b) => a.start - b.start);
+                const last = mine[mine.length - 1];
+                if (last === undefined) {
+                  after += p.to - p.from; // no request in this batch's phase
+                  continue;
+                }
+                any = true;
+                let reach = p.from;
+                for (const r of mine) {
+                  const s0 = Math.max(r.start, reach, p.from);
+                  const s1 = Math.min(r.end, p.to);
+                  if (s1 > s0) busy += s1 - s0;
+                  const gap = r.start - reach;
+                  if (reach > p.from && gap > LANE_GAP_MS) {
+                    gapN += 1;
+                    gapMs += gap;
+                  }
+                  reach = Math.max(reach, r.end);
+                }
+                after += Math.max(0, p.to - last.end);
+              }
+              if (!any) return `lane ${lane} no request (idle ${secs(total)})`;
+              return `lane ${lane} busy ${secs(busy)} (${pct(busy)}), waiting at window boundaries ${gapN} (${secs(gapMs)}), after its last request ${secs(after)} (${pct(after)})`;
+            });
+          lines.push(`  lanes over the mutants phase (${secs(total)}): ${parts.join("; ")}`);
+          lines.push(
+            `    lane memory holds ${memoryHolds} (printed once per session), idle daemons closed ${idleCloses}`,
+          );
+        }
       }
 
       const mutantsMs = phaseMs.get("mutants");
