@@ -3,6 +3,31 @@
 Status: r1, committed to master before the census and any keep-list change (coord PR-159, lethal-preproc, 2026-11-18).
 Evidence: `/coord/handoff/R-984/y1.run.events.ndjson` (read-only) and `/coord/handoff/PR-159/`.
 
+## 0. Amendment 1 (the opus spec-adversary's review of r1, 2026-11-18: nothing blocks building)
+- **M2: the attribution is known, and P2 is exact, not an upper bound.** y1's store (`y1/doy1.sqlite`, `test_results`) and
+  report attribute every close:
+  - GetTable 12345 comes from **M10951** (`lethal.remove-not` on `GetLogInfo`'s `IsRecord` guard). It is killed in the
+    same request by another test, so the keep does not touch its own verdict.
+  - The JSON text comes from **M36459 and M36460** (`WriteEndObject` emptied or removed in `CDO Json Writer`).
+  - The 2 NUL prefetch closes come from **M28736**.
+  - Every non-pass row of these mutants, with today's keep-list plus the two new texts, holds **0 unkept** refusals
+    (M36459: 3 rows; M36460: 3; M28736: 184).
+  - So P2 is exact: **3 closes and 140 s from this item; 12 of 94 restarts and about 550 s with PR-139's widths.**
+  - §1's "no known mutant" and "cannot be read from the events" were wrong. A direct kept-versus-fresh DO check stays
+    optional. DO's state at both texts is plain, as for PR-133's GetTable keep, which had none.
+- **M1: P4 is added** (§3). It is the only prediction that can catch a moved verdict.
+- **L1: the `toRecipients[1]` cell is dropped.** With `WriteEndObject` removed, the second recipient fails inside
+  recipient 0's object, so DO's path is `[0]` on every row. `[1]` would need three or more recipients, which no DO code
+  sends.
+- **L2: the GetTable slot probe is dropped.** Only 12345 joins 123 by name. No DO close produced the other values, and
+  each kept value widens what the keep-list trusts with no measured saving.
+- **L3:** P1 now requires the 12345 class's refusers to include both the plain cell and the `IsRecord`-guarded cell, each
+  refusing at least once under serve.
+- **L4: the JSON keep's comment names a deeper caller as not measured.** `CDO Microsoft Graph Rest Api`, reached from
+  `CDO Send Mail Management.SendMSGraphMail` after an access-token HTTP call and the `StartEvents` publishers, can reach
+  the same text in a deeper state. No DO test reaches it today; the kept `ccRecipients[0]` path has the same exposure. P4
+  is what would catch it.
+
 ## 1. The measurement (y1, a fresh DO run on 8ff134f1, before PR-139)
 - **The restarts:** 94 daemon closes, of which 71 followed a refusal and 23 a timeout. After-refusal warm-ups total
   2,746 s.
@@ -55,4 +80,11 @@ Evidence: `/coord/handoff/R-984/y1.run.events.ndjson` (read-only) and `/coord/ha
   - P2 counts each close's named text. A prefetch request's other refused rows are unknown, so this is an upper bound.
 - **P3 (the next DO window on a head with this change):** 0 closes on a kept text. Any close on a sibling not kept is
   named.
-- **The gates:** the al-runner-v3 gate on the final head shows that nothing else moved.
+- **P4 (amendment 1; the next DO window, compared by full site key with y1):**
+  - M10951, M36459 and M36460 keep their y1 verdicts (killed, error, error) and the same set of refused tests;
+  - each kept text is seen at least once in that window and is followed by no close (positive evidence, not only an
+    absence);
+  - every mutant scored on that lane after such a kept refusal, up to the lane's next close, keeps its y1 verdict. Any
+    difference is re-run on a fresh daemon before the window is accepted.
+- **The gates:** the al-runner-v3 gate on the final head shows that nothing else moved. No gate fixture produces these
+  texts, so it says nothing about the keep itself.
