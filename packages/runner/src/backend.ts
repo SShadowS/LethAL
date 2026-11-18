@@ -585,6 +585,11 @@ export interface ExecutionBackend {
   /** Releases what the backend holds open (bcdev's MCP child, v3's serve daemon). R775: the CLI calls it. */
   close?(): Promise<void>;
   /**
+   * PR-144: closes the backend's serve daemons now, before the withheld-kill recheck starts its own, and
+   * nothing else: `close()` stays the one place that prints the stats line. Absent: nothing to close.
+   */
+  closeDaemons?(): Promise<void>;
+  /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
    * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
@@ -652,6 +657,11 @@ export interface ExecutionBackend {
    * fingerprint; such a run neither lends nor borrows history or a baseline snapshot.
    */
   readonly isolationAuto?: boolean;
+  /**
+   * PR-144: the session runs the serve-entries transport (a daemon answers every request). Read after
+   * `decideTransport`. Absent counts as false (one-shot, or a backend with no such choice).
+   */
+  readonly serveEntries?: boolean;
   /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once

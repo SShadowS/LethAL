@@ -542,6 +542,43 @@ export type RunEventInput =
     }
   | {
       /**
+       * PR-144: the recheck's own baseline (the targets' covering tests, one per session), once. It is
+       * NOT `baseline-batch-finished`: the fold never reads it into the session's baseline figures
+       * (`baselineGreen`, unsupported tests, timings). `tests` is how many ran; `elapsedMs` its wall time.
+       */
+      readonly type: "recheck-baseline-finished";
+      readonly tests: number;
+      readonly elapsedMs: number;
+      readonly verdicts: readonly { readonly name: string; readonly outcome: TestOutcome }[];
+    }
+  | {
+      /**
+       * PR-144: the recheck's answer for ONE withheld-kill row of this session's main pass. The only event
+       * that replaces an earlier row (matched by `batchIndex` and `mutant.mutantId`); the row must be a
+       * withheld kill, or the fold throws. Without `recovery` the row stays `error` and `keptNote` is
+       * appended to its note AFTER `V3_NOT_RUN_SUFFIX`, so it is still a withheld kill. With `recovery`
+       * (rules (a) to (e) all held) the row becomes `killed`.
+       */
+      readonly type: "mutant-rechecked";
+      readonly mutant: MutantManifestEntry;
+      readonly batchIndex: number;
+      readonly durationMs: number;
+      readonly keptNote?: string;
+      readonly recovery?: {
+        readonly killingTest: string;
+        readonly killingTestFailure?: string;
+        readonly killPosition?: number;
+        readonly reproducedFailure?: string;
+        readonly coveringTests: readonly string[];
+        readonly isolatedRecheck: {
+          readonly withheldFailure: string;
+          readonly afterTest?: string;
+          readonly killerGreenInMainBaseline: boolean;
+        };
+      };
+    }
+  | {
+      /**
        * R198: one `RunMutantMany` call was made (whatever it answered). Folded into
        * `SessionReport.groupedCalls`, which the gates pin to a NUMBER derived from their frozen
        * baselines, so a feature that silently stopped grouping fails a gate instead of reading

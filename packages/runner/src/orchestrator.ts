@@ -40,6 +40,7 @@ import {
   type TierResolver,
   assignMutantIds,
   canCarryMutationSelectorVar,
+  clipMutationText,
   coarseIdentityTupleOf,
   dedupeSpecs,
   describeObjectKinds,
@@ -362,6 +363,12 @@ import {
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 import { describeWebServiceHttpText } from "./webservice-http-text";
+import {
+  type RecheckRunner,
+  recheckSiteKey,
+  runWithheldRecheck,
+  shouldRunRecheck,
+} from "./withheld-recheck";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
 // public types are re-exported one by one from here, the module the barrel does list.
@@ -717,6 +724,12 @@ export interface MutationSetOptions {
    * so does a filter that keeps nothing.
    */
   readonly lines?: readonly LineRange[];
+  /**
+   * PR-144: exact sites, as `recheckSiteKey` values (file, span, operator, mutated text). When present, only
+   * a spec with one of these keys is kept, after `lines`. Used by the withheld-kill recheck, which re-runs
+   * those mutants and no other on their lines.
+   */
+  readonly exactSites?: ReadonlySet<string>;
   /**
    * When present, this function's four `console.warn` calls emit `{ type: "warning" }` events on
    * it instead — `runSession` always passes one (defaulting to a no-op emitter). Absent for the
@@ -1376,6 +1389,24 @@ export async function generateMutationSet(
       }
       fileSpecs = selected;
     }
+    // PR-144: the withheld-kill recheck keeps exactly its own sites, after the line filter (which has
+    // already reduced to dedup survivors); the others on those lines are numbered nothing, as above.
+    if (options.exactSites !== undefined) {
+      const exact = options.exactSites;
+      const selected: MutationSpec[] = [];
+      for (const spec of fileSpecs) {
+        const key = recheckSiteKey({
+          file: rel,
+          startIndex: spec.before.startIndex,
+          endIndex: spec.before.endIndex,
+          operatorName: spec.operatorName,
+          mutatedText: clipMutationText(spec.after.text),
+        });
+        if (exact.has(key)) selected.push(spec);
+        else hiddenTuples.push(coarseOf(spec));
+      }
+      fileSpecs = selected;
+    }
     if (fileSpecs.length === 0) continue;
     for (const spec of fileSpecs) producedAnywhere.add(spec.operatorName);
     if (!canCarryMutationSelectorVar(root)) {
@@ -1713,6 +1744,20 @@ export interface SessionConfig {
    * `survived` or `no-coverage`; the report says so (`tests-narrowed`, `excludedTests`).
    */
   readonly excludeTests?: readonly string[];
+  /**
+   * PR-144, the withheld-kill recheck's nested session only: `Codeunit.Method` names; the suite is cut to
+   * exactly these, after `--tests-only`. Sound only where each test runs alone, so it is refused unless the
+   * backend runs method isolation. A name matching no test is refused.
+   */
+  readonly keepOnlyTests?: readonly string[];
+  /** PR-144, the nested session only: see `MutationSetOptions.exactSites`. */
+  readonly exactSites?: ReadonlySet<string>;
+  /**
+   * PR-144 (`alRunnerV3.recheckWithheldKills`): after the main pass, re-run this session's withheld-kill
+   * rows through `runner` (a nested session on a method-isolation backend) as its own step, with its own
+   * budget, and replace each by a `mutant-rechecked` event. Absent: no recheck.
+   */
+  readonly recheck?: { readonly budgetSeconds: number; readonly runner: RecheckRunner };
   /**
    * R44: maximum injected guards per published artifact — see `PlanOptions.maxGuardsPerBatch`.
    * Absent means one artifact for everything, which is not publishable for a real app.
@@ -6785,6 +6830,31 @@ async function runSessionBody(
       excludeTestKeys.push(testKeyOf(t));
     }
   }
+  // PR-144: the recheck's nested session runs exactly its targets' covering tests. Each runs alone under
+  // method isolation, so leaving the others out cannot change what a kept test sees; under any other mode it
+  // could, so it is refused. A name with no test is refused: a smaller suite than asked for is a wrong baseline.
+  if (cfg.keepOnlyTests !== undefined) {
+    if (cfg.backend.methodIsolation !== true) {
+      throw new Error(
+        "keepOnlyTests (the withheld-kill recheck, PR-144) needs a backend running method isolation: under any other mode a test left out could change what a kept test sees.",
+      );
+    }
+    const want = new Set(cfg.keepOnlyTests);
+    const kept = tests.filter((t) => want.has(qualifiedTestName(t)));
+    const found = new Set(kept.map((t) => qualifiedTestName(t)));
+    const missing = [...want].filter((n) => !found.has(n));
+    if (missing.length > 0) {
+      throw new Error(
+        `keepOnlyTests (PR-144) matched no test for ${missing
+          .slice(0, 5)
+          .map((n) => `"${n}"`)
+          .join(
+            ", ",
+          )}${missing.length > 5 ? ` and ${missing.length - 5} more` : ""} in this run's suite. Refusing rather than running a smaller suite than asked for.`,
+      );
+    }
+    tests = kept;
+  }
   // R488: the UNFILTERED list, every arm read: a look-alike al-runner would also select must be
   // excluded whether or not this session runs it. Given again to every worker below.
   cfg.backend.useDiscoveredTests?.(discovery.unfiltered);
@@ -7189,6 +7259,7 @@ async function runSessionBody(
         ? { operators: resolvedOperators }
         : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
+    ...(cfg.exactSites !== undefined ? { exactSites: cfg.exactSites } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
     preprocessorSymbols: sourceSymbols,
     backend: buildBackend,
@@ -9366,6 +9437,27 @@ async function runSessionBody(
   // ordering still never depends on which worker finished first regardless of arrival order.
   // R654 removed three .NET al-runner readers here (R129's BC build, R148's missing
   // implementation, R583's dependency drops): no remaining backend reports any of them.
+  // PR-144: the opt-in withheld-kill recheck, its own step after the main pass and its own budget. Never on a
+  // quarantined session (its verdicts are not trusted), and never changes a row except through its events.
+  if (
+    cfg.recheck !== undefined &&
+    shouldRunRecheck({ recheck: cfg.recheck, unsafe: safety.isUnsafe })
+  ) {
+    await runWithheldRecheck({
+      events: [...collectedEvents],
+      emit: (e) => emit(e),
+      main: {
+        ...(v3Build !== undefined
+          ? { version: v3Build.version, binarySha256: v3Build.binarySha256 }
+          : {}),
+        sourceSha256: sourceHashAtGeneration,
+        dependencySourceSha256,
+      },
+      budgetSeconds: cfg.recheck.budgetSeconds,
+      runner: cfg.recheck.runner,
+      backend: cfg.backend,
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
@@ -13696,6 +13788,8 @@ async function runMutantsParallel(
       needsLiveCall?: (mutantId: string) => boolean;
       laneDaemonStarts?: () => number;
       noteLanes?: (message: string) => void;
+      /** PR-151: test seam, called under the split with the size of each window `cutWindows` made. */
+      noteWindows?: (sizes: readonly number[]) => void;
       /**
        * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
        * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
@@ -13740,11 +13834,18 @@ async function runMutantsParallel(
   // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.
   const paced = !split && laneWarmupMs !== undefined && needsLiveCall !== undefined;
   let widest: Awaited<ReturnType<typeof runScopeQueue>> | undefined;
-  for (const [wi, window] of windows.entries()) {
+  // PR-151: under the split ONE queue and ONE commit run the whole batch (no window barrier); each unit
+  // carries the window of its first mutant for the look-ahead bound. Otherwise one group per window.
+  // An empty batch has no window: keep `windows` (no group) so no "1 of N lanes started" notice prints.
+  const groups = split && windows.length > 0 ? [windows.flat()] : windows;
+  if (split) owner.noteWindows?.(windows.map((w) => w.length)); // test seam: the window cut
+  const windowOfMutant = new Map<string, number>();
+  for (const [wi, w] of windows.entries()) for (const m of w) windowOfMutant.set(m.mutantId, wi);
+  for (const [wi, window] of groups.entries()) {
     if (args.safety.isUnsafe) break;
     const spent = (): boolean => {
       if (args.timeBudget?.exhausted !== true) return false;
-      const left = windows
+      const left = groups
         .slice(wi)
         .flat()
         .filter((x) => args.perMutantTests.get(x.mutantId) !== undefined).length;
@@ -13815,6 +13916,15 @@ async function runMutantsParallel(
             },
           }
         : {}),
+      ...(split
+        ? {
+            lookAhead: {
+              windowOf: (unit: readonly MutantManifestEntry[]) =>
+                windowOfMutant.get(unit[0]?.mutantId ?? "") ?? 0,
+              budgetSpent: () => args.timeBudget?.exhausted === true,
+            },
+          }
+        : {}),
       mayStart: (k) => owner.laneMayStart?.(k) ?? true,
       commit,
       isUnsafe: () => args.safety.isUnsafe,
@@ -13848,7 +13958,7 @@ async function runMutantsParallel(
         args.perMutantTests.get(x.mutantId) !== undefined;
       const left =
         commit.unrecorded(window.filter(covered).map((x) => x.mutantId)).length +
-        windows
+        groups
           .slice(wi + 1)
           .flat()
           .filter(covered).length;

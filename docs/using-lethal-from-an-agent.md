@@ -157,6 +157,11 @@ suspect, not a proven cause. The 512 KB is not a measured limit: it is the size 
 and the warning refuses nothing. If a run is quarantined because a run's fate on the server is unknown, as when the tier stops, and
 its batch holds such a method, the quarantine reason names that method as one suspect. To shrink the method, leave out the
 operators the warning lists, with one `--exclude-operator` each, or narrow the run with `--only`.
+- **What each would save (R1118):** the warning gives, per file, the largest method with each listed operator left out, and with all
+  of them out together. Each figure is a real emit, so pick from it rather than trying one dry run per operator.
+- **`--lines` is not the lever here:** it narrows which mutants run, but a fold inside one procedure shrinks only guard by guard.
+- **Measured once:** a 23.9 MB method's publish was refused on BC 29 for Linux (System.OutOfMemoryException), and the tier stayed up
+  (R826).
 
 **Know which flags can move a verdict.** `--only`, `--exclude`, `--operator`, `--exclude-operator`, `--lines` and
 `--changed-since` select which
@@ -231,6 +236,9 @@ a daemon is reused, one whose resident memory passed the size, or that served th
 fresh daemon (close reason `recycle`, one warm-up each). Measured verdict-neutral with a recycle after every request. A
 daemon already over the size right after its warm-up is the project's working set: the size bound is then turned off for
 the session, said once as `al-runner-v3-daemon-recycle-off`.
+`"recheckWithheldKills"` (default `false`) and `"recheckBudgetSeconds"` (default 3600) turn on and bound the recheck of
+withheld-kill rows after the main pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured
+against BC and may be false where an earlier test that al-runner refused would have set state on BC.
 **Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
 (`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
 baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
@@ -421,7 +429,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v30.schema.json](../schemas/explain-v30.schema.json)
+- `lethal explain`: [../schemas/explain-v31.schema.json](../schemas/explain-v31.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -469,7 +477,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 30`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 31`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -622,7 +630,9 @@ readable file.
 **Every verdict line is PROVISIONAL until `session-finished` appears.** A `batch-invalidated` event
 can supersede a verdict already written to the file: a lease loss, or a deploy that turns out
 unsound, sends its batch round again. Acting on a `survived` line that a later event retracts means
-acting on a fact the run itself no longer stands behind.
+acting on a fact the run itself no longer stands behind. The same holds for `mutant-rechecked` (PR-144, opt-in
+`alRunnerV3.recheckWithheldKills`): it replaces the verdict of an earlier `mutant-scored` `error` row (a withheld kill)
+with `killed`, so a consumer that ignores it reads `error` where the report says `killed`.
 
 Unknown event types are ignored by design, so a future event type does not break a consumer.
 

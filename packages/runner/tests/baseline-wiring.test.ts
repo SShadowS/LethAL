@@ -333,6 +333,8 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
     // R602: legs MO and WR.
     MULTIOBJECT_BASELINE_PATH: "al-runner-v3.multiobject.baseline.json",
     WRAPPED_BASELINE_PATH: "al-runner-v3.wrapped.baseline.json",
+    // PR-144: leg RC.
+    RECHECK_BASELINE_PATH: "al-runner-v3.recheck.baseline.json",
   },
 };
 const READERS: Record<string, string> = {
@@ -463,7 +465,7 @@ describe("R332 wiring: real call sites, not text", () => {
       path: c.arguments[1]?.getText(sf),
       pinned: c.arguments[4]?.getText(sf),
     }));
-    expect(recorded.length).toBe(6);
+    expect(recorded.length).toBe(7); // PR-144: leg RC is the seventh
     // R918: legs MOE and WRE compare again with MO's and WR's baselines, and only compare: their
     // env is `compareOnlyEnv()`, never `process.env`, so a record request cannot reach them.
     const serve = asserts.filter((c) => c.arguments[3]?.getText(sf) === "compareOnlyEnv()");

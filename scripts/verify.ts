@@ -543,8 +543,13 @@ export function stuckWorkers(
  * about a second before the kill, and reuses pids quickly, so there the window is small but not zero.
  * Any other OS, or any failure to ask, answers false, and `execWatched` then uses its backstop.
  */
-export function isChildOf(pid: number, parent: number): boolean {
-  return parentTable([pid]).get(pid) === parent;
+export function isChildOf(
+  pid: number,
+  parent: number,
+  read: (pids: readonly number[]) => Map<number, number> = parentTable,
+): boolean {
+  // `read` is the OS read (R1129: a unit test passes a fake table instead of timing PowerShell).
+  return read([pid]).get(pid) === parent;
 }
 
 /**

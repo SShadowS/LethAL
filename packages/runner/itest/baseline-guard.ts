@@ -381,6 +381,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.wrapped.baseline.json",
     "itest:alrunner-v3",
   ),
+  // PR-144: leg RC (sandbox-recheck, the withheld-kill recheck), pre-committed in
+  // docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md section 0b; recorded 2026-11-18 (section 0h).
+  "al-runner-v3.recheck.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=RC",
+    "al-runner-v3.recheck.baseline.json",
+    "itest:alrunner-v3",
+  ),
 };
 
 /**
@@ -415,6 +422,8 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * R602's two v3 legs (`al-runner-v3.multiobject.baseline.json`, `al-runner-v3.wrapped.baseline.json`)
  * waited here and were recorded once on 2026-10-24 (R-602, after their pre-commitment c2f67f0a), equal to
  * it per mutant; the list is empty again.
+ * PR-144/PR-162's leg RC (`al-runner-v3.recheck.baseline.json`) waited here and was recorded once on
+ * 2026-11-18 by the R849 route, equal to spec section 0h's expected rows; the list is empty again.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
 

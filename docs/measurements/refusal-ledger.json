@@ -2606,5 +2606,11 @@
     "key": "NotRun: out-of-scope: call <x>: <x> is a control add-in (usercontrol): control add-ins are not modelled",
     "state": "unexamined",
     "note": "PR-135: NOT reproduced on edge-4ebfe7913: an invented usercontrol call from an action, OnOpenPage or OnControlAddInReady fails with 'has not been instantiated'; 1 error mutant (R-930/m/saif.onprem.sqlite)"
+  },
+  {
+    "key": "NotRun: out-of-scope: format string <x>: code <x> on Char <x>",
+    "state": "open",
+    "note": "PR-161: refused on edge-4ebfe7913 for Format(Char 'a', 0, '<Number>'); BC 28.4 (bc3, dev-endpoint runner) answers 97, and Format(C) / Format(C, 0, 9) answer the character (invented probe /coord/handoff/PR-161/probe, codeunit 91564); met in a probe helper, no corpus sighting yet",
+    "issue": "#8348"
   }
 ]
