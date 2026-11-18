@@ -3,6 +3,51 @@
 Coord task PR-169, lethal-preproc, 2026-11-18. A spec only. The orchestrator decides on a build after the adversary
 review. Related: [[R1122]], [[R1121]], [[R586]], [[R1116]].
 
+## 0a. Amendment 1 (r2): the spec-adversary review of r1 (a81396e6)
+The review found no path to a false kill, but five points must change before a build. Each overrides the section it
+names. The review checked the key join on PR-155: `keyOf` matches the full v3 and bc reports one to one (86 mutants, no
+duplicate and no unmatched keys).
+1. **R1121 stub kills (overrides §4 and §5).** bc.json carries no per-mutant R1121 flag.
+   - The merge computes it from `killingTestFailure` with `failureTextMechanisms` (`platform-artifact-kills.ts`), as
+     `platformArtifactKills` does.
+   - A flagged mutant keeps BC's `killed` (R72's rule: never re-scored), with flag `linux-rdlc-stub`.
+   - It is counted on its own line beside the score ("of which K are R1121 platform-stub kills") and left out of the
+     "confirmed kills" list. On PR-137, 11 of 21 BC kills were stub kills.
+2. **Identity ordinals (overrides §3 "How it narrows").** `identityOrdinal` is numbered over the FULL generated set,
+   before the confirm filter drops anything, and bc.json carries those numbers.
+   - The filter must therefore run after `numberIdentityOrdinals` (schemata `project.ts`). It must not run beside PR-144's
+     `exactSites`, which filters before numbering.
+   - Test: twins of which the sample draws only the second (ordinal 1) join, and are not refused.
+3. **The noted set is not a superset (overrides §7's first limit). The selection adds a second group, `nocov-noted`.**
+   - `nocov-noted` is every v3 `no-coverage` mutant carrying R609's note: its only reaching tests were refused by v3.
+     These are selected like the noted survivors.
+   - **The remaining gap, stated in the docs:** a refused test in a codeunit that has NO green covering test of the
+     mutant leaves the mutant unnoted. Only the sample can catch it.
+4. **More refusals, mechanical (adds to §3's list, applied by both the confirm run and the merge):**
+   - `sourceSha256`, `dependencySourceSha256` or `identityScheme` differ between the two reports;
+   - `testsOnly` or `--exclude-tests` differ: a different suite on BC credits kills to tests outside v3's scope;
+   - `--skip-known-survivors` on the confirm run is refused, because a `known-survivor` row is not a measurement made in
+     this run.
+   - §7's "run both from one commit" stays as advice; the sha checks now enforce it.
+5. **§8 pre-commits every row, and the sample bound is printed only when it means something.**
+   - The rows are counted from PR-155's full reports by the review's read-only script: 64 v3 survivors, 35 noted and 29
+     unnoted.
+   - **The noted 35 on BC:** 8 `killed` (M0001, M0002, M0047, M0048, M0049, M0082, M0083, M0084), 24 `survived`, 1
+     `no-coverage`, 2 `error` (M0078 and M0079, TestPage-unsupported, so both take `bc-error`).
+   - **The unnoted 29 on BC:** 28 `survived`, 1 `error`.
+   - Those are figures of a FULL 86-mutant bcdev run. The confirm run narrows to 64, so this is also the probe of
+     whether narrowing changes BC's answers. **Every row must match;** a difference in any row is investigated, and in
+     the 8 kills it is a BLOCK.
+   - **The upper bound is printed only when the sample is smaller than the unnoted set.** At n = 30 on PR-155 all 29 are
+     measured, so the merge prints "all unnoted survivors measured" instead of a bound.
+   - The `nocov-noted` group adds its own rows. Its PR-155 count is taken before the first live use and pre-committed
+     then.
+6. **(should) A v3 kill BC does not confirm.** The merge does not re-check v3 kills. But when bc.json has a row for a
+   v3-`killed` mutant (only possible for an overlap) whose BC verdict is `error` because its killing test is not green
+   on BC, that row is flagged `v3-kill-unconfirmed`. PR-155's M0080 is such a case, named here. It is not in the confirm
+   set, so the first live use does not show it.
+7. **(should) A partial bc.json is refused by name** (an unfinished run, or stranded mutants), like the v3 input.
+
 ## 1. The problem, and the measured basis
 A v3 run is fast and offline but not authoritative ([[R586]]). When v3 refuses a test at baseline, that test cannot
 kill anything. A mutant it would have killed is then scored `survived` on the other covering tests. Such a survivor
