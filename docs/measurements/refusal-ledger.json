@@ -2026,7 +2026,7 @@
     "key": "NotRun: out-of-scope: the CaptionClass expression of field Dimension N Filter of table Acc. Schedule Line calls Record.Modify, and how many times BC runs it with an empty record during a page open is not pinned (al-runne",
     "state": "open",
     "issue": "#7391",
-    "note": "PR-142: #7391's own case on edge-4ebfe7913: its closing fix covers CaptionClass expressions that write nothing, so the Acc. Schedule Overview open passes Dialog.Message and now refuses here, at the expression's Record.Modify (an invented setup of the issue's snippet, /coord/handoff/PR-142/repros/7391/). Reopen material, drafted to the orchestrator (was: PR-06: NEW on edge-a184cfc79, 3 sighting(s) from a baseline test that is not a freed test, in the scoring store of project 18)"
+    "note": "PR-142: #7391's own case on edge-4ebfe7913: its closing fix covers CaptionClass expressions that write nothing, so the Acc. Schedule Overview open passes Dialog.Message and now refuses here, at the expression's Record.Modify (an invented setup of the issue's snippet, /coord/handoff/PR-142/repros/7391/). Re-test posted on the closed issue: https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7391#issuecomment-6968185241 (was: PR-06: NEW on edge-a184cfc79, 3 sighting(s) from a baseline test that is not a freed test, in the scoring store of project 18)"
   },
   {
     "key": "NotRun: out-of-scope: DotNet System.Collections.IEnumerator.MoveNext: <x> is an instance member and the variable holds no object",
