@@ -44,6 +44,7 @@ import {
   rowVersion,
 } from "./bc-app-content.ts";
 import {
+  type LeaseDeps,
   continiaDependencyProblems,
   errText,
   heldLeaseDeps,
@@ -64,10 +65,14 @@ export interface Args {
   /** A coord lease the caller already holds on `server` (`heldLeaseDeps`): heartbeated, never taken or
    *  released, so a failure leaves the caller holding the server. */
   readonly heldLease?: string;
+  /** `--allow-upgrade`: an `upgrade` decision is refused without it (R707/R709). */
+  readonly allowUpgrade: boolean;
 }
 
 const USAGE =
-  "usage: bun scripts/bc-continia-publish.ts --server bc1|bc2|bc3|bc4 --lane <lane> --token-dir <dir> --dir <packages dir> [--predict] [--held-lease <token>] [--ids <appId>...] -- <app file name>...";
+  "usage: bun scripts/bc-continia-publish.ts --server bc1|bc2|bc3|bc4 --lane <lane> --token-dir <dir> --dir <packages dir> [--predict] [--allow-upgrade] [--held-lease <token>] [--ids <appId>...] -- <app file name>...";
+
+const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 export function parseArgs(argv: readonly string[]): Args {
   let server: string | undefined;
@@ -75,6 +80,7 @@ export function parseArgs(argv: readonly string[]): Args {
   let tokenDir: string | undefined;
   let dir: string | undefined;
   let predict = false;
+  let allowUpgrade = false;
   let heldLease: string | undefined;
   const ids: string[] = [];
   const files: string[] = [];
@@ -94,6 +100,7 @@ export function parseArgs(argv: readonly string[]): Args {
     else if (a === "--token-dir") tokenDir = value();
     else if (a === "--dir") dir = value();
     else if (a === "--predict") predict = true;
+    else if (a === "--allow-upgrade") allowUpgrade = true;
     else if (a === "--held-lease") heldLease = value();
     else if (a === "--ids") {
       ids.push(value());
@@ -111,6 +118,9 @@ export function parseArgs(argv: readonly string[]): Args {
   if (files.length === 0 && ids.length === 0)
     throw new Error(`name app files after --, or --ids\n${USAGE}`);
   if (files.length === 0 && predict) throw new Error(`--predict needs app files\n${USAGE}`);
+  for (const id of ids)
+    if (!GUID.test(id))
+      throw new Error(`--ids value ${JSON.stringify(id)} is not an app id (a GUID)\n${USAGE}`);
   for (const f of files)
     if (f !== basename(f) || f.startsWith("-"))
       throw new Error(`${JSON.stringify(f)} is not a plain file name\n${USAGE}`);
@@ -122,6 +132,7 @@ export function parseArgs(argv: readonly string[]): Args {
     predict,
     ids,
     files,
+    allowUpgrade,
     ...(heldLease !== undefined ? { heldLease } : {}),
   };
 }
@@ -146,6 +157,7 @@ export function decideThirdParty(
   local: Buffer,
   resident: Buffer | null,
   rs: Awaited<ReturnType<ServerOps["rows"]>>,
+  allowUpgrade = false,
 ): Decision {
   const me = readAppIdentity(local);
   const seen = describeRows(rs);
@@ -154,6 +166,13 @@ export function decideThirdParty(
     why: "content-unknown",
     line: `refuse    content-unknown ${me.name}: ${what} (${seen}); the server's state is not one this tool understands: the owner`,
   });
+  const pub = me.publisher.toLowerCase();
+  if (pub === "microsoft" || pub === "lethal")
+    return {
+      action: "refuse",
+      why: "content-unknown",
+      line: `refuse    publisher ${me.name}: publisher ${me.publisher} is not a third party; Microsoft apps come with the server, and LethAL's control app and fixtures belong to bc-linux-setup.ts and bc-republish.ts`,
+    };
   if (resident === null && rs.length === 0)
     return {
       action: "publish",
@@ -181,12 +200,19 @@ export function decideThirdParty(
       line: `refuse    same-version-other-content ${me.name} ${have}: resident digest ${short(contentDigest(resident))}, file ${short(lastDigest)}; a third-party app is never replaced here (${seen})`,
     };
   }
-  if (versionBelow(have, me.version))
+  if (versionBelow(have, me.version)) {
+    if (!allowUpgrade)
+      return {
+        action: "refuse",
+        why: "content-unknown",
+        line: `refuse    upgrade-not-allowed ${me.name} ${have} -> ${me.version}: an upgrade makes BC recompile every installed app that depends on it, and a refused upgrade can strip those dependents (R707, R709); pass --allow-upgrade to accept that (${seen})`,
+      };
     return {
       action: "publish",
       how: "upgrade",
       line: `publish   upgrade ${me.name} ${have} -> ${me.version} (${seen})`,
     };
+  }
   return {
     action: "refuse",
     why: "above-build",
@@ -206,12 +232,19 @@ export async function dependencyRefusals(
   const out: string[] = [];
   const listed = files.map((f) => ({ ...readAppIdentity(f.bytes), bytes: f.bytes }));
   const resident = new Map<string, string | null>();
-  const pinned = new Map(listed.map((a) => [a.name, a.version]));
+  const seenIds = new Map<string, string>();
+  for (const a of listed) {
+    const key = a.id.toLowerCase();
+    const first = seenIds.get(key);
+    if (first !== undefined)
+      out.push(`refuse    duplicate ${a.name} and ${first} carry the same app id ${a.id}`);
+    else seenIds.set(key, a.name);
+  }
   for (const n of ["Application", "System"])
     resident.set(n, await ops.residentVersion("Microsoft", n));
   listed.forEach((a, i) => {
     for (const d of appInputsOfPackage(a.bytes).dependencies) {
-      const j = listed.findIndex((x) => x.id.toLowerCase() === d.id || x.name === d.name);
+      const j = listed.findIndex((x) => x.id.toLowerCase() === d.id);
       if (j >= i)
         out.push(
           `refuse    order ${a.name} (position ${i + 1}) depends on ${d.name}, which is ${j === i ? "itself" : `listed later (position ${j + 1})`}; name the files dependencies first`,
@@ -219,16 +252,22 @@ export async function dependencyRefusals(
     }
   });
   for (const a of listed) {
+    // Per app: a listed dependency counts only when its ID matches; the map is keyed by name only
+    // because `continiaDependencyProblems` reads it that way.
+    const pinned = new Map<string, string>();
     for (const d of appInputsOfPackage(a.bytes).dependencies) {
-      if (listed.some((x) => x.id.toLowerCase() === d.id || x.name === d.name)) continue;
+      const hit = listed.find((x) => x.id.toLowerCase() === d.id);
+      if (hit !== undefined) {
+        pinned.set(d.name, hit.version);
+        continue;
+      }
       const v = await ops.residentVersion(d.publisher, d.name);
       if (d.publisher === "Microsoft") resident.set(d.name, v);
       else if (v !== null) pinned.set(d.name, v);
     }
-  }
-  for (const a of listed)
     for (const p of continiaDependencyProblems(a.bytes, resident, pinned))
       out.push(`refuse    depends ${p}`);
+  }
   return out;
 }
 
@@ -256,11 +295,12 @@ export async function run(args: Args, d: Deps): Promise<void> {
       bytes,
       await d.ops.resident(id.publisher, id.name),
       await d.ops.rows(id.id),
+      args.allowUpgrade,
     );
     d.log(`  ${decision.line}`);
     // PR-128 (R1110): an app that would be installed and declares text-optimized fields needs SQL Server Full-Text Search,
     // which no call here can read; say so before the publish, not after its HTTP 422.
-    if (decision.line.trimStart().startsWith("publish")) {
+    if (decision.action === "publish") {
       const ts = textSearchApp(bytes);
       if (ts !== undefined) d.log(`  note      ${textSearchNote(ts)}`);
     }
@@ -274,21 +314,38 @@ export async function run(args: Args, d: Deps): Promise<void> {
     d.log("  predicted: nothing published");
     return;
   }
-  await actAll(decided, d.ops, d.log);
+  // Upgrades synchronize, never forcesync (R707/R709); the `--mint` remedy is for fixtures, not these apps.
+  await actAll(decided, d.ops, d.log, { upgradeSchemaMode: "synchronize", noMintRemedy: true });
 }
 
-async function main(): Promise<number> {
-  try {
-    const args = parseArgs(process.argv.slice(2));
-    refuseIfOutOfUse(args.server, outOfUseDir(process.env), process.env);
+/** What `runMain` depends on: a fake counts these in tests. */
+export interface MainSeams {
+  outOfUse(server: ServerName): void;
+  heldLease(token: string): LeaseDeps;
+  newLease(lane: string, tokenDir: string): LeaseDeps;
+  run(args: Args): Promise<void>;
+}
+
+export const realSeams: MainSeams = {
+  outOfUse: (server) => refuseIfOutOfUse(server, outOfUseDir(process.env), process.env),
+  heldLease: (t) => heldLeaseDeps(t),
+  newLease: (lane, tokenDir) => leaseFor(lane, tokenDir, "continia"),
+  run: (args) => {
     const c = connFor(args.server);
+    return run(args, { ops: realPublishOps(c), read: (p) => readFileSync(p), log: console.log });
+  },
+};
+
+/** The lease is released only on success; on any failure it is KEPT (the server may be in a state only its holder should touch). */
+export async function runMain(argv: readonly string[], seams: MainSeams): Promise<number> {
+  try {
+    const args = parseArgs(argv);
+    seams.outOfUse(args.server);
     const lease =
       args.heldLease !== undefined
-        ? heldLeaseDeps(args.heldLease)
-        : leaseFor(args.lane, args.tokenDir, "continia");
-    await withLease(args.server, lease, () =>
-      run(args, { ops: realPublishOps(c), read: (p) => readFileSync(p), log: console.log }),
-    );
+        ? seams.heldLease(args.heldLease)
+        : seams.newLease(args.lane, args.tokenDir);
+    await withLease(args.server, lease, () => seams.run(args), undefined, true);
     console.log("ok");
     return 0;
   } catch (err) {
@@ -297,4 +354,4 @@ async function main(): Promise<number> {
   }
 }
 
-if (import.meta.main) process.exit(await main());
+if (import.meta.main) process.exit(await runMain(process.argv.slice(2), realSeams));

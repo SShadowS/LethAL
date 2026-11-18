@@ -454,6 +454,8 @@ export async function withLease<T>(
   deps: LeaseDeps,
   body: () => Promise<T>,
   heartbeatMs: number = HEARTBEAT_MS,
+  /** On a failed body keep the lease (print its token and the release command) instead of releasing. */
+  keepOnFailure = false,
 ): Promise<T> {
   const token = await deps.take(server);
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -480,11 +482,17 @@ export async function withLease<T>(
     result = { ok: false, error };
   }
   if (timer !== undefined) clearInterval(timer);
-  try {
-    await deps.release(server, token);
-  } catch (err) {
-    if (result.ok) throw err;
-    console.error(`  [FAIL] releasing ${server} failed too: ${errText(err)}`);
+  if (!result.ok && keepOnFailure) {
+    console.error(
+      `  lease KEPT: ${token}\n  release it when the server is known healthy: kraken coord release ${server} ${token}`,
+    );
+  } else {
+    try {
+      await deps.release(server, token);
+    } catch (err) {
+      if (result.ok) throw err;
+      console.error(`  [FAIL] releasing ${server} failed too: ${errText(err)}`);
+    }
   }
   if (!result.ok) throw result.error;
   return result.value;

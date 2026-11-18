@@ -86,10 +86,17 @@ function devBase(c: Conn): string {
   return `${hostOf(c)}:${portsOf(c.server).dev}/BC`;
 }
 
-export async function publishBytes(c: Conn, fileName: string, bytes: Uint8Array): Promise<void> {
+export type SchemaUpdateMode = "forcesync" | "synchronize";
+
+export async function publishBytes(
+  c: Conn,
+  fileName: string,
+  bytes: Uint8Array,
+  schemaMode: SchemaUpdateMode = "forcesync",
+): Promise<void> {
   const params = new URLSearchParams({
     tenant: "default",
-    SchemaUpdateMode: "forcesync",
+    SchemaUpdateMode: schemaMode,
     DependencyPublishingOption: "default",
   });
   const form = new FormData();
@@ -576,7 +583,8 @@ export interface ServerOps {
   /** `residentPackage`: `null` only on a 404, any other failure throws. */
   resident(publisher: string, name: string): Promise<Buffer | null>;
   rows(appId: string): Promise<ExtensionRow[]>;
-  publish(fileName: string, bytes: Buffer): Promise<void>;
+  /** `schemaMode` is passed only when a caller asks for other than the default `forcesync`. */
+  publish(fileName: string, bytes: Buffer, schemaMode?: SchemaUpdateMode): Promise<void>;
 }
 
 export function realOps(c: Conn): ServerOps {
@@ -587,7 +595,7 @@ export function realOps(c: Conn): ServerOps {
       ext ??= extensionsApi(c);
       return rows(c, await ext, appId);
     },
-    publish: (fileName, bytes) => publishBytes(c, fileName, bytes),
+    publish: (fileName, bytes, schemaMode) => publishBytes(c, fileName, bytes, schemaMode),
   };
 }
 
@@ -759,15 +767,25 @@ export async function actAll(
   decided: readonly Decided[],
   ops: ServerOps,
   log: (s: string) => void,
+  opts: {
+    /** Schema mode for `upgrade` publishes; unset keeps the default (`forcesync`). */
+    readonly upgradeSchemaMode?: SchemaUpdateMode;
+    /** Skip the fixture-specific `--mint` remedy (it does not fit a prebuilt third-party app). */
+    readonly noMintRemedy?: boolean;
+  } = {},
 ): Promise<void> {
   if (refusals(decided).length > 0) throw new Error("unreachable: actAll after a refusal");
   for (const { item, decision } of decided) {
     if (decision.action !== "publish") continue;
     const id = readAppIdentity(item.local);
+    const fileName = `${id.publisher}_${id.name}_${id.version}.app`;
     try {
-      await ops.publish(`${id.publisher}_${id.name}_${id.version}.app`, item.local);
+      if (decision.how === "upgrade" && opts.upgradeSchemaMode !== undefined)
+        await ops.publish(fileName, item.local, opts.upgradeSchemaMode);
+      else await ops.publish(fileName, item.local);
     } catch (err) {
-      throw new Error(`${(err as Error).message}${remedyFor(err, item, id.name, decided)}`);
+      const remedy = opts.noMintRemedy === true ? "" : remedyFor(err, item, id.name, decided);
+      throw new Error(`${(err as Error).message}${remedy}`);
     }
     const back = await ops.resident(id.publisher, id.name);
     const rs = await ops.rows(id.id);
