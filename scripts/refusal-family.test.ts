@@ -26,6 +26,7 @@ import {
   UNTOUCHED_HANDLE,
   X2_REFUSALS,
   X3_REFUSALS,
+  Y1_REFUSALS,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -1234,10 +1235,52 @@ describe("PR-139: the x3-refusals family", () => {
     expect(classes.find((c) => c.text === text(10))?.cells).toHaveLength(5);
   });
 
-  test("last of FAMILIES (place 19, BC-check number 20, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("x3-refusals");
+  test("place 19 of FAMILIES (BC-check number 20, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(18);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051020");
+  });
+});
+
+describe("PR-159: the y1-refusals family", () => {
+  const f = Y1_REFUSALS;
+  const JSON_TEXT_Y1 =
+    "DotNet Newtonsoft.Json.JsonTextWriter.WriteStartObject raised the .NET exception Newtonsoft.Json.JsonWriterException: Token StartObject in state Object would result in an invalid JSON object. Path 'message.body.toRecipients[0].emailAddress'.; the text AL would see is not pinned (ADR-014 section 7)";
+  const TEXTS = [
+    "RecordRef.GetTable of Integer 12345",
+    "RecordRef.GetTable of Integer 12345",
+    JSON_TEXT_Y1,
+  ];
+
+  test("three cells, an OnPrem app, distinct names, the guard checks IsRecord before GetTable, the path is toRecipients[0]", () => {
+    expect(f.cells).toHaveLength(3);
+    expect(f.target).toBe("OnPrem");
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    expect(f.cells[1]?.call).toBe("Helper.GetLog(V);");
+    expect(f.support).toContain("if VariantRecord.IsRecord then\n            exit;");
+    expect(f.cells[2]?.setup).toContain("JW.WritePropertyName('toRecipients');");
+    expect(f.cells[2]?.setup).not.toContain("JW.WritePropertyName('ccRecipients');");
+  });
+
+  test("a run that gives the measured texts makes 2 refusal classes (the 12345 class has 2 cells), none known", () => {
+    const rows = f.cells.map((_, i) => ({
+      name: `Codeunit${BASE_ID + 1 + i}.Cell`,
+      status: "error",
+      notRun: true,
+      message: `NotRun: out-of-scope: ${TEXTS[i]}`,
+    }));
+    const results = classify(f, rows);
+    expect(results.filter((r) => r.outcome === "refused")).toHaveLength(TEXTS.length);
+    const classes = refusalClasses(f, results);
+    expect(classes.every((c) => !c.known)).toBe(true);
+    expect(classes).toHaveLength(2);
+    expect(classes.find((c) => c.text === TEXTS[0])?.cells).toHaveLength(2);
+  });
+
+  test("last of FAMILIES (place 20, BC-check number 21, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("y1-refusals");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(19);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051021");
   });
 });
 
