@@ -10737,7 +10737,14 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
       allPass(m, cu, d, n).map((x) =>
         x.method === "B" ? { ...x, status: "fail" as const, message: text } : x,
       );
-  const named = (opts: RigOpts) => rig({ ...opts, appExtra: { publisher: PUB } });
+  // R1123 (PR-146): coverage on, so the re-check's coverage guard compares real maps (under "none" it compares none)
+  const named = (opts: RigOpts) =>
+    rig({
+      ...opts,
+      appExtra: { publisher: PUB },
+      extra: { coverage: "al-runner", ...opts.extra },
+      oneShotCoverage: plainCoverage,
+    });
   const rowsOf = (r: Rig) =>
     (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
   /** Each first session's stored coverage, as the orchestrator builds it from the baseline verdicts. */
@@ -10910,6 +10917,42 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
       [...(storedOf.get(r1) ?? new Map<string, string>())].map(([k, v]) => [`x${k}`, v]),
     );
     const { why } = await recheck(r1, allPass, (s) => s, renamed);
+    expect(why).toContain("no stored coverage to compare");
+  });
+
+  test("R1123: under coverage none no map is compared, and the re-check says so by name instead of passing null vs null", async () => {
+    const state = await (await firstOf(allPass)).b.baselineState();
+    const r2 = await named({
+      serve: { rows: allPass, coverage: plainCoverage },
+      extra: { coverage: "none" },
+    });
+    r2.b.baselinePhase(true);
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // nothing stored to compare: under coverage on this refuses (test 7); under none the rows decide
+      const why = await r2.b.recheckReusedBaseline(
+        JSON.parse(JSON.stringify(state)),
+        new Map(),
+        1000,
+      );
+      expect(why).toBeUndefined();
+      expect(
+        warn.mock.calls.some((c) => String(c[0]).includes("re-check: coverage not compared")),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("R1123: a failing test's null vs null is not a comparison: with the passing test's map missing, it refuses", async () => {
+    const rows = rowsWith("boom"); // B fails, A passes
+    const r1 = await firstOf(rows);
+    // keep only B's stored entry ("null"): A's map is missing, so nothing real is compared
+    const onlyB = new Map(
+      [...(storedOf.get(r1) ?? new Map<string, string>())].filter(([k]) => k.endsWith(".b")),
+    );
+    expect([...onlyB.values()]).toEqual(["null"]);
+    const { why } = await recheck(r1, rows, (s) => s, onlyB);
     expect(why).toContain("no stored coverage to compare");
   });
 
@@ -11799,8 +11842,15 @@ interface BatchReq {
 }
 describe("PR-123: the batched re-check of a reused baseline", () => {
   const isBatch = (q: Req) => q.body.test === undefined;
+  // R1123 (PR-146): coverage on, so a sample's coverage is a real map (under "none" the re-check compares none)
   const named = (opts: RigOpts) =>
-    rig({ suite: SUITE7, ...opts, appExtra: { publisher: "Acme Pub" } });
+    rig({
+      suite: SUITE7,
+      oneShotCoverage: plainCoverage,
+      ...opts,
+      appExtra: { publisher: "Acme Pub" },
+      extra: { coverage: "al-runner", ...opts.extra },
+    });
   const rowsOf = (r: Rig) =>
     (r.b as unknown as { baselineRows: Map<number, unknown[]> }).baselineRows;
   const priv = (r: Rig) =>
@@ -11867,7 +11917,7 @@ describe("PR-123: the batched re-check of a reused baseline", () => {
     const why = await r2.b.recheckReusedBaseline(o.patch?.(state) ?? state, f.coverage, 1000);
     return { why, r2 };
   };
-  /** The stored coverage of sample CU2's test C is another map (as the L5 test 6 does it; the rig reads no coverage index). */
+  /** The stored coverage of sample CU2's test C is another map (as the L5 test 6 does it). */
   const otherCoverage = (f: Awaited<ReturnType<typeof stored>>) =>
     new Map([...f.coverage, [`codeunit${CU2}.c`, JSON.stringify({ not: "it" })]]);
   const lineOf = (warn: { mock: { calls: unknown[][] } }) =>

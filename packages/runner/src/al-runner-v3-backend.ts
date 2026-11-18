@@ -7319,6 +7319,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const stopSeconds = stopSecondsOf(timeoutMs);
     const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
     const order = s.rows.map(([k]) => k);
+    // R1123 (PR-146): without a coverage index (alRunnerV3.coverage "none") this session reads no coverage map: the
+    // samples ask for none, no map is compared, and the re-check says so by name rather than passing null vs null.
+    const coverageOn = this.coverageIndex !== undefined;
+    if (!coverageOn)
+      console.warn(
+        `[lethal] al-runner-v3 re-check: coverage not compared (alRunnerV3.coverage is "none": this session builds no coverage index, so it reads no coverage map to compare with the stored ones); the rows are compared (R1123).`,
+      );
     const sample = new Set(
       [order[1], order[Math.floor(order.length / 2)], order[order.length - 1]].filter(
         (x): x is number => x !== undefined,
@@ -7398,7 +7405,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             return "the memory bound (the re-check could not run)";
           try {
             await this.checkBound(lane);
-            got = await this.baselineRequest(lane, mode, id, stopSeconds, sample.has(id));
+            got = await this.baselineRequest(
+              lane,
+              mode,
+              id,
+              stopSeconds,
+              sample.has(id) && coverageOn,
+            );
           } catch (err) {
             if (!(err instanceof AlRunnerServerRequestError)) throw err;
             got = undefined;
@@ -7416,7 +7429,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           { rows: masked(stored.get(id) ?? []), coverage: none },
         );
         if (diffs.length > 0) return `the re-check (codeunit ${id}: ${diffs[0]})`;
-        if (sample.has(id)) {
+        if (sample.has(id) && coverageOn) {
           // Review 2: a sampled codeunit with a passing test must compare at least one coverage map,
           // or the check would pass with nothing compared (empty vs empty)
           let compared = 0;
@@ -7436,7 +7449,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             if (was === undefined) continue; // a test the session does not measure (TestPage-skipped, out of scope)
             if (JSON.stringify(now ?? null) !== was)
               return `the re-check (codeunit ${id}: ${r.method}'s coverage differs)`;
-            compared += 1;
+            // R1123 (PR-146): only a map this session read counts; null vs null (a test with no coverage) compares nothing
+            if (now !== undefined) compared += 1;
           }
           if (passing && compared === 0)
             return `the re-check (codeunit ${id}: no stored coverage to compare for its passing tests)`;
