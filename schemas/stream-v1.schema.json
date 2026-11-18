@@ -1798,6 +1798,267 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "tests",
+        "elapsedMs",
+        "verdicts",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "recheck-baseline-finished"
+        },
+        "tests": {
+          "type": "number"
+        },
+        "elapsedMs": {
+          "type": "number"
+        },
+        "verdicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "outcome"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "fail",
+                  "skip",
+                  "timeout",
+                  "deadline-exceeded",
+                  "error"
+                ]
+              }
+            }
+          }
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "mutant",
+        "batchIndex",
+        "durationMs",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "mutant-rechecked"
+        },
+        "mutant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mutantId",
+            "file",
+            "startIndex",
+            "endIndex",
+            "startLine",
+            "operatorName",
+            "operatorVersion",
+            "astHash",
+            "objectType",
+            "codeunitId",
+            "codeunitName",
+            "procedureName",
+            "originalText",
+            "mutatedText"
+          ],
+          "properties": {
+            "mutantId": {
+              "type": "string"
+            },
+            "file": {
+              "type": "string"
+            },
+            "startIndex": {
+              "type": "number"
+            },
+            "endIndex": {
+              "type": "number"
+            },
+            "startLine": {
+              "type": "number"
+            },
+            "operatorName": {
+              "type": "string"
+            },
+            "operatorVersion": {
+              "type": "string"
+            },
+            "astHash": {
+              "type": "string"
+            },
+            "reachGrain": {
+              "type": "string",
+              "enum": [
+                "statement",
+                "enclosing",
+                "unplaced"
+              ]
+            },
+            "reachLine": {
+              "type": "number"
+            },
+            "objectType": {
+              "type": "string"
+            },
+            "codeunitId": {
+              "type": "number"
+            },
+            "codeunitName": {
+              "type": "string"
+            },
+            "procedureName": {
+              "type": "string"
+            },
+            "procedureScope": {
+              "type": "string",
+              "enum": [
+                "local",
+                "public"
+              ]
+            },
+            "coverageArmNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "triggerName": {
+              "type": "string"
+            },
+            "procedureStartLine": {
+              "type": "number"
+            },
+            "procedureEndLine": {
+              "type": "number"
+            },
+            "nonDebuggable": {
+              "const": true
+            },
+            "procedureOverloadIndex": {
+              "type": "number"
+            },
+            "gapId": {
+              "type": "string"
+            },
+            "blockStartLine": {
+              "type": "number"
+            },
+            "blockEndLine": {
+              "type": "number"
+            },
+            "identityOrdinal": {
+              "type": "number"
+            },
+            "memberHash": {
+              "type": "string"
+            },
+            "originalText": {
+              "type": "string"
+            },
+            "mutatedText": {
+              "type": "string"
+            },
+            "platformKillMechanism": {
+              "type": "string"
+            },
+            "hangCapable": {
+              "type": "string"
+            },
+            "equivalenceRisk": {
+              "type": "string"
+            }
+          }
+        },
+        "batchIndex": {
+          "type": "number"
+        },
+        "durationMs": {
+          "type": "number"
+        },
+        "keptNote": {
+          "type": "string"
+        },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "killingTest",
+            "coveringTests",
+            "isolatedRecheck"
+          ],
+          "properties": {
+            "killingTest": {
+              "type": "string"
+            },
+            "killingTestFailure": {
+              "type": "string"
+            },
+            "killPosition": {
+              "type": "number"
+            },
+            "reproducedFailure": {
+              "type": "string"
+            },
+            "coveringTests": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "isolatedRecheck": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "withheldFailure",
+                "killerGreenInMainBaseline"
+              ],
+              "properties": {
+                "withheldFailure": {
+                  "type": "string"
+                },
+                "afterTest": {
+                  "type": "string"
+                },
+                "killerGreenInMainBaseline": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "mutantId",
         "attemptId",
         "opSeq",

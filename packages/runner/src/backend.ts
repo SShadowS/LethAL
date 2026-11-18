@@ -653,6 +653,11 @@ export interface ExecutionBackend {
    */
   readonly isolationAuto?: boolean;
   /**
+   * PR-144: the session runs the serve-entries transport (a daemon answers every request). Read after
+   * `decideTransport`. Absent counts as false (one-shot, or a backend with no such choice).
+   */
+  readonly serveEntries?: boolean;
+  /**
    * R517, OPTIONAL: the in-run stop LethAL configured for the whole session, timed on the test's
    * own body, enforced whatever budget a run is sent. al-runner `--server` answers it once
    * `useMutantBudgetFloor` was called; absent elsewhere (the stop is the budget). An upper bound

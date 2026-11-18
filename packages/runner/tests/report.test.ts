@@ -244,8 +244,9 @@ describe("Caveat union", () => {
       "time-budget-reached": true,
       "nondebuggable-no-coverage": true,
       "withheld-kills": true,
+      "isolated-recheck-kills": true,
     };
-    expect(Object.keys(all).length).toBe(35);
+    expect(Object.keys(all).length).toBe(36);
   });
 });
 

@@ -2450,6 +2450,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get methodIsolation(): boolean {
     return this.cfg.isolation === "method";
   }
+  /** PR-144: see `ExecutionBackend.serveEntries`. */
+  get serveEntries(): boolean {
+    return this.entries;
+  }
   /** R896: see `ExecutionBackend.isolationAuto`. */
   get isolationAuto(): boolean {
     return this.cfg.isolation === "auto";

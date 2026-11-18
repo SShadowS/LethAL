@@ -101,6 +101,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     // R1018: the al-runner binary is pinned once per run, on v3 only
     'if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)':
       "v3",
+    // PR-144: the withheld-kill recheck exists on v3 only
+    'if (a.parsed.backendKind !== "al-runner-v3") return undefined;': "v3",
     '} else if (paths.backendKind === "al-runner-v3") {': "v3",
     'if (backendKind === "al-runner-v3") {': "v3",
     'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",
