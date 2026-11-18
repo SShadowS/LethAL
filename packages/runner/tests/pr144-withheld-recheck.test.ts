@@ -797,9 +797,12 @@ describe("--resume does not carry a recovered kill", () => {
 describe("config and docs", () => {
   const base = { packagesDir: "/p", bcVersion: "28.0.1.1", path: "/x/al-runner" };
 
-  test("defaults: off, 3600 s", () => {
+  test("defaults: on (PR-182), 3600 s; false opts out", () => {
     const c = validateAlRunnerV3Config(base);
-    expect(c.recheckWithheldKills).toBe(false);
+    expect(c.recheckWithheldKills).toBe(true);
+    expect(
+      validateAlRunnerV3Config({ ...base, recheckWithheldKills: false }).recheckWithheldKills,
+    ).toBe(false);
     expect(c.recheckBudgetSeconds).toBe(V3_RECHECK_BUDGET_SECONDS_DEFAULT);
     expect(V3_RECHECK_BUDGET_SECONDS_DEFAULT).toBe(3600);
   });
@@ -900,8 +903,11 @@ describe("v3RecheckOf (cli wiring)", () => {
     return { recheck, built, ran, closed: () => closed, storeClosed: () => storeClosed };
   }
 
+  test("key absent: the recheck is built (default on, PR-182)", () => {
+    expect(wire(section).recheck?.budgetSeconds).toBe(3600);
+  });
+
   test("option off, or another backend: no recheck is built", () => {
-    expect(wire(section).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: false }).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: true }, "bcdev").recheck).toBeUndefined();
   });

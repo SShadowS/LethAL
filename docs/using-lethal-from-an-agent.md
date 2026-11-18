@@ -236,9 +236,12 @@ a daemon is reused, one whose resident memory passed the size, or that served th
 fresh daemon (close reason `recycle`, one warm-up each). Measured verdict-neutral with a recycle after every request. A
 daemon already over the size right after its warm-up is the project's working set: the size bound is then turned off for
 the session, said once as `al-runner-v3-daemon-recycle-off`.
-`"recheckWithheldKills"` (default `false`) and `"recheckBudgetSeconds"` (default 3600) turn on and bound the recheck of
-withheld-kill rows after the main pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured
-against BC and may be false where an earlier test that al-runner refused would have set state on BC.
+`"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
+rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck of withheld-kill rows after the main
+pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an
+earlier test that al-runner refused would have set state on BC. A row the recheck does not recover stays `error`:
+unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9
+TestPage-only killers, 7 killers red at BC's baseline).
 **Runs stored before this change.** A serve-entries session now records ` baseline-daemon` in its lending build
 (`runs.runner_build`), because its baseline comes from a daemon, not from one process per codeunit, and a verdict or
 baseline snapshot should be lent only to a session whose baseline came the same way. So a run stored by an earlier
@@ -630,7 +633,7 @@ readable file.
 **Every verdict line is PROVISIONAL until `session-finished` appears.** A `batch-invalidated` event
 can supersede a verdict already written to the file: a lease loss, or a deploy that turns out
 unsound, sends its batch round again. Acting on a `survived` line that a later event retracts means
-acting on a fact the run itself no longer stands behind. The same holds for `mutant-rechecked` (PR-144, opt-in
+acting on a fact the run itself no longer stands behind. The same holds for `mutant-rechecked` (PR-144, on by default;
 `alRunnerV3.recheckWithheldKills`): it replaces the verdict of an earlier `mutant-scored` `error` row (a withheld kill)
 with `killed`, so a consumer that ignores it reads `error` where the report says `killed`.
 

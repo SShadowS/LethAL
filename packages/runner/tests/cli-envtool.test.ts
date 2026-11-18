@@ -975,7 +975,10 @@ describe("R775: runFromCli closes the al-runner-v3 backend", () => {
           await runFromCli(parsed, {
             validateSelectorIdsForProject: async () => {},
             resolveEnvToolSession: async () => ({
-              effectiveConfig: { alRunnerV3: { path: join(link, "al-runner") } },
+              // PR-182: the recheck is on by default and this stub is not a full section; the test is about the link.
+              effectiveConfig: {
+                alRunnerV3: { path: join(link, "al-runner"), recheckWithheldKills: false },
+              },
             }),
             buildBackend: async (_p, c) => {
               paths.push((c.alRunnerV3 as { path?: string } | undefined)?.path);
