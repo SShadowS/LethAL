@@ -546,7 +546,10 @@ lethal campaign compare --manifest docs/campaign/2026-08-03-do/campaign.json \
 uncommitted, modified or simply missing is refused. The whole point is that you cannot write down
 what you expected after seeing the answer.
 
-Recovery, when a session died mid-run and left the container held:
+Recovery, when a session died mid-run and left the container held. A quarantined run prints these
+steps with its own server, instance and config. If its message says the lease must not be trusted
+until an NST restart (R658: a test hung and BC never confirmed LethAL's stop), restart the BC
+service tier first; the commands below assume it answers again.
 
 ```bash
 # clears the SERVER-side lease and operation marker

@@ -105,6 +105,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (backendKind === "al-runner-v3") {': "v3",
     'if (configured !== "al-runner") return { mode: configured, offFiles: [] };': "coverage-mode",
     'if (backendArg === "bcdev" && workers > 1) {': "bcdev",
+    // PR-132 (R1113): the whole-suite note is bcdev's, where one hanging baseline test quarantines the run
+    'return backendKind === "bcdev" ? [head, BASELINE_WHOLE_SUITE_NOTE] : [head];': "bcdev",
     'if (parsed.backendKind !== "bcdev" || configFile.envTool === undefined) {': "bcdev",
     'if (parsed.backendKind !== "bcdev") return {};': "bcdev",
     // PR-42: the bcdev section's stopHungSessions applies on bcdev only

@@ -157,6 +157,8 @@
     "r560c-credit-limit-setup.ts",
     "bc-republish.ts",
     "bc-republish.test.ts",
+    "bc-continia-publish.ts",
+    "bc-continia-publish.test.ts",
     "r594/cdo-publish.ts",
     "r623-probe/drive.ts",
     "r702-probe/drive.ts",

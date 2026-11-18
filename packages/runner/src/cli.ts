@@ -3731,6 +3731,40 @@ export function permissionCanaryFor(
   return { permissionCanary: () => runPermissionCanary(client) };
 }
 
+/**
+ * PR-132 (R1113): printed by a bcdev dry run beside its `tests:` line. The baseline runs the whole test app, and one test that
+ * hangs there quarantines the run, even when `--only` narrows the target to one file.
+ */
+export const BASELINE_WHOLE_SUITE_NOTE =
+  "  the baseline runs every test in it; one test that hangs quarantines the whole run (R1113). --tests-only <glob> narrows the baseline when you know the covering tests (it can change a verdict).";
+
+/** The dry run's `tests:` line, and on bcdev (where a hang quarantines the run) the whole-suite note. */
+export function dryRunTestsLines(backendKind: string | undefined, testDir: string): string[] {
+  const head = `tests: ${testDir} (the real run tests with this app; a dry run runs none)`;
+  return backendKind === "bcdev" ? [head, BASELINE_WHOLE_SUITE_NOTE] : [head];
+}
+
+/**
+ * PR-132 (R1113): the way back from a quarantined bcdev run, with the run's own server, instance and config, printed after
+ * "kept scratch folder". Step 1 applies only when the quarantine message asked for a service-tier restart (R658).
+ */
+export function quarantineRecoverySteps(o: {
+  readonly quarantined: boolean;
+  readonly server: string | undefined;
+  readonly instance: string | undefined;
+  readonly configPath: string;
+}): string[] {
+  // Only a quarantined run on a known bcdev tier has a way back to print (al-runner has no tier).
+  if (!o.quarantined || o.server === undefined || o.instance === undefined) return [];
+  return [
+    "[lethal] the run is quarantined. To recover:",
+    `  1. If the message above says the lease must not be trusted until an NST restart (R658), restart the BC service tier of ${o.server} / ${o.instance} first.`,
+    `  2. lethal force-reset-lease --server ${o.server} --instance ${o.instance} --config ${o.configPath}`,
+    `  3. lethal clear-quarantine --config ${o.configPath}`,
+    "  4. Run again. If the test that hung is outside your scope, leave it out with --exclude-test <Codeunit.Method>, or run only the covering tests at baseline with --tests-only <glob>. Both can change a verdict; the report flags 'tests-narrowed'.",
+  ];
+}
+
 export function resourceIdentityFor(
   parsed: BackendInputs,
   configFile: LethalConfigFile,
@@ -4395,6 +4429,14 @@ export async function runFromCliWithAccept(
   } else {
     await removeScratchQuietly(scratchRoot);
   }
+  // PR-132 (R1113): the way back, with this run's own server, instance and config.
+  for (const line of quarantineRecoverySteps({
+    quarantined,
+    server: tier.resourceServer,
+    instance: tier.resourceServerInstance,
+    configPath: given.configPath,
+  }))
+    console.warn(line);
   // PR-79: from the snapshot the run parsed, never from disk.
   // An error here must not lose the finished run: it comes back beside the report, and `main`
   // prints it and refuses to pass (exit 1 unless the report's own code is 3, 4 or 7).
@@ -6660,7 +6702,7 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
         `--tests ${parsed.testDir}: no such folder (a dry run runs no test, but checks the folder it names)`,
       );
     }
-    console.log(`tests: ${parsed.testDir} (the real run tests with this app; a dry run runs none)`);
+    for (const line of dryRunTestsLines(parsed.backendKind, parsed.testDir)) console.log(line);
   }
   if (parsed.timeBudgetSeconds !== undefined) {
     console.log(

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**44 of 1075 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1081 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -385,6 +385,8 @@ that ordering is the priority.
 - **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · closed 2026-11-16 — measured clean (PR-95): hidden excluded tests leave a kept daemon clean; the remaining…
 - **R1104** · Hang refusal for remove-not on `while not S.EOS` when the InStream S is read earlier in a block that holds the loop (R173's 'EOS is false at the start' fails after a pre-read): 7 DO sites refused, 2 hangs per 3 scored lost; P4 waits for a DO window · [R1104.md](docs/roadmap/R1104.md) · open — built (PR-109); P4 waits for the first DO window on a head with it
 - **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · closed 2026-11-17 — measured (PR-110): the only static rule fails PR-37's bar (0 hangs in 3 scored sites)…
+- **R1114** · x2 drifted after a kept RecordRef.Duplicate refusal (a fail -> pass on a test the mutant cannot reach): check the keep directly · [R1114.md](docs/roadmap/R1114.md) · closed 2026-11-17 — checked directly (PR-134): the Duplicate keep is clean; the drift was mutant M17235…
+- **R1116** · al-runner v3 raises no error on a bare Insert() of an existing key (upstream #8267): a mutant that inserts a duplicate key can score SURVIVED where BC kills it · [R1116.md](docs/roadmap/R1116.md) · open
 
 ## Product gaps a real project hits
 
@@ -587,7 +589,7 @@ that ordering is the priority.
 - **R1056** · v3: a timeout kill that is provably a CPU-time stop (row clock cpu, under 10 x N wall, unmutated confirm within N/4) skips R577's reproduction; stop evidence v3-cpu-stop · [R1056.md](docs/roadmap/R1056.md) · done (a7b736fc)
 - **R1061** · Removing a loop bound set before the loop can hang (DO M7544: a batch size left at 0 is never above the count), but a plain rule refuses non-hanging sites too; narrow it before building · [R1061.md](docs/roadmap/R1061.md) · done (4e7d2cb9)
 - **R1062** · Toggling the blank literal of a loop's exit comparison hangs the loop (DO t5/t6: 3 timeout-killed mutants, about 90-180 s each); toggle-blank-string is now hang-refused there, following the exit's polarity · [R1062.md](docs/roadmap/R1062.md) · done (cc43198b)
-- **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · open
+- **R1063** · Hang refusal precision, what PR-48's review left: R1050 misses a local copy that feeds the exit name; rule B (R1061) over-refuses after an earlier write or a counter that can start below 0, and misses `until Y = X` and a bound read through a second variable · [R1063.md](docs/roadmap/R1063.md) · closed 2026-11-18 — measured by PR-136: the leftover candidates move 0 real sites…
 - **R1079** · In CI, a pull request whose changed lines hold no mutation site makes `lethal run --changed-since` exit 1 (an error), so docs-only or comment-only AL changes fail the pipeline · [R1079.md](docs/roadmap/R1079.md) · done (fe099d4a)
 - **R1080** · `lethal export` tells users to render HTML with `npx mutation-testing-elements`, but that package has no CLI, and Azure DevOps' PublishMutationReport task reads an HTML report, so the exported JSON cannot be shown as a build tab · [R1080.md](docs/roadmap/R1080.md) · open
 - **R1081** · `lethal doctor` on an al-runner-v3 config whose `packagesDir` is missing fails with a bare ENOENT, not a message naming the setting and how to fill it · [R1081.md](docs/roadmap/R1081.md) · done (cc9d602e)
@@ -596,6 +598,9 @@ that ordering is the priority.
 - **R1086** · Credentials can only be set by hand-editing the config JSON: no environment variable, env file or include · [R1086.md](docs/roadmap/R1086.md) · done (e7244b10)
 - **R1087** · `lethal doctor` checks dependencies against the package cache, not against what the server has installed · [R1087.md](docs/roadmap/R1087.md) · done (e7244b10)
 - **R1110** · A dependency whose install needs a server-side SQL feature (Full-Text Search, for a text-optimized index) fails only at publish, with HTTP 422; `lethal doctor` checks nothing on the server's database side · [R1110.md](docs/roadmap/R1110.md) · done (e93270e9) — PR-128: doctor check text-search-dependencies over the project's dependency closure; live…
+- **R1113** · One hanging test anywhere in a user's suite quarantines a whole bcdev run at baseline, with no recovery steps printed; nothing warns before the run about tests that can make real outbound HTTP calls · [R1113.md](docs/roadmap/R1113.md) · open — fix 1 (recovery steps on a quarantine) and a dry-run whole-suite note landed in PR-132; fix 2…
+- **R1117** · `lethal init` says a selector-id clash with a dependency is "NOT ruled out" when the dependency packages are missing, but does not say how to make it check · [R1117.md](docs/roadmap/R1117.md) · closed 2026-11-18 — already fixed by PR-84 (b093054f, 9b23f4fd): dependencyCheckWarning names the folder and…
+- **R1118** · The large-method note cannot say how far each listed operator would shrink the file, and does not say that `--lines` will not shrink a fold inside one procedure · [R1118.md](docs/roadmap/R1118.md) · open — filed by PR-67 (the DO pilot), 2026-11-17
 
 ## Backends and tooling
 
@@ -1103,7 +1108,7 @@ that ordering is the priority.
 - **R1089** · Dates, times and date formulas as a generated BC differential (PR-86): 334 cells, 300 equal; Format length, closing dates and Danish/German date formulas measured, filed #8198-#8200 · [R1089.md](docs/roadmap/R1089.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1090** · JSON and text handling as a generated BC differential (PR-87): 416 cells, every answered cell equal; 25 refusals in 3 classes with BC's answers measured, filed #8201-#8203 · [R1090.md](docs/roadmap/R1090.md) · closed 2026-11-16 — measured on bc2 and filed upstream
 - **R1091** · R1058's follow-up: an order-independent serve entry cost per codeunit needs per-codeunit calibration requests; probe their cost and how often entries are cut first · [R1091.md](docs/roadmap/R1091.md) · open
-- **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — refreshed by PR-125 (2026-11-17): the cross-check one-shots (12-14 s each, 55% workspace compile) are…
+- **R1092** · DO speed profile (PR-90): warm-ups are ~53% of a window's mutant phase and mostly LethAL's choice; inside a pass a fresh .NET sidecar and a per-request workspace reload set a ~0.7 s floor; test code and DB reset are near zero · [R1092.md](docs/roadmap/R1092.md) · open — refreshed by PR-134 (2026-11-17): Duplicate keep clean (R1114 closed, R1115 filed); RunRequestPage not…
 - **R1093** · Measure whether the serve prefetch (32% of a DO window's mutant phase) can be split across parallel lanes per codeunit without moving a verdict · [R1093.md](docs/roadmap/R1093.md) · done (d0f4f2cc): split prefetch built (PR-99, spec r6); DO slice N = 1 = N = 3 per mutant, mutant phase 1,025…
 - **R1094** · On al-runner v3 serve, an entry's excludeTests hides rows but still RUNS the excluded tests; only runSelectedOnly skips them. So L4's cut (R1030) never saved test execution, and its t4 rate gain belongs elsewhere · [R1094.md](docs/roadmap/R1094.md) · done (PR-94) — runSelectedOnly on prefix-cut entries; DO e-doc slice prefetch -28.5%, per-mutant IDENTICAL
 - **R1095** · DO windows t10/t11's remaining refusal families kept on the serve daemon (PR-93): 27 of 30 texts driven by invented cells, all 15 classes CLEAN with every distinct text a measured refuser; 154 of 174 t10/t11 closes now kept · [R1095.md](docs/roadmap/R1095.md) · done (4605b385) — P3 held: DO t12 and t13 (heads with PR-93) closed 0 times on the 26 kept texts (PR-105)
@@ -1119,7 +1124,8 @@ that ordering is the priority.
 - **R1108** · Name withheld kills in the report: an error whose covering test failed under the mutant but al-runner v3 did not trust the failure gets a per-mutant note, a count, a caveat with the remedy, and a console line · [R1108.md](docs/roadmap/R1108.md) · done (52e679a8): withheld kills named in the report…
 - **R1109** · v3 baseline batching (PR-115) is switched on per build by `V3_BASELINE_BATCHING_BUILDS`, listing edge-4ebfe7913 only: when edge moves `current`, batching silently turns off until someone lists the new build; let the update gate record it · [R1109.md](docs/roadmap/R1109.md) · done (d9fcdfca) — PR-117: the update gate records batchFacts only when its own DBM batched and passed; a…
 - **R1111** · al-runner v3 `"coverage": "none"` still asks al-runner for coverage on every baseline request (a cost nothing reads) · [R1111.md](docs/roadmap/R1111.md) · open
-- **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · open
+- **R1112** · Run up to two of the daemon fill's cross-check samples in flight, memory-admitted (the same samples): the one-shot chain is a fresh whole-DO baseline's critical path (~70-80 s) · [R1112.md](docs/roadmap/R1112.md) · closed 2026-11-17 — measured by PR-127: correct (0 moves) but no wall gain…
+- **R1115** · The kept-refusal drift check counts a test that is red at baseline as unreachable, though a mutant can reach it: false drifts cost a daemon restart · [R1115.md](docs/roadmap/R1115.md) · open
 
 ---
 

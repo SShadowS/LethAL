@@ -297,7 +297,7 @@ export function residentPairs(
 // ---------------------------------------------------------------------------------------------
 // the server
 
-function connFor(server: ServerName): Conn {
+export function connFor(server: ServerName): Conn {
   const login = readSecretFile();
   return {
     server,
@@ -305,7 +305,7 @@ function connFor(server: ServerName): Conn {
   };
 }
 
-function leaseFor(lane: string, tokenDir: string, label: string): LeaseDeps {
+export function leaseFor(lane: string, tokenDir: string, label: string): LeaseDeps {
   return {
     async take(server) {
       const token = (JSON.parse(await kraken(["lease", server, lane])) as { token?: unknown })

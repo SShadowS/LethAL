@@ -24,11 +24,34 @@ import {
   headerPackageId,
   isInstrumented,
   normaliseNavigation,
+  publishBytes,
   realOps,
   refusals,
   refuseDependent,
   residentPackage,
 } from "./bc-app-content.ts";
+
+describe("publishBytes schema mode", () => {
+  const urls: string[] = [];
+  const c: Conn = {
+    server: "bc1",
+    authorization: "Basic x",
+    fetch: (async (u: unknown) => {
+      urls.push(String(u));
+      return new Response("", { status: 200 });
+    }) as FetchFn,
+  };
+  test("the default is forcesync; a caller can ask for synchronize", async () => {
+    await publishBytes(c, "a.app", new Uint8Array([1]));
+    await realOps(c).publish("b.app", Buffer.from([1]));
+    await publishBytes(c, "c.app", new Uint8Array([1]), "synchronize");
+    expect(urls.map((u) => new URL(u).searchParams.get("SchemaUpdateMode"))).toEqual([
+      "forcesync",
+      "forcesync",
+      "synchronize",
+    ]);
+  });
+});
 
 // Five real alc 18.0.43.1464 builds (/coord/handoff/R-599/offline, digest-offline.log):
 // names1 and names2 are one source compiled twice; nt-resident1 and nt-local are one test source
