@@ -79,10 +79,11 @@ duplicate and no unmatched keys).
      - The refusal of real source drift stays. No accept flag (a manual override would be pasted by habit).
      - The key and effective-symbols checks are unchanged.
   3. **Red both ways:** an `.al` change refuses; a version-only `app.json` change passes.
-- **Effects beyond confirm.** The same hash is read by `explain --project`, `verify`, PR-144's recheck and baseline-snapshot
-  reuse.
-  - Every stored baseline snapshot (dos4, y1, y2's store) re-baselines once after the change.
-  - From then on, a version-only `app.json` change REUSES a snapshot, which is the point.
+- **Effects beyond confirm.** The same hash is read by `explain --project`, `verify`, PR-144's recheck, the report's
+  `sourceSha256` and the store's `runs.source_sha256`.
+  - **Corrected by the build (PR-177):** baseline-snapshot reuse is NOT keyed on this hash. It is keyed on `batchHash`
+    (the instrumented `.al` files only) plus the test app's hash. So stored snapshots (dos4, y1, y2) do not re-baseline,
+    and a version-only `app.json` change already reused a snapshot. A test now pins that.
   - A report written before the change no longer matches `explain --project` (no backward compatibility before the
     release).
 - **The live proof** is re-run on bc4 (lethal-code) with the same pre-committed rows. The v3 input must be re-run on the
