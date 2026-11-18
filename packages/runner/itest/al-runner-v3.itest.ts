@@ -174,6 +174,7 @@ import {
   judgeN1Serve,
   judgeO1Seed,
   judgeOrderProbe,
+  judgeRecheckBaseline,
   judgeRecheckLeg,
   judgeStateNotes,
   judgeWrArms,
@@ -1890,7 +1891,10 @@ async function legRC(scratch: string): Promise<SessionReport> {
     workers: 1,
     recheck,
   });
-  const fails = judgeRecheckLeg(r.mutants, r.validity.caveats);
+  const fails = [
+    ...judgeRecheckLeg(r.mutants, r.validity.caveats),
+    ...judgeRecheckBaseline(r.unsupportedTests),
+  ];
   for (const f of fails) console.log(`    - ${f}`);
   const [first] = fails;
   if (first !== undefined) throw new LegFailure(first);

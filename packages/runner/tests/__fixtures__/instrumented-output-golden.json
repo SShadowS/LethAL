@@ -377,8 +377,8 @@
       "mutants": 6
     },
     "fixtures/sandbox-recheck-tests/src/RecheckTests.Codeunit.al": {
-      "sha256": "065b17ef68e50540208633ee46135b7d675fd28f738e12b5a96fba7c509944b6",
-      "mutants": 25
+      "sha256": "bef6a2abf20f2cda6de7c987cbb3ba877e8dcdba65902706c6d155dc7304a42b",
+      "mutants": 29
     },
     "fixtures/sandbox-recheck/src/RecheckLogic.Codeunit.al": {
       "sha256": "0396014313d7b1cc0f3b90601cd230780666d1cc837dd2bd959504817c4f284d",

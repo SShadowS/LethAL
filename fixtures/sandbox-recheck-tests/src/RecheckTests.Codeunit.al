@@ -1,10 +1,12 @@
-// Declared order matters: al-runner v3 runs a codeunit's tests in this order (PR-162, spec amendment 6).
-// Under the remove-assignment mutant of `C := '7'`, Sevens(10) is ten NUL characters. A0_ParsesSevens and
-// B0_ParsesSevens then hit a refusal mid-run (the Evaluate of a NUL text), and what BC would still run after that
-// point holds a Page.RunModal of page 0, which is not in al-runner's program. So the refusal's remaining reach is
-// unknown, and the NEXT test's failure is withheld. B2_SeesTheMark passes after B1_OneSevenAndMarks in one
-// codeunit run (TestIsolation = Function keeps the codeunit's variables) and fails alone: that is what the
-// recheck's rule (e) must notice.
+// Declared order matters: al-runner v3 runs a codeunit's tests in this order (PR-162, spec amendment 7).
+// A0_RefusedWithUnknownReach and B0_RefusedWithUnknownReach build a NUL text of their own (not from Sevens or
+// SevensB) and Evaluate it: al-runner refuses that at EVERY baseline, and what BC would still run after the
+// refusal point holds a Page.RunModal of page 0, which is not in al-runner's program (an unknown reach). They
+// cover no mutant, so a covering test's failure after them is the mutant's FIRST non-pass row, and is withheld.
+// The baseline is therefore 3 of 5 passing by design: A0 and B0 are refused.
+// A1_OneSeven is the only covering test of the Sevens mutant, so the recheck recovers it. B2_SeesTheMark passes
+// after B1_OneSevenAndMarks in one codeunit run (TestIsolation = Function keeps the codeunit's variables) and
+// fails alone: that is what the recheck's rule (e) must notice for the SevensB mutant.
 codeunit 76050 "Recheck A Tests"
 {
     Subtype = Test;
@@ -13,15 +15,19 @@ codeunit 76050 "Recheck A Tests"
         Logic: Codeunit "Recheck Logic";
 
     [Test]
-    procedure A0_ParsesSevens()
+    procedure A0_RefusedWithUnknownReach()
     var
         R: Record "Recheck Row";
         D: Decimal;
         T: Text;
+        Ch: Char;
+        I: Integer;
     begin
-        T := Logic.Sevens(10);
+        Ch := 0;
+        for I := 1 to 10 do
+            T += Format(Ch);
         if not Evaluate(D, T) then
-            Error('Sevens(10) must parse as a number');
+            Error('a NUL text must parse');
         if D < 0 then
             Page.RunModal(0, R);
     end;
@@ -43,15 +49,19 @@ codeunit 76051 "Recheck B Tests"
         Marked: Boolean;
 
     [Test]
-    procedure B0_ParsesSevens()
+    procedure B0_RefusedWithUnknownReach()
     var
         R: Record "Recheck Row";
         D: Decimal;
         T: Text;
+        Ch: Char;
+        I: Integer;
     begin
-        T := Logic.SevensB(10);
+        Ch := 0;
+        for I := 1 to 10 do
+            T += Format(Ch);
         if not Evaluate(D, T) then
-            Error('SevensB(10) must parse as a number');
+            Error('a NUL text must parse');
         if D < 0 then
             Page.RunModal(0, R);
     end;

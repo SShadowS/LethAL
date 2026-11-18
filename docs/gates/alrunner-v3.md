@@ -339,19 +339,20 @@ Both run as the other legs do (`runSession`, the v3 backend, one-shot, coverage 
 
 ### Leg RC: the withheld-kill recheck (PR-144)
 
-Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162; §0b is the leg's design and §0c its warning set `[]`), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, has not been recorded: the leg REFUSES to start until it is (R332), and the figure block below names it with no totals until then.
+Pre-committed in `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162) and §0g (amendment 7; §0b is the leg's design and §0c its warning set `[]`), before it was built or run. It is a default itest leg, after WRE, and it is NOT in `V3_GATE_LEGS` (a build gated before it stays gated). Its baseline, `al-runner-v3.recheck.baseline.json`, has not been recorded: the leg REFUSES to start until it is (R332), and the figure block below names it with no totals until then.
 
 - **Fixture:** `fixtures/sandbox-recheck` and `fixtures/sandbox-recheck-tests` (runtime 17, invented code, ids 76000-76099).
   - Codeunit "Recheck Logic": `Sevens(N)` and `SevensB(N)`, each a loop of `C := '7'; T += Format(C);`. Table "Recheck Row" (76001) is only the record handed to `Page.RunModal`.
-  - "Recheck A Tests", in order: `A0_ParsesSevens` (`Evaluate` of `Sevens(10)` into Decimal must succeed, then `if D < 0 then Page.RunModal(0, R)`, which is after the refusal point and holds a construct al-runner cannot know), `A1_OneSeven` (asserts `Sevens(1) = '7'`).
-  - "Recheck B Tests", in order: `B0_ParsesSevens` (as A0 over `SevensB`), `B1_OneSevenAndMarks` (sets the global Boolean `Marked`, then asserts `SevensB(1) = '7'`), `B2_SeesTheMark` (asserts `Marked`: passes after B1 in one codeunit run, fails alone).
+  - "Recheck A Tests", in order: `A0_RefusedWithUnknownReach` (builds its own 10-NUL text from a `Char` 0 loop, `Evaluate`s it into a Decimal, which al-runner refuses, then `if D < 0 then Page.RunModal(0, R)`, which is after the refusal point and holds a construct al-runner cannot know; it never calls `Sevens`, so it covers no mutant), `A1_OneSeven` (asserts `Sevens(1) = '7'`; the only covering test of the `Sevens` mutant).
+  - "Recheck B Tests", in order: `B0_RefusedWithUnknownReach` (as A0), `B1_OneSevenAndMarks` (sets the global Boolean `Marked`, then asserts `SevensB(1) = '7'`), `B2_SeesTheMark` (asserts `Marked`: passes after B1 in one codeunit run, fails alone).
 - **Session:** al-runner v3 on the gate's pinned build, `"isolation": "test"` (explicit, so `auto` cannot move the codeunits), serve transport, `"recheckWithheldKills": true`, `--workers 1`. The recheck is built by `v3RecheckOf`, the CLI's own code.
 - **Pre-committed figures, per mutant** (the `lethal.remove-assignment` mutant of `C := '7'` in each procedure):
-  - `Sevens`: main pass `error` with `withheldKill` (afterTest `A0_ParsesSevens`); after the recheck `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`.
-  - `SevensB`: main pass `error` with `withheldKill` (afterTest `B0_ParsesSevens`); after the recheck it stays `error`, its note naming rule (e) and `B2_SeesTheMark`, which passed in the main baseline and fails alone.
+  - `Sevens`: main pass `error` with `withheldKill` (afterTest `A0_RefusedWithUnknownReach`); after the recheck `killed` by `A1_OneSeven`, with `killReproduced` and `isolatedRecheck`.
+  - `SevensB`: main pass `error` with `withheldKill` (afterTest `B0_RefusedWithUnknownReach`); after the recheck it stays `error`, its note naming rule (e) and `B2_SeesTheMark`, which passed in the main baseline and fails alone.
   - Other mutants of the two procedures are recorded in the leg's baseline and are not predicted.
   - Caveats: `isolated-recheck-kills` for the `Sevens` mutant, `withheld-kills` for the `SevensB` one.
 - **The leg fails by name** (`judgeRecheckLeg`, checked BEFORE the own-baseline compare): when the main pass has 0 withheld kills, when the `Sevens` mutant is not recovered, or when the `SevensB` mutant is recovered. It also fails on a `SevensB` note that does not name rule (e) and `B2_SeesTheMark`, a wrong afterTest, or a missing caveat.
+- **The baseline is 3 of 5 passing by design** (§0g, amendment 7): A0 and B0 are refused at every baseline, so the session carries the `baseline-red` caveat. The leg checks, by name (`judgeRecheckBaseline`), that exactly those two tests are refused and no other. A0 and B0 cover no mutant; that is why a covering test's failure after them is the mutant's first non-pass row, and so a withheld kill.
 - **Warning set** `[]` (`GATE_WARNINGS["al-runner-v3/RC"]`, amendment 3).
 - **Symbols:** the two projects are in the fixture symbol tar only after the owner rebuilds it; until the tar swap reaches CI and its compile is green, RC is recorded but not counted as proven.
 - Every other leg's frozen figures stay exactly as they are.

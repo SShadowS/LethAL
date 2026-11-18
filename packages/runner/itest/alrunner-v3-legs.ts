@@ -559,8 +559,8 @@ export function judgeN1Serve(
 
 /**
  * PR-144, leg RC: `sandbox-recheck` under `"isolation": "test"`, serve, `recheckWithheldKills`, one worker.
- * Pre-commitment: `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162;
- * §0b is the leg's design and §0c its warning set).
+ * Pre-commitment: `docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md` §0f (amendment 6, PR-162) with
+ * §0g (amendment 7: the refused tests cover no mutant); §0b is the leg's design and §0c its warning set.
  * Not in `V3_GATE_LEGS` (a build gated before this leg stays gated); every gate runs it from now on.
  */
 export const V3_RC_LEG = "RC";
@@ -568,9 +568,29 @@ export const V3_RC_LEG = "RC";
 /** The test the recovered `Sevens` kill must name, the test the main pass withheld after, and the test whose loss
  *  (rule (e)) keeps the `SevensB` kill withheld. */
 export const RC_SEVENS_KILLER = "A1_OneSeven";
-export const RC_SEVENS_AFTER_TEST = "A0_ParsesSevens";
-export const RC_SEVENSB_AFTER_TEST = "B0_ParsesSevens";
+export const RC_SEVENS_AFTER_TEST = "A0_RefusedWithUnknownReach";
+export const RC_SEVENSB_AFTER_TEST = "B0_RefusedWithUnknownReach";
 export const RC_SEVENSB_LOST_TEST = "B2_SeesTheMark";
+
+/**
+ * The baseline is 3 of 5 passing BY DESIGN (§0g): exactly A0 and B0 are refused, and nothing else. Returns the
+ * failures (each starting `RC:`), empty when `unsupportedTests` names exactly those two tests. A name may be
+ * qualified by its codeunit.
+ */
+export function judgeRecheckBaseline(unsupportedTests: readonly string[]): readonly string[] {
+  const fails: string[] = [];
+  for (const want of [RC_SEVENS_AFTER_TEST, RC_SEVENSB_AFTER_TEST])
+    if (unsupportedTests.filter((t) => t.endsWith(want)).length !== 1)
+      fails.push(
+        `RC: ${want} must be refused at baseline (refused: ${unsupportedTests.join(", ") || "none"})`,
+      );
+  const extra = unsupportedTests.filter(
+    (t) => !t.endsWith(RC_SEVENS_AFTER_TEST) && !t.endsWith(RC_SEVENSB_AFTER_TEST),
+  );
+  if (extra.length > 0)
+    fails.push(`RC: unexpected refused test(s) at baseline: ${extra.join(", ")}`);
+  return fails;
+}
 
 /** The report row's fields the RC judge reads. */
 export interface RcRow {
@@ -594,7 +614,7 @@ const isSevenSite = (r: RcRow, procedureName: string): boolean =>
 
 /**
  * RC's pre-committed table, for the remove-assignment mutant of `C := '7'` in `Sevens` and in `SevensB`
- * (§0f, amendment 6). Returns every failure, each starting `RC:`, the three the pre-commitment names first.
+ * (§0f, amendment 6; names per §0g, amendment 7). Returns every failure, each starting `RC:`, the three the pre-commitment names first.
  * Other mutants are outside the judge (the leg's baseline holds them). Pure, so it is red-checked offline.
  *  - the main pass held at least one withheld kill (any row recovered, or still withheld);
  *  - the `Sevens` mutant is `killed` by `A1_OneSeven` with `killReproduced` and `isolatedRecheck` (its main-pass

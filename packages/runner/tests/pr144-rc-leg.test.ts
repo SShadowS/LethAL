@@ -8,6 +8,7 @@ import {
   RC_SEVENS_KILLER,
   type RcRow,
   V3_RC_LEG,
+  judgeRecheckBaseline,
   judgeRecheckLeg,
 } from "../itest/alrunner-v3-legs";
 import { PENDING_FIRST_RECORD } from "../itest/baseline-guard";
@@ -15,7 +16,7 @@ import { GATE_WARNINGS } from "../itest/gate-expected";
 
 /**
  * PR-144, leg RC (pre-commitment: docs/superpowers/specs/2026-11-18-pr144-withheld-kill-recheck.md §0f,
- * amendment 6, with §0b and §0c). Offline: the table judge, the fixture's shape, and the leg's wiring. The live
+ * amendment 6, with §0g (amendment 7), §0b and §0c). Offline: the table judge, the fixture's shape, and the leg's wiring. The live
  * run is the gate's.
  */
 
@@ -83,7 +84,7 @@ describe("judgeRecheckLeg: the pre-committed table", () => {
 
   test("a Sevens kill by another test, or not reproduced, or without isolatedRecheck, fails", () => {
     for (const bad of [
-      { killingTest: "A0_ParsesSevens" },
+      { killingTest: RC_SEVENS_AFTER_TEST },
       { killReproduced: false },
       { isolatedRecheck: undefined },
     ])
@@ -95,7 +96,7 @@ describe("judgeRecheckLeg: the pre-committed table", () => {
       [{ ...sevens(), isolatedRecheck: { afterTest: "A1_OneSeven" } }, sevensB()],
       CAVEATS,
     );
-    expect(f.some((x) => x.includes("pre-committed A0_ParsesSevens"))).toBe(true);
+    expect(f.some((x) => x.includes("pre-committed A0_RefusedWithUnknownReach"))).toBe(true);
   });
 
   test("a SevensB note that does not name rule (e) and B2_SeesTheMark, or a wrong afterTest, fails", () => {
@@ -124,6 +125,14 @@ describe("judgeRecheckLeg: the pre-committed table", () => {
     expect(judgeRecheckLeg([sevens(), plain], CAVEATS)).toContain(
       "RC: the SevensB remove-assignment mutant is not a withheld kill",
     );
+  });
+
+  test("the baseline must refuse exactly A0 and B0, by name", () => {
+    const ok = ["Recheck A Tests.A0_RefusedWithUnknownReach", "B0_RefusedWithUnknownReach"];
+    expect(judgeRecheckBaseline(ok)).toEqual([]);
+    expect(judgeRecheckBaseline([])).toHaveLength(2);
+    expect(judgeRecheckBaseline([ok[0] ?? ""]).join()).toContain("B0_RefusedWithUnknownReach");
+    expect(judgeRecheckBaseline([...ok, "A1_OneSeven"]).join()).toContain("A1_OneSeven");
   });
 
   test("a missing caveat fails", () => {
@@ -162,9 +171,9 @@ describe("the fixture is the one pre-committed", () => {
   test("the tests, in declared order", () => {
     const at = (s: string) => tests.indexOf(`procedure ${s}()`);
     const order = [
-      "A0_ParsesSevens",
+      "A0_RefusedWithUnknownReach",
       "A1_OneSeven",
-      "B0_ParsesSevens",
+      "B0_RefusedWithUnknownReach",
       "B1_OneSevenAndMarks",
       "B2_SeesTheMark",
     ].map(at);
@@ -172,8 +181,12 @@ describe("the fixture is the one pre-committed", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(tests).toContain('codeunit 76050 "Recheck A Tests"');
     expect(tests).toContain('codeunit 76051 "Recheck B Tests"');
-    expect(tests).toContain("T := Logic.Sevens(10);");
-    expect(tests).toContain("T := Logic.SevensB(10);");
+    // A0 and B0 build their own NUL text: they never call Sevens or SevensB, so they cover no mutant.
+    expect(tests).not.toContain("Sevens(10)");
+    expect(tests).not.toContain("SevensB(10)");
+    expect(tests.match(/Ch := 0;\s+for I := 1 to 10 do\s+T \+= Format\(Ch\);/g)?.length).toBe(2);
+    expect(tests.match(/Logic\.Sevens\(/g)?.length).toBe(1);
+    expect(tests.match(/Logic\.SevensB\(/g)?.length).toBe(1);
     expect(tests.match(/Page\.RunModal\(0, R\);/g)?.length).toBe(2);
     expect(tests).toContain("Logic.Sevens(1) <> '7'");
     expect(tests).toContain("Logic.SevensB(1) <> '7'");
