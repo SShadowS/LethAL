@@ -4,9 +4,24 @@ Status: r1, committed to master before any build (coord PR-160, lethal-preproc, 
 2026-11-18: build (d) with the cap at 1, and skip (a). Evidence: `/coord/handoff/PR-160/` (`result.md`, `cuts.ts`,
 `after-hang.ts` / `after-hang.txt`, `held-fallback.ts`) and `/coord/handoff/PR-159/timeouts-notes.md`.
 
+## 0. Amendment 1 (before any build, 2026-11-18)
+- **The window length was wrong in §1.** y1's session ran 27,150 s (`session-finished`), with a 26,434 s mutant phase;
+  12,600 s was x3's time budget.
+  - So y1's hangs cost about 2,650 s, about 10% of its mutant phase.
+  - The 1,015 s of after-timeout restarts is about 4% of the session.
+- **itest:hang's BASELINE file does not change, and R332's re-record does not apply.**
+  - `hang.single.baseline.json` holds per-mutant entries (verdict and killing test) only, which P2 predicts unchanged.
+  - The call counts that move are constants: `HANG_FIGURES.heldSecondHangs` and `HANG_FIGURES.stoppedCallsOn`, in
+    `packages/runner/itest/gate-expected.ts`, with the gate page's `gate-figures` block that
+    `packages/runner/tests/gate-pages.test.ts` pins.
+  - They change in the build branch: `heldSecondHangs` 2 -> 0, `stoppedCallsOn` 8 -> 6. `groupedCalls` is derived from
+    them and the counts.
+  - If the live run shows any per-mutant entry moving, P2 has failed: no re-record, and the build is reconsidered.
+- **The upstream ask (e)** is posted as #8334, linking #8180.
+
 ## 1. The measurement
 - **The cost in y1:** 8 mutants that loop forever caused 23 cut requests (1,635 s) and 23 daemon restarts (1,015 s),
-  about 2,650 s of a 12,600 s window.
+  about 2,650 s of a 27,150 s session (26,434 s of mutants; amendment 1 corrects the 12,600 s first written here).
 - **Why one mutant hangs more than once:** PR-108 (R1057) lets a mutant's walk go on past a hang, up to
   `WALK_HANG_CAP = 3` (`orchestrator.ts`), so a later covering test may still kill it normally.
   - PR-51 holds the FIRST timeout and replays it after the walk. A later timeout is only noted, and is scored only if
