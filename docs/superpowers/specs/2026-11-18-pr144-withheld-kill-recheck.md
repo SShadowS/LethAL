@@ -41,6 +41,40 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   - tests reach the real nested path (`exactSites`, `keepOnlyTests` refusals, the session hook).
 - **The al-runner-v3 gate leg** (§3.7): its figures are pre-committed in amendment 2, before it is built or run.
 
+## 0b. Amendment 2: the gate leg RC, pre-committed before it is built or run
+- **The fixture `fixtures/sandbox-recheck`** (an app and a test app, runtime 17, invented code).
+  - **App:** codeunit "Recheck Logic", with:
+    - `Double(X: Integer): Integer` (`exit(X * 2)`);
+    - `Triple(X: Integer): Integer` (`exit(X * 3)`);
+    - `Bump()` and `Count(): Integer` over a counter in a `SingleInstance` codeunit "Recheck State".
+  - **Test codeunit "Recheck A Tests"**, in declared order:
+    - `A0_Refuses`: an `Evaluate` of a 10-NUL text into Decimal, a refusal on edge-4ebfe7913 (PR-139's probe);
+    - `A1_Doubles`: asserts `Double(2) = 4`.
+  - **Test codeunit "Recheck B Tests"**, in declared order:
+    - `B0_Refuses`: the same refusal;
+    - `B1_TriplesAndBumps`: calls `Bump()`, then asserts `Triple(2) = 6`;
+    - `B2_SeesTheBump`: asserts `Count() = 1`. It passes after B1 in one codeunit session, and fails alone.
+- **The leg's session:**
+  - backend al-runner-v3 on the gate's pinned build, `"isolation": "test"` (explicit, so `auto` cannot move the
+    codeunits), serve transport;
+  - `"recheckWithheldKills": true`, `--workers 1`.
+- **Pre-committed figures, per mutant at the two sites** (`exit(X * 2)` in `Double` and `exit(X * 3)` in `Triple`):
+  - **Main pass:** every mutant at those sites that changes the returned value is `error` with `withheldKill` (afterTest
+    `A0_Refuses` or `B0_Refuses`).
+  - **After the recheck:**
+    - each `Double` mutant whose main row was a withheld kill is `killed` by `A1_Doubles`, with `killReproduced` and
+      `isolatedRecheck`;
+    - each `Triple` withheld kill stays `error`, its note naming rule (e) and the lost test `B2_SeesTheBump`;
+    - mutants elsewhere (`Bump`, `Count`) are recorded in the leg's baseline. They are not part of this prediction.
+  - **Caveats:** `isolated-recheck-kills` counts exactly the recovered `Double` mutants, and `withheld-kills` counts
+    exactly the `Triple` ones.
+- **The leg fails by name:**
+  - when the main pass has 0 withheld kills (a fixed refusal would make the leg empty);
+  - when no `Double` mutant is recovered;
+  - when any `Triple` mutant is recovered.
+- **Existing legs:** every other leg's frozen figures stay exactly as they are; RC adds a baseline file of its own. The
+  gate page `docs/gates/alrunner-v3.md` gains RC's section with these figures.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows
