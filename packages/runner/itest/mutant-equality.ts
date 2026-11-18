@@ -23,6 +23,7 @@
  */
 import { createHash } from "node:crypto";
 import { REDACTION_MARKER } from "../src/explain";
+import { keyOf } from "../src/mutant-key";
 import type { MutantOutcome, SessionReport } from "../src/report";
 
 export interface NormalizedMutant {
@@ -54,16 +55,8 @@ export function mutatedTextSha256(text: unknown): string | undefined {
   return createHash("sha256").update(text.replaceAll("\r\n", "\n"), "utf8").digest("hex");
 }
 
-export function keyOf(m: MutantOutcome): string {
-  // `procedureName` joined the identity in R166; R193 added `identityOrdinal`, this mutant's
-  // position among byte-identical twins in SOURCE order (not report order, which is what R166
-  // rightly refused to key on). Appended only when non-zero, so every key without a twin is
-  // unchanged and a baseline with no collisions is byte-identical across the change.
-  const scope = m.procedureName || m.triggerName || "";
-  const tuple = `${m.astHash}|${m.codeunitName}|${scope}|${m.operatorName}|${m.operatorMajor}`;
-  const ordinal = m.identityOrdinal ?? 0;
-  return ordinal > 0 ? `${tuple}|${ordinal}` : tuple;
-}
+// PR-171: `keyOf` lives in src so the CLI can use it. Re-exported, scheme unchanged.
+export { keyOf };
 
 /**
  * Coarse, deterministic error classification. `cause` is set at only two call sites in

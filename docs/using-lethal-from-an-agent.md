@@ -279,7 +279,7 @@ has the complete set.
 | `--tests` | `run`, `doctor`, `verify` |
 | `--config` | `run`, `clear-quarantine`, `clear-ceiling`, `force-reset-lease`, `doctor`, `verify` |
 | `--db` | `run`, `clear-ceiling`, `verify` |
-| `--out` | `run`, `init`, `export` |
+| `--out` | `run`, `init`, `export`, `confirm-merge` |
 | `--credentials-env` | `init` |
 | `--progress-out` | `run` |
 | `--json` | `doctor`, `campaign` |

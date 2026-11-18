@@ -59,6 +59,14 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   "campaign-freeze.ts": { 'if (report.backend === "al-runner-v3") {': "v3" },
   // PR-77: only an al-runner-v3 report can put a survivor apart.
   "changed-line-survivors.ts": { 'const v3 = report.backend === "al-runner-v3";': "v3" },
+  // PR-171 (R1122): `--confirm-from` reads a v3 report only; `measuredBy` is the confirmation
+  // artifact's own field (`confirmation-field`), not a backend-identity read.
+  "confirm.ts": {
+    'if (r.backend !== "al-runner-v3") throw new ConfirmInputNotV3Error(r.backend);': "v3",
+    '(m) => m.finalVerdict === "survived" && m.measuredBy === "bcdev",': "confirmation-field",
+    'if (m.measuredBy === "bcdev" && isKill(m.finalVerdict) && m.v3Verdict !== m.finalVerdict) {':
+      "confirmation-field",
+  },
   "line-map.ts": {
     'case "bcdev":': "exhaustive-switch",
     'case "al-runner-v3":': "exhaustive-switch",
