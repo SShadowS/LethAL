@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { V3_NOT_RUN_SUFFIX } from "../src/al-runner-v3-backend";
 import {
@@ -915,7 +916,8 @@ describe("v3RecheckOf (cli wiring)", () => {
       budgetSeconds: 120,
     });
     expect(w.built).toHaveLength(1);
-    expect(w.built[0]?.dir).toBe("/scratch/recheck");
+    // cli.ts builds both folders with path.join: backslashes on Windows (CI check 44344348571)
+    expect(w.built[0]?.dir).toBe(join("/scratch", "recheck"));
     expect(
       (w.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3,
     ).toMatchObject({
@@ -927,7 +929,7 @@ describe("v3RecheckOf (cli wiring)", () => {
     expect(nested?.timeBudgetSeconds).toBe(120);
     expect(nested?.lines).toEqual([{ file: "src/A.al", start: 3, end: 3 }]);
     expect(nested?.exactSites?.size).toBe(1);
-    expect(nested?.instrumentedDir).toBe("/scratch/recheck-instrumented");
+    expect(nested?.instrumentedDir).toBe(join("/scratch", "recheck-instrumented"));
     expect(nested?.projectDir).toBe("/proj");
     expect(nested?.only).toEqual(["src/**"]);
     expect(nested?.excludeTests).toEqual(["A.B"]); // R488: kept
