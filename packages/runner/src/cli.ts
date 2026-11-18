@@ -3342,8 +3342,8 @@ export function pinV3Binary(parsed: RunCliConfig, config: LethalConfigFile): Let
 }
 
 /**
- * PR-144: `SessionConfig.recheck` for a v3 run whose config sets `alRunnerV3.recheckWithheldKills`, else
- * `undefined`. The nested session is the main pass's own config (the pinned binary and sidecar, R1018) with
+ * PR-144: `SessionConfig.recheck` for a v3 run unless `alRunnerV3.recheckWithheldKills` is `false` (on by
+ * default, PR-182), else `undefined`. The nested session is the main pass's own config (the pinned binary and sidecar, R1018) with
  * `isolation` forced to `"method"`, on a fresh backend and an in-memory store, narrowed to the targets'
  * exact sites and covering tests, under the recheck's own budget. It carries no `recheck`, no `resume` and
  * no event subscriber of the main run: its events never reach the main stream.
@@ -3358,14 +3358,11 @@ export function v3RecheckOf(a: {
   readonly scratchRoot: string;
 }): SessionConfig["recheck"] | undefined {
   if (a.parsed.backendKind !== "al-runner-v3") return undefined;
-  // Only a config that names the option is validated here; every other config is judged by `buildBackend`.
+  // PR-182: an absent key means the config parser's default (on). No section: `buildBackend` refuses it by name.
   const raw = a.effectiveConfig.alRunnerV3;
-  if (
-    typeof raw !== "object" ||
-    raw === null ||
-    (raw as { recheckWithheldKills?: unknown }).recheckWithheldKills === undefined
-  )
-    return undefined;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  // An explicit opt-out needs no validation here either: `buildBackend` judges the section.
+  if ((raw as { recheckWithheldKills?: unknown }).recheckWithheldKills === false) return undefined;
   const section = validateAlRunnerV3Config(raw);
   if (!section.recheckWithheldKills) return undefined;
   const runner: RecheckRunner = async (req) => {
@@ -4901,7 +4898,7 @@ export async function runFromCliWithAccept(
               ...leaseSessionFor(parsed, effectiveConfig),
               ...permissionCanaryFor(parsed, effectiveConfig),
             };
-            // PR-144: the opt-in withheld-kill recheck, from the run's pinned config.
+            // PR-144: the withheld-kill recheck (on by default), from the run's pinned config.
             const recheck = v3RecheckOf({
               parsed,
               effectiveConfig,

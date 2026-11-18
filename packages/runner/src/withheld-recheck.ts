@@ -1,5 +1,5 @@
 /**
- * PR-144: the opt-in recheck of "withheld kill" error rows (`withheldKillOf`, R1108) after an al-runner-v3
+ * PR-144: the recheck (on by default, PR-182) of "withheld kill" error rows (`withheldKillOf`, R1108) after an al-runner-v3
  * session's main pass (`alRunnerV3.recheckWithheldKills`).
  *
  * A withheld kill is an `error` row where a covering test FAILED under the mutant, but v3 did not trust the
