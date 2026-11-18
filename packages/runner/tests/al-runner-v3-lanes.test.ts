@@ -716,7 +716,7 @@ describe("PR-140: a hold closes idle daemons", () => {
     closingLanes: Set<number>;
   }
   /** x3's numbers: peak 4.07 GiB, declared 15, roomy cgroup: 3 lanes charged are refused by "declared peak". */
-  const rig140 = async (resident: readonly number[]) => {
+  const rig140 = async (resident: readonly number[], watch = true) => {
     const r = await lanesRig({ lanes: 3 });
     await laneBaseline(r);
     for (const k of resident) {
@@ -743,10 +743,11 @@ describe("PR-140: a hold closes idle daemons", () => {
     const woke = new Promise<void>((res) => {
       wake = res;
     });
-    r.b.watchLaneGate(() => {
-      fired += 1;
-      wake();
-    });
+    if (watch)
+      r.b.watchLaneGate(() => {
+        fired += 1;
+        wake();
+      });
     return { r, notices, closed, fired: () => fired, woke };
   };
 
@@ -757,6 +758,8 @@ describe("PR-140: a hold closes idle daemons", () => {
     expect(g.notices[0]).toContain("rule: declared peak");
     expect(g.notices[0]).toContain("closing the idle daemons of lane(s) 2");
     expect(g.fired()).toBe(0); // the close has not finished yet
+    // build review 2: lane 2's daemon map is already cleared; only its closing charge keeps lane 1 refused
+    expect(g.r.b.laneMayStart(1)).toBe(false);
     await g.woke;
     await tick();
     expect(g.closed).toEqual([{ lane: 2, reason: "lane-idle" }]);
@@ -779,9 +782,27 @@ describe("PR-140: a hold closes idle daemons", () => {
     const g = await rig140([0, 1]);
     g.r.b.seams.memoryReader = () => ({ usedBytes: 60 * G, maxBytes: 64 * G, source: "cg" });
     expect(g.r.b.laneMayStart(2)).toBe(false); // refused, and lane 1 is below lane 2
+    // build review 1: checked at once, since a close finishes only after several awaits
+    expect((g.r.b as unknown as P140).closingLanes.size).toBe(0);
+    expect(g.notices[0]).not.toContain("closing the idle");
     await tick();
     expect(g.closed).toEqual([]);
     expect(g.fired()).toBe(0);
+  });
+
+  test("3b: lane 1 resident and idle asks for itself and is refused: its own daemon is not closed", async () => {
+    const g = await rig140([0, 1]);
+    g.r.b.seams.memoryReader = () => ({ usedBytes: 60 * G, maxBytes: 64 * G, source: "cg" });
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+    expect((g.r.b as unknown as P140).closingLanes.has(1)).toBe(false);
+    expect(g.notices[0]).not.toContain("closing the idle");
+  });
+
+  test("3c: with no split queue running (no gate watcher), a hold closes nothing", async () => {
+    const g = await rig140([0, 2], false);
+    expect(g.r.b.laneMayStart(1)).toBe(false);
+    expect((g.r.b as unknown as P140).closingLanes.size).toBe(0);
+    expect(g.notices[0]).not.toContain("closing the idle");
   });
 
   test("6: nothing idle: refused, no close, no watcher; a lane in closingLanes is refused", async () => {
