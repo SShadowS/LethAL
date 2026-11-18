@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1092 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 1092 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1136,7 +1136,7 @@ that ordering is the priority.
 - **R1123** · Under al-runner v3 `"coverage": "none"`, the reused-baseline re-check's coverage guard compares null with null and counts it as a comparison (an empty-vs-empty pass) · [R1123.md](docs/roadmap/R1123.md) · done (this commit) — PR-146: under "none" the re-check compares no map and says so by name; with coverage on…
 - **R1125** · PR-144's withheld-kill recheck has no live gate leg: a fixture needs an earlier test that reaches an unknown-reach v3 refusal only under the mutant; then leg RC, the symbol-tar rebuild, and the BC differential (P5) that gates any default-on · [R1125.md](docs/roadmap/R1125.md) · open — filed by lethal-preproc from coord PR-144 (2026-11-18, orchestrator ruling (B))
 - **R1128** · The fixture symbol tar has two gaps: build-fixture-symbols-tar.sh builds sandbox-wrapped without WRAPDEF (its tests then fail AL0185), and sandbox-dates, -optin and -order (with their tests) are in no tar, so compile:fixtures SKIPs them everywhere · [R1128.md](docs/roadmap/R1128.md) · open — filed by lethal-preproc from coord PR-162 (2026-11-18)
-- **R1129** · Two R622 watchdog tests in scripts/verify.test.ts carry wall-clock bounds that a slow Windows CI runner missed (isChildOf timed out at 60 s; the serial spin run took 17.5 s against a 15 s bound): a flake that reddens the Windows check on unrelated changes · [R1129.md](docs/roadmap/R1129.md) · open
+- **R1129** · Two R622 watchdog tests in scripts/verify.test.ts carry wall-clock bounds that a slow Windows CI runner missed (isChildOf timed out at 60 s; the serial spin run took 17.5 s against a 15 s bound): a flake that reddens the Windows check on unrelated changes · [R1129.md](docs/roadmap/R1129.md) · done (7848be53)
 
 ---
 
