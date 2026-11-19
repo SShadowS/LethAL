@@ -110,3 +110,21 @@ on any class outside the measured set.
     one branch may stay under 0.8;
   - a refusal that closes a WARM-UP carries no text and no family, so neither check sees it.
   - The storm backstops the first, not the second.
+
+## Amendment 2 (2026-11-19, bugs' keep audit, before submit): entries of at least 7 words, and 12 entries that never match
+- **What the audit found** (`/coord/handoff/PR-217/keep-audit.md`): 12 PR56 entries never match on `current`, because
+  al-runner appends ` (not pinned)` and `pr56Entry` anchors `$`. The 12 are `geturl-company-characters`,
+  `geturl-object-type-or-arguments`, `dotnet-copilot-platform-authorization`, `yaml-list-indent`, `yaml-null-or-number`,
+  `yaml-blank-line-nested`, `yaml-flow-quoted-key`, `gotokey-statement-no-row`, `part-visible-other-shape`,
+  `xmlport-import-header`, `asdecimal-text-control` and `page-no-record-onopenpage`.
+- **Measured:** real lines from the PR-213/PR-175 repros (`/coord/handoff/PR-244/notpinned-check.txt`). The near-miss
+  check names 11 of the 12 at 100% containment; `yaml-list-indent` has 7 literal words, under the minimum of 8.
+- **Change:** the minimum becomes **7 words**.
+  - False alarms, re-read: `nearmiss.txt` already scored every refusal close of y2, y3 and PERF-10 against entries of 4
+    words or more. No unkept text reaches 0.8 on an entry of under 8 words; the only ones that do are now kept.
+  - So the change adds 0 false alarms on the measured runs.
+- **Test:** all 12 real lines warn, each naming its entry. Red check: the minimum back at 8, so the `yaml-list-indent`
+  line goes red.
+- **The entries themselves** (widening them to accept the suffix) are not PR-244's: keep behaviour changes only with
+  proof (principle 9). Bugs widens the Company pair with a kept-vs-fresh proof. For the 12, this warning makes each
+  visible the first time it closes a daemon.
