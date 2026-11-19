@@ -192,6 +192,41 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
    - The review checks this.
    - (`EXPECTED_LAYOUT`'s split goes with item 2's revert.)
 
+## 0e. Amendment 4 (2026-11-19, after the first record runs; before any v3 record is written)
+- **The BC side so far:** bcdev RECORDED on bc1 exactly as pre-committed: 22 old rows byte-identical, +3 condition-true and +1
+  blank-argument (3 survived, 1 no-coverage), groupedCalls 20, warmKills 0.
+  - The other BC legs failed only on figures that depend on the new rows. Every observed value was sent, and they are being
+    pinned: lend L0; wrapped 12 survived + 2 killed of the 14; harden's 2 rows both killed; chunked survived 9 → 11, with the
+    same 17 killers in both legs; hang +1 refused site and line 141 killed.
+- **The v3 record attempt** (/coord/handoff/PR-209/v3rec/record.log) wrote nothing, as the guards meant it to. What it
+  showed:
+  1. **L1's warning set moves (missed by amendment 3):** running `--profile slim` flags `operator-narrowed-run`. That is the
+     slim profile's stated design (§2 item 2: a slim report never reads as a full one). **Pre-committed:**
+     `GATE_WARNINGS["al-runner-v3/L1"]` becomes `["operator-narrowed-run", "oversized-batch"]`. L1's rows are unchanged
+     (11, slim).
+  2. **DBM:** 17 / 5 / 104 over 126 (was 15 / 3 / 104 over 122). The 4 new sites: 2 killed, 2 survived. DBM is a figures
+     leg with no baseline file, so these are recorded figures.
+  3. **v3 baselines on a pinned build follow R849** (docs/gates/alrunner-v3.md, "The route for a row to change on a pinned
+     build"): the run must equal an expected file committed BEFORE it, with each added row's verdict pre-committed or shown
+     equal to the BC row. Never a copy of the run.
+     - **WR** (`al-runner-v3.wrapped.baseline.json`, +14) and **T** (`al-runner-v3.tables.baseline.json`, +32): the
+       expected files take each added row's verdict from the BC twin's recorded row (`bcdev.wrapped.baseline.json`,
+       `tables.baseline.json`), once those are recorded. A v3 row that differs from its BC twin is a v3 difference to
+       report, not to absorb.
+     - **T** also moves its hand pins and `v3ReadingsDigest` (new counts), so per R849 step 2 it is a re-gate of the pinned
+       build. Its details are stated in the commit that lands it.
+     - **MO** (`al-runner-v3.multiobject.baseline.json`, +1) has NO BC twin. **NEEDS A RULING:** the refused record run
+       already showed the new row's verdict (counts 8 / 1 / 6, so the new condition-true row was killed), so a "prediction"
+       written now is not blind. Options:
+       - (a) pre-commit it from an independent reading of the fixture (which test covers the guard, and why it must fail),
+         and state that the run had been seen;
+       - (b) leave MO's new row unrecorded (MO runs `--profile slim`, like L1), so its baseline stays 14.
+       - **Recommendation: (a)** if the reading is unambiguous, else (b).
+  4. **S1, S1E, DB, DBI, ISO** compare against `bcdev.baseline.json`. They pass once bcdev's re-recorded file lands
+     (observed 3 / 17 / 6 over 26, equal to bc1's).
+  5. **O1 and D1 were run with `LETHAL_ITEST_V3_CDO=1`** instead of the checkout path (`/work/src/do-lethal`, at 5f2a71d):
+     my mistake. They are invalid, and re-run with the path.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
