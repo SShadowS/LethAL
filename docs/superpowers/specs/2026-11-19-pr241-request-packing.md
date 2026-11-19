@@ -4,6 +4,25 @@ lethal-preproc, 2026-11-19 (coord PR-241, from PR-231's ranking). Offline only: 
 after the orchestrator's ruling. Scripts and outputs: `/coord/handoff/PR-241/` (`fixed.py`/`fixed.txt`,
 `pack.py`/`pack.txt`); the code facts from a read-only survey (names, not lines).
 
+## 0a. Amendment 1 (2026-11-19, the orchestrator's rulings and a read-only state check, before the build)
+- **RULED:** run the A/B (Q1), arm B at 64 entries (Q2), live requests after (Q3). Build the off-by-default knob with red
+  tests both ways (off = exactly today's requests; on = consecutive units of one lane up to the cap, never across lanes).
+- **The cross-unit risk, stated precisely (replaces §2's "Isolation" bullet):**
+  - Packing does not change what an entry sees from al-runner. Per-entry reset, within one request and across requests on
+    one daemon, is MEASURED for seven state kinds plus Commit (PR-24's carry probe, `/coord/handoff/PR-24/carry-probe/`;
+    gate leg O1 on every gated build). No verdict reads al-runner's per-request `baselineMs` (timing only); a kill is
+    judged against LethAL's session baseline rows and the kill pairs. The per-request `setupMs` reloads unchanged sources.
+  - Two things LethAL decides PER REQUEST would change, and the build AVOIDS both instead of accepting them:
+    1. `runSelectedOnly` is one flag per request: a unit is packed only if the request's flag is the same with and
+       without it, so no unit's excluded tail starts running hidden.
+    2. The PR-56 kept-refusal drift guard checks the request after a kept refusal: that next request is never packed.
+  - Per-unit bookkeeping stays per unit (`prefetched`, `timedOutMutants`, `pairStore`, each unit's `batchKillPairs`).
+    Never pack across a deploy or across modes.
+  - Still unmeasured, as today: the .NET helper's state across requests, a leaked row, and Random values at a different
+    position in a request. The per-mutant comparison is the guard.
+- **§3 recorded figures add:** live-request count, entries per live request and live wall (for lethal-code's PR-242,
+  which pre-commits the live saving per packing factor against arm B).
+
 ## 1. Measured offline (y3: `/coord/handoff/PR-204/y3.run.events.ndjson`, 7,959 `serve-request-timed` events, 3 lanes)
 - **The "fixed" cost IS fixed.** Least squares per kind, cost = a + b·entries + c·tests:
   - prefetch (5,052 requests): setup 973 ms + al-runner baseline 577 ms; entries and tests explain ~nothing (R² 0.01-0.02;
