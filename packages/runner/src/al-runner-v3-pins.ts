@@ -117,6 +117,17 @@ export interface V3BuildPin {
     readonly cdoWorkDate: string;
     readonly issue: string;
     readonly evidence: string;
+    /**
+     * PR-233 (pre-commitment master d46eaa1ee): this build refuses every row insert in the CDO set's session after the
+     * partner apps' `OnAfterLogin` (al-runner f9116dc96, #8149). A KNOWN COVERAGE LOSS tracked on #8239, never "correct":
+     * BC measured runs the inserts (bc4). `judgeOrderProbe` then expects exactly `O1_PARTNER_LOGIN_TESTS` refused with
+     * exactly `text`. R1149 removes it when upstream's P2 lands.
+     */
+    readonly partnerLoginRefusal?: {
+      readonly text: string;
+      readonly issue: string;
+      readonly evidence: string;
+    };
   };
 }
 
@@ -764,6 +775,27 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     binarySha256: "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
+  {
+    // PR-217 (pre-commitment master d2153c9ed): perf-combined 2bb4b686, a FORK TEST BUILD FOR PERF-10, NEVER `current`
+    // and never in the gate manifest. The live root edge-d72d3197d's readings (the same constants, so it moves with them)
+    // plus ONLY O1's partner-login refusal (PR-233, #8239: a known coverage loss, not BC's behaviour). Removed after
+    // PERF-10 by its own commit. Placed before edge-d72d3197d, which stays the last (newest) pin.
+    id: "perfcombined-2bb4b6861",
+    version: "al-runner 3.0.0-alpha.14 (2bb4b6861)",
+    binarySha256: "f824dee326e1f9dc3e63045214297353d8e32299ca2677f4bfc3184411b2fc9b",
+    ...READINGS_8078BCF49,
+    o1: {
+      ...O1_8078BCF49,
+      cdoApps: 18,
+      partnerLoginRefusal: {
+        // equal to the itest's O1_PARTNER_LOGIN_TEXT (pinned by pr217-perfcombined-pin.test.ts)
+        text: "NotRun: out-of-scope: a read of a global of SingleInstance codeunit Server Setting Impl.: OnAfterLogin raised to the login subscribers of the partner dependency apps changed it before the first test, and it is not the one codeunit of the one subscriber's app with the measured globals (two Integer, a List of [Text], a Text): what BC leaves there is not pinned",
+        issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8239",
+        evidence:
+          "/coord/handoff/PR-217/gate/ (perf-combined, 14:49Z) and /coord/handoff/PR-233/o1-base/ (plain 0e6397742): the 16 row inserts of O1's CDO set refused with exactly this text; BC runs them (bc4, #8239 issuecomment-7014017475)",
+      },
+    },
   },
   {
     // Edge d72d3197d (R-815 pre-commitment, master 7071d5c2): alpha.12's readings, by a masked diff of the two unpinned

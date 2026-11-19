@@ -95,6 +95,7 @@ import {
 } from "../packages/runner/src/al-runner-v3-pin";
 import {
   type GatedBuildEntry,
+  type V3BuildPin,
   V3_BUILD_PINS,
   alphaOfEntry,
   findV3Pin,
@@ -147,6 +148,8 @@ export type CommitOrder = "ahead" | "behind" | "identical" | "diverged";
 /** Everything with a side effect, injected so the test drives every branch (T19). */
 export interface UpdateDeps {
   readonly root: string;
+  /** PR-236: the hand pin with this id, for every pin `gateOne` and `readReceipt` look up (a test seam). Absent: `handV3Pin`. */
+  readonly handPin?: (id: string) => V3BuildPin | undefined;
   /** PR-226: the checkout `runGate` and the lock's orphan check use. Absent: `GATE_WORKTREE`. */
   readonly gateWorktree?: string;
   /** Release tags, newest first (`gh release list`). */
@@ -386,7 +389,12 @@ export async function readReceipt(
   nonce: string,
   sha: string,
   commit: string,
-  expect: { readonly candidate?: boolean; readonly pinFrom?: string } = {},
+  expect: {
+    readonly candidate?: boolean;
+    readonly pinFrom?: string;
+    /** PR-236: the pin lookup (`UpdateDeps.handPin`). Absent: `handV3Pin`. */
+    readonly pinOf?: (id: string) => V3BuildPin | undefined;
+  } = {},
 ): Promise<{ outcome: Outcome; why: string; pinApplied?: string }> {
   let raw: unknown;
   try {
@@ -453,7 +461,7 @@ export async function readReceipt(
       why: `a pass that applied no pin, asked to judge by ${expect.pinFrom}`,
     };
   // The gate ran at `.gated`'s commit: a hand pin edited since then is not what it judged by.
-  const hand = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+  const hand = pinApplied !== undefined ? (expect.pinOf ?? handV3Pin)(pinApplied) : undefined;
   if (
     r.outcome === "pass" &&
     expect.candidate === true &&
@@ -692,6 +700,52 @@ export function pinRootOf(g: GatedBuild): string | undefined {
   return g.readingsFrom ?? findV3Pin(g.version, g.binarySha256)?.id;
 }
 
+/** PR-236: a pin's readings (`id`, `version`, `binarySha256` left out, as `v3ReadingsDigest`) as JSON with sorted keys. */
+function canonicalReadings(pin: V3BuildPin): string {
+  const { id: _id, version: _version, binarySha256: _sha, ...readings } = pin;
+  const norm = (v: unknown): unknown => {
+    if (v instanceof RegExp || typeof v === "function") return String(v);
+    if (Array.isArray(v)) return v.map(norm);
+    if (v !== null && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(o)
+          .sort()
+          .map((k) => [k, norm(o[k])]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(norm(readings));
+}
+
+/**
+ * PR-236 (pre-commitment master 50a76d17b): why a PRIVATE gate's pass that applied `appliedId`, not
+ * `pinRootOf(gated)`, stays infra-fail; `undefined` when it is accepted. Accepted only when the applied pin is a hand
+ * pin for the candidate's exact bytes (`version`, `sha`), carries `o1.partnerLoginRefusal`, and, less that one field,
+ * reads exactly as the root pin (keys sorted, so only order may differ).
+ */
+export function privatePinRefusal(
+  appliedId: string | undefined,
+  applied: V3BuildPin | undefined,
+  root: V3BuildPin | undefined,
+  version: string,
+  sha: string,
+): string | undefined {
+  if (appliedId === undefined) return "no pin applied";
+  if (applied === undefined) return `no hand pin ${appliedId} in this checkout`;
+  if (applied.version !== version || applied.binarySha256 !== sha)
+    return `pin ${appliedId} is for ${applied.version} ${applied.binarySha256.slice(0, 12)}, not the candidate's ${version} ${sha.slice(0, 12)}`;
+  const o1 = applied.o1;
+  if (o1?.partnerLoginRefusal === undefined)
+    return `pin ${appliedId} carries no o1.partnerLoginRefusal`;
+  if (root === undefined) return "no root pin to compare with";
+  const { partnerLoginRefusal: _refusal, ...o1Rest } = o1;
+  if (canonicalReadings({ ...applied, o1: o1Rest }) !== canonicalReadings(root))
+    return `pin ${appliedId}'s readings, less o1.partnerLoginRefusal, differ from ${root.id}'s`;
+  return undefined;
+}
+
 const ledgerPath = (root: string) => join(root, "gated-builds.jsonl");
 const publishedPath = (root: string) => join(root, "gated-builds.published");
 
@@ -744,6 +798,8 @@ export async function gateOne(
   opts: GateOneOpts = {},
 ): Promise<Outcome | "not-ahead"> {
   const { root } = deps;
+  // PR-236: every hand-pin lookup below goes through this one seam.
+  const pinOf = deps.handPin ?? handV3Pin;
   const work = await mkdtemp(join(root, ".work-"));
   try {
     let binary: string;
@@ -860,6 +916,7 @@ export async function gateOne(
     const { outcome, why, pinApplied } = await readReceipt(receipt, nonce, sha, commit, {
       candidate,
       ...(pinFrom !== undefined ? { pinFrom } : {}),
+      pinOf,
     });
     const lines = await receiptLines(receipt);
     await deps.log(
@@ -957,11 +1014,27 @@ export async function gateOne(
       // PR-226: the same check for a private gate, against the pin it was asked to judge by (`pinRootOf`).
       const want = pinRootOf(gated);
       if (pinApplied !== want) {
+        // PR-236: a private gate may pass on a hand pin for the candidate's own bytes that is the root pin plus
+        // o1.partnerLoginRefusal; every other difference, and every non-private one, stays infra-fail.
+        const refusal = priv
+          ? privatePinRefusal(
+              pinApplied,
+              pinApplied !== undefined ? pinOf(pinApplied) : undefined,
+              want !== undefined ? pinOf(want) : undefined,
+              version,
+              sha,
+            )
+          : "";
+        if (refusal !== undefined) {
+          await deps.log(
+            `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${want ?? "(none)"}${refusal !== "" ? ` (PR-236: ${refusal})` : ""}`,
+          );
+          await retire();
+          return infra(deps, name);
+        }
         await deps.log(
-          `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${want ?? "(none)"}`,
+          `${deps.now()} ${tag}: PR-236: the pass applied ${pinApplied}, the candidate's own hand pin, which reads as ${want} plus o1.partnerLoginRefusal`,
         );
-        await retire();
-        return infra(deps, name);
       }
       const w = await receiptWarnFacts(receipt);
       const bf = await receiptBatchFacts(receipt);
@@ -1071,13 +1144,13 @@ export async function gateOne(
     };
     await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
     // PR-117: on every pass, whether the record just written lets a session batch.
-    const pinForSleep = pinApplied !== undefined ? handV3Pin(pinApplied) : findV3Pin(version, sha);
+    const pinForSleep = pinApplied !== undefined ? pinOf(pinApplied) : findV3Pin(version, sha);
     await deps.log(
       `${deps.now()} ${tag}: ${batchingRecordLine(batchFacts, pinForSleep?.legC["sleep-is-noop"]?.verdict === "gone", await receiptBatchReading(receipt))}`,
     );
     if (dirName !== undefined) {
       // R814: the row goes to the ledger before `current` moves; `publishPending` commits it.
-      const handPin = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+      const handPin = pinApplied !== undefined ? pinOf(pinApplied) : undefined;
       if (handPin !== undefined) {
         const row: GatedBuildEntry = {
           id:

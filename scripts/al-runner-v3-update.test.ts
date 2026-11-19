@@ -21,7 +21,9 @@ import { V3_CAPABILITY_FACTS } from "../packages/runner/src/al-runner-v3-contrac
 import { checkGated, parseGated } from "../packages/runner/src/al-runner-v3-pin";
 import {
   type GatedBuildEntry,
+  type V3BuildPin,
   V3_BUILD_PINS,
+  handV3Pin,
   v3ReadingsDigest,
 } from "../packages/runner/src/al-runner-v3-pins";
 import {
@@ -54,6 +56,7 @@ import {
   parseUpdateArgs,
   pinDigests,
   privateGateOnce,
+  privatePinRefusal,
   privateRealDeps,
   publishPending,
   publishToMaster,
@@ -2365,6 +2368,105 @@ describe("R814: pinFromAt", () => {
   });
 });
 
+// PR-236: hand pins for one candidate's exact bytes, made from a real root pin. They reach `gateOne` and `readReceipt`
+// only through the `handPin` seam (`pinLookup`), never by changing the shared pin table other tests read.
+const PR236_REFUSAL = {
+  text: "refused after OnAfterLogin",
+  issue: "#8239",
+  evidence: "PR-236 test",
+};
+function pr236RootPin(id: string): V3BuildPin {
+  const p = handV3Pin(id);
+  if (p === undefined || p.o1 === undefined) throw new Error(`no root pin ${id} with o1`);
+  return p;
+}
+/** The root pin's readings, the candidate's version and bytes, plus o1.partnerLoginRefusal. */
+function pr236CandidatePin(
+  rootId: string,
+  version: string,
+  binarySha256: string,
+  over: Partial<V3BuildPin> = {},
+): V3BuildPin {
+  const r = pr236RootPin(rootId);
+  const o1 = r.o1 ?? { cdoWorkDate: "", issue: "", evidence: "" };
+  return {
+    ...r,
+    id: "pr236-cand",
+    version,
+    binarySha256,
+    o1: { ...o1, partnerLoginRefusal: PR236_REFUSAL },
+    ...over,
+  };
+}
+/** The real pin table plus `p`, as a `UpdateDeps.handPin`; the table itself is never touched. */
+const pinLookup =
+  (p: V3BuildPin) =>
+  (id: string): V3BuildPin | undefined =>
+    id === p.id ? p : handV3Pin(id);
+
+describe("PR-236: privatePinRefusal", () => {
+  const ROOT = "alpha.12-d4bc8d3a5";
+  const V = "al-runner 3.0.0-alpha.3 (c893e3633)";
+  const S = sha("alpha3");
+  const cand = (over: Partial<V3BuildPin> = {}) => pr236CandidatePin(ROOT, V, S, over);
+  const refusal = (p: V3BuildPin | undefined, id = "pr236-cand") =>
+    privatePinRefusal(id, p, pr236RootPin(ROOT), V, S);
+
+  test("the root's readings plus o1.partnerLoginRefusal, for the candidate's exact bytes: accepted", () => {
+    expect(refusal(cand())).toBeUndefined();
+  });
+  test("key order alone is no difference (o1's keys written in reverse)", () => {
+    const o1 = cand().o1;
+    if (o1 === undefined) throw new Error("the candidate pin has no o1");
+    const reversed = Object.fromEntries(Object.entries(o1).reverse()) as NonNullable<
+      V3BuildPin["o1"]
+    >;
+    expect(Object.keys(reversed)).toEqual(Object.keys(o1).reverse());
+    expect(refusal(cand({ o1: reversed }))).toBeUndefined();
+  });
+  test("one other reading changed (legT's total): refused", () => {
+    const r = pr236RootPin(ROOT);
+    expect(refusal(cand({ legT: { ...r.legT, total: r.legT.total + 1 } }))).toMatch(
+      /readings, less o1\.partnerLoginRefusal, differ from alpha\.12-d4bc8d3a5's/,
+    );
+  });
+  test("canonical at EVERY level: a key-order difference two levels down (legT.counts) passes; a value difference there refuses", () => {
+    const r = pr236RootPin(ROOT);
+    const counts = r.legT.counts;
+    const reversed = Object.fromEntries(Object.entries(counts).reverse()) as typeof counts;
+    expect(Object.keys(reversed)).toEqual(Object.keys(counts).reverse());
+    expect(Object.keys(reversed).length).toBeGreaterThan(1);
+    expect(refusal(cand({ legT: { ...r.legT, counts: reversed } }))).toBeUndefined();
+    expect(
+      refusal(cand({ legT: { ...r.legT, counts: { ...counts, killed: counts.killed + 1 } } })),
+    ).toMatch(/differ from/);
+  });
+  test("a field missing compared with the root (xb): refused", () => {
+    const { xb: _xb, ...rest } = cand();
+    expect(refusal(rest as V3BuildPin)).toMatch(/differ from/);
+  });
+  test("another binary's sha256, or another version: refused", () => {
+    expect(refusal(cand({ binarySha256: sha("other") }))).toMatch(/not the candidate's/);
+    expect(refusal(cand({ version: "al-runner 3.0.0-alpha.4 (c893e3633)" }))).toMatch(
+      /not the candidate's/,
+    );
+  });
+  test("no o1.partnerLoginRefusal (the root's o1 as it is, another id): refused", () => {
+    const rootO1 = pr236RootPin(ROOT).o1;
+    if (rootO1 === undefined) throw new Error("the root pin has no o1");
+    expect(refusal(cand({ o1: rootO1 }))).toMatch(/carries no o1\.partnerLoginRefusal/);
+  });
+  test("no pin applied, or a pin this checkout does not have: refused", () => {
+    expect(privatePinRefusal(undefined, undefined, pr236RootPin(ROOT), V, S)).toBe(
+      "no pin applied",
+    );
+    expect(refusal(undefined, "nope")).toMatch(/no hand pin nope/);
+  });
+  test("no root pin to compare with: refused", () => {
+    expect(privatePinRefusal("pr236-cand", cand(), undefined, V, S)).toMatch(/no root pin/);
+  });
+});
+
 // R859: `--refresh-rows`, with fakes. A row is replaced only on its own gate's pass.
 linuxOnly("R859: refreshRows", () => {
   const PIN = "edge-d72d3197d";
@@ -2403,6 +2505,20 @@ linuxOnly("R859: refreshRows", () => {
       expect(existsSync(join(root, d))).toBe(false);
     expect(await current()).toBe(join(root, ALPHA2_DIR));
   };
+
+  test("PR-236: a NON-private refresh whose pass applied a candidate pin (the root's readings plus o1.partnerLoginRefusal) stays infra-fail, with the old message", async () => {
+    const p = await world();
+    const before = await readFile(p, "utf8");
+    const V = "al-runner 3.0.0-alpha.3 (c893e3633)";
+    const candPin = pr236CandidatePin(PIN, V, sha("bin-aaaaaaaaa"));
+    const m = mk(p, { pinApplied: candPin.id, pinDigest: v3ReadingsDigest(candPin) });
+    const deps = { ...m.deps, handPin: pinLookup(candPin) };
+    expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["infra-fail"]);
+    const log = m.seen.logs.join("\n");
+    expect(log).toMatch(/infra-fail: a pass that applied pin pr236-cand, not edge-d72d3197d$/m);
+    expect(log).not.toMatch(/PR-236/);
+    expect(await readFile(p, "utf8")).toBe(before);
+  });
 
   test("PR-117 (M-1): a refresh drops the old row's batchFacts when its receipt does not qualify, and writes this gate's when it does", async () => {
     const OLD = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
@@ -2971,7 +3087,12 @@ linuxOnly("PR-226: privateGateOnce", () => {
   /** A shared root (`root`, with `current`), a private root, a candidate and the counting fakes. */
   async function world(
     o: Parameters<typeof fake>[0] = {},
-    opt: { pinned?: boolean; candidateAs?: "file" | "folder" } = {},
+    opt: {
+      pinned?: boolean;
+      candidateAs?: "file" | "folder";
+      /** PR-236: the deps' `handPin` seam (absent: the real pin table). */
+      handPin?: (id: string) => V3BuildPin | undefined;
+    } = {},
   ) {
     await setup();
     if (opt.pinned === true) {
@@ -2994,6 +3115,7 @@ linuxOnly("PR-226: privateGateOnce", () => {
     const calls = { list: 0, download: 0, order: 0, copy: [] as string[][], cwd: [] as string[] };
     const deps: UpdateDeps = {
       ...f.deps,
+      ...(opt.handPin !== undefined ? { handPin: opt.handPin } : {}),
       root: priv,
       gateWorktree: join(priv, "gate-worktree"),
       listReleases: async () => {
@@ -3139,6 +3261,68 @@ linuxOnly("PR-226: privateGateOnce", () => {
     const gated = parseGated(await readFile(join(priv, "builds", TAG, ".gated"), "utf8"), "x");
     expect(gated.readingsFrom).toBe(HAND.id);
     expect(w.seen.envs[0]?.LETHAL_V3_PIN_FROM).toBe(HAND.id);
+  });
+
+  test("PR-236: a private pass that applied the candidate's own hand pin (the root's readings plus o1.partnerLoginRefusal) passes, and its .gated reads readingsFrom = that pin", async () => {
+    const candPin = pr236CandidatePin(
+      ROOT_PIN,
+      "al-runner 3.0.0-alpha.3 (c893e3633)",
+      sha("alpha3"),
+    );
+    const w = await world(
+      { pinApplied: candPin.id, pinDigest: v3ReadingsDigest(candPin) },
+      { pinned: true, handPin: pinLookup(candPin) },
+    );
+    const r = await w.run();
+    expect(r.outcome).toBe("pass");
+    const g = parseGated(await readFile(join(priv, "builds", TAG, ".gated"), "utf8"), "x");
+    expect(g.readingsFrom).toBe(candPin.id);
+    expect(g.binarySha256).toBe(sha("alpha3"));
+    expect(w.seen.logs.join("\n")).toMatch(
+      /PR-236: the pass applied pr236-cand, the candidate's own hand pin, which reads as alpha\.12-d4bc8d3a5 plus o1\.partnerLoginRefusal/,
+    );
+    // The shared pin table was never changed.
+    expect(V3_BUILD_PINS.some((p) => p.id === candPin.id)).toBe(false);
+  });
+
+  test("PR-236: a private pass whose candidate pin differs from the root in one other reading is infra-fail, names why, and writes no .gated", async () => {
+    const root12 = pr236RootPin(ROOT_PIN);
+    const candPin = pr236CandidatePin(
+      ROOT_PIN,
+      "al-runner 3.0.0-alpha.3 (c893e3633)",
+      sha("alpha3"),
+      {
+        legT: { ...root12.legT, total: root12.legT.total + 1 },
+      },
+    );
+    const w = await world(
+      { pinApplied: candPin.id, pinDigest: v3ReadingsDigest(candPin) },
+      { pinned: true, handPin: pinLookup(candPin) },
+    );
+    const r = await w.run();
+    expect(r.outcome).toBe("infra-fail");
+    expect(existsSync(join(priv, "builds"))).toBe(false);
+    expect(w.seen.logs.join("\n")).toMatch(
+      /infra-fail: a pass that applied pin pr236-cand, not alpha\.12-d4bc8d3a5 \(PR-236: pin pr236-cand's readings, less o1\.partnerLoginRefusal, differ from alpha\.12-d4bc8d3a5's\)/,
+    );
+  });
+
+  test("PR-236: readReceipt reads the candidate pin through the same seam: a receipt whose pinDigest is not that pin's is infra-fail and writes no .gated", async () => {
+    const candPin = pr236CandidatePin(
+      ROOT_PIN,
+      "al-runner 3.0.0-alpha.3 (c893e3633)",
+      sha("alpha3"),
+    );
+    const w = await world(
+      { pinApplied: candPin.id, pinDigest: "0".repeat(64) },
+      { pinned: true, handPin: pinLookup(candPin) },
+    );
+    const r = await w.run();
+    expect(r.outcome).toBe("infra-fail");
+    expect(existsSync(join(priv, "builds"))).toBe(false);
+    expect(w.seen.logs.join("\n")).toMatch(
+      /the gate judged by another pr236-cand than this checkout's/,
+    );
   });
 
   test("G1: a pass writes <root>/builds/<tag>/al-runner (mode 755, the candidate's bytes) and the gate's own .gated beside it, and nothing outside <root>", async () => {

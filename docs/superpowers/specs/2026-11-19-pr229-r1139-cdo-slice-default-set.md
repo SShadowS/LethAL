@@ -43,3 +43,37 @@ R1136, PR-209 (`condition-true` and `blank-argument` default-on). Evidence: `/co
   - A D-leg verdict for a new mutant that differs from BC's is a pre-committed v3 difference, recorded as such; it is never
     hidden.
 - **Roadmap:** R1139 is set to done.
+
+## Amendment 1 (2026-11-19, after the runs, before anything lands): 6 killing tests moved by the kill ledger
+**What the runs gave** (bc3, 28.4.53241.56646, R594's accepted build; `/coord/handoff/PR-229/compare.txt`):
+- every §2 prediction held except one: 78 rows per leg; exactly the 13 new sites; baseline 21 of 21, R594's names in R594's
+  order; every old VERDICT equal (A 53 / 12, B 53 / 8 / 4); leg B's covering sets equal; all 13 new rows equal to v3's
+  row, verdict and killer.
+- **The BLOCK:** 3 old rows per leg (6 rows) changed their KILLING TEST, with the verdict unchanged:
+  - `CDORecipientMgt.Codeunit.al` line 34 `lethal.negate-conditional`;
+  - line 34 `lethal.toggle-blank-string`;
+  - line 35 `lethal.remove-assignment`.
+  - R594's `AddRecipientsFromTable_WhenFirstToRecipientHasContactNo_ShouldSetFirstToContactNo` became
+    `AddRecipientsFromTable_WhenMultipleToRecipients_ShouldOnlySetFirstContactNo`.
+  - Nothing was re-run and nothing was absorbed.
+
+**The cause, measured offline from the legs' events** (`/coord/handoff/PR-229/ledger-check.py` and `.txt`):
+- `orderCoveringTests` (`packages/runner/src/test-order.ts`) runs a mutant's covering tests with the tests that already
+  killed a mutant in the same procedure scope this session first.
+- In both legs, before line 34 `negate-conditional` was scored, the ledger for `AddRecipientsFromTable` held exactly ONE
+  kill by `…WhenMultipleToRecipients_ShouldOnlySetFirstContactNo`. It came from a NEW mutant, line 34
+  `lethal.condition-true`, which that test kills. R594's killer held 0.
+- The promoted test then killed at position 2, where R594 had killed at position 11.
+- The next two changed rows follow from it: the first change adds one old kill to the ledger for the same test, then two.
+- R594's slice had no new mutants, so nothing promoted that test there.
+- So the killer differs by a known ordering feature, caused by the 13 added mutants. The verdicts hold. That is the
+  orchestrator's option (b), with an established cause.
+
+**What lands, re-pre-committed:**
+- R594's own reports stay as they are: they are the record of the 65-mutant slice.
+- The extended oracle is the two default-set reports from these runs (redacted), frozen as measured. For the 6 rows its
+  killing tests are the ones above (`…WhenMultipleToRecipients_ShouldOnlySetFirstContactNo`), named here before landing.
+  Every other old row equals R594's on verdict and killing test (and covering tests in leg B), checked row by row.
+- D1 and D1c on v3: their default-set expectations are taken from these reports. A v3 killing test for the 6 rows that
+  differs from BC's is a v3 difference, recorded as such.
+- Everything else in §3 stands.
