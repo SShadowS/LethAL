@@ -71,6 +71,22 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   - `IDENTITY_SCHEME` stays 48 (ordinals already carry the operator; no key's shape changes);
   - the count script compares default KEY SETS, not counts.
 
+## 0b. Rulings and decisions after amendment 1 (2026-11-19)
+- **M6 RULED (orchestrator): (a), (b) and (c).**
+  - An old store refuses a default resume by name and points to `--profile slim`.
+  - Slim keeps the old digest by construction: the same operator set, so it is not a back-compat fallback.
+  - Help and CHANGELOG say so.
+  - **A red test both ways:** a new-default resume of an old store refuses; a slim resume of it proceeds.
+- **R1136's rule, fixed here (lethal-preproc):** a NAME rule cannot tell the endless polarity from the terminating one, so
+  it refuses BOTH (the safe direction, R829: a wrong refusal costs one mutant, a miss can end a run).
+  - It refuses `condition-true` (and `blank-argument`'s analogue, if any) on an `if` whose then-arm `exit(...)`s from a
+    procedure that is called inside a loop's exit test (`until` / `while` condition) of the same object.
+  - **So `sandbox-hang`'s line-63 mutant (`NextRow`'s guard) is REFUSED,** not made. That is the hang leg proving the new
+    shape is refused, as the orchestrator asked, through its `hangRefused` rows, with no fixture edit.
+  - Amendment 1 item 2's "line 63 survived" is withdrawn: the hang leg gains 1 row (line 141, killed) and 1 refused site.
+  - R1136's "the terminating one is still made" is corrected to match.
+- **Amendment 2 is computed WITH this rule:** counts, refusals, and every code-keyed table renumbered.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
