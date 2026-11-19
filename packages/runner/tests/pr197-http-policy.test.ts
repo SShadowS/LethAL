@@ -79,7 +79,7 @@ describe("httpPolicyOf: classes over the selected tests", () => {
     "d.al": cu(4, "AllowAll D", "AllowAllOutboundRequests"),
   };
   const read = async (p: string) => {
-    const f = files[p.split("/").pop() ?? ""];
+    const f = files[p.split(/[\\/]/).pop() ?? ""]; // join() uses "\" on Windows
     if (f === undefined) throw new Error(`ENOENT ${p}`);
     return f;
   };
@@ -301,7 +301,7 @@ describe("review fixes: never read as blocking when unsure", () => {
         { codeunitName: "Bad", file: "bad.al" },
         { codeunitName: "Ok", file: "ok.al" },
       ],
-      async (p) => files[p.split("/").pop() ?? ""] ?? "",
+      async (p) => files[p.split(/[\\/]/).pop() ?? ""] ?? "",
     );
     expect(s.unread.map((e) => e.codeunit)).toEqual(["Bad"]);
     expect(s.open.map((e) => e.codeunit)).toEqual(["Ok"]);
