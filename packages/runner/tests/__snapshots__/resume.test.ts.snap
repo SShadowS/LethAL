@@ -289,6 +289,18 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {

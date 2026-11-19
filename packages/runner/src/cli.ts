@@ -121,12 +121,14 @@ export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-
 import { type AcceptResult, computeAcceptResult, loadAcceptList } from "./accept-list";
 import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
 import type { ReportView } from "./changed-line-survivors";
+import { discoverTests } from "./discovery";
 import type { EventSubscriber, RunEvent } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
 import { type ExplainSuggestedOutput, suggest } from "./explain-suggest";
 import { formatFailure } from "./format-failure";
 import { ApiBaseUnsetError, HarnessVerifier, UnfilteredExtensionsQueryError } from "./harness";
 import type { HarnessDetails, LeaseSnapshot } from "./harness";
+import { httpPolicyLines, httpPolicyOf } from "./http-policy";
 import { largeFoldWarning } from "./large-fold";
 import { type ForceResetOutcome, LeaseClient, LeaseUnavailableError } from "./lease";
 import { changedLinesSince, parseLineArg } from "./line-filter";
@@ -7065,6 +7067,23 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
       );
     }
     for (const line of dryRunTestsLines(parsed.backendKind, parsed.testDir)) console.log(line);
+    // PR-197 (R1113 fix 2): over the whole suite; the dry run applies no test filter.
+    try {
+      // Discovery's tree finder (R420/R424) parses a file whose [Test] tokens and regex disagree: start the parser first.
+      await initNativeParser();
+      const summary = await httpPolicyOf(parsed.testDir, await discoverTests(parsed.testDir));
+      for (const line of httpPolicyLines(summary, "a real run's events file lists all"))
+        console.log(line);
+      console.log(
+        "  (a dry run checks the whole test suite; the real run checks only the tests it selects)",
+      );
+    } catch (err) {
+      console.log(
+        `outbound HTTP check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  } else {
+    console.log("outbound HTTP: not checked (no test project; pass --tests)");
   }
   if (parsed.timeBudgetSeconds !== undefined) {
     console.log(

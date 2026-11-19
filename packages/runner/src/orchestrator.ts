@@ -182,6 +182,7 @@ import type { HangRefusedFile, PreprocExcludedFile } from "./excluded-sites";
 import { ActivationFailure } from "./failure-classes";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { homeDir } from "./home";
+import { type HttpPolicySummary, httpPolicyOf } from "./http-policy";
 import {
   IsolationChoiceChangedError,
   type IsolationChoiceRow,
@@ -6930,12 +6931,25 @@ async function runSessionBody(
   // R745: the tests `--exclude-test` left out ride the same list, reason `exclude-test`.
   excludedTests.push(...excludeTestRecords);
   const unverifiedTestFiles = testArmEvidence.kind === "none" ? [...testArmEvidence.files] : [];
+  // PR-197 (R1113 fix 2): the TestHttpRequestPolicy of every codeunit in the FINAL list, the one the baseline runs.
+  // A nested recheck session (keepOnlyTests) does not repeat it; a failure never stops the run.
+  let httpPolicy: HttpPolicySummary | undefined;
+  let httpPolicyFailed: string | undefined;
+  if (cfg.keepOnlyTests === undefined) {
+    try {
+      httpPolicy = await httpPolicyOf(cfg.testDir, tests);
+    } catch (err) {
+      httpPolicyFailed = err instanceof Error ? err.message : String(err);
+    }
+  }
   emit({
     type: "tests-discovered",
     tests,
     ...(testBuildSymbols.length > 0 ? { testBuildSymbols } : {}),
     ...(excludedTests.length > 0 ? { excludedTests } : {}),
     ...(unverifiedTestFiles.length > 0 ? { unverifiedTestFiles } : {}),
+    ...(httpPolicy !== undefined ? { httpPolicy } : {}),
+    ...(httpPolicyFailed !== undefined ? { httpPolicyFailed } : {}),
   });
   if (cfg.testsOnly !== undefined && cfg.testsOnly.length > 0) {
     emit({
