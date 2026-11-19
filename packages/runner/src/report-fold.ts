@@ -15,6 +15,8 @@ import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
 import {
+  type CostlyTestRow,
+  type CostlyTests,
   type DeclarativeSiteFile,
   type ExcludedTestRecord,
   type NotInstrumentedFile,
@@ -219,6 +221,8 @@ export interface FoldedReport {
   readonly baselineTests: readonly { readonly codeunitName: string; readonly file?: string }[];
   /** R272 — see `SessionReport.testMethods`. Absent without a `tests-discovered` event. */
   readonly testMethods?: readonly TestMethodRecord[];
+  /** PR-247 — see `SessionReport.costlyTests`. Absent without a `test-costs` event. */
+  readonly costlyTests?: CostlyTests;
   readonly untargetedTriggerCount: number;
   /** R198 — see `SessionReport.groupedCalls`. */
   readonly groupedCalls: number;
@@ -483,6 +487,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   let isolationRows: IsolationChoiceRow[] | undefined;
   let resumeFromRunId: number | undefined;
 
+  // PR-247: `test-costs` totals per test, the scored mutants' covering/killing facts, and the session
+  // (stream-started runId) each `test-costs` and each carried verdict belongs to.
+  const testCostEntries: TestCostEntry[] = [];
+  let sawTestCosts = false;
+  let currentRunId: number | undefined;
+  const runIdsWithTestCosts = new Set<number>();
+  const carriedFromRunIds: number[] = [];
   const outcomes: SessionOutcome[] = [];
   const invalidations: BatchInvalidation[] = [];
   let carriedCount = 0;
@@ -681,6 +692,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "resume-resolved":
         resumeFromRunId = e.fromRunId;
         break;
+      case "stream-started":
+        currentRunId = e.runId;
+        break;
+      case "test-costs":
+        sawTestCosts = true;
+        if (currentRunId !== undefined) runIdsWithTestCosts.add(currentRunId);
+        for (const t of e.tests) testCostEntries.push(t);
+        break;
       case "mutant-scored":
         outcomes.push({
           mutant: e.mutant,
@@ -721,6 +740,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
         break;
       case "mutant-carried":
         carriedCount += 1;
+        carriedFromRunIds.push(e.fromRunId);
         outcomes.push({
           mutant: e.mutant,
           verdict: e.verdict,
@@ -912,6 +932,17 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       (a.mutant.mutantId < b.mutant.mutantId ? -1 : a.mutant.mutantId > b.mutant.mutantId ? 1 : 0),
   );
 
+  // R272, computed once: the section's `baselineMs` reads it too.
+  const testMethods =
+    discoveredTests !== undefined
+      ? testMethodsOf(
+          discoveredTests,
+          baselineDurations,
+          baselineFlaggedTests,
+          baselineFlaggedUnknownTests,
+        )
+      : undefined;
+
   return {
     caps: statics.caps,
     baselineGreen,
@@ -1009,13 +1040,15 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       : {}),
     timings: { totalMs, generateMutationSetMs, deployMs, baselineMs },
     baselineTests,
-    ...(discoveredTests !== undefined
+    ...(testMethods !== undefined ? { testMethods } : {}),
+    ...(sawTestCosts
       ? {
-          testMethods: testMethodsOf(
-            discoveredTests,
-            baselineDurations,
-            baselineFlaggedTests,
-            baselineFlaggedUnknownTests,
+          costlyTests: buildCostlyTests(
+            testCostEntries,
+            outcomes,
+            new Set(invalidations.map((i) => i.batchIndex)),
+            carriedFromRunIds.filter((id) => !runIdsWithTestCosts.has(id)).length,
+            testMethods,
           ),
         }
       : {}),
@@ -1040,6 +1073,85 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(baselineWorkDate !== undefined ? { baselineWorkDate } : {}),
   };
 }
+
+/** PR-247: how many rows `costlyTests.top` keeps. */
+const COSTLY_TESTS_TOP = 20;
+
+/** PR-247: the `costlyTests` section from the folded `test-costs` totals; see `SessionReport.costlyTests`. */
+export function buildCostlyTests(
+  entries: readonly TestCostEntry[],
+  finalOutcomes: readonly SessionOutcome[],
+  invalidatedBatches: ReadonlySet<number>,
+  carriedMutants: number,
+  testMethods: readonly TestMethodRecord[] | undefined,
+): CostlyTests {
+  // Time is summed over every batch (it was spent); survivor time only over batches no
+  // `batch-invalidated` event took back (their mutants end as `error`, not as survivors).
+  const costs = new Map<string, { runs: number; ownMs: number; msUnderSurvivors: number }>();
+  for (const t of entries) {
+    const acc = costs.get(t.test) ?? { runs: 0, ownMs: 0, msUnderSurvivors: 0 };
+    acc.runs += t.runs;
+    acc.ownMs += t.ownMs;
+    if (!invalidatedBatches.has(t.batchIndex)) acc.msUnderSurvivors += t.msUnderSurvivors;
+    costs.set(t.test, acc);
+  }
+  let totalOwnMs = 0;
+  for (const c of costs.values()) totalOwnMs += c.ownMs;
+  // The FINAL outcome per mutant (after rechecks and invalidations), one per mutant key; a carried
+  // outcome is not this session's measurement.
+  const finals = new Map<string, SessionOutcome>();
+  for (const o of finalOutcomes) {
+    if (o.carried === true) continue;
+    const m = o.mutant;
+    finals.set(
+      `${m.file}\0${m.startIndex}\0${m.endIndex}\0${m.operatorName}\0${m.astHash}\0${m.mutantId}`,
+      o,
+    );
+  }
+  const scored = [...finals.values()];
+  // A kill is credited only when exactly ONE covering test matches `killingTest` (a method name that two
+  // codeunits' tests can share); otherwise nobody is credited and `ambiguousKills` counts it.
+  let ambiguousKills = 0;
+  const killerOf = new Map<SessionOutcome, string>();
+  for (const o of scored) {
+    if (!isKill(o.verdict) || o.killingTest === undefined) continue;
+    const hits = (o.coveringTests ?? []).filter((t) => t.endsWith(`.${o.killingTest}`));
+    const [only] = hits;
+    if (hits.length === 1 && only !== undefined) killerOf.set(o, only);
+    else if (hits.length > 1) ambiguousKills += 1;
+  }
+  const baselineOf = new Map((testMethods ?? []).map((t) => [t.name, t.baselineDurationMs]));
+  const top = [...costs]
+    .sort(([a, x], [b, y]) => y.ownMs - x.ownMs || compareCodeUnits(a, b))
+    .slice(0, COSTLY_TESTS_TOP)
+    .map(([test, c]): CostlyTestRow => {
+      const coveredMutants = scored.filter((s) => (s.coveringTests ?? []).includes(test)).length;
+      const kills = scored.filter((s) => killerOf.get(s) === test).length;
+      const baselineMs = baselineOf.get(test);
+      return {
+        test,
+        coveredMutants,
+        runs: c.runs,
+        ownMs: c.ownMs,
+        share: totalOwnMs === 0 ? 0 : c.ownMs / totalOwnMs,
+        meanMs: c.runs === 0 ? 0 : c.ownMs / c.runs,
+        ...(baselineMs !== undefined ? { baselineMs } : {}),
+        kills,
+        killRate: coveredMutants === 0 ? 0 : kills / coveredMutants,
+        msUnderSurvivors: c.msUnderSurvivors,
+      };
+    });
+  return {
+    scope: carriedMutants === 0 ? "whole-run" : "this-session",
+    carriedMutants,
+    totalOwnMs,
+    ambiguousKills,
+    top,
+  };
+}
+
+/** PR-247: one entry of a `test-costs` event. */
+type TestCostEntry = Extract<RunEvent, { type: "test-costs" }>["tests"][number];
 
 /** R206: the two verdicts `killPosition` is defined on. */
 function isKill(verdict: string): boolean {

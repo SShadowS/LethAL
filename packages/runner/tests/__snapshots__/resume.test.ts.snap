@@ -882,6 +882,20 @@ exports[`C02-04 characterization R192: the resumed run reuses batch 1's baseline
     {
       "event": {
         "seq": 39,
+        "tests": [
+          {
+            "batchIndex": 1,
+            "msUnderSurvivors": 10,
+            "runs": 2,
+            "test": "Sandbox Tests.OverBudgetDetected",
+          },
+        ],
+        "type": "test-costs",
+      },
+    },
+    {
+      "event": {
+        "seq": 40,
         "type": "session-finished",
       },
     },
