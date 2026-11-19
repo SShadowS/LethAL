@@ -525,12 +525,16 @@ describe("runWithheldRecheck: the driver", () => {
     expect(closes).toBe(0);
   });
 
-  test("no main-baseline results (a reused baseline): skipped with a warning, nothing sent", async () => {
-    const fake = fakeRunner(() => nestedFor(["M1"]));
-    const { emitted, summary } = await drive(seqOf([scored("M1")]), fake);
+  test("no baseline results at all: ONE skip warning with the reason and the row count, nothing sent", async () => {
+    const fake = fakeRunner(() => nestedFor(["M1", "M2"]));
+    const { emitted, summary } = await drive(seqOf([scored("M1"), scored("M2")]), fake);
     expect(fake.calls).toHaveLength(0);
+    expect(emitted).toHaveLength(1);
     expect(emitted).toMatchObject([{ type: "warning", code: "withheld-recheck-skipped" }]);
-    expect(summary.skipped).toContain("reused baseline");
+    const msg = emitted[0]?.type === "warning" ? emitted[0].message : "";
+    expect(msg).toContain("no baseline results at all");
+    expect(msg).toContain("2 withheld kill(s)");
+    expect(summary.skipped).toContain("no baseline results at all");
   });
 
   test("the recheck baseline folds strictly: fail then pass across two batches is not passed", async () => {
@@ -797,9 +801,12 @@ describe("--resume does not carry a recovered kill", () => {
 describe("config and docs", () => {
   const base = { packagesDir: "/p", bcVersion: "28.0.1.1", path: "/x/al-runner" };
 
-  test("defaults: off, 3600 s", () => {
+  test("defaults: on (PR-182), 3600 s; false opts out", () => {
     const c = validateAlRunnerV3Config(base);
-    expect(c.recheckWithheldKills).toBe(false);
+    expect(c.recheckWithheldKills).toBe(true);
+    expect(
+      validateAlRunnerV3Config({ ...base, recheckWithheldKills: false }).recheckWithheldKills,
+    ).toBe(false);
     expect(c.recheckBudgetSeconds).toBe(V3_RECHECK_BUDGET_SECONDS_DEFAULT);
     expect(V3_RECHECK_BUDGET_SECONDS_DEFAULT).toBe(3600);
   });
@@ -831,7 +838,7 @@ describe("config and docs", () => {
 
   test("the not-yet-exercised-live sentence is pinned beside the warning, in the README and the caveat", async () => {
     expect(RECHECK_UNEXERCISED).toBe(
-      "The recheck has not yet been exercised live end-to-end: it is covered by unit and real-path tests and by an approximation on a real project (PR-144's arm M), and a gate leg for it is a follow-up.",
+      "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills confirmed, 0 false).",
     );
     const read = (p: string) => readFileSync(new URL(`../../../${p}`, import.meta.url), "utf8");
     expect(read("README.md")).toContain(`${RECHECK_WARNING} ${RECHECK_UNEXERCISED}`);
@@ -900,8 +907,11 @@ describe("v3RecheckOf (cli wiring)", () => {
     return { recheck, built, ran, closed: () => closed, storeClosed: () => storeClosed };
   }
 
+  test("key absent: the recheck is built (default on, PR-182)", () => {
+    expect(wire(section).recheck?.budgetSeconds).toBe(3600);
+  });
+
   test("option off, or another backend: no recheck is built", () => {
-    expect(wire(section).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: false }).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: true }, "bcdev").recheck).toBeUndefined();
   });

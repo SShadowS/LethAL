@@ -7,7 +7,7 @@
  * No class counts as BaseApp (the safe side).
  * Shell takers use `scripts/heavy-slot.sh`.
  */
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readCgroupMemory } from "../packages/runner/src/al-runner-v3-baseline-check.ts";
 
@@ -84,10 +84,13 @@ export function writeSlotClass(
  * daemon at 5,988 MiB plus LethAL and the rest; its baseline 7.8 GB) -> 8; a BaseApp-class v3 run
  * 3.8-5.3 GB, a BaseApp instrumentation job about 10.6 GB -> 12 (R-942's DO baseline reached 30.8 GB
  * and was OOM-killed: such a job declares its own, larger peak and runs under a watchdog); the v3 gate
- * about 2.0 GB -> 2; a module pool build 0.37-0.55 GB -> 1. A job that declares nothing gets its
+ * about 2.0 GB -> 2; a module pool build 0.37-0.55 GB -> 1, PR-179: 2.2-3.0 GiB measured -> 3. A job that declares nothing gets its
  * class's default: `other` 8 (a capped serve run), `baseapp` 12.
  */
-export const PEAK_GIB = { serve: 8, baseline: 12, gate: 2, build: 1 } as const;
+export const PEAK_GIB = { serve: 8, baseline: 12, gate: 2, build: 3 } as const;
+// PR-179 (R992 measurement, 2,060 jobs): a build measured 2.2-3.0 GiB, so it declares 3 (over the
+// small-job allowance's 2 GiB, so it uses the normal checks). A DO single `lethal run` on v3 declares at
+// least 8 GiB and a Base Application Fixed Asset run at least 10 GiB: both went above lower declarations.
 export const DEFAULT_PEAK_GIB: Readonly<Record<SlotClass, number>> = { baseapp: 12, other: 8 };
 /** GiB kept free below `memory.max` for the sessions, caches and non-heavy work the cgroup also counts. */
 export const MEMORY_RESERVE_GIB = 4;
@@ -105,6 +108,45 @@ export const SMALL_JOBS_MAX = 2;
 export const SMALL_ADMITS_LEDGER = "heavy-small-admits.tsv";
 /** R992: the ledger (in the lock folder) of every admitted heavy job's declared and measured peak. */
 export const PEAKS_LEDGER = "heavy-peaks.tsv";
+
+/**
+ * PR-179 (R992 ruling, owner via kraken q-20261118T205840-608301d3, option (b)): in the declared-sum check
+ * a held slot counts at max(its measured process-tree RSS, PARTIAL_COUNT_F x its declared peak), not its
+ * full declared peak. Revisit f on 2026-11-25 with a week of heavy-peaks.tsv.
+ */
+export const PARTIAL_COUNT_F = 0.8;
+/** A reading older than this many ms counts as missing (the sampler writes every 5 s). */
+export const RSS_FRESH_MS = 30_000;
+/** The sampler's latest reading of a slot's tree: `<KiB>`, rewritten each sample (its mtime is its age). */
+export const slotRssFile = (lockDir: string, slot: number): string =>
+  join(lockDir, `heavy.${slot}.peak.rss`);
+
+/** The slot's latest measured tree RSS in GiB; undefined when missing, unreadable, malformed or stale. */
+export function readSlotRssGiB(
+  lockDir: string,
+  slot: number,
+  nowMs: number = Date.now(),
+): number | undefined {
+  try {
+    const file = slotRssFile(lockDir, slot);
+    const text = readFileSync(file, "utf8").trim();
+    // An empty file is a write caught half-way (the sampler truncates, then writes): missing, not 0.
+    if (text === "") return undefined;
+    const kb = Number(text);
+    const age = nowMs - statSync(file).mtimeMs;
+    // A future-dated reading is not proof of freshness either. A file just written can carry an mtime a
+    // fraction of a millisecond past Date.now(), so only a reading more than 2 s ahead counts as future.
+    if (!(Number.isFinite(kb) && kb >= 0) || age < -2000 || age > RSS_FRESH_MS) return undefined;
+    return kb / 2 ** 20;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What a held slot counts as in the declared-sum check; no reading = the full declared peak (fail closed). */
+export function countedPeakGiB(declaredGiB: number, rssGiB: number | undefined): number {
+  return rssGiB === undefined ? declaredGiB : Math.max(rssGiB, PARTIAL_COUNT_F * declaredGiB);
+}
 
 /** `serve`, `baseline`, `gate`, `build` or a number of GiB; undefined when it is none of these. */
 export function parsePeak(arg: string): number | undefined {

@@ -245,6 +245,145 @@ Status: **r2**, committed to master before any build (coord PR-144, lethal-prepr
   `.alpackages` for sandbox-dates, -optin and -order with their tests (R1128), so `compile:fixtures` skips nothing.
   The recheck pair's files are as in amendment 6.
 
+## 0i. Amendment 9 (coord PR-182, 2026-11-18): the recheck ON by default (owner ruling)
+- **The ruling** (kraken for the owner, from the mantra, q-20261118T211712-33a8f746; principles 1, 2, 17, 6):
+  - turn it on by default, with an opt-out for speed;
+  - report the rows BC could not measure as unmeasured, never as kills.
+- **The evidence, as stated in help and docs:**
+  - **PR-170 (DO sample on bc4, bcdev):** of 58 sampled recovered kills, BC confirmed 42 (K) and found 0 false (S). 16
+    could not be measured on BC (N): 9 are `no-coverage` because the killer is a TestPage test bcdev skips, and 7 have a
+    killer red at BC's baseline.
+  - **PR-156 (a):** the recheck fixture on bc2. The 4 recovered Sevens kills were confirmed. Rule (e) kept SevensB `error`
+    (the conservative side).
+  - **The cost** (the orchestrator's ask): about 12 s per withheld row, about 10% of a DO run (about 295 rows). The gain:
+    DO errors from 446 to about 150.
+  - **What it does not show** (PR-170): for 56 of the 58 rows the sample does not test H1, the earlier test's state.
+    Rule (e) stays as the guard for that (ruling of amendment P5(a), R1125).
+- **The change:**
+  1. `alRunnerV3.recheckWithheldKills` defaults to `true` (al-runner-v3-config.ts). `false` is the opt-out, documented
+     with its saving (about 10% of a run with many withheld rows; nothing when a run has none). It is the only
+     difference between the two settings.
+  2. The help text and the README describe it as the default, with the evidence above. The warning every description
+     must carry (`al-runner-v3-config.ts`, PR-144) stays verbatim; only "opt-in" wording changes. The report caveat text
+     (`report.ts`, `isolated-recheck-kills`) drops "opt-in".
+  3. "Unmeasured, never kills": nothing in the recheck's verdicts changes. A row it does not recover stays `error` with
+     its withheld note (rules (a)-(e)); only a reproduced kill becomes `killed`. The docs say so in those words.
+- **Pre-committed: NO frozen gate figure moves.**
+  - The recheck is built only on the CLI path (`v3RecheckOf`, cli.ts) or where a leg builds it, and leg RC already sets
+    the option explicitly.
+  - In the most recent full v3 gate (PR-177, `/coord/handoff/PR-177/gate.log`), no leg other than RC printed a withheld
+    kill.
+  - So with the default on, every v3 gate leg's per-mutant table and warning set must be byte-identical to today's. Any
+    difference is investigated before anything is re-recorded.
+  - The BC gates (bcdev and the rest) do not read this option.
+
+## 0j. Amendment 10 (coord PR-185, 2026-11-18): the recheck on resumed and reused-baseline runs; the stale warning line
+- **The rulings** (orchestrator, 2026-11-18):
+  1. Update `RECHECK_UNEXERCISED` to say leg RC exists (PR-162).
+  2. `withheld-recheck-skipped` on resumed or reused-baseline runs means the owner's default-on does not apply to them.
+     Make the recheck run there if that can be sound; otherwise say so once per run, with the reason and the row count.
+- **Why it skips today** (`runWithheldRecheck`, withheld-recheck.ts):
+  - rule (e) needs the main baseline's per-test results;
+  - `mainBaselineOf` reads them only from `baseline-batch-finished` events;
+  - a batch whose baseline snapshot is REUSED emits none, so `mainBaseline` is empty and the recheck skips ("a reused
+    baseline").
+  - Separately, `recheckTargetsOf` reads only `mutant-scored`. A withheld row CARRIED by `--resume`/`--resume-run`
+    (`mutant-carried`) is never a target. Its own run was interrupted before the session-end recheck, so it is never
+    rechecked anywhere.
+- **Why it can be sound:**
+  - A reused snapshot stores the full baseline, one observation per test with its verdict (`BaselineSnapshot.baseline`),
+    taken on an identical instrumented tree and test app (the reuse key). It is exactly what rule (e) compares against.
+  - A carried row's withheld note and covering tests are what the recheck needs, if its `cause` is known.
+- **The change:**
+  1. **The main baseline for rule (e):** `mainBaselineOf` is the union of `baseline-batch-finished` verdicts and the
+     verdicts of every batch whose snapshot this session REUSED. The orchestrator hands the reused observations to the
+     recheck; the event stream does not change. The same stricter reading applies: a test is green only if it passed in
+     every batch it ran in.
+  2. **Carried targets:** a `mutant-carried` row is a target when `withheldKillOf` matches it. That needs `cause` on
+     `mutant-carried`, carried from the store like `failureNote`.
+     - If the store does not hold `cause` for such rows, the build does NOT guess from the note's text. Instead the
+       skip warning names the carried withheld rows: one warning per run, with the reason and the count.
+     - A carried row the recheck recovers takes the same `mutant-rechecked` path as a scored one.
+  3. **The skip warning stays only for the real skips:** method isolation, a non-serve transport, and no baseline
+     results at all. It is emitted once per run, with the reason and the row count, as today.
+  4. **`RECHECK_UNEXERCISED`** becomes: "The recheck is exercised live by the al-runner-v3 gate's leg RC (PR-162) on a
+     fixture built to withhold a kill, and measured against BC on a DO sample (PR-170: 42 of 58 recovered kills
+     confirmed, 0 false)." The test that pins it changes in the same commit. RECHECK_WARNING stays verbatim.
+- **Pre-committed:**
+  - **No frozen gate figure moves.** Leg RC runs fresh (no reuse, no resume), and no other leg builds the recheck
+    (amendment 9).
+  - **A manual run of leg RC's fixture, twice on ONE store** (the second reuses the first's baseline snapshot): the second
+    run prints NO `withheld-recheck-skipped`, and its rows equal leg RC's baseline file per mutant. That is 4 Sevens
+    `killed` by A1_OneSeven (reproduced, `isolatedRecheck`) and 4 SevensB `error`, with the note naming rule (e) and
+    B2_SeesTheMark.
+  - **Unit tests, each red-checked:**
+    - a reused-baseline session runs the recheck, and rule (e) reads the reused verdicts;
+    - a carried withheld row is rechecked, or, without `cause`, it is counted in the one warning;
+    - the skip warning appears once per run with the right count.
+
+## 0k. Amendment 11 (coord PR-185, 2026-11-18, before any build): amendment 10's cause was wrong; corrected
+- **Measured by the builder before writing code:**
+  - A REUSED baseline snapshot's observations go into the same `baseline` array as a fresh run's.
+    `baseline-batch-finished` is then emitted from it unconditionally (orchestrator.ts `scoreBatch`).
+  - Probe: in resume.test.ts's "R192 (second half)" test, both batches reused their snapshots (`baselineRuns` 0, two
+    `resume-baseline-reused` warnings), and the stream still held 2 `baseline-batch-finished`.
+  - So `mainBaselineOf` is NOT empty on a reused-baseline session, and amendment 10's "why it skips" is false. It came from
+    a code comment and a unit-test name, not a measurement. Also measured by lethal-preproc:
+    - no recorded run has ever printed `withheld-recheck-skipped`;
+    - leg RC's fixture run twice on one store rechecked 8 of 8 both times, with no skip;
+    - reuse happens only on `--resume`.
+- **What is really missed, read from the code:** a `--resume`/`--resume-run` session CARRIES the interrupted run's scored
+  rows (`mutant-carried`). `recheckTargetsOf` reads only `mutant-scored`, so a carried withheld row is never a target.
+  Its own run was interrupted before the session-end recheck, so it is never rechecked anywhere, and nothing says so.
+  - The store does not hold `cause` for mutant rows (`recordMutant`, `CarriedVerdict` have none), so `withheldKillOf`
+    cannot match a carried row as it stands.
+- **The change, replacing amendment 10's items 1-3** (item 4, the `RECHECK_UNEXERCISED` text, stands):
+  1. **Item 1 is dropped:** no change to `mainBaselineOf`. The unit test "no main-baseline results (a reused baseline)"
+     and the `ruleELosesNothing` comment are re-worded to the real condition: a session with no baseline results at all.
+  2. **Carried withheld rows become targets.**
+     - The store records `cause` for each mutant row (a new nullable column, migrated like earlier columns), and resume's
+       `CarriedVerdict` and `mutant-carried` carry it.
+     - A carried row then matches `withheldKillOf` exactly as a scored one does, and takes the same recheck and
+       `mutant-rechecked` path.
+     - A row carried from a run stored BEFORE this column exists has no `cause`. Those rows are not guessed from the
+       note: the run prints ONE warning, `withheld-recheck-carried-unknown`, with the count of carried `error` rows whose
+       note carries the withheld prefix ("these were not rechecked: their run predates PR-185; re-run them fresh").
+  3. **The `withheld-recheck-skipped` warning** stays for the real skips only (method isolation, non-serve transport, no
+     baseline results at all), once per run, with the reason and the row count.
+- **Pre-committed:**
+  - **No frozen gate figure moves** (leg RC runs fresh; no other leg builds the recheck).
+  - **Unit tests, each red-checked:**
+    - a carried withheld row with `cause` is rechecked and recovered like a scored one;
+    - a carried row without `cause` is counted in the one warning and not rechecked;
+    - the store migration keeps old rows readable;
+    - the re-worded skip test.
+  - **A live resume probe** (interrupting a run, then `--resume`) was NOT run. lethal-preproc's kill command was denied
+    by the session's guard, rightly, because its pattern would have matched other lanes' al-runner daemons. The unit
+    tests above pin the path.
+- **Amendment 10's manual-run prediction is withdrawn.** It rested on reuse without `--resume`, which does not happen.
+
+## 0l. Amendment 12 (coord PR-185, 2026-11-18, after the Opus review of the build): there is no gap; item 2 withdrawn
+- **Found by the review, and checked by lethal-preproc in resume.ts:** resume NEVER carries an `error` row.
+  - `CARRYABLE_VERDICTS` is killed, survived, timeout-killed, no-coverage and known-survivor. "`error` is deliberately
+    absent … re-running it either reproduces the error (no loss) or scores it (a gain)".
+  - A withheld kill is always `error`. On `--resume` it is therefore RE-RUN, comes back as `mutant-scored`, and the
+    existing recheck already takes it as a target.
+- **So amendment 11's premise was false as well,** read from `recheckTargetsOf` and not from the carry rule. A resumed
+  DO window does recheck its withheld rows. Together with amendment 10's false cause, the orchestrator's concern behind
+  ruling (2) does not hold: the default-on applies to resumed runs. Only the real skips remain: method isolation, a
+  non-serve transport, and a session with no baseline results at all.
+- **The change, replacing amendment 11's item 2:**
+  1. The carried-row plumbing is NOT kept. It cannot run, and dormant code that tests pass on hand-built events is a
+     trap. Removed: the `cause` store column, `CarriedVerdict.cause`, `mutant-carried.cause`, the carried branch of
+     `recheckTargetsOf`, and `withheld-recheck-carried-unknown`.
+  2. **Kept:**
+     - the skip warning's real wording ("no baseline results at all"), with its once-per-run test;
+     - the new `RECHECK_UNEXERCISED` text (item 4).
+  3. **Added: the real guarantee, pinned end to end.** A test drives a resume of a store holding a withheld `error` row,
+     and asserts that the row is re-scored (`mutant-scored`, not `mutant-carried`) and is a recheck target.
+     - Red-checked by putting `error` into `CARRYABLE_VERDICTS`: the test must go red.
+- **Pre-committed:** no frozen gate figure moves; the stream schema is unchanged from master.
+
 ## 0. The review of r1, finding by finding
 - **H1: a recheck kill does not answer why v3 withheld the kill.**
   - Method isolation removes the state an earlier refused test left; it does not restore BC's. BC keeps that test's rows

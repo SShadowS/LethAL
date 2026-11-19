@@ -9510,7 +9510,7 @@ async function runSessionBody(
   // ordering still never depends on which worker finished first regardless of arrival order.
   // R654 removed three .NET al-runner readers here (R129's BC build, R148's missing
   // implementation, R583's dependency drops): no remaining backend reports any of them.
-  // PR-144: the opt-in withheld-kill recheck, its own step after the main pass and its own budget. Never on a
+  // PR-144: the withheld-kill recheck (on by default), its own step after the main pass and its own budget. Never on a
   // quarantined session (its verdicts are not trusted), and never changes a row except through its events.
   if (
     cfg.recheck !== undefined &&

@@ -90,6 +90,16 @@ duplicate and no unmatched keys).
   new build, so its report carries the new hash. Its rows are pre-committed to equal PR-155's v3 rows per mutant (keys,
   verdicts); any difference is investigated before the bc run.
 
+## 0d. Amendment 4 (2026-11-18, before the retry): bc4 now runs LethAL Control 1.0.0.27 (PR-180, R1127)
+- **What changed on bc4:** bcdev starts each test on Base Application's default WorkDate (2026-11-01 on bc4), not today.
+  1.0.0.26 cannot come back (a downgrade). DO was restored again, at 30.0.20775.39390.
+- **Checked offline:** PR-180 lists 101 DO tests that read WorkDate (`/coord/handoff/PR-180/m2/compare.tsv`). NONE of
+  them covers any of the 64 selected mutants (their covering tests in PR-155's v3 report). PR-180 also measured 0
+  baseline-outcome changes between 1.0.0.26 and 1.0.0.27 over those 101.
+- **Pre-committed: the bc rows of §0a item 5 stand unchanged, with no exception for WorkDate.** Any row difference is
+  investigated, and one in the 8 kills is a BLOCK.
+- The fresh v3 input follows this restore (amendment 3).
+
 ## 1. The problem, and the measured basis
 A v3 run is fast and offline but not authoritative ([[R586]]). When v3 refuses a test at baseline, that test cannot
 kill anything. A mutant it would have killed is then scored `survived` on the other covering tests. Such a survivor

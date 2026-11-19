@@ -224,6 +224,39 @@ const at = (body: string, needle: string): number => {
   return i;
 };
 
+describe("R1127: each method starts on the client's default WorkDate", () => {
+  // The Test Runner's Initialize (130453) stores the WorkDate set before RunTests and restores it after the codeunit,
+  // so the set must come after the run's positioning FindFirst and before the reset/note pair, with no other
+  // WorkDate( write in between.
+  test("LC Run Many: GetDefaultWorkDate once per call, WorkDate set before each method's run", () => {
+    const body = codeOnly(procedureBody(read("RunMany.Codeunit.al"), "RunAll"));
+    const computed = at(body, "StartWorkDate := LogInMgt.GetDefaultWorkDate();");
+    const loop = at(body, "foreach Entry in Methods do begin");
+    const find = at(body, "RunLine.FindFirst();");
+    const set = at(body, "WorkDate(StartWorkDate);");
+    const reset = at(body, "State.ResetObservedActive();");
+    expect(computed).toBeLessThan(loop);
+    expect(loop).toBeLessThan(find);
+    expect(find).toBeLessThan(set);
+    expect(set).toBeLessThan(reset);
+    expect(body.match(/\bWorkDate\(/g)?.length).toBe(1); // \b: GetDefaultWorkDate( is not a set
+    expect(body.match(/StartWorkDate :=/g)?.length).toBe(1);
+  });
+  test("LC Run Method: WorkDate set from GetDefaultWorkDate after the positioning FindFirst, before the note", () => {
+    const body = codeOnly(procedureBody(read("RunMethod.Codeunit.al"), "RunOneMethod"));
+    const set = at(body, "WorkDate(LogInMgt.GetDefaultWorkDate());");
+    const note = at(body, "State.NoteTestMethodRun();");
+    const run = at(body, "Mgt.RunAllTests(Line);");
+    expect(body.lastIndexOf("Line.FindFirst();", set)).toBeGreaterThan(0);
+    expect(body.lastIndexOf("Line.FindFirst();", set)).toBeGreaterThan(
+      body.lastIndexOf('Line.SetRange("Test Suite", RunSuiteName);', set),
+    );
+    expect(set).toBeLessThan(note);
+    expect(note).toBeLessThan(run);
+    expect(body.match(/\bWorkDate\(/g)?.length).toBe(1); // \b: GetDefaultWorkDate( is not a set
+  });
+});
+
 describe("GH-24: ObservedActive, reset per method and read after ProgressBetween", () => {
   test("LC Run Many resets ObservedActive right before each method runs", () => {
     const body = procedureBody(read("RunMany.Codeunit.al"), "RunAll");

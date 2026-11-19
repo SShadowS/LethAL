@@ -1,5 +1,6 @@
 namespace LethAL.Control;
 
+using System.Environment;
 using System.TestTools.TestRunner;
 
 /// <summary>
@@ -139,6 +140,8 @@ codeunit 91012 "LC Run Many"
         PrevFnLineNo: Integer;
         HeaderLineNo: Integer;
         I: Integer;
+        LogInMgt: Codeunit LogInManagement;
+        StartWorkDate: Date;
     begin
         if FenceAttemptId = '' then
             Error('LC Run Many: SetRequest was not called with a fence; the loop runs only inside a claimed op.');
@@ -168,6 +171,10 @@ codeunit 91012 "LC Run Many"
 
         if not ResolvePairs(SuiteName, Methods, FnLineNos, HeaderLineNos, HeaderNames) then
             exit('');
+
+        // R1127 (PR-180): the start WorkDate a client session gets at login, BaseApp's own rule (in a demo company the last
+        // G/L posting date; otherwise the session's WorkDate unchanged). Computed once per call, set before each method.
+        StartWorkDate := LogInMgt.GetDefaultWorkDate();
 
         T0 := CurrentDateTime;
         EndedBy := 'complete';
@@ -229,6 +236,9 @@ codeunit 91012 "LC Run Many"
             RunLine.SetRange("Test Suite", SuiteName);
             RunLine.SetFilter("Line No.", '%1|%2', HeaderLineNo, FnLineNo);
             RunLine.FindFirst();
+            // R1127: the runner's Initialize stores the WorkDate set here and restores it after the codeunit (130453),
+            // so this is the date the method starts from.
+            WorkDate(StartWorkDate);
             TStart := CurrentDateTime;
             State.ResetObservedActive();
             State.NoteTestMethodRun();

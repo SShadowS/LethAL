@@ -6,7 +6,7 @@
  *
  * `scripts/heavy-slot.sh` starts it beside the admitted command. Every `sample` seconds (default 5) it
  * sums the resident memory of `root`'s process tree (this sampler and its own children left out) and
- * writes the highest sum so far, in KiB, to `out`; it ends when `root` is gone. Test seam:
+ * writes the highest sum so far, in KiB, to `out` (and the latest sum to `out.rss`); it ends when `root` is gone. Test seam:
  * LETHAL_HEAVY_PEAK_PS_FILE names a file holding `ps -eo pid=,ppid=,rss=` output (read once per sample;
  * not the guard's LETHAL_HEAVY_PS_FILE, whose format differs). The period is at least 1 s.
  *
@@ -68,6 +68,8 @@ if (import.meta.main) {
         ? readFileSync(psFile, "utf8")
         : Bun.spawnSync(["ps", "-eo", "pid=,ppid=,rss="], { stdout: "pipe" }).stdout.toString();
     const kb = treeRssKb(ps, root, process.pid);
+    // PR-179: the latest reading, for the guard's partial counting (`<out>.rss`; its mtime is its age).
+    writeFileSync(`${out}.rss`, `${kb}\n`);
     if (kb > max) {
       max = kb;
       writeFileSync(out, `${max}\n`);

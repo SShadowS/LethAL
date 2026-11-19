@@ -29,10 +29,12 @@ import {
   DEFAULT_PEAK_GIB,
   MEMORY_RESERVE_GIB,
   SMALL_ADMITS_LEDGER,
+  countedPeakGiB,
   markSlotSmall,
   memoryVerdict,
   readContainerMemory,
   readSlot,
+  readSlotRssGiB,
 } from "./heavy-slot-class.ts";
 
 /** The pid the slot's lock file names (heavy-slot.sh writes its own; the guard runs under `flock`). */
@@ -72,8 +74,13 @@ export function heldInputs(
   const procs = parsePs(psText);
   // A held slot with no readable class (a bare flock, or a pid that died) counts at the larger default;
   // a heavy job in no slot at its class default (review r1: memory.current holds only what it uses now).
+  // PR-179 (R992): a readable slot counts at max(its fresh measured RSS, 0.8 x declared), else its full peak.
   const heldPeaks = [
-    ...slots.map((s) => s?.peakGiB ?? Math.max(...Object.values(DEFAULT_PEAK_GIB))),
+    ...slots.map((s, i) =>
+      s === undefined
+        ? Math.max(...Object.values(DEFAULT_PEAK_GIB))
+        : countedPeakGiB(s.peakGiB, readSlotRssGiB(dir, held[i] ?? 0)),
+    ),
     ...unslottedPeaks(
       procs,
       selfPid,
