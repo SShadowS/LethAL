@@ -44,6 +44,7 @@ const FILES = [
   "dependency-report-source.ts",
   "isolation-auto.ts",
   "confirm.ts",
+  "http-policy.ts",
 ].map((f) => join(SRC, f));
 
 /** Types the report references from OTHER packages. Listed explicitly for the same reason as above:
