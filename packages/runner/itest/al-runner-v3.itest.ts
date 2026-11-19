@@ -183,6 +183,7 @@ import {
   o1CdoApps,
   o1CommitRuns,
   o1LoginWorkDate,
+  o1PartnerLogin,
   v3DefaultLegs,
   v3ItestFailures,
   v3KOnCandidate,
@@ -1654,18 +1655,12 @@ async function legO1(scratch: string, version: string): Promise<void> {
       `  O1: ${set.name} set: commit kind judged as ${runs ? "runs (pin: commit-under-test-isolation gone)" : "refused (pin does not record commit-under-test-isolation gone)"}`,
     );
     // PR-233: the CDO set (the one with partner apps) judges the f9116dc96 row-insert refusal; the own set never does.
-    const partnerText = activePin?.o1?.partnerLoginRefusal?.text;
-    if (set.name === "cdo")
+    const partner = o1PartnerLogin(set.name, activePin);
+    if (partner !== undefined)
       console.log(
-        `  O1: cdo set: partner-login row inserts judged as ${partnerText !== undefined ? `refused (pin ${activePin?.id}, ${activePin?.o1?.partnerLoginRefusal?.issue})` : "pass, or held when refused by exactly the f9116dc96 text (no pin field)"}`,
+        `  O1: ${set.name} set: partner-login row inserts judged as ${partner.pinned !== undefined ? `refused (pin ${activePin?.id}, ${activePin?.o1?.partnerLoginRefusal?.issue})` : "pass, or held when refused by exactly the f9116dc96 text (no pin field)"}`,
       );
-    const j = judgeOrderProbe(
-      done,
-      [...dates],
-      login,
-      runs,
-      set.name === "cdo" ? (partnerText !== undefined ? { pinned: partnerText } : {}) : undefined,
-    );
+    const j = judgeOrderProbe(done, [...dates], login, runs, partner);
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     results.push({ set: set.name, ...j });
   }

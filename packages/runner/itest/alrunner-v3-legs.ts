@@ -215,6 +215,19 @@ export function o1LoginWorkDate(
   return set === "cdo" ? pin?.o1?.cdoWorkDate : undefined;
 }
 
+/**
+ * PR-233: `judgeOrderProbe`'s `partnerLogin` for a set: the CDO set (the one with partner apps) only, `pinned` from the
+ * pin's `o1.partnerLoginRefusal.text`; the own set gets none, so it is judged as before.
+ */
+export function o1PartnerLogin(
+  set: string,
+  pin: { readonly o1?: { readonly partnerLoginRefusal?: { readonly text: string } } } | undefined,
+): { readonly pinned?: string } | undefined {
+  if (set !== "cdo") return undefined;
+  const text = pin?.o1?.partnerLoginRefusal?.text;
+  return text !== undefined ? { pinned: text } : {};
+}
+
 /** R807: how many package apps O1's CDO set must load: the pin's `cdoApps`, else 17 (alpha.7 to alpha.11). */
 export function o1CdoApps(
   pin: { readonly o1?: { readonly cdoApps?: number } } | undefined,

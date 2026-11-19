@@ -12,6 +12,7 @@ import {
   judgeOrderProbe,
   o1CommitRuns,
   o1LoginWorkDate,
+  o1PartnerLogin,
   v3DefaultLegs,
 } from "../itest/alrunner-v3-legs";
 import { V3_BUILD_PINS } from "../src/al-runner-v3-pins";
@@ -580,6 +581,14 @@ describe("PR-233: the partner-login row-insert refusal in O1's CDO set", () => {
   });
   test("the own set (no partnerLogin): the refusal is a gate-fail as before, never held", () => {
     expect(judgeOrderProbe(measured(), TODAY, undefined, true).outcome).toBe("gate-fail");
+  });
+  test("the itest's set choice: the CDO set gets the pin's text or {}, the own set none", () => {
+    const pin = { o1: { partnerLoginRefusal: { text: "T" } } };
+    expect(o1PartnerLogin("cdo", pin)).toEqual({ pinned: "T" });
+    expect(o1PartnerLogin("cdo", { o1: {} })).toEqual({});
+    expect(o1PartnerLogin("cdo", undefined)).toEqual({});
+    expect(o1PartnerLogin("own", pin)).toBeUndefined();
+    expect(o1PartnerLogin("own", undefined)).toBeUndefined();
   });
   test("no pin in this landing carries the field (pins are per exact binary, pre-committed per build)", () => {
     expect(V3_BUILD_PINS.filter((p) => p.o1?.partnerLoginRefusal !== undefined)).toEqual([]);
