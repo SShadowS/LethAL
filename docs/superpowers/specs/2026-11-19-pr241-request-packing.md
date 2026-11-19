@@ -46,6 +46,22 @@ after the orchestrator's ruling. Scripts and outputs: `/coord/handoff/PR-241/` (
 - A miss of 1-3 on this slice is reported as measured (the slice may have different unit sizes than y3), not explained
   away; a miss of 5 is a BLOCK for adoption.
 
+## 0d. Amendment 4 (2026-11-19, coord PR-246, before any further A/B): §1's packing estimate was WRONG; the corrected figure
+- **The error:** §1 said y3's requests are small because "the unit, not a cap, sets the size", and `pack.py` merged
+  requests by entries alone. Both came from the code survey's inference, never measured against y3's sizing events.
+- **Measured now** (`/coord/handoff/PR-246/sized.py`, `pack-budget.py`; y3's `serve-request-sized` events, one per request,
+  each listing its codeunit calls, entries and measured per-entry cost):
+  - y3's prefetch requests are bound by R987's **4 GiB measured-cost budget**: cost/budget p50 0.85, p90 1.65. DO's entries
+    are memory-heavy, so a request fills the budget at ~20 entries. The 16-unmeasured cap bit once in 5,052 requests.
+  - Re-simulated with the budget enforced (the cap packing goes through): 64 entries: 5,052 -> 4,899 prefetch requests,
+    **~94 s wall saved** (not ~1,770 s); 128: ~101 s; 256: ~105 s.
+- **So lever 2 as packing is about 0.4% of the mutant phase on DO**, and amendment 3's small 73 -> 59 on the slice had the
+  same cause. The knob stays as merged (off by default, verdict-neutral); no speed A/B of packing is worth running on DO.
+- **Where the fixed cost could still be cut** (for the orchestrator; not measured here): R987's per-request budget
+  (requests would grow only if the 4 GiB per-request budget grew, against the container's 32 GiB and 3 lanes), or the
+  per-entry memory growth itself (upstream #8026, resource files that entries replace), which is what makes DO's requests
+  small; and upstream's per-request floor (R1092).
+
 ## 0c. Amendment 3 (2026-11-19, the A/B's result): packing is SAFE; its speed is NOT shown on this slice
 Run 20:27-21:52Z, arms A, B (64), A2 back to back on `lethal/pr-241` cd660eb34, `current` 4ebfe7913; outputs
 `/coord/handoff/PR-241/ab-{A,B,A2}/`, comparison `ab-compare.py`/`ab-compare.txt`.
