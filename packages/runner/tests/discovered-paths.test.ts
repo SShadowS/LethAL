@@ -8,6 +8,7 @@ import type { MutantManifestEntry } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
 import { DiscoveredPathError, isEnumeratedAl } from "../src/line-filter";
 import {
+  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -72,8 +73,14 @@ function snapshotOf(files: Record<string, string>, sep: "/" | "\\"): Map<string,
 /** Generates both forms over one empty project dir (the snapshot is the source). */
 async function bothForms(files: Record<string, string>) {
   const projectDir = await tempDir();
-  const slash = await generateMutationSet(projectDir, { source: snapshotOf(files, "/") });
+  // PR-209: the counts and batch plans pinned below are the OLD default set's (`--profile slim`);
+  // the claim is that the path form changes nothing, which no operator affects.
+  const slash = await generateMutationSet(projectDir, {
+    ...SLIM_OPTIONS,
+    source: snapshotOf(files, "/"),
+  });
   const back = await generateMutationSet(projectDir, {
+    ...SLIM_OPTIONS,
     source: snapshotOf(files, "\\"),
     // Simulates Bun's readdir on Windows.
     platform: "win32",
@@ -228,10 +235,18 @@ test("5. sandbox-data's manifest is byte-identical from a `\\`-keyed snapshot an
   // R984: 2 comparison `shift-integer` entries gain `equivalenceRisk`, the only change (was 5cadd234...f28a).
   // R985: toggle-blank-temporal 2.0.0 and its 17540102D texts, the only change (was 0f9af9e9...7242).
   const pinned = "c6df40c476282fd73a5b791940b63edf7cd9c6584c9bd01361f07e72ad9bb7ca";
-  expect(await hashOf(await generateMutationSet(fixtureDir, { emit: () => {} }))).toBe(pinned);
+  // PR-209: `pinned` is the OLD default set's hash (`--profile slim`).
+  expect(
+    await hashOf(await generateMutationSet(fixtureDir, { ...SLIM_OPTIONS, emit: () => {} })),
+  ).toBe(pinned);
   expect(
     await hashOf(
-      await generateMutationSet(fixtureDir, { source: back, platform: "win32", emit: () => {} }),
+      await generateMutationSet(fixtureDir, {
+        ...SLIM_OPTIONS,
+        source: back,
+        platform: "win32",
+        emit: () => {},
+      }),
     ),
   ).toBe(pinned);
 });

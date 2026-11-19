@@ -1095,6 +1095,35 @@ describe("RC-3 (M3): the receipt must prove what it claims", () => {
     await setup();
     expect((await readReceipt(await write(base()), "n", "s", GATED_COMMIT)).outcome).toBe("pass");
   });
+  test("R1150 (PR-238): a pass naming a pin this checkout lacks is infra-fail by name; a known pin passes; a held one stays held", async () => {
+    await setup();
+    const gone = await readReceipt(
+      await write(base({ pinApplied: "edge-0000gone0", pinDigest: "0".repeat(64) })),
+      "n",
+      "s",
+      GATED_COMMIT,
+    );
+    expect(gone.outcome).toBe("infra-fail");
+    expect(gone.why).toMatch(
+      /the gate applied pin edge-0000gone0, which this checkout does not have/,
+    );
+    const known = V3_BUILD_PINS[0];
+    if (known === undefined) throw new Error("no hand pin");
+    const ok = await readReceipt(
+      await write(base({ pinApplied: known.id, pinDigest: v3ReadingsDigest(known) })),
+      "n",
+      "s",
+      GATED_COMMIT,
+    );
+    expect(ok.outcome).toBe("pass");
+    const held = await readReceipt(
+      await write(base({ outcome: "held", legs: legsFor("held"), pinApplied: "edge-0000gone0" })),
+      "n",
+      "s",
+      GATED_COMMIT,
+    );
+    expect(held.outcome).toBe("held");
+  });
   test("outcome pass with a leg missing, or skipped, is infra-fail", async () => {
     await setup();
     const { T: _t, ...missing } = legsFor("pass");
@@ -1890,6 +1919,26 @@ linuxOnly("R814: the two tracks", () => {
     expect(await current()).toBe(join(root, ALPHA2_DIR));
   });
 
+  test("R1150 (PR-238): a pass that applied a pin this checkout does not know is infra-fail: no .gated, no ledger row, current stays", async () => {
+    await setupPinned();
+    const { deps, seen } = edgeOf({ outcome: "pass", pinApplied: "edge-0000gone0" });
+    expect(await edgeOnce(deps)).toBe("infra-fail");
+    expect(await ledger()).toEqual([]);
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+    expect(existsSync(join(root, EDGE_DIR, ".gated"))).toBe(false);
+    expect(seen.logs.join("\n")).toMatch(
+      /the gate applied pin edge-0000gone0, which this checkout does not have/,
+    );
+  });
+
+  test("R1150 (PR-238): a HELD gate that applied an unknown pin stays held (only a pass is stopped)", async () => {
+    await setupPinned();
+    expect(await edgeOnce(edgeOf({ outcome: "held", pinApplied: "edge-0000gone0" }).deps)).toBe(
+      "held",
+    );
+    expect(await current()).toBe(join(root, ALPHA2_DIR));
+  });
+
   test("R886: a pass builds the sidecar beside the binary and records its file and sha in .gated and the row", async () => {
     await setupPinned();
     const f = edgeOf(pinnedPass);
@@ -2663,6 +2712,15 @@ linuxOnly("R859: refreshRows", () => {
         async () => [await world({ readingsFrom: "nope" }), false, ["edge-aaaaaaaaa"]],
         /no hand pin/,
       ],
+      [
+        "frozen",
+        async () => [
+          await world({ readingsFrom: "edge-d72d3197d-frozen-pre-pr209" }),
+          false,
+          ["edge-aaaaaaaaa"],
+        ],
+        /is frozen/,
+      ],
       ["dirty", async () => [await world(), true, ["edge-aaaaaaaaa"]], /uncommitted/],
       ["none", async () => [await world(), false, []], /name each row/],
       // The second id is bad: the first must not be gated either.
@@ -3236,6 +3294,18 @@ linuxOnly("PR-226: privateGateOnce", () => {
     expect(w.seen.logs.join("\n")).toMatch(
       /a pass that applied pin alpha\.12-d4bc8d3a5, not \(none\)/,
     );
+  });
+
+  test("R1150 (PR-238): a private pass that applied a pin this checkout does not know is infra-fail and writes no .gated", async () => {
+    const w = await world({ pinApplied: "edge-0000gone0" }, { pinned: true });
+    const r = await w.run();
+    expect(r.outcome).toBe("infra-fail");
+    expect(existsSync(join(priv, "builds"))).toBe(false);
+    expect(w.seen.logs.join("\n")).toMatch(
+      /the gate applied pin edge-0000gone0, which this checkout does not have/,
+    );
+    // It stops in readReceipt, before the refresh/private branch (PR-236's check) is reached.
+    expect(w.seen.logs.join("\n")).not.toMatch(/PR-236:/);
   });
 
   test("P6b: a `current` with NO readingsFrom whose version and sha256 ARE a hand pin: the pin comes from findV3Pin, and a pass that applied it passes (the old `gated.readingsFrom` check would call it infra-fail)", async () => {

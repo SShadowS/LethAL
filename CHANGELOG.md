@@ -11,6 +11,21 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ## [Unreleased]
 
+### Changed
+
+- **`condition-true` and `blank-argument` are default operators; `--profile slim` is the old default set** (PR-209,
+  R868, R1136). A default run now holds both, with R868's hang rules. Measured on DO: +12.7% mutants (5,526 on 43,511)
+  at 0.91x the per-mutant cost, about +11.5% wall. `swap-workdate-today` stays opt-in. `--profile slim` on `run`
+  (and `run --dry-run`) leaves the two out: they are not walked at all, so slim is the old default set exactly. The
+  report flags it `operator-narrowed`. `--profile` with `--operator` is refused; with `--exclude-operator` the
+  exclusions add up; an unknown profile name is refused.
+  **Old stores and stages:** a new default run carries a fingerprint marker, so `--resume` of a store an older default
+  run wrote refuses by name and points to `--profile slim`. Slim keeps the OLD fingerprint, so it resumes that store.
+  **Compare old campaign stages with `--profile slim`:** a stage frozen before this change holds the old set.
+- **R1136, a new hang rule:** `condition-true` is refused on an `if` whose then-arm `exit(...)`s from a procedure that a
+  loop's exit test (`until`, `while`) of the same object calls, in both polarities, and `blank-argument` is refused
+  anywhere inside such a procedure. The shape `repeat ... until NextRow() = 0` could otherwise run forever.
+
 ### Added
 
 - **A BC run leaves out test methods that write the Company table; `--keep-company-tests` runs them** (PR-212, R1113).

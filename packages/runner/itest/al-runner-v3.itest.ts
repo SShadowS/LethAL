@@ -95,7 +95,12 @@ import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/art
 import { type RunCliConfig, buildBackend, v3RecheckOf } from "../src/cli";
 import type { EventSubscriber } from "../src/events";
 import { formatFailure } from "../src/format-failure";
-import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig, runSession } from "../src/orchestrator";
+import {
+  BASELINE_TIMEOUT_DEFAULT,
+  SLIM_OPTIONS,
+  type SessionConfig,
+  runSession,
+} from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { type SpawnFn, defaultSpawn } from "../src/publisher";
 import type { MutantOutcome, SessionReport } from "../src/report";
@@ -220,9 +225,9 @@ import {
   settleThrown,
 } from "./gate-warnings";
 import {
-  LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
   LAYOUT_SELECTOR_IDS,
+  LAYOUT_SESSION_OPTIONS,
   LAYOUT_TEST_DIR,
   assertLayoutRun,
   printLayoutTable,
@@ -324,8 +329,8 @@ const ORACLE_BC_BUILD: Record<string, string> = {
   DB: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   DBI: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
-  D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
-  D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
+  D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A.default)",
+  D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B.default)",
   T: "none (own baseline; BC cross-check suspended)",
 };
 
@@ -673,7 +678,8 @@ const S1E_PINS = {
   // (docs/superpowers/specs/2026-11-14-r987-request-sizing-precommitment.md, master 2c0976bc).
   boundChecks: 4,
   warmups: 1,
-  entriesSent: 48,
+  // PR-209 amendment 9 addendum: 54 (read on current; was 48).
+  entriesSent: 54,
   pairBatchRequests: 1,
   pairBatchStored: 3,
   pairBatchServed: 3,
@@ -730,7 +736,8 @@ async function legS1(
     }
     throw e;
   }
-  assertCounts(r, leg, 3, 14, 5, 22);
+  // PR-209 amendment 9: bcdev.baseline.json's table under the default set (was 3 / 14 / 5 over 22).
+  assertCounts(r, leg, 3, 17, 6, 26);
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), leg);
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
@@ -844,7 +851,7 @@ async function legDBI(scratch: string, version: string): Promise<void> {
     }
     throw e;
   }
-  assertCounts(r, "DBI", 3, 14, 5, 22);
+  assertCounts(r, "DBI", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "DBI");
   must(r.validity.executionContexts[0]?.isolateTests === true, "DBI: the report hides the mode");
   must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "DBI: a state note under --isolate-tests");
@@ -1493,7 +1500,7 @@ async function legISO(scratch: string, version: string): Promise<void> {
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
-  assertCounts(r, "ISO", 3, 14, 5, 22);
+  assertCounts(r, "ISO", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "ISO");
   must(r.validity.executionContexts[0]?.isolateTests === true, "ISO: the report hides the mode");
   must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "ISO: a state note under --isolate-tests");
@@ -1736,7 +1743,9 @@ function assertCleanLeg(
  * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
  * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
  * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0007 and 1/M0008 survived, covered
- * by GrowAboveTen. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
+ * by GrowAboveTen. PR-209: L1 runs under `--profile slim` (LAYOUT_SESSION_OPTIONS), because the default
+ * set's added guard stretches Grow past the verbatim file and breaks the span premise.
+ * Removing either alone stays green (R-654 S2 L-R1, L-R2). See
  * docs/gates/alrunner-v3.md.
  */
 async function legL1(scratch: string): Promise<SessionReport> {
@@ -1752,8 +1761,7 @@ async function legL1(scratch: string): Promise<SessionReport> {
   const r = await session(scratch, b, {
     projectDir: LAYOUT_PROJECT_DIR,
     testDir: LAYOUT_TEST_DIR,
-    selectorIds: LAYOUT_SELECTOR_IDS,
-    maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
+    ...LAYOUT_SESSION_OPTIONS,
   });
   printLayoutTable(r, "L1");
   assertCounts(r, "L1", 8, 3, 0, 11);
@@ -1849,7 +1857,8 @@ async function legMO(scratch: string, serve = false): Promise<SessionReport> {
       ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
-  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
+  // PR-209 amendment 4 (§0e item 3, RULED (b)): MO and MOE run `--profile slim`, so the baseline stays 14 rows.
+  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids, ...SLIM_OPTIONS });
   assertKillers(r, b, leg, V3_MO_KILLERS);
   assertCounts(r, leg, 7, 1, 6, 14);
   assertCleanLeg(r, b, leg);
@@ -1944,8 +1953,9 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
     boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
     // R975 (R-965 amendment 4): 448 until the 6 twin OnOpenPage mutants read no-coverage and were not sent.
     // R976 (R-973): 436 until the 3 twin OnOpenPage empty-block mutants read no-coverage too.
-    entriesSent: 430,
-    pairRequests: 62,
+    // PR-209 amendment 9: 464 (read on current and alpha.12; was 430) and 64 pair requests, one per WR kill (was 62).
+    entriesSent: 464,
+    pairRequests: 64,
     echoMismatches: 0,
   },
 };
@@ -1972,7 +1982,7 @@ function logServeCounters(b: AlRunnerV3Backend, leg: "MOE" | "WRE"): void {
 
 /**
  * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 102 mutants (R855: was 98): the 8
- * single-wrapper files score as `none` does (killer constant), and the three `WrappedArms` mutants
+ * single-wrapper files score as `none` does (killer constant), and the four `WrappedArms` mutants (three before PR-209)
  * (the two-arm control, which the index has no rule for) read no-coverage with the refusal sentence.
  * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 62 / 37 / 3
  * (R855: was 58 / 37 / 3).
@@ -2008,7 +2018,9 @@ async function legWR(scratch: string, serve = false): Promise<SessionReport> {
   must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
   // R975 (R-965 amendment 2): 6 unwrapped twin OnOpenPage mutants read no-coverage by line attribution;
   // R976 (R-973): their 3 empty-block mutants too (62 / 31 / 9 before).
-  assertCounts(r, leg, 62, 28, 12, 102);
+  // PR-209 (amendments 4 and 6): +14 condition-true rows, the BC twins' 2 killed and 12 survived, except WrappedArms'
+  // new `Pick` row, no-coverage by the refusal (BC: survived): 64 / 39 / 13 over 116, as printed (was 62 / 28 / 12 over 102).
+  assertCounts(r, leg, 64, 39, 13, 116);
   assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
   if (serve) logServeCounters(b, "WRE");
   return r;
@@ -2093,7 +2105,7 @@ async function legK(scratch: string): Promise<void> {
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
-  assertCounts(r, "K", 3, 14, 5, 22);
+  assertCounts(r, "K", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "K");
   const facts = {
     coverage: b.capabilities().coverage,
@@ -2782,9 +2794,11 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     testsOnly: ["Src/Recipients/CDORecipientMgtTests.Codeunit.al"],
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
     ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
+    // PR-229 (R1139): the default set, judged by the extended oracle (78 mutants: R594's 65 plus `condition-true` and
+    // `blank-argument`'s 13), measured on bc3 (docs/measurements/r594/bc3-{A,B}.default.report.json).
   });
-  if (leg === "D1") assertCounts(r, leg, 53, 12, 0, 65);
-  else assertCounts(r, leg, 53, 8, 4, 65);
+  if (leg === "D1") assertCounts(r, leg, 63, 15, 0, 78);
+  else assertCounts(r, leg, 63, 11, 4, 78);
   await assertPerMutant(
     r,
     join(
@@ -2792,14 +2806,16 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
       "docs",
       "measurements",
       "r594",
-      leg === "D1" ? "bc3-A.report.json" : "bc3-B.report.json",
+      leg === "D1" ? "bc3-A.default.report.json" : "bc3-B.default.report.json",
     ),
     leg,
   );
+  // PR-229: one state note per killed mutant, as before (53 of 65); measured on PR-229's v3 run of this scope.
   const STATE = [
-    ...Array.from({ length: 30 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
+    ...Array.from({ length: 33 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
     ...[
-      35, 36, 37, 38, 39, 41, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 58, 60, 61, 62, 63,
+      35, 36, 37, 38, 43, 44, 45, 46, 47, 48, 50, 53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 65,
+      66, 68, 70, 72, 73, 74, 75,
     ].map((n) => `0/M${String(n).padStart(4, "0")}`),
   ].sort();
   const got = tagged(r, V3_STATE_NOTE_TAG);
@@ -2816,7 +2832,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
-  assertServeCounters(b, leg, 53);
+  assertServeCounters(b, leg, 63);
 }
 
 /**

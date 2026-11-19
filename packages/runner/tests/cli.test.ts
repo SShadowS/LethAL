@@ -3659,6 +3659,8 @@ const INVOCATIONS: ReadonlyArray<{ readonly sub: string; readonly argv: readonly
 /** Values that satisfy a flag's own validator, so "read" is not confused with "refused a bad value".
  *  Every other string flag gets `zz-<flag>`, a value no default can equal. */
 const VALUE: Readonly<Record<string, string>> = {
+  // PR-209: the one profile name; any other is refused by name.
+  profile: "slim",
   lines: "src/A.al:1-2",
   thresholds: "70,50",
   top: "3",

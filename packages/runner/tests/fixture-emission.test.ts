@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { readTargetSource } from "../src/baseline-snapshot";
-import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import {
+  SLIM_OPTIONS,
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+} from "../src/orchestrator";
 import { removeScratchDir } from "./helpers/scratch";
 
 /**
@@ -248,7 +253,10 @@ for (const [fixture, { selectorIds, hashes }] of Object.entries(PINNED)) {
     ): Promise<Record<string, string>> => {
       const targetDir = await mkdtemp(join(tmpdir(), "lethal-fixture-emission-"));
       dirs.push(targetDir);
-      const set = await generateMutationSet(fixtureDir, options);
+      // PR-209: the pinned hashes are the OLD default set's, which is `--profile slim`. The capture
+      // pins the parser and the emitter, not the operators; slim equal to it, byte for byte, is the
+      // proof that slim is the old set.
+      const set = await generateMutationSet(fixtureDir, { ...SLIM_OPTIONS, ...options });
       await writeInstrumentedProject({
         targetDir,
         files: set.files,

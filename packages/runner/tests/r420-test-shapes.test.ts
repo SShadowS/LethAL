@@ -22,7 +22,7 @@ import {
   treeTestsWithOffsets,
 } from "../src/discovery";
 import type { RunEvent } from "../src/events";
-import { type SessionConfig, runSession } from "../src/orchestrator";
+import { SLIM_OPTIONS, type SessionConfig, runSession } from "../src/orchestrator";
 import { sessionFingerprint } from "../src/resume";
 import { ResultsStore } from "../src/store";
 import {
@@ -877,6 +877,8 @@ const session = (
     testDir: join(root, "tests"),
     instrumentedDir: join(root, `instr-${++sessions}`),
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+    // PR-209: the pinned digests are the older default's; slim keeps that digest (no key, no marker).
+    ...SLIM_OPTIONS,
     ...extra,
   });
 

@@ -2394,6 +2394,9 @@ describe("R327: a split member swallowed by the global var section gets no site 
     const { manifest } = await instrument({ "Repro.Codeunit.al": R327_SWALLOW });
     expect(sites(manifest)).toEqual([
       "Repro.Codeunit.al L15 lethal.empty-block",
+      // PR-209: the two blank-argument rows are new (Show(X, Y) blanks X and Y).
+      "Repro.Codeunit.al L16 lethal.blank-argument",
+      "Repro.Codeunit.al L16 lethal.blank-argument",
       "Repro.Codeunit.al L16 lethal.void-method-call",
       "Repro.Codeunit.al L17 lethal.delete-additive-right",
       "Repro.Codeunit.al L17 lethal.remove-assignment",
@@ -2802,7 +2805,7 @@ describe("R302: split-member sites through the real pipeline", () => {
     const m = await one(T3_Q2);
     const twin = m.mutants.filter((x) => x.procedureName === "Twin");
     const pick = m.mutants.filter((x) => x.startLine >= 13 && x.startLine <= 25);
-    expect(pick.length).toBe(9); // R855: was 7; two delete-additive sites
+    expect(pick.length).toBe(10); // R855: was 7; two delete-additive sites. PR-209: was 9; one condition-true
     for (const x of pick) expect(x.procedureName).toBe("Pick");
     const rel = (xs: typeof twin, base: number) =>
       xs.map((x) => `${x.startLine - base} ${x.operatorName}`).sort();
@@ -3686,7 +3689,7 @@ describe("R318: a renamed split member carries its coverage names, and no identi
   test("r1: the renamed member's mutants list both arm names; Plain's carry none", async () => {
     const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
     const inMember = manifest.mutants.filter((m) => m.startLine >= 3 && m.startLine <= 16);
-    expect(inMember).toHaveLength(14); // R855: was 10; four delete-additive sites
+    expect(inMember).toHaveLength(15); // R855: was 10; four delete-additive sites. PR-209: was 14; one condition-true
     for (const m of inMember) {
       expect(m.procedureName).toBe("");
       expect(m.coverageArmNames).toEqual(["Pick", "Choose"]);
@@ -3700,7 +3703,7 @@ describe("R318: a renamed split member carries its coverage names, and no identi
   test("r1: the arm names are computed once per member, not once per mutant", async () => {
     coverageArmNamesComputed.count = 0;
     const { manifest } = await instrument({ "Repro.Codeunit.al": R318_R1 });
-    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(14); // R855: was 10
+    expect(manifest.mutants.filter((m) => m.startLine <= 16).length).toBe(15); // R855: was 10. PR-209: was 14; one condition-true
     // The renamed member and Plain: two members.
     expect(coverageArmNamesComputed.count).toBe(2);
   });
@@ -3738,6 +3741,8 @@ describe("R318: a renamed split member carries its coverage names, and no identi
       "1bdfa00ed4f9f5b66393ce5fa68726410673f75c945f991bd88595fd5bcc3bef|Repro R||lethal.empty-block|1",
       "8c55bdb8637a08951045fee707015dc789f78464ec2849c92df3f575da6ac6df|Repro R||lethal.remove-assignment|1",
       "bfde8a9e5399719cb19619ee057c24eedd9306fcf2d76c657c6b4a4378b24f00|Repro R||lethal.shift-integer|1",
+      // PR-209: the condition-true row is new; every other key is HEAD's.
+      "42f3c401fde31149e055dfec5842326f020390b03c7018fe168a642644df6a58|Repro R||lethal.condition-true|1",
       "42f3c401fde31149e055dfec5842326f020390b03c7018fe168a642644df6a58|Repro R||lethal.conditional-boundary|1",
       "833313f8bb3ff0f9a49296706144f2ae48dacc26d9ccab4a6105590536136497|Repro R||lethal.remove-assignment|1",
       // R855: the delete-additive-* rows are new; every other key is HEAD's.

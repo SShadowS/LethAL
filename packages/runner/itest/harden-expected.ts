@@ -81,6 +81,15 @@ export const EXPECTED: readonly ExpectedMutant[] = [
     verdict: "killed",
     killingTest: "FirstAmountReadsARow",
   },
+  // PR-209: the two `condition-true` rows (recorded on bc3, 2026-11-19) are the default set's additions.
+  {
+    file: L,
+    line: 23,
+    operator: "lethal.condition-true",
+    scope: "FirstAmount",
+    verdict: "killed",
+    killingTest: "FirstAmountReadsARow",
+  },
   {
     file: L,
     line: 23,
@@ -151,6 +160,14 @@ export const EXPECTED: readonly ExpectedMutant[] = [
     file: L,
     line: 40,
     operator: "lethal.shift-integer",
+    scope: "BonusFor",
+    verdict: "killed",
+    killingTest: "BonusForPaysOnlyAboveTen",
+  },
+  {
+    file: L,
+    line: 41,
+    operator: "lethal.condition-true",
     scope: "BonusFor",
     verdict: "killed",
     killingTest: "BonusForPaysOnlyAboveTen",

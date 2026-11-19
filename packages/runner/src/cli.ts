@@ -141,7 +141,9 @@ import {
   LARGE_RUN_MUTANT_THRESHOLD,
   MIN_MUTANT_BUDGET_MS,
   NoMutableLinesError,
+  PROFILES,
   REQUEST_CEILING_MS,
+  SLIM_LEFT_OUT,
   defaultQuarantineDir,
   generateMutationSet,
   operatorTiers,
@@ -489,6 +491,8 @@ export interface DryRunCliConfig {
   readonly operators?: readonly string[];
   /** R832: `--exclude-operator` names, honoured for the same reason. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`, honoured for the same reason. */
+  readonly profile?: "slim";
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -571,8 +575,11 @@ export interface RunCliConfig {
    * `empty-block` and `void-method-call` site in them.
    */
   readonly operators?: readonly string[];
-  /** R832: `--exclude-operator <name>` (repeatable): every operator but these. Refused with `--operator`. */
+  /** R832: `--exclude-operator <name>` (repeatable): every operator but these. Refused with `--operator`.
+   *  With `--profile slim` this already holds the profile's two names too. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`: the older default set (no condition-true, no blank-argument). */
+  readonly profile?: "slim";
   /** Issue #19 (R227): `--lines <file>:<start>-<end>` (repeatable), parsed. */
   readonly lines?: readonly LineRange[];
   /** Issue #19 (R227): `--changed-since <git-ref>`. Resolved to line ranges by `resolveLineRanges`
@@ -1149,11 +1156,20 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
   --operator <name>          only these operators contribute mutants (repeatable). The 'lethal.'
                              prefix is optional; an unregistered name, or a registered one with no
                              deployable site here, is refused. The report flags it
-                             'operator-narrowed'. An opt-in operator (swap-workdate-today,
-                             condition-true, blank-argument) runs only when this flag names it
+                             'operator-narrowed'. The opt-in operator swap-workdate-today runs
+                             only when this flag names it
   --exclude-operator <name>  every operator but these contributes mutants (repeatable). Same
                              prefix rule and same flag in the report. An unregistered name is
                              refused, and so is giving --operator as well
+  --profile slim             the older, faster default set: leaves out condition-true and
+                             blank-argument (default operators since PR-209). The default set
+                             keeps every fact; slim saves time. Measured on DO: the default
+                             is +12.7% mutants (5,526 on 43,511) at 0.91x the per-mutant cost,
+                             about +11.5% wall; on two BC.History apps +81 and +154 mutants.
+                             The report flags it 'operator-narrowed'. Adds to --exclude-operator;
+                             refused with --operator; an unknown profile is refused. Resume or
+                             compare a store or campaign stage made BEFORE PR-209 with this
+                             flag: a default run refuses to resume it, by name
   --lines <file>:<a>-<b>     only mutants whose span touches these lines contribute (repeatable;
                              <file>:<n> for one line). Paths are project-relative. A mutant that
                              spans a given line and others is kept. Applied after dedup, so it
@@ -1524,6 +1540,8 @@ export const RUN_FLAGS = {
   // R127: repeatable — several `--operator` names union. See `RunCliConfig.operators`.
   operator: { type: "string", multiple: true },
   "exclude-operator": { type: "string", multiple: true },
+  // PR-209: `--profile slim`, the older default operator set. See `RunCliConfig.profile`.
+  profile: { type: "string" },
   // Issue #19 (R227): line-scoped mutant filter. `--lines` is repeatable and unions.
   lines: { type: "string", multiple: true },
   "changed-since": { type: "string" },
@@ -1614,6 +1632,7 @@ const RUN_ONLY_FLAGS = [
   "exclude",
   "operator",
   "exclude-operator",
+  "profile",
   "lines",
   "changed-since",
   "max-guards-per-batch",
@@ -2289,11 +2308,28 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   if (operatorRaw !== undefined && excludeOperatorRaw !== undefined) {
     throw new Error("--operator and --exclude-operator cannot be combined");
   }
+  // PR-209: `--profile slim` is the same narrowing `--exclude-operator` makes, for the two operators
+  // that became default; with `--exclude-operator` the exclusions add up.
+  const profileRaw = values.profile;
+  if (profileRaw !== undefined && !PROFILES.includes(profileRaw)) {
+    throw new Error(
+      `--profile "${profileRaw}" is not a known profile. Known: ${PROFILES.join(", ")}.`,
+    );
+  }
+  if (profileRaw !== undefined && operatorRaw !== undefined) {
+    throw new Error(
+      "--profile and --operator cannot be combined. Name the operators to run, or pick a profile.",
+    );
+  }
+  const slim = profileRaw === "slim";
+  const excludedByFlags = [
+    ...(slim ? SLIM_LEFT_OUT : []),
+    ...(excludeOperatorRaw ?? []).filter((n) => !(slim && SLIM_LEFT_OUT.includes(n))),
+  ];
   const operators = {
     ...(operatorRaw !== undefined && operatorRaw.length > 0 ? { operators: operatorRaw } : {}),
-    ...(excludeOperatorRaw !== undefined && excludeOperatorRaw.length > 0
-      ? { excludeOperators: excludeOperatorRaw }
-      : {}),
+    ...(excludedByFlags.length > 0 ? { excludeOperators: excludedByFlags } : {}),
+    ...(slim ? { profile: "slim" as const } : {}),
   };
 
   // Issue #19 (R227). `--changed-since` is kept as the ref here; `git` runs when the run starts.
@@ -3769,6 +3805,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     daemonMaxRssGb: c.daemonMaxRssGb, // R952
     daemonMaxRequests: c.daemonMaxRequests, // R952
     ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
+    ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
   };
 }
 
@@ -4267,6 +4304,8 @@ export async function printDryRun(
     readonly operators?: readonly string[];
     /** R832: `--exclude-operator` names, likewise. */
     readonly excludeOperators?: readonly string[];
+    /** PR-209: `--profile slim`, likewise (the walk skips the two operators). */
+    readonly profile?: "slim";
     /** Issue #19: the resolved line filter, honoured for the same reason. */
     readonly lines?: readonly LineRange[];
     /**
@@ -4320,6 +4359,7 @@ export async function printDryRun(
     ...(exclude !== undefined ? { exclude } : {}),
     ...(operators !== undefined ? { operators } : {}),
     ...(excludeOperators !== undefined ? { excludeOperators } : {}),
+    ...(paths.profile !== undefined ? { profile: paths.profile } : {}),
     ...(paths.lines !== undefined ? { lines: paths.lines } : {}),
     ...(paths.source !== undefined ? { source: paths.source } : {}),
     ...(paths.preprocessorSymbols !== undefined
@@ -4956,6 +4996,7 @@ export async function runFromCliWithAccept(
               ...(parsed.excludeOperators !== undefined
                 ? { excludeOperators: parsed.excludeOperators }
                 : {}),
+              ...(parsed.profile !== undefined ? { profile: parsed.profile } : {}),
               ...(lineRanges !== undefined
                 ? {
                     lines: lineRanges.ranges,
@@ -7165,6 +7206,7 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
     ...(parsed.outPath !== undefined ? { outPath: parsed.outPath } : {}),
     ...(parsed.operators !== undefined ? { operators: parsed.operators } : {}),
     ...(parsed.excludeOperators !== undefined ? { excludeOperators: parsed.excludeOperators } : {}),
+    ...(parsed.profile !== undefined ? { profile: parsed.profile } : {}),
     ...(dryRunLines !== undefined ? { lines: dryRunLines.ranges } : {}),
     ...(dryRunExclude.length > 0 ? { exclude: dryRunExclude } : {}),
     ...(dryRunConfig?.preprocessorSymbols !== undefined

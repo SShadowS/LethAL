@@ -131,7 +131,7 @@ describe("R618 seedRunFrom: a clone with no override is the source run", () => {
   test("the run row, the verdicts, history and resume read it as the source", () => {
     const { store, a } = source();
     const before = survivorKeys(store);
-    expect(before.keys.size).toBe(14);
+    expect(before.keys.size).toBe(17);
     const c = seedRunFrom(store, a, { finished: true });
     expect(changed(store.getRun(a), store.getRun(c))).toEqual([]);
     const sorted = (id: number) =>
@@ -147,7 +147,7 @@ describe("R618 seedRunFrom: a clone with no override is the source run", () => {
     store.close();
   });
 
-  test("the source's 14 survivors are exactly LEND_MUTANTS' survived keys", () => {
+  test("the source's 17 survivors are exactly LEND_MUTANTS' survived keys", () => {
     const { store } = source();
     const survived = CODES.filter((c) => LEND_MUTANTS[c].verdict === "survived");
     expect(survivorKeys(store).keys).toEqual(keys(survived));
@@ -248,7 +248,7 @@ describe("R618 seedRunFrom: K is permuted by code, keyed intact, with a sentinel
 describe("R618: each seed gives the refusal its leg expects", () => {
   test("N0 lends, N1 names only the backend step, N5 names only the test app", () => {
     for (const [over, keysLent, fired] of [
-      [{}, 14, []],
+      [{}, 17, []],
       [{ backend: "al-runner-v3", runnerBuild: "r618-seed" }, 0, ["backendBuildRefused"]],
       [{ revoke: true }, 0, ["testAppChanged"]],
     ] as const) {

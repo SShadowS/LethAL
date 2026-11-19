@@ -42,6 +42,14 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Harden Logic|FirstAmount|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "FirstAmountReadsARow",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Harden Logic|FirstAmount|lethal.negate-guard|1",
       "verdict": "killed",
       "killingTest": "FirstAmountReadsARow",
@@ -160,6 +168,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "9e23eec43a8fbfbbb9f029d1da306519722fa058d744a25160a4dccaa8dbea64"
+    },
+    {
+      "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Harden Logic|BonusFor|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "BonusForPaysOnlyAboveTen",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "f48256d2232900b052c4f5d1051d47aa0ecd6ffd925bd33c5a526b4c44333cca|Harden Logic|BonusFor|lethal.conditional-boundary|1",

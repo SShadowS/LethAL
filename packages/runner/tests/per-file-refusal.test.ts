@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import * as schemata from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import {
+  SLIM_OPTIONS,
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+} from "../src/orchestrator";
 import { removeScratchDir } from "./helpers/scratch";
 
 /**
@@ -237,7 +242,11 @@ describe("R307: sandbox-data is byte-identical with the trial in place", () => {
   });
   test("manifest and instrumented files", async () => {
     const REPO = join(import.meta.dir, "../../..");
-    const set = await generateMutationSet(join(REPO, "fixtures/sandbox-data"), { emit: () => {} });
+    // PR-209: the pinned hash is the OLD default set's (`--profile slim`).
+    const set = await generateMutationSet(join(REPO, "fixtures/sandbox-data"), {
+      ...SLIM_OPTIONS,
+      emit: () => {},
+    });
     expect(set.refusedFiles).toEqual([]);
     await writeInstrumentedProject({
       targetDir: dir,

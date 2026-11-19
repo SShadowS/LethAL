@@ -21,16 +21,21 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 {
   "gate": "itest:bcdev-wrapped",
   "baselines": {
-    "bcdev.wrapped.baseline.json": { "killed": 64, "survived": 38 }
+    "bcdev.wrapped.baseline.json": { "killed": 66, "survived": 50 }
   }
 }
 ```
 
-The fenced leg scores 64 killed and 38 survived.
+The fenced leg scores 66 killed and 50 survived. PR-209's 14 `condition-true` rows are twelve survivors and two kills
+(M0096 `WrappedYBand.Report` line 58 by `BandYDirect`, M0111 `WrappedYBandTwin.Report` line 58 by `BandYDirectTwin`); the hub equals the fenced side per mutant.
 
-R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035), all killed as pre-committed, recorded on bc3 on 2026-11-07.
+R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035; M0013, M0022, M0031, M0041 since PR-209 added 14 `condition-true` rows), all killed as pre-committed, recorded on bc3 on 2026-11-07.
 
 ## History
+
+2026-11-19 (PR-209): recorded on bc3, the default set gained `condition-true`: 14 added rows, 12 survived and 2 killed;
+the fenced leg is now 66 killed / 50 survived over 116 rows, the hub equal per mutant. `EXPECTED_WRAPPED` and
+`EXPECTED_WRAPPED_BC_ALL` hold the verdicts. `bcdev.wrapped.baseline.json` is not re-recorded in this commit. Logs: `/coord/handoff/PR-209-bc/bc3-bcdev-wrapped-record/`.
 
 2026-11-19 (R1131, coord task PR-203): the hub leg's warning set (R736) gained `workdate-not-compared`, so it is now
 `compiled-out-sites` and `workdate-not-compared`. The code comes from LethAL Control 1.0.0.28's start-WorkDate check

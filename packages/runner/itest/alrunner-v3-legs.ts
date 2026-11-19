@@ -900,6 +900,7 @@ export const V3_MO_KILLERS: readonly V3Killer[] = [
   ["M0001", "src/MultiControl.Codeunit.al", 4, "empty-block", "ControlDoubles"],
   ["M0002", "src/MultiControl.Codeunit.al", 5, "return-value", "ControlDoubles"],
   ["M0007", "src/MultiPair.Codeunit.al", 12, "empty-block", "ReachedBothWays"],
+  // PR-209 amendment 4 (§0e item 3): MO runs `--profile slim`, so these are the pre-flip codes again.
   ["M0009", "src/MultiPair.Codeunit.al", 14, "return-value", "ReachedBothWays"],
   ["M0010", "src/MultiPair.Codeunit.al", 14, "delete-additive-right", "ReachedBothWays"],
   ["M0011", "src/MultiPair.Codeunit.al", 14, "swap-additive", "ReachedBothWays"],
@@ -912,68 +913,68 @@ export const V3_MO_KILLERS: readonly V3Killer[] = [
  * refusal of a two-arm wrapper costs; `judgeWrArms` pins that refusal instead). 62 rows.
  */
 export const V3_WR_KILLERS: readonly V3Killer[] = [
-  ["M0004", "src/WrappedPairA.Codeunit.al", 10, "empty-block", "PairPick"],
-  ["M0006", "src/WrappedPairA.Codeunit.al", 12, "return-value", "PairPick"],
-  ["M0007", "src/WrappedPre.Codeunit.al", 9, "empty-block", "GrowPre"],
-  ["M0009", "src/WrappedPre.Codeunit.al", 11, "return-value", "GrowPre"],
-  ["M0010", "src/WrappedPre.Codeunit.al", 11, "delete-additive-right", "GrowPre"],
-  ["M0011", "src/WrappedPre.Codeunit.al", 11, "swap-additive", "GrowPre"],
-  ["M0013", "src/WrappedPre.Codeunit.al", 35, "empty-block", "TwicePre"],
-  ["M0014", "src/WrappedPre.Codeunit.al", 36, "return-value", "TwicePre"],
-  ["M0015", "src/WrappedPreTwin.Codeunit.al", 9, "empty-block", "GrowPreTwin"],
-  ["M0017", "src/WrappedPreTwin.Codeunit.al", 11, "return-value", "GrowPreTwin"],
-  ["M0018", "src/WrappedPreTwin.Codeunit.al", 11, "delete-additive-right", "GrowPreTwin"],
-  ["M0019", "src/WrappedPreTwin.Codeunit.al", 11, "swap-additive", "GrowPreTwin"],
-  ["M0021", "src/WrappedPreTwin.Codeunit.al", 35, "empty-block", "TwicePreTwin"],
-  ["M0022", "src/WrappedPreTwin.Codeunit.al", 36, "return-value", "TwicePreTwin"],
-  ["M0023", "src/WrappedTop.Codeunit.al", 7, "empty-block", "GrowTop"],
-  ["M0025", "src/WrappedTop.Codeunit.al", 9, "return-value", "GrowTop"],
-  ["M0026", "src/WrappedTop.Codeunit.al", 9, "delete-additive-right", "GrowTop"],
-  ["M0027", "src/WrappedTop.Codeunit.al", 9, "swap-additive", "GrowTop"],
-  ["M0029", "src/WrappedTop.Codeunit.al", 32, "empty-block", "TwiceTop"],
-  ["M0030", "src/WrappedTop.Codeunit.al", 34, "remove-assignment", "TwiceTop"],
-  ["M0031", "src/WrappedTop.Codeunit.al", 36, "return-value", "TwiceTop"],
-  ["M0032", "src/WrappedTopTwin.Codeunit.al", 7, "empty-block", "GrowTopTwin"],
-  ["M0034", "src/WrappedTopTwin.Codeunit.al", 9, "return-value", "GrowTopTwin"],
-  ["M0035", "src/WrappedTopTwin.Codeunit.al", 9, "delete-additive-right", "GrowTopTwin"],
-  ["M0036", "src/WrappedTopTwin.Codeunit.al", 9, "swap-additive", "GrowTopTwin"],
-  ["M0038", "src/WrappedTopTwin.Codeunit.al", 32, "empty-block", "TwiceTopTwin"],
-  ["M0039", "src/WrappedTopTwin.Codeunit.al", 34, "remove-assignment", "TwiceTopTwin"],
-  ["M0040", "src/WrappedTopTwin.Codeunit.al", 36, "return-value", "TwiceTopTwin"],
-  ["M0041", "src/WrappedTrigger.Table.al", 19, "empty-block", "ClampTrigger"],
-  ["M0043", "src/WrappedTrigger.Table.al", 21, "remove-assignment", "ClampTrigger"],
-  ["M0044", "src/WrappedTrigger.Table.al", 21, "shift-integer", "ClampTrigger"],
-  ["M0045", "src/WrappedTrigger.Table.al", 35, "empty-block", "DoubledTrigger"],
-  ["M0046", "src/WrappedTrigger.Table.al", 36, "return-value", "DoubledTrigger"],
-  ["M0047", "src/WrappedTriggerTwin.Table.al", 19, "empty-block", "ClampTriggerTwin"],
-  ["M0049", "src/WrappedTriggerTwin.Table.al", 21, "remove-assignment", "ClampTriggerTwin"],
-  ["M0050", "src/WrappedTriggerTwin.Table.al", 21, "shift-integer", "ClampTriggerTwin"],
-  ["M0051", "src/WrappedTriggerTwin.Table.al", 35, "empty-block", "DoubledTriggerTwin"],
-  ["M0052", "src/WrappedTriggerTwin.Table.al", 36, "return-value", "DoubledTriggerTwin"],
-  ["M0056", "src/WrappedView.Page.al", 32, "empty-block", "LabelView"],
-  ["M0061", "src/WrappedViewTwin.Page.al", 32, "empty-block", "LabelViewTwin"],
-  ["M0066", "src/WrappedXtra.PageExt.al", 19, "empty-block", "ScaledXtra"],
-  ["M0068", "src/WrappedXtra.PageExt.al", 21, "return-value", "ScaledXtra"],
-  ["M0072", "src/WrappedXtraTwin.PageExt.al", 19, "empty-block", "ScaledXtraTwin"],
-  ["M0074", "src/WrappedXtraTwin.PageExt.al", 21, "return-value", "ScaledXtraTwin"],
-  ["M0075", "src/WrappedYBand.Report.al", 22, "empty-block", "BandYRun"],
-  ["M0076", "src/WrappedYBand.Report.al", 23, "remove-assignment", "BandYRun"],
-  ["M0082", "src/WrappedYBand.Report.al", 53, "shift-integer", "BandYRun"],
-  ["M0083", "src/WrappedYBand.Report.al", 57, "empty-block", "BandYDirect"],
-  ["M0084", "src/WrappedYBand.Report.al", 58, "conditional-boundary", "BandYDirect"],
-  ["M0085", "src/WrappedYBand.Report.al", 59, "return-value", "BandYDirect"],
-  ["M0086", "src/WrappedYBand.Report.al", 60, "return-value", "BandYDirect"],
-  ["M0087", "src/WrappedYBand.Report.al", 64, "empty-block", "BandYRun"],
-  ["M0088", "src/WrappedYBand.Report.al", 65, "return-value", "BandYRun"],
-  ["M0089", "src/WrappedYBandTwin.Report.al", 22, "empty-block", "BandYRunTwin"],
-  ["M0090", "src/WrappedYBandTwin.Report.al", 23, "remove-assignment", "BandYRunTwin"],
-  ["M0096", "src/WrappedYBandTwin.Report.al", 53, "shift-integer", "BandYRunTwin"],
-  ["M0097", "src/WrappedYBandTwin.Report.al", 57, "empty-block", "BandYDirectTwin"],
-  ["M0098", "src/WrappedYBandTwin.Report.al", 58, "conditional-boundary", "BandYDirectTwin"],
-  ["M0099", "src/WrappedYBandTwin.Report.al", 59, "return-value", "BandYDirectTwin"],
-  ["M0100", "src/WrappedYBandTwin.Report.al", 60, "return-value", "BandYDirectTwin"],
-  ["M0101", "src/WrappedYBandTwin.Report.al", 64, "empty-block", "BandYRunTwin"],
-  ["M0102", "src/WrappedYBandTwin.Report.al", 65, "return-value", "BandYRunTwin"],
+  ["M0005", "src/WrappedPairA.Codeunit.al", 10, "empty-block", "PairPick"],
+  ["M0008", "src/WrappedPairA.Codeunit.al", 12, "return-value", "PairPick"],
+  ["M0009", "src/WrappedPre.Codeunit.al", 9, "empty-block", "GrowPre"],
+  ["M0012", "src/WrappedPre.Codeunit.al", 11, "return-value", "GrowPre"],
+  ["M0013", "src/WrappedPre.Codeunit.al", 11, "delete-additive-right", "GrowPre"],
+  ["M0014", "src/WrappedPre.Codeunit.al", 11, "swap-additive", "GrowPre"],
+  ["M0016", "src/WrappedPre.Codeunit.al", 35, "empty-block", "TwicePre"],
+  ["M0017", "src/WrappedPre.Codeunit.al", 36, "return-value", "TwicePre"],
+  ["M0018", "src/WrappedPreTwin.Codeunit.al", 9, "empty-block", "GrowPreTwin"],
+  ["M0021", "src/WrappedPreTwin.Codeunit.al", 11, "return-value", "GrowPreTwin"],
+  ["M0022", "src/WrappedPreTwin.Codeunit.al", 11, "delete-additive-right", "GrowPreTwin"],
+  ["M0023", "src/WrappedPreTwin.Codeunit.al", 11, "swap-additive", "GrowPreTwin"],
+  ["M0025", "src/WrappedPreTwin.Codeunit.al", 35, "empty-block", "TwicePreTwin"],
+  ["M0026", "src/WrappedPreTwin.Codeunit.al", 36, "return-value", "TwicePreTwin"],
+  ["M0027", "src/WrappedTop.Codeunit.al", 7, "empty-block", "GrowTop"],
+  ["M0030", "src/WrappedTop.Codeunit.al", 9, "return-value", "GrowTop"],
+  ["M0031", "src/WrappedTop.Codeunit.al", 9, "delete-additive-right", "GrowTop"],
+  ["M0032", "src/WrappedTop.Codeunit.al", 9, "swap-additive", "GrowTop"],
+  ["M0034", "src/WrappedTop.Codeunit.al", 32, "empty-block", "TwiceTop"],
+  ["M0035", "src/WrappedTop.Codeunit.al", 34, "remove-assignment", "TwiceTop"],
+  ["M0036", "src/WrappedTop.Codeunit.al", 36, "return-value", "TwiceTop"],
+  ["M0037", "src/WrappedTopTwin.Codeunit.al", 7, "empty-block", "GrowTopTwin"],
+  ["M0040", "src/WrappedTopTwin.Codeunit.al", 9, "return-value", "GrowTopTwin"],
+  ["M0041", "src/WrappedTopTwin.Codeunit.al", 9, "delete-additive-right", "GrowTopTwin"],
+  ["M0042", "src/WrappedTopTwin.Codeunit.al", 9, "swap-additive", "GrowTopTwin"],
+  ["M0044", "src/WrappedTopTwin.Codeunit.al", 32, "empty-block", "TwiceTopTwin"],
+  ["M0045", "src/WrappedTopTwin.Codeunit.al", 34, "remove-assignment", "TwiceTopTwin"],
+  ["M0046", "src/WrappedTopTwin.Codeunit.al", 36, "return-value", "TwiceTopTwin"],
+  ["M0047", "src/WrappedTrigger.Table.al", 19, "empty-block", "ClampTrigger"],
+  ["M0050", "src/WrappedTrigger.Table.al", 21, "remove-assignment", "ClampTrigger"],
+  ["M0051", "src/WrappedTrigger.Table.al", 21, "shift-integer", "ClampTrigger"],
+  ["M0052", "src/WrappedTrigger.Table.al", 35, "empty-block", "DoubledTrigger"],
+  ["M0053", "src/WrappedTrigger.Table.al", 36, "return-value", "DoubledTrigger"],
+  ["M0054", "src/WrappedTriggerTwin.Table.al", 19, "empty-block", "ClampTriggerTwin"],
+  ["M0057", "src/WrappedTriggerTwin.Table.al", 21, "remove-assignment", "ClampTriggerTwin"],
+  ["M0058", "src/WrappedTriggerTwin.Table.al", 21, "shift-integer", "ClampTriggerTwin"],
+  ["M0059", "src/WrappedTriggerTwin.Table.al", 35, "empty-block", "DoubledTriggerTwin"],
+  ["M0060", "src/WrappedTriggerTwin.Table.al", 36, "return-value", "DoubledTriggerTwin"],
+  ["M0064", "src/WrappedView.Page.al", 32, "empty-block", "LabelView"],
+  ["M0070", "src/WrappedViewTwin.Page.al", 32, "empty-block", "LabelViewTwin"],
+  ["M0076", "src/WrappedXtra.PageExt.al", 19, "empty-block", "ScaledXtra"],
+  ["M0079", "src/WrappedXtra.PageExt.al", 21, "return-value", "ScaledXtra"],
+  ["M0083", "src/WrappedXtraTwin.PageExt.al", 19, "empty-block", "ScaledXtraTwin"],
+  ["M0086", "src/WrappedXtraTwin.PageExt.al", 21, "return-value", "ScaledXtraTwin"],
+  ["M0087", "src/WrappedYBand.Report.al", 22, "empty-block", "BandYRun"],
+  ["M0088", "src/WrappedYBand.Report.al", 23, "remove-assignment", "BandYRun"],
+  ["M0094", "src/WrappedYBand.Report.al", 53, "shift-integer", "BandYRun"],
+  ["M0095", "src/WrappedYBand.Report.al", 57, "empty-block", "BandYDirect"],
+  ["M0097", "src/WrappedYBand.Report.al", 58, "conditional-boundary", "BandYDirect"],
+  ["M0098", "src/WrappedYBand.Report.al", 59, "return-value", "BandYDirect"],
+  ["M0099", "src/WrappedYBand.Report.al", 60, "return-value", "BandYDirect"],
+  ["M0100", "src/WrappedYBand.Report.al", 64, "empty-block", "BandYRun"],
+  ["M0101", "src/WrappedYBand.Report.al", 65, "return-value", "BandYRun"],
+  ["M0102", "src/WrappedYBandTwin.Report.al", 22, "empty-block", "BandYRunTwin"],
+  ["M0103", "src/WrappedYBandTwin.Report.al", 23, "remove-assignment", "BandYRunTwin"],
+  ["M0109", "src/WrappedYBandTwin.Report.al", 53, "shift-integer", "BandYRunTwin"],
+  ["M0110", "src/WrappedYBandTwin.Report.al", 57, "empty-block", "BandYDirectTwin"],
+  ["M0112", "src/WrappedYBandTwin.Report.al", 58, "conditional-boundary", "BandYDirectTwin"],
+  ["M0113", "src/WrappedYBandTwin.Report.al", 59, "return-value", "BandYDirectTwin"],
+  ["M0114", "src/WrappedYBandTwin.Report.al", 60, "return-value", "BandYDirectTwin"],
+  ["M0115", "src/WrappedYBandTwin.Report.al", 64, "empty-block", "BandYRunTwin"],
+  ["M0116", "src/WrappedYBandTwin.Report.al", 65, "return-value", "BandYRunTwin"],
 ];
 
 /**
@@ -985,7 +986,7 @@ export const V3_WR_KILLERS: readonly V3Killer[] = [
  * R976 (R-973 amendment 1): M0089, the same trigger's body `empty-block`, too, since it carries
  * M0090's line. The three left are the `#if`-wrapped original's, which carry no line.
  */
-export const V3_WR_STATE_NOTES: readonly string[] = ["0/M0075", "0/M0076", "0/M0082"];
+export const V3_WR_STATE_NOTES: readonly string[] = ["0/M0087", "0/M0088", "0/M0094"];
 
 /** One line when the run's state notes are not exactly `want` (both as `batch/code`); else none. */
 export function judgeStateNotes(got: readonly string[], want: readonly string[]): string[] {
@@ -1046,13 +1047,14 @@ export function judgeKillers(rows: readonly V3RowFacts[], killers: readonly V3Ki
 const WR_ARMS_FILE = "src/WrappedArms.Codeunit.al";
 
 /**
- * Leg WR's by-name refusal: exactly three `WrappedArms` rows, each `no-coverage` with `refusal` as
- * its note, and no other row carrying that note. Empty is a pass.
+ * Leg WR's by-name refusal: exactly four `WrappedArms` rows, each `no-coverage` with `refusal` as
+ * its note, and no other row carrying that note. Empty is a pass. PR-209 amendment 6 item 1: four since condition-true
+ * is default-on (`Pick` gains one; the BC twin `bcdev.wrapped.baseline.json` holds the same four), three before.
  */
 export function judgeWrArms(rows: readonly V3RowFacts[], refusal: string): string[] {
   const out: string[] = [];
   const arms = rows.filter((r) => r.file.replace(/\\/g, "/") === WR_ARMS_FILE);
-  if (arms.length !== 3) out.push(`${arms.length} WrappedArms row(s), pre-committed 3`);
+  if (arms.length !== 4) out.push(`${arms.length} WrappedArms row(s), pre-committed 4`);
   for (const r of arms) {
     if (r.verdict !== "no-coverage" || r.failureNote !== refusal) {
       out.push(
@@ -1129,9 +1131,10 @@ export function judgeLegK(f: LegKFacts): string[] {
     );
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
-  if (f.noCoverageFiles.length !== 5 || off.length > 0)
+  // PR-209 amendment 9 addendum: 6 (DiscountedPrice condition-true joins; bcdev.baseline.json), was 5.
+  if (f.noCoverageFiles.length !== 6 || off.length > 0)
     out.push(
-      `K: ${f.noCoverageFiles.length} no-coverage mutant(s) (${off.length} outside ${NO_COVERAGE_FILE}), pre-committed 5, all in ${NO_COVERAGE_FILE}`,
+      `K: ${f.noCoverageFiles.length} no-coverage mutant(s) (${off.length} outside ${NO_COVERAGE_FILE}), pre-committed 6, all in ${NO_COVERAGE_FILE}`,
     );
   return out;
 }

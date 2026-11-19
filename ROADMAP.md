@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**50 of 1111 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**49 of 1113 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -391,8 +391,10 @@ that ordering is the priority.
 - **R1127** · LethAL's two backends start a test with different WorkDates in a demo company: v3 (a client session) gets BC's login default, the last G/L entry date, while bcdev (an OData session) gets Today, so a WorkDate-dependent test can give different verdicts · [R1127.md](docs/roadmap/R1127.md) · done (7669e5cc) — LethAL Control 1.0.0.27 starts every bcdev test on BaseApp's GetDefaultWorkDate, as a…
 - **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · done (3bc17254)
 - **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · done (162fceb8) — PR-215: the refusal is named as a third shape of tests-testpage-unsupported…
-- **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · open
+- **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · done (ac2807507)
 - **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · closed 2026-11-19 — measured: DO's own test-order dependence (codeunit globals only earlier tests set), not…
+- **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · done (a00e686e7)
+- **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
 
 ## Product gaps a real project hits
 
@@ -1155,7 +1157,7 @@ that ordering is the priority.
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — measure first (coord PR-228): census of DO's cut kinds, a direct kept-vs-fresh DO check on `current`…
 - **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — measure first: survivors' seconds in tests outside reachedBy (codeunit-order rule), then a v3 A/B on a…
 - **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
-- **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · open
+- **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
 
 ---
 

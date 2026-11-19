@@ -342,6 +342,9 @@ const EXPECTED_ON: ReadonlyArray<{
   // --- position was PRE-COMMITTED from the dry-run manifest in
   // --- docs/superpowers/specs/2026-09-03-r206-build-precommitment.md before this gate ran.
   { line: 140, operator: "lethal.empty-block", verdict: "killed", killPosition: 1 },
+  // PR-209: the added `condition-true` row (observed on bc2, 2026-11-19).
+  // PR-209: RECORDED on bc2 (lethal-code): killed at group position 2, a warm kill.
+  { line: 141, operator: "lethal.condition-true", verdict: "killed", killPosition: 2 },
   { line: 141, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 1 },
   { line: 142, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
   { line: 143, operator: "lethal.remove-assignment", verdict: "survived" },
@@ -352,7 +355,10 @@ const EXPECTED_ON: ReadonlyArray<{
   // replayed unmutated and method 2 completed inside its budget.
   { line: 145, operator: "lethal.void-method-call", verdict: "timeout-killed", killPosition: 2 },
   { line: 146, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 2 },
-  { line: 147, operator: "lethal.return-value", verdict: "killed", killPosition: 2 },
+  // PR-209 (spec §0f): position 2 -> 1, recorded on bc2. The kill ledger (test-order.ts) now puts
+  // SpinUntilReachesTheTarget first in SpinUntil after it killed line 141's new mutant; it is the only test that reaches
+  // line 147, so the killer is the same.
+  { line: 147, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
 ];
 
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
@@ -721,13 +727,13 @@ function assertHangRefusedRow(label: string, report: SessionReport): void {
         file: "src/HangLogic.Codeunit.al",
         reason: "hang-refused",
         kinds: "codeunit_declaration",
-        sites: 2,
+        sites: 3,
       },
     ],
-    `[${label}] R447: expected exactly one hang-refused row with 2 sites`,
+    `[${label}] R447: expected exactly one hang-refused row with 3 sites (PR-209: line 63 is R1136-refused)`,
   );
   assert.ok(
-    report.validity.scoreDescribes.includes("; 2 hang-refused site(s) in 1 file(s) not mutated"),
+    report.validity.scoreDescribes.includes("; 3 hang-refused site(s) in 1 file(s) not mutated"),
     `[${label}] R447: scoreDescribes must name the hang-refused sites; got ${JSON.stringify(report.validity.scoreDescribes)}`,
   );
   assert.equal(
@@ -740,6 +746,14 @@ function assertHangRefusedRow(label: string, report: SessionReport): void {
 function assertOnLeg(leg: LegResult): void {
   const { report, testRows } = leg;
   dump("stop-hung-sessions ON", report);
+  // PR-209: print the figures asserted later, BEFORE any assertion, so one record run shows them all. Print only.
+  console.log(
+    `  [ON] figures: warmKills=${report.warmKills} groupedCalls=${report.groupedCalls} warmKillCodes=${JSON.stringify(
+      report.mutants
+        .filter((m) => m.verdict === "killed" && (m.killPosition ?? 1) > 1)
+        .map((m) => `${m.mutantCode}@${m.killPosition}`),
+    )}`,
+  );
   assertHangRefusedRow("ON", report);
 
   assert.equal(report.baselineGreen, true, "baseline must be green (the fixture test passes)");
