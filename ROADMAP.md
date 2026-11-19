@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**51 of 1115 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**52 of 1116 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -395,6 +395,7 @@ that ordering is the priority.
 - **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · closed 2026-11-19 — measured: DO's own test-order dependence (codeunit globals only earlier tests set), not…
 - **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · done (a00e686e7)
 - **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
+- **R1153** · 12 PR-56 keep entries have never matched: al-runner ends their texts with " (not pinned)", the census normalised it away, and the anchored regex needs it (keeps that passed for the wrong reason) · [R1153.md](docs/roadmap/R1153.md) · open — (a) widen each of the 12 only with its own kept-vs-fresh DO proof, later; (b) test every keep entry…
 
 ## Product gaps a real project hits
 
