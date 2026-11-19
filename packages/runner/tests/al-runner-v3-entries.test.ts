@@ -10799,10 +10799,31 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         for (const [k, v] of storeOf(early)) storeOf(early).set(k, { ...v, seq: 0 });
         await early.b.sendKillPair("M0001", ref("B"));
         expect(early.b.pairRefusalReasons()).toEqual({ ...zero, notAfterKill: 1 });
-        for (const x of [cut, other, early])
+        // the kill's rows did not come from a prefetch (no prefetchSeq for its codeunit)
+        const np = await batched();
+        (
+          np.b as unknown as { lane: { rowsByCodeunit: Map<number, unknown> } }
+        ).lane.rowsByCodeunit.clear();
+        await np.b.sendKillPair("M0001", ref("B"));
+        expect(np.b.pairRefusalReasons()).toEqual({ ...zero, notPrefetched: 1 });
+        for (const x of [cut, other, early, np])
           expect(counts(x).pairBatchRefused).toBe(
             Object.values(x.b.pairRefusalReasons()).reduce((a, b) => a + b, 0),
           );
+        // the summary line carries the split, next to `refused`
+        const warn = spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          await cut.b.close();
+          expect(
+            warn.mock.calls.some((a) =>
+              String(a[0]).includes(
+                "refused 1 [another codeunit 0, not prefetched 0, not after the kill 0, cut before the killer 1]",
+              ),
+            ),
+          ).toBe(true);
+        } finally {
+          warn.mockRestore();
+        }
       });
     });
   });

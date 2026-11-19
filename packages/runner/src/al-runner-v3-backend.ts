@@ -3874,7 +3874,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { ...counts, ...timers };
   }
 
-  /** PR-99 (§10.2): per-unit scoring times and per-window prefetch walls of an N = 1 run, for the scheduling bound. */
   /**
    * PR-242 (M1, measure-only): why `takeStoredPair` refused a stored kill pair, one count per reason, over every
    * lane. The four always sum to the lanes' `pairBatchRefused`. Printed in the serve-entries summary only.
@@ -3891,6 +3890,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { ...this.pairRefusals };
   }
 
+  /** PR-99 (§10.2): per-unit scoring times and per-window prefetch walls of an N = 1 run, for the scheduling bound. */
   private readonly unitTimes: { units: UnitTiming[]; windows: WindowTiming[] } = {
     units: [],
     windows: [],
