@@ -75,6 +75,31 @@ lethal-preproc, 2026-11-19 (coord PR-200's follow-up). No code yet.
 - **The detection in the build is the parser's**, not this text reader. The pre-committed DO figure is 16 methods, the three
   hung ones included; any difference is explained before it lands.
 
+## 2b. RULED (owner, q-20261119T085814-248f6f17): (a). Built as coord PR-212.
+- **On BC backends, a default run leaves the company-writing test methods out by name** (reason `company-write`), with the
+  opt-in `--keep-company-tests` (principle 21).
+- Every report lists them by name, and the mutants only those tests would cover count as UNMEASURED, never as survived
+  (principles 5 and 6).
+- **The wording of the rule:** the owner's restart answer (q-20261119T085347-4e338329) says "company writes with Commit". The
+  ruled question is "tests that write a company", and that is what is built: it includes every committing one, and a
+  commit-only rule would miss two of DO's three hung tests (§2a).
+- A platform-bug note on the BC 29 tier break is drafted for the owner (principle 3): `/coord/handoff/PR-212/`.
+
+## 2c. Amendment 2: "the mutants only those tests would cover" (NEEDS A RULING)
+- **The gap:** the left-out tests never run, so their coverage is not observed in that run. Today `--exclude-test` says "a
+  mutant only they kill is reported SURVIVED or NO-COVERAGE" (R745). The ruling forbids SURVIVED for these. A mutant that
+  remaining tests cover is measured by them; the open case is a mutant NO remaining test covers.
+- **Options:**
+  - **(i) Static object reach:** the target objects the left-out methods name, directly or through their one-hop test-app
+    helpers. A no-coverage mutant in such an object is reported UNMEASURED (`left-out-test-reach`) and listed; other
+    no-coverage mutants stay no-coverage. It is cheap and over-approximate: hub objects such as `CDO Setup` mark many.
+  - **(ii) Every no-coverage mutant** in a run that left tests out is UNMEASURED. Simple, but it erases the run's most useful
+    finding ("the suite does not cover this") for the whole project.
+  - **(iii) Coverage from a run where those tests did run** (an al-runner v3 store over the same tree, as R1122's confirm
+    flow reads one): exact when it exists; otherwise fall back to (i).
+- **Recommendation: (i), with (iii) when a coverage source is given.** Before the build, the count of DO's no-coverage
+  mutants (i) would mark is measured and stated.
+
 ## 3. Tests, if built (red-checked both ways)
 - **Detection, on parsed AL:**
   - a direct write;
