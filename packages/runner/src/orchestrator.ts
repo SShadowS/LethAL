@@ -364,6 +364,7 @@ import {
 } from "./testpage-scan";
 import {
   type FrameSourceLookup,
+  REQUEST_PAGE_DIAGNOSIS,
   describeTestPageRefusal,
   frameSourceLookup,
   isTestPageNotRunMessage,
@@ -10641,7 +10642,10 @@ export function unsupportedCoverageNote(
   // R69: the platform cannot run these tests on this path at all — a fact about the SESSION TYPE,
   // not about the test. Named separately from the generic wording below, which sends a reader to
   // debug a test that is already correct.
-  const testPage = qualified.filter((n) => testPageThisBatch.has(n));
+  // R1135: the shared describer also returns the request-page text; split by its diagnosis prefix.
+  const isRequestPage = (n: string): boolean =>
+    testPageThisBatch.get(n)?.startsWith(REQUEST_PAGE_DIAGNOSIS) ?? false;
+  const testPage = qualified.filter((n) => testPageThisBatch.has(n) && !isRequestPage(n));
   const testPageFirst = testPage[0];
   const testPageText =
     testPageFirst === undefined ? undefined : testPageThisBatch.get(testPageFirst);
@@ -10651,6 +10655,20 @@ export function unsupportedCoverageNote(
       testPage,
       testPageText,
       "that cannot run on this session type",
+    );
+  }
+
+  // R1135: tests that open a report request page, which this session type cannot show.
+  const requestPage = qualified.filter(isRequestPage);
+  const requestPageFirst = requestPage[0];
+  const requestPageText =
+    requestPageFirst === undefined ? undefined : testPageThisBatch.get(requestPageFirst);
+  if (requestPageText !== undefined) {
+    return describe(
+      "request page unsupported on this path",
+      requestPage,
+      requestPageText,
+      "that open a report request page, which this session type cannot show",
     );
   }
 
