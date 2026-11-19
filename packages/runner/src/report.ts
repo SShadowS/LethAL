@@ -40,7 +40,12 @@ import { RESTRICTIVE_DEFAULT_DIAGNOSIS } from "./restrictive-default";
 import type { CoverageAttribution } from "./selection";
 import { identityKeyOf, isCarryDisabled, memberGroupNameOf, serializeKey } from "./selection";
 import type { BatchArtifact, MutantVerdict, RunnerKind } from "./store";
-import { TESTPAGE_DIAGNOSIS, TESTPAGE_REFUSED_DIAGNOSIS } from "./testpage-unsupported";
+import {
+  REQUEST_PAGE_ALSO_SENTENCE,
+  REQUEST_PAGE_DIAGNOSIS,
+  TESTPAGE_DIAGNOSIS,
+  TESTPAGE_REFUSED_DIAGNOSIS,
+} from "./testpage-unsupported";
 
 export type { BatchArtifact };
 
@@ -1650,7 +1655,9 @@ export interface SessionReport {
   };
   /**
    * R69: baseline tests refused because they open a `TestPage`, which the fenced session
-   * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. Also a strict subset
+   * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. R909 added Linux BC's
+   * plain-CLR page refusal, and R1135 (PR-215) a report request page ("cannot be used in background
+   * or server sessions"); `diagnosis` names whichever kinds are present. Also a strict subset
    * of `unsupportedTests`. See `CAVEAT_INTERPRETATIONS["tests-testpage-unsupported"]` for what
    * this means to a reader.
    *
@@ -3325,6 +3332,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   // reader.
   const testPageUnsupportedTests = input.testPageUnsupportedTests ?? [];
   if (testPageUnsupportedTests.length > 0) caveats.push("tests-testpage-unsupported");
+  // R1135: how many of those are request-page refusals (a subset by construction).
+  const requestPageCount = testPageUnsupportedTests.filter((t) =>
+    (input.requestPageTests ?? []).includes(t),
+  ).length;
   // See CAVEAT_INTERPRETATIONS["tests-testpage-refused"].
   const testPageRefusedTests = input.testPageRefusedTests ?? [];
   if (testPageRefusedTests.length > 0) caveats.push("tests-testpage-refused");
@@ -3660,7 +3671,13 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
       ? {
           testPageUnsupported: {
             tests: [...testPageUnsupportedTests].sort(),
-            diagnosis: TESTPAGE_DIAGNOSIS,
+            // R1135: the diagnosis follows which kinds of test are present.
+            diagnosis:
+              requestPageCount === 0
+                ? TESTPAGE_DIAGNOSIS
+                : requestPageCount === testPageUnsupportedTests.length
+                  ? REQUEST_PAGE_DIAGNOSIS
+                  : `${TESTPAGE_DIAGNOSIS} ${REQUEST_PAGE_ALSO_SENTENCE}`,
           },
         }
       : {}),
@@ -4093,8 +4110,16 @@ export function renderConsole(r: SessionReport): string {
   // test. Deliberately NOT folded into the permissions block above — see `testPageUnsupported`.
   if (r.testPageUnsupported !== undefined) {
     const n = r.testPageUnsupported.tests.length;
+    // R1135: the diagnosis text says which kinds are present (it is chosen from the same data).
+    const d = r.testPageUnsupported.diagnosis;
+    const opened =
+      d === REQUEST_PAGE_DIAGNOSIS
+        ? "a report request page"
+        : d.endsWith(REQUEST_PAGE_ALSO_SENTENCE)
+          ? "a TestPage or a report request page"
+          : "a TestPage";
     lines.push(
-      `TESTPAGE UNSUPPORTED ON THIS PATH: ${n} baseline test(s) were refused for opening a TestPage. ${r.testPageUnsupported.diagnosis}`,
+      `TESTPAGE UNSUPPORTED ON THIS PATH: ${n} baseline test(s) were refused for opening ${opened}. ${d}`,
     );
     for (const t of r.testPageUnsupported.tests.slice(0, 10)) lines.push(`  ${t}`);
     if (n > 10) lines.push(`  ... ${n - 10} more`);

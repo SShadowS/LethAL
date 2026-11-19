@@ -194,13 +194,50 @@ export function describeLinuxPageRefusal(
   return `${LINUX_PAGE_DIAGNOSIS} BC's own words: "${LINUX_CLR_MESSAGE}" Top frame: ${matched}`;
 }
 
-/** Windows text first (it needs no source), then the Linux shape; the one both call sites use. */
+/**
+ * R1135: BC's refusal of `Report.RunRequestPage` in a background or server session. First line only:
+ * `failureMessage` is `message` + "\n" + `stackTrace`, so a stack frame must never match.
+ */
+const REQUEST_PAGE_REFUSAL_RE =
+  /^[^\n]*The report request page cannot be used in background or server sessions[^\n]*/;
+
+/** Names the request-page refusal, or `undefined`. Quotes BC's own first line, like the TestPage one. */
+export function describeRequestPageRefusal(failureText: string | undefined): string | undefined {
+  if (failureText === undefined) return undefined;
+  const quoted = REQUEST_PAGE_REFUSAL_RE.exec(failureText)?.[0]?.trim();
+  if (quoted === undefined || quoted === "") return undefined;
+  return `${REQUEST_PAGE_DIAGNOSIS} BC's own words: "${quoted}"`;
+}
+
+/** Windows text first (it needs no source), then the Linux shape, then the request page; the one both call sites use. */
 export function describeTestPageRefusal(
   failureText: string | undefined,
   lookup: FrameSourceLookup | undefined,
 ): string | undefined {
-  return describeTestPageUnsupported(failureText) ?? describeLinuxPageRefusal(failureText, lookup);
+  return (
+    describeTestPageUnsupported(failureText) ??
+    describeLinuxPageRefusal(failureText, lookup) ??
+    describeRequestPageRefusal(failureText)
+  );
 }
+
+/**
+ * R1135: the request-page explanation, shared by the report and the per-mutant note. Like
+ * `TESTPAGE_DIAGNOSIS` it is a property of the execution path and carries no "declare X" fix.
+ */
+export const REQUEST_PAGE_DIAGNOSIS =
+  "this test opens a report request page, which the fenced session cannot show: LethAL executes " +
+  'tests in an OData web-service session with GuiAllowed=No (R57/R58) and BC refuses "The report ' +
+  'request page cannot be used in background or server sessions" there (R1135). This is a ' +
+  "property of the EXECUTION PATH, not of your test: no change to the test or its declarations " +
+  "makes it run here. The affected tests are dropped from the green set, so mutants covered only " +
+  "by them are recorded `error` (score-excluded) rather than scored against tests that never ran.";
+
+/** R1135: the sentence added to `TESTPAGE_DIAGNOSIS` when both kinds of test are present. */
+export const REQUEST_PAGE_ALSO_SENTENCE =
+  "Some of the listed tests were refused for another reason of the same kind: they open a report " +
+  'request page, and BC refuses "The report request page cannot be used in background or server ' +
+  'sessions" in this session type (R1135). That too is a property of the execution path.';
 
 /** The Linux shape's explanation: the same account, saying "page" (the call may be in target code). */
 export const LINUX_PAGE_DIAGNOSIS =
