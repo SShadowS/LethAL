@@ -236,6 +236,11 @@ a daemon is reused, one whose resident memory passed the size, or that served th
 fresh daemon (close reason `recycle`, one warm-up each). Measured verdict-neutral with a recycle after every request. A
 daemon already over the size right after its warm-up is the project's working set: the size bound is then turned off for
 the session, said once as `al-runner-v3-daemon-recycle-off`.
+`"daemonStderrDir"` (absent = off, PR-227) is for measurement runs: each serve daemon's FULL stderr is written to
+`<folder>/<utc>-lane<N>-pid<P>.stderr`, one file per daemon (LethAL itself keeps only a 64 KB tail in memory). It changes
+nothing else. Separately, the `serve-request-timed` events keep every `summary.timings` field LethAL does not name in
+`timings.extra` (scalars, or one flat object of scalars, such as `setupParts` and `workspaceCache`), so a new al-runner field
+is recorded without a LethAL change.
 `"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
 rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck of withheld-kill rows after the main
 pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an

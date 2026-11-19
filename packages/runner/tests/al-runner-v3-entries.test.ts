@@ -1826,9 +1826,16 @@ describe("10: R612's keep rule per entry, in entry order", () => {
       expect(f).toMatch(/^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-lane0-pid\S+\.stderr$/);
       expect(readFileSync(join(dir, "on", f), "utf8")).toContain("compile cache: request ");
     }
-    // off (the default): the same run writes nothing anywhere under the folder
-    await readyRig({ serve: echo2, mutants: ["M0001", "M0002"] });
+    // off (the default): the same run writes no stderr file: not under the folder, and nowhere in the
+    // run's own tree (its scratch, instrumented and test folders all sit under the layout's root)
+    const off = await readyRig({ serve: echo2, mutants: ["M0001", "M0002"] });
     expect(readdirSync(dir)).toEqual(["on"]);
+    const root = dirname(off.l.batch);
+    expect(off.l.scratch.startsWith(root)).toBe(true);
+    const stray = (readdirSync(root, { recursive: true }) as string[]).filter((p) =>
+      p.endsWith(".stderr"),
+    );
+    expect(stray).toEqual([]);
   });
 
   test("PR-227 daemonStderrFileFor: absent dir -> none; the name carries the UTC start, the lane and the pid", () => {

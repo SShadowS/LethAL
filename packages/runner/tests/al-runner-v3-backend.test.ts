@@ -55,6 +55,7 @@ import {
   V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
+import { v3SectionPassThrough } from "../src/cli";
 import {
   MESSAGE_PREFIX_REASON,
   type V3ContractResult,
@@ -1575,6 +1576,21 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ daemonStderrDir: "rel/d" }).daemonStderrDir).toBe(resolve("rel/d"));
     expect(() => v({ daemonStderrDir: "" })).toThrow("daemonStderrDir");
     expect(() => v({ daemonStderrDir: 3 })).toThrow("daemonStderrDir");
+    // and the CLI passes it on to the backend's config (v3SectionPassThrough), with its siblings
+    expect(v3SectionPassThrough(v({ daemonStderrDir: "/m/daemons" })).daemonStderrDir).toBe(
+      "/m/daemons",
+    );
+    expect("daemonStderrDir" in v3SectionPassThrough(v({}))).toBe(false);
+    expect(
+      v3SectionPassThrough(
+        v({ noClient: true, downloadDemoData: false, daemonMaxRequests: 7, cacheDir: "/c" }),
+      ),
+    ).toMatchObject({
+      noClient: true,
+      downloadDemoData: false,
+      daemonMaxRequests: 7,
+      cacheDir: "/c",
+    });
   });
 
   test("R907 the config key noClient: default from the constant, boolean only, passed through", () => {
