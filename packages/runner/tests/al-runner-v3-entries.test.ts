@@ -1388,8 +1388,11 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons.length).toBeGreaterThanOrEqual(2);
     for (const argv of on.serve.daemons) expect(argv).toContain("--timings");
     const off = await readyRig({ serve: script, mutants: ["M0001", "M0002"] });
+    // (review LOW) never an empty match: the off runs spawned daemons too
+    expect(off.serve.daemons.length).toBeGreaterThanOrEqual(2);
     for (const argv of off.serve.daemons) expect(argv).not.toContain("--timings");
     const offExplicit = await readyRig({ mutants: ["M0001"], extra: { serveTimings: false } });
+    expect(offExplicit.serve.daemons.length).toBeGreaterThanOrEqual(1);
     for (const argv of offExplicit.serve.daemons) expect(argv).not.toContain("--timings");
   });
 
