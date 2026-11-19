@@ -1571,6 +1571,14 @@ export function daemonStderrFileFor(
     );
 }
 
+/**
+ * PR-227: `V3Timings.extra` rides on every `serve-request-timed` event (about 7,000 in a DO run), so its
+ * kept fields are capped at this many bytes of JSON. Fields are kept in al-runner's order while they fit;
+ * the number of fields left out is `extra[V3_TIMING_EXTRA_TRUNCATED]`.
+ */
+export const V3_TIMING_EXTRA_MAX_BYTES = 4096;
+export const V3_TIMING_EXTRA_TRUNCATED = "lethalTruncatedFields";
+
 /** PR-227: a scalar al-runner sent, as kept in `V3Timings.extra`; `undefined` for anything else. */
 function timingScalar(v: unknown): V3TimingValue | undefined {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
@@ -1592,21 +1600,30 @@ export function pickV3Timings(raw: unknown): V3Timings | undefined {
   if (typeof r.baselineSource === "string") out.baselineSource = r.baselineSource;
   if (r.engineKept === true) out.engineKept = true;
   const extra: Record<string, V3TimingValue | Readonly<Record<string, V3TimingValue>>> = {};
+  // The size the fields kept so far add to `extra`'s JSON; the braces and the marker are not counted.
+  let size = 0;
+  let left = 0;
   for (const [k, v] of Object.entries(r)) {
-    if (V3_TIMING_KNOWN.has(k)) continue;
-    const scalar = timingScalar(v);
-    if (scalar !== undefined) {
-      extra[k] = scalar;
+    if (V3_TIMING_KNOWN.has(k) || k === V3_TIMING_EXTRA_TRUNCATED) continue;
+    let kept: V3TimingValue | Readonly<Record<string, V3TimingValue>> | undefined = timingScalar(v);
+    if (kept === undefined && typeof v === "object" && v !== null && !Array.isArray(v)) {
+      const flat: Record<string, V3TimingValue> = {};
+      for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
+        const s = timingScalar(v2);
+        if (s !== undefined) flat[k2] = s;
+      }
+      if (Object.keys(flat).length > 0) kept = flat;
+    }
+    if (kept === undefined) continue;
+    const add = JSON.stringify(k).length + 1 + JSON.stringify(kept).length + 1;
+    if (size + add > V3_TIMING_EXTRA_MAX_BYTES) {
+      left += 1;
       continue;
     }
-    if (typeof v !== "object" || v === null || Array.isArray(v)) continue;
-    const flat: Record<string, V3TimingValue> = {};
-    for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
-      const s = timingScalar(v2);
-      if (s !== undefined) flat[k2] = s;
-    }
-    if (Object.keys(flat).length > 0) extra[k] = flat;
+    size += add;
+    extra[k] = kept;
   }
+  if (left > 0) extra[V3_TIMING_EXTRA_TRUNCATED] = left;
   if (Object.keys(extra).length > 0) out.extra = extra;
   return Object.keys(out).length > 0 ? out : undefined;
 }

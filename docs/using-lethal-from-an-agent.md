@@ -240,7 +240,8 @@ the session, said once as `al-runner-v3-daemon-recycle-off`.
 `<folder>/<utc>-lane<N>-pid<P>.stderr`, one file per daemon (LethAL itself keeps only a 64 KB tail in memory). It changes
 nothing else. Separately, the `serve-request-timed` events keep every `summary.timings` field LethAL does not name in
 `timings.extra` (scalars, or one flat object of scalars, such as `setupParts` and `workspaceCache`), so a new al-runner field
-is recorded without a LethAL change.
+is recorded without a LethAL change. `extra` is capped at 4 KB of JSON per event; fields past the cap are counted in
+`extra.lethalTruncatedFields`.
 `"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
 rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck of withheld-kill rows after the main
 pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an

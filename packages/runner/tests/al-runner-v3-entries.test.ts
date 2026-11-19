@@ -55,6 +55,8 @@ import {
   type V3RequestSized,
   V3_AUTO_METHOD_ONE_SHOT,
   V3_ROUTINE_CLOSES,
+  V3_TIMING_EXTRA_MAX_BYTES,
+  V3_TIMING_EXTRA_TRUNCATED,
   V3_UNIFORM_REFUSAL_CODEUNITS,
   WINDOW_BOUND_CAVEAT,
   daemonStderrFileFor,
@@ -11563,6 +11565,31 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
     expect(known).toEqual(
       pickV3Timings({ setupMs: 10364.2, compileMs: 0.6, engineKept: true }) ?? {},
     );
+  });
+
+  test("PR-227: extra is capped at 4 KB of JSON per event; the rest is counted, never silently dropped", () => {
+    expect(V3_TIMING_EXTRA_MAX_BYTES).toBe(4096);
+    // 100 fields of about 60 bytes each: about 6 KB, over the cap
+    const many: Record<string, string> = {};
+    for (let i = 0; i < 100; i++) many[`f${String(i).padStart(3, "0")}`] = "v".repeat(50);
+    const t = pickV3Timings({ testsMs: 1, ...many });
+    const extra = t?.extra ?? {};
+    const kept = Object.keys(extra).filter((k) => k !== V3_TIMING_EXTRA_TRUNCATED);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(100);
+    // in al-runner's order, a prefix
+    expect(kept).toEqual(Object.keys(many).slice(0, kept.length));
+    expect(extra[V3_TIMING_EXTRA_TRUNCATED]).toBe(100 - kept.length);
+    const keptJson = JSON.stringify(Object.fromEntries(kept.map((k) => [k, extra[k]])));
+    expect(keptJson.length).toBeLessThanOrEqual(V3_TIMING_EXTRA_MAX_BYTES + 2);
+    expect(t?.testsMs).toBe(1); // known fields are outside the cap
+    // one oversized field is left out (counted), and a small field after it is still kept
+    const t2 = pickV3Timings({ big: "x".repeat(5000), small: 1 });
+    expect(t2?.extra).toEqual({ small: 1, [V3_TIMING_EXTRA_TRUNCATED]: 1 });
+    // under the cap: no marker
+    expect(pickV3Timings({ a: 1 })?.extra).toEqual({ a: 1 });
+    // al-runner sending the marker's own name cannot forge a count
+    expect(pickV3Timings({ [V3_TIMING_EXTRA_TRUNCATED]: 99, a: 1 })?.extra).toEqual({ a: 1 });
   });
 
   test("the warm-up cause: first, after-deploy, recycle, after-<reason>", async () => {
