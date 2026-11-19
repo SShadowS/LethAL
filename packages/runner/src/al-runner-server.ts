@@ -892,7 +892,8 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   ], // PR-54 class "* on the Company table"
   [
     // PR-217 (pre-commitment master f24ed4448): the SAME class as upstream words it after edge-4ebfe7913 (records.rs:751 at
-    // 0e6397742 and c5861dcd9), exact; kept by the kept-vs-fresh DO check on perf-combined (/coord/handoff/PR-217/keepcheck/).
+    // 0e6397742 and c5861dcd9), exact; kept by the kept-vs-fresh DO check on perf-combined (/coord/handoff/PR-217/keepcheck/,
+    // 2026-11-19 22:06Z: the new text in all 28 requests, 156 rows, one kept daemon; 28 of 28 equal to fresh; self-test caught).
     "company-table-read-named",
     "%COMPANYM% on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
   ],
