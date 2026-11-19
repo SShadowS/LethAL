@@ -1,5 +1,22 @@
 # R594 reports: the R546 CDO slice measured live on bc3
 
+**The default operator set, measured 2026-11-19 for R1139 (coord PR-229).** `bc3-A.default.report.json` and
+`bc3-B.default.report.json` hold the slice under the default set, with `condition-true` and `blank-argument` on (PR-209
+head `b452b65b0`). They ran on bc3, BC 28.4.53241.56646, with LethAL Control 1.0.0.28.
+- **Results:** A 63 killed / 15 survived over 78; B 63 / 11 / 4 no-coverage over 78. The 65 rows below plus 13 new ones in
+  `CDORecipientMgt.Codeunit.al`: `condition-true` at lines 15, 28, 34, 36, 44, 60, 64, 70, 78 and 85, and
+  `blank-argument` at 36, 40 and 42. The new rows are 10 killed and 3 survived (`condition-true` at 44, 78, 85).
+- **The 65 old rows:** joined on the full site key, every verdict equals `bc3-A`/`bc3-B` below, and leg B's covering tests
+  are equal. Every killing test is equal too, except 3 rows per leg:
+  - line 34 `negate-conditional`, line 34 `toggle-blank-string` and line 35 `remove-assignment` now name
+    `AddRecipientsFromTable_WhenMultipleToRecipients_ShouldOnlySetFirstContactNo`;
+  - the cause is the kill ledger (`test-order.ts`): the new line-34 `condition-true` mutant's kill promotes that test
+    ahead of R594's killer in the same procedure.
+  - Measured offline from the legs' events, before anything landed.
+- **v3:** all 13 new rows equal v3's row, verdict and killing test.
+- **Pre-commitment:** `docs/superpowers/specs/2026-11-19-pr229-r1139-cdo-slice-default-set.md`, with its amendment 1.
+- The files below (`bc3-A`, `bc3-B`) stay unchanged, as the record of the 65-mutant slice.
+
 **Re-measured 2026-11-07 for R855.** `bc3-A.report.json` and `bc3-B.report.json` now hold a run on bc3 at `lethal/r855` 3882eba6, identity scheme 45, BC 28.4, control app as the branch pins it: A 53 / 12 / 0 and B 53 / 8 / 4 over 65. Joined on procedure, line and operator, the old 63 rows are equal on verdict, killing test and covering tests in both legs. The 2 added rows are `delete-logical-left` and `-right` at line 60 of `MoveRecipientFromHeaderToTable`, both killed. Pre-commitment: the addendum in `docs/superpowers/specs/2026-11-07-r855-operator-batch-precommitment.md`. The two CDO apps were published for the run and removed after it. Everything below describes the first measurement, 2026-10-21.
 
 **Builds.**
