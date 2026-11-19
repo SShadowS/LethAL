@@ -5,6 +5,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
+import { IDENTITY_SCHEME } from "@lethal/schemata";
+import type { MutantManifestEntry } from "@lethal/schemata";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -15,10 +17,11 @@ import type {
 import { parseCliConfig } from "../src/cli";
 import { companyWriteLines, companyWriteMethods } from "../src/company-writes";
 import type { RunEvent } from "../src/events";
-import { type SessionConfig, runSession } from "../src/orchestrator";
-import { type SessionReport, renderConsole } from "../src/report";
+import { type SessionConfig, record, runSession, setLeftOutReach } from "../src/orchestrator";
+import { type SessionOutcome, type SessionReport, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { buildTestAppModel } from "../src/testpage-scan";
+import { leftOutBySource } from "../src/verify";
 import { servesTestApp } from "./helpers/proven-test-app";
 import { removeScratchDirs } from "./helpers/scratch";
 
@@ -139,6 +142,81 @@ const ref = (method: string, id = 79100, name = "Co Tests"): TestMethodRef => ({
 });
 const ALL = ["Plain", "Direct", "ViaHelper", "ViaLib", "ReadOnly", "TwoHops"].map((m) => ref(m));
 
+// More write shapes (code review): DeleteAll, a RecordRef opened on Company, a namespace-qualified type; and what is NOT
+// a write: a temporary Company record, a RecordRef opened on another table.
+const SHAPES_AL = `codeunit 79102 "Co Shapes"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure DelAll()
+    var
+        C: Record Company;
+    begin
+        C.DeleteAll();
+    end;
+
+    [Test]
+    procedure RefByName()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::Company);
+        R.Delete();
+    end;
+
+    [Test]
+    procedure RefQuoted()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::"Company");
+        R.Insert();
+    end;
+
+    [Test]
+    procedure RefById()
+    var
+        R: RecordRef;
+    begin
+        R.Open(2000000006);
+        R.DeleteAll();
+    end;
+
+    [Test]
+    procedure Qualified()
+    var
+        C: Record System.Environment.Company;
+    begin
+        C.Rename('b');
+    end;
+
+    [Test]
+    procedure Temp()
+    var
+        C: Record Company temporary;
+    begin
+        C.Insert();
+    end;
+
+    [Test]
+    procedure RefOther()
+    var
+        R: RecordRef;
+    begin
+        R.Open(Database::Customer);
+        R.Delete();
+    end;
+}
+`;
+const SHAPES = ["DelAll", "RefByName", "RefQuoted", "RefById", "Qualified", "Temp", "RefOther"].map(
+  (m) => ref(m, 79102, "Co Shapes"),
+);
+const shapesFound = () =>
+  companyWriteMethods(buildTestAppModel([{ path: "S.al", text: SHAPES_AL }]), SHAPES).map(
+    (m) => m.test.method,
+  );
+
 beforeAll(async () => {
   await initParser();
 });
@@ -167,6 +245,22 @@ describe("detection, on the parse", () => {
     expect(direct?.reach.has("setup mgt")).toBe(true);
     expect(direct?.reach.has("company")).toBe(true);
   });
+  test("DeleteAll is a write", () => {
+    expect(shapesFound()).toContain("DelAll");
+  });
+  test("a RecordRef opened on Database::Company (named, quoted, or by id) is a write; one opened on another table is not", () => {
+    const f = shapesFound();
+    expect(f).toContain("RefByName");
+    expect(f).toContain("RefQuoted");
+    expect(f).toContain("RefById");
+    expect(f).not.toContain("RefOther");
+  });
+  test("a namespace-qualified Company type is a write", () => {
+    expect(shapesFound()).toContain("Qualified");
+  });
+  test("a temporary Company record is not a write", () => {
+    expect(shapesFound()).not.toContain("Temp");
+  });
   test("the lines name path and commits; kept says they run; none prints nothing", () => {
     const left = companyWriteLines(found(), false, 6);
     expect(left[0]).toContain("3 of 6");
@@ -181,12 +275,15 @@ describe("detection, on the parse", () => {
 /** A bcdev or v3 stub: tests cover only Sandbox Logic's procedure, so the two other objects read no-coverage. */
 class Stub implements ExecutionBackend {
   readonly ran: string[] = [];
-  constructor(private readonly kind: "bcdev" | "al-runner-v3") {
+  constructor(
+    private readonly kind: "bcdev" | "al-runner-v3",
+    private readonly coverage: "procedure" | "none" = "procedure",
+  ) {
     if (kind === "bcdev") Object.assign(this, servesTestApp());
   }
   capabilities(): BackendCapabilities {
     return {
-      coverage: "procedure",
+      coverage: this.coverage,
       deploy: "publish",
       isolation: "session",
       kind: this.kind,
@@ -234,6 +331,7 @@ let n = 0;
 async function run(
   kind: "bcdev" | "al-runner-v3",
   extra: Partial<SessionConfig> = {},
+  coverage: "procedure" | "none" = "procedure",
 ): Promise<{ r: SessionReport; stub: Stub; events: RunEvent[] }> {
   const root = mkdtempSync(join(tmpdir(), "lethal-pr212-"));
   roots.push(root);
@@ -247,7 +345,7 @@ async function run(
   await Bun.write(join(root, "tests", "CoTests.Codeunit.al"), TESTS_AL);
   await Bun.write(join(root, "tests", "CoLib.Codeunit.al"), LIB_AL);
   await Bun.write(join(root, "tests", "app.json"), TEST_APP_JSON);
-  const stub = new Stub(kind);
+  const stub = new Stub(kind, coverage);
   const events: RunEvent[] = [];
   const r = await runSession({
     backend: stub,
@@ -283,15 +381,21 @@ describe("a BC run leaves company-writing tests out by default", () => {
     expect(r.excludedTests ?? []).toEqual([]);
     expect(r.validity.caveats).not.toContain("tests-narrowed");
     expect(r.mutants.filter((m) => m.cause === "left-out-test-reach")).toEqual([]);
-    const w = events.find((e) => e.type === "warning" && e.code === "company-write-tests-left-out");
+    // A distinct code: the run kept them, so "left out" would be false.
+    expect(
+      events.some((e) => e.type === "warning" && e.code === "company-write-tests-left-out"),
+    ).toBe(false);
+    const w = events.find((e) => e.type === "warning" && e.code === "company-write-tests-kept");
     expect(JSON.stringify(w)).toContain("RUN (--keep-company-tests)");
   });
   test("al-runner v3 leaves nothing out and warns of nothing", async () => {
     const { r, stub, events } = await run("al-runner-v3");
     expect(stub.ran).toContain("Direct");
     expect(r.excludedTests ?? []).toEqual([]);
+    expect(r.mutants.length).toBeGreaterThan(0);
+    expect(r.mutants.some((m) => m.cause === "left-out-test-reach")).toBe(false);
     expect(
-      events.some((e) => e.type === "warning" && e.code === "company-write-tests-left-out"),
+      events.some((e) => e.type === "warning" && e.code.startsWith("company-write-tests")),
     ).toBe(false);
   });
 });
@@ -315,7 +419,129 @@ describe("§2c (i): a no-coverage mutant in an object a left-out test names is n
   test("with --keep-company-tests the reached object stays no-coverage", async () => {
     const { r } = await run("bcdev", { keepCompanyTests: true });
     const reached = r.mutants.filter((m) => m.file.endsWith("SetupMgt.al"));
+    expect(reached.length).toBeGreaterThan(0);
     expect(reached.every((m) => m.verdict === "no-coverage")).toBe(true);
+  });
+  test("coverage none: a reached SURVIVED mutant is not measured, an unreached one stays survived", async () => {
+    const { r } = await run("bcdev", {}, "none");
+    const inFile = (f: string) => r.mutants.filter((m) => m.file.endsWith(f));
+    const reached = inFile("SetupMgt.al");
+    const unreached = inFile("Unrelated.al");
+    expect(reached.length).toBeGreaterThan(0);
+    expect(unreached.length).toBeGreaterThan(0);
+    expect(reached.every((m) => m.verdict === "error" && m.cause === "left-out-test-reach")).toBe(
+      true,
+    );
+    expect(unreached.every((m) => m.verdict === "survived")).toBe(true);
+  });
+  test("coverage none with --keep-company-tests: nothing is marked", async () => {
+    const { r } = await run("bcdev", { keepCompanyTests: true }, "none");
+    expect(inFileCount(r, "SetupMgt.al")).toBeGreaterThan(0);
+    expect(r.mutants.some((m) => m.cause === "left-out-test-reach")).toBe(false);
+  });
+  test("one store reused by a later session does not carry the earlier session's set", async () => {
+    const store = new ResultsStore(":memory:");
+    const first = await run("bcdev", { store });
+    expect(first.r.mutants.some((m) => m.cause === "left-out-test-reach")).toBe(true);
+    const second = await run("bcdev", { store, keepCompanyTests: true });
+    expect(inFileCount(second.r, "SetupMgt.al")).toBeGreaterThan(0);
+    expect(second.r.mutants.some((m) => m.cause === "left-out-test-reach")).toBe(false);
+  });
+});
+
+describe("verify reads the recorded left-out tests as company-write", () => {
+  test("the run records their keys apart from --exclude-test's", async () => {
+    const store = new ResultsStore(":memory:");
+    await run("bcdev", { store });
+    expect(store.getRun(1)?.testNarrowing).toEqual({
+      testsOnly: [],
+      excludeTests: [],
+      companyWrites: ["79100::Direct", "79100::ViaHelper", "79100::ViaLib"],
+    });
+  });
+  test("leftOutBySource labels them company-write, not exclude-test", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lethal-pr212v-"));
+    roots.push(root);
+    await Bun.write(join(root, "CoTests.Codeunit.al"), TESTS_AL);
+    await Bun.write(join(root, "CoLib.Codeunit.al"), LIB_AL);
+    const out = await leftOutBySource(
+      root,
+      { testsOnly: [], excludeTests: [], companyWrites: ["79100::Direct"] },
+      1,
+      [],
+    );
+    expect(out.get("79100::Direct")?.reason).toBe("company-write");
+    expect(out.size).toBe(1);
+  });
+});
+
+const inFileCount = (r: SessionReport, f: string) =>
+  r.mutants.filter((m) => m.file.endsWith(f)).length;
+
+describe("record(): the rewrite keeps an existing note and spares a carried verdict", () => {
+  const mutant = (id: string): MutantManifestEntry => ({
+    mutantId: id,
+    file: "SetupMgt.al",
+    startIndex: 1,
+    endIndex: 2,
+    startLine: 3,
+    operatorName: "lethal.void-method-call",
+    operatorVersion: "1.0.0",
+    astHash: `hash-${id}`,
+    objectType: "codeunit",
+    codeunitId: 79001,
+    codeunitName: "Setup Mgt",
+    procedureName: "Limit",
+    procedureScope: "public",
+    originalText: "x",
+    mutatedText: "",
+  });
+  const drive = (carried: boolean) => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      testScope: [],
+      coverageMode: "procedure",
+      identityScheme: IDENTITY_SCHEME,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "bcdev",
+      appVersion: "1.0.0.0",
+    });
+    setLeftOutReach(store, new Set(["setup mgt"]), false);
+    const outcomes: SessionOutcome[] = [];
+    record(
+      store,
+      runId,
+      mutant("M0001"),
+      "no-coverage",
+      outcomes,
+      0,
+      () => {},
+      undefined,
+      "R298: refused object note",
+      undefined,
+      0,
+      [],
+      undefined,
+      undefined,
+      carried,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      carried ? 1 : undefined,
+    );
+    return outcomes[0];
+  };
+  test("an existing failure note stays, the new one is appended", () => {
+    const o = drive(false);
+    expect(o?.verdict).toBe("error");
+    expect(o?.cause).toBe("left-out-test-reach");
+    expect(o?.failureNote).toContain("R298: refused object note");
+    expect(o?.failureNote).toContain("not measured");
+  });
+  test("a carried no-coverage verdict keeps what its own run recorded", () => {
+    expect(drive(true)?.verdict).toBe("no-coverage");
   });
 });
 

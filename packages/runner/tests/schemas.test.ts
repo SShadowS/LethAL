@@ -739,7 +739,8 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     const real = JSON.parse(
       readFileSync(join(import.meta.dir, "fixtures", "verify-v8-r259-probe.json"), "utf8"),
     ) as unknown;
-    expect(conformsTo(verifySchema, real)).toEqual([]);
+    // PR-212: v9 is current; the v8 probe is a v8 document, so it validates against v8 (kept as published).
+    expect(conformsTo(loadSchema("verify-v8.schema.json"), real)).toEqual([]);
     expect(conformsTo(loadSchema("verify-v7.schema.json"), real)).not.toEqual([]);
   });
 
@@ -776,7 +777,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     // R759: the new optional field's reason domain, against the constant and a literal; a document
     // with it conforms, and one with an unknown reason does not.
     expect(enumAt(verifySchema, "$.excludedTests[].reason")).toEqual([...VERIFY_EXCLUSION_REASONS]);
-    expect([...VERIFY_EXCLUSION_REASONS]).toEqual(["tests-only", "exclude-test"]);
+    expect([...VERIFY_EXCLUSION_REASONS]).toEqual(["tests-only", "exclude-test", "company-write"]);
     const withExcluded = {
       verifySchemaVersion: VERIFY_SCHEMA_VERSION,
       ok: false,
@@ -1749,6 +1750,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       ],
       // R259: the same seven; v8 only grew results[].sameProcedure.
       "verify-v8.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
+      // PR-212: the same seven; v9 only grew the excludedTests[].reason value `company-write`.
+      "verify-v9.schema.json": [
         "counts",
         "exitCode",
         "newTests",

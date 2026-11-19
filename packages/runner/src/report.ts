@@ -1229,7 +1229,7 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
   "left-out-test-reach": {
     meaning:
       "This run left out test methods that write the Company table (`excludedTests`, reason `company-write`), and no test " +
-      "that ran covers this mutant. It sits in an object one of the left-out methods names (a variable type or an " +
+      "that ran covers this mutant (under coverage `none`: none that ran killed it). It sits in an object one of the left-out methods names (a variable type or an " +
       "object reference, in the method or in one test-app procedure it calls), so one of them might cover it. It is NOT " +
       "MEASURED: not survived, not no-coverage. Over-approximate on purpose: an object only NAMED by such a method may " +
       "still be untested. Run with `--keep-company-tests` on a server you can restart to measure it (R1113).",

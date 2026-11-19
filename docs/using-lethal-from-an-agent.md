@@ -726,7 +726,7 @@ normal republish is not refused; for the target app, see [Restoring your app aft
 
 ### Reading a verify result (checked)
 
-`verifySchemaVersion: 8`. Schema: [../schemas/verify-v8.schema.json](../schemas/verify-v8.schema.json).
+`verifySchemaVersion: 9`. Schema: [../schemas/verify-v9.schema.json](../schemas/verify-v9.schema.json).
 
 | field | values |
 |---|---|

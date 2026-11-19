@@ -2,8 +2,9 @@
  * PR-212 (R1113): which selected test METHODS write the Company table, read from the test app's parse
  * (`buildTestAppModel`, the model the TestPage scan uses; no text matching).
  *
- * A method writes a company when `Insert`, `Delete` or `Rename` is called on a variable declared
- * `Record Company` / `Record 2000000006`: in its own body (`direct`), or in ONE test-app procedure it calls
+ * A method writes a company when `Insert`, `Delete`, `DeleteAll` or `Rename` is called on a variable declared
+ * `Record Company` / `Record 2000000006` (not `temporary`; a namespace-qualified name counts), or on a RecordRef
+ * opened on it in the same procedure (`Open(Database::Company)` or 2000000006): in its own body (`direct`), or in ONE test-app procedure it calls
  * (`via <procedure>`): a bare call in the same object, or a call on a `Codeunit "X"` variable whose codeunit is in
  * the test app. A write two calls away is not listed (the stated limit). `commits` says the method or that
  * procedure calls `Commit()`.
@@ -25,10 +26,30 @@ export interface CompanyWriteMethod {
   readonly reach: ReadonlySet<string>;
 }
 
-const COMPANY_TYPE = /^\s*record\s+(?:"?company"?|2000000006)(?:\s+temporary)?\s*$/i;
+// `Record Company`, `Record "Company"`, `Record 2000000006`, or a namespace-qualified Company (`System.Environment.Company`).
+// A `temporary` record never touches the database, so it is not a company write: the type text then ends in
+// `temporary`, and the `$` anchor leaves it unmatched.
+const COMPANY_TYPE = /^\s*record\s+(?:(?:\w+|"[^"]+")\.)*(?:"?company"?|2000000006)\s*$/i;
 const NAMED_TYPE =
   /^\s*(?:record|codeunit|page|report|query|xmlport)\s+(.+?)(?:\s+temporary)?\s*$/i;
-const WRITES = new Set(["insert", "delete", "rename"]);
+const WRITES = new Set(["insert", "delete", "rename", "deleteall"]);
+const isCompanyRecord = (t: string): boolean => COMPANY_TYPE.test(t);
+
+/** `R.Open(Database::Company)`, `Database::"Company"` or 2000000006: the RecordRef names, in this procedure. */
+function companyRefs(proc: Proc): Set<string> {
+  const out = new Set<string>();
+  for (const s of proc.sites ?? []) {
+    if (s.kind !== "member" || s.recv.k !== "name" || norm(s.member) !== "open") continue;
+    const a = s.argFacts.find((f) => f.at === 0);
+    if (
+      a !== undefined &&
+      ((a.k === "ref" && a.kind === "database" && norm(a.name) === "company") ||
+        (a.k === "int" && a.value === "2000000006"))
+    )
+      out.add(norm(s.receiver));
+  }
+  return out;
+}
 
 /** Every type text the name has in the procedure (a local hides a global), or none. */
 const typesOf = (unit: Unit, proc: Proc, name: string): readonly string[] =>
@@ -37,12 +58,14 @@ const typesOf = (unit: Unit, proc: Proc, name: string): readonly string[] =>
 const norm = (s: string): string => normalizeAlName(s.trim());
 
 function writesCompany(proc: Proc): boolean {
+  const refs = companyRefs(proc);
   return (proc.sites ?? []).some(
     (s) =>
       s.kind === "member" &&
       s.recv.k === "name" &&
       WRITES.has(norm(s.member)) &&
-      typesOf(proc.unit, proc, norm(s.receiver)).some((t) => COMPANY_TYPE.test(t)),
+      (refs.has(norm(s.receiver)) ||
+        typesOf(proc.unit, proc, norm(s.receiver)).some(isCompanyRecord)),
   );
 }
 

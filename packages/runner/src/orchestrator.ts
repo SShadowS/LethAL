@@ -6872,6 +6872,7 @@ async function runSessionBody(
   const excludeTestRecords: { test: string; file: string; reason: "exclude-test" }[] = [];
   // R759: the same tests by `testKeyOf`, recorded on the run row for `lethal verify`.
   const excludeTestKeys: string[] = [];
+  const companyWriteKeys: string[] = [];
   if (cfg.excludeTests !== undefined && cfg.excludeTests.length > 0) {
     const split = excludeNamedTests(chosen.tests, cfg.excludeTests);
     if (split.unmatched.length > 0) {
@@ -6915,12 +6916,16 @@ async function runSessionBody(
         );
       }
       companyRecords.push({ test: qualifiedTestName(t), file: t.file, reason: "company-write" });
-      excludeTestKeys.push(testKeyOf(t));
+      companyWriteKeys.push(testKeyOf(t));
     }
   }
   // §2c (i): the objects the left-out methods name. A no-coverage mutant in one is not measured (see `record`).
   // Set on every session, so a store reused by a later session never keeps an earlier one's set.
-  setLeftOutReach(cfg.store, new Set(companyLeftOut.flatMap((m) => [...m.reach])));
+  setLeftOutReach(
+    cfg.store,
+    new Set(companyLeftOut.flatMap((m) => [...m.reach])),
+    caps.coverage === "none",
+  );
   // PR-144: the recheck's nested session runs exactly its targets' covering tests. Each runs alone under
   // method isolation, so leaving the others out cannot change what a kept test sees; under any other mode it
   // could, so it is refused. A name with no test is refused: a smaller suite than asked for is a wrong baseline.
@@ -7005,13 +7010,17 @@ async function runSessionBody(
   }
   // PR-212 (R1113): names each method, its path and `commits`, and the opt-in. The main session only (a recheck repeats it).
   if (cfg.keepOnlyTests === undefined) {
-    const lines = companyWriteLines(
-      companyWrites,
-      cfg.keepCompanyTests === true,
-      chosen.tests.length,
-    );
+    // Two codes: `company-write-tests-left-out` (they were left out) and `company-write-tests-kept`
+    // (--keep-company-tests: they run). R736: no fixture under fixtures/ writes a company (parse and grep, PR-212), so
+    // no BC gate leg sees either code.
+    const kept = cfg.keepCompanyTests === true;
+    const lines = companyWriteLines(companyWrites, kept, chosen.tests.length);
     if (lines.length > 0)
-      emit({ type: "warning", code: "company-write-tests-left-out", message: lines.join("\n") });
+      emit({
+        type: "warning",
+        code: kept ? "company-write-tests-kept" : "company-write-tests-left-out",
+        message: lines.join("\n"),
+      });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
   // R-236c: before the run row and before any test is sent (status and quarantine checks run
@@ -7270,7 +7279,11 @@ async function runSessionBody(
     testScope: sessionTestScope,
     // R759: and what it was narrowed by, always written (empty lists mean "nothing left out"), so
     // `lethal verify` can tell a test this run left out from a new one.
-    testNarrowing: { testsOnly: cfg.testsOnly ?? [], excludeTests: excludeTestKeys },
+    testNarrowing: {
+      testsOnly: cfg.testsOnly ?? [],
+      excludeTests: excludeTestKeys,
+      ...(companyWriteKeys.length > 0 ? { companyWrites: companyWriteKeys } : {}),
+    },
     // R586: a v3 run records its build; `runMayLend` lends it only to that build.
     ...(lendingSession.runnerBuild !== undefined
       ? { runnerBuild: lendingSession.runnerBuild }
@@ -14919,10 +14932,20 @@ function carriedReproduction(
 }
 
 // PR-212: per store, the normalised object names a session's left-out company-writing tests name (§2c).
-const leftOutReach = new WeakMap<ResultsStore, ReadonlySet<string>>();
-function setLeftOutReach(store: ResultsStore, names: ReadonlySet<string>): void {
+// `alsoSurvived`: coverage "none" runs every test against every mutant and records no `no-coverage`, so a
+// `survived` mutant there is the same unmeasured case (a left-out test might have killed it).
+const leftOutReach = new WeakMap<
+  ResultsStore,
+  { readonly names: ReadonlySet<string>; readonly alsoSurvived: boolean }
+>();
+// Exported ONLY for tests/pr212-company-writes.test.ts, which drives `record()` directly.
+export function setLeftOutReach(
+  store: ResultsStore,
+  names: ReadonlySet<string>,
+  alsoSurvived: boolean,
+): void {
   if (names.size === 0) leftOutReach.delete(store);
-  else leftOutReach.set(store, names);
+  else leftOutReach.set(store, { names, alsoSurvived });
 }
 
 export function record(
@@ -15015,17 +15038,21 @@ export function record(
   // PR-212 §2c (i): no remaining test covers this mutant, and a left-out company-writing test names its object,
   // so it is not measured: `error` / `left-out-test-reach`, never `no-coverage` and never `survived`. Here, because
   // `no-coverage` is recorded from many places. A carried verdict keeps what its own run recorded.
+  const leftOut = leftOutReach.get(store);
   if (
-    verdict === "no-coverage" &&
+    leftOut !== undefined &&
+    (verdict === "no-coverage" || (verdict === "survived" && leftOut.alsoSurvived)) &&
     carried !== true &&
-    leftOutReach.get(store)?.has(normalizeAlName(key.codeunitName)) === true
+    leftOut.names.has(normalizeAlName(key.codeunitName))
   ) {
+    const why = `not measured: ${verdict === "survived" ? "no test that ran killed it" : "no test that ran covers it"}, and ${key.codeunitName} is named by a test method this run left out because it writes the Company table (--keep-company-tests runs them)`;
+    // An existing note (R298's refused object, R69's TestPage-only) stays; this one is appended.
     // biome-ignore lint/style/noParameterAssign: one rewrite of three positional arguments; a wrapper would re-spell 28
+    failureNote = failureNote === undefined ? why : `${failureNote}; ${why}`;
+    // biome-ignore lint/style/noParameterAssign: see above
     verdict = "error";
     // biome-ignore lint/style/noParameterAssign: see above
     cause = "left-out-test-reach";
-    // biome-ignore lint/style/noParameterAssign: see above
-    failureNote = `not measured: no test that ran covers it, and ${key.codeunitName} is named by a test method this run left out because it writes the Company table (--keep-company-tests runs them)`;
   }
   const reproduced =
     reproduction !== undefined
