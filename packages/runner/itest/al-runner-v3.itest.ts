@@ -329,8 +329,8 @@ const ORACLE_BC_BUILD: Record<string, string> = {
   DB: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   DBI: "bc1 BC 28.4.53241.56590 W1 (bcdev.baseline.json reproduced live, cited)",
   N1: "bc1 BC 28.4.53241.56590 W1 (bcdev.names.baseline.json reproduced live, cited)",
-  D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A)",
-  D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B)",
+  D1: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-A.default)",
+  D1c: "bc3 BC 28.4 W1, Microsoft apps 28.4.53241.56646 (docs/measurements/r594/bc3-B.default)",
   T: "none (own baseline; BC cross-check suspended)",
 };
 
@@ -2794,11 +2794,11 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     testsOnly: ["Src/Recipients/CDORecipientMgtTests.Codeunit.al"],
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
     ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
-    // PR-209 amendment 7 (RULED (b)): slim keeps the slice on R594's oracle (65 mutants); R1139 extends the oracle.
-    ...SLIM_OPTIONS,
+    // PR-229 (R1139): the default set, judged by the extended oracle (78 mutants: R594's 65 plus `condition-true` and
+    // `blank-argument`'s 13), measured on bc3 (docs/measurements/r594/bc3-{A,B}.default.report.json).
   });
-  if (leg === "D1") assertCounts(r, leg, 53, 12, 0, 65);
-  else assertCounts(r, leg, 53, 8, 4, 65);
+  if (leg === "D1") assertCounts(r, leg, 63, 15, 0, 78);
+  else assertCounts(r, leg, 63, 11, 4, 78);
   await assertPerMutant(
     r,
     join(
@@ -2806,14 +2806,16 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
       "docs",
       "measurements",
       "r594",
-      leg === "D1" ? "bc3-A.report.json" : "bc3-B.report.json",
+      leg === "D1" ? "bc3-A.default.report.json" : "bc3-B.default.report.json",
     ),
     leg,
   );
+  // PR-229: one state note per killed mutant, as before (53 of 65); measured on PR-229's v3 run of this scope.
   const STATE = [
-    ...Array.from({ length: 30 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
+    ...Array.from({ length: 33 }, (_, i) => `0/M${String(i + 1).padStart(4, "0")}`),
     ...[
-      35, 36, 37, 38, 39, 41, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 58, 60, 61, 62, 63,
+      35, 36, 37, 38, 43, 44, 45, 46, 47, 48, 50, 53, 54, 55, 56, 57, 58, 59, 60, 62, 63, 64, 65,
+      66, 68, 70, 72, 73, 74, 75,
     ].map((n) => `0/M${String(n).padStart(4, "0")}`),
   ].sort();
   const got = tagged(r, V3_STATE_NOTE_TAG);
@@ -2830,7 +2832,7 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
   must(r.baselineGreen && r.unsupportedTests.length === 0, `${leg}: baseline not green`);
   assertIndex(b, leg, 3, 0);
   assertReproduced(r, leg);
-  assertServeCounters(b, leg, 53);
+  assertServeCounters(b, leg, 63);
 }
 
 /**
