@@ -1690,8 +1690,10 @@ describe("R939: why each serve daemon closed", () => {
 
   // PR-244: the near-miss and restart-storm warnings. Warning only: the daemon closes as before.
   describe("PR-244: keep near-miss and restart storm", () => {
-    const PERF10 =
-      "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)";
+    // A synthetic rewording (a clause inserted mid-sentence into `page-no-record-onopenpage`): unkept, and no suffix
+    // widening of that entry would keep it. (PERF-10's Company text is kept since bugs' widening, master c3355859.)
+    const REWORDED =
+      "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
     const REPORT_VARIANT =
       "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
     const textFor =
@@ -1707,10 +1709,12 @@ describe("R939: why each serve daemon closed", () => {
     const storm = (seen: [string, string][]) =>
       seen.filter(([c]) => c === "al-runner-v3-refusal-restart-storm");
 
-    test("the PERF-10 text warns once at its first close; the same text again does not; the daemon still closes", async () => {
-      const { r, seen } = await watched(textFor(PERF10, ["M0001", "M0002"]));
+    test("a reworded text warns once at its first close; the same text again does not; the daemon still closes", async () => {
+      const { r, seen } = await watched(textFor(REWORDED, ["M0001", "M0002"]));
       expect(near(seen).length).toBe(1);
-      expect(near(seen)[0]?.[1]).toContain("company-findset (15/15 words)");
+      expect(near(seen)[0]?.[1]).toMatch(
+        /keep entry page-no-record-onopenpage \((\d+)\/\1 words\)/,
+      );
       // the keep decision is unchanged: the refusal closed the daemon, and counted by reason
       expect([...r.b.daemonCloses().byReason]).toEqual([["refusal", 2]]);
     });
@@ -1749,7 +1753,7 @@ describe("R939: why each serve daemon closed", () => {
         serve: {
           rows: (m, cu, d, n) =>
             ids.indexOf(m) >= 20
-              ? textFor(PERF10, ids)(m, cu, d, n)
+              ? textFor(REWORDED, ids)(m, cu, d, n)
               : textFor(WITH_EVENTS, ids)(m, cu, d, n),
         },
         oneShotRows: allPass,

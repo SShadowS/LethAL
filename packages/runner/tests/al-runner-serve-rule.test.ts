@@ -12,8 +12,13 @@ import {
 // PR-244: a reworded kept refusal shows as a near-miss; a kept text, an unrelated one and the two
 // pre-committed variants do not warn.
 describe("PR-244: keepNearMiss", () => {
+  // PERF-10's reworded Company text: a near-miss when PR-244 was built, KEPT since bugs' widening (master c3355859).
   const PERF10 =
     "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)";
+  // A synthetic rewording: a clause inserted MID-sentence into `page-no-record-onopenpage`'s text, which no suffix
+  // widening of that entry would accept, so it stays unkept.
+  const REWORDED =
+    "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
   const REPORT =
     "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
   const CASCADE_TAIL =
@@ -79,18 +84,19 @@ describe("PR-244: keepNearMiss", () => {
     }
   });
 
-  test("the PERF-10 reworded Company FindSet text names company-findset with every word found", () => {
-    const nm = keepNearMiss(PERF10);
-    expect(nm?.entry).toBe("company-findset");
+  test("a text reworded mid-sentence names its entry (page-no-record-onopenpage) with every word found", () => {
+    const nm = keepNearMiss(REWORDED);
+    expect(nm?.entry).toBe("page-no-record-onopenpage");
     expect(nm?.found).toBe(nm?.size);
-    expect(knownNearMissVariant("company-findset", PERF10)).toBeUndefined();
+    expect(knownNearMissVariant("page-no-record-onopenpage", REWORDED)).toBeUndefined();
   });
-  test("the original kept text is never a near-miss", () => {
+  test("a kept text is never a near-miss: the original Company text, and PERF-10's rewording now that it is kept", () => {
     expect(
       keepNearMiss(
         "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
       ),
     ).toBeUndefined();
+    expect(keepNearMiss(PERF10)).toBeUndefined();
   });
   test("an unrelated unkept refusal is not a near-miss", () => {
     expect(
