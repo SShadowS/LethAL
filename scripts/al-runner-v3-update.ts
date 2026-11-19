@@ -58,12 +58,13 @@
  * 18-dependency workspace, the measurement #5614 lacks (R586's defect table, row 14).
  */
 import { randomUUID } from "node:crypto";
-import { existsSync, constants as fsConstants } from "node:fs";
+import { existsSync, constants as fsConstants, readFileSync } from "node:fs";
 import {
   access,
   chmod,
   cp,
   link,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -77,7 +78,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import path, { basename, dirname, join, posix, relative, resolve } from "node:path";
 import {
   type V3LegOutcome,
   V3_GATE_LEGS,
@@ -111,6 +112,7 @@ import {
   descendants,
   lockDir,
   parsePs,
+  slotHeld,
 } from "./corpus-snapshot";
 import {
   MEMORY_RESERVE_GIB,
@@ -574,14 +576,6 @@ async function readCurrentGated(root: string): Promise<GatedBuild & { readonly d
   return { ...parseGated(await readFile(join(dir, ".gated"), "utf8"), join(dir, ".gated")), dir };
 }
 
-/**
- * R777: a candidate is never judged on fewer legs than `V3_GATE_LEGS` requires. When `.gated`'s
- * commit predates some of them, `current` is first re-gated at this script's own commit, under the
- * caller's lock. Returns the `.gated` to judge against: the re-gated one on a pass; otherwise
- * `current`'s with this script's commit, so the candidate is still judged on every leg while
- * `current` stays put. Undefined (logged) when this script's commit cannot serve: it lacks the legs
- * too, is not on origin/master, or is older than `.gated`'s.
- */
 /** The legs (and pin support) `current`'s gate commit lacks. Read-only. */
 async function missingLegsOf(deps: UpdateDeps, current: GatedBuild): Promise<string[]> {
   const has = new Set(await deps.legsAt(current.lethalCommit));
@@ -611,6 +605,14 @@ async function selfCannotServe(
         : undefined;
 }
 
+/**
+ * R777: a candidate is never judged on fewer legs than `V3_GATE_LEGS` requires. When `.gated`'s
+ * commit predates some of them, `current` is first re-gated at this script's own commit, under the
+ * caller's lock. Returns the `.gated` to judge against: the re-gated one on a pass; otherwise
+ * `current`'s with this script's commit, so the candidate is still judged on every leg while
+ * `current` stays put. Undefined (logged) when this script's commit cannot serve: it lacks the legs
+ * too, is not on origin/master, or is older than `.gated`'s.
+ */
 async function gatedWithAllLegs(
   deps: UpdateDeps,
   what: string,
@@ -903,8 +905,26 @@ export async function gateOne(
       // One folder per run: an old pass receipt can never sit beside a new result.
       const privDir = join(root, "private", `${name}@${commit}-${nonce}`);
       await keep(privDir);
-      opts.onPrivateDir?.(privDir);
+      if (existsSync(privDir)) opts.onPrivateDir?.(privDir);
     } else if (refresh) await keep(join(root, "refresh", `${name}@${commit}`));
+    // PR-226 S2a: a build that just failed must not keep an older pass's `.gated`, or `checkGated` would still accept it.
+    const retire = async () => {
+      if (!priv) return;
+      const g = join(root, "builds", name, ".gated");
+      if (!existsSync(g)) return;
+      try {
+        await rename(g, `${g}.retired-${nonce}`);
+        await deps.log(
+          `${deps.now()} ${tag}: the earlier pass's .gated is retired (${g}.retired-${nonce})`,
+        );
+      } catch (err) {
+        await deps.log(
+          `${deps.now()} ${tag}: the earlier .gated could not be retired: ${String(err)}`,
+        );
+        await rm(g, { force: true });
+      }
+    };
+    if (outcome !== "pass") await retire();
     if (outcome === "infra-fail") {
       if (opts.regateAt === undefined && !refresh) await keep(join(root, "infra"), `${name}.`);
       return infra(deps, name);
@@ -940,34 +960,50 @@ export async function gateOne(
         await deps.log(
           `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${want ?? "(none)"}`,
         );
+        await retire();
         return infra(deps, name);
       }
       const w = await receiptWarnFacts(receipt);
       const bf = await receiptBatchFacts(receipt);
       if (priv) {
-        // The copy is what LethAL will run: its bytes must be the bytes the gate measured.
+        // The copy is what LethAL will run: its bytes must be the bytes the gate measured. It is written beside
+        // its name and renamed over it, so an earlier valid pass is never half replaced (S2b); a sha mismatch
+        // or an error removes only the tmp files, never an earlier pass (S2c, S2d).
         const dest = join(root, "builds", name);
-        await mkdir(dest, { recursive: true });
-        await cp(binary, join(dest, "al-runner"));
-        await chmod(join(dest, "al-runner"), 0o755);
-        const copySha = await sha256OfFile(join(dest, "al-runner"));
-        if (copySha !== sha) {
-          await rm(dest, { recursive: true, force: true });
+        const tmpBin = join(dest, `al-runner.tmp-${nonce}`);
+        const tmpGated = join(dest, `.gated.tmp-${nonce}`);
+        try {
+          await mkdir(dest, { recursive: true });
+          await cp(binary, tmpBin);
+          await chmod(tmpBin, 0o755);
+          const copySha = await sha256OfFile(tmpBin);
+          if (copySha !== sha) {
+            await rm(tmpBin, { force: true });
+            await deps.log(
+              `${deps.now()} ${tag}: infra-fail: the copy has sha256 ${copySha}, the receipt's is ${sha}; no .gated written`,
+            );
+            return infra(deps, name);
+          }
+          const next: GatedBuild = {
+            ...(w !== undefined ? { warnFacts: w } : {}),
+            ...(bf !== undefined ? { batchFacts: bf } : {}),
+            version,
+            binarySha256: copySha,
+            lethalCommit: commit,
+            ...(pinApplied !== undefined ? { readingsFrom: pinApplied } : {}),
+            gatedAt: deps.now(),
+          };
+          await rename(tmpBin, join(dest, "al-runner"));
+          await writeFile(tmpGated, `${JSON.stringify(next, null, 2)}\n`);
+          await rename(tmpGated, join(dest, ".gated"));
+        } catch (err) {
+          await rm(tmpBin, { force: true }).catch(() => {});
+          await rm(tmpGated, { force: true }).catch(() => {});
           await deps.log(
-            `${deps.now()} ${tag}: infra-fail: the copy has sha256 ${copySha}, the receipt's is ${sha}; no .gated written`,
+            `${deps.now()} ${tag}: infra-fail: the gated copy could not be written: ${String(err)}`,
           );
           return infra(deps, name);
         }
-        const next: GatedBuild = {
-          ...(w !== undefined ? { warnFacts: w } : {}),
-          ...(bf !== undefined ? { batchFacts: bf } : {}),
-          version,
-          binarySha256: copySha,
-          lethalCommit: commit,
-          ...(pinApplied !== undefined ? { readingsFrom: pinApplied } : {}),
-          gatedAt: deps.now(),
-        };
-        await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
         await deps.log(
           `${deps.now()} ${tag}: passed privately; gated copy ${join(dest, "al-runner")}`,
         );
@@ -1269,6 +1305,7 @@ export function countHeavyJobs(
  * R992's two-small-job cap, and a third small job may be admitted. That is bounded at about the
  * update's 2 GiB peak above the declared sum, once a day, and each job still passed used + peak +
  * reserve. A marker that counts the update would close this if wanted.
+ * PR-226: a private gate DOES run inside its own slot; `opts.ownSlot` then leaves that slot out (see `ownSlotOf`).
  */
 export function gateMemoryVerdict(
   dir: string,
@@ -1277,12 +1314,64 @@ export function gateMemoryVerdict(
     readonly psText: () => string;
     readonly appendLedger: typeof appendSmallAdmit;
   },
+  opts: { readonly ownSlot?: boolean } = {},
+): { readonly refuse: boolean; readonly message: string } | undefined {
+  return gateMemoryVerdictOf(dir, seams, opts);
+}
+
+/**
+ * The held slot whose holder (the pid its lock file names: heavy-slot.sh's shell) is an ancestor of `selfPid`, and the
+ * `ps` text without that holder's whole tree (this gate and its children are what is being admitted).
+ */
+function ownSlotOf(
+  dir: string,
+  selfPid: number,
+  psText: string,
+): { readonly slot: number; readonly psText: string } | undefined {
+  const procs = parsePs(psText);
+  for (const slot of SLOTS) {
+    if (!slotHeld(dir, slot)) continue;
+    const holder = Number(readFileSync(join(dir, `heavy.${slot}`), "utf8").trim());
+    if (Number.isNaN(holder)) continue;
+    const tree = descendants(procs, holder);
+    if (!tree.has(selfPid)) continue;
+    const [head, ...lines] = psText.split(/\r?\n/);
+    return {
+      slot,
+      psText: [
+        head ?? "",
+        ...lines.filter((l) => !tree.has(Number(/^\s*(\d+)\s/.exec(l)?.[1] ?? Number.NaN))),
+      ].join("\n"),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * PR-226 `ownSlot`: this process runs inside its own heavy slot (the private gate, under `heavy-slot.sh`), which the
+ * slot's guard already admitted. That slot, and the process tree under it, are then not counted again, and no
+ * small-admit row is appended (the guard wrote one). No slot above this process: nothing is excluded.
+ */
+function gateMemoryVerdictOf(
+  dir: string,
+  seams: {
+    readonly readSample: typeof readContainerMemory;
+    readonly psText: () => string;
+    readonly appendLedger: typeof appendSmallAdmit;
+  },
+  opts: { readonly ownSlot?: boolean },
 ): { readonly refuse: boolean; readonly message: string } | undefined {
   const sample = seams.readSample();
   if (sample?.maxBytes === undefined) return undefined;
-  const { heldPeaks, smallHeld } = heldInputs(dir, process.pid, seams.psText());
+  let ps = seams.psText();
+  let mine: number | undefined;
+  if (opts.ownSlot === true) {
+    const own = ownSlotOf(dir, process.pid, ps);
+    if (own !== undefined) ({ slot: mine, psText: ps } = own);
+  }
+  const { heldPeaks, smallHeld } = heldInputs(dir, process.pid, ps, mine);
   const m = memoryVerdict(sample, heldPeaks, PEAK_GIB.gate, MEMORY_RESERVE_GIB, smallHeld);
-  if (m.small === true)
+  if (m.small === true && mine === undefined)
     seams.appendLedger(
       dir,
       "al-runner-v3-update",
@@ -1762,9 +1851,19 @@ export async function runToLog(
 }
 
 /** Real side effects. */
-export function realDeps(root = ROOT, opts: { readonly gateWorktree?: string } = {}): UpdateDeps {
-  const run = (argv: string[], env: Record<string, string> = {}, cwd?: string) =>
-    runToLog(argv, env, cwd);
+export function realDeps(
+  root = ROOT,
+  opts: {
+    readonly gateWorktree?: string;
+    /** Tests: replaces the command runner (default: `runToLog`), so no real command runs. */
+    readonly run?: (argv: string[], env?: Record<string, string>, cwd?: string) => Promise<string>;
+    /** PR-226: this process runs inside its own heavy slot, which the memory rule must not count. */
+    readonly ownSlot?: boolean;
+  } = {},
+): UpdateDeps {
+  const run =
+    opts.run ??
+    ((argv: string[], env: Record<string, string> = {}, cwd?: string) => runToLog(argv, env, cwd));
   const gateWorktree = opts.gateWorktree ?? GATE_WORKTREE;
   return {
     root,
@@ -1902,12 +2001,18 @@ export function realDeps(root = ROOT, opts: { readonly gateWorktree?: string } =
       );
     },
     gateMemory: async () =>
-      gateMemoryVerdict(lockDir(), {
-        readSample: readContainerMemory,
-        psText: () =>
-          Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], { stdout: "pipe" }).stdout.toString(),
-        appendLedger: appendSmallAdmit,
-      }),
+      gateMemoryVerdict(
+        lockDir(),
+        {
+          readSample: readContainerMemory,
+          psText: () =>
+            Bun.spawnSync(["ps", "-eo", "pid,ppid,pgid,args"], {
+              stdout: "pipe",
+            }).stdout.toString(),
+          appendLedger: appendSmallAdmit,
+        },
+        { ownSlot: opts.ownSlot === true },
+      ),
     // PR-60: `free -g` reads the HOST, not the container. `skippedForTheDay` calls this only when
     // `gateMemory` is undefined, i.e. the cgroup names no limit; under a limit the cgroup decides.
     freeGb: async () => {
@@ -2149,6 +2254,19 @@ export const SHARED_CACHE = "/work/tools/al-runtime-rs/cache";
 const privateRefusal = (why: string): Error => new Error(`al-runner-v3-private-refused: ${why}`);
 
 /**
+ * Is `p` the folder `base` or under it? By `path.relative`, so it holds on every platform (a drive letter, backslashes);
+ * `/work/toolsx` is not under `/work/tools`. `p` and `base` are absolute and already resolved.
+ */
+export function isUnderRoot(
+  p: string,
+  base: string,
+  pathMod: Pick<typeof posix, "relative" | "isAbsolute"> = path,
+): boolean {
+  const rel = pathMod.relative(base, p);
+  return rel === "" || (!rel.startsWith("..") && !pathMod.isAbsolute(rel));
+}
+
+/**
  * PR-226: refuses a root that resolves (the real path of its nearest existing ancestor, plus the rest) to `toolsRoot` or
  * under it. A symlink into it and a `..` walk are caught; `/work/toolsx` is not under `/work/tools`.
  */
@@ -2163,7 +2281,7 @@ export async function checkPrivateRoot(root: string, toolsRoot = TOOLS_ROOT): Pr
     return join(await realpath(at), ...rest);
   };
   const [r, t] = [await real(root), await real(toolsRoot)];
-  if (r === t || r.startsWith(`${t}/`))
+  if (isUnderRoot(r, t))
     throw privateRefusal(
       `--root ${root} resolves to ${r}, which is ${toolsRoot} or under ${toolsRoot}; a private gate never writes there`,
     );
@@ -2242,30 +2360,49 @@ export async function privateGateOnce(
   if (resolve(root) === resolve(shared))
     throw privateRefusal(`--root ${root} is the shared install`);
   await mkdir(root, { recursive: true });
+  // S3: a pre-made link at any of the folders the gate writes through could lead under the tools folder.
+  for (const n of ["cache", "builds", "private", "gate-worktree"]) {
+    const p = join(root, n);
+    const l = await lstat(p).catch(() => undefined);
+    if (l === undefined) continue;
+    if (l.isSymbolicLink()) throw privateRefusal(`${p} is a symbolic link; remove it`);
+    await checkPrivateRoot(p, opts.toolsRoot);
+  }
+  // Read-only, and before the load check, the lock and the cache seed: a refusal here changes nothing.
+  const current = await readCurrentGated(shared);
+  let gated: GatedBuild = current;
+  const missing = await missingLegsOf(deps, current);
+  if (missing.length > 0) {
+    const self = await deps.selfCommit();
+    const cannot = await selfCannotServe(deps, self, current);
+    const stale = `.gated's lethalCommit ${current.lethalCommit} predates leg(s) ${missing.join(",")} of V3_GATE_LEGS`;
+    if (cannot !== undefined)
+      throw privateRefusal(
+        `${stale}; this script's commit ${self} ${cannot}: not gated; run it from a current master checkout`,
+      );
+    await deps.log(`${deps.now()} private: ${stale}; the candidate is judged at ${self}`);
+    gated = { ...current, lethalCommit: self };
+  }
   if (await skippedForTheDay(deps, "private")) return { outcome: "skipped" };
   const lock = await takeGateLock(deps, "private");
   if (lock === undefined) return { outcome: "skipped" };
   try {
     // Once: the gate then runs on the compile artifacts the pre-commitment measured, and never writes the shared cache.
+    // S1: copied beside its name and renamed, so a seed that fails leaves no half cache for the next run to trust.
     const cache = join(root, "cache");
     if (!existsSync(cache)) {
       const from = opts.sharedCache ?? SHARED_CACHE;
-      if (existsSync(from)) await (opts.copyCache ?? copyCacheTree)(from, cache);
-      else await mkdir(cache, { recursive: true });
-    }
-    const current = await readCurrentGated(shared);
-    let gated: GatedBuild = current;
-    const missing = await missingLegsOf(deps, current);
-    if (missing.length > 0) {
-      const self = await deps.selfCommit();
-      const cannot = await selfCannotServe(deps, self, current);
-      const stale = `.gated's lethalCommit ${current.lethalCommit} predates leg(s) ${missing.join(",")} of V3_GATE_LEGS`;
-      if (cannot !== undefined)
-        throw privateRefusal(
-          `${stale}; this script's commit ${self} ${cannot}: not gated; run it from a current master checkout`,
-        );
-      await deps.log(`${deps.now()} private: ${stale}; the candidate is judged at ${self}`);
-      gated = { ...current, lethalCommit: self };
+      if (existsSync(from)) {
+        const tmp = join(root, `cache.tmp-${randomUUID()}`);
+        try {
+          await mkdir(tmp, { recursive: true });
+          await (opts.copyCache ?? copyCacheTree)(from, tmp);
+          await rename(tmp, cache);
+        } catch (err) {
+          await rm(tmp, { recursive: true, force: true }).catch(() => {});
+          throw err;
+        }
+      } else await mkdir(cache, { recursive: true });
     }
     const sha = await sha256OfFile(binary);
     const tag = `local-${sha.slice(0, 12)}`;
@@ -2291,7 +2428,8 @@ export async function privateGateOnce(
 
 /** PR-226: a private gate's real side effects: its own worktree, and a log under `<root>/private/`, never the daily logs. */
 export function privateRealDeps(root: string): UpdateDeps {
-  const base = realDeps(root, { gateWorktree: join(root, "gate-worktree") });
+  // `ownSlot`: it runs under `scripts/heavy-slot.sh`, so the memory rule must not count its own slot (S4).
+  const base = realDeps(root, { gateWorktree: join(root, "gate-worktree"), ownSlot: true });
   const log = join(root, "private", "update.log");
   return {
     ...base,
