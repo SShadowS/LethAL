@@ -2551,14 +2551,17 @@ export class ResultsStore {
 
   /**
    * PR-225 (R1142): the tests (`Codeunit.Method`) whose outcome under one mutant of this run was not `pass`. The
-   * mutant is named by its code AND batch, because `mutant_code` alone is unique only within a batch (I5).
+   * mutant is named by its code AND batch, because `mutant_code` alone is unique only within a batch (I5). Rows run
+   * with NO mutant active (an unmutated kill confirm, a warm replay, a discovery confirm: `mutant_code` NULL) are not
+   * outcomes under the mutant, so they are left out.
    */
   notPassTestsOf(runId: number, mutantCode: string, batchIndex: number): string[] {
     const rows = this.db
       .query(
         `SELECT DISTINCT t.codeunit_name AS cu, t.method AS method FROM test_results t
          JOIN mutants m ON m.id = t.mutant_row_id
-         WHERE t.run_id = ? AND m.run_id = ? AND m.mutant_code = ? AND m.batch_index = ? AND t.outcome <> 'pass'`,
+         WHERE t.run_id = ? AND m.run_id = ? AND m.mutant_code = ? AND m.batch_index = ? AND t.outcome <> 'pass'
+           AND t.mutant_code = m.mutant_code`,
       )
       .all(runId, runId, mutantCode, batchIndex) as { cu: string | null; method: string }[];
     return rows.flatMap((r) => (r.cu === null ? [] : [`${r.cu}.${r.method}`]));

@@ -4,12 +4,12 @@ import type { TestOutcome } from "../src/backend";
 import type { RunEvent, RunEventInput } from "../src/events";
 import { ResultsStore } from "../src/store";
 import {
-  LEFT_OUT_OF_SET,
   type NestedRow,
   RECHECK_SKIPPED_CODE,
   type RecheckIdentity,
   type RecheckTarget,
   decideRecheck,
+  leftOutNote,
   recheckTestSetOf,
   runWithheldRecheck,
 } from "../src/withheld-recheck";
@@ -156,7 +156,119 @@ describe("runWithheldRecheck with no candidate at all", () => {
   });
 });
 
+describe("runWithheldRecheck: the nested run gets the narrowed list, and a kept row names what was left out", () => {
+  // Codeunit K holds the candidate; P.P1 is a covering test that passed under the mutant in the main pass.
+  const events = [
+    {
+      type: "baseline-batch-finished",
+      batchIndex: 0,
+      verdicts: ["K.K1", "K.K2", "K.K3", "P.P1", "P.P2"].map((name) => ({
+        name,
+        outcome: "pass",
+        classification: [],
+      })),
+    },
+    {
+      type: "mutant-scored",
+      mutant: manifest("M1"),
+      verdict: "error",
+      batchIndex: 0,
+      durationMs: 1,
+      cause: "runner-refused",
+      failureNote: target("M1", []).failureNote,
+      coveringTests: ["K.K1", "P.P1"],
+    },
+  ].map((e, i) => ({ ...e, seq: i + 1 })) as unknown as RunEvent[];
+
+  async function drive(notPass: readonly string[]) {
+    const emitted: RunEventInput[] = [];
+    const asked: string[][] = [];
+    const m = manifest("M1");
+    await runWithheldRecheck({
+      events,
+      notPassOf: () => notPass,
+      emit: (e) => emitted.push(e),
+      main: MAIN,
+      budgetSeconds: 10,
+      runner: async (req) => {
+        asked.push([...req.tests]);
+        return {
+          // The nested run found no kill: the row is kept (rule (b)).
+          rows: [
+            {
+              file: m.file,
+              startIndex: m.startIndex,
+              endIndex: m.endIndex,
+              operatorName: m.operatorName,
+              mutatedText: m.mutatedText,
+              verdict: "survived",
+              coveringTests: req.tests.filter((n) => n === "K.K1" || n === "P.P1"),
+              durationMs: 1,
+            },
+          ],
+          baseline: req.tests.map((name) => ({ name, outcome: "pass" as TestOutcome })),
+          baselineElapsedMs: 1,
+          identity: { ...MAIN },
+        };
+      },
+      backend: { serveEntries: true },
+    });
+    const kept = emitted.find((e) => e.type === "mutant-rechecked");
+    const note = kept !== undefined && "keptNote" in kept ? String(kept.keptNote) : "";
+    return { asked, note };
+  }
+
+  test("the runner receives only the candidate and its codeunit, not the passing covering test", async () => {
+    const { asked } = await drive(["K.K1"]);
+    expect(asked).toEqual([["K.K1", "K.K2", "K.K3"]]);
+  });
+
+  test("a kept row whose covering tests the set left out says how many ran, and that the rest are unmeasured", async () => {
+    const { note } = await drive(["K.K1"]);
+    expect(note).toContain("rule (b)");
+    expect(note).toContain(leftOutNote(1, 2));
+    expect(note.endsWith("]")).toBe(true);
+  });
+
+  test("a kept row whose covering tests all ran carries no left-out note", async () => {
+    const { note } = await drive(["K.K1", "P.P1"]);
+    expect(note).toContain("rule (b)");
+    expect(note).not.toContain("covering tests; the others");
+  });
+});
+
 describe("ResultsStore.notPassTestsOf: the candidate killers come from the run's own stored results", () => {
+  test("a not-pass row run with NO mutant active (mutant_code NULL) is not an outcome under the mutant", () => {
+    const store = new ResultsStore(":memory:");
+    const runId = store.createRun({
+      testScope: [],
+      coverageMode: "al-runner",
+      identityScheme: 1,
+      buildSymbols: [],
+      projectPath: "/p",
+      backend: "al-runner-v3",
+      appVersion: "1",
+    });
+    const id = store.recordMutant(runId, {
+      mutantCode: "M1",
+      astHash: "h",
+      codeunitName: "C",
+      procedureName: "P",
+      operatorName: "op",
+      operatorMajor: 1,
+      file: "f.al",
+      line: 1,
+      verdict: "error",
+      durationMs: 1,
+      batchIndex: 0,
+    });
+    const ref = (method: string) => ({ codeunitId: 1, codeunitName: "K", method });
+    store.recordTestResult(runId, id, "M1", ref("K1"), "error", 1, "distrusted failure");
+    // An unmutated confirm of the same mutant row: recorded with no mutant code.
+    store.recordTestResult(runId, id, null, ref("K9"), "fail", 1, "failed with no mutant active");
+    expect(store.notPassTestsOf(runId, "M1", 0)).toEqual(["K.K1"]);
+  });
+
   function storeWith(): { store: ResultsStore; runId: number } {
     const store = new ResultsStore(":memory:");
     const runId = store.createRun({
@@ -222,32 +334,7 @@ describe("a rule missing its test means unmeasured, never a kill", () => {
     };
   }
 
-  test("(c): a killer the set left out of the recheck baseline keeps the row error, naming rule (c)", () => {
-    // P.P1 passed under the mutant in the main pass, so option A leaves it out; the nested row names it anyway.
-    const recheckBaseline = new Map<string, TestOutcome>([
-      ["K.K1", "pass"],
-      ["K.K2", "pass"],
-      ["K.K3", "pass"],
-    ]);
-    const d = decideRecheck({
-      target: target("M9", ["K.K1", "P.P1"]),
-      row: row(),
-      mainBaseline: MAIN_BASELINE,
-      recheckBaseline,
-      main: MAIN,
-      recheck: MAIN,
-      recheckSet: new Set(["K.K1", "K.K2", "K.K3"]),
-    });
-    expect(d.kind).toBe("kept");
-    if (d.kind === "kept") {
-      expect(d.failed).toContain("c");
-      expect(d.note).toContain("is not in the recheck baseline");
-      // The owner's ruling: the report names these rows as unmeasured, left out by the set (R1142).
-      expect(d.note).toContain(LEFT_OUT_OF_SET);
-    }
-  });
-
-  test("(c): a killer IN the set but with no recheck result keeps the plain note (not blamed on the set)", () => {
+  test("(c): a killer with no recheck-baseline result keeps the row error, naming rule (c)", () => {
     const d = decideRecheck({
       target: target("M9", ["K.K1", "P.P1"]),
       row: row(),
@@ -255,12 +342,11 @@ describe("a rule missing its test means unmeasured, never a kill", () => {
       recheckBaseline: new Map<string, TestOutcome>([["K.K1", "pass"]]),
       main: MAIN,
       recheck: MAIN,
-      recheckSet: new Set(["K.K1", "P.P1"]),
     });
     expect(d.kind).toBe("kept");
     if (d.kind === "kept") {
+      expect(d.failed).toContain("c");
       expect(d.note).toContain("P.P1 is not in the recheck baseline");
-      expect(d.note).not.toContain(LEFT_OUT_OF_SET);
     }
   });
 

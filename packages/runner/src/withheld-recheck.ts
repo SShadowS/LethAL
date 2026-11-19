@@ -126,16 +126,11 @@ export function ruleBKilledReproduced(row: NestedRow | undefined): string | unde
 export function ruleCKillerPassedAlone(
   recheckBaseline: ReadonlyMap<string, TestOutcome>,
   killer: string | undefined,
-  recheckSet?: ReadonlySet<string>,
 ): string | undefined {
   if (killer === undefined)
     return "the killing test cannot be named (none, or two codeunits share its method name)";
   const outcome = recheckBaseline.get(killer);
-  if (outcome === undefined)
-    // PR-225: name why, when the set itself left the killer out (the owner's ruling: the report names these rows).
-    return recheckSet !== undefined && !recheckSet.has(killer)
-      ? `${killer} is not in the recheck baseline: ${LEFT_OUT_OF_SET}`
-      : `${killer} is not in the recheck baseline`;
+  if (outcome === undefined) return `${killer} is not in the recheck baseline`;
   if (outcome !== "pass")
     return `${killer} did not pass alone at the recheck baseline (${outcome})`;
   return undefined;
@@ -203,14 +198,12 @@ export function decideRecheck(a: {
   readonly recheckBaseline: ReadonlyMap<string, TestOutcome>;
   readonly main: RecheckIdentity;
   readonly recheck: RecheckIdentity;
-  /** PR-225: the tests the recheck baseline was asked to run, so rule (c) can say a killer was left out. */
-  readonly recheckSet?: ReadonlySet<string>;
 }): RecheckDecision {
   const killer = a.row === undefined ? undefined : qualifiedKillerOf(a.row);
   const checks: readonly [RecheckRule, string | undefined][] = [
     ["a", ruleAWithheldKill(a.target)],
     ["b", ruleBKilledReproduced(a.row)],
-    ["c", ruleCKillerPassedAlone(a.recheckBaseline, killer, a.recheckSet)],
+    ["c", ruleCKillerPassedAlone(a.recheckBaseline, killer)],
     ["d", ruleDSameBuild(a.main, a.recheck)],
     ["e", ruleELosesNothing(a.mainBaseline, a.recheckBaseline, killer)],
   ];
@@ -290,9 +283,14 @@ export function recheckTestSetOf(
   ]);
 }
 
-/** The reason rule (c) adds when option A left the killer out of the recheck set (the report names the row). */
-export const LEFT_OUT_OF_SET =
-  "unmeasured: it passed under the mutant in the main pass, so the recheck set left it out (R1142)";
+/**
+ * PR-225, the owner's ruling (the report names these rows): what a kept row's note adds when the recheck set left out
+ * some of the row's covering tests. The nested run executes only the set, so those tests were not run here: they passed
+ * under the mutant in the main pass, or the main pass never reached them. Either way they are unmeasured, never a kill.
+ */
+export function leftOutNote(ran: number, covering: number): string {
+  return `the recheck ran ${ran} of its ${covering} covering tests; the others passed under the mutant in the main pass or were not reached there, so they are unmeasured here (R1142)`;
+}
 
 export interface RecheckDeps {
   /** The session's events so far (`mutant-scored`, `baseline-batch-finished`). */
@@ -407,16 +405,21 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
       recheckBaseline,
       main: d.main,
       recheck: result.identity,
-      recheckSet: testSet,
     });
     const durationMs = row?.durationMs ?? 0;
     if (decision.kind === "kept") {
+      const ran = target.coveringTests.filter((n) => testSet.has(n)).length;
+      // The note keeps its closing bracket last; the left-out count goes inside it.
+      const keptNote =
+        ran < target.coveringTests.length
+          ? `${decision.note.slice(0, -1)}; ${leftOutNote(ran, target.coveringTests.length)}]`
+          : decision.note;
       d.emit({
         type: "mutant-rechecked",
         mutant: target.mutant,
         batchIndex: target.batchIndex,
         durationMs,
-        keptNote: decision.note,
+        keptNote,
       });
       continue;
     }
