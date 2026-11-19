@@ -305,10 +305,10 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The proof below predates LethAL Control 1.0.0.27 (coord PR-180, R1127, 2026-11-18).** 1.0.0.27 changes only each test's start
-WorkDate (the client's default, BaseApp's `GetDefaultWorkDate`), and no bcdev-gate fixture reads the default WorkDate. It is proven on
-`bc4` (its table below), not yet on `bc1`-`bc3`. They get 1.0.0.27 through `bc-linux-setup.ts`, and their re-proof under it is
-still to run.
+**The proof below predates the control build of coord PR-180 (R1127, 2026-11-18).** That build changes only each test's start
+WorkDate (the client's default, BaseApp's `GetDefaultWorkDate`), and no bcdev-gate fixture reads the default WorkDate. It is
+proven on `bc4` (its table below), not yet on `bc1`-`bc3`. They get it through `bc-linux-setup.ts`, and their re-proof under it
+is still to run.
 
 **The proof of record is R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below).** Head c13e4d0d (branch
 lethal/r-990, whose client requires 1.0.0.26), one server at a time under one coord lease each (`bc-linux-setup.ts --held-lease`),
