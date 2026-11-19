@@ -3900,6 +3900,22 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return { ...counts, ...timers };
   }
 
+  /**
+   * PR-242 (M1, measure-only): why `takeStoredPair` refused a stored kill pair, one count per reason, over every
+   * lane. The four always sum to the lanes' `pairBatchRefused`. Printed in the serve-entries summary only.
+   */
+  private readonly pairRefusals = {
+    otherCodeunit: 0,
+    notPrefetched: 0,
+    notAfterKill: 0,
+    cutBeforeKiller: 0,
+  };
+
+  /** PR-242: the refusal counts by reason (tests and the summary line). */
+  pairRefusalReasons(): Readonly<AlRunnerV3Backend["pairRefusals"]> {
+    return { ...this.pairRefusals };
+  }
+
   /** PR-99 (§10.2): per-unit scoring times and per-window prefetch walls of an N = 1 run, for the scheduling bound. */
   private readonly unitTimes: { units: UnitTiming[]; windows: WindowTiming[] } = {
     units: [],
@@ -9494,6 +9510,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (stored.cu !== id || killSeq === undefined || stored.seq <= killSeq || !cutOk) {
       lane.stats.pairBatchRefused += 1;
+      // PR-242 (M1): the first reason in this order is counted, so the four sum to pairBatchRefused.
+      if (stored.cu !== id) this.pairRefusals.otherCodeunit += 1;
+      else if (killSeq === undefined) this.pairRefusals.notPrefetched += 1;
+      else if (stored.seq <= killSeq) this.pairRefusals.notAfterKill += 1;
+      else this.pairRefusals.cutBeforeKiller += 1;
       return undefined;
     }
     lane.stats.pairBatchServed += 1;
@@ -9928,7 +9949,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused}); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.

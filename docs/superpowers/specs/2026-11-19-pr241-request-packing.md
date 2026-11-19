@@ -4,6 +4,71 @@ lethal-preproc, 2026-11-19 (coord PR-241, from PR-231's ranking). Offline only: 
 after the orchestrator's ruling. Scripts and outputs: `/coord/handoff/PR-241/` (`fixed.py`/`fixed.txt`,
 `pack.py`/`pack.txt`); the code facts from a read-only survey (names, not lines).
 
+## 0a. Amendment 1 (2026-11-19, the orchestrator's rulings and a read-only state check, before the build)
+- **RULED:** run the A/B (Q1), arm B at 64 entries (Q2), live requests after (Q3). Build the off-by-default knob with red
+  tests both ways (off = exactly today's requests; on = consecutive units of one lane up to the cap, never across lanes).
+- **The cross-unit risk, stated precisely (replaces §2's "Isolation" bullet):**
+  - Packing does not change what an entry sees from al-runner. Per-entry reset, within one request and across requests on
+    one daemon, is MEASURED for seven state kinds plus Commit (PR-24's carry probe, `/coord/handoff/PR-24/carry-probe/`;
+    gate leg O1 on every gated build). No verdict reads al-runner's per-request `baselineMs` (timing only); a kill is
+    judged against LethAL's session baseline rows and the kill pairs. The per-request `setupMs` reloads unchanged sources.
+  - Two things LethAL decides PER REQUEST would change, and the build AVOIDS both instead of accepting them:
+    1. `runSelectedOnly` is one flag per request: a unit is packed only if the request's flag is the same with and
+       without it, so no unit's excluded tail starts running hidden.
+    2. The PR-56 kept-refusal drift guard checks the request after a kept refusal: that next request is never packed.
+  - Per-unit bookkeeping stays per unit (`prefetched`, `timedOutMutants`, `pairStore`, each unit's `batchKillPairs`).
+    Never pack across a deploy or across modes.
+  - Still unmeasured, as today: the .NET helper's state across requests, a leaked row, and Random values at a different
+    position in a request. The per-mutant comparison is the guard.
+- **§3 recorded figures add:** live-request count, entries per live request and live wall (for lethal-code's PR-242,
+  which pre-commits the live saving per packing factor against arm B).
+
+## 0b. Amendment 2 (2026-11-19, the build done; the A/B pre-committed before it runs)
+- **Built** on `lethal/pr-241` cd660eb34 (VERIFY 15,194/0; Opus build review: no BLOCK, its three should-fixes applied):
+  `LETHAL_V3_PACK_ENTRIES=<n>`, off by default. Under it, one packed request is ONE `prefetchMutants` call over the lane's
+  consecutive units (`unitSizes` marks them); `batchKillPairs` still runs per unit. **Packing is OFF under a time
+  budget** (R912's deadline clamp would otherwise drop a whole packed request), so §2's "a stop loses at most one window"
+  holds.
+- **The A/B** (`/coord/handoff/PR-241/ab.sh`), after PERF-10's control ends, on `current` (4ebfe7913):
+  - PR-94's DO e-document slice (`--only` its four codeunits, R-942's source and the PR-67 v3 config), `--workers 3`,
+    NO `--time-budget` (an outer `timeout` of 7,200 s only), fresh stores, heavy slot `--peak 18`.
+  - One checkout (`lethal/pr-241`); arms run back to back: A (knob unset), B (`LETHAL_V3_PACK_ENTRIES=64`), then A2
+    (unset again) to see drift.
+- **Pre-committed bounds for B against A** (the slice's unit sizes are not known offline; these are y3's ratios):
+  1. B's prefetch requests ≤ 45% of A's;
+  2. B's prefetch setup+baseline lane-seconds ≤ 50% of A's;
+  3. B's mutant-phase wall at least 4% below A's AND below A2's (drift check);
+  4. live requests: B within ±2% of A (lethal-code's PR-242 amendment 1, master bced1dccc: per-unit pair batches);
+  5. **must hold, or no adoption:** every mutant's verdict equal to A's per mutant on the full site key;
+     `killingTest` may differ only as R197's ledger orders it (named per mutant); the timeout-killed set equal; no new
+     warning code; daemon peak RSS per request recorded, and no lane's peak above A's by more than R987's per-request
+     budget (4 GiB).
+- A miss of 1-3 on this slice is reported as measured (the slice may have different unit sizes than y3), not explained
+  away; a miss of 5 is a BLOCK for adoption.
+
+## 0c. Amendment 3 (2026-11-19, the A/B's result): packing is SAFE; its speed is NOT shown on this slice
+Run 20:27-21:52Z, arms A, B (64), A2 back to back on `lethal/pr-241` cd660eb34, `current` 4ebfe7913; outputs
+`/coord/handoff/PR-241/ab-{A,B,A2}/`, comparison `ab-compare.py`/`ab-compare.txt`.
+- **Bound 5 (correctness): MET.** 1,006 mutants in every arm; per mutant on the full site key, 0 verdict and 0
+  `killingTest` differences (A-B, A-A2, A2-B); counts identical (390 killed / 423 survived / 154 no-coverage / 39 error);
+  timeout-killed sets equal (0); warning-code sets identical. B did pack: 69.4 entries per prefetch request against 56.1.
+- **Bound 4 (live within ±2%): MET.** 75 live requests (1,504 entries) in every arm.
+- **Bound 1 (prefetch requests ≤ 45% of A): MISSED.** 59 against 73 (81%). This slice's units are already large (A sent
+  56.1 entries per prefetch request; y3 sent 22.8), so packing had little to merge: 14 fewer requests, about 13-19
+  lane-seconds of fixed cost at the per-request cost measured in the same arms.
+- **Bounds 2 and 3 (fixed cost ≤ 50%; mutant phase ≥ 4% faster): met on paper, but CONFOUNDED, so not claimed.**
+  - Mutant phase: A 1,371.7 s, B 709.9 s, A2 1,143.8 s; prefetch setup+baseline: A 120.9 s, B 55.6 s, A2 98.4 s.
+  - The box changed speed under the arms: during A, three other lanes' full VERIFY runs and a v3 itest ran
+    (`/coord/locks/heavy-peaks.tsv`, 20:28-21:00Z); A2 had no logged heavy job but was still slower than B.
+  - The proof it was the box: LIVE requests are identical in every arm and packing never touches them, yet their
+    setup+baseline was A 130.9 s, B 59.2 s, A2 107.2 s, the same fall as prefetch's (B/A 0.45 live, 0.46 prefetch).
+    So packing's own share of B's speed is about nil here; the rest is box noise.
+- **So:** the knob is correct (verdict-neutral, red-tested, A/B-equal) and stays off by default. Its speed claim still rests
+  on §1's model (fixed cost per request × requests removed), unproven live.
+- **To prove the speed** (proposed, for the orchestrator): a slice chosen for SMALL units (y3-like ≤ 25 entries per
+  prefetch request, picked from y3's events), on a quiet box with the arms interleaved (A, B, A, B), judged on
+  requests removed × the per-request fixed cost measured in the same arm, which is robust to box speed, and on wall.
+
 ## 1. Measured offline (y3: `/coord/handoff/PR-204/y3.run.events.ndjson`, 7,959 `serve-request-timed` events, 3 lanes)
 - **The "fixed" cost IS fixed.** Least squares per kind, cost = a + b·entries + c·tests:
   - prefetch (5,052 requests): setup 973 ms + al-runner baseline 577 ms; entries and tests explain ~nothing (R² 0.01-0.02;

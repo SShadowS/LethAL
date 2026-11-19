@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**51 of 1113 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**52 of 1116 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -393,8 +393,9 @@ that ordering is the priority.
 - **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · done (162fceb8) — PR-215: the refusal is named as a third shape of tests-testpage-unsupported…
 - **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · done (ac2807507)
 - **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · closed 2026-11-19 — measured: DO's own test-order dependence (codeunit globals only earlier tests set), not…
-- **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · open
+- **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · done (a00e686e7)
 - **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
+- **R1153** · 12 PR-56 keep entries have never matched: al-runner ends their texts with " (not pinned)", the census normalised it away, and the anchored regex needs it (keeps that passed for the wrong reason) · [R1153.md](docs/roadmap/R1153.md) · open — (a) widen each of the 12 only with its own kept-vs-fresh DO proof, later; (b) test every keep entry…
 
 ## Product gaps a real project hits
 
@@ -1157,7 +1158,9 @@ that ordering is the priority.
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — measure first (coord PR-228): census of DO's cut kinds, a direct kept-vs-fresh DO check on `current`…
 - **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — measure first: survivors' seconds in tests outside reachedBy (codeunit-order rule), then a v3 A/B on a…
 - **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
-- **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · open
+- **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
+- **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · open
+- **R1152** · Leg C's serve-keep-reasons checks only some keep-list entries: a reworded refusal text (the Company-table one, upstream since edge-4ebfe7913) passed every gate and turned into a DO restart storm (PERF-10, 2026-11-19) · [R1152.md](docs/roadmap/R1152.md) · open — add a serve-keep-reasons case per keep entry that can be produced without the .NET helper, starting…
 
 ---
 
