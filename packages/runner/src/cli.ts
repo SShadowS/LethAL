@@ -1195,7 +1195,9 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              pre-flight a real run does (config keys, environment, license,
                              packages folder, alc, selector ids) and refuses by the same error
                              names; it does NOT run what needs the al-runner binary (the pinned-
-                             build check) or a server.
+                             build check) or a server. By choice of scope it does not check the
+                             accept list (lethal.accepted.json) or the equivalence-marks file
+                             either, so a malformed one still passes a dry run.
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -3468,6 +3470,21 @@ export function v3RecheckOf(a: {
  * function is the only caller in `cli.ts`, and it always validates immediately before starting,
  * so that ordering holds on every path that reaches it.
  */
+export function validateEnvToolSection(configFile: LethalConfigFile): EnvToolConfigSection {
+  // Item 6 (final review): see `resolveEnvToolSession`. PR-194: pure (config and process.env), so a
+  // dry run calls it too.
+  const bcdevRaw = configFile.bcdev ?? {};
+  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+    const v = (bcdevRaw as Record<string, unknown>)[key];
+    return typeof v === "string" && v !== "";
+  });
+  return validateEnvToolConfig(configFile.envTool, {
+    env: process.env,
+    hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+    bcdevDeclaredKeys,
+  });
+}
+
 export async function resolveEnvToolSession(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -3497,15 +3514,7 @@ export async function resolveEnvToolSession(
   // its own to check that against, so the overlap is computed here, from the SAME raw bcdev
   // section `startEnvToolSession` below reads, and handed in as plain key names.
   const bcdevRaw = configFile.bcdev ?? {};
-  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
-    const v = (bcdevRaw as Record<string, unknown>)[key];
-    return typeof v === "string" && v !== "";
-  });
-  const envCfg = validateEnvToolConfig(configFile.envTool, {
-    env: process.env,
-    hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
-    bcdevDeclaredKeys,
-  });
+  const envCfg = validateEnvToolSection(configFile);
   const makeClient =
     deps.makeClient ??
     ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, parsed.projectDir));
@@ -3641,6 +3650,9 @@ export async function preflightRunConfig(a: {
   }
 
   if (a.deferBcdevSection === true) {
+    // The bcdev fields come from provisioning, but the envTool section and the alc lookup do not.
+    validateEnvToolSection(configFile);
+    assertBcdevToolsLocated(configFile.bcdev ?? {}, await alToolPaths(), true);
     await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
       packageDirs: configuredPackageCaches(configFile),
       warn: () => {},
@@ -3662,7 +3674,30 @@ export async function preflightRunConfig(a: {
         "publish outside the configured environment tool",
     );
   }
-  const toolPaths = await alToolPaths();
+  const resolved = assertBcdevToolsLocated(c, await alToolPaths(), envToolDeploy);
+  // R3/R4: validated after alc/altool are confirmed present (so the "could not locate..." guard
+  // above still fires first when BOTH are wrong) but before any compiler touches the target.
+  await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
+    packageDirs: configuredPackageCaches(configFile),
+    warn: () => {},
+  });
+  return {
+    preprocessorSymbols,
+    probing,
+    bcdev: { c, alcPath: resolved.alcPath, altoolPath: resolved.altoolPath },
+  };
+}
+
+/**
+ * PR-194: the bcdev alc/altool lookup, shared by `preflightRunConfig` and, for an `envTool` run, by
+ * `runFromCliWithAccept` BEFORE it provisions a billed environment. Reads only `alcPath`/`altoolPath`
+ * of the bcdev section and the AL extension folder. Returns the resolved paths, alc defined.
+ */
+export function assertBcdevToolsLocated(
+  c: Pick<BcDevConfigSection, "alcPath" | "altoolPath">,
+  toolPaths: { readonly alcPath: string; readonly altoolPath: string } | undefined,
+  envToolDeploy: boolean,
+): { readonly alcPath: string; readonly altoolPath: string | undefined } {
   const resolved = resolveAlToolPaths(c, toolPaths);
   // R43/R64: a configured `alcPath`/`altoolPath` SATISFIES the requirement below — the gate exists
   // to catch "no AL compiler/publisher anywhere", and an explicit path is one. Compilation is
@@ -3693,17 +3728,7 @@ export async function preflightRunConfig(a: {
         "install the extension, or set bcdev.altoolPath",
     );
   }
-  // R3/R4: validated after alc/altool are confirmed present (so the "could not locate..." guard
-  // above still fires first when BOTH are wrong) but before any compiler touches the target.
-  await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
-    packageDirs: configuredPackageCaches(configFile),
-    warn: () => {},
-  });
-  return {
-    preprocessorSymbols,
-    probing,
-    bcdev: { c, alcPath: resolved.alcPath, altoolPath: resolved.altoolPath },
-  };
+  return { alcPath: resolved.alcPath, altoolPath: resolved.altoolPath };
 }
 
 /**

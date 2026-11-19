@@ -172,7 +172,7 @@ describe("PR-194: a dry run makes the real run's config refusals", () => {
     const r = await rig();
     await expect(
       dry(r, { alRunnerV3: r.v3, assemblyProbingPaths: [join(root, "no-probing")] }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/assembly probing path .*does not exist or is not a folder/);
   });
 
   test("the platform refusal (al-runner-v3-platform-unsupported)", async () => {
@@ -197,9 +197,38 @@ describe("PR-194: a dry run makes the real run's config refusals", () => {
     );
   });
 
-  test("bcdev with an envTool section: the bcdev section is left to provisioning", async () => {
-    const r = await rig();
-    expect(await dry(r, { bcdev: {}, envTool: { command: ["x"] } }, "bcdev")).toBe(0);
+  describe("bcdev with an envTool section (the bcdev fields come from provisioning)", () => {
+    const envTool = (over: Record<string, unknown> = {}) => ({
+      toolPath: "/nonexistent/env-tool",
+      envId: "env-1",
+      resolve: [
+        { command: ["env", "get", "{envId}"], reads: { baseUrl: "url" } },
+        { command: ["env", "users", "{envId}"], reads: { username: "u", password: "p" } },
+      ],
+      publish: { command: ["publish", "{envId}", "{appFile}"] },
+      ...over,
+    });
+    test("a valid section with an alcPath passes, spawning nothing", async () => {
+      const r = await rig();
+      const cfg = { bcdev: { packageCachePath: r.pkgs, alcPath: r.alc }, envTool: envTool() };
+      expect(await dry(r, cfg, "bcdev")).toBe(0);
+      expect(existsSync(join(root, "alc-ran"))).toBe(false);
+      expect(spawnSpy).not.toHaveBeenCalled();
+      expect(spawnSyncSpy).not.toHaveBeenCalled();
+    });
+    test("an invalid envTool section is refused (validateEnvToolConfig)", async () => {
+      const r = await rig();
+      const cfg = {
+        bcdev: { packageCachePath: r.pkgs, alcPath: r.alc },
+        envTool: envTool({ envId: "${PR194_UNSET_VAR}" }),
+      };
+      await expect(dry(r, cfg, "bcdev")).rejects.toThrow(/PR194_UNSET_VAR/);
+    });
+    test("no alc anywhere is refused before any provisioning (could not locate alc.exe under)", async () => {
+      const r = await rig();
+      const cfg = { bcdev: { packageCachePath: r.pkgs }, envTool: envTool() };
+      await expect(dry(r, cfg, "bcdev")).rejects.toThrow("could not locate alc.exe under");
+    });
   });
 
   test("no config at all still passes a dry run (issue #21)", async () => {
