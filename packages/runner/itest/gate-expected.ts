@@ -44,12 +44,14 @@ export const ENVTOOL_FIGURES = {
 } as const;
 
 export const TABLES_FIGURES = {
-  // PR-209 (spec §3, pre-committed): 440 generated sites + 23 condition-true + 9 blank-argument. The verdict counts
-  // below are still to be recorded (`PR209_PENDING`).
+  // PR-209 (spec §3, pre-committed): 440 generated sites + 23 condition-true + 9 blank-argument. The verdict counts are
+  // RECORDED on bc2 (lethal-code, /coord/handoff/PR-209-bc/bc2-tables-record/gate.log): 342 / 83 / 25 over 450 rows, i.e.
+  // +20 killed, +10 survived, +2 no-coverage on the old 322 / 73 / 23. groupedCalls, warmKills, killPositions: still to be
+  // recorded (`PR209_PENDING`); the itest prints them before asserting.
   totalMutantSites: 472,
-  killed: 322,
-  survived: 73,
-  noCoverage: 23,
+  killed: 342,
+  survived: 83,
+  noCoverage: 25,
   platformArtifactKills: 4,
   assertionScreenDiscrimination: "partial",
   untargetedTriggerCount: 0,

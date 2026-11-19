@@ -1824,6 +1824,18 @@ async function main(): Promise<void> {
   const scratchB = await mkdtemp(join(tmpdir(), "lethal-itest-tables-b-"));
   try {
     const first = await runOnce(scratchA, "first");
+    // PR-209: print the figures asserted later, BEFORE any assertion, so one record run shows them all. Print only.
+    console.log(
+      `  tables figures (first): groupedCalls=${first.report.groupedCalls} warmKills=${first.report.warmKills} killPositions=${JSON.stringify(
+        first.report.mutants
+          .filter((m) => m.verdict === "killed" && (m.killPosition ?? 1) > 1)
+          .map((m) => ({
+            mutantCode: m.mutantCode,
+            killingTest: m.killingTest,
+            killPosition: m.killPosition,
+          })),
+      )}`,
+    );
     assertVerdictTable(first.report);
     assertSessionLiveness(first.report, first.sessionLiveness, 0);
     // The trigger claim itself, read off the manifests the run actually deployed (the scratch

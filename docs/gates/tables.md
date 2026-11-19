@@ -16,9 +16,9 @@ mutant equal to its baseline, with the W1 company (R-583).
   },
   "constants": {
     "TABLES_FIGURES.totalMutantSites": 472,
-    "TABLES_FIGURES.killed": 322,
-    "TABLES_FIGURES.survived": 73,
-    "TABLES_FIGURES.noCoverage": 23,
+    "TABLES_FIGURES.killed": 342,
+    "TABLES_FIGURES.survived": 83,
+    "TABLES_FIGURES.noCoverage": 25,
     "TABLES_FIGURES.untargetedTriggerCount": 0,
     "TABLES_FIGURES.groupedCalls": 425,
     "TABLES_FIGURES.warmKills": 15,
