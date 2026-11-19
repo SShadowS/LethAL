@@ -4,6 +4,35 @@ Status: r1, committed to master before the family, the census and any keep-list 
 Evidence: `/coord/handoff/PR-163/` (y2's events and store, read-only) and `/coord/handoff/PR-195/` (`bc3.md`, `chars.json`,
 `v3.json`, `comment-8203.md`). Roadmap: R1092. Method: PR-191's (spec 2026-11-19-pr191-y2-xml-keeps-precommitment.md).
 
+## 0. Amendment 1 (the opus spec-adversary's review of r1, 2026-11-19: not safe as specified; the fixes need no redesign)
+Committed before the census and any keep-list change. The family was built in parallel with the review; it changes below.
+- **HIGH-1: P4 restores PR-191's lane clause.** A close comes after the whole request has run, so the keep never changes the 4
+  mutants' own rows; it changes what runs NEXT on that daemon. P4 now also requires: every mutant scored on that lane after a
+  kept collation refusal, up to the lane's next close, keeps its y2 verdict and `killingTest` (full site key). Any difference is
+  re-run on a fresh daemon; if the fresh daemon gives y2's answer and the kept one did not, the keep is withdrawn before the
+  window is accepted.
+- **HIGH-2: the census never changes the active mutant between entries** (its requests send `NONE` throughout), and DO's
+  `MutationSelector` is a SingleInstance codeunit that caches `active-mutant.txt` on first use. A daemon that kept the previous
+  mutant after a refusal would look clean to the census. **Added: a direct DO check (P5)**, as PR-139 did: on ONE daemon, the
+  4 mutants' requests over codeunit 68986 (each test its own entry), then a request with no mutant, then requests for other
+  mutants of `CDO Azure Blob Folder Mgt.` with a stable y2 verdict; every row compared with the same request on a fresh daemon.
+  The same check is run for PR-191's 8 XML mutants (merged in f1148eb6), whose census had the same gap.
+- **MED-1: DO's refusing codeunit is SingleInstance** (`CDO Azure Blob Folder Mgt.`, with a global tests set) and the refusal
+  unwinds through it. The family's refusing codeunit becomes SingleInstance with a global set before the call, and a reader
+  reads that global back.
+- **MED-2: §1 was wrong about the Cyrillic test.** y2's store holds the U+041A refusal row for all 4 mutants: a close event
+  names one text (the first), and both texts occur in the same request. Both are still needed; P4's "new rows" clause is dropped.
+- **MED-3: a reader that orders text** (é against Z, a and z; `~` against letters; a FindSet over a Code-keyed table holding é
+  and Z), so a half-built or cached collation table after a refusal would show.
+- **L1:** P2's check covers every entry of the 4 closing requests (two prefetch requests held 19 and 9 entries of codeunit 68986
+  from other mutants too); every refusal text in 68986's y2 rows is kept today or proposed here.
+- **L2:** bc3.md measured U+0416 (Ж), not U+041A (К). The verdict is NotRun either way, so it changes nothing here.
+- **L3:** the entry comment names that the same two code points from another operation (a key or record ordering) are kept
+  unmeasured; today only codeunit 68986's two tests hold such characters in DO.
+- **L4:** P3 is a shape check, not evidence the keep is safe; P4 and P5 are.
+- **P5 (new):** the direct DO check shows every row of every request on the kept daemon equal to a fresh daemon's, for both this
+  keep and PR-191's. A difference blocks this keep, and is reported against PR-191's.
+
 ## 1. The measurement
 - **y2:** 4 of its 59 refusal closes, 214.2 s of warm-up compile, on `ordering of the character U+516C (no collation weight)`,
   all in `CDO Azure Blob Folder Tests.Derivation_Explicit_NonLatinScript_CJK_FallsBackToCompany` (codeunit 68986).
