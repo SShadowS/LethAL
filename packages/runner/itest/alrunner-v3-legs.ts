@@ -357,6 +357,13 @@ export function judgeOrderProbe(
       }
     }
   }
+  // PR-233 (build review MED): held only for the WHOLE measured pattern, every row insert of every W and C entry refused;
+  // a part of it (an unstable or narrowed refusal) is a gate-fail, so a pin is never pre-committed for a pattern that moved.
+  const partnerAll = O1_PLAN.flat().filter((k) => k !== "R").length * 2;
+  if (partnerHeld.length > 0 && partnerHeld.length !== partnerAll)
+    bad.push(
+      `${partnerHeld.length} of the ${partnerAll} row-insert tests refused after the partner login, pre-committed all or none (PR-233; first: ${partnerHeld[0]})`,
+    );
   if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
   if (partnerHeld.length > 0)
     held.push(

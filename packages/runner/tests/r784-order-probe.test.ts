@@ -573,6 +573,62 @@ describe("PR-233: the partner-login row-insert refusal in O1's CDO set", () => {
       judgeOrderProbe(measured("NotRun: something else"), TODAY, undefined, true, {}).outcome,
     ).toBe("gate-fail");
   });
+  test("no pin field: a PART of the pattern (2 of the 4 tests refused, or one entry only) is a gate-fail, never held", () => {
+    const half = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.name.endsWith(".InsertRow") || l.name.endsWith(".CommitLocalRow")
+            ? { ...l, status: "error", message: O1_PARTNER_LOGIN_TEXT }
+            : l,
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      {},
+    );
+    expect(half.outcome).toBe("gate-fail");
+    expect(half.lines.join("\n")).toContain("8 of the 16 row-insert tests");
+    const one = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.entry === "W1.0" && l.name.endsWith(".InsertRow")
+            ? { ...l, status: "error", message: O1_PARTNER_LOGIN_TEXT }
+            : l,
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      {},
+    );
+    expect(one.outcome).toBe("gate-fail");
+    expect(one.lines.join("\n")).toContain("1 of the 16 row-insert tests");
+  });
+  test("pinned, on a build whose pin does not record commits running: the 2 row commits carry the pin's text, the other 4 the commit refusal", () => {
+    // answers(..., false): every C test answers the commit refusal; then the 4 row inserts get the partner text.
+    const j = judgeOrderProbe(
+      answers(refuse(O1_PARTNER_LOGIN_TEXT), false),
+      TODAY,
+      undefined,
+      false,
+      pinned,
+    );
+    expect(j).toEqual({ outcome: "pass", lines: [] });
+    // and a row commit answering the commit refusal instead is a gate-fail by name
+    const k = judgeOrderProbe(
+      answers(
+        (l) => (l.name.endsWith(".CommitLocalRow") ? l : refuse(O1_PARTNER_LOGIN_TEXT)(l)),
+        false,
+      ),
+      TODAY,
+      undefined,
+      false,
+      pinned,
+    );
+    expect(k.outcome).toBe("gate-fail");
+    expect(k.lines.join("\n")).toContain("CommitLocalRow is error");
+  });
   test("no pin field: the all-pass answer still passes", () => {
     expect(judgeOrderProbe(answers(undefined, true), TODAY, undefined, true, {})).toEqual({
       outcome: "pass",
