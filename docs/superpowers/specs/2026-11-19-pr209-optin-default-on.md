@@ -222,6 +222,15 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
          and state that the run had been seen;
        - (b) leave MO's new row unrecorded (MO runs `--profile slim`, like L1), so its baseline stays 14.
        - **Recommendation: (a)** if the reading is unambiguous, else (b).
+       - **RULED (orchestrator): (b).** After a run has been seen, a "prediction" cannot be blind, however careful the
+         reading, and MO's job is multi-object coverage, not the operator set.
+       - **Pre-committed:**
+         - legs MO and MOE (the same fixture) run `--profile slim`, like L1;
+         - `al-runner-v3.multiobject.baseline.json` stays as it is (14 rows), and is not re-recorded;
+         - `V3_MO_KILLERS` returns to its PRE-flip table (round 2's 4 moved codes are reverted);
+         - `GATE_WARNINGS["al-runner-v3/MO"]` and `["al-runner-v3/MOE"]` become `["operator-narrowed-run"]` (both were
+           `[]`).
+       - Gating the new operators' multi-object behaviour, if it is wanted, is its own task with a blind prediction.
   4. **S1, S1E, DB, DBI, ISO** compare against `bcdev.baseline.json`. They pass once bcdev's re-recorded file lands
      (observed 3 / 17 / 6 over 26, equal to bc1's).
   5. **O1 and D1 were run with `LETHAL_ITEST_V3_CDO=1`** instead of the checkout path (`/work/src/do-lethal`, at 5f2a71d):
