@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**49 of 1109 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**48 of 1109 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -381,7 +381,7 @@ that ordering is the priority.
 - **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · done (31b9c761)
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · done (c49521c1) — PR-81: a non-terminal error is held and the walk goes on…
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · done (274a9aac)
-- **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
+- **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · closed 2026-11-19 — measured, rare in effect (1 timeout in 43,511 DO mutants, the original site), caught by…
 - **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · closed 2026-11-16 — measured clean (PR-95): hidden excluded tests leave a kept daemon clean; the remaining…
 - **R1104** · Hang refusal for remove-not on `while not S.EOS` when the InStream S is read earlier in a block that holds the loop (R173's 'EOS is false at the start' fails after a pre-read): 7 DO sites refused, 2 hangs per 3 scored lost; P4 held in DO window x1 · [R1104.md](docs/roadmap/R1104.md) · closed 2026-11-18 — P4 held in DO window x1, the first on a head with PR-109 (orchestrator ruling; PR-154)
 - **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · closed 2026-11-17 — measured (PR-110): the only static rule fails PR-37's bar (0 hangs in 3 scored sites)…
