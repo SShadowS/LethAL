@@ -71,3 +71,28 @@ Coord PR-247, lethal-code. It builds the section proposed in PR-243's spec-light
 ## 5. Not in this change
 - `reachRate` (the share of covered survivors whose statement a test reached) waits for R1148 / PR-235's in-run reach.
 - No test is reordered or skipped.
+
+## Amendment 1 (2026-11-20, from the Opus build review, before any commit)
+1. **Which rows count:** only rows that carry a mutant code (the mutant's own runs and its R577 reproduction). The
+   unmutated confirmation rows (the NONE confirm, the warm-kill replay, `confirmFoundNone`) are not mutation time under
+   that mutant and are left out. The event's and the row type's docs say so.
+2. **Own time is charged as R963 charges it** (`ownTimeCharge`): a row's own time when it has one; otherwise its call's
+   wall ONCE per call (the call id kept with the row), never once per row. A row with no call id and no own time is
+   charged its `durationMs`, as before.
+3. **Per batch:** each `test-costs` entry carries `batchIndex` (one entry per test per batch). The fold sums `runs` and
+   `ownMs` over every batch, since the time was spent. It sums `msUnderSurvivors` only over batches that no
+   `batch-invalidated` event invalidated, because their mutants end as `error`, not as survivors.
+4. **`coveredMutants` and `kills` come from the FINAL outcome per mutant** (after the recheck's `mutant-rechecked` and
+   `applyBatchInvalidations`), one per mutant key. A mutant scored twice in an appended stream counts once. Carried
+   outcomes are not counted.
+5. **A kill is credited only when exactly one of that mutant's covering tests matches `killingTest`.** `killingTest` is a
+   method name, so two codeunits' tests can share it. An ambiguous kill credits nobody, and the section's `ambiguousKills`
+   counts such kills.
+6. **A quarantined session** still emits `test-costs`. The section shows the time actually spent.
+7. **Tests added:**
+   - two codeunits sharing a killing method name → no double credit, `ambiguousKills` 1;
+   - a recheck-recovered kill counts;
+   - an invalidated batch's kill does not, and its time leaves `msUnderSurvivors` but stays in `ownMs`;
+   - rows sharing a call id with no own time charge the call once;
+   - a NONE confirmation row is not counted.
+   - Each is red-checked.
