@@ -322,7 +322,9 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "bcdev/second": [],
   "bcdev-names/fenced": [],
   "bcdev-wrapped/fenced": COMPILED_OUT,
-  "bcdev-wrapped/hub": COMPILED_OUT,
+  // PR-203 (pre-commitment: R1131 spec §0c, master 837caf2f): hub mode (coverageMode procedure) cannot compare the
+  // start WorkDate, and says so once per session; the only bcdev leg in procedure mode.
+  "bcdev-wrapped/hub": [...COMPILED_OUT, "workdate-not-compared"],
   "tables/first": TABLES,
   "tables/second": TABLES,
   // R746 (pre-commitment docs/superpowers/specs/2026-10-24-r746-chunked-pin-precommitment.md, master

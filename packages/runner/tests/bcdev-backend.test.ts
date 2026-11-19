@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { AnySchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
+import { GATE_WARNINGS } from "../itest/gate-expected";
 import { AppMethodIndex } from "../src/app-package";
 import {
   AlcCompileError,
@@ -5024,7 +5025,7 @@ describe("BcDevMcpBackend — start WorkDate per call (R1131)", () => {
       (async (_url: unknown) => new Response("{}")) as typeof fetch,
       { controlState },
     );
-  async function backendIn(coverageMode: "none" | "procedure") {
+  async function backendIn(coverageMode: "none" | "procedure" | "fenced") {
     const outputDir = scratch("lethal-r1131-");
     await writeDeployInputs(outputDir);
     await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS);
@@ -5215,6 +5216,31 @@ describe("BcDevMcpBackend — start WorkDate per call (R1131)", () => {
       expect(notes.filter((c) => c === "workdate-not-compared")).toHaveLength(1);
     } finally {
       await cleanup();
+    }
+  });
+
+  test("PR-203: each R1131 warning a mode emits is in that mode's gate leg set (bcdev-wrapped hub and fenced)", async () => {
+    // A new warning code in a gated mode must reach GATE_WARNINGS through a pre-commitment (R736): PR-196's did not.
+    for (const [mode, leg] of [
+      ["procedure", "bcdev-wrapped/hub"],
+      ["fenced", "bcdev-wrapped/fenced"],
+    ] as const) {
+      const { backend, notes, cleanup } = await backendIn(mode);
+      try {
+        await baselineOn(backend, "2026-11-19");
+        const r1131 = [...new Set(notes.filter((c) => c.startsWith("workdate-")))];
+        const pinned = GATE_WARNINGS[leg] ?? [];
+        expect(
+          r1131.filter((c) => !pinned.includes(c)),
+          leg,
+        ).toEqual([]);
+        expect(
+          pinned.filter((c) => c.startsWith("workdate-") && !r1131.includes(c)),
+          leg,
+        ).toEqual([]);
+      } finally {
+        await cleanup();
+      }
     }
   });
 });

@@ -32,6 +32,12 @@ R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035), all k
 
 ## History
 
+2026-11-19 (R1131, coord task PR-203): the hub leg's warning set (R736) gained `workdate-not-compared`, so it is now
+`compiled-out-sites` and `workdate-not-compared`. The code comes from LethAL Control 1.0.0.28's start-WorkDate check
+(PR-196), which hub mode cannot make, and it says so once per session. PR-198's re-proof on bc3 failed on the unpinned
+code. No verdict, row or figure moved; the fenced leg's set is unchanged. Pre-commitment: §0c of
+`docs/superpowers/specs/2026-11-19-pr196-r1131-workdate-per-call.md` (master 837caf2f).
+
 2026-11-06 (R827, coord task R-836): `Grow` in the four wrapped files gained a `#pragma` line, which keeps it a chain as long as this gate needs, and a comment line went, so no mutant's line moved. Its
 `empty-block` row re-keyed in each of the four: recorded on `bc2` by R332, no verdict, killing test or other row moved, and the confirm run passed. Pre-commitment: the spec's Addenda 3, 4 and 7. Logs: `/coord/handoff/R-836/bc2/`.
 
