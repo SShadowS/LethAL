@@ -386,6 +386,41 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   - **The rule for what follows:** before any refresh, the full v3 gate on `current` at the branch head must PASS every
     leg, so no hidden check is left for a refresh to find.
 
+## 0k. Amendment 10 (2026-11-19): the gate manifest's 18 rows, RULED (b) by the owner (q-20261119T154107-12f69ed1)
+- **The problem:** all 18 rows of `al-runner-v3-gated-builds.json` read one hand-pin readings object, and PR-209 moves its
+  leg-T counts, so every row's digest moves (e8ce7f40 → df57baf0). A refresh re-gates a row's kept binary at today's
+  head, and old builds fail leg C facts added after they were gated.
+- **The ruling (b):** a row that cannot pass a refresh keeps a FROZEN copy of today's readings under its own pin id,
+  labelled frozen with the reason; a row that passes moves to the new readings. Nothing is retired.
+- **The measurement** (full v3 gate on `current` at lethal/pr209 938376c68: 25/25 PASS; then a measure-only
+  `--refresh-rows` probe of the 17 older rows, newest first, at the same head, stopping at the first failure;
+  `/coord/handoff/PR-209/regate/probe2.log`):
+  - **PASS, move to the new readings (7):** edge-4ebfe7913 (`current`, by the full gate), edge-5a58a0f16, edge-a184cfc79,
+    edge-847b1fa5a, edge-c8fe56e05, edge-736fc7677, edge-2bd87774f.
+  - **FAIL, frozen (measured, 2):** edge-42af5d384 (leg C: `serve-keep-reasons` unkept, a refusal its build predates,
+    R1000) and alpha.12-d4bc8d3a5 (leg C: refuses `strictOrder`, PR-114a's capability facts; first refresh attempt,
+    `/work/tools/al-runner-v3/refresh/refresh-alpha.12-d4bc8d3a5@0d355f18…`).
+  - **Not re-gated, frozen (9):** edge-3138effad, edge-3096bf68f, edge-9597b4a01, edge-05d692e5e, edge-897b441eb,
+    edge-6bb821b98, edge-a0825f1d9, alpha.14-ef00a6a8f, alpha.13-23e7631be. All are older than edge-42af5d384. Freezing
+    is the conservative direction: a frozen row keeps exactly the claim it was gated with and asserts nothing new, so
+    it needs no gate; only a move needs a pass. Each is labelled "not re-gated" (not "fails"), so the label claims no
+    measurement.
+- **Pre-committed build:**
+  - a frozen readings object, byte-equal to today's (master) readings; a red-going test pins its digest to e8ce7f40;
+  - frozen pin ids, one per distinct pin a frozen row read, each with `frozen: { reason }`. A frozen pin is reachable
+    ONLY through a manifest row's `readingsFrom`, never by `findV3Pin`, so a live run of any build never judges by
+    frozen readings;
+  - the 11 frozen rows' `readingsFrom` move to their frozen pin; their `readingsDigest` and `lethalCommit` stay as they
+    are (still e8ce7f40);
+  - R814's digest test accepts both kinds: every row's digest equals its (live or frozen) hand pin's today. Red tests
+    each way: a frozen row with the new digest fails, and a live row with the old digest fails;
+  - the 7 passing rows: the tool-written diff `probe2-manifest.diff` (sha256 prefix 78cb22439bbbd8ab, 6 rows: the probe's
+    six) applied byte for byte, plus `current`'s own row by one `--refresh-rows edge-4ebfe7913` run on the final head (the
+    probe skipped it because the full gate had just passed there). No hand edit to any refreshed row.
+  - **Gated at 938376c68:** the six probe rows record lethalCommit 938376c68. The result lists every commit between it and
+    the submitted head, with why none moves a gate leg's reading; any that does re-runs those rows (orchestrator's
+    condition). The full v3 gate runs on the final head before submit.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
