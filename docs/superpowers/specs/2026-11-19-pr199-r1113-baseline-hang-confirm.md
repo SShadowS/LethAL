@@ -33,48 +33,84 @@ Coord PR-199 (lethal-code, 2026-11-19). Roadmap: R1113, fix 3. Evidence: `/coord
     30 s grace.
   - If it never returns, BC never answers, and the session may still be alive. R658's distrust is then right.
 
-## 3. Measurement M1 (bc4, BC 29, under lethal-code's lease; owner question q-20261119T043331-68d01347; nothing runs before a yes)
-- **The probe pair** (`/coord/handoff/PR-199/probe/`, scratch ids 76150-76199, checked free first; invented code). One test
-  codeunit, each test alone at baseline:
-  - **S1 `LoopsForever`:** an AL loop bounded at 15 min. This is the control: the hang gate's shape.
-  - **S2 `HttpBlackhole`:** `HttpClient.Get` to a non-routable address (`http://10.255.255.1/`) with
-    `HttpClient.Timeout := 900000`, so only the network wait holds it.
-  - **S3 `HttpDefaultTimeout`:** the same call with BC's default timeout.
-- **The driver** (`/coord/handoff/PR-199/drive.ts`) calls LethAL's own transport (`run` with `timeoutMs` 10 s), so the stop is
-  LethAL's real `StopHungRun`, with `stopGraceMs` raised to 900 s for this measurement only. For each shape it records:
-  - when the stop was confirmed by our side;
-  - when BC answered the held request, and with what status and text (or none by 900 s);
-  - whether the hung session is still in `Active Session` at the answer and at 900 s. That is read through the bc-dev MCP's
-    data tools, or a probe web-service read, by session id;
-  - afterwards: a control-app lease acquire and release, and one trivial `RunMutant`. This tells whether the server is healthy
-    or needs the owner's restart.
-- **Predictions:**
-  - **P1:** S1 is answered within 10 s with the 400 form, the session is gone, and the server is healthy.
-  - **P2:** S3 is answered later than 30 s but within about 130 s (BC's default HTTP timeout, plus margin), with the session gone
-    by then.
-  - **P3:** S2 is either answered only after the 900 s client timeout, or not by 900 s.
-- **Decision rule** (pre-committed; the design that follows is chosen by M1, not by preference):
-  - **A: every non-answered shape is answered later, with the stop form, and the session is then gone.** The fix is
-    client-side: at baseline only, hold the request longer for BC's answer, under a new `--baseline-stop-grace-ms`. Its default
-    is chosen from the measured times and stated with them. A late answer then scores as today's confirmed stop
-    (`baseline-test-stopped`), and the run goes on. The R658 rule is unchanged: no answer by the end of the grace still
-    quarantines.
-  - **B: a shape gets no answer, but its session is provably gone** (not in `Active Session`) and the server is healthy. The fix
-    adds a second form of confirmation: the control app reports whether that session id is still alive (a new read-only action,
-    so a control-app version, folded into PR-196's 1.0.0.28 only if both are ready together). "Gone" then confirms the stop. A
-    session that is still alive keeps the quarantine.
-  - **C: a session stays alive.** The quarantine stays (R658). Fix 3 then names the hung test and its shape in the quarantine
-    message, which fix 1's recovery steps already partly do. The underlying cause goes to the owner as a BC limit, with the
-    measurement.
-  - If M1 shows something none of these covers, a new pre-commitment comes first.
-- **What M1 cannot show:** the third DO hang (no network) may be a database wait or something else. M1 does not reproduce it.
-  The DO test itself is not rerun, because it hung only intermittently. The chosen design is judged on S1-S3 only, and says so.
+## 3. Measurement, in bounded stages (bc4, BC 29, under lethal-code's lease; owner question q-20261119T043331-68d01347; nothing runs before a yes)
+**Revised before any run** after the spec-adversary review (2026-11-19). The first version (master 461e8378) could pick a
+design with no evidence:
+- an HTTP shape that fails at once reaches no stop;
+- its measuring client is cut by Bun's own fetch limit, about 272-300 s (R191);
+- its health check is the one R658 calls untrustworthy;
+- branch B's evidence was unchecked against the work actually ending.
+
+This version measures only shapes whose wait ends by itself first. Every shape is checked for validity before the rule.
+
+- **The probe pair** (`/coord/handoff/PR-199/probe/`, scratch ids 76150-76199, checked free first; invented code). A test
+  codeunit, each test sent alone exactly as the bcdev baseline sends it (`RunMutantWithCoverage`, empty mutant id), and a probe
+  web service:
+  - **S1 `LoopsForever`:** writes and locks one scratch row (`P199 Witness`, key = the shape), then runs an AL loop bounded at
+    10 min. This is the control: the hang gate's shape.
+  - **S3 `HttpSlow60`:** writes and locks its scratch row, then makes `HttpClient.Get` to a non-routable address with
+    `HttpClient.Timeout := 60000`.
+  - **S2 (an unbounded network wait) and S4 (a database wait) are NOT run in this stage.** They need their own pre-commitment,
+    and an owner restart booked beforehand.
+- **The witness, which is the health check:** after each shape, a probe web-service call in a NEW session tries to lock and
+  modify that shape's scratch row, with `LockTimeout` on.
+  - If the row is free, the hung session's transaction is gone: its work ended.
+  - If it is still locked, the session's work goes on, whatever any session list says.
+  - Lease reads and a trivial run are not health evidence (R658).
+- **The driver** (`/coord/handoff/PR-199/drive.ts`) sends the held request through LethAL's own transport, with a
+  `fetchFn` wrapper that turns off Bun's idle timeout and logs these timings:
+  - request sent, headers received, body received, status, and the first 300 characters of the body;
+  - the error type, if the request fails;
+  - our `StopHungRun` sent and answered, with `stopped`.
+
+  The budget is 10 s. The held request is kept for at most 240 s, which is below Bun's limit about 272 s, bc4's OData
+  operation timeout (to be read and stated), and Linux's connect give-up at about 127 s. S3's own wait is 60 s, well under all
+  of these.
+- **M0, validity, before any stop:**
+  - S3 is run once with a 240 s budget and no stop: it must take 55-75 s and fail with an HTTP timeout error. A shape that
+    fails fast (BC refusing the address, a gateway "unreachable", or a refused `Timeout`) is void, and needs a new
+    pre-commitment.
+  - Each stop measurement must reproduce the DO symptom: our stop `confirmed`, and no BC answer within 30 s. A shape that is
+    answered within 30 s shows nothing about late answers; that is recorded, not counted for A.
+- **M1a, under the stop:** S1 and then S3, each once, with the witness after each.
+  - **P1:** S1 is answered within 10 s with the 400 form, and its witness row is free.
+  - **P2:** S3 is NOT answered within 30 s. It is answered between 45 and 75 s after our stop, after its own HTTP wait has
+    ended, and its witness row is free after the answer.
+  - The exact text of every answer is recorded.
+- **Decision rule** (pre-committed):
+  - **A** (P2 holds, with the stop form): the fix is client-side.
+    - At baseline only, the request is held longer under a new `--baseline-stop-grace-ms`.
+    - Its default is based on the longest native wait it should cover, not on S3's measured time. It goes into R821's
+      budget-plus-grace check, which refuses a total above the smaller of `REQUEST_CEILING_MS` and the client's own limit.
+    - A late answer on BC 28 (the 408, which names the stop) scores as today's confirmed stop.
+    - **On BC 29**, a late 400 is outside today's 10 s `STOP_400_WINDOW_MS`, and its text does not name the stop (R833, R53
+      §4.2). Widening that window needs an owner ruling. Even with the ruling, a late 400 scores only if the witness also shows
+      the work ended. That witness is a new client-side check, so it gets its own design and tests in the amendment.
+    - With no answer by the end of the grace, the run still quarantines (R658).
+  - **B** (session gone, no answer) is **not available** from this stage. A session missing from `Active Session` was not shown
+    to mean its work ended, and no database-wait shape is measured. It needs S4 and the witness, in its own pre-commitment.
+  - **C** (S3's answer never comes, or its witness row stays locked): the quarantine stays. The measurement goes to the owner as
+    a BC limit, and the quarantine message names the hung test.
+  - Anything else: a new pre-commitment first.
+- **Releasing bc4:** only if every shape was answered and every witness row is free. Otherwise the lease is kept, the
+  out-of-use marker is written, and the owner is asked through kraken.
+- **bc2, for BC 28's 408 form:** after M1a, S3 once on bc2 under its own lease, with the same witness. This is a measurement
+  before any bc2 gate leg is pre-committed.
+- **What this cannot show:**
+  - the third DO hang (no network);
+  - an unbounded network wait.
+
+  The chosen design states both gaps. The DO test itself is not rerun, because it hung only intermittently.
 
 ## 4. The change (filled in by an amendment after M1; nothing is built before it)
 Common to A and B:
 - **The test is left out by name,** as today's `baseline-test-stopped`.
 - **The mutants that only it covered are not reported as plain `no-coverage`.** The report's `baselineStopped` block already
   names the test. The amendment says, with a test, whether those mutants carry a note.
-- **Gates:** `itest:hang` on bc4 (the 400 form) and on bc2 (the 408 form), on the final head, with its existing legs unchanged
-  and a new baseline leg for the measured late-answer shape, pre-committed in the amendment. Plus the unit suite, red checks
-  in both directions, and VERIFY.
+- **Gates:** `itest:hang` on bc4 (the 400 form) and on bc2 (the 408 form), on the final head, with its existing legs unchanged.
+  - **A new baseline leg for the late-answer shape,** pre-committed in the amendment:
+    - its duration is at least the budget plus 30 s (so it cannot pass on the old path or on a fast failure; below that is a
+      BLOCK);
+    - `stopEvidence` is checked for each server form;
+    - the witness row is free afterwards.
+  - Plus the unit suite, red checks in both directions, and VERIFY.
