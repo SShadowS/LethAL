@@ -31,6 +31,7 @@
  * case below) fall through silently rather than throwing on a shape it doesn't handle.
  */
 import type { EventSubscriber, RunEvent } from "./events";
+import { httpPolicyLines } from "./http-policy";
 
 function formatSeconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
@@ -136,6 +137,13 @@ export function createProgressRenderer(
         write(`baseline batch ${event.batchIndex}: ${passed}/${total} passed${failingPart}`);
         break;
       }
+      case "tests-discovered":
+        // PR-197 (R1113 fix 2): which selected test codeunits can make a real outbound HTTP call.
+        if (event.httpPolicy !== undefined)
+          for (const l of httpPolicyLines(event.httpPolicy)) write(l);
+        if (event.httpPolicyFailed !== undefined)
+          write(`outbound HTTP check failed: ${event.httpPolicyFailed}; the run continues`);
+        break;
       case "coverage-split": {
         // Earns its place: on a real run, 66% no-coverage would have been visible here at batch
         // 1, roughly 15 minutes before the report said so.
@@ -204,7 +212,7 @@ export function createProgressRenderer(
       // facts the operator already supplied on the command line; `resume-resolved` restates
       // `--resume`'s own inputs, and its learned counts arrive anyway via `mutant-carried`/
       // `mutant-skipped-stranded`, which DO render through the mutant counter above;
-      // `tests-discovered` is a single up-front list with nothing to say beyond "N tests, once";
+      // `tests-discovered` renders only its PR-197 outbound-HTTP lines (above), never the list;
       // `batch-published`/`batch-invalidated` are compile/deploy plumbing a phase boundary
       // already brackets; `permission-canary` is a one-shot diagnostic whose verdict reaches the
       // operator through the final report regardless.
