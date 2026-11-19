@@ -55,12 +55,11 @@ export const TABLES_FIGURES = {
   platformArtifactKills: 4,
   assertionScreenDiscrimination: "partial",
   untargetedTriggerCount: 0,
-  /** 322 killed + 73 survived scored, plus 15 warm-kill replays, plus (R582) 15 warm-kill re-runs
-   *  under the mutant. The 15 warm-kill terms are the pre-R855 figures: R855's 8 added kills may
-   *  add warm kills, which only a live run shows. The kills at position 1 re-run as single calls,
-   *  which are not grouped. */
-  groupedCalls: 395 + 15 + 15,
-  warmKills: 15,
+  /** 342 killed + 83 survived scored, plus 17 warm-kill replays, plus (R582) 17 warm-kill re-runs
+   *  under the mutant. PR-209: RECORDED on bc2 (tables record, `tables figures (first)` line): groupedCalls 459, warmKills
+   *  17 (was 395 + 15 + 15 and 15). The kills at position 1 re-run as single calls, which are not grouped. */
+  groupedCalls: 425 + 17 + 17,
+  warmKills: 17,
   killPositions: [
     { mutantCode: "M0192", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
     { mutantCode: "M0197", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
