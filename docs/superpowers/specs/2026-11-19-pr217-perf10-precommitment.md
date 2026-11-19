@@ -77,3 +77,55 @@ it); 48 restarts (25 after a refusal, warm-up compile 1,014.1 s; 23 after a time
 8. **Output:** s per covered mutant, wall, restart count and cost, the setupMs/compileMs/baselineMs totals, verdict counts, against
    y2 AND y3, each comparison labelled with what is fair for it (mutant phase: y3; baseline and wall: the control; verdicts: y3
    per mutant, y2 as asked); the moved-verdict table; the ranked "where the remaining time goes".
+
+## Amendment 1 (2026-11-19, before any run; the replaced run request and the day's rulings)
+
+The first start (14:42Z) stopped in triage, before any baseline: **the CLI has no candidate mode**
+(`LETHAL_ALRUNNER_V3_CANDIDATE` is read only by the v3 itest). The owner ruled out a hand-written `.gated`
+(q-20261119T144427-5d4d1763) and chose a reviewed private gate (q-20261119T144716-dff42cde): PR-226. The run request was replaced
+(`/coord/handoff/from-alrunner/PERF-10-run-request.md`, the set-aside rule, owner option (a)). This amendment replaces
+"Candidate mode", the wrapper, and the parts of "Builds" and "Other differences" they touch. Everything not named here
+stands.
+
+**Order of steps; each must hold before the next:**
+1. PR-209, then PR-233, are on master.
+2. **Private gate** of perf-combined 2bb4b686 with PR-226's `--root /coord/handoff/PR-217/root --local-candidate <binary>`, from a
+   shell with no `LETHAL_*` variables. Its receipt is quoted in the result.
+   - It must PASS. A held or failed gate stops PERF-10 and goes to the orchestrator.
+   - Known beforehand: perf-combined's leg O1 reads HELD under `current`'s readings (PR-233: "held for PR-233's O1 pin"). A
+     PASS therefore needs a hand pin for perf-combined's exact binary carrying `o1.partnerLoginRefusal`. That pin is its own
+     pre-commitment, naming the binary, made only with the orchestrator's word. Nothing here writes one.
+3. The run, then the control, then the moved-verdict reruns on plain base.
+
+**What runs, replacing candidate mode and the wrapper:**
+- LethAL points `alRunnerV3.path` at the gated copy `/coord/handoff/PR-217/root/builds/<tag>/al-runner`, never a wrapper.
+  Session rules are a normal pinned session's: the pin check, the gate's own `.gated` facts, `unlike-bc` refusing, the probe
+  cached.
+- **Baseline batching** follows the gate's `.gated`: on when it carries `batchFacts` (a DBM leg that batched and passed), as in y3;
+  off otherwise. The result says which. When on, prediction 3 becomes "within ±15% of y3's 584.2 s", and the control is still
+  run as the same-mode reference for the wall.
+- **The whole `lethal run` runs under `taskset -c 0-11`** (PR-226's ruling), so every daemon is on the performance cores
+  (`cpu_core`). y2 and y3 ran unpinned on all 22 logical CPUs. **The control is pinned the same way**, so the fair speed reference
+  for this run is the control (baseline, wall) and the same-mode y3 figures only with that named.
+- **perf stat:** a small watcher attaches `perf stat -e instructions:u -p <pid>` to every 10th new `al-runner serve` pid and
+  writes `<pid>.perf`.
+- **Daemon stderr:** LethAL's own `alRunnerV3.daemonStderrDir` (PR-227) writes every daemon's FULL stderr to a file (`compile
+  cache:` and `login replay check:` lines included). **Raw timings:** PR-227's `timings.extra` on `serve-request-timed` carries
+  `setupParts` and `workspaceCache` from the summary JSON. So `--timings` must reach the daemon; how it is passed is named in
+  the result.
+- **LethAL head:** master with PR-227 and PR-233 (needed for the two items above), NOT df6d0073. The result lists every commit
+  between df6d0073 and that head that touches `packages/runner/src`, and names which could move a verdict or a timing.
+  y3's verdict comparison keeps the recheck class and those named commits apart.
+
+**Set-aside rule (owner, the replaced request), verbatim in effect:**
+- A mutant is SET ASIDE when any of its covering tests is NotRun with a reason naming "OnAfterLogin raised to the login
+  subscribers of the partner dependency apps" (or "a read of a global of SingleInstance codeunit ... changed it before the
+  first test").
+- Set-aside mutants are left out of BOTH the verdict comparison and the speed comparison (seconds per covered mutant and every
+  total), and reported apart: how many, which reason, and their y2 verdicts (killed / survived).
+- **Prediction: 0 set aside.** Upstream main c5861dcd9, which carries f9116dc96, refused nothing over PR-223's 90 DO mutants
+  (519 test rows). Any set-aside count above 0 is reported with its reason, and is not a failure of this prediction's purpose.
+- Every other moved verdict is a correctness question explained before any speed claim, as in prediction 2.
+
+**Comparisons:** speed against y2 (the request) AND y3 (the orchestrator), each labelled; verdict attribution per the request
+(rerun ONLY the moved mutants on plain 0e6397742, reported y2 / plain base / perf-combined).

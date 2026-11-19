@@ -550,8 +550,15 @@ export type V3RequestSized = {
 /**
  * PR-100: al-runner's own per-request timings (its `summary.timings`), only the known fields and only
  * when their type is right. Milliseconds, except `baselineSource` and `engineKept`.
+ * PR-227: `extra` keeps every OTHER field as al-runner sent it (`setupParts`, `workspaceCache`, and any
+ * field a later build adds), when it is a number, a string, a boolean, or one flat object of those.
+ * Anything deeper is left out. Measurement runs read it; no verdict or rule does.
  */
+export type V3TimingValue = number | string | boolean;
 export type V3Timings = {
+  readonly extra?: Readonly<
+    Record<string, V3TimingValue | Readonly<Record<string, V3TimingValue>>>
+  >;
   readonly setupMs?: number;
   readonly compileMs?: number;
   readonly engineMs?: number;

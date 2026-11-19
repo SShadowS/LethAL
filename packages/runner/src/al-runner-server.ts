@@ -63,6 +63,8 @@
  *   (measured on 2.11.0, R319); the symbols are start-time flags, see the constructor.
  */
 
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
 import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
@@ -338,7 +340,15 @@ export class AlRunnerServer {
     private readonly preprocessorSymbols: readonly string[] = [],
     /** R612: v2's daemon is `--server`; v3's is `serve` (the update gate's `serve-keep-reasons`). */
     private readonly subcommand: "--server" | "serve" = "--server",
+    /**
+     * PR-227 (`alRunnerV3.daemonStderrDir`): the file that gets this daemon's FULL stderr, named once
+     * the pid is known. Absent: nothing is written (the 64 KB tail above is kept either way).
+     */
+    private readonly stderrFileFor?: (pid: number | undefined) => string,
   ) {}
+
+  /** PR-227: the file this daemon's stderr goes to, when one is named and still writable. */
+  private stderrFile: string | undefined;
 
   /**
    * Spawns the daemon and waits for its readiness line.
@@ -371,6 +381,16 @@ export class AlRunnerServer {
     ];
     const proc = this.spawn(argv);
     this.proc = proc;
+    if (this.stderrFileFor !== undefined) {
+      const file = this.stderrFileFor(proc.pid);
+      try {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "");
+        this.stderrFile = file;
+      } catch (err) {
+        console.warn(`[lethal] daemon stderr not written to ${file}: ${String(err)} (PR-227)`);
+      }
+    }
     this.stdout = new LineReader(proc.stdout);
     this.stderrPump = this.pumpStderr(proc.stderr);
 
@@ -410,6 +430,17 @@ export class AlRunnerServer {
         const next = await it.next();
         if (next.done === true) return;
         const value = next.value;
+        if (this.stderrFile !== undefined) {
+          try {
+            // ponytail: a sync append per chunk (measurement runs only); a write stream if a chatty daemon ever shows the cost
+            appendFileSync(this.stderrFile, value);
+          } catch (err) {
+            console.warn(
+              `[lethal] daemon stderr no longer written to ${this.stderrFile}: ${String(err)} (PR-227)`,
+            );
+            this.stderrFile = undefined;
+          }
+        }
         this.stderrText += decoder.decode(value, { stream: true });
         if (this.stderrText.length > STDERR_KEEP_BYTES) {
           this.stderrText = this.stderrText.slice(-STDERR_KEEP_BYTES);
@@ -614,6 +645,19 @@ export class AlRunnerServer {
       proc.kill();
     } catch {
       // Already exited.
+    }
+    // PR-227: with a stderr file, let the pump read what is still in the pipe (a crash text, the last
+    // counters) before ending it below, so the file holds the FULL stderr. Bounded like the waits below.
+    // Without a file nothing changes.
+    if (this.stderrFile !== undefined) {
+      await Promise.race([
+        proc.wait?.().catch(() => undefined) ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, 5000)),
+      ]);
+      await Promise.race([
+        this.stderrPump ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, 1000)),
+      ]);
     }
     // END the stderr drain rather than merely waiting for it. Killing the child usually closes the
     // pipe, but "usually" leaves an outstanding read holding the event loop open, and a completed

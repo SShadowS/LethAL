@@ -7,16 +7,18 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   readlink,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import path, { dirname, join } from "node:path";
 import { V3_GATE_LEGS } from "../packages/runner/itest/al-runner-v3-gate";
 import { V3_CAPABILITY_FACTS } from "../packages/runner/src/al-runner-v3-contract";
-import { parseGated } from "../packages/runner/src/al-runner-v3-pin";
+import { checkGated, parseGated } from "../packages/runner/src/al-runner-v3-pin";
 import {
   type GatedBuildEntry,
   V3_BUILD_PINS,
@@ -26,23 +28,33 @@ import {
   type CommitOrder,
   GATED_BUILDS_FILE,
   GATE_STEPS,
+  GATE_WORKTREE,
   HEAVY_JOB,
   type Outcome,
   type PublishResult,
+  ROOT,
   type UpdateDeps,
+  type UpdateHandlers,
   V3_CDO_DEFAULT,
   argv0FromCmdline,
   batchingRecordLine,
   candidates,
+  checkPrivateRoot,
+  copyCacheTree,
   countHeavyJobs,
   dailyOnce,
+  dispatchUpdate,
   edgeOnce,
   edgeRejudge,
   expectedSha,
   gateOne,
+  isUnderRoot,
   movesUnder,
   parseGateLegs,
+  parseUpdateArgs,
   pinDigests,
+  privateGateOnce,
+  privateRealDeps,
   publishPending,
   publishToMaster,
   readReceipt,
@@ -2655,5 +2667,960 @@ linuxOnly("R859: refreshRows", () => {
     const { deps } = mk(p, { outcome: "gate-fail" });
     expect(await refreshRows(deps, ["edge-aaaaaaaaa"])).toEqual(["gate-fail"]);
     expect(existsSync(join(dir, "refresh.json"))).toBe(false);
+  });
+});
+
+// PR-226: gate a local build privately (`--root`, `--local-candidate`).
+describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)", () => {
+  const FULL = "a".repeat(40);
+  const refused = (argv: string[]) => {
+    try {
+      parseUpdateArgs(argv);
+    } catch (err) {
+      return String(err);
+    }
+    return undefined;
+  };
+
+  test("each existing mode parses as before; no argument is the daily mode", () => {
+    expect(parseUpdateArgs([])).toEqual({ mode: "daily" });
+    expect(parseUpdateArgs(["--pin-digests"])).toEqual({ mode: "pin-digests" });
+    expect(parseUpdateArgs(["--edge"])).toEqual({ mode: "edge" });
+    expect(parseUpdateArgs(["--refresh-rows", "a,b,,c"])).toEqual({
+      mode: "refresh-rows",
+      ids: ["a", "b", "c"],
+    });
+    expect(parseUpdateArgs(["--edge-rejudge", "c893e3633"])).toEqual({
+      mode: "edge-rejudge",
+      sha: "c893e3633",
+    });
+    expect(parseUpdateArgs(["--regate", FULL])).toEqual({ mode: "regate", commit: FULL });
+    expect(parseUpdateArgs(["--root", "/x/r", "--local-candidate", "/x/c"])).toEqual({
+      mode: "private",
+      root: "/x/r",
+      candidate: "/x/c",
+    });
+    // The two private flags may come in either order.
+    expect(parseUpdateArgs(["--local-candidate", "/x/c", "--root", "/x/r"])).toEqual({
+      mode: "private",
+      root: "/x/r",
+      candidate: "/x/c",
+    });
+  });
+
+  test("R4/R5: an unknown argument, an `=` spelling, a missing value, a value that starts with `-`, a duplicate: each refused by name", () => {
+    const bad: string[][] = [
+      ["--bogus"],
+      ["stray"],
+      ["--root=x"],
+      ["--local-candidate=y"],
+      ["--root=x", "--local-candidate", "y"],
+      ["--root"],
+      ["--root", "--local-candidate", "y"],
+      ["--root", "x", "--local-candidate"],
+      ["--root", "x", "--local-candidate", "-y"],
+      ["--root", "a", "--root", "b", "--local-candidate", "c"],
+      ["--regate"],
+      ["--regate", "abc"],
+      ["--regate", `${FULL}0`],
+      ["--edge-rejudge"],
+      ["--edge-rejudge", "--edge"],
+      ["--refresh-rows"],
+      ["--edge", "--edge"],
+    ];
+    for (const argv of bad) {
+      const text = refused(argv);
+      expect(text, argv.join(" ")).toMatch(/al-runner-v3-update-args-refused/);
+    }
+  });
+
+  test("R1/R2: `--root` alone and `--local-candidate` alone are refused by name", () => {
+    expect(refused(["--root", "/x/r"])).toMatch(/--root and --local-candidate come together/);
+    expect(refused(["--local-candidate", "/x/c"])).toMatch(
+      /--root and --local-candidate come together/,
+    );
+  });
+
+  test("R4: either private flag with any mode flag is refused, in any order", () => {
+    const modes: string[][] = [
+      ["--regate", FULL],
+      ["--edge"],
+      ["--edge-rejudge", "c893e3633"],
+      ["--refresh-rows", "a"],
+      ["--pin-digests"],
+    ];
+    for (const m of modes) {
+      for (const argv of [
+        [...m, "--root", "r", "--local-candidate", "c"],
+        ["--root", "r", "--local-candidate", "c", ...m],
+        ["--root", "r", ...m],
+        ["--local-candidate", "c", ...m],
+      ])
+        expect(refused(argv), argv.join(" ")).toMatch(/al-runner-v3-update-args-refused/);
+    }
+  });
+
+  test("two mode flags are refused (one dispatcher, one mode)", () => {
+    expect(refused(["--edge", "--pin-digests"])).toMatch(/one mode/);
+  });
+
+  function counters() {
+    const ran: string[] = [];
+    const h: UpdateHandlers = {
+      pinDigests: async () => void ran.push("pin-digests"),
+      refreshRows: async (ids) => void ran.push(`refresh-rows:${ids.join(",")}`),
+      edge: async () => void ran.push("edge"),
+      edgeRejudge: async (sha) => void ran.push(`edge-rejudge:${sha}`),
+      regate: async (c) => void ran.push(`regate:${c}`),
+      daily: async () => void ran.push("daily"),
+      privateGate: async (r, c) => void ran.push(`private:${r}:${c}`),
+    };
+    return { ran, h };
+  }
+
+  test("the CLI refusals run NO mode function (no daily, edge, regate, rejudge, refresh, private)", async () => {
+    for (const argv of [
+      ["--root=x"],
+      ["--root", "x", "--local-candidate", "y", "--edge"],
+      ["--root", "--local-candidate", "y"],
+      ["--root", "x"],
+      ["--local-candidate", "y"],
+      ["--root", "x", "--local-candidate", "y", "--regate", FULL],
+      ["--bogus"],
+      ["--edge", "--bogus"],
+    ]) {
+      const { ran, h } = counters();
+      await expect(dispatchUpdate(argv, h), argv.join(" ")).rejects.toThrow(
+        /al-runner-v3-update-args-refused/,
+      );
+      expect(ran, argv.join(" ")).toEqual([]);
+    }
+  });
+
+  test("each good argv runs exactly its own mode function", async () => {
+    const cases: [string[], string][] = [
+      [[], "daily"],
+      [["--edge"], "edge"],
+      [["--pin-digests"], "pin-digests"],
+      [["--refresh-rows", "a,b"], "refresh-rows:a,b"],
+      [["--edge-rejudge", "c893e3633"], "edge-rejudge:c893e3633"],
+      [["--regate", FULL], `regate:${FULL}`],
+      [["--root", "/r", "--local-candidate", "/c"], "private:/r:/c"],
+    ];
+    for (const [argv, want] of cases) {
+      const { ran, h } = counters();
+      await dispatchUpdate(argv, h);
+      expect(ran, argv.join(" ")).toEqual([want]);
+    }
+  });
+});
+
+linuxOnly("PR-226: the defaults are unchanged (D1-D3)", () => {
+  test("D1: realDeps() has root ROOT and gateWorktree GATE_WORKTREE; an option changes only the worktree", () => {
+    const d = realDeps();
+    expect(d.root).toBe(ROOT);
+    expect(d.gateWorktree).toBe(GATE_WORKTREE);
+    const p = realDeps("/some/root", { gateWorktree: "/some/root/gate-worktree" });
+    expect(p.root).toBe("/some/root");
+    expect(p.gateWorktree).toBe("/some/root/gate-worktree");
+  });
+
+  test("D2: no flags gives the daily mode, and the daily path still calls publishPending (a ledger row goes to publishEntries)", async () => {
+    expect(parseUpdateArgs([])).toEqual({ mode: "daily" });
+    await setup();
+    const f = join(await current(), ".gated");
+    await writeFile(
+      f,
+      JSON.stringify({
+        ...JSON.parse(await readFile(f, "utf8")),
+        readingsFrom: "alpha.12-d4bc8d3a5",
+      }),
+    );
+    await writeFile(join(root, "gated-builds.jsonl"), `${JSON.stringify({ id: "edge-old" })}\n`);
+    const { deps, seen } = edgeOf({
+      outcome: "pass",
+      pinApplied: "alpha.12-d4bc8d3a5",
+      tags: ["edge"],
+    });
+    await dailyOnce(deps);
+    expect(seen.published).toContain("edge-old");
+  });
+
+  test("D3: a default candidate still comes from download, SHA256SUMS is checked, and the gate is not private", async () => {
+    await setup();
+    const bad = fake({ outcome: "pass", badSums: true });
+    expect(await updateOnce(bad.deps)).toEqual(["infra-fail"]);
+    expect(bad.seen.downloads).toBe(1);
+    expect(bad.seen.extracts).toBe(0);
+    expect(bad.seen.gates).toEqual([]);
+    const good = fake({ outcome: "pass" });
+    expect(await updateOnce(good.deps)).toEqual(["pass"]);
+    expect(good.seen.downloads).toBe(1);
+    expect(good.seen.envs[0]?.LETHAL_ALRUNNER_V3_CACHE).toBeUndefined();
+    expect(existsSync(join(root, "private"))).toBe(false);
+    expect(existsSync(join(root, "builds"))).toBe(false);
+    expect(existsSync(join(root, ALPHA3_DIR, "al-runner"))).toBe(true);
+  });
+});
+
+describe("PR-226: checkPrivateRoot (R3)", () => {
+  let scratch = "";
+  afterEach(async () => {
+    if (scratch !== "") await rm(scratch, { recursive: true, force: true });
+    scratch = "";
+  });
+
+  test("R3: the tools folder and anything under it is refused; a sibling named toolsx is accepted (portable paths)", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "lethal-pr226-r3-"));
+    const tools = join(scratch, "tools");
+    await mkdir(tools);
+    await mkdir(join(scratch, "toolsx"));
+    for (const bad of [
+      tools,
+      join(tools, "al-runner-v3"),
+      join(tools, "not", "yet", "there"),
+      join(scratch, "toolsx", "..", "tools", "x"),
+    ])
+      await expect(checkPrivateRoot(bad, tools), bad).rejects.toThrow(/under/);
+    for (const ok of [
+      join(scratch, "toolsx"),
+      join(scratch, "toolsx", "priv"),
+      join(scratch, "elsewhere"),
+    ])
+      await expect(checkPrivateRoot(ok, tools), ok).resolves.toBeUndefined();
+  });
+
+  test("B1: isUnderRoot compares by path.relative, so a Windows path (a drive, backslashes) is judged right", () => {
+    const w = path.win32;
+    const t = "D:\\work\\tools";
+    expect(isUnderRoot(t, t, w)).toBe(true);
+    expect(isUnderRoot("D:\\work\\tools\\al-runner-v3", t, w)).toBe(true);
+    expect(isUnderRoot("D:\\work\\toolsx", t, w)).toBe(false);
+    expect(isUnderRoot("D:\\work\\toolsx\\priv", t, w)).toBe(false);
+    expect(isUnderRoot("E:\\work\\tools\\x", t, w)).toBe(false);
+    expect(isUnderRoot("D:\\work", t, w)).toBe(false);
+    expect(isUnderRoot("/work/tools/x", "/work/tools", path.posix)).toBe(true);
+    expect(isUnderRoot("/work/toolsx", "/work/tools", path.posix)).toBe(false);
+  });
+
+  linuxOnly("R3 (Linux paths)", () => {
+    test("the literal /work/tools is refused; /work/toolsx is accepted", async () => {
+      await expect(checkPrivateRoot("/work/tools")).rejects.toThrow(/under \/work\/tools/);
+      await expect(checkPrivateRoot("/work/tools/not/yet/there")).rejects.toThrow(
+        /under \/work\/tools/,
+      );
+      await expect(checkPrivateRoot("/work/toolsx/priv")).resolves.toBeUndefined();
+    });
+
+    test("R3: a symlink into the tools folder is refused", async () => {
+      scratch = await mkdtemp(join(tmpdir(), "lethal-pr226-r3l-"));
+      const tools = join(scratch, "tools");
+      await mkdir(tools);
+      await symlink(tools, join(scratch, "link"));
+      await expect(checkPrivateRoot(join(scratch, "link", "new", "deeper"), tools)).rejects.toThrow(
+        /under/,
+      );
+      await expect(checkPrivateRoot(join(scratch, "link"), tools)).rejects.toThrow(/under/);
+    });
+  });
+});
+
+describe("PR-226: copyCacheTree reads the source and never writes it", () => {
+  test("a copy equal to the source, the source byte-identical after", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lethal-pr226-cache-"));
+    try {
+      const src = join(dir, "src");
+      await mkdir(join(src, "compile"), { recursive: true });
+      await writeFile(join(src, "compile", "a.bin"), "AAA");
+      await writeFile(join(src, "b.txt"), "B");
+      const list = async (d: string) => (await readdir(d, { recursive: true })).sort();
+      const before = await list(src);
+      await copyCacheTree(src, join(dir, "dst"));
+      expect(await list(join(dir, "dst"))).toEqual(before);
+      expect(await readFile(join(dir, "dst", "compile", "a.bin"), "utf8")).toBe("AAA");
+      expect(await list(src)).toEqual(before);
+      expect(await readFile(join(src, "compile", "a.bin"), "utf8")).toBe("AAA");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+linuxOnly("PR-226: privateGateOnce", () => {
+  const ROOT_PIN = "alpha.12-d4bc8d3a5";
+  const TAG = `local-${sha("alpha3").slice(0, 12)}`;
+  let scratch = "";
+  let priv = "";
+  const made: string[] = [];
+  afterEach(async () => {
+    for (const d of made.splice(0)) await rm(d, { recursive: true, force: true });
+    scratch = "";
+    priv = "";
+  });
+
+  /** Every file and link under `dir`, with content hashes: the byte-level picture of a tree. */
+  async function snap(dir: string): Promise<string> {
+    const out: string[] = [];
+    const walk = async (d: string): Promise<void> => {
+      for (const e of (await readdir(d, { withFileTypes: true })).sort((a, b) =>
+        a.name.localeCompare(b.name),
+      )) {
+        const p = join(d, e.name);
+        if (e.isSymbolicLink()) out.push(`${p} -> ${await readlink(p)}`);
+        else if (e.isDirectory()) {
+          out.push(`${p}/`);
+          await walk(p);
+        } else out.push(`${p} ${sha(await readFile(p, "utf8"))}`);
+      }
+    };
+    await walk(dir);
+    return out.join("\n");
+  }
+
+  /** A shared root (`root`, with `current`), a private root, a candidate and the counting fakes. */
+  async function world(
+    o: Parameters<typeof fake>[0] = {},
+    opt: { pinned?: boolean; candidateAs?: "file" | "folder" } = {},
+  ) {
+    await setup();
+    if (opt.pinned === true) {
+      const f = join(await current(), ".gated");
+      await writeFile(
+        f,
+        JSON.stringify({ ...JSON.parse(await readFile(f, "utf8")), readingsFrom: ROOT_PIN }),
+      );
+    }
+    scratch = await mkdtemp(join(tmpdir(), "lethal-pr226-"));
+    made.push(scratch);
+    priv = join(scratch, "priv");
+    const candDir = join(scratch, "cand");
+    await mkdir(candDir);
+    await writeFile(join(candDir, "al-runner"), "alpha3");
+    await chmod(join(candDir, "al-runner"), 0o755);
+    const sharedCache = join(scratch, "shared-cache");
+    await mkdir(sharedCache);
+    const f = fake({ outcome: "pass", realSha: true, ...o });
+    const calls = { list: 0, download: 0, order: 0, copy: [] as string[][], cwd: [] as string[] };
+    const deps: UpdateDeps = {
+      ...f.deps,
+      root: priv,
+      gateWorktree: join(priv, "gate-worktree"),
+      listReleases: async () => {
+        calls.list += 1;
+        return [];
+      },
+      download: async () => {
+        calls.download += 1;
+        throw new Error("a private gate never downloads");
+      },
+      commitOrder: async () => {
+        calls.order += 1;
+        return "ahead";
+      },
+      procsWithCwdUnder: async (d) => {
+        calls.cwd.push(d);
+        return o.orphans ?? [];
+      },
+    };
+    const run = (over: Partial<Parameters<typeof privateGateOnce>[1]> = {}) =>
+      privateGateOnce(deps, {
+        sharedRoot: root,
+        candidate: opt.candidateAs === "folder" ? candDir : join(candDir, "al-runner"),
+        env: {},
+        sharedCache,
+        copyCache: async (from, to) => {
+          calls.copy.push([from, to]);
+          await mkdir(to, { recursive: true });
+        },
+        ...over,
+      });
+    return { ...f, deps, calls, run, candDir, sharedCache };
+  }
+
+  const receiptDirs = async () =>
+    existsSync(join(priv, "private"))
+      ? (await readdir(join(priv, "private"))).filter((n) => n !== "update.log")
+      : [];
+  const allNames = async () => (await readdir(priv, { recursive: true })).map((n) => String(n));
+
+  async function untouched(w: Awaited<ReturnType<typeof world>>, sharedBefore: string) {
+    expect(await snap(root)).toBe(sharedBefore);
+    expect(w.calls.download).toBe(0);
+    expect(w.calls.list).toBe(0);
+    expect(w.calls.order).toBe(0);
+    expect(w.seen.downloads).toBe(0);
+    expect(w.seen.published).toEqual([]);
+    for (const n of ["gated-builds.jsonl", "gated-builds.published", "current", "failed", "held"])
+      expect(existsSync(join(priv, n)), n).toBe(false);
+    // The only `.gated` a private run may write is the gated copy's, and only on a pass.
+    expect(
+      (await allNames()).filter((n) => n.endsWith(".gated") && !n.startsWith("builds/")),
+    ).toEqual([]);
+  }
+
+  test("P1: a pass: outcome pass; the shared root is byte-identical; no ledger, current, failed or held; nothing fetched; the receipt is under <root>/private/ (a `current` with NO readingsFrom)", async () => {
+    const w = await world();
+    const before = await snap(root);
+    const r = await w.run();
+    expect(r.outcome).toBe("pass");
+    await untouched(w, before);
+    const dirs = await receiptDirs();
+    expect(dirs.length).toBe(1);
+    expect(dirs[0]).toMatch(new RegExp(`^${TAG}@${GATED_COMMIT}-[0-9a-f-]{36}$`));
+    expect(r.dir).toBe(join(priv, "private", dirs[0] ?? ""));
+    expect(existsSync(join(r.dir ?? "", "receipt.json"))).toBe(true);
+    expect(w.seen.gates).toEqual([GATED_COMMIT]);
+  });
+
+  for (const [name, outcome] of [
+    ["P2", "gate-fail"],
+    ["P3", "held"],
+    ["P4", "infra-fail"],
+  ] as const) {
+    test(`${name}: a ${outcome}: the outcome is returned, the receipt is kept under <root>/private/, and nothing else is written (G2: no .gated, no build folder, anywhere)`, async () => {
+      const w = await world({ outcome });
+      const before = await snap(root);
+      const r = await w.run();
+      expect(r.outcome).toBe(outcome);
+      await untouched(w, before);
+      expect(existsSync(join(priv, "builds"))).toBe(false);
+      expect((await allNames()).filter((n) => n.includes(".gated"))).toEqual([]);
+      const dirs = await receiptDirs();
+      expect(dirs.length).toBe(1);
+      expect(existsSync(join(priv, "private", dirs[0] ?? "", "receipt.json"))).toBe(true);
+      // The fake gate was given the cache under <root>.
+      expect(w.seen.envs[0]?.LETHAL_ALRUNNER_V3_CACHE).toBe(join(priv, "cache"));
+    });
+  }
+
+  test("P5: the gate runs at current's lethalCommit, by pinRootOf(current), with the candidate variables and the cache under <root>; the receipt is read as a candidate (K must pass)", async () => {
+    const w = await world({ pinApplied: ROOT_PIN }, { pinned: true });
+    expect((await w.run()).outcome).toBe("pass");
+    expect(w.seen.gates).toEqual([GATED_COMMIT]);
+    const env = w.seen.envs[0] ?? {};
+    expect(env.LETHAL_V3_PIN_FROM).toBe(ROOT_PIN);
+    expect(env.LETHAL_ALRUNNER_V3_CANDIDATE).toBe("1");
+    expect(env.LETHAL_ITEST_V3_K_ON_CANDIDATE).toBe("1");
+    expect(env.LETHAL_ITEST_ALRUNNER_V3).toBe("1");
+    expect(env.LETHAL_ITEST_V3_TABLES).toBe("1");
+    expect(env.LETHAL_ALRUNNER_V3_CACHE).toBe(join(priv, "cache"));
+    expect(env.LETHAL_ALRUNNER_V3_CACHE?.startsWith(`${priv}/`)).toBe(true);
+    expect(env.LETHAL_V3_GATE_RECEIPT?.startsWith(`${priv}/`)).toBe(true);
+    // As a candidate: a pass whose K did not pass is not a pass.
+    const k = await world(
+      { pinApplied: ROOT_PIN, legs: { ...legsFor("pass"), K: "gate-fail" } },
+      { pinned: true },
+    );
+    expect((await k.run()).outcome).toBe("gate-fail");
+  });
+
+  test("P6: a pass whose receipt applied another pin than pinRootOf(current) is infra-fail, and writes no .gated (a `current` with NO readingsFrom)", async () => {
+    const w = await world({ pinApplied: ROOT_PIN });
+    const r = await w.run();
+    expect(r.outcome).toBe("infra-fail");
+    expect(existsSync(join(priv, "builds"))).toBe(false);
+    expect((await allNames()).filter((n) => n.includes(".gated"))).toEqual([]);
+    expect(w.seen.logs.join("\n")).toMatch(
+      /a pass that applied pin alpha\.12-d4bc8d3a5, not \(none\)/,
+    );
+  });
+
+  test("P6b: a `current` with NO readingsFrom whose version and sha256 ARE a hand pin: the pin comes from findV3Pin, and a pass that applied it passes (the old `gated.readingsFrom` check would call it infra-fail)", async () => {
+    // A real hand pin of al-runner-v3-pins.ts: pinRootOf(current) is its id only through findV3Pin.
+    const HAND = {
+      id: "alpha.5-07342060e",
+      version: "al-runner 3.0.0-alpha.5 (07342060e)",
+      binarySha256: "fd4d6d406a2f2170fccfe13413d51bbb1317b78b3ef5af3800ca9a6009b51db2",
+    };
+    const w = await world({ pinApplied: HAND.id });
+    const f = join(await current(), ".gated");
+    // No readingsFrom: the pin must come from findV3Pin(version, sha256) alone.
+    const { readingsFrom: _none, ...g } = JSON.parse(await readFile(f, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      f,
+      JSON.stringify({ ...g, version: HAND.version, binarySha256: HAND.binarySha256 }),
+    );
+    const r = await w.run();
+    expect(r.outcome).toBe("pass");
+    const gated = parseGated(await readFile(join(priv, "builds", TAG, ".gated"), "utf8"), "x");
+    expect(gated.readingsFrom).toBe(HAND.id);
+    expect(w.seen.envs[0]?.LETHAL_V3_PIN_FROM).toBe(HAND.id);
+  });
+
+  test("G1: a pass writes <root>/builds/<tag>/al-runner (mode 755, the candidate's bytes) and the gate's own .gated beside it, and nothing outside <root>", async () => {
+    const w = await world({ pinApplied: ROOT_PIN }, { pinned: true });
+    const sharedBefore = await snap(root);
+    const candBefore = await snap(w.candDir);
+    expect((await w.run()).outcome).toBe("pass");
+    const dest = join(priv, "builds", TAG);
+    expect(await readFile(join(dest, "al-runner"), "utf8")).toBe("alpha3");
+    expect((await stat(join(dest, "al-runner"))).mode & 0o777).toBe(0o755);
+    const g = parseGated(await readFile(join(dest, ".gated"), "utf8"), "x");
+    expect(g.binarySha256).toBe(sha("alpha3"));
+    expect(g.version).toBe("al-runner 3.0.0-alpha.3 (c893e3633)");
+    expect(g.lethalCommit).toBe(GATED_COMMIT);
+    expect(g.readingsFrom).toBe(ROOT_PIN);
+    expect(g.gatedAt).toBe("2026-10-21T00:00:00Z");
+    expect(await snap(root)).toBe(sharedBefore);
+    expect(await snap(w.candDir)).toBe(candBefore);
+    expect((await readdir(scratch)).sort()).toEqual(["cand", "priv", "shared-cache"]);
+    expect(existsSync(join(priv, "current"))).toBe(false);
+    expect(existsSync(join(priv, "gated-builds.jsonl"))).toBe(false);
+  });
+
+  test("G3: checkGated accepts the private copy on that .gated; it refuses the same binary with no .gated, and a .gated whose sha256 differs", async () => {
+    const w = await world();
+    expect((await w.run()).outcome).toBe("pass");
+    const dest = join(priv, "builds", TAG);
+    const version = "al-runner 3.0.0-alpha.3 (c893e3633)";
+    const none = { findBuild: () => undefined };
+    const ok = await checkGated(join(dest, "al-runner"), version, none);
+    expect(ok.binarySha256).toBe(sha("alpha3"));
+    // The same bytes with no `.gated` beside them.
+    const bare = join(scratch, "bare");
+    await mkdir(bare);
+    await writeFile(join(bare, "al-runner"), "alpha3");
+    await expect(checkGated(join(bare, "al-runner"), version, none)).rejects.toThrow(
+      /not a gated build/,
+    );
+    // A `.gated` that names another sha256.
+    const g = JSON.parse(await readFile(join(dest, ".gated"), "utf8"));
+    await writeFile(join(dest, ".gated"), JSON.stringify({ ...g, binarySha256: sha("other") }));
+    await expect(checkGated(join(dest, "al-runner"), version, none)).rejects.toThrow(/pins/);
+  });
+
+  test("a changed copy (its sha256 not the receipt's) is infra-fail and leaves no .gated", async () => {
+    const w = await world();
+    // The candidate changes between the gate and the copy: the gate's own hook edits it.
+    const f = w.deps.runGate;
+    const deps2 = {
+      ...w.deps,
+      runGate: async (...a: Parameters<typeof f>) => {
+        await f(...a);
+        await writeFile(join(w.candDir, "al-runner"), "alpha3-changed");
+      },
+    };
+    const r = await privateGateOnce(deps2, {
+      sharedRoot: root,
+      candidate: join(w.candDir, "al-runner"),
+      env: {},
+      sharedCache: w.sharedCache,
+      copyCache: async (_f, to) => mkdir(to, { recursive: true }).then(() => undefined),
+    });
+    expect(r.outcome).toBe("infra-fail");
+    expect((await allNames()).filter((n) => n.includes(".gated"))).toEqual([]);
+  });
+
+  test("one receipt folder per run: a second run's receipt never overwrites the first's (builds/ is covered by the S2 tests)", async () => {
+    const w = await world();
+    const a = await w.run();
+    expect(a.outcome).toBe("pass");
+    const second = fake({ outcome: "gate-fail", realSha: true });
+    const b = await privateGateOnce(
+      { ...w.deps, runGate: second.deps.runGate },
+      {
+        sharedRoot: root,
+        candidate: join(w.candDir, "al-runner"),
+        env: {},
+        sharedCache: w.sharedCache,
+        copyCache: async () => undefined,
+      },
+    );
+    expect(b.outcome).toBe("gate-fail");
+    expect(a.dir).not.toBe(b.dir);
+    expect((await receiptDirs()).length).toBe(2);
+    expect(JSON.parse(await readFile(join(a.dir ?? "", "receipt.json"), "utf8")).outcome).toBe(
+      "pass",
+    );
+    expect(JSON.parse(await readFile(join(b.dir ?? "", "receipt.json"), "utf8")).outcome).toBe(
+      "gate-fail",
+    );
+  });
+
+  type World = Awaited<ReturnType<typeof world>>;
+  /** Another gate run on the same private root and candidate, by another fake gate. */
+  const again = (w: World, o: Parameters<typeof fake>[0], over: Partial<UpdateDeps> = {}) => {
+    const s = fake({ realSha: true, ...o });
+    return privateGateOnce(
+      { ...w.deps, runGate: s.deps.runGate, ...over },
+      {
+        sharedRoot: root,
+        candidate: join(w.candDir, "al-runner"),
+        env: {},
+        sharedCache: w.sharedCache,
+        copyCache: async () => undefined,
+      },
+    );
+  };
+  const VERSION3 = "al-runner 3.0.0-alpha.3 (c893e3633)";
+  const NO_MANIFEST = { findBuild: () => undefined };
+  const buildNames = async () => readdir(join(priv, "builds", TAG));
+
+  test("S2a: a pass, then a gate-fail of the same bytes: the old .gated is retired, so checkGated accepts nothing; the retirement is logged", async () => {
+    const w = await world();
+    expect((await w.run()).outcome).toBe("pass");
+    const copy = join(priv, "builds", TAG, "al-runner");
+    expect((await checkGated(copy, VERSION3, NO_MANIFEST)).binarySha256).toBe(sha("alpha3"));
+    expect((await again(w, { outcome: "gate-fail" })).outcome).toBe("gate-fail");
+    await expect(checkGated(copy, VERSION3, NO_MANIFEST)).rejects.toThrow(/not a gated build/);
+    expect((await buildNames()).filter((n) => n.startsWith(".gated.retired-")).length).toBe(1);
+    expect(w.seen.logs.join("\n")).toMatch(/retired/);
+  });
+
+  test("S2a: a held and an infra-fail after a pass retire the .gated too", async () => {
+    for (const o of ["held", "infra-fail"] as const) {
+      const w = await world();
+      expect((await w.run()).outcome).toBe("pass");
+      expect((await again(w, { outcome: o })).outcome).toBe(o);
+      expect(existsSync(join(priv, "builds", TAG, ".gated")), o).toBe(false);
+    }
+  });
+
+  test("S2b/c: a copy whose sha256 differs removes only its own tmp copy: the earlier pass stays valid", async () => {
+    const w = await world();
+    expect((await w.run()).outcome).toBe("pass");
+    const s = fake({ outcome: "pass", realSha: true });
+    const r = await again(
+      w,
+      {},
+      {
+        runGate: async (...a) => {
+          await s.deps.runGate(...a);
+          // The bytes change AFTER the gate measured them and BEFORE the copy.
+          await writeFile(join(w.candDir, "al-runner"), "alpha3-changed");
+        },
+      },
+    );
+    expect(r.outcome).toBe("infra-fail");
+    const copy = join(priv, "builds", TAG, "al-runner");
+    expect(await readFile(copy, "utf8")).toBe("alpha3");
+    expect((await checkGated(copy, VERSION3, NO_MANIFEST)).binarySha256).toBe(sha("alpha3"));
+    expect((await buildNames()).filter((n) => n.includes(".tmp-"))).toEqual([]);
+  });
+
+  test("S2b: a pass leaves no tmp file beside the copy and .gated", async () => {
+    const w = await world();
+    expect((await w.run()).outcome).toBe("pass");
+    expect((await buildNames()).sort()).toEqual([".gated", "al-runner"]);
+  });
+
+  test("S2d: a copy or rename error (here: the target is a non-empty folder) is infra-fail with the error text, and writes no .gated", async () => {
+    const w = await world();
+    await mkdir(join(priv, "builds", TAG, "al-runner", "sub"), { recursive: true });
+    const r = await w.run();
+    expect(r.outcome).toBe("infra-fail");
+    expect(existsSync(join(priv, "builds", TAG, ".gated"))).toBe(false);
+    expect(w.seen.logs.join("\n")).toMatch(
+      /infra-fail: the gated copy could not be written: .*(EISDIR|ENOTDIR|ENOTEMPTY|EEXIST)/,
+    );
+    expect((await buildNames()).filter((n) => n.includes(".tmp-"))).toEqual([]);
+  });
+
+  test("the cache: seeded once from the shared cache, atomically (copied beside it, then renamed), never the source, not seeded again", async () => {
+    const w = await world();
+    await w.run();
+    expect(w.calls.copy.length).toBe(1);
+    expect(w.calls.copy[0]?.[0]).toBe(w.sharedCache);
+    expect(w.calls.copy[0]?.[1]?.startsWith(join(priv, "cache.tmp-"))).toBe(true);
+    expect(existsSync(join(priv, "cache"))).toBe(true);
+    expect((await readdir(priv)).filter((n) => n.startsWith("cache.tmp-"))).toEqual([]);
+    await w.run();
+    expect(w.calls.copy.length).toBe(1);
+  });
+
+  test("S1: a seed that writes a file and then throws leaves no <root>/cache and no tmp folder; the next run seeds again", async () => {
+    const w = await world();
+    await expect(
+      w.run({
+        copyCache: async (_f, to) => {
+          await mkdir(to, { recursive: true });
+          await writeFile(join(to, "half.bin"), "x");
+          throw new Error("disk full");
+        },
+      }),
+    ).rejects.toThrow(/disk full/);
+    expect(existsSync(join(priv, "cache"))).toBe(false);
+    expect((await readdir(priv)).filter((n) => n.startsWith("cache.tmp-"))).toEqual([]);
+    expect(existsSync(join(priv, ".gate.lock"))).toBe(false);
+    expect(w.seen.gates).toEqual([]);
+    expect((await w.run()).outcome).toBe("pass");
+    expect(w.calls.copy.length).toBe(1);
+    expect(existsSync(join(priv, "cache"))).toBe(true);
+  });
+
+  test("S3: a pre-made <root>/cache (or builds, private, gate-worktree) that is a symlink is refused by name, and nothing is written through it", async () => {
+    for (const name of ["cache", "builds", "private", "gate-worktree"]) {
+      const w = await world();
+      const tools = join(scratch, "tools");
+      // The link leads OUTSIDE the tools root: only the symbolic-link refusal can stop it.
+      const outside = join(scratch, "elsewhere");
+      const inside = join(tools, "target");
+      await mkdir(outside, { recursive: true });
+      await mkdir(inside, { recursive: true });
+      await mkdir(priv, { recursive: true });
+      for (const [target, why] of [
+        [outside, /is a symbolic link/],
+        [inside, /(is a symbolic link|which is)/],
+      ] as const) {
+        await rm(join(priv, name), { force: true });
+        await symlink(target, join(priv, name));
+        await expect(w.run({ toolsRoot: tools }), `${name} -> ${target}`).rejects.toThrow(why);
+        await expect(w.run({ toolsRoot: tools }), name).rejects.toThrow(
+          new RegExp(`al-runner-v3-private-refused.*${name}`),
+        );
+        expect(await readdir(target), name).toEqual([]);
+        expect(w.seen.gates).toEqual([]);
+      }
+    }
+  });
+
+  test("a root that is the shared install is refused by name", async () => {
+    const w = await world();
+    await expect(
+      privateGateOnce(
+        { ...w.deps, root },
+        {
+          sharedRoot: root,
+          candidate: join(w.candDir, "al-runner"),
+          env: {},
+          sharedCache: w.sharedCache,
+          copyCache: async () => undefined,
+        },
+      ),
+    ).rejects.toThrow(/al-runner-v3-private-refused.*shared install/);
+    expect(w.seen.gates).toEqual([]);
+  });
+
+  test("a private gate never builds a sidecar and never runs upstream repros (even when the deps offer them)", async () => {
+    const w = await world();
+    let sidecar = 0;
+    let repros = 0;
+    const r = await again(
+      w,
+      { outcome: "pass" },
+      {
+        buildSidecar: async () => {
+          sidecar += 1;
+          throw new Error("no");
+        },
+        upstreamRepros: async () => {
+          repros += 1;
+          return [];
+        },
+      },
+    );
+    expect(r.outcome).toBe("pass");
+    expect([sidecar, repros]).toEqual([0, 0]);
+  });
+
+  test("onPrivateDir: the folder is reported only when a receipt was kept (no receipt: no folder, no dir)", async () => {
+    const w = await world();
+    const r = await again(w, {}); // a gate that writes no receipt
+    expect(r.outcome).toBe("infra-fail");
+    expect(r.dir).toBeUndefined();
+    expect(await receiptDirs()).toEqual([]);
+  });
+
+  test("the refusals about a stale `current` come before the memory check, the lock and the cache seed", async () => {
+    const w = await world({ legsByCommit: { [GATED_COMMIT]: ["C"] }, ancestor: () => false });
+    let memory = 0;
+    await expect(
+      privateGateOnce(
+        {
+          ...w.deps,
+          gateMemory: async () => {
+            memory += 1;
+            return undefined;
+          },
+        },
+        {
+          sharedRoot: root,
+          candidate: join(w.candDir, "al-runner"),
+          env: {},
+          sharedCache: w.sharedCache,
+          copyCache: async (f, t) => void w.calls.copy.push([f, t]),
+        },
+      ),
+    ).rejects.toThrow(/al-runner-v3-private-refused/);
+    expect(memory).toBe(0);
+    expect(w.calls.copy).toEqual([]);
+    expect(existsSync(join(priv, "cache"))).toBe(false);
+  });
+
+  test("the env refusals: any LETHAL_ITEST_V3_* but _CDO, any LETHAL_ALRUNNER_V3_*, and LETHAL_V3_PIN_FROM are refused by name before anything is made or run", async () => {
+    for (const name of [
+      "LETHAL_ITEST_V3_TABLES",
+      "LETHAL_ITEST_V3_K_ON_CANDIDATE",
+      "LETHAL_ALRUNNER_V3_PATH",
+      "LETHAL_ALRUNNER_V3_CACHE",
+      "LETHAL_V3_PIN_FROM",
+    ]) {
+      const w = await world();
+      await expect(w.run({ env: { [name]: "x" } }), name).rejects.toThrow(
+        new RegExp(`al-runner-v3-private-refused.*${name}`),
+      );
+      expect(w.seen.gates).toEqual([]);
+      expect(existsSync(priv), name).toBe(false);
+    }
+    const ok = await world();
+    expect(
+      (await ok.run({ env: { LETHAL_ITEST_V3_CDO: "/some/cdo", PATH: "/usr/bin" } })).outcome,
+    ).toBe("pass");
+  });
+
+  test("a root under /work/tools is refused before anything is made or run", async () => {
+    const w = await world();
+    await expect(
+      privateGateOnce(
+        { ...w.deps, root: "/work/tools/al-runner-v3-pr226-test", gateWorktree: "/x" },
+        {
+          sharedRoot: root,
+          candidate: join(w.candDir, "al-runner"),
+          env: {},
+          sharedCache: w.sharedCache,
+          copyCache: async () => undefined,
+        },
+      ),
+    ).rejects.toThrow(/under \/work\/tools/);
+    expect(w.seen.gates).toEqual([]);
+    expect(existsSync("/work/tools/al-runner-v3-pr226-test")).toBe(false);
+  });
+
+  test("--local-candidate: a file or a folder holding an executable al-runner is accepted; anything else is refused by name", async () => {
+    const folder = await world({}, { candidateAs: "folder" });
+    expect((await folder.run()).outcome).toBe("pass");
+    const w = await world();
+    const bad: string[] = [
+      join(scratch, "missing"),
+      join(scratch, "cand", "nope"),
+      scratch, // a folder with no al-runner
+    ];
+    await writeFile(join(scratch, "plain"), "alpha3");
+    await chmod(join(scratch, "plain"), 0o644);
+    bad.push(join(scratch, "plain"));
+    for (const c of bad)
+      await expect(w.run({ candidate: c }), c).rejects.toThrow(/al-runner-v3-private-refused/);
+    expect(w.seen.gates).toEqual([]);
+  });
+
+  test("the lock is <root>/.gate.lock, held during the gate and released after; a busy machine skips like the daily gate", async () => {
+    let held = false;
+    const w = await world({
+      onGate: async () => {
+        held = existsSync(join(priv, ".gate.lock"));
+      },
+    });
+    expect((await w.run()).outcome).toBe("pass");
+    expect(held).toBe(true);
+    expect(existsSync(join(priv, ".gate.lock"))).toBe(false);
+    const busy = await world({ mem: { refuse: true, message: "no memory" } });
+    expect((await busy.run()).outcome).toBe("skipped");
+    expect(busy.seen.gates).toEqual([]);
+    expect(busy.seen.logs.join("\n")).toMatch(/skipped for the day: no memory/);
+  });
+
+  test("W1: the lock's orphan check and its skip message name <root>/gate-worktree, never GATE_WORKTREE", async () => {
+    const w = await world({ orphans: [777] });
+    await mkdir(priv, { recursive: true });
+    await writeFile(
+      join(priv, ".gate.lock"),
+      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+    );
+    expect((await w.run()).outcome).toBe("skipped");
+    expect(w.calls.cwd).toEqual([join(priv, "gate-worktree")]);
+    const text = w.seen.logs.join("\n");
+    expect(text).toContain(`still run under ${join(priv, "gate-worktree")}`);
+    expect(text).toContain(`check that no process runs under ${join(priv, "gate-worktree")}`);
+    expect(text).not.toContain(GATE_WORKTREE);
+    expect(w.seen.gates).toEqual([]);
+  });
+
+  test("W1: the default deps still name GATE_WORKTREE in the lock's orphan check", async () => {
+    await setup();
+    const cwd: string[] = [];
+    const f = fake({ outcome: "pass" });
+    await writeFile(
+      join(root, ".gate.lock"),
+      JSON.stringify({ pid: 4242, startedAt: "2026-10-20T00:00:00Z", argv: [] }),
+    );
+    const deps = {
+      ...f.deps,
+      procsWithCwdUnder: async (d: string) => {
+        cwd.push(d);
+        return [1];
+      },
+    };
+    expect(await updateOnce(deps)).toEqual(["skipped"]);
+    expect(cwd).toEqual([GATE_WORKTREE]);
+    expect(f.seen.logs.join("\n")).toContain(`still run under ${GATE_WORKTREE}`);
+  });
+
+  test("W1: the real runGate checks out in <root>/gate-worktree, never GATE_WORKTREE", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "lethal-pr226-w1-"));
+    made.push(scratch);
+    const gw = join(scratch, "gate-worktree");
+    // No real command ever runs: the runner is a fake that records the argv and then stops the gate.
+    const argvs: string[][] = [];
+    const stop = new Error("stopped by the fake runner");
+    const fakeRun = async (argv: string[]) => {
+      argvs.push(argv);
+      throw stop;
+    };
+    const d = realDeps(scratch, { gateWorktree: gw, run: fakeRun });
+    // No worktree yet: the first command is `git worktree add <gw>`.
+    await expect(d.runGate("c0ffee", {}, async () => {})).rejects.toBe(stop);
+    // A worktree there: the first command is `git -C <gw> checkout`.
+    await mkdir(gw);
+    await expect(d.runGate("c0ffee", {}, async () => {})).rejects.toBe(stop);
+    expect(argvs.length).toBe(2);
+    expect(argvs[0]).toContain(gw);
+    expect(argvs[1]).toEqual(["git", "-C", gw, "checkout", "--detach", "c0ffee"]);
+    expect(argvs.flat()).not.toContain(GATE_WORKTREE);
+  });
+
+  test("privateRealDeps: root, worktree under it, and the log is <root>/private/update.log", async () => {
+    scratch = await mkdtemp(join(tmpdir(), "lethal-pr226-log-"));
+    made.push(scratch);
+    const d = privateRealDeps(scratch);
+    expect(d.root).toBe(scratch);
+    expect(d.gateWorktree).toBe(join(scratch, "gate-worktree"));
+    await d.log("a line");
+    await d.log("another");
+    expect(await readFile(join(scratch, "private", "update.log"), "utf8")).toBe(
+      "a line\nanother\n",
+    );
+  });
+
+  test("a stale .gated (legs missing): the candidate is judged at the script's own commit, and the re-gate of current is never called", async () => {
+    const w = await world({ legsByCommit: { [GATED_COMMIT]: ["C"] } });
+    const sharedBefore = await snap(root);
+    // Caught, so a re-gate of current (which needs <root>/current) fails by assertion, not by a crash.
+    const r = await w.run().catch((e: unknown) => ({ outcome: `threw ${String(e)}` }));
+    expect(w.seen.logs.join("\n")).not.toMatch(/re-gating current/);
+    expect(w.seen.envs.filter((e) => e.LETHAL_ALRUNNER_V3_CANDIDATE !== "1")).toEqual([]);
+    expect(r.outcome).toBe("pass");
+    // One gate only: the candidate's, at self. A re-gate of current would be a second run, at self,
+    // and would write <root>/regate.
+    expect(w.seen.gates).toEqual([FIXED_COMMIT]);
+    expect(w.seen.envs[0]?.LETHAL_ALRUNNER_V3_CANDIDATE).toBe("1");
+    expect(existsSync(join(priv, "regate"))).toBe(false);
+    expect(await snap(root)).toBe(sharedBefore);
+    const g = parseGated(await readFile(join(priv, "builds", TAG, ".gated"), "utf8"), "x");
+    expect(g.lethalCommit).toBe(FIXED_COMMIT);
+  });
+
+  test("a stale .gated and a script commit that cannot serve: refused by name, nothing gated, nothing re-gated", async () => {
+    const w = await world({
+      legsByCommit: { [GATED_COMMIT]: ["C"] },
+      ancestor: () => false, // not on origin/master
+    });
+    await expect(w.run()).rejects.toThrow(/al-runner-v3-private-refused.*origin\/master/);
+    expect(w.seen.gates).toEqual([]);
+    expect(existsSync(join(priv, "regate"))).toBe(false);
+    // The lock was released on the refusal.
+    expect(existsSync(join(priv, ".gate.lock"))).toBe(false);
   });
 });
