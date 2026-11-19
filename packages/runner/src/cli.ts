@@ -7069,6 +7069,8 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
     for (const line of dryRunTestsLines(parsed.backendKind, parsed.testDir)) console.log(line);
     // PR-197 (R1113 fix 2): over the whole suite; the dry run applies no test filter.
     try {
+      // Discovery's tree finder (R420/R424) parses a file whose [Test] tokens and regex disagree: start the parser first.
+      await initNativeParser();
       const summary = await httpPolicyOf(parsed.testDir, await discoverTests(parsed.testDir));
       for (const line of httpPolicyLines(summary, "a real run's events file lists all"))
         console.log(line);

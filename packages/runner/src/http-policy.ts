@@ -7,8 +7,10 @@
  * from source, so the run can say which codeunits can call out. It never decides a verdict and never refuses.
  *
  * Classes: `block` is not listed; `handler` is listed apart (whether a handler lets a call through is not measured);
- * `open` (no property, `AllowAllOutboundRequests`, any other value) is listed; `unread` (file unreadable, or no object
- * of that name in it) is listed and never treated as safe. Which codeunits can REACH an `HttpClient` send is R1134.
+ * `open` (no property, `AllowAllOutboundRequests`, any other value) is listed; `unread` (file unreadable, no object of
+ * that name in it, a file the header reader refuses, or a preprocessor directive inside the object, so the property
+ * may sit in an inactive `#if` arm) is listed and never treated as safe. Which codeunits can REACH an `HttpClient`
+ * send is R1134. al-runner v3 opens no connection (ADR-027): the network risk is BC's.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +34,11 @@ export interface HttpPolicySummary {
 
 const norm = (s: string): string => s.replaceAll('"', "").trim().toLowerCase();
 
-/** The policy one codeunit of `source` sets: "" for none, `undefined` when no codeunit of that name is in the file. */
+/**
+ * The policy one codeunit of `source` sets: "" for none; `undefined` (unread) when no codeunit of that name is in the
+ * file, or when a preprocessor directive sits inside the object while a policy is written there (the policy may be in an
+ * inactive arm, and reading it as active could hide an open codeunit).
+ */
 export function policyOfCodeunit(source: string, codeunit: string): string | undefined {
   const masked = maskAlNonCode(source, { blankStringContents: true });
   const headers = [...objectHeadersOf(masked, "")].sort((a, b) => a.startIndex - b.startIndex);
@@ -40,10 +46,11 @@ export function policyOfCodeunit(source: string, codeunit: string): string | und
   const own = headers[i];
   if (own === undefined) return undefined;
   const end = headers[i + 1]?.startIndex ?? masked.length;
-  const m = masked
-    .slice(own.startIndex, end)
-    .match(/\bTestHttpRequestPolicy\s*=\s*([A-Za-z]+)\s*;/i);
-  return m?.[1] ?? "";
+  const segment = masked.slice(own.startIndex, end);
+  const m = segment.match(/\bTestHttpRequestPolicy\s*=\s*([A-Za-z]+)\s*;/i);
+  if (m === null) return "";
+  if (/^\s*#(if|else|elif|endif)\b/im.test(segment)) return undefined;
+  return m[1] ?? "";
 }
 
 /** Group the selected tests by codeunit and classify each. Reads each test file once. */
@@ -65,7 +72,13 @@ export async function httpPolicyOf(
     if (file !== "" && !sources.has(file))
       sources.set(file, await read(join(testDir, file)).catch(() => undefined));
     const src = file === "" ? undefined : sources.get(file);
-    const policy = src === undefined ? undefined : policyOfCodeunit(src, codeunit);
+    let policy: string | undefined;
+    try {
+      policy = src === undefined ? undefined : policyOfCodeunit(src, codeunit);
+    } catch {
+      // A file the header reader refuses (FileRefusedError) is this codeunit's unread, not the whole check's failure.
+      policy = undefined;
+    }
     if (policy === undefined) {
       unread.push({ codeunit, file, policy: "" });
       continue;
@@ -100,8 +113,11 @@ export function httpPolicyLines(
       s.handler.length > 0
         ? ` (${s.handler.length} more use AllowOutboundFromHandler; whether a handler lets a call out is not measured)`
         : ""
-    }${s.unread.length > 0 ? `; unread: ${s.unread.length}` : ""}.`,
-    "  On BC, and in al-runner, a call made from them can go out to the network; a slow or unreachable host can stall the baseline (R1113).",
+    }.`,
+    ...(s.unread.length > 0
+      ? [`  unread: ${s.unread.length} (policy not read; never counted as blocking)`]
+      : []),
+    "  On BC a call made from them goes out to the network; a slow or unreachable host can stall the baseline (R1113). (al-runner v3 opens no connection, ADR-027.)",
     "  Set TestHttpRequestPolicy = BlockOutboundRequests on test codeunits that should not call out, or leave a test out with --exclude-test / --tests-only.",
   ];
   for (const e of listed.slice(0, SHOWN))

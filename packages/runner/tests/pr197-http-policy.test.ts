@@ -1,6 +1,6 @@
 // PR-197 (R1113 fix 2): the TestHttpRequestPolicy of each selected test codeunit, read from source, carried on
 // `tests-discovered` and printed before the run. Spec: docs/superpowers/specs/2026-11-19-pr197-r1113-outbound-http-warning.md.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { SelectorConfig } from "@lethal/schemata";
 import type { CompiledArtifact } from "../src/artifact";
@@ -11,6 +11,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { dryRunFromCli } from "../src/cli";
 import { type RunEvent, createEmitter } from "../src/events";
 import { httpPolicyLines, httpPolicyOf, policyOfCodeunit } from "../src/http-policy";
 import { type SessionConfig, runSession } from "../src/orchestrator";
@@ -136,10 +137,11 @@ describe("httpPolicyLines", () => {
       "see X",
     );
     expect(lines[0]).toBe(
-      "outbound HTTP: 12 of 14 selected test codeunit(s) set no TestHttpRequestPolicy that blocks outbound calls (1 more use AllowOutboundFromHandler; whether a handler lets a call out is not measured); unread: 1.",
+      "outbound HTTP: 12 of 14 selected test codeunit(s) set no TestHttpRequestPolicy that blocks outbound calls (1 more use AllowOutboundFromHandler; whether a handler lets a call out is not measured).",
     );
-    expect(lines[1]).toContain("R1113");
-    expect(lines[2]).toContain("BlockOutboundRequests");
+    expect(lines[1]).toBe("  unread: 1 (policy not read; never counted as blocking)");
+    expect(lines[2]).toContain("R1113");
+    expect(lines[3]).toContain("BlockOutboundRequests");
     expect(lines.filter((l) => /^ {2}C\d\d \(/.test(l))).toHaveLength(10);
     expect(lines.at(-1)).toBe("  ... and 4 more (see X)");
   });
@@ -239,6 +241,17 @@ describe("runSession: tests-discovered carries httpPolicy for the final test lis
       { ...fakeBackend(), methodIsolation: true },
     );
     expect(d.httpPolicy).toBeUndefined();
+    expect(d.httpPolicyFailed).toBeUndefined();
+  });
+  test("a failed check prints its own line and the run goes on", () => {
+    const out: string[] = [];
+    const render = createProgressRenderer((l) => out.push(l), { heartbeatMs: 60_000 });
+    render({
+      type: "tests-discovered",
+      tests: [],
+      httpPolicyFailed: "boom",
+    } as unknown as RunEvent);
+    expect(out).toEqual(["outbound HTTP check failed: boom; the run continues"]);
   });
   test("the progress renderer prints the lines", () => {
     const out: string[] = [];
@@ -258,5 +271,81 @@ describe("runSession: tests-discovered carries httpPolicy for the final test lis
       "outbound HTTP: 1 of 1 selected test codeunit(s) set no TestHttpRequestPolicy that blocks outbound calls.",
     );
     expect(out).toContain("  Open Tests (Open.al)");
+    expect(out.some((l) => l.includes("al-runner v3 opens no connection"))).toBe(true);
+  });
+});
+
+describe("review fixes: never read as blocking when unsure", () => {
+  test("a #if inside the object with a policy written makes it unread, not block", () => {
+    const src = cu(1, "A", undefined).replace(
+      "Subtype = Test;",
+      "Subtype = Test;\n#if SOMESYM\n    TestHttpRequestPolicy = BlockOutboundRequests;\n#endif",
+    );
+    expect(policyOfCodeunit(src, "A")).toBeUndefined();
+    // a directive with no policy written is still "" (open), never unread
+    expect(
+      policyOfCodeunit(
+        cu(1, "B", undefined).replace("Subtype = Test;", "Subtype = Test;\n#if X\n#endif"),
+        "B",
+      ),
+    ).toBe("");
+  });
+  test("a file the header reader refuses is that codeunit's unread; the others are still classed", async () => {
+    const files: Record<string, string> = {
+      "bad.al": "not an AL object at all",
+      "ok.al": cu(2, "Ok", undefined),
+    };
+    const s = await httpPolicyOf(
+      "/t",
+      [
+        { codeunitName: "Bad", file: "bad.al" },
+        { codeunitName: "Ok", file: "ok.al" },
+      ],
+      async (p) => files[p.split("/").pop() ?? ""] ?? "",
+    );
+    expect(s.unread.map((e) => e.codeunit)).toEqual(["Bad"]);
+    expect(s.open.map((e) => e.codeunit)).toEqual(["Ok"]);
+  });
+  test("the unread count is its own line", () => {
+    const lines = httpPolicyLines({
+      codeunits: 2,
+      open: [],
+      handler: [],
+      unread: [{ codeunit: "X", file: "x.al", policy: "" }],
+    });
+    expect(lines).toContain("  unread: 1 (policy not read; never counted as blocking)");
+  });
+});
+
+describe("the dry run prints the check over the whole suite", () => {
+  test("with --tests: the lines and the whole-suite note; without: not checked", async () => {
+    const root = scratch("lethal-pr197-dry-");
+    const app = join(root, "app");
+    const tests = join(root, "tests");
+    await Bun.write(join(app, "src", "Logic.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(tests, "app.json"), "{}");
+    await Bun.write(join(tests, "Open.Codeunit.al"), cu(79100, "Open Tests", undefined, "OpenOne"));
+    const base = {
+      mode: "dry-run" as const,
+      projectDir: app,
+      dbPath: join(root, "lethal.sqlite"),
+      configPath: join(root, "lethal.config.json"),
+    };
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      lines.push(a.map(String).join(" "));
+    });
+    try {
+      expect(await dryRunFromCli({ ...base, testDir: tests })).toBe(0);
+      expect(lines).toContain(
+        "outbound HTTP: 1 of 1 selected test codeunit(s) set no TestHttpRequestPolicy that blocks outbound calls.",
+      );
+      expect(lines.some((l) => l.includes("a dry run checks the whole test suite"))).toBe(true);
+      lines.length = 0;
+      expect(await dryRunFromCli(base)).toBe(0);
+      expect(lines).toContain("outbound HTTP: not checked (no test project; pass --tests)");
+    } finally {
+      log.mockRestore();
+    }
   });
 });
