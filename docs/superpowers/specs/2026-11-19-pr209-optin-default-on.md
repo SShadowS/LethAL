@@ -147,6 +147,24 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
    guards (§3a). With item 4's tables in place, a failure there now speaks only to the premise.
 7. **Pins under `docs/` and `packages/runner/tests/`** were not scanned by the count. The build greps them for the moving
    codes, and each hit is mapped or explained in the review.
+8. **R1136 on real code** (the orchestrator's ask; `/coord/handoff/PR-209/count/real/`, the same prototype, by parse):
+
+   | app | default | + ct | + ba | R1136 refused |
+   |---|---:|---:|---:|---:|
+   | DO (PR-187's project) | 43,511 | 4,213 | 1,313 | 0 |
+   | PaymentPractices | 873 | 81 | 2 | 0 |
+   | ServiceDeclaration | 1,044 | 150 | 4 | 0 |
+
+   - The counts equal PR-187's. In every app, the flipped set minus the two operators has exactly the old default keys.
+   - **The endless `condition-true` shape does not occur in this real code.**
+   - **One `blank-argument` analogue, in DO:** a `blank-argument` site inside `GetNextPeriodStart`
+     (`CDOAutomaticPeriodStatement.Table.al`), a procedure called from a `while` loop's exit test (`GetCalcPeriodDates`).
+     - R868's `inLoopExitParts` covers an argument written IN the exit test, not one inside a helper the test calls.
+     - Blanking that argument can stop the loop's date from advancing.
+   - **Decision (the safe direction, R829): R1136's rule ALSO refuses `blank-argument` in a procedure called from a loop's exit
+     test of the same object.**
+     - It costs 1 mutant on DO and none on any fixture (no fixture has the shape), so §3 and items 1-5 are unchanged.
+     - A parsed red test for it joins R1136's.
 
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
