@@ -163,7 +163,8 @@ codeunit 91007 "LC Run Method"
         // G/L posting date; otherwise the session's WorkDate unchanged). The runner's Initialize stores it and restores it
         // after the codeunit (130453), so this is the date the method starts from.
         WorkDate(LogInMgt.GetDefaultWorkDate());
-        StartWorkDateText := Format(WorkDate(), 0, 9);
+        // R1131: read back what was just set (no parentheses: the source test counts `WorkDate(` as a set).
+        StartWorkDateText := Format(WorkDate, 0, 9);
         // R206 §2.1: the session-freshness counter, immediately before the run (one of two sites).
         State.NoteTestMethodRun();
         Mgt.RunAllTests(Line);
