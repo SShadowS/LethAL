@@ -357,7 +357,10 @@ const EXPECTED_ON: ReadonlyArray<{
   // replayed unmutated and method 2 completed inside its budget.
   { line: 145, operator: "lethal.void-method-call", verdict: "timeout-killed", killPosition: 2 },
   { line: 146, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 2 },
-  { line: 147, operator: "lethal.return-value", verdict: "killed", killPosition: 2 },
+  // PR-209 (spec §0f): position 2 -> 1, recorded on bc2. The kill ledger (test-order.ts) now puts
+  // SpinUntilReachesTheTarget first in SpinUntil after it killed line 141's new mutant; it is the only test that reaches
+  // line 147, so the killer is the same.
+  { line: 147, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
 ];
 
 /** R206: the warm kills of the ON leg, all in the new arm: three warm fails and one warm timeout. */
