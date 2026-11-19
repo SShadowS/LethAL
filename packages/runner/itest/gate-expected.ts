@@ -10,7 +10,9 @@
 import { PR209_UNRECORDED } from "./pr209-pending";
 
 export const BCDEV_FIGURES = {
-  totalMutantSites: 22,
+  // PR-209 (spec §3, pre-committed): 22 + 3 condition-true + 1 blank-argument. The verdict counts below are the OLD
+  // 22-site figures, still to be recorded (`PR209_PENDING`).
+  totalMutantSites: 26,
   killed: 3,
   survived: 14,
   noCoverage: 5,
@@ -42,7 +44,9 @@ export const ENVTOOL_FIGURES = {
 } as const;
 
 export const TABLES_FIGURES = {
-  totalMutantSites: 440,
+  // PR-209 (spec §3, pre-committed): 440 generated sites + 23 condition-true + 9 blank-argument. The verdict counts
+  // below are still to be recorded (`PR209_PENDING`).
+  totalMutantSites: 472,
   killed: 322,
   survived: 73,
   noCoverage: 23,
@@ -282,7 +286,8 @@ export const LEND_ADDED_MUTANTS = {
  * are `LEND_MUTANTS` plus the role sets below; these are the counts and call totals.
  */
 export const LEND_FIGURES = {
-  totalMutantSites: 22,
+  // PR-209 (spec §3, pre-committed): the sandbox-app fixture's 22 + 4 (LEND_ADDED_MUTANTS).
+  totalMutantSites: 26,
   /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.) */
   fresh: { killed: 3, survived: 14, noCoverage: 5, groupedCalls: 17 },
   /** L1 and N0: the 14 survivors carried as known survivors; 3 kills scored. */

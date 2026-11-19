@@ -23,7 +23,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   "baselines": {},
   "noBaseline": "Expectations are pre-committed constants (LEND_FIGURES, LEND_MUTANTS in gate-expected.ts); every leg reads bcdev.baseline.json read-only and compares with it by identity key.",
   "constants": {
-    "LEND_FIGURES.totalMutantSites": 22,
+    "LEND_FIGURES.totalMutantSites": 26,
     "LEND_FIGURES.fresh.killed": 3,
     "LEND_FIGURES.fresh.survived": 14,
     "LEND_FIGURES.fresh.noCoverage": 5,

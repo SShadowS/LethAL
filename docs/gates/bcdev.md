@@ -15,7 +15,7 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
     "bcdev.baseline.json": { "killed": 3, "survived": 14, "no-coverage": 5 }
   },
   "constants": {
-    "BCDEV_FIGURES.totalMutantSites": 22,
+    "BCDEV_FIGURES.totalMutantSites": 26,
     "BCDEV_FIGURES.killed": 3,
     "BCDEV_FIGURES.survived": 14,
     "BCDEV_FIGURES.noCoverage": 5,
