@@ -236,6 +236,31 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   5. **O1 and D1 were run with `LETHAL_ITEST_V3_CDO=1`** instead of the checkout path (`/work/src/do-lethal`, at 5f2a71d):
      my mistake. They are invalid, and re-run with the path.
 
+## 0f. Amendment 5 (2026-11-19): §0c item 5's "kill position unchanged" over-claimed; the corrected rule
+- **What happened** (hang record, bc2): an EXISTING row moved its kill position. The `return-value` mutant at
+  `HangLogic.Codeunit.al` line 147 (old M0038, now M0039) was a warm kill at position 2 and is now killed at position 1.
+  Its verdict is still killed.
+- **The cause, from the code** (an Opus read; test-order.ts `orderCoveringTests`, orchestrator.ts `recordKill`):
+  - kill position is the killing TEST's place in that mutant's own grouped call;
+  - the tests are ordered by a session-wide KILL LEDGER: tests that already killed mutants in the same procedure go first.
+  - PR-209's new mutant at line 141 is killed by `SpinUntilReachesTheTarget`, one more kill for that test in `SpinUntil`.
+    By line 147 it leads the order and kills at position 1.
+  - `SpinUntilAtZeroExitsEarly` leaves at line 142 and cannot reach line 147, so the killer is the same test either way.
+  - The fixture's own header says this arm is "DESIGNED AROUND THE KILL LEDGER".
+  - warmKills stays 4: M0031 joins the warm kills and M0039 leaves them.
+  - The ledger is a cost heuristic, never a verdict rule (test-order.ts).
+- **The corrected rule, replacing §0c item 5's "kill position unchanged":**
+  - an existing row's verdict, killing test, error class and mutated text never move (checked by the baseline diff, row by
+    row, at each record);
+  - its kill position MAY move, but only inside a procedure that gains a killed mutant, and only as the kill ledger orders
+    it. Each such move is named in the review with its procedure.
+  - Any other move of a kill position is still a BLOCK.
+- **Pinned:**
+  - `EXPECTED_ON` line 147 `return-value` killPosition 2 → 1;
+  - line 141 `condition-true` killPosition 2 (recorded).
+  - **The settling evidence is the hang record's baseline diff:** the line-147 row must be byte-identical, killing test
+    included. A different killer there is a BLOCK.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
