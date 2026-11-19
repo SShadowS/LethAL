@@ -27,6 +27,7 @@ import {
   X2_REFUSALS,
   X3_REFUSALS,
   Y1_REFUSALS,
+  Y2_XML,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -1277,10 +1278,59 @@ describe("PR-159: the y1-refusals family", () => {
     expect(classes.find((c) => c.text === TEXTS[0])?.cells).toHaveLength(2);
   });
 
-  test("last of FAMILIES (place 20, BC-check number 21, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("y1-refusals");
+  test("place 20 of FAMILIES (BC-check number 21, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(19);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051021");
+  });
+});
+
+describe("PR-191: the y2-xml family", () => {
+  const f = Y2_XML;
+
+  test("19 cells, distinct names, support ids clear of every cell id, app.json range covers them", () => {
+    expect(f.cells).toHaveLength(19);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const ids = [...f.support.matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
+    expect(ids).toEqual([51000, 51020, 51021, 51022, 51023]);
+    const range = JSON.parse(emitApp(f)["app.json"] ?? "{}").idRanges[0];
+    expect(range).toEqual({ from: 51000, to: 51000 + 1 + 19 + 4 });
+  });
+
+  test("extraIds moves the idRanges end by exactly that much; a family without it is unchanged", () => {
+    const end = (x: Family) => JSON.parse(emitApp(x)["app.json"] ?? "{}").idRanges[0].to;
+    expect(end({ ...f, extraIds: 0 })).toBe(51000 + 1 + 19);
+    expect(end({ ...f, extraIds: 7 })).toBe(51000 + 1 + 19 + 7);
+    const { extraIds: _drop, ...none } = f;
+    expect(end(none)).toBe(51000 + 1 + 19);
+    const y1 = Y1_REFUSALS;
+    expect(end(y1)).toBe(51000 + 1 + y1.cells.length);
+  });
+
+  test("the wrapper is not SingleInstance; the deep cells set the SingleInstance codeunit, bind, write a blob, then Commit", () => {
+    expect(f.support.split('codeunit 51020 "Y2 Chain"')[0]).not.toContain("SingleInstance");
+    const deep = f.cells.slice(-2);
+    for (const c of deep) {
+      expect(c.setup).toEqual([
+        "Single.SetValue('x');",
+        "BindSubscription(Sub);",
+        "W.WriteBlob();",
+        "Commit();",
+      ]);
+    }
+  });
+
+  test("the by-var cell passes the target to a procedure that never sets it, then uses the target", () => {
+    const c = f.cells.find((x) => x.method === "UnassignedNodeByVar");
+    expect(c?.setup).toContain("W.SkipSetter(W2);");
+    expect(c?.call).toBe("W2.UseNode();");
+    expect(f.support).toContain('procedure SkipSetter(var Target: Codeunit "Y2 Xml Node")');
+  });
+
+  test("last of FAMILIES (place 21, BC-check number 22, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("y2-xml");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(20);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051022");
   });
 });
 
