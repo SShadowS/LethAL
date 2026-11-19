@@ -289,6 +289,23 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
 - **5. WR's expected file** follows the same construction from `bcdev.wrapped.baseline.json` once a WR record run past
   item 1 dumps its keys. It lands in its own master commit before WR's record, with WR's `assertCounts` figures.
 
+## 0h. Amendment 7 (2026-11-19): D1 and D1c run slim, RULED (b) by the orchestrator
+- **Observed** (`/coord/handoff/PR-209/v3rec2/o1d1.log`, checkout `/work/lethal-wt/cdo-r396`): O1 PASS; D1 63 / 15 / 0 over
+  78, pinned 53 / 12 / 0 over 65.
+- **Why not re-pin:** D1 and D1c compare per mutant with R594's BC oracle (`docs/measurements/r594/bc3-A.report.json`,
+  `bc3-B.report.json`), recorded with the OLD operator set; the 13 new mutants have no oracle row. A dry-run diff of the
+  slice (default against `--profile slim`) names them: `CDORecipientMgt.Codeunit.al` lines 15, 28, 34, 36, 44, 60, 64, 70,
+  78, 85 condition-true and 36, 40, 42 blank-argument; slim has no mutant the default lacks.
+- **RULED (b)**, as for MO: the run has been seen, so a prediction of the new rows cannot be blind, and D1's job is v3
+  against BC on a real slice, not the operator set.
+- **Pre-committed:**
+  - D1 and D1c run `--profile slim`; their counts stay (53 / 12 / 0 and 53 / 8 / 4 over 65) and so does the oracle;
+  - their warning sets (`CDO_D`, shared by both) gain `operator-narrowed-run`;
+  - nothing else in the legs moves.
+- **The gap this leaves:** nothing compares the two default-on operators with BC on real code. Filed as R1139 (in
+  PR-209's branch): re-measure the CDO slice on BC with the default set and extend R594's oracle by the 13 rows. BC is
+  the oracle, so it needs no blind prediction. Scheduled by the orchestrator after PERF-10.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
