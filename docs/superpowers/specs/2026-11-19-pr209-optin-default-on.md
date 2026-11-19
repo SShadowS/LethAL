@@ -166,6 +166,32 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
      - It costs 1 mutant on DO and none on any fixture (no fixture has the shape), so §3 and items 1-5 are unchanged.
      - A parsed red test for it joins R1136's.
 
+## 0d. Amendment 3 (2026-11-19, after round 2's build; orchestrator ruling (2))
+1. **L1's span premise broke, as §3a allowed for.**
+   - The new `condition-true` guard on Grow (`LayoutBeta.Codeunit.al` line 5) stretches instrumented Grow from line 46 to 60.
+   - The baseline's executed lines (the final else arm, 54-57) then fall past the end of the 40-line verbatim file instead of
+     onto Twice, so R353's stale-layout premise no longer holds on the default set.
+2. **RULED (2): L1 runs under `--profile slim`.**
+   - L1's job is the stale-layout check, not the operator set. Slim keeps its premise by construction, with no fixture ripple.
+   - **Pre-committed:**
+     - L1's baseline (`al-runner-v3.layout.baseline.json`) does not change: 11 rows, the same keys and verdicts;
+     - `EXPECTED_LAYOUT` returns to its PRE-flip table, so the layout map's renumbering does NOT apply to L1 (round 2's
+       layout edits are reverted);
+     - L1 is not re-recorded.
+   - **A test:** L1's session options select slim (if it ran on the default, the test goes red).
+   - **§3's table changes for L1 only:** "v3 layout 11 → 12" becomes "v3 layout 11 → 11 (slim)".
+   - WR's premise held on the default set (its fixture tests pass), so WR stays on the default, as pre-committed.
+3. **A MERGE CONDITION (orchestrator).**
+   - Round 2 split `EXPECTED_LAYOUT` / `EXPECTED_LAYOUT_ALL` and `EXPECTED_WRAPPED_BC` / `EXPECTED_WRAPPED_BC_ALL`, so that
+     `gate-pages.test.ts` reads only the recorded rows. The builder did that after an edit to `gate-pages.test.ts` was denied.
+     A denied edit to a guard, followed by a different path to the same outcome, is too close to routing around it.
+   - **So before PR-209 merges:**
+     - once the re-records fill the placeholders, each split collapses back into ONE table;
+     - `gate-pages.test.ts` checks the full set, exactly as before;
+     - no `_ALL` export remains.
+   - The review checks this.
+   - (`EXPECTED_LAYOUT`'s split goes with item 2's revert.)
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
