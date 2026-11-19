@@ -123,7 +123,32 @@ item overrides the section it names.
     - servers.md's proof rows move only with code's re-proof.
   - **M5** is moot: R192's reuse is kept.
 
-## 1. The problem (checked in the source before writing)
+## 0c. Amendment 3 (2026-11-19, coord PR-203, after merge): the hub leg's warning set (R736 procedure)
+- **What failed:** `itest:bcdev-wrapped` on bc3 (PR-198's re-proof, `/coord/handoff/PR-198/bc3/bcdev-wrapped.log`):
+  `GateWarningsMismatchError: bcdev-wrapped/hub ... Extra: ["workdate-not-compared"]`. Observed:
+  `["compiled-out-sites", "workdate-not-compared"]`.
+- **Why the prediction missed it:**
+  - §0a item 5 asked for "a one-line note" in hub mode. The build emitted it as a `warning` event with the code
+    `workdate-not-compared`, once per session, in `baselinePhase(true)` when `coverageMode` is `procedure`.
+  - My "no frozen figure moves" (§0a item 6) looked only at the per-mutant tables. It missed R736's per-leg warning
+    sets, which pin every warning code.
+  - No review checked a new warning code against GATE_WARNINGS. PR-196's pre-merge proof on bc3 ran hang, bcdev and lend,
+    none in hub mode.
+- **The leg check (from the source, master 3cc7997e):**
+  - The default coverage mode is `fenced` (`DEFAULT_COVERAGE_MODE`). The setup script leaves `coverageMode` unset in the
+    fixture configs it writes (bc-linux-setup.ts), so every leg on bc1-bc3 runs fenced, except the one leg that sets
+    `procedure` itself: `bcdev-wrapped/hub`. That includes chunked, which takes its config's mode.
+  - `envtool/run` is documented as procedure mode (envtool.itest.ts). Its set is ABSENT on purpose, until the owner's
+    host-only observe run (R683). **That observe run should expect `workdate-not-compared`.**
+  - al-runner v3 legs never call the bcdev backend.
+- **Pre-committed (the R736 change):**
+  - `GATE_WARNINGS["bcdev-wrapped/hub"]` becomes `["compiled-out-sites", "workdate-not-compared"]`.
+  - Every other leg's set is unchanged.
+  - The next `itest:bcdev-wrapped` run passes with both legs on their frozen tables, the hub leg observing exactly
+    those two codes.
+  - The code is kept as a warning, not demoted to a log line: hub mode really does not compare dates, and a user
+    should see that.
+
 - Since PR-180 the control app sets each test's start WorkDate to Base Application's `LogInMgt.GetDefaultWorkDate()`:
   - `RunMethod.Codeunit.al` reads it on every call;
   - `RunMany.Codeunit.al` reads it once per call (`StartWorkDate`) and sets it before each method.
