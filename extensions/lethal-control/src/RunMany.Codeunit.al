@@ -258,6 +258,7 @@ codeunit 91012 "LC Run Many"
             One.Add('method', MethodName);
             One.Add('lineNo', FnLineNo);
             One.Add('sessionId', SessionId());
+            One.Add('workDate', Format(StartWorkDate, 0, 9));
             One.Add('codeunitResults', FunctionLineResults(Mgt, FnLine, CodeunitId, HeaderNames.Get(I)));
             One.Add('durationMs', DurationMs(CurrentDateTime - TStart));
             One.Add('observedActive', State.AttestationObservedActive());

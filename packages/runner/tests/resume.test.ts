@@ -50,6 +50,7 @@ import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { recheckTargetsOf } from "../src/withheld-recheck";
+import { WorkDateGuard } from "../src/workdate-guard";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -1792,6 +1793,132 @@ describe("runSession --resume (R47)", () => {
         .sort();
     expect(verdictsOf(report)).toEqual(verdictsOf(control));
     expect(report.validity.baselineTests).toEqual(control.validity.baselineTests);
+  });
+
+  // R1131 (PR-196): a snapshot is reused only on an equal start WorkDate. `Dated` is a CountingBackend whose answers
+  // carry `date` and go through the real guard, as bcdev's do; `seenBefore` plays "an earlier answer of this session".
+  class Dated extends CountingBackend {
+    readonly guard = new WorkDateGuard(true);
+    constructor(
+      private readonly date: string | undefined,
+      abortFromDeploy?: number,
+      seenBefore?: string,
+    ) {
+      super("pass", undefined, abortFromDeploy);
+      if (seenBefore !== undefined) {
+        this.guard.check({
+          ref: { codeunitId: 1, codeunitName: "x", method: "y" },
+          outcome: "pass",
+          durationMs: 1,
+          workDate: seenBefore,
+        });
+      }
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      return this.date === undefined ? v : this.guard.check({ ...v, workDate: this.date });
+    }
+    baselinePhase(on: boolean): void {
+      this.guard.baselinePhase(on);
+    }
+    batchWorkDate(): string | undefined {
+      return this.guard.batchWorkDate();
+    }
+    refuseReusedBaselineDate(d: string | undefined): string | undefined {
+      return this.guard.refuseReuse(d);
+    }
+    noteReusedBaseline(b: Parameters<WorkDateGuard["noteReused"]>[0]): void {
+      this.guard.noteReused(b);
+    }
+  }
+  const resumeWith = async (first: CountingBackend, second: Dated) => {
+    const dirs = await makeProject({ secondFile: true });
+    const store = new ResultsStore(":memory:");
+    await runSession({ backend: first, store, ...dirs, selectorIds, maxGuardsPerBatch: 1 });
+    const events: RunEvent[] = [];
+    await runSession({
+      backend: second,
+      store,
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      resume: "last",
+      emit: [(e) => events.push(e)],
+    });
+    const codes = (code: string) =>
+      events.filter((e) => e.type === "warning" && e.code === code).length;
+    return {
+      events,
+      reused: codes("resume-baseline-reused"),
+      notReused: codes("resume-baseline-not-reused"),
+    };
+  };
+
+  test("R1131: a snapshot measured on the same start WorkDate is reused", async () => {
+    const second = new Dated("2026-11-19", undefined, "2026-11-19");
+    const r = await resumeWith(new Dated("2026-11-19", 2), second);
+    expect(second.baselineRuns).toBe(0);
+    expect(r.reused).toBe(2);
+    expect(r.notReused).toBe(0);
+  });
+
+  test("R1131: a snapshot measured on another start WorkDate is not reused; the baseline runs again", async () => {
+    const second = new Dated("2026-11-20", undefined, "2026-11-20");
+    const r = await resumeWith(new Dated("2026-11-19", 2), second);
+    expect(r.reused).toBe(0);
+    expect(r.notReused).toBeGreaterThan(0);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(
+      r.events.some(
+        (e) =>
+          e.type === "warning" &&
+          e.code === "resume-baseline-not-reused" &&
+          e.message.includes("2026-11-19") &&
+          e.message.includes("2026-11-20"),
+      ),
+    ).toBe(true);
+  });
+
+  test("R1131: a snapshot with no start WorkDate (stored before control 1.0.0.28) is never reused", async () => {
+    const second = new Dated("2026-11-19", undefined, "2026-11-19");
+    const r = await resumeWith(new CountingBackend("pass", undefined, 2), second);
+    expect(r.reused).toBe(0);
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(
+      r.events.some(
+        (e) =>
+          e.type === "warning" &&
+          e.code === "resume-baseline-not-reused" &&
+          e.message.includes("records no start WorkDate"),
+      ),
+    ).toBe(true);
+  });
+
+  test("R1131: the baseline's start WorkDate travels on baseline-batch-finished into the report", async () => {
+    const dirs = await makeProject({ secondFile: true });
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend: new Dated("2026-11-19"),
+      store: new ResultsStore(":memory:"),
+      ...dirs,
+      selectorIds,
+      maxGuardsPerBatch: 1,
+      emit: [(e) => events.push(e)],
+    });
+    const finished = events.filter((e) => e.type === "baseline-batch-finished");
+    expect(finished.length).toBeGreaterThan(0);
+    for (const e of finished)
+      expect(e.type === "baseline-batch-finished" && e.workDate).toBe("2026-11-19");
+    expect(report.baselineWorkDate).toBe("2026-11-19");
+    // A backend that reports no date (al-runner, hub mode) leaves the field absent.
+    const plain = await runSession({
+      backend: new CountingBackend("pass"),
+      store: new ResultsStore(":memory:"),
+      ...(await makeProject({ secondFile: true })),
+      selectorIds,
+      maxGuardsPerBatch: 1,
+    });
+    expect("baselineWorkDate" in plain).toBe(false);
   });
 
   test("R678: a session whose every batch reuses its snapshot hands the reused baseline to the backend, so a stored refusal still notes a survivor", async () => {
@@ -5473,7 +5600,7 @@ describe("R514: a reused baseline's durations set today's budgets", () => {
     expect(stale).toHaveLength(1);
     expect(renderConsole(report)).toContain(", reused-budget-stale 1])");
     const out = explain(report);
-    expect(out.explainSchemaVersion).toBe(31);
+    expect(out.explainSchemaVersion).toBe(32);
     const rows = out.notMeasured.filter((n) => n.cause === "reused-budget-stale");
     expect(rows).toHaveLength(1);
     for (const r of rows) {

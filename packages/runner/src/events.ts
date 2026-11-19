@@ -318,6 +318,12 @@ export type RunEventInput =
       /** R658: the `--baseline-timeout-ms` a `baseline-test-stopped` test ran past. Present only
        *  when this batch has one. */
       readonly stoppedBudgetMs?: number;
+      /**
+       * R1131: the start WorkDate this batch's baseline ran under (control app 1.0.0.28), an ISO date, on bcdev
+       * outside hub mode. The report's `baselineWorkDate` is the first batch's. Absent on every other backend,
+       * in hub mode and in older streams.
+       */
+      readonly workDate?: string;
       readonly verdicts: readonly {
         readonly name: string;
         readonly outcome: TestOutcome;

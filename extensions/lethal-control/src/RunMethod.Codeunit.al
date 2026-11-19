@@ -34,6 +34,7 @@ codeunit 91007 "LC Run Method"
         FenceOpSeq: BigInteger;
         FenceIndex: Integer;
         MethodToken: Text;
+        StartWorkDateText: Text;
 
     trigger OnRun()
     var
@@ -60,6 +61,14 @@ codeunit 91007 "LC Run Method"
         FenceOpSeq := 0;
         FenceIndex := 0;
         MethodToken := '';
+        StartWorkDateText := '';
+    end;
+
+    /// <summary>R1131: the start WorkDate this run set before the method, as ISO text (Format 0, 9), or blank when no
+    /// method ran (a fail-closed answer). `BuildStatus` adds it as `workDate` when a method ran.</summary>
+    procedure StartWorkDate(): Text
+    begin
+        exit(StartWorkDateText);
     end;
 
     /// <summary>R198: names the op this method runs inside and its 1-based index within it, so
@@ -154,6 +163,7 @@ codeunit 91007 "LC Run Method"
         // G/L posting date; otherwise the session's WorkDate unchanged). The runner's Initialize stores it and restores it
         // after the codeunit (130453), so this is the date the method starts from.
         WorkDate(LogInMgt.GetDefaultWorkDate());
+        StartWorkDateText := Format(WorkDate(), 0, 9);
         // R206 §2.1: the session-freshness counter, immediately before the run (one of two sites).
         State.NoteTestMethodRun();
         Mgt.RunAllTests(Line);

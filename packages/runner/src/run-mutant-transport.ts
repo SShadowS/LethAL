@@ -237,6 +237,38 @@ function sessionKeysOf(
   return { sessionId, testRunsBefore };
 }
 
+/** R1131: the ISO date text control app 1.0.0.28 sends (`Format(d, 0, 9)`). */
+const WORK_DATE_TEXT = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * R1131 (control app 1.0.0.28): the `workDate` of an answer, REQUIRED exactly when a method ran (the
+ * `sessionId` rule): one per `RunMutantMany` entry, and on a `RunMutant` answer whose `codeunitResults` is
+ * not the fail-closed `{"error": ...}` shape. Returns the date, `undefined` where none is required, or the
+ * reason the answer is malformed. `codeunitResults` of `undefined` (or not JSON) is left to `mapRanResult`.
+ */
+function workDateOf(
+  workDate: unknown,
+  codeunitResults: unknown,
+  perEntry: boolean,
+): string | undefined | { readonly malformed: string } {
+  if (!perEntry) {
+    if (typeof codeunitResults !== "string") return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(codeunitResults);
+    } catch {
+      return undefined;
+    }
+    if (typeof parsed !== "object" || parsed === null || "error" in parsed) return undefined;
+  }
+  if (typeof workDate !== "string" || !WORK_DATE_TEXT.test(workDate)) {
+    return {
+      malformed: `answer ran a method but carries no ISO workDate (got ${JSON.stringify(workDate)}); control app 1.0.0.28 stamps it on every answer that ran a method (R1131)`,
+    };
+  }
+  return workDate;
+}
+
 /** Parsed `LethALControl_RunMutantMany` result. */
 interface RunMutantManyAnswer {
   readonly status?: unknown;
@@ -265,6 +297,8 @@ interface GroupEntry {
   /** R206: the function line the entry ran (distinct across a call) and the session it ran in. */
   readonly lineNo: unknown;
   readonly sessionId: unknown;
+  /** R1131 (control app 1.0.0.28): the start WorkDate this entry's method ran under. */
+  readonly workDate: unknown;
   /** GH-24: per-entry reach attestation — see `TestVerdict.reachedActive`. */
   readonly observedActive: unknown;
 }
@@ -295,6 +329,8 @@ interface RunMutantResult {
    */
   readonly testRunsBefore?: unknown;
   readonly sessionId?: unknown;
+  /** R1131 (control app 1.0.0.28): the start WorkDate the method ran under; see `workDateOf`. */
+  readonly workDate?: unknown;
 }
 
 /**
@@ -1740,6 +1776,10 @@ export class RunMutantTransport {
         return malformed(
           `entry ${i + 1} carries sessionId ${JSON.stringify(raw.sessionId)}, the call's is ${session.sessionId}`,
         );
+      // R1131: every entry ran a method, so every entry names the start WorkDate it ran under.
+      const entryDate = workDateOf(raw.workDate, undefined, true);
+      if (typeof entryDate !== "string")
+        return malformed(`entry ${i + 1}: ${entryDate?.malformed}`);
       if (typeof raw.lineNo !== "number" || !Number.isInteger(raw.lineNo))
         return malformed(`entry ${i + 1} has no integer lineNo`);
       if (seenLineNos.has(raw.lineNo))
@@ -1790,6 +1830,7 @@ export class RunMutantTransport {
         ...(raw.durationMs >= 0 ? { measuredDurationMs: raw.durationMs } : {}),
         attestation,
         ...session,
+        workDate: entryDate,
       });
     }
     return { kind: "verdicts", endedBy, ranCount, verdicts, durationMs };
@@ -2288,8 +2329,20 @@ export class RunMutantTransport {
         failureMessage: `RunMutant answer malformed: ${session}`,
       };
     }
+    // R1131: the start WorkDate, required where a method ran; refused by name like the session keys.
+    const workDate = workDateOf(result.workDate, result.codeunitResults, false);
+    if (typeof workDate === "object") {
+      return {
+        ref,
+        outcome: "error",
+        durationMs,
+        failureMessage: `RunMutant answer malformed: ${workDate.malformed}`,
+      };
+    }
     const v = this.mapRanResult(ref, durationMs, result, fencedOp);
-    return v.outcome === "error" ? v : { ...v, ...session };
+    return v.outcome === "error"
+      ? v
+      : { ...v, ...session, ...(workDate !== undefined ? { workDate } : {}) };
   }
 
   private mapRanResult(

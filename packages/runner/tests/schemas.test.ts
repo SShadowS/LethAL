@@ -1515,6 +1515,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v32.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v31.schema.json": [
         "caveats",
         "contract",
@@ -1809,6 +1821,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "nondebuggable-no-coverage",
         "withheld-kills",
         "isolated-recheck-kills",
+        "workdate-changed",
       ],
       "#/properties/survivorSelection/properties/rankedBy": ["report-order", "actionability"],
       "#/properties/survivors/items/properties/attribution": [
@@ -1862,6 +1875,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "kill-not-reproduced",
         "confirm-stopped",
         "test-discovery-failed",
+        "workdate-changed",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
@@ -1956,6 +1970,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v30.schema.json")).toEqual(required("explain-v29.schema.json"));
     // PR-144's v31 added a caveat value, not a required field.
     expect(required("explain-v31.schema.json")).toEqual(required("explain-v30.schema.json"));
+    // PR-196's v32 added a cause value and a caveat value, not a required field.
+    expect(required("explain-v32.schema.json")).toEqual(required("explain-v31.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

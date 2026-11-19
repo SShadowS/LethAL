@@ -942,7 +942,7 @@ codeunit 91003 "LC Control API"
                 ClaimStatus := 'lease-invalid'
             else
                 ClaimStatus := ClaimReason;
-            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, ClaimReason, -1));
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, ClaimReason, -1, ''));
         end;
 
         // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
@@ -966,10 +966,10 @@ codeunit 91003 "LC Control API"
         // R203): our own stop tombstoned this op while the session was still finishing.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1, ''));
 
         Ran := true;
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore, Runner.StartWorkDate()));
     end;
 
     /// <summary>
@@ -1509,7 +1509,7 @@ codeunit 91003 "LC Control API"
     /// on phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
     /// 'op-in-flight' for a still-active same-attempt duplicate claim), and since R198/R203 on ONE
     /// phase-3 refusal: 'op-stopped', the op our own stop tombstoned while the session finished.</summary>
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; ObservedActive: Boolean; Reason: Text; TestRunsBefore: Integer): Text
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; ObservedActive: Boolean; Reason: Text; TestRunsBefore: Integer; WorkDateText: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -1529,6 +1529,9 @@ codeunit 91003 "LC Control API"
         Obj.Add('observedActive', ObservedActive);
         Obj.Add('identityMismatch', IdentityMismatch);
         AddSessionKeys(Obj, Status, TestRunsBefore);
+        // R1131: the start WorkDate the method ran under; blank when no method ran (a fail-closed answer).
+        if WorkDateText <> '' then
+            Obj.Add('workDate', WorkDateText);
         Obj.WriteTo(Out);
         exit(Out);
     end;

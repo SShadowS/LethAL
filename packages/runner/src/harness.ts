@@ -77,6 +77,8 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.28 (R1131) returns the start WorkDate it set as `workDate` on every answer that ran a method (RunMany's per-method
+ * object, RunMutant's status), so the client can refuse a start date that moved from the batch's baseline. No fallback.
  * 1.0.0.27 (R1127) starts every test method on the WorkDate a client session gets at login (BaseApp's
  * `GetDefaultWorkDate`: the last G/L posting date in a demo company), as al-runner v3 does, instead of the OData
  * session's Today. No action changes; it is required so a run's verdicts never mix the two start dates.
@@ -91,7 +93,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.27";
+export const MIN_CONTROL_VERSION = "1.0.0.28";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is

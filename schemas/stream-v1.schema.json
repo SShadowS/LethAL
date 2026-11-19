@@ -953,6 +953,9 @@
         "stoppedBudgetMs": {
           "type": "number"
         },
+        "workDate": {
+          "type": "string"
+        },
         "verdicts": {
           "type": "array",
           "items": {
@@ -1396,7 +1399,8 @@
             "runner-refused",
             "kill-not-reproduced",
             "confirm-stopped",
-            "test-discovery-failed"
+            "test-discovery-failed",
+            "workdate-changed"
           ]
         },
         "killingTestFailure": {

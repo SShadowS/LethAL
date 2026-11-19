@@ -7,6 +7,7 @@ import { testsInAlSource } from "../src/discovery";
 import { MalformedReportError, explain } from "../src/explain";
 import { type MutantOutcome, REPORT_SCHEMA_VERSION, type SessionReport } from "../src/report";
 import { testMethodsOf } from "../src/report-fold";
+import { WorkDateGuard } from "../src/workdate-guard";
 
 /**
  * R272: explain lists a gap's covering tests with file:line, ordered by reach then name; the
@@ -205,7 +206,12 @@ describe("R272: each backend's duration is the test's own", () => {
       if (v === undefined) throw new Error("no answer");
       return v;
     };
-    Object.assign(backend, { runOnHub: stub, runViaTransport: stub });
+    // R1131: `Object.create` runs no constructor, so the start-WorkDate guard is handed over too.
+    Object.assign(backend, {
+      runOnHub: stub,
+      runViaTransport: stub,
+      workDates: new WorkDateGuard(true),
+    });
     const run = (coverage: RunOpts["coverage"]) =>
       backend.run(ref, { coverage, timeoutMs: 1000 } as RunOpts);
     answers.push({ ref, outcome: "pass", durationMs: 300 });

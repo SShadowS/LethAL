@@ -80,6 +80,7 @@ import {
 } from "./test-app-publish";
 import type { CompiledTestApp, PublishedTestApp } from "./test-app-publish";
 import { walkFilesSync } from "./walk";
+import { WorkDateGuard } from "./workdate-guard";
 
 /**
  * R552: the warning for a `lethal-control.app` an older LethAL left in the user's package cache, or
@@ -471,6 +472,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
   /** R552: the leftover `lethal-control.app` warning is printed once per backend. */
   private leftoverWarned = false;
   private danglingWarned = false;
+  /**
+   * R1131: the start-WorkDate comparison. Off in hub mode (`coverageMode: "procedure"`), whose baseline goes to
+   * bc-dev-mcp and carries no `workDate`; the session then says so once (`hubWorkDateNoted`).
+   */
+  private readonly workDates: WorkDateGuard;
+  private hubWorkDateNoted = false;
   /** R739: where this backend's notices go. Default: the console, as before a session installs one. */
   private notify: (code: string, message: string) => void = (_code, message) =>
     console.warn(message);
@@ -484,6 +491,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
     this.notify = notify ?? ((_code, message) => console.warn(message));
     this.controlState.notify = notify;
     if (notify !== undefined) {
+      this.workDates.resetSession();
+      this.hubWorkDateNoted = false;
       this.refusalsWarned.clear();
       this.leftoverWarned = false;
       this.danglingWarned = false;
@@ -535,7 +544,35 @@ export class BcDevMcpBackend implements ExecutionBackend {
       artifactId: string,
       controlState: ControlState,
     ) => RunMutantTransport,
-  ) {}
+  ) {
+    this.workDates = new WorkDateGuard(cfg.coverageMode !== "procedure");
+  }
+
+  /** R1131: see `ExecutionBackend.baselinePhase`; a batch's bracket resets its baseline date. */
+  baselinePhase(on: boolean): void {
+    this.workDates.baselinePhase(on);
+    if (on && this.cfg.coverageMode === "procedure" && !this.hubWorkDateNoted) {
+      this.hubWorkDateNoted = true;
+      this.notify(
+        "workdate-not-compared",
+        "[lethal] workdate-not-compared: coverageMode procedure sends the baseline to bc-dev-mcp, whose answers carry no start WorkDate, so a start date that moves during this run is not detected (R1131).",
+      );
+    }
+  }
+
+  batchWorkDate(): string | undefined {
+    return this.workDates.batchWorkDate();
+  }
+
+  refuseReusedBaselineDate(snapshotWorkDate: string | undefined): string | undefined {
+    return this.workDates.refuseReuse(snapshotWorkDate);
+  }
+
+  noteReusedBaseline(
+    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+  ): void {
+    this.workDates.noteReused(baseline);
+  }
 
   /** R516 I1: the control app stops a run at the budget it was sent. */
   readonly inRunStopIsBudget = true;
@@ -1342,7 +1379,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     const v =
       opts.coverage === "procedure" || opts.coverage === "line"
         ? await this.runOnHub(ref, opts)
-        : await this.runViaTransport(ref, opts);
+        : this.workDates.check(await this.runViaTransport(ref, opts));
     // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
     // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
     // negative one: the hub path's `Date.now()` delta can go below 0 when the clock steps back (the
@@ -1410,7 +1447,23 @@ export class BcDevMcpBackend implements ExecutionBackend {
       // unmutated run; a mutant's group call only with `--stop-hung-sessions`.
       stopHungSessions: this.cfg.stopHungSessions === true || opts.confirmation === true,
     });
-    return result.kind === "verdicts" ? { ...result, fencedOp } : { ...result, fencedOp };
+    if (result.kind !== "verdicts") return { ...result, fencedOp };
+    // R1131: every entry's start WorkDate against the batch's baseline. The first refused entry ends the call
+    // as a per-mutant `workdate-changed` (a call shares one date, so that is entry 1 unless the batch had
+    // already moved); a plain verdict list is never returned with a refused row in it.
+    const checked = result.verdicts.map((v) => this.workDates.check(v));
+    const bad = checked.findIndex((v) => v.workDateRefusal !== undefined);
+    const refused = checked[bad];
+    if (refused !== undefined) {
+      return {
+        kind: "call",
+        verdict: refused,
+        methodIndex: bad + 1,
+        cause: "workdate-changed",
+        fencedOp,
+      };
+    }
+    return { ...result, verdicts: checked, fencedOp };
   }
 
   private async runViaTransport(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
