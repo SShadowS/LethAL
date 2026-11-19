@@ -288,6 +288,61 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   redeploy, not across lethal-bugs' daily update (next 2026-11-20 ~07:47Z).
 - **5. WR's expected file** follows the same construction from `bcdev.wrapped.baseline.json` once a WR record run past
   item 1 dumps its keys. It lands in its own master commit before WR's record, with WR's `assertCounts` figures.
+  - **Landed** (`packages/runner/itest/expected/al-runner-v3.wrapped.baseline.json`): the 102 committed rows verbatim; 14
+    added `condition-true` rows, key and hash from the refused record's dump, verdicts from the BC twins (2 killed, 12
+    survived), except WrappedArms' new `Pick` row: no-coverage, `coverageFiltered` true, no killer, by item 1's refusal
+    rule, like its three siblings (BC: survived).
+  - **WR's `assertCounts`: 64 / 39 / 13 over 116** (was 62 / 28 / 12 over 102). That is the twins plus the refusal rule,
+    and equals the printed reading (`/coord/handoff/PR-209/v3rec2/wr-d1.log`).
+  - **Disclosed:** the dump's rows already equal this file. It is built from the twins and the rule, not copied.
+  - D1 and D1c PASS slim (53 / 12 / 0 and 53 / 8 / 4 over 65), amendment 7 confirmed.
+
+## 0i. Amendment 8 (2026-11-19, before any itest:verify run): the verify gate, missed by §3 and §4
+- **The miss:** `itest:verify` (`verify.itest.ts`, `verify-gaps.ts`) runs `fixtures/sandbox-app` on BC with the default set,
+  and agentflow's gate table routes sandbox-app changes to it. §3's table and §4's BC legs never named it. The Opus build
+  review found it still pinned to the old set (14 gap members, a 5-key `DiscountedPrice` no-coverage block).
+- **What these figures rest on (not blind):** derived from the code (an Opus read-only pass) AND checked against
+  bcdev's recorded twin. `bcdev.baseline.json` (bc1, 2026-11-19) runs the same fixture with the same set and is on
+  master, so the verdicts below are known before verify runs. Numbers taken FROM THE TWIN:
+  - the 4 added rows' verdicts: `ClampPercent` condition-true, `ApplyAudit` blank-argument and `LogAudit` condition-true
+    survived; `DiscountedPrice` condition-true no-coverage;
+  - their keys (hash prefixes `241fff…`, `68eef1…`, `5cba65…`, `4b61c0…`);
+  - survived 17 in total.
+- **Numbers from the CODE** (where each row lands, and what does not move):
+  - a gap id hashes the block (`gapIdOf`: file, first and last line, block text), never its members, and the fixture is
+    unchanged, so all 5 gap ids stay;
+  - the four rows join EXISTING blocks: ClampPercent ct shares the line-12 condition's block (`CLAMP_GAP`); ApplyAudit ba
+    sits in the procedure body (`APPLY_GAP`); LogAudit ct's condition is outside its then-block (`LOG_BODY_GAP`;
+    `LOG_THEN_GAP` unchanged); DiscountedPrice ct joins that no-coverage block. No-coverage rows are never gap members.
+- **Pre-committed:**
+  - `CLAMP_GAP` 7 → 8 keys, `APPLY_GAP` 2 → 3, `LOG_BODY_GAP` 3 → 4, `LOG_THEN_GAP` 2 (unchanged); still exactly 4
+    gaps, each `unobservedBlock`, per-gap survived = its keys;
+  - `memberTotal` 14 → 17, equal to `counts.survived`;
+  - `PREDICTED_NO_COVERAGE_KEYS` 5 → 6 (+ `DiscountedPrice` condition-true); still exactly 1 no-coverage block;
+  - unchanged: the 3 `IsOverBudget` rows (killed), `OVER_BUDGET_GAP`, the REACH_* strings (they count only the
+    survivors each verify call names), steps 3-5's counts and refusals, `GATE_WARNINGS` verify/* all `[]`;
+  - `packages/runner/tests/gap-pins.test.ts` returns to the default set (its `SLIM_OPTIONS` removed): the offline proof of
+    the four keys and the unchanged ids.
+- **Run:** `LETHAL_ITEST_BCDEV=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json` `itest:verify`, on bc1 (its proven server),
+  against `bcdev.baseline.json`. Any difference is a BLOCK.
+- **The other gates not yet run under PR-209** (same method: an Opus read of each itest, figures from the code and the
+  recorded twins):
+  - **itest:agreement** (`sandbox-harden`; twin `harden.baseline.json`, 23 rows, recorded on bc3) MOVES:
+    - step 1, A: 21 → 23 mutants; killed / survived / no-coverage [16, 5, 0] → [18, 5, 0] (FROM THE TWIN: the two added
+      `condition-true` rows, `HardenLogic` lines 23 and 41, killed);
+    - step 4, B: 21 → 23 mutants; [20, 1, 0] → [22, 1, 0]. From the code: the two rows' recorded killers
+      (`FirstAmountReadsARow`, `BonusForPaysOnlyAboveTen`, FROM THE TWIN) are in the scratch suite (`SCRATCH_TESTS`);
+    - unchanged: the five planted keys, `REACH_STEP3`, steps 3 and 5, warning sets (`HARDEN_DEPENDENTS`).
+  - **itest:verify-scale** (`sandbox-data`; twin `tables.baseline.json`, recorded on bc2) MOVES: `SURVIVORS` 73 → 83
+    (FROM THE TWIN). Steps 3 and 7 follow the re-recorded baseline. It also requires one batch (needs its run's reading).
+  - **itest:testapp** follows `bcdev.baseline.json` by row (no count pinned; its step-3 key suffixes stay unique). It
+    assumes one batch (needs its run's reading). **itest:stale-publish**, **itest:lease** and **itest:growth** pin
+    nothing the set moves (by procedure+operator; no mutants; print only).
+  - **itest:envtool** (host-only) was already stale before PR-209 (master generates 22 against its 19). Its own rule
+    re-records only against a same-day bcdev run, through the owner; not moved here.
+- **Runs** (each its proven server, bc1 per `docs/gates/servers.md`): `itest:verify`, `itest:agreement`
+  (`LETHAL_ITEST_AGREEMENT=1`), `itest:verify-scale` (`LETHAL_ITEST_VERIFY_SCALE=1`), `itest:testapp`
+  (`LETHAL_ITEST_TESTAPP=1`), all with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`. Any difference is a BLOCK.
 
 ## 0h. Amendment 7 (2026-11-19): D1 and D1c run slim, RULED (b) by the orchestrator
 - **Observed** (`/coord/handoff/PR-209/v3rec2/o1d1.log`, checkout `/work/lethal-wt/cdo-r396`): O1 PASS; D1 63 / 15 / 0 over

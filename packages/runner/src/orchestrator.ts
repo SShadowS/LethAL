@@ -9611,6 +9611,8 @@ async function runSessionBody(
   ) {
     await runWithheldRecheck({
       events: [...collectedEvents],
+      // PR-225: each target's candidate killers, from this run's own stored test results.
+      notPassOf: (t) => cfg.store.notPassTestsOf(runId, t.mutant.mutantId, t.batchIndex),
       emit: (e) => emit(e),
       main: {
         ...(v3Build !== undefined
