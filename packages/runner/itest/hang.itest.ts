@@ -345,7 +345,8 @@ const EXPECTED_ON: ReadonlyArray<{
   // --- docs/superpowers/specs/2026-09-03-r206-build-precommitment.md before this gate ran.
   { line: 140, operator: "lethal.empty-block", verdict: "killed", killPosition: 1 },
   // PR-209: the added `condition-true` row (observed on bc2, 2026-11-19); no killPosition is pinned.
-  { line: 141, operator: "lethal.condition-true", verdict: "killed" },
+  // PR-209: RECORDED on bc2 (lethal-code): killed at group position 2, a warm kill.
+  { line: 141, operator: "lethal.condition-true", verdict: "killed", killPosition: 2 },
   { line: 141, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 1 },
   { line: 142, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
   { line: 143, operator: "lethal.remove-assignment", verdict: "survived" },
@@ -744,6 +745,14 @@ function assertHangRefusedRow(label: string, report: SessionReport): void {
 function assertOnLeg(leg: LegResult): void {
   const { report, testRows } = leg;
   dump("stop-hung-sessions ON", report);
+  // PR-209: print the figures asserted later, BEFORE any assertion, so one record run shows them all. Print only.
+  console.log(
+    `  [ON] figures: warmKills=${report.warmKills} groupedCalls=${report.groupedCalls} warmKillCodes=${JSON.stringify(
+      report.mutants
+        .filter((m) => m.verdict === "killed" && (m.killPosition ?? 1) > 1)
+        .map((m) => `${m.mutantCode}@${m.killPosition}`),
+    )}`,
+  );
   assertHangRefusedRow("ON", report);
 
   assert.equal(report.baselineGreen, true, "baseline must be green (the fixture test passes)");
