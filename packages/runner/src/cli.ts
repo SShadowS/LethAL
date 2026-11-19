@@ -3769,6 +3769,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     daemonMaxRssGb: c.daemonMaxRssGb, // R952
     daemonMaxRequests: c.daemonMaxRequests, // R952
     ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
+    ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
   };
 }
 
