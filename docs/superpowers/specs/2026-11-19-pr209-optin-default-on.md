@@ -288,6 +288,14 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   redeploy, not across lethal-bugs' daily update (next 2026-11-20 ~07:47Z).
 - **5. WR's expected file** follows the same construction from `bcdev.wrapped.baseline.json` once a WR record run past
   item 1 dumps its keys. It lands in its own master commit before WR's record, with WR's `assertCounts` figures.
+  - **Landed** (`packages/runner/itest/expected/al-runner-v3.wrapped.baseline.json`): the 102 committed rows verbatim; 14
+    added `condition-true` rows, key and hash from the refused record's dump, verdicts from the BC twins (2 killed, 12
+    survived), except WrappedArms' new `Pick` row: no-coverage, `coverageFiltered` true, no killer, by item 1's refusal
+    rule, like its three siblings (BC: survived).
+  - **WR's `assertCounts`: 64 / 39 / 13 over 116** (was 62 / 28 / 12 over 102). That is the twins plus the refusal rule,
+    and equals the printed reading (`/coord/handoff/PR-209/v3rec2/wr-d1.log`).
+  - **Disclosed:** the dump's rows already equal this file. It is built from the twins and the rule, not copied.
+  - D1 and D1c PASS slim (53 / 12 / 0 and 53 / 8 / 4 over 65), amendment 7 confirmed.
 
 ## 0h. Amendment 7 (2026-11-19): D1 and D1c run slim, RULED (b) by the orchestrator
 - **Observed** (`/coord/handoff/PR-209/v3rec2/o1d1.log`, checkout `/work/lethal-wt/cdo-r396`): O1 PASS; D1 63 / 15 / 0 over
