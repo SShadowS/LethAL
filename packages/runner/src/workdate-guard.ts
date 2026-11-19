@@ -84,7 +84,11 @@ export class WorkDateGuard {
     if (snapshotDate === undefined) {
       return "it records no start WorkDate (stored before control app 1.0.0.28, or no baseline call carried one), so its baseline cannot be compared with this session's (R1131)";
     }
-    if (this.sessionDate !== undefined && this.sessionDate !== snapshotDate) {
+    // A session never reuses its FIRST batch's snapshot: that baseline runs live and gives the session its date.
+    if (this.sessionDate === undefined) {
+      return "this session has no start WorkDate yet, and its first batch's baseline runs again to read it (R1131)";
+    }
+    if (this.sessionDate !== snapshotDate) {
       return `it ran on start WorkDate ${snapshotDate} and this session's calls start on ${this.sessionDate} (R1131)`;
     }
     return undefined;
@@ -121,7 +125,7 @@ export class WorkDateGuard {
       ref: v.ref,
       outcome: "error",
       durationMs: v.durationMs,
-      failureMessage: `workdate-changed: ${why}; a start date that moved can change a test's verdict, so the answer is not scored. The rest of this batch is not scored; re-run with --resume (R1131)`,
+      failureMessage: `workdate-changed: ${why}; a start date that moved can change a test's verdict, so the answer is not scored. The rest of this batch is not scored; re-run (R1131)`,
       workDate: d,
       workDateRefusal: "workdate-changed",
       ...(v.attestation !== undefined ? { attestation: v.attestation } : {}),

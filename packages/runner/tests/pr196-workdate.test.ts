@@ -111,6 +111,10 @@ describe("WorkDateGuard (R1131)", () => {
     expect(g.refuseReuse(undefined)).toContain("records no start WorkDate");
   });
 
+  test("snapshot reuse: a session with no date yet (its first batch) reuses nothing, even an equal date", () => {
+    expect(new WorkDateGuard(true).refuseReuse(D1)).toContain("no start WorkDate yet");
+  });
+
   test("a reused snapshot's verdicts give the batch its date", () => {
     const g = new WorkDateGuard(true);
     g.baselinePhase(true);

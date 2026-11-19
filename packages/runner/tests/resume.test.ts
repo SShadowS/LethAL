@@ -1854,16 +1854,25 @@ describe("runSession --resume (R47)", () => {
     };
   };
 
-  test("R1131: a snapshot measured on the same start WorkDate is reused", async () => {
-    const second = new Dated("2026-11-19", undefined, "2026-11-19");
+  test("R1131: a resumed session re-runs batch 0's baseline even when its snapshot's date would match; a later batch on an equal date is reused", async () => {
+    const second = new Dated("2026-11-19");
     const r = await resumeWith(new Dated("2026-11-19", 2), second);
-    expect(second.baselineRuns).toBe(0);
-    expect(r.reused).toBe(2);
-    expect(r.notReused).toBe(0);
+    // Batch 0 ran live (it gives the session its date); batch 1 reused its snapshot.
+    expect(second.baselineRuns).toBeGreaterThan(0);
+    expect(r.reused).toBe(1);
+    expect(r.notReused).toBe(1);
+    expect(
+      r.events.some(
+        (e) =>
+          e.type === "warning" &&
+          e.code === "resume-baseline-not-reused" &&
+          e.message.includes("no start WorkDate yet"),
+      ),
+    ).toBe(true);
   });
 
   test("R1131: a snapshot measured on another start WorkDate is not reused; the baseline runs again", async () => {
-    const second = new Dated("2026-11-20", undefined, "2026-11-20");
+    const second = new Dated("2026-11-20");
     const r = await resumeWith(new Dated("2026-11-19", 2), second);
     expect(r.reused).toBe(0);
     expect(r.notReused).toBeGreaterThan(0);
@@ -1880,7 +1889,7 @@ describe("runSession --resume (R47)", () => {
   });
 
   test("R1131: a snapshot with no start WorkDate (stored before control 1.0.0.28) is never reused", async () => {
-    const second = new Dated("2026-11-19", undefined, "2026-11-19");
+    const second = new Dated("2026-11-19");
     const r = await resumeWith(new CountingBackend("pass", undefined, 2), second);
     expect(r.reused).toBe(0);
     expect(second.baselineRuns).toBeGreaterThan(0);
