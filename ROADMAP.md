@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1104 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 1105 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1147,8 +1147,9 @@ that ordering is the priority.
 - **R1129** · Two R622 watchdog tests in scripts/verify.test.ts carry wall-clock bounds that a slow Windows CI runner missed (isChildOf timed out at 60 s; the serial spin run took 17.5 s against a 15 s bound): a flake that reddens the Windows check on unrelated changes · [R1129.md](docs/roadmap/R1129.md) · done (7848be53)
 - **R1130** · A fixture test project's own .alpackages (from a full symbol-tar extraction) silently changed itest:alrunner-v3's readings: v3 reads it beside packagesDir, so N1, N1E, N1S, WR and WRE turned test data off; the itest now hands v3 a copy without it · [R1130.md](docs/roadmap/R1130.md) · done (bb021380)
 - **R1132** · Shell writes into source (`cat >> file <<EOF`) still pass: no-shell-edits blocks only `sed -i`, and the advisory hook (PR-122) only warns; a PR-179 builder appended test code by heredoc. Proposal: block such writes into the repo, for the owner to rule at the advisory's week review (2026-11-24) · [R1132.md](docs/roadmap/R1132.md) · open — a proposal (hook changes need the owner's word); filed by lethal-preproc from coord PR-179, 2026-11-18
-- **R1142** · The withheld-kill recheck's own baseline costs about 2,088 s per DO run against 46.5 s of target rows: can it be smaller or reused? · [R1142.md](docs/roadmap/R1142.md) · open — measure first: which part of the 1,161-test method-isolation baseline the 516 targets' rules actually…
+- **R1142** · The withheld-kill recheck's own baseline costs about 2,088 s per DO run against 46.5 s of target rows: can it be smaller or reused? · [R1142.md](docs/roadmap/R1142.md) · done (651bf616) — option A (PR-225): the recheck baseline runs only the candidate killers' codeunits…
 - **R1140** · DO's y3 `error` mutants, mined (757 in the main pass, 61 classes, identical to y2; 348 after the withheld-kill recheck, which recovered only by-design cascades): three al-runner refusals met only under mutation filed as upstream #8486, and four narrower shapes of filed refusals reported on #7760, #8036 and #7764; the rest is by design or already filed · [R1140.md](docs/roadmap/R1140.md) · open
+- **R1143** · Reuse an earlier run's withheld-kill recheck baseline when the build, sources and test app are the same (R1142's option B); filed, not built · [R1143.md](docs/roadmap/R1143.md) · open
 
 ---
 
