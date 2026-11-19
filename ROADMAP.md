@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1104 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**45 of 1104 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -392,7 +392,7 @@ that ordering is the priority.
 - **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · done (3bc17254)
 - **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · done (162fceb8) — PR-215: the refusal is named as a third shape of tests-testpage-unsupported…
 - **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · open
-- **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · open — measured 2026-11-19: the test is order-dependent in DO's own code…
+- **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · closed 2026-11-19 — measured: DO's own test-order dependence (codeunit globals only earlier tests set), not…
 
 ## Product gaps a real project hits
 
