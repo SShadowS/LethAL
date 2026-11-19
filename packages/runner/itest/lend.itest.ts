@@ -288,7 +288,10 @@ function assertCodes(leg: string, events: readonly RunEvent[], want: readonly st
 /** The one message of `code` (assertCodes has already pinned there is one). */
 function message(events: readonly RunEvent[], code: string): string {
   const hit = events.find((e) => e.type === "warning" && e.code === code);
-  return hit?.type === "warning" ? hit.message : "";
+  const text = hit?.type === "warning" ? hit.message : "";
+  // PR-209: print every message a check reads, BEFORE the check, so a record or observe run shows it. Print only.
+  console.log(`  message ${code}: ${text === "" ? "(none)" : text}`);
+  return text;
 }
 
 /** R272: how many baseline tests ran in THIS session (a reused snapshot has no durations). */
