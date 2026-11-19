@@ -201,6 +201,7 @@ import type {
   V3BaselineOneShotTimed,
   V3RequestSized,
   V3RequestTimed,
+  V3TimingValue,
   V3Timings,
 } from "./backend";
 import {
@@ -926,6 +927,8 @@ export interface AlRunnerV3Config {
   readonly daemonMaxRssGb?: number;
   /** R952 (R948): recycle a serve daemon after this many requests (`alRunnerV3.daemonMaxRequests`); absent or 0 = off. */
   readonly daemonMaxRequests?: number;
+  /** PR-227: `alRunnerV3.daemonStderrDir`: every serve daemon's full stderr, one file each. Absent: none written. */
+  readonly daemonStderrDir?: string;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
@@ -1535,26 +1538,93 @@ export type V3DaemonClose = {
   readonly phase: "warmup" | "prefetch" | "live" | "baseline" | "idle";
 };
 
-/** PR-100: `summary.timings` reduced to the known fields of the right type; absent when none is left. */
+const V3_TIMING_NUMBERS = [
+  "setupMs",
+  "compileMs",
+  "engineMs",
+  "baselineMs",
+  "testsMs",
+  "coverageMs",
+  "otherMs",
+  "resetMs",
+] as const;
+const V3_TIMING_KNOWN: ReadonlySet<string> = new Set([
+  ...V3_TIMING_NUMBERS,
+  "baselineSource",
+  "engineKept",
+]);
+
+/**
+ * PR-227: where a serve daemon's full stderr goes (`alRunnerV3.daemonStderrDir`):
+ * `<dir>/<utc>-lane<N>-pid<P>.stderr`, the UTC start with `:` and `.` made `-`. Absent dir: none.
+ */
+export function daemonStderrFileFor(
+  dir: string | undefined,
+  lane: number,
+  now: () => Date = () => new Date(),
+): ((pid: number | undefined) => string) | undefined {
+  if (dir === undefined) return undefined;
+  return (pid) =>
+    join(
+      dir,
+      `${now().toISOString().replace(/[:.]/g, "-")}-lane${lane}-pid${pid ?? "unknown"}.stderr`,
+    );
+}
+
+/**
+ * PR-227: `V3Timings.extra` rides on every `serve-request-timed` event (about 7,000 in a DO run), so its
+ * kept fields are capped at this many bytes of JSON. Fields are kept in al-runner's order while they fit;
+ * the number of fields left out is `extra[V3_TIMING_EXTRA_TRUNCATED]`.
+ */
+export const V3_TIMING_EXTRA_MAX_BYTES = 4096;
+export const V3_TIMING_EXTRA_TRUNCATED = "lethalTruncatedFields";
+
+/** PR-227: a scalar al-runner sent, as kept in `V3Timings.extra`; `undefined` for anything else. */
+function timingScalar(v: unknown): V3TimingValue | undefined {
+  if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+  return typeof v === "string" || typeof v === "boolean" ? v : undefined;
+}
+
+/**
+ * PR-100: `summary.timings` reduced to the known fields of the right type; absent when none is left.
+ * PR-227: every other field goes to `extra` when it is a scalar or one flat object of scalars.
+ */
 export function pickV3Timings(raw: unknown): V3Timings | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const r = raw as Record<string, unknown>;
   const out: { -readonly [K in keyof V3Timings]: V3Timings[K] } = {};
-  for (const k of [
-    "setupMs",
-    "compileMs",
-    "engineMs",
-    "baselineMs",
-    "testsMs",
-    "coverageMs",
-    "otherMs",
-    "resetMs",
-  ] as const) {
+  for (const k of V3_TIMING_NUMBERS) {
     const v = r[k];
     if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
   }
   if (typeof r.baselineSource === "string") out.baselineSource = r.baselineSource;
   if (r.engineKept === true) out.engineKept = true;
+  const extra: Record<string, V3TimingValue | Readonly<Record<string, V3TimingValue>>> = {};
+  // The size the fields kept so far add to `extra`'s JSON; the braces and the marker are not counted.
+  let size = 0;
+  let left = 0;
+  for (const [k, v] of Object.entries(r)) {
+    if (V3_TIMING_KNOWN.has(k) || k === V3_TIMING_EXTRA_TRUNCATED) continue;
+    let kept: V3TimingValue | Readonly<Record<string, V3TimingValue>> | undefined = timingScalar(v);
+    if (kept === undefined && typeof v === "object" && v !== null && !Array.isArray(v)) {
+      const flat: Record<string, V3TimingValue> = {};
+      for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
+        const s = timingScalar(v2);
+        if (s !== undefined) flat[k2] = s;
+      }
+      if (Object.keys(flat).length > 0) kept = flat;
+    }
+    if (kept === undefined) continue;
+    const add = JSON.stringify(k).length + 1 + JSON.stringify(kept).length + 1;
+    if (size + add > V3_TIMING_EXTRA_MAX_BYTES) {
+      left += 1;
+      continue;
+    }
+    size += add;
+    extra[k] = kept;
+  }
+  if (left > 0) extra[V3_TIMING_EXTRA_TRUNCATED] = left;
+  if (Object.keys(extra).length > 0) out.extra = extra;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -7737,6 +7807,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
+      daemonStderrFileFor(this.cfg.daemonStderrDir, lane.index),
     );
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
       "--bc-version",

@@ -37,6 +37,7 @@ import {
 } from "./al-runner-v3-backend";
 import {
   AL_RUNNER_V3_NOT_AUTHORITATIVE,
+  type AlRunnerV3ConfigSection,
   assertAlcRunnable,
   assertBcVersionMatchesPackages,
   defaultV3Path,
@@ -3755,6 +3756,22 @@ export function assertBcdevToolsLocated(
  * transport is serve-entries where proven and one-shot otherwise (R761), unless the config names
  * one. Coverage is turned off (with a warning) by `v3CoverageMode`.
  */
+/**
+ * PR-227: the `alRunnerV3` keys that reach the backend's config unchanged, in one place so a test
+ * pins the wiring (a key the config parses but the CLI never passes on was invisible before).
+ */
+export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
+  return {
+    ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
+    downloadDemoData: c.downloadDemoData,
+    noClient: c.noClient, // R907
+    memoryHeadroomGb: c.memoryHeadroomGb, // R948
+    daemonMaxRssGb: c.daemonMaxRssGb, // R952
+    daemonMaxRequests: c.daemonMaxRequests, // R952
+    ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
+  };
+}
+
 async function buildAlRunnerV3Backend(
   parsed: BackendInputs,
   configFile: LethalConfigFile,
@@ -3806,12 +3823,7 @@ async function buildAlRunnerV3Backend(
       ...(parsed.baselineProcesses !== undefined
         ? { isolatedBaselineProcesses: parsed.baselineProcesses }
         : {}),
-      ...(c.cacheDir !== undefined ? { cacheDir: c.cacheDir } : {}),
-      downloadDemoData: c.downloadDemoData,
-      noClient: c.noClient, // R907
-      memoryHeadroomGb: c.memoryHeadroomGb, // R948
-      daemonMaxRssGb: c.daemonMaxRssGb, // R952
-      daemonMaxRequests: c.daemonMaxRequests, // R952
+      ...v3SectionPassThrough(c),
       daemonBaseline: c.transport === "serve-entries", // R948: the baseline through one daemon
       environmentChoice, // R938
       ...(license !== undefined ? { license } : {}), // R956

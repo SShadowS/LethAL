@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**47 of 1107 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**48 of 1108 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1151,6 +1151,7 @@ that ordering is the priority.
 - **R1140** · DO's y3 `error` mutants, mined (757 in the main pass, 61 classes, identical to y2; 348 after the withheld-kill recheck, which recovered only by-design cascades): three al-runner refusals met only under mutation filed as upstream #8486, and four narrower shapes of filed refusals reported on #7760, #8036 and #7764; the rest is by design or already filed · [R1140.md](docs/roadmap/R1140.md) · open
 - **R1143** · Reuse an earlier run's withheld-kill recheck baseline when the build, sources and test app are the same (R1142's option B); filed, not built · [R1143.md](docs/roadmap/R1143.md) · open
 - **R1145** · An al-runner launcher prefix (alRunnerV3.launcher), so performance runs can wrap the daemons (perf, stderr capture) while LethAL still hashes and gates the real binary · [R1145.md](docs/roadmap/R1145.md) · open
+- **R1146** · Adopt al-runner's stopAfterFirstFailure (upstream #8484) for mutant requests: the fork's version cut DO test time 20-23% with 0 moved verdicts (PR-223); re-measure upstream's before use · [R1146.md](docs/roadmap/R1146.md) · open — trigger: the first gated `current` that contains upstream #8484
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — measure first (coord PR-228): census of DO's cut kinds, a direct kept-vs-fresh DO check on `current`…
 
 ---

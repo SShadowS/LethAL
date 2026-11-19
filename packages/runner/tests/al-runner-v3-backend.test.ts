@@ -68,6 +68,7 @@ import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "../src/assertion-screen";
 import type { RunOpts, TestMethodRef } from "../src/backend";
+import { v3SectionPassThrough } from "../src/cli";
 import { noGreenBaselineNote, runOnce } from "../src/orchestrator";
 import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import type { SpawnFn } from "../src/publisher";
@@ -1564,6 +1565,33 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ downloadDemoData: false }).downloadDemoData).toBe(false);
     expect(v({ downloadDemoData: true }).downloadDemoData).toBe(true);
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
+  });
+
+  test("PR-227 the config key daemonStderrDir: absent by default, resolved to absolute, empty or non-string refused", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).daemonStderrDir).toBeUndefined();
+    expect("daemonStderrDir" in v({})).toBe(false);
+    // resolve(): on Windows an absolute "/m/daemons" gains the drive letter
+    expect(v({ daemonStderrDir: "/m/daemons" }).daemonStderrDir).toBe(resolve("/m/daemons"));
+    expect(v({ daemonStderrDir: "rel/d" }).daemonStderrDir).toBe(resolve("rel/d"));
+    expect(() => v({ daemonStderrDir: "" })).toThrow("daemonStderrDir");
+    expect(() => v({ daemonStderrDir: 3 })).toThrow("daemonStderrDir");
+    // and the CLI passes it on to the backend's config (v3SectionPassThrough), with its siblings
+    expect(v3SectionPassThrough(v({ daemonStderrDir: "/m/daemons" })).daemonStderrDir).toBe(
+      resolve("/m/daemons"),
+    );
+    expect("daemonStderrDir" in v3SectionPassThrough(v({}))).toBe(false);
+    expect(
+      v3SectionPassThrough(
+        v({ noClient: true, downloadDemoData: false, daemonMaxRequests: 7, cacheDir: "/c" }),
+      ),
+    ).toMatchObject({
+      noClient: true,
+      downloadDemoData: false,
+      daemonMaxRequests: 7,
+      cacheDir: "/c",
+    });
   });
 
   test("R907 the config key noClient: default from the constant, boolean only, passed through", () => {
