@@ -112,6 +112,62 @@ describe("PR-60 gateMemoryVerdict", () => {
     expect(run(dir, 3, ps).v?.message).toContain("REFUSED");
   });
 
+  test("PR-226 S4: a private gate inside its own heavy slot does not count that slot, nor its own process tree, and appends no small-admit row", async () => {
+    const dir = mk();
+    await hold(dir, 1, `other ${process.pid} 8\n`); // the gate's own slot
+    await hold(dir, 2, `other ${process.pid} 8\n`); // someone else's
+    // The slot file names the wrapper (pid 900); this process runs under it.
+    writeFileSync(join(dir, "heavy.1"), "900\n");
+    writeFileSync(join(dir, "heavy.2"), "902\n"); // another job's wrapper, not above this process
+    const ps = `${PS_HEAD}900 1 900 scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n${process.pid} 900 900 bun scripts/al-runner-v3-update.ts --root /x --local-candidate /y\n901 ${process.pid} 900 bun run itest:alrunner-v3\n`;
+    const ledger: string[] = [];
+    const seams = {
+      readSample: () => sample(8.2),
+      psText: () => ps,
+      appendLedger: (_d: string, who: string) => {
+        ledger.push(who);
+      },
+    };
+    const own = gateMemoryVerdict(dir, seams, { ownSlot: true });
+    expect(own?.message).toContain("held slots' peaks 8.0 (1)");
+    expect(ledger).toEqual([]);
+    const all = gateMemoryVerdict(dir, seams);
+    expect(all?.message).not.toContain("held slots' peaks 8.0 (1)");
+    // Not inside any slot (no held slot's wrapper is above this process): nothing is excluded.
+    const outside = gateMemoryVerdict(dir, { ...seams, psText: () => PS_HEAD }, { ownSlot: true });
+    expect(outside?.message).not.toContain("held slots' peaks 8.0 (1)");
+  });
+
+  test("PR-226 S4: where the small-job allowance applies, an own-slot gate appends no ledger row, and a gate with no own slot (or without the option) does", async () => {
+    const dir = mk();
+    await hold(dir, 1, `other ${process.pid} 8\n`); // the gate's own slot
+    await hold(dir, 2, `other ${process.pid} 12\n`);
+    await hold(dir, 3, `other ${process.pid} 8\n`);
+    await hold(dir, 4, `other ${process.pid} 8\n`);
+    writeFileSync(join(dir, "heavy.1"), "900\n");
+    for (const n of [2, 3, 4]) writeFileSync(join(dir, `heavy.${n}`), `${900 + n}\n`);
+    const ps = `${PS_HEAD}900 1 900 scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts\n${process.pid} 900 900 bun scripts/al-runner-v3-update.ts\n`;
+    const rows: string[] = [];
+    const seams = (psText: string) => ({
+      readSample: () => sample(8.2),
+      psText: () => psText,
+      appendLedger: (_d: string, who: string) => {
+        rows.push(who);
+      },
+    });
+    // Own slot left out: held 12 + 8 + 8 = 28; 28 + 2 + 4 > 32, so only the allowance admits it, and the slot's guard
+    // already wrote that row.
+    const own = gateMemoryVerdict(dir, seams(ps), { ownSlot: true });
+    expect(own?.message).toContain("small job");
+    expect(rows).toEqual([]);
+    // Not told it is in a slot: all four count (36), the allowance admits it, and the row IS appended.
+    expect(gateMemoryVerdict(dir, seams(ps))?.message).toContain("small job");
+    expect(rows).toEqual(["al-runner-v3-update"]);
+    // Told, but no held slot is above this process: nothing is excluded, and the row is appended.
+    gateMemoryVerdict(dir, seams(PS_HEAD), { ownSlot: true });
+    expect(rows).toEqual(["al-runner-v3-update", "al-runner-v3-update"]);
+  });
+
   test("no cgroup limit: undefined", () => {
     const v = gateMemoryVerdict(mk(), {
       readSample: () => undefined,
