@@ -158,7 +158,26 @@ export function withKit(f: Family): Family {
     vars: [STATE_VAR, ...(c.vars ?? [])],
     setup: [WRITES, ...(c.setup ?? [])],
   }));
-  return { ...f, support: `${f.support}\n${KIT_AL}`, cells };
+  return { ...f, support: `${f.support}\n${kitAl(f)}`, cells };
+}
+
+/**
+ * PR-191: the kit's AL, with a family's `readers` folded into `Observe` before `dotnet=` (the part OBS captures, so the
+ * kept daemon, the control and the fresh daemons compare them). A family without readers gets KIT_AL unchanged.
+ */
+export function kitAl(f: Family): string {
+  const readers = f.readers ?? [];
+  if (readers.length === 0) return KIT_AL;
+  const vars = readers.flatMap((r) => r.vars).map((v) => `        ${v}\n`);
+  const obs = readers.map((r) => `            ' ${r.name}=[' + ${r.expr} + ']' +\n`);
+  const a = "        B64: Text;\n    begin\n";
+  const b = "            ' dotnet=[len=' + Format(MS.Length()) + ' b64=' + B64 + ']');";
+  if (!KIT_AL.includes(a) || !KIT_AL.includes(b))
+    throw new Error("keep-census: the kit's Observe changed; update kitAl");
+  return KIT_AL.replace(a, () => `        B64: Text;\n${vars.join("")}    begin\n`).replace(
+    b,
+    () => `${obs.join("")}${b}`,
+  );
 }
 
 /** app.json with the kit's id range and the resource folder the entries' `active-mutant.txt` override needs. */
