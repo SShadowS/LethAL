@@ -95,3 +95,36 @@ on any class outside the measured set.
       the warnings).
 - **(4) goes to the orchestrator and the owner** with the exposure above. It is not built here.
 - **(3) is not built.**
+
+## Amendment 1 (2026-11-19, from the Opus build review, before submit)
+- **Per session, really:** the checked-text set, the known variants shown and a storm count per family are cleared by
+  `setNotify`, as the backend's other once-per-session flags are. So a reused backend's next session warns on its own 10th
+  close and on a text the last session reported. `closeFamilies` (the close line's lifetime count) is untouched. Tested,
+  and red-checked by removing the reset.
+- **A known false-alarm source,** not seen in y2, y3, PERF-10 or the v3 gate: a `cascade` refusal whose tail is a panic or
+  a timeout fails `SAFE_TAIL` on purpose, but holds all of the `cascade` entry's 8 words, so it prints the near-miss
+  warning. That is acceptable for a warning (the daemon closes either way). Timeouts stay out of the v3 gate (R164), so no
+  gate leg prints it. Should it appear in a real run, add it as a third known variant by a pre-commitment.
+- **Misses, stated:**
+  - an entry with an alternation (`http`, `commit`, `dotnet-exception`) has words from every branch, so a reworded text of
+    one branch may stay under 0.8;
+  - a refusal that closes a WARM-UP carries no text and no family, so neither check sees it.
+  - The storm backstops the first, not the second.
+
+## Amendment 2 (2026-11-19, bugs' keep audit, before submit): entries of at least 7 words, and 12 entries that never match
+- **What the audit found** (`/coord/handoff/PR-217/keep-audit.md`): 12 PR56 entries never match on `current`, because
+  al-runner appends ` (not pinned)` and `pr56Entry` anchors `$`. The 12 are `geturl-company-characters`,
+  `geturl-object-type-or-arguments`, `dotnet-copilot-platform-authorization`, `yaml-list-indent`, `yaml-null-or-number`,
+  `yaml-blank-line-nested`, `yaml-flow-quoted-key`, `gotokey-statement-no-row`, `part-visible-other-shape`,
+  `xmlport-import-header`, `asdecimal-text-control` and `page-no-record-onopenpage`.
+- **Measured:** real lines from the PR-213/PR-175 repros (`/coord/handoff/PR-244/notpinned-check.txt`). The near-miss
+  check names 11 of the 12 at 100% containment; `yaml-list-indent` has 7 literal words, under the minimum of 8.
+- **Change:** the minimum becomes **7 words**.
+  - False alarms, re-read: `nearmiss.txt` already scored every refusal close of y2, y3 and PERF-10 against entries of 4
+    words or more. No unkept text reaches 0.8 on an entry of under 8 words; the only ones that do are now kept.
+  - So the change adds 0 false alarms on the measured runs.
+- **Test:** all 12 real lines warn, each naming its entry. Red check: the minimum back at 8, so the `yaml-list-indent`
+  line goes red.
+- **The entries themselves** (widening them to accept the suffix) are not PR-244's: keep behaviour changes only with
+  proof (principle 9). Bugs widens the Company pair with a kept-vs-fresh proof. For the 12, this warning makes each
+  visible the first time it closes a daemon.
