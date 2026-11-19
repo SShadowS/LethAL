@@ -378,6 +378,13 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
 - **Not PR-209's:** alpha.12 also fails leg C (it refuses `strictOrder`, PR-114a's capability facts of 2026-11-17) and X
   (no `alone-confirm`). Both pass on `current`. Whether old manifest rows can be refreshed at all after PR-114a is a
   separate question for the orchestrator; no figure here depends on it.
+- **Addendum (2026-11-19, the measure-only refresh probe on `current` at cb5155ee2):** the counts above passed, and
+  three checks they had hidden then failed (a leg stops at its first failed check):
+  - **S1E and DB** (`S1E_PINS`): `entriesSent` 48 → **54**. READ on `current`, not predicted.
+  - **K** (`judgeLegK`): no-coverage mutants 5 → **6**, all still in `SandboxPricing.Codeunit.al`. FROM THE TWIN: the
+    sixth is `DiscountedPrice` condition-true, no-coverage in `bcdev.baseline.json`.
+  - **The rule for what follows:** before any refresh, the full v3 gate on `current` at the branch head must PASS every
+    leg, so no hidden check is left for a refresh to find.
 
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
