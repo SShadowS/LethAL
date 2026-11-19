@@ -34,6 +34,7 @@ import type {
 import type { ConfirmGiven } from "./confirm";
 import type { DependencyReportSourceRecord } from "./dependency-report-source";
 import type { HangRefusedFile, PreprocExcludedFile, RefusedExcludedFile } from "./excluded-sites";
+import type { HttpPolicySummary } from "./http-policy";
 import type { IsolationChoiceRow } from "./isolation-auto";
 import type { ChangedSinceSource, LineRange } from "./line-filter";
 import type { PermissionCanaryResult } from "./permission-canary";
@@ -258,6 +259,14 @@ export type RunEventInput =
       readonly testBuildSymbols?: readonly string[];
       readonly excludedTests?: readonly ExcludedTestRecord[];
       readonly unverifiedTestFiles?: readonly string[];
+      /**
+       * PR-197 (R1113 fix 2): the TestHttpRequestPolicy of every codeunit in `tests` (`http-policy.ts`). Absent on a
+       * nested recheck session, and when the check itself failed (then a stderr line says so). Never read by the
+       * report fold.
+       */
+      readonly httpPolicy?: HttpPolicySummary;
+      /** PR-197: why the check above failed; the run goes on. */
+      readonly httpPolicyFailed?: string;
     }
   | {
       /**
