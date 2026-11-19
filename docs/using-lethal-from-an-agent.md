@@ -242,7 +242,7 @@ nothing else. Separately, the `serve-request-timed` events keep every `summary.t
 `timings.extra` (scalars, or one flat object of scalars, such as `setupParts` and `workspaceCache`), so a new al-runner field
 is recorded without a LethAL change. `extra` is capped at 4 KB of JSON per event; fields past the cap are counted in
 `extra.lethalTruncatedFields`.
-`"serveTimings"` (default `false`, PR-237) passes `--timings` to every serve daemon. Its stderr then also carries the
+`"serveTimings"` (default `false`, PR-237) turns on al-runner's own timings switch for every serve daemon. Its stderr then also carries the
 compile-cache lines (with the workspace layer's miss reasons) and the slowest codeunits; with `daemonStderrDir` they are kept.
 It is for measurement runs and changes no verdict (measured on and off over the same scope).
 `"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
