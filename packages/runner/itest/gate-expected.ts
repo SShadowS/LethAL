@@ -12,12 +12,13 @@ import { PR209_UNRECORDED } from "./pr209-pending";
 export const BCDEV_FIGURES = {
   // PR-209 (spec §3, pre-committed): 22 + 3 condition-true + 1 blank-argument. The verdict counts are RECORDED on bc1
   // (lethal-code, /coord/handoff/PR-209-bc/bc1-bcdev-record/gate.log): the 4 new rows are M0005, M0014, M0016 survived
-  // and M0022 no-coverage; the old rows' counts are unchanged (3 / 14 / 5). groupedCalls and warmKills: still to be recorded.
+  // and M0022 no-coverage; the old rows' counts are unchanged (3 / 14 / 5). groupedCalls 20 RECORDED (one per scored
+  // mutant: 3 killed + 17 survived). warmKills stays 0: the kills are the same M0001-M0003; the record run confirms it.
   totalMutantSites: 26,
   killed: 3,
   survived: 17,
   noCoverage: 6,
-  groupedCalls: 17,
+  groupedCalls: 20,
   warmKills: 0,
   assertionScreenDiscrimination: "vacuous",
 } as const;
