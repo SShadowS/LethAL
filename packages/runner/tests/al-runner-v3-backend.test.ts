@@ -1572,13 +1572,14 @@ describe("R885: demo data, on the one-shot path", () => {
     const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
     expect(v({}).daemonStderrDir).toBeUndefined();
     expect("daemonStderrDir" in v({})).toBe(false);
-    expect(v({ daemonStderrDir: "/m/daemons" }).daemonStderrDir).toBe("/m/daemons");
+    // resolve(): on Windows an absolute "/m/daemons" gains the drive letter
+    expect(v({ daemonStderrDir: "/m/daemons" }).daemonStderrDir).toBe(resolve("/m/daemons"));
     expect(v({ daemonStderrDir: "rel/d" }).daemonStderrDir).toBe(resolve("rel/d"));
     expect(() => v({ daemonStderrDir: "" })).toThrow("daemonStderrDir");
     expect(() => v({ daemonStderrDir: 3 })).toThrow("daemonStderrDir");
     // and the CLI passes it on to the backend's config (v3SectionPassThrough), with its siblings
     expect(v3SectionPassThrough(v({ daemonStderrDir: "/m/daemons" })).daemonStderrDir).toBe(
-      "/m/daemons",
+      resolve("/m/daemons"),
     );
     expect("daemonStderrDir" in v3SectionPassThrough(v({}))).toBe(false);
     expect(

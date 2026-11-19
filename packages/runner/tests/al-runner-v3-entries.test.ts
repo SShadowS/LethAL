@@ -1843,8 +1843,9 @@ describe("10: R612's keep rule per entry, in entry order", () => {
   test("PR-227 daemonStderrFileFor: absent dir -> none; the name carries the UTC start, the lane and the pid", () => {
     expect(daemonStderrFileFor(undefined, 0)).toBeUndefined();
     const f = daemonStderrFileFor("/d", 2, () => new Date("2026-11-19T15:30:01.250Z"));
-    expect(f?.(4242)).toBe("/d/2026-11-19T15-30-01-250Z-lane2-pid4242.stderr");
-    expect(f?.(undefined)).toBe("/d/2026-11-19T15-30-01-250Z-lane2-pidunknown.stderr");
+    // join(): the platform's separator (CI's check job runs on Windows)
+    expect(f?.(4242)).toBe(join("/d", "2026-11-19T15-30-01-250Z-lane2-pid4242.stderr"));
+    expect(f?.(undefined)).toBe(join("/d", "2026-11-19T15-30-01-250Z-lane2-pidunknown.stderr"));
   });
 
   test("all entries kept: one daemon", async () => {
