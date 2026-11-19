@@ -43,6 +43,9 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   kill(31, "empty-block", "BandReportSumsBands", 1, SUM0),
   kill(32, "return-value", "BandReportSumsBands", 1, SUM0),
   { line: 36, operator: "empty-block", verdict: "no-coverage" },
+  // PR-209 (RECORDED on bc2, tables record): condition-true is default-on; line 37's guard, like its neighbours, is
+  // reached by no test.
+  { line: 37, operator: "condition-true", verdict: "no-coverage" },
   { line: 37, operator: "conditional-boundary", verdict: "no-coverage" },
   { line: 38, operator: "return-value", verdict: "no-coverage" },
   // R855 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md): `Unreached`'s `N + 1`

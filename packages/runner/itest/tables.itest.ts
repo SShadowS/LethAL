@@ -67,7 +67,7 @@ import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
 import { refuseIfPr209Pending } from "./pr209-pending";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
-import { armOracleDiffs } from "./r254-arm-oracle";
+import { R254_ARM_FILE, armOracleDiffs } from "./r254-arm-oracle";
 import {
   type DirectTransportProbe,
   type ReachControlRun,
@@ -1655,6 +1655,12 @@ function assertAssertionScreenTwinPair(
  * kill position, failure text, by file+line+operator). A difference is a BLOCK, not a re-record.
  */
 function assertArmOracle(report: SessionReport): void {
+  // PR-209: print the arm's mutants (verdict, killer, position, failure) BEFORE the check, so a record run shows any
+  // row the oracle lacks in full. Print only.
+  for (const m of report.mutants.filter((x) => x.file === R254_ARM_FILE))
+    console.log(
+      `  arm ${m.mutantCode} line ${m.line} ${m.operatorName}: ${m.verdict}${m.killingTest !== undefined && m.killingTest !== null ? ` by ${m.killingTest} at ${m.killPosition} failure=${JSON.stringify(m.killingTestFailure ?? "")}` : ""}`,
+    );
   const diffs = armOracleDiffs(report.mutants);
   assert.deepEqual(diffs, [], `R254 arm oracle:\n${diffs.join("\n")}`);
 }
