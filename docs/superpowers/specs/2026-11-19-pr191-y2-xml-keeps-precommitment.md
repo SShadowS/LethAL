@@ -3,7 +3,20 @@
 Status: r1 (0e295901), committed to master before the family, the census and any keep-list change; amendment 1 (§0), committed
 before any keep-list change (coord PR-191, lethal-bugs, 2026-11-19).
 Evidence: `/coord/handoff/PR-163/y2.run.events.ndjson` and `doy2.sqlite` (read-only), and `/coord/handoff/PR-191/`
-(`families.md`, `attrib.txt`, `others.txt`, `do-state.md`, `census2/`). Roadmap: R1092.
+(`families.md`, `attrib.txt`, `others.txt`, `do-state.md`, `census2/`, `census3/`). Roadmap: R1092.
+
+**Amendment 2 (the opus build review, after the keep entries were written; no prediction changes).**
+- **MED-1:** the by-var cell refused inside the setter, on the setter's own unassigned local, so the never-set wrapper global
+  was not reached. Fixed: the setter's body is empty, and the cell now refuses at the use of the never-set global.
+- **Control cells (LOW-4, and the by-value question):** three passing cells show where the refusers refuse. The by-var setter
+  alone passes, and the by-value assignment alone passes, so both cells refuse at the use. The deep setup alone passes and
+  shows, inside the same test, that the subscriber ran once, the SingleInstance value was kept and the blob row was written
+  after the Commit. So v3 runs the deep refusers' setup before their last call.
+- **The census evidence is `census3/`**, run on the final 21-cell app (18 refusers, 3 controls; the WriteTo cell removed):
+  **all 12 classes CLEAN**, with every refuser measured (the unassigned-XmlNode class: after-children, by-var, by-value).
+  census2 ran a 19-cell app, with the old by-var cell and the WriteTo cell.
+- **The entry comments name what is not measured:** the two-argument SetAttribute DO's M36708 reaches (it fails in a cell),
+  and every builtin other than XmlElement.Create that gives the XML-name text.
 
 ## 0. Amendment 1 (the opus spec-adversary's review of r1, 2026-11-19: not safe as specified; the fixes need no redesign)
 Order, stated plainly: the family was built and a first census (`census/`) ran in parallel with the review. That census used
