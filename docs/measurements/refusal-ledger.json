@@ -816,7 +816,7 @@
   {
     "key": "NotRun: out-of-scope: DotNet new Newtonsoft.Json.Linq.JObject: assembly <x> could not be loaded: FileNotFoundException: Could not load file or assembly <x>. The system cannot find the file specified. Besides the .NET run",
     "state": "open",
-    "note": "PR-39: not observed on edge-5a58a0f16: its refused test(s) now hit another refusal (8) or are not in the re-run (4) (apps: edoc, qm, sus) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
+    "note": "PR-210 correction: LethAL's DEFAULT passes the build's own pinned .NET sidecar (R886, resolveDotnetSidecar), and with it the assembly loads, so a default run does NOT meet this refusal. It occurs with the sidecar off (dotnetSidecar: false), missing or unusable, and on builds with no pinned sidecar. PR-205's 'without the sidecar (LethAL's default)' was wrong; its reproduction (PR-135's invented cell 52158, no sidecar, edge-4ebfe7913) and its decision (keep entry dotnet-assembly stays, for those cases) stand. (was: PR-39: not observed on edge-5a58a0f16: its refused test(s) now hit another refusal (8) or are not in the re-run (4) (apps: edoc, qm, sus) (was: PR-05: not re-run on edge-a184cfc79 (its projects are outside the PR-05 re-run: sources cleaned or not a BC.History sweep project) (was: R-983's stores, a baseline refusal row (R-983 mined error mutants only)))",
     "issue": "#7775, #7819, #6924",
     "repro": "scripts/upstream-repros/u7775-refusals"
   },
@@ -2060,8 +2060,9 @@
   },
   {
     "key": "NotRun: out-of-scope: RecordRef.GetTable of an unassigned Variant",
-    "state": "unexamined",
-    "note": "PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9"
+    "state": "fixed",
+    "repro": "/coord/handoff/PR-205/repro",
+    "note": "PR-205: fixed upstream from edge-5a58a0f16 on (R1026), current edge-4ebfe7913 included: the invented repro runs and fails with 'NavVariant variable not initialized.', the asserterror form passes. Still refused by the alpha.14 release and edge-a184cfc79, which the gate manifest allows, so keep entry gettable-unassigned-variant stays. No upstream issue was filed. (was: PR-06: NEW on edge-a184cfc79, 2 sighting(s) from error mutants, in the scoring store of project 982-9)"
   },
   {
     "key": "NotRun: out-of-scope: Report.SaveAs as Pdf of report <x>: not measured on BC. Nearest measured rows differ in: dataset rows none (row: some) [reports/html-email-body/RxLayoutSelectionTests.al:N]; default layout Word (row",

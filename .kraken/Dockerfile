@@ -2,7 +2,7 @@ FROM kraken/tentacle-base
 USER root
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl sqlite3 time \
+      build-essential pkg-config libicu-dev libssl-dev python3 jq unzip xz-utils ca-certificates curl sqlite3 time linux-perf \
       libglib2.0-0t64 libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 libdbus-1-3 libx11-6 libxcomposite1 libxdamage1 \
       libxext6 libxfixes3 libxrandr2 libgbm1 libxcb1 libxkbcommon0 libasound2t64 libatspi2.0-0t64 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*

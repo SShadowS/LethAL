@@ -114,3 +114,37 @@ Common to A and B:
     - `stopEvidence` is checked for each server form;
     - the witness row is free afterwards.
   - Plus the unit suite, red checks in both directions, and VERIFY.
+
+## Amendment 1 (2026-11-19): the first stage measured nothing; the second stage, pre-committed before it runs
+**The owner's answers:**
+- q-20261119T043331-68d01347 allowed the probe on bc4.
+- q-20261119T044508-116185f0 ruled, for branch A on BC 29: a late 400 counts as a confirmed stop **only** when the independent
+  lock witness shows the work ended. Each such stop records its delay per test and is labelled `late-confirmed` in the report.
+  R833's 10 s window stays for everything without a witness.
+
+**Stage 1 (bc4, lease attempt 075, probe v1.0.0.0; evidence `/coord/handoff/PR-199/m1a.log`, `S1/`):**
+- **M0 is VOID.** `HttpWaitOnly` to `http://10.255.255.1/` returned "failed" with an empty error text after **181 ms**: BC does
+  not wait on that address. The review predicted this (PR-176 saw BC refuse a loopback address at once). S3 was not run, as
+  the rule says.
+- **S1 measured nothing.** It failed in 274 ms with "Sorry, the current permissions prevented the action. (TableData 76150 P199
+  Witness Insert ...)": the test runner's restrictive permissions. The loop never ran, and no stop was sent. Its witness read
+  "free: no row", which shows nothing, because the row never existed.
+- No conclusion is drawn from stage 1.
+
+**Stage 2, probe v1.0.0.1** (`/coord/handoff/PR-199/probe/`, `alc` 0 errors):
+- **Permissions:** the probe codeunits get explicit `Permissions` on the witness and setting tables.
+- **Seeding:** each shape's witness row is seeded and committed (`SeedWitness`) before the shape runs, so the test locks an
+  EXISTING row. The witness then reads `free: counter N`. If the lock is still held, it fails on BC's lock timeout.
+- **S3's URL** comes from a setting (`SetUrl`), and M0 tries candidates **in this order**, each `HttpWaitOnly(url, 60000)`
+  with no stop. The first that takes 55-75 s is used for S3:
+  - C2: `http://192.0.2.1/` (TEST-NET-1, never routed);
+  - C3: `http://1.1.1.1:81/` (a public host, a port that is not served);
+  - C4: `http://example.com:81/`.
+
+  Each candidate's time and text are recorded. If none waits, S3 is not measurable from bc4. That is recorded, and the stage
+  ends with S1 alone.
+- **S1:** after `SeedWitness('S1')`, under the stop, then the witness.
+- **P1 is unchanged:** answered within 10 s with the 400 form, and the witness free.
+- **S3** (if M0 found a URL): after `SeedWitness('S3')`, under the stop, then the witness.
+  - **P2:** no answer within 30 s; an answer between 45 and 75 s after our stop; the witness free after it.
+- **The decision rule is §3's,** with the owner's ruling above for BC 29.
