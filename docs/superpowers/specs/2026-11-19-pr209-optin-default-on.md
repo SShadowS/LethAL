@@ -260,6 +260,34 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   - line 141 `condition-true` killPosition 2 (recorded).
   - **The settling evidence is the hang record's baseline diff:** the line-147 row must be byte-identical, killing test
     included. A different killer there is a BLOCK.
+  - **Settled:** the hang record (bc2) kept the line-147 row byte-identical, killed by `SpinUntilReachesTheTarget`.
+
+## 0g. Amendment 6 (2026-11-19, before the v3 WR and T records): the v3 pre-commitments for those two legs
+- **State:** every BC leg recorded and confirmed (all 8 PASS at lethal/pr209-figs 4960b3ff1). A v3 run at d6b04f87e
+  (`/coord/handoff/PR-209/v3rec2/run.log`): L1, MO, MOE and DBM PASS under amendment 4.
+- **1. WR's WrappedArms count moves 3 → 4 (missed by amendment 4).** `judgeWrArms` pins exactly three rows in
+  `src/WrappedArms.Codeunit.al`. PR-209 adds `condition-true` in `Pick` there: the BC twin `bcdev.wrapped.baseline.json`
+  (recorded on bc3) now holds four `Wrapped Arms|Pick` rows (empty-block, return-value, condition-true,
+  conditional-boundary), three before. **Pre-committed:** exactly FOUR rows, each still `no-coverage` with the refusal
+  note, and no other row carrying it. The rule is unchanged; only the count follows the generated set.
+- **2. O1 and D1's checkout is `/work/lethal-wt/cdo-r396`** (at 5f2a71d, with the 17 pinned `Test/.alpackages` apps), as
+  docs/gates/alrunner-v3.md names it. Amendment 4 item 5 named `/work/src/do-lethal`, which has no `.alpackages`: wrong
+  again; the run refused it by name (0 of 17 apps).
+- **3. T's expected file** (`packages/runner/itest/expected/al-runner-v3.tables.baseline.json`, committed with this
+  amendment, before any T record):
+  - the 418 committed v3 rows verbatim;
+  - the 32 added rows (23 condition-true, 9 blank-argument): the key and `mutatedTextSha256` from the refused record's dump
+    (keys and hashes can only come from a run; R849 step 6); verdict, killingTest, coverageFiltered and errorClass from the
+    BC twin row in `tables.baseline.json` (recorded on bc2);
+  - order: the gate's own (`sortedForDisk`).
+  - **Disclosed:** the dump's 32 rows already equal their BC twins on every field. So the file equals that run's rows; it
+    is built from the twins, not copied.
+- **4. T's hand-pin counts** (`legT.counts` of the readings the current pin uses, total 418 → 450) are NOT predicted here.
+  They are read from the T record run's printed count line, then pinned. That moves the readings digest, so the manifest
+  rows are re-gated with `--refresh-rows` (as R-965 did), in the window the orchestrator sets: after y3, before the
+  redeploy, not across lethal-bugs' daily update (next 2026-11-20 ~07:47Z).
+- **5. WR's expected file** follows the same construction from `bcdev.wrapped.baseline.json` once a WR record run past
+  item 1 dumps its keys. It lands in its own master commit before WR's record, with WR's `assertCounts` figures.
 
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
