@@ -912,6 +912,8 @@ export interface AlRunnerV3Config {
    * key. Unset: read at construction from `LETHAL_V3_SPECULATE_BASELINE` ("1" = on; unset or empty = off).
    */
   readonly speculateBaseline?: boolean;
+  /** PR-241: pack consecutive prefetch units into requests of up to this many entries. Internal. Unset: `LETHAL_V3_PACK_ENTRIES`. */
+  readonly packEntries?: number;
   /**
    * R948: under serve-entries, run the baseline through ONE serve daemon (a `plain()` request per
    * codeunit, with coverage) instead of one al-runner process per codeunit, cross-checked against
@@ -1058,6 +1060,27 @@ function readSequentialSamples(): boolean {
   if (v === undefined || v === "") return false;
   if (v === "1") return true;
   throw new AlRunnerV3SequentialSamplesRefusedError(v);
+}
+
+/** PR-241: `LETHAL_V3_PACK_ENTRIES=<n>` packs consecutive prefetch units of a lane into one request (A/B knob, off by default). */
+export const PACK_ENTRIES_ENV = "LETHAL_V3_PACK_ENTRIES";
+
+export class AlRunnerV3PackEntriesRefusedError extends Error {
+  constructor(value: string) {
+    super(
+      `lethal-v3-pack-entries-refused: ${PACK_ENTRIES_ENV} is "${value}"; use a positive whole number of entries, or leave it unset`,
+    );
+    this.name = "AlRunnerV3PackEntriesRefusedError";
+  }
+}
+
+/** Unset or empty: off (undefined). A positive integer: on. Anything else throws. */
+export function readPackEntries(
+  raw: string | undefined = process.env[PACK_ENTRIES_ENV],
+): number | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  if (!/^[1-9][0-9]{0,8}$/.test(raw)) throw new AlRunnerV3PackEntriesRefusedError(raw);
+  return Number(raw);
 }
 
 /** What `crossCheckSample` returns (R951). */
@@ -2911,6 +2934,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly speculateOn: boolean;
   /** PR-119: `LETHAL_V3_SEQUENTIAL_SAMPLES=1`, read at construction; `seams.concurrentSamples` overrides it. */
   private readonly sequentialSamplesEnv: boolean;
+  /** PR-241: the pack cap in entries (option or `LETHAL_V3_PACK_ENTRIES`, read at construction); undefined = off. */
+  private readonly packEntries: number | undefined;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /**
@@ -3170,6 +3195,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (typeof cfg.dotnetSidecar === "string") this.sidecarPath = resolve(cfg.dotnetSidecar); // R886
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     this.sequentialSamplesEnv = readSequentialSamples();
+    this.packEntries = cfg.packEntries ?? readPackEntries(); // refuses a bad value here, at startup
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
@@ -5925,6 +5951,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       l.setScratchCwd(join(resolve(this.cfg.instrumentedDir), `daemon-${l.index}`));
     }
     this.lanesBuilt = true;
+    // PR-241: said only where packing can apply (the split, which needs lanes).
+    if (this.packEntries !== undefined)
+      console.warn(
+        `[lethal] al-runner-v3 pack-entries ${this.packEntries} (PR-241 A/B; experimental)`,
+      );
     return this.laneList.map((l) => this.laneView(l));
   }
 
@@ -9082,6 +9113,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
     opts?: {
       readonly remainingMs?: () => number;
+      readonly unitSizes?: readonly number[];
       readonly batchPlans?: readonly {
         readonly mutantId: string;
         readonly refs: readonly TestMethodRef[];
@@ -9096,21 +9128,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.registerPlans(plans, opts?.batchPlans);
     if (this.lanesBuilt) {
       if (lane.index === 0) await this.warmSessionFirst(lane, plans);
-      if (plans.length > 0) lane.stats.unitsPrefetched += 1;
+      if (plans.length > 0)
+        lane.stats.unitsPrefetched += opts?.unitSizes?.filter((s) => s > 0).length ?? 1;
     }
     lane.prefetch.remainingMs = opts?.remainingMs;
     try {
-      await this.prefetchWindow(lane, plans);
+      await this.prefetchWindow(lane, plans, opts?.unitSizes);
     } finally {
       lane.prefetch.remainingMs = undefined;
     }
   }
 
-  private async prefetchWindow(
-    lane: Lane,
+  /** PR-241: the pack cap in entries, or undefined (off). */
+  packEntryCap(): number | undefined {
+    return this.packEntries;
+  }
+
+  /** PR-241: the entries `plans` would send, counted as `groupsThatFit` counts them (a group is its codeunits plus its echo). */
+  prefetchEntryCount(
     plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
-  ): Promise<void> {
-    const groups: EntryGroup[] = plans
+  ): number {
+    return this.prefetchGroups(plans).reduce((n, g) => n + g.codeunits.length + 1, 0);
+  }
+
+  private prefetchGroups(
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+  ): EntryGroup[] {
+    return plans
       .map((p) => ({
         mutantId: p.mutantId,
         // By size, as R857's test ids are negative and numbered in the order the tests first ran.
@@ -9120,14 +9164,116 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ),
       }))
       .filter((g) => g.codeunits.length > 0); // R937: a mutant only one-shot codeunits cover sends no group
+  }
+
+  /**
+   * PR-241: how many of `seg`'s first `n` groups (cut by `groupsThatFit`) one packed request takes. Whole
+   * units only after the first piece; none after a kept refusal on a daemon the chunk would use (the PR-56
+   * guard then checks one unit, as today); and only units whose `runSelectedOnly` decision (per mode) equals
+   * the first piece's, so no unit changes another's flag. `unitOf` maps a group to its unit.
+   */
+  private packCut(
+    lane: Lane,
+    seg: readonly EntryGroup[],
+    n: number,
+    unitOf: (g: EntryGroup) => number,
+  ): number {
+    const u0 = seg[0] === undefined ? 0 : unitOf(seg[0]);
+    let first = 0;
+    while (first < n && seg[first] !== undefined && unitOf(seg[first] as EntryGroup) === u0)
+      first++;
+    if (first >= n) return n;
+    const modesOf = (gs: readonly EntryGroup[]): RequestMode[] => {
+      const m = new Map<string, RequestMode>();
+      for (const g of gs)
+        for (const cu of g.codeunits) {
+          const mode = this.modeOfCall(cu);
+          m.set(modeKey(mode), mode);
+        }
+      return [...m.values()];
+    };
+    // Pieces after the first, whole only: a unit that continues past `n` is left for the next request.
+    if (modesOf(seg.slice(0, n)).some((m) => lane.daemonFor(m)?.keptRefusal !== undefined))
+      return first;
+    const lastUnit = seg[n - 1] === undefined ? u0 : unitOf(seg[n - 1] as EntryGroup);
+    const continues = seg[n] !== undefined && unitOf(seg[n] as EntryGroup) === lastUnit;
+    const flagKey = (gs: readonly EntryGroup[]): string => {
+      const byMode = new Map<string, { mode: RequestMode; gs: EntryGroup[] }>();
+      for (const g of gs) {
+        const parts = new Map<string, number[]>();
+        for (const cu of g.codeunits) {
+          const mode = this.modeOfCall(cu);
+          const k = modeKey(mode);
+          if (!byMode.has(k)) byMode.set(k, { mode, gs: [] });
+          parts.set(k, [...(parts.get(k) ?? []), cu]);
+        }
+        for (const [k, codeunits] of parts) byMode.get(k)?.gs.push({ ...g, codeunits });
+      }
+      return [...byMode]
+        .map(([k, { mode, gs: mine }]) => {
+          const sent = encodeGroups(
+            mine,
+            this.requireEchoId(),
+            (id) => this.isolated(id),
+            // uncounted: `mutantExcludes` without its stats
+            (cu, g) => this.cutAfterLastCovering(cu, g.mutantId, this.mutantLeftOutNames(cu)),
+          );
+          const flag =
+            !mode.runSelectedOnly &&
+            selectedOnlyDecision(
+              sent,
+              (cu) => ({
+                baseline: this.baselineOrder(cu),
+                discovered: this.discoveredNames.get(cu) ?? [],
+              }),
+              this.neverFlag,
+            ).flag;
+          return `${k}:${flag}`;
+        })
+        .sort()
+        .join("|");
+    };
+    const want = flagKey(seg.slice(0, first));
+    let end = first;
+    while (end < n) {
+      const u = unitOf(seg[end] as EntryGroup);
+      let stop = end;
+      while (stop < n && unitOf(seg[stop] as EntryGroup) === u) stop++;
+      if (stop === n && continues) break;
+      if (flagKey(seg.slice(end, stop)) !== want) break;
+      end = stop;
+    }
+    return end;
+  }
+
+  private async prefetchWindow(
+    lane: Lane,
+    plans: readonly { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }[],
+    unitSizes?: readonly number[],
+  ): Promise<void> {
+    const groups = this.prefetchGroups(plans);
     for (const g of groups) for (const cu of g.codeunits) this.union.add(cu);
+    // PR-241: the unit of each mutant of a packed call (absent: one unit, today's chunks).
+    const unitOfMutant = new Map<string, number>();
+    if (unitSizes !== undefined) {
+      let at = 0;
+      for (const [u, size] of unitSizes.entries()) {
+        for (const p of plans.slice(at, at + size)) unitOfMutant.set(p.mutantId, u);
+        at += size;
+      }
+    }
+    const unitOf = (g: EntryGroup): number => unitOfMutant.get(g.mutantId) ?? 0;
     // R987: each chunk is cut when it is sent, from the costs measured so far (`groupsThatFit`).
     // Resent groups form their own segment after the window's, as their own chunks did before.
     const segments: EntryGroup[][] = groups.length > 0 ? [[...groups]] : [];
     const nextChunk = (): EntryGroup[] | undefined => {
       const seg = segments[0];
       if (seg === undefined) return undefined;
-      const chunk = seg.splice(0, groupsThatFit(seg, this.costOf));
+      const fit = groupsThatFit(seg, this.costOf);
+      const chunk = seg.splice(
+        0,
+        unitSizes === undefined ? fit : this.packCut(lane, seg, fit, unitOf),
+      );
       if (seg.length === 0) segments.shift();
       return chunk;
     };
@@ -9167,7 +9313,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const g of again) resent.add(g.mutantId);
       if (again.length > 0) segments.push([...again]);
     }
-    await this.batchKillPairs(lane, plans);
+    // PR-241: kill pairs are batched per unit, as when the units were prefetched one by one.
+    if (unitSizes === undefined) await this.batchKillPairs(lane, plans);
+    else {
+      let at = 0;
+      for (const size of unitSizes) {
+        await this.batchKillPairs(lane, plans.slice(at, at + size));
+        at += size;
+      }
+    }
   }
 
   /**

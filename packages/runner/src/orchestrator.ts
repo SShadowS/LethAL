@@ -14089,6 +14089,12 @@ async function runMutantsParallel(
       noteLanes?: (message: string) => void;
       /** PR-151: test seam, called under the split with the size of each window `cutWindows` made. */
       noteWindows?: (sizes: readonly number[]) => void;
+      /** PR-241: the pack cap in entries (`LETHAL_V3_PACK_ENTRIES`), or undefined = off. */
+      packEntryCap?: () => number | undefined;
+      /** PR-241: the entries a unit's plans would send. */
+      prefetchEntryCount?: (
+        plans: { mutantId: string; refs: readonly TestMethodRef[] }[],
+      ) => number;
       /**
        * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
        * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
@@ -14128,6 +14134,11 @@ async function runMutantsParallel(
   // The latch is shared by every lane: the owner's is the one to read.
   const probe: Latch = () => owner.latched?.();
   const asked = lanes.length;
+  // PR-241: off under a time budget: R912 clamps each prefetch request's deadline to the time left, so a
+  // stop must lose at most one window's request, never a packed one.
+  const budgeted = args.timeBudget !== undefined && Number.isFinite(args.timeBudget.seconds);
+  const packCap = split && !budgeted ? owner.packEntryCap?.() : undefined;
+  const packOn = packCap !== undefined && owner.prefetchEntryCount !== undefined;
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
   // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.
@@ -14224,6 +14235,40 @@ async function runMutantsParallel(
             },
           }
         : {}),
+      // PR-241: off unless the owner has a cap; then a lane packs consecutive units up to that many entries.
+      ...(packOn && packCap !== undefined
+        ? {
+            pack: {
+              fits: (batch: readonly (readonly MutantManifestEntry[])[]) =>
+                batch.length === 1 ||
+                batch.reduce(
+                  (n, u) =>
+                    n + (owner.prefetchEntryCount?.(prefetchPlans({ ...args, mutants: u })) ?? 0),
+                  0,
+                ) <= packCap,
+              prefetch: async (
+                k: number,
+                batch: readonly (readonly MutantManifestEntry[])[],
+                sink: LaneSink,
+              ) => {
+                const backend = lanes[k];
+                if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
+                if (backend.prefetchMutants === undefined || sink.closed || args.safety.isUnsafe)
+                  return;
+                const per = batch.map((u) => prefetchPlans({ ...args, mutants: u }));
+                try {
+                  await backend.prefetchMutants(per.flat(), {
+                    ...prefetchOpts,
+                    unitSizes: per.map((p) => p.length),
+                  });
+                } catch (err) {
+                  commit.fail(batch[0]?.[0]?.mutantId, err);
+                  throw err;
+                }
+              },
+            },
+          }
+        : {}),
       mayStart: (k) => owner.laneMayStart?.(k) ?? true,
       commit,
       isUnsafe: () => args.safety.isUnsafe,
@@ -14232,6 +14277,7 @@ async function runMutantsParallel(
         if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
         if (
           split &&
+          !packOn &&
           backend.prefetchMutants !== undefined &&
           !sink.closed &&
           !args.safety.isUnsafe
