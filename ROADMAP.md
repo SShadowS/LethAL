@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**46 of 1105 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**47 of 1106 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -394,6 +394,7 @@ that ordering is the priority.
 - **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · open
 - **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · closed 2026-11-19 — measured: DO's own test-order dependence (codeunit globals only earlier tests set), not…
 - **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · open
+- **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
 
 ## Product gaps a real project hits
 
