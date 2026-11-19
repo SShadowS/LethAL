@@ -105,8 +105,8 @@ A's run row and rows, with only the named field changed.
 | leg | seed | session | expected |
 |---|---|---|---|
 | L0 | none | no flag | frozen; H contains `\|closed-world:public` (refused by name otherwise); one unsuffixed snapshot |
-| L1 | none | `--skip-known-survivors` | the 14 survivors known, by key; no lend warning |
-| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (22), `resume-baseline-reused` naming B; one deploy; no baseline test ran here; all but the 5 no-coverage carried by key (R621) |
+| L1 | none | `--skip-known-survivors` | the 17 survivors known, by key; no lend warning |
+| R1 | F: unfinished full clone | `--resume-run F` | `resume-reusing-run` (26), `resume-baseline-reused` naming B; one deploy; no baseline test ran here; all but the 6 no-coverage carried by key (R621) |
 | R2 | SP1 to SP4 (snapshot owners), then K | `--resume` | resolves to K; `resume-baseline-reused` names L1's run B; KEPT minus its two uncovered rows carried by key; the sentinel's `priorDurationMs`; no baseline test ran here |
 | R3 | SV3 (a v3 snapshot owner), K2 | `--resume-run K2` | `snapshot-backend-build-changed`, exact; the baseline re-ran (as many tests as L0's) |
 | N0 | finished clone | `--skip-known-survivors` | as L1: the clone lends |

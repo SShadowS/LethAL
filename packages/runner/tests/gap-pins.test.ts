@@ -4,12 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { PINNED_GAPS } from "../itest/verify-gaps";
-import {
-  SLIM_OPTIONS,
-  generateMutationSet,
-  identityOrdinalsOf,
-  operatorTiers,
-} from "../src/orchestrator";
+import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
 import { removeScratchDir } from "./helpers/scratch";
 
 /**
@@ -38,8 +33,8 @@ test("itest:verify's pinned gap ids and members match sandbox-app's emitted mani
   const fixtureDir = join(import.meta.dir, "../../../fixtures/sandbox-app");
   const targetDir = await mkdtemp(join(tmpdir(), "lethal-gap-pins-"));
   dirs.push(targetDir);
-  // PR-209: `PINNED_GAPS` (itest) holds the OLD default set's gaps (`--profile slim`); its re-pin is the gate round's.
-  const set = await generateMutationSet(fixtureDir, { ...SLIM_OPTIONS });
+  // PR-209 amendment 8: `PINNED_GAPS` is the default set's (condition-true and blank-argument included).
+  const set = await generateMutationSet(fixtureDir, {});
   await writeInstrumentedProject({
     targetDir,
     files: set.files,

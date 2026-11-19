@@ -372,11 +372,12 @@ async function main(): Promise<void> {
     assertSingleBatch(a);
     assertHardenVerdicts(a);
     assertHardenMarks(a);
-    assert.equal(a.mutants.length, 21, "step 1: 21 deployed mutants");
+    // PR-209 amendment 8: +2 condition-true rows (HardenLogic lines 23 and 41), both killed in harden.baseline.json.
+    assert.equal(a.mutants.length, 23, "step 1: 23 deployed mutants");
     assert.equal(a.batches, 1, "step 1: one batch");
     assert.deepEqual(
       [a.counts.killed, a.counts.survived, a.counts.noCoverage],
-      [16, 5, 0],
+      [18, 5, 0],
       "step 1: killed / survived / no-coverage",
     );
     const lastArtifact = a.artifacts?.at(-1);
@@ -648,7 +649,7 @@ async function main(): Promise<void> {
       );
       assert.equal(b.validity.reliability, "full", "step 4: B's reliability is full");
       assert.equal(b.quarantined, undefined, "step 4: B must not quarantine");
-      assert.equal(b.mutants.length, 21, "step 4: 21 deployed mutants");
+      assert.equal(b.mutants.length, 23, "step 4: 23 deployed mutants");
       const predicted = new Set(EXPECTED.map((r) => siteOf(r.file, r.line, r.operator)));
       for (const m of b.mutants) {
         const site = siteOf(m.file, m.line, m.operatorName);
@@ -687,8 +688,9 @@ async function main(): Promise<void> {
         `step 4: likelyEquivalentSurvivors lists S5 only: ${JSON.stringify(les ?? null)}`,
       );
       assert.deepEqual(
+        // PR-209 amendment 8: the two condition-true rows' killers are in SCRATCH_TESTS (20 -> 22 killed).
         [b.counts.killed, b.counts.survived, b.counts.noCoverage],
-        [20, 1, 0],
+        [22, 1, 0],
         "step 4: killed / survived / no-coverage",
       );
       console.log(

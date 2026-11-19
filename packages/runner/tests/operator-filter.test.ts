@@ -339,6 +339,58 @@ describe("R832: --exclude-operator", () => {
   });
 });
 
+describe("PR-209: --profile slim is derived from the profile alone", () => {
+  const SLIM_TWO = ["lethal.condition-true", "lethal.blank-argument"];
+  const slimWarnings = async (
+    dir: string,
+    extra: { excludeOperators?: string[] },
+  ): Promise<string[]> => {
+    const seen: string[] = [];
+    await generateMutationSet(dir, {
+      profile: "slim",
+      ...extra,
+      emit: (e) => {
+        if (e.type === "warning" && e.code === "operator-narrowed-run") seen.push(e.message);
+      },
+    });
+    return seen;
+  };
+
+  test("the profile alone admits a narrowed set and warns, with no excludeOperators given", async () => {
+    const registered = [...operatorTiers.keys()];
+    const admitted = admittedOperatorNames({ profile: "slim" }, registered);
+    expect(admitted).toBeDefined();
+    for (const n of SLIM_TWO) expect(admitted?.has(n)).toBe(false);
+    await withProject(FIXTURE, async (dir) => {
+      const seen = await slimWarnings(dir, {});
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toContain("--profile slim left out");
+    });
+  });
+
+  test("an unprefixed --exclude-operator naming only slim's own two is not 'left out more'", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const seen = await slimWarnings(dir, { excludeOperators: ["condition-true"] });
+      expect(seen[0]).toContain("--profile slim left out");
+      expect(seen[0]).not.toContain("left out more");
+    });
+  });
+
+  test("exclusions beyond slim's own that leave nothing are still refused", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const left = [
+        ...new Set(operatorNamesOf((await generateMutationSet(dir, { profile: "slim" })).files)),
+      ];
+      expect(left.length).toBeGreaterThan(0);
+      await expect(
+        generateMutationSet(dir, { profile: "slim", excludeOperators: left }),
+      ).rejects.toThrow(
+        "no deployable mutation site is left in this scope with --exclude-operator",
+      );
+    });
+  });
+});
+
 describe("generateMutationSet — --operator cannot resurrect a mutant dedup deletes", () => {
   test("void-method-call yields ONLY the site no Tier-2 operator claims", async () => {
     await withProject(FIXTURE, async (projectDir) => {

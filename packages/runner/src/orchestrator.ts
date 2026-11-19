@@ -518,6 +518,13 @@ export const SLIM_OPTIONS = {
 /** Profile names `--profile` knows. */
 export const PROFILES: readonly string[] = ["slim"];
 
+/** `--exclude-operator` names beyond slim's own two, with the optional `lethal.` prefix normalised. */
+function exclusionsBeyondSlim(names: readonly string[] | undefined): string[] {
+  return (names ?? []).filter(
+    (n) => !SLIM_LEFT_OUT.includes(n.startsWith("lethal.") ? n : `lethal.${n}`),
+  );
+}
+
 /** The operator names a slim run admits: every registered one but the two, and the opt-in ones. */
 function slimOperatorNames(registered: readonly string[]): readonly string[] {
   return registered.filter((n) => !SLIM_LEFT_OUT.includes(n) && !optInOperatorNames.has(n)).sort();
@@ -936,10 +943,17 @@ export function admittedOperatorNames(
   options: {
     readonly operators?: readonly string[];
     readonly excludeOperators?: readonly string[];
+    readonly profile?: "slim";
   },
   registered: readonly string[],
 ): ReadonlySet<string> | undefined {
-  const { operators = [], excludeOperators = [] } = options;
+  const { operators = [] } = options;
+  // PR-209: slim's exclusion is derived here from the profile, so no caller can get the walk
+  // without the warning and the slim fingerprint. Adding the two again is harmless (a set).
+  const excludeOperators = [
+    ...(options.excludeOperators ?? []),
+    ...(options.profile === "slim" ? SLIM_LEFT_OUT : []),
+  ];
   if (operators.length > 0 && excludeOperators.length > 0) {
     throw new Error(
       "--operator and --exclude-operator cannot be combined. Name the operators to run, or the ones to leave out.",
@@ -1141,7 +1155,9 @@ export async function generateMutationSet(
   // R127: resolved before any file is read too, so an unregistered operator name fails as
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
   const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
-  const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
+  const excludingOperators =
+    (options.excludeOperators?.length ?? 0) > 0 || options.profile === "slim";
+  const beyondSlim = exclusionsBeyondSlim(options.excludeOperators);
   // PR-209: `--profile slim` alone admits exactly what its walk produces, so its specs need no
   // narrowing pass and stay as the older default run left them (raw, deduped later per file).
   const slimAlone =
@@ -1535,8 +1551,13 @@ export async function generateMutationSet(
   // Only a run left with nothing at all is refused. Leaving out an operator with no site loses
   // nothing, so unlike `--exclude` that is not refused.
   // PR-209: not under `--profile slim`, which IS the older default run, and that run never refused
-  // an empty set here (the run itself refuses one later, as it always did).
-  if (excludingOperators && options.profile !== "slim" && producedInstrumentable.size === 0) {
+  // an empty set here (the run itself refuses one later, as it always did). Exclusions beyond
+  // slim's own still refuse an empty set.
+  if (
+    excludingOperators &&
+    (options.profile !== "slim" || beyondSlim.length > 0) &&
+    producedInstrumentable.size === 0
+  ) {
     throw new Error(
       `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
     );
@@ -1693,7 +1714,7 @@ export async function generateMutationSet(
     warn(
       "operator-narrowed-run",
       options.profile === "slim"
-        ? `[lethal] --profile slim left out ${SLIM_LEFT_OUT.join(", ")} (default operators since PR-209; not walked at all${(options.excludeOperators?.length ?? 0) > SLIM_LEFT_OUT.length ? `, and --exclude-operator left out more: ${excludedByOperator} mutation site(s) excluded` : ""}). The score below does not cover them — it is not a full-default score.`
+        ? `[lethal] --profile slim left out ${SLIM_LEFT_OUT.join(", ")} (default operators since PR-209; not walked at all${beyondSlim.length > 0 ? `, and --exclude-operator left out more: ${excludedByOperator} mutation site(s) excluded` : ""}). The score below does not cover them — it is not a full-default score.`
         : excludingOperators
           ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
           : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,

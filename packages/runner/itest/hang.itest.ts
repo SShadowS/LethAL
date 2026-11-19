@@ -342,7 +342,7 @@ const EXPECTED_ON: ReadonlyArray<{
   // --- position was PRE-COMMITTED from the dry-run manifest in
   // --- docs/superpowers/specs/2026-09-03-r206-build-precommitment.md before this gate ran.
   { line: 140, operator: "lethal.empty-block", verdict: "killed", killPosition: 1 },
-  // PR-209: the added `condition-true` row (observed on bc2, 2026-11-19); no killPosition is pinned.
+  // PR-209: the added `condition-true` row (observed on bc2, 2026-11-19).
   // PR-209: RECORDED on bc2 (lethal-code): killed at group position 2, a warm kill.
   { line: 141, operator: "lethal.condition-true", verdict: "killed", killPosition: 2 },
   { line: 141, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 1 },

@@ -27,9 +27,10 @@ import {
 } from "./loop-hazard";
 
 /*
- * R868: the hang rules of the two opt-in operators `lethal.condition-true` (#36) and
- * `lethal.blank-argument` (#34). They live here and not in `loop-hazard.ts`, so a default run never
- * asks them. All are by NAME, the safe direction (R829: a wrong refusal loses one mutant, a miss can
+ * R868: the hang rules of the two operators `lethal.condition-true` (#36) and
+ * `lethal.blank-argument` (#34), opt-in when written and default since PR-209 (`--profile slim`
+ * leaves them out). They live here and not in `loop-hazard.ts`, so the other operators never
+ * ask them. All are by NAME, the safe direction (R829: a wrong refusal loses one mutant, a miss can
  * end a run). Every rule is red-checked by a parsed AL source in `tests/r868-optin-hang.test.ts`.
  *
  * NAME MATCHING CANNOT SEE: another object (`Other.Run(Step)`, a table procedure, a page), a value

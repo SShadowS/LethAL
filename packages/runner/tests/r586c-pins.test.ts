@@ -413,9 +413,12 @@ describe("R586c leg T: the seven rows", () => {
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
   });
-  test("T-pin-0 (B1): all seven still survived, the baseline's 298/54/66, with the pin: exactly held (no pin: pass)", () => {
-    expect(judge(ownRows, { pinned: false, counts: [298, 54, 66] }).outcome).toBe("pass");
-    const j = judge(ownRows, { counts: [298, 54, 66] });
+  // PR-209: the unpinned own baseline is 318/64/68 over 450 (`LEG_T_OWN_COUNTS`; 298/54/66 over 418 before).
+  test("T-pin-0 (B1): all seven still survived, the baseline's 318/64/68, with the pin: exactly held (no pin: pass)", () => {
+    expect(
+      judge(ownRows, { pinned: false, counts: [318, 64, 68], extra: { total: 450 } }).outcome,
+    ).toBe("pass");
+    const j = judge(ownRows, { counts: [318, 64, 68], extra: { total: 450 } });
     expect(j.outcome).toBe("held");
     expect(j.pinned).toBeUndefined();
     expect(j.lines.some((l) => l.startsWith("T: pin-mismatch: "))).toBe(true);

@@ -309,15 +309,18 @@ export const LEND_FIGURES = {
    * rows are scored here, so the scored-not-carried count goes 17 - 7 = 10 to 20 - 7 = 13.
    */
   resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 13 },
-  /** R3: K2 (all but M0022, so 21 rows); the v3 snapshot refused, the baseline re-run. Partly
-   *  carried too: 17 carried (M0018-M0021 uncovered here, re-derived, as in R2). The 21 is not a
-   *  constant because the gate does not assert it (review M-3). R855: was M0019, 18 rows, 15.
+  /** R3: K2 (all but M0026, so 25 rows); the v3 snapshot refused, the baseline re-run. Partly
+   *  carried too: 20 carried (the five no-coverage rows M0021-M0025 are re-derived here, as in R2). The 25 is not a
+   *  constant because the gate does not assert it (review M-3). R855: was M0019, 18 rows, 15; before PR-209 it was
+   *  all but M0022, 21 rows, 17 carried.
    *  PR-209: carried RECORDED on bc1 (lend observe): 20 (was 17); the keyed carry check before it passed unchanged. */
   resumeRefusedSnapshot: { carried: 20, groupedCalls: 0 },
   /** I2: the KEPT row in K whose `durationMs` R2 must read back from `mutant-carried`. */
   sentinel: { code: "M0004", durationMs: 987654 },
   /** K's rows: 2 killed, 5 survived, 2 no-coverage, carried by key. R855: the same nine mutants,
-   *  their codes moved (old M0005-M0008 are M0007-M0010, old M0016-M0017 are M0018-M0019). */
+   *  their codes moved (R855: old M0005-M0008 became M0007-M0010, old M0016-M0017 became M0018-M0019;
+   *  PR-209's four added rows moved them again: M0007-M0010 are now M0008-M0011, M0018-M0019 are now
+   *  M0021 and M0023). */
   kept: ["M0001", "M0002", "M0004", "M0008", "M0009", "M0010", "M0011", "M0021", "M0023"],
   /** K's error row (Q3): non-carryable, so re-executed. */
   keptAsError: ["M0003"],
