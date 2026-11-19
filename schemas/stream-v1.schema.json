@@ -2370,6 +2370,30 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "extra": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "number",
+                      "string",
+                      "boolean"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "number",
+                        "string",
+                        "boolean"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
             "setupMs": {
               "type": "number"
             },

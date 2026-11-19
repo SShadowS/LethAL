@@ -323,8 +323,9 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
     survivors each verify call names), steps 3-5's counts and refusals, `GATE_WARNINGS` verify/* all `[]`;
   - `packages/runner/tests/gap-pins.test.ts` returns to the default set (its `SLIM_OPTIONS` removed): the offline proof of
     the four keys and the unchanged ids.
-- **Run:** `LETHAL_ITEST_BCDEV=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json` `itest:verify`, on bc1 (its proven server),
-  against `bcdev.baseline.json`. Any difference is a BLOCK.
+- **Run:** `LETHAL_ITEST_VERIFY=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json` `itest:verify`, on bc1 (its proven server),
+  against `bcdev.baseline.json`. Any difference is a BLOCK. (Corrected 2026-11-19: this line first said
+  `LETHAL_ITEST_BCDEV=1`, under which the gate skips; that attempt measured nothing.)
 - **The other gates not yet run under PR-209** (same method: an Opus read of each itest, figures from the code and the
   recorded twins):
   - **itest:agreement** (`sandbox-harden`; twin `harden.baseline.json`, 23 rows, recorded on bc3) MOVES:
@@ -340,9 +341,11 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
     nothing the set moves (by procedure+operator; no mutants; print only).
   - **itest:envtool** (host-only) was already stale before PR-209 (master generates 22 against its 19). Its own rule
     re-records only against a same-day bcdev run, through the owner; not moved here.
-- **Runs** (each its proven server, bc1 per `docs/gates/servers.md`): `itest:verify`, `itest:agreement`
-  (`LETHAL_ITEST_AGREEMENT=1`), `itest:verify-scale` (`LETHAL_ITEST_VERIFY_SCALE=1`), `itest:testapp`
-  (`LETHAL_ITEST_TESTAPP=1`), all with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`. Any difference is a BLOCK.
+- **Runs** (each its proven server, bc1 per `docs/gates/servers.md`): `itest:verify` (`LETHAL_ITEST_VERIFY=1`),
+  `itest:agreement` (`LETHAL_ITEST_AGREEMENT=1`), `itest:verify-scale` (`LETHAL_ITEST_VERIFY_SCALE=1` and
+  `LETHAL_VERIFY_SCALE_OUT=<file>`, which it requires), `itest:testapp` (`LETHAL_ITEST_TESTAPP=1`), all with
+  `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`. Any difference is a BLOCK. (Corrected 2026-11-19: verify's and
+  verify-scale's variables; the first attempts skipped or refused before measuring anything.)
 
 ## 0h. Amendment 7 (2026-11-19): D1 and D1c run slim, RULED (b) by the orchestrator
 - **Observed** (`/coord/handoff/PR-209/v3rec2/o1d1.log`, checkout `/work/lethal-wt/cdo-r396`): O1 PASS; D1 63 / 15 / 0 over
@@ -360,6 +363,28 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
 - **The gap this leaves:** nothing compares the two default-on operators with BC on real code. Filed as R1139 (in
   PR-209's branch): re-measure the CDO slice on BC with the default set and extend R594's oracle by the 13 rows. BC is
   the oracle, so it needs no blind prediction. Scheduled by the orchestrator after PERF-10.
+
+## 0j. Amendment 9 (2026-11-19, before the manifest re-gate): the v3 legs the earlier rounds never ran in full
+- **How it was found:** the `--refresh-rows` re-gate's first row (alpha.12) gate-failed, and a full v3 gate on `current`
+  at lethal/pr209 0d355f18b (`/coord/handoff/PR-209/regate/full-current.log`) then separated PR-209's moves from the old
+  build's. On `current`: C, DBM, S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, MOE, RC, D1, D1c, T PASS. Only the legs
+  below fail. Earlier rounds ran only the legs this PR changed; the full gate had not run on the branch.
+- **S1, S1E, DB, DBI, ISO, K** compare with `bcdev.baseline.json` (amendment 4 item 4 said so, but their hand-written
+  `assertCounts` stayed at 3 / 14 / 5 over 22). **Pre-committed: 3 / 17 / 6 over 26**, FROM THE TWIN (bcdev's recorded
+  table); every one of them read exactly that on `current` and on alpha.12.
+- **WRE's serve counters** (R918): `entriesSent` 430 → **464** and `pairRequests` 62 → **64**; the rest unchanged
+  (warmups 1, liveRequests 1, boundChecks 4, echoMismatches 0). `pairRequests` is one per WR kill (62 → 64 killed,
+  amendment 6). `entriesSent` is READ, not predicted: the same 464 on `current` and on alpha.12.
+- **Not PR-209's:** alpha.12 also fails leg C (it refuses `strictOrder`, PR-114a's capability facts of 2026-11-17) and X
+  (no `alone-confirm`). Both pass on `current`. Whether old manifest rows can be refreshed at all after PR-114a is a
+  separate question for the orchestrator; no figure here depends on it.
+- **Addendum (2026-11-19, the measure-only refresh probe on `current` at cb5155ee2):** the counts above passed, and
+  three checks they had hidden then failed (a leg stops at its first failed check):
+  - **S1E and DB** (`S1E_PINS`): `entriesSent` 48 → **54**. READ on `current`, not predicted.
+  - **K** (`judgeLegK`): no-coverage mutants 5 → **6**, all still in `SandboxPricing.Codeunit.al`. FROM THE TWIN: the
+    sixth is `DiscountedPrice` condition-true, no-coverage in `bcdev.baseline.json`.
+  - **The rule for what follows:** before any refresh, the full v3 gate on `current` at the branch head must PASS every
+    leg, so no hidden check is left for a refresh to find.
 
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in

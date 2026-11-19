@@ -310,7 +310,9 @@ describe("R614: both callers use prepareFixtureSymbols", () => {
     const s = await src("scripts/al-runner-v3-update.ts");
     const gate = s.slice(s.indexOf("runGate: async"));
     const call = gate.search(
-      /^\s*const prepared = await prepareFixtureSymbols\(\{ worktree: GATE_WORKTREE \}\);$/m,
+      // PR-226: runGate prepares the deps' gate worktree (`gateWorktree`, GATE_WORKTREE by default; pinned by the update
+      // script's D1 and W1 tests), so a private gate prepares its own.
+      /^\s*const prepared = await prepareFixtureSymbols\(\{ worktree: gateWorktree \}\);$/m,
     );
     const logged = gate.search(/^\s*await log\(`fixture \.alpackages: \$\{prepared\}`\);$/m);
     expect(call).toBeGreaterThan(0);
