@@ -891,6 +891,13 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "%COMPANYM% on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
   ], // PR-54 class "* on the Company table"
   [
+    // PR-217 (pre-commitment master f24ed4448): the SAME class as upstream words it after edge-4ebfe7913 (records.rs:751 at
+    // 0e6397742 and c5861dcd9), exact; kept by the kept-vs-fresh DO check on perf-combined (/coord/handoff/PR-217/keepcheck/,
+    // 2026-11-19 22:06Z: the new text in all 28 requests, 156 rows, one kept daemon; 28 of 28 equal to fresh; self-test caught).
+    "company-table-read-named",
+    "%COMPANYM% on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+  ],
+  [
     "license-permission",
     "License Permission: only a count that names one object by type and number, or one object type with a license loaded, is served",
   ],
@@ -1271,8 +1278,9 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * (Module scope, isolation "test", coverage off); the basis is R-937's finding that nothing crosses
    * requests under any isolation. The cascade's test name, a name with no comma, is its only variable part.
    */
+  // PR-217: also upstream's wording after edge-4ebfe7913, exactly (the clause is optional and literal, nothing looser).
   "company-findset":
-    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know(?:; name them with --companies NAME\[,NAME\.\.\.\] \(serve: the `companies` field\); `all` needs test data)? \(ADR-046 decision 4a\)$/,
   /**
    * R1000 (coord R-989): edge-847b1fa5a split the text by kind and names the object: "changed number
    * sequence '<name>' ... (only a new NumberSequence.Insert is)" and "changed isolated storage key
