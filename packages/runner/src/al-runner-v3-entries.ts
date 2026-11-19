@@ -54,8 +54,8 @@ export const ENTRIES_REQUEST_BUDGET_BYTES = 4 * 1024 ** 3;
 export const ENTRIES_UNMEASURED_CAP = 16;
 
 /**
- * R987: how many of `groups`, from the front, the next request takes. `costOf(call)` is the highest
- * cost per entry measured for a call (bytes its daemon grew during a request, over the request's
+ * R987: how many of `groups`, from the front, the next request takes. `costOf(call)` is the recent
+ * price of a call (max of the last K readings; PR-246) per entry (bytes its daemon grew during a request, over the request's
  * entries), `undefined` if no request has measured it. Groups are taken whole, in order, while the
  * request stays within `ENTRIES_CHUNK_CAP` entries, `ENTRIES_UNMEASURED_CAP` entries of unmeasured
  * calls, and `ENTRIES_REQUEST_BUDGET_BYTES` of measured cost; the first group is always taken (a

@@ -254,6 +254,9 @@ const RSS_SAMPLE_MS = 200;
 /** R987: a daemon this far over its floor holds memory, so a request that did not grow it says nothing. */
 const RETAINED_SLACK_BYTES = 512 * 2 ** 20;
 
+/** PR-246: a call's price is the highest of its last this-many readings (recent, not all-time). */
+export const COST_READINGS_KEPT = 5;
+
 /**
  * R956: al-runner's own refusal text for a test that needs a license it was not given. Only a message
  * that holds it gets the pointer; every other refusal text is unchanged (so no stored text moves).
@@ -2571,11 +2574,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private prefetchBatch: { groups: number; size: number; ran: boolean } | undefined;
 
   /**
-   * R987: per call (codeunit, or one test under isolation), the highest cost per entry measured in any
-   * request that ran it (bytes the daemon grew during the request, over its entries), for the whole
-   * session: it never falls.
+   * R987, PR-246: per call (codeunit, or one test under isolation), its last `COST_READINGS_KEPT`
+   * readings of cost per entry (bytes the daemon grew from the request's own start, over its test
+   * entries), oldest first. The call's price is the highest of them: it follows recent growth. The
+   * first model charged `peakRss - floorRss`, which billed memory a kept daemon merely HOLDS to every
+   * entry, and kept the highest reading ever, so one heavy request froze the price for the session.
    */
-  private readonly costByCall = new Map<number, number>();
+  private readonly costByCall = new Map<number, number[]>();
   /** PR-88: the calls whose lowered cap was announced (one line per call). */
   private readonly capLoweredCalls = new Set<number>();
   /** PR-88: set once `al-runner-v3-peak-unverified` was printed. */
@@ -2583,7 +2588,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly defaultProbe: PeakProbe = makeProcPeakProbe();
 
   /** R987: a call's measured cost per entry (`groupsThatFit`), `undefined` until a request ran it. */
-  private readonly costOf = (call: number): number | undefined => this.costByCall.get(call);
+  private readonly costOf = (call: number): number | undefined => {
+    const recent = this.costByCall.get(call);
+    return recent === undefined ? undefined : Math.max(...recent);
+  };
 
   /**
    * R987: one request's reading: its daemon's RSS when it was sent, the daemon's floor (the lowest
@@ -2591,13 +2599,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * HOLDS memory (its start `RETAINED_SLACK_BYTES` or more over the floor) may have reused what an
    * earlier request left: it says nothing, and its calls keep their state (an unmeasured one stays
    * unmeasured). Every other request is a reading (a daemon near its floor that did not grow: a cost of
-   * about 0). The growth is read
-   * from the floor, not the start: a daemon that keeps some memory starts each request higher, and
-   * from the start a request reads low. The growth is divided over the request's TEST entries only
+   * about 0). PR-246: the growth is read from the request's OWN start (`peakRss - startRss`), because
+   * memory a kept daemon holds over its floor was not grown by this request. The retained-slack rule
+   * above stays as it was and combines with it: growth is marginal, and a request with no growth that
+   * starts high is no reading at all (it may have reused), where one starting near the floor reads 0.
+   * The growth is divided over the request's TEST entries only
    * (an echo is LethAL's own tiny codeunit, and `groupsThatFit` charges costs to test entries only:
    * dividing over every entry halved the cost of one-codeunit groups, so Contoso read 64 MiB where a
-   * test entry costs about twice that). It is charged to every call the request ran, each keeping its
-   * highest: never an average, never falling.
+   * test entry costs about twice that). It is pushed onto every call the request ran; a call's price
+   * is the highest of its last `COST_READINGS_KEPT` readings (`costOf`).
    */
   private noteEntryCost(
     lane: number,
@@ -2625,24 +2635,32 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const tests = sent.filter((e) => !e.echo);
     if (tests.length === 0) return;
     if (!(peakRss > startRss) && startRss - floorRss >= RETAINED_SLACK_BYTES) return;
-    const cost = (peakRss - floorRss) / tests.length;
+    const cost = Math.max(0, peakRss - startRss) / tests.length;
     const entriesPerCall = new Map<number, number>();
     for (const e of tests) {
       const call = callOf(e);
       entriesPerCall.set(call, (entriesPerCall.get(call) ?? 0) + 1);
-      if (cost > (this.costByCall.get(call) ?? -1)) this.costByCall.set(call, cost);
     }
     // PR-88: one line per call whose cap falls below the chunk cap, once per call.
     const calls: { call: number; entries: number; cost: number }[] = [];
     for (const [call, entries] of entriesPerCall) {
-      const highest = this.costByCall.get(call) ?? cost;
-      calls.push({ call, entries, cost: highest });
-      const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / highest);
+      // PR-246: a request on a daemon that HOLDS memory may have reused it, so it reads low: it may
+      // raise a call's price, never lower it. Near the floor, every reading counts (it ages old ones out).
+      const prior = this.costOf(call);
+      const held = startRss - floorRss >= RETAINED_SLACK_BYTES;
+      const dropped = held && prior !== undefined && cost <= prior;
+      const recent = dropped
+        ? (this.costByCall.get(call) ?? [])
+        : [...(this.costByCall.get(call) ?? []), cost].slice(-COST_READINGS_KEPT);
+      this.costByCall.set(call, recent);
+      const price = Math.max(...recent);
+      calls.push({ call, entries, cost: price });
+      const fit = Math.floor(ENTRIES_REQUEST_BUDGET_BYTES / price);
       if (fit < ENTRIES_CHUNK_CAP && !this.capLoweredCalls.has(call)) {
         this.capLoweredCalls.add(call);
         this.notify(
           "al-runner-v3-entries-cap-lowered",
-          `[lethal] al-runner-v3: requests carrying codeunit ${call} hold about ${Math.max(1, fit)} test entries (its highest measured cost: ${(highest / 2 ** 20).toFixed(0)} MiB per entry, from a ${reading.source} peak)`,
+          `[lethal] al-runner-v3: requests carrying codeunit ${call} hold about ${Math.max(1, fit)} test entries (its recent measured cost: ${(price / 2 ** 20).toFixed(0)} MiB per entry, from a ${reading.source} peak)`,
         );
       }
     }
