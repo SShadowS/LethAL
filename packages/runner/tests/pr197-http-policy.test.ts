@@ -140,7 +140,8 @@ describe("httpPolicyLines", () => {
       "outbound HTTP: 12 of 14 selected test codeunit(s) set no TestHttpRequestPolicy that blocks outbound calls (1 more use AllowOutboundFromHandler; whether a handler lets a call out is not measured).",
     );
     expect(lines[1]).toBe("  unread: 1 (policy not read; never counted as blocking)");
-    expect(lines[2]).toContain("R1113");
+    expect(lines[2]).toContain("can stall the baseline.");
+    expect(lines[2]).not.toContain("R1113");
     expect(lines[3]).toContain("BlockOutboundRequests");
     expect(lines.filter((l) => /^ {2}C\d\d \(/.test(l))).toHaveLength(10);
     expect(lines.at(-1)).toBe("  ... and 4 more (see X)");

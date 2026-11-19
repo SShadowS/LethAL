@@ -739,7 +739,8 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     const real = JSON.parse(
       readFileSync(join(import.meta.dir, "fixtures", "verify-v8-r259-probe.json"), "utf8"),
     ) as unknown;
-    expect(conformsTo(verifySchema, real)).toEqual([]);
+    // PR-212: v9 is current; the v8 probe is a v8 document, so it validates against v8 (kept as published).
+    expect(conformsTo(loadSchema("verify-v8.schema.json"), real)).toEqual([]);
     expect(conformsTo(loadSchema("verify-v7.schema.json"), real)).not.toEqual([]);
   });
 
@@ -776,7 +777,7 @@ describe("published JSON Schema - verify (C02-06 Task 6)", () => {
     // R759: the new optional field's reason domain, against the constant and a literal; a document
     // with it conforms, and one with an unknown reason does not.
     expect(enumAt(verifySchema, "$.excludedTests[].reason")).toEqual([...VERIFY_EXCLUSION_REASONS]);
-    expect([...VERIFY_EXCLUSION_REASONS]).toEqual(["tests-only", "exclude-test"]);
+    expect([...VERIFY_EXCLUSION_REASONS]).toEqual(["tests-only", "exclude-test", "company-write"]);
     const withExcluded = {
       verifySchemaVersion: VERIFY_SCHEMA_VERSION,
       ok: false,
@@ -1013,6 +1014,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
       "compiled-out",
       "preproc-undecided-kept",
       "exclude-test",
+      "company-write",
     ]);
   });
 
@@ -1515,6 +1517,18 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "survivors",
         "toolConditions",
       ],
+      "explain-v33.schema.json": [
+        "caveats",
+        "contract",
+        "derivedFromReportSchemaVersion",
+        "explainSchemaVersion",
+        "markIdentityScheme",
+        "notMeasured",
+        "score",
+        "survivorSelection",
+        "survivors",
+        "toolConditions",
+      ],
       "explain-v32.schema.json": [
         "caveats",
         "contract",
@@ -1744,6 +1758,16 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "timings",
         "verifySchemaVersion",
       ],
+      // PR-212: the same seven; v9 only grew the excludedTests[].reason value `company-write`.
+      "verify-v9.schema.json": [
+        "counts",
+        "exitCode",
+        "newTests",
+        "ok",
+        "results",
+        "timings",
+        "verifySchemaVersion",
+      ],
     });
   });
 
@@ -1876,6 +1900,7 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
         "confirm-stopped",
         "test-discovery-failed",
         "workdate-changed",
+        "left-out-test-reach",
       ],
       "#/properties/toolConditions/items/properties/condition": ["quarantined", "stranded-skips"],
       // R273: new domains on the new optional `suggestions` (an optional additive field, so no
@@ -1972,6 +1997,8 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(required("explain-v31.schema.json")).toEqual(required("explain-v30.schema.json"));
     // PR-196's v32 added a cause value and a caveat value, not a required field.
     expect(required("explain-v32.schema.json")).toEqual(required("explain-v31.schema.json"));
+    // PR-212's v33 added a cause value, not a required field.
+    expect(required("explain-v33.schema.json")).toEqual(required("explain-v32.schema.json"));
     expect(v6).toEqual([
       "attribution",
       "codeunitName",

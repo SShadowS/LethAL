@@ -117,7 +117,7 @@ export function httpPolicyLines(
     ...(s.unread.length > 0
       ? [`  unread: ${s.unread.length} (policy not read; never counted as blocking)`]
       : []),
-    "  On BC a call made from them goes out to the network; a slow or unreachable host can stall the baseline (R1113). (al-runner v3 opens no connection, ADR-027.)",
+    "  On BC a call made from them goes out to the network; a slow or unreachable host can stall the baseline. (al-runner v3 opens no connection, ADR-027.)",
     "  Set TestHttpRequestPolicy = BlockOutboundRequests on test codeunits that should not call out, or leave a test out with --exclude-test / --tests-only.",
   ];
   for (const e of listed.slice(0, SHOWN))
