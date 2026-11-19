@@ -90,13 +90,26 @@ describe("PR-215 P2: other combinations", () => {
 });
 
 describe("PR-215 P3: what is not classified", () => {
-  test("a pass, a line-count answer, and a stack-frame-only match are not named", () => {
+  // A pass and a line-count answer are kept out by the orchestrator's own guards (didNotPassAtBaseline,
+  // isRunMutantLineCountMessage), which this file does not exercise; the matcher's part is the text alone.
+  test("no text, other text, and a stack-frame-only match are not named", () => {
     expect(describeRequestPageRefusal(undefined)).toBeUndefined();
     expect(describeRequestPageRefusal("")).toBeUndefined();
-    expect(describeRequestPageRefusal("RunMutant returned 0 test lines")).toBeUndefined();
+    expect(
+      describeRequestPageRefusal("Assert.AreEqual failed. Expected:<1> Actual:<2>"),
+    ).toBeUndefined();
     const onFrame = `Assert failed\n  at ${REQUEST_REFUSAL}`;
     expect(describeRequestPageRefusal(onFrame)).toBeUndefined();
     expect(describeTestPageRefusal(onFrame, undefined)).toBeUndefined();
+  });
+
+  test("the Windows TestPage text wins, in the describer and in the report fold alike", () => {
+    const both = `${REQUEST_REFUSAL}\n${TESTPAGE_REFUSAL}`;
+    const described = describeTestPageRefusal(both, undefined);
+    expect(described).toBeDefined();
+    expect(described?.startsWith(REQUEST_PAGE_DIAGNOSIS)).toBe(false);
+    const r = build({ "Tests.Both": both });
+    expect(r.testPageUnsupported?.diagnosis).toBe(TESTPAGE_DIAGNOSIS);
   });
 
   test("line one with frames after it is named, quoting line one only", () => {

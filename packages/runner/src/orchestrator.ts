@@ -6284,7 +6284,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // all-red path in the caller's `select` callback (`greenTests.length === 0`) rather than only
   // on the happy path.
   // Classification is computed directly against `describeTestPermissionsRefusal`/
-  // `describeTestPageUnsupported`/the stale-test-app sentinel — the SAME pure checks the
+  // `describeTestPageRefusal` (TestPage, Linux page, request page)/the stale-test-app sentinel — the SAME pure checks the
   // `refusedThisBatch`/`testPageThisBatch` loop in the caller's `select` callback also runs,
   // over the SAME domain: the permission/testpage regexes are gated on
   // `didNotPassAtBaseline(b.verdict.outcome)` here for

@@ -24,7 +24,7 @@ import {
   withheldKillOf,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
-import { describeRequestPageRefusal } from "./testpage-unsupported";
+import { describeRequestPageRefusal, describeTestPageUnsupported } from "./testpage-unsupported";
 
 /** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
 export interface FoldedNumbering {
@@ -558,7 +558,11 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           }
           if (v.classification.includes("tests-testpage-unsupported")) {
             testPageUnsupportedTests.add(v.name);
-            if (describeRequestPageRefusal(v.failureMessage) !== undefined) {
+            // The orchestrator's precedence (describeTestPageRefusal): the Windows TestPage text wins.
+            if (
+              describeTestPageUnsupported(v.failureMessage) === undefined &&
+              describeRequestPageRefusal(v.failureMessage) !== undefined
+            ) {
               requestPageTests.add(v.name);
             }
           }

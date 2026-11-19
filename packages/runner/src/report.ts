@@ -1655,7 +1655,9 @@ export interface SessionReport {
   };
   /**
    * R69: baseline tests refused because they open a `TestPage`, which the fenced session
-   * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. Also a strict subset
+   * (`GuiAllowed=No`, `ClientType=ODataV4`) cannot create a test service for. R909 added Linux BC's
+   * plain-CLR page refusal, and R1135 (PR-215) a report request page ("cannot be used in background
+   * or server sessions"); `diagnosis` names whichever kinds are present. Also a strict subset
    * of `unsupportedTests`. See `CAVEAT_INTERPRETATIONS["tests-testpage-unsupported"]` for what
    * this means to a reader.
    *
