@@ -219,9 +219,9 @@ import {
   settleThrown,
 } from "./gate-warnings";
 import {
-  LAYOUT_MAX_GUARDS,
   LAYOUT_PROJECT_DIR,
   LAYOUT_SELECTOR_IDS,
+  LAYOUT_SESSION_OPTIONS,
   LAYOUT_TEST_DIR,
   assertLayoutRun,
   printLayoutTable,
@@ -1728,9 +1728,10 @@ function assertCleanLeg(
  * two batches, EXPECTED_LAYOUT per ref. It is R349's stale-layout check on v3 (R666): v3 reports a
  * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
  * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
- * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0008 and 1/M0009 survived (1/M0007 and 1/M0008 before PR-209's
- * added `condition-true` row), covered by GrowAboveTen. PR-209: the added guard may break the leg's
- * span premise (instrumented Grow now runs to line 60 of a 40-line verbatim file): run L1 first. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
+ * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0007 and 1/M0008 survived, covered
+ * by GrowAboveTen. PR-209: L1 runs under `--profile slim` (LAYOUT_SESSION_OPTIONS), because the default
+ * set's added guard stretches Grow past the verbatim file and breaks the span premise.
+ * Removing either alone stays green (R-654 S2 L-R1, L-R2). See
  * docs/gates/alrunner-v3.md.
  */
 async function legL1(scratch: string): Promise<SessionReport> {
@@ -1746,8 +1747,7 @@ async function legL1(scratch: string): Promise<SessionReport> {
   const r = await session(scratch, b, {
     projectDir: LAYOUT_PROJECT_DIR,
     testDir: LAYOUT_TEST_DIR,
-    selectorIds: LAYOUT_SELECTOR_IDS,
-    maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
+    ...LAYOUT_SESSION_OPTIONS,
   });
   printLayoutTable(r, "L1");
   assertCounts(r, "L1", 8, 3, 0, 11);

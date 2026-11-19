@@ -30,7 +30,7 @@ export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
   ],
   "al-runner-v3": [
     "DBM_FIGURES.killed/survived/noCoverage (126 sites now)",
-    "the added rows of EXPECTED_LAYOUT (1/M0002) and the v3 legs' baselines (MO, WR, T, D1, S1...)",
+    "the v3 legs' baselines (MO, WR, T, D1, S1...); L1 is not pending (slim, unchanged)",
   ],
   lend: ["LEND_MUTANTS' 4 added rows (M0005, M0014, M0016, M0022) and LEND_FIGURES' counts"],
   "bcdev-wrapped": ["EXPECTED_WRAPPED_BC / EXPECTED_WRAPPED: 14 added condition-true rows"],
