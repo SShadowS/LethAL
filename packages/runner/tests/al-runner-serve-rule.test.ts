@@ -19,6 +19,66 @@ describe("PR-244: keepNearMiss", () => {
   const CASCADE_TAIL =
     "NotRun: out-of-scope: a test before this one in the codeunit did not pass (SomeInventedTest: failed (Assert.IsTrue failed. invented message) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: An error was expected inside an ASSERTERROR statement.";
 
+  // PR-244 amendment 2 (bugs' keep audit): 12 PR56 entries that never match on `current`, because al-runner appends
+  // " (not pinned)"; real lines from the PR-213/PR-175 repros (al-runner's own messages).
+  const NOT_PINNED: readonly (readonly [string, string])[] = [
+    [
+      "asdecimal-text-control",
+      "NotRun: out-of-scope: AsDecimal of a Text control whose text has digits but is no number (not pinned)",
+    ],
+    [
+      "dotnet-copilot-platform-authorization",
+      "NotRun: out-of-scope: DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments (not pinned)",
+    ],
+    [
+      "geturl-object-type-or-arguments",
+      "NotRun: out-of-scope: GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
+    ],
+    [
+      "geturl-company-characters",
+      "NotRun: out-of-scope: GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters than letters, digits and space (not pinned)",
+    ],
+    [
+      "gotokey-statement-no-row",
+      "NotRun: out-of-scope: GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part (not pinned)",
+    ],
+    [
+      "yaml-blank-line-nested",
+      "NotRun: out-of-scope: ReadFromYaml of a carriage return or a blank line in a nested, list or flow form (not pinned)",
+    ],
+    [
+      "yaml-flow-quoted-key",
+      "NotRun: out-of-scope: ReadFromYaml of a flow mapping entry with this quoted key (not pinned)",
+    ],
+    [
+      "yaml-list-indent",
+      "NotRun: out-of-scope: ReadFromYaml of a mapping item in a list at another indent than 4 (not pinned)",
+    ],
+    [
+      "yaml-null-or-number",
+      "NotRun: out-of-scope: ReadFromYaml of a null form or a number other than `null` and a whole number (not pinned)",
+    ],
+    [
+      "xmlport-import-header",
+      "NotRun: out-of-scope: XmlPort import: the row of table element Header stored before its child rows is gone after them (not pinned)",
+    ],
+    [
+      "page-no-record-onopenpage",
+      "NotRun: out-of-scope: a page opened without a record whose OnOpenPage left Rec where its view has no row (not pinned)",
+    ],
+    [
+      "part-visible-other-shape",
+      "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one (not pinned)",
+    ],
+  ];
+  test("amendment 2: each never-matching ' (not pinned)' line names its own keep entry with every word found", () => {
+    expect(NOT_PINNED.length).toBe(12);
+    for (const [entry, text] of NOT_PINNED) {
+      const nm = keepNearMiss(text);
+      expect([entry, nm?.entry, nm?.found === nm?.size]).toEqual([entry, entry, true]);
+    }
+  });
+
   test("the PERF-10 reworded Company FindSet text names company-findset with every word found", () => {
     const nm = keepNearMiss(PERF10);
     expect(nm?.entry).toBe("company-findset");

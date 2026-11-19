@@ -1444,7 +1444,8 @@ export function keepNearMiss(
   const have = nearMissWords(text.replace(/^NotRun: out-of-scope: /, ""));
   let best: { entry: string; found: number; size: number } | undefined;
   for (const [entry, words] of keepWords()) {
-    if (words.size < 8) continue;
+    // PR-244 amendment 2: entries of at least 7 literal words (`yaml-list-indent` has 7).
+    if (words.size < 7) continue;
     let found = 0;
     for (const w of words) if (have.has(w)) found += 1;
     if (
