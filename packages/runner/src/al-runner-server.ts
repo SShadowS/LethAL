@@ -432,6 +432,7 @@ export class AlRunnerServer {
         const value = next.value;
         if (this.stderrFile !== undefined) {
           try {
+            // ponytail: a sync append per chunk (measurement runs only); a write stream if a chatty daemon ever shows the cost
             appendFileSync(this.stderrFile, value);
           } catch (err) {
             console.warn(
@@ -644,6 +645,19 @@ export class AlRunnerServer {
       proc.kill();
     } catch {
       // Already exited.
+    }
+    // PR-227: with a stderr file, let the pump read what is still in the pipe (a crash text, the last
+    // counters) before ending it below, so the file holds the FULL stderr. Bounded like the waits below.
+    // Without a file nothing changes.
+    if (this.stderrFile !== undefined) {
+      await Promise.race([
+        proc.wait?.().catch(() => undefined) ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, 5000)),
+      ]);
+      await Promise.race([
+        this.stderrPump ?? Promise.resolve(),
+        new Promise<void>((r) => setTimeout(r, 1000)),
+      ]);
     }
     // END the stderr drain rather than merely waiting for it. Killing the child usually closes the
     // pipe, but "usually" leaves an outstanding read holding the event loop open, and a completed

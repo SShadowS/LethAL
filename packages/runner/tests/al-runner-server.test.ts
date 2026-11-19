@@ -180,6 +180,76 @@ describe("PR-227: the daemon's full stderr to a file", () => {
     expect(server.stderrSoFar()).toBe("compile cache: hit\n");
   });
 
+  test("shutdown: stderr that arrives after the kill still reaches the file (the pipe is drained, then ended)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr227-"));
+    const enc = new TextEncoder();
+    // A pipe like a real one: stopping the reader (`return`) drops whatever has not been read yet.
+    const pending: Uint8Array[] = [];
+    let ended = false;
+    let wake: (() => void) | undefined;
+    const push = (c: Uint8Array | null) => {
+      if (c === null) ended = true;
+      else pending.push(c);
+      wake?.();
+    };
+    const stderr: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]: () => ({
+        async next() {
+          for (;;) {
+            const c = pending.shift();
+            if (c !== undefined) return { done: false, value: c };
+            if (ended) return { done: true, value: undefined };
+            await new Promise<void>((r) => {
+              wake = r;
+            });
+          }
+        },
+        async return() {
+          ended = true;
+          pending.length = 0;
+          wake?.();
+          return { done: true, value: undefined };
+        },
+      }),
+    };
+    let exited: () => void = () => undefined;
+    const exit = new Promise<void>((r) => {
+      exited = r;
+    });
+    const out: Array<Uint8Array | null> = [enc.encode('{"ready":true}\n')];
+    const proc: ServerProcessHandle = {
+      write: () => undefined,
+      stdout: {
+        async *[Symbol.asyncIterator]() {
+          for (const c of out) if (c !== null) yield c;
+          await exit;
+        },
+      },
+      stderr,
+      // the dying daemon writes its last line a moment after the signal, then exits
+      kill: () => {
+        setTimeout(() => {
+          push(enc.encode("panic: the last line\n"));
+          push(null);
+          exited();
+        }, 20);
+      },
+      wait: () => exit,
+    };
+    push(enc.encode("compile cache: hit\n"));
+    const file = join(dir, "d.stderr");
+    const server = new AlRunnerServer(
+      "al-runner",
+      () => proc,
+      [],
+      "serve",
+      () => file,
+    );
+    await server.start(2000);
+    await server.close();
+    expect(readFileSync(file, "utf8")).toBe("compile cache: hit\npanic: the last line\n");
+  });
+
   test("an unwritable file warns and never fails the daemon", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pr227-"));
     writeFileSync(join(dir, "blocker"), "a file, not a folder");

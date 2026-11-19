@@ -69,7 +69,11 @@ export interface AlRunnerV3ConfigSection {
   readonly environment?: "saas" | "onprem";
   /** R956: a `.bclicense` file, absolute, passed as `--license <path>` on every al-runner call that runs tests. Absent: none. */
   readonly license?: string;
-  /** PR-227: a folder, absolute, that receives every serve daemon's full stderr, one file per daemon. Absent: none written. */
+  /**
+   * PR-227: a folder (a relative one is resolved against the working directory, as `license` is) that
+   * receives every serve daemon's full stderr, one file per daemon. One-shot and `--isolate-tests`
+   * processes are not daemons and get none. Absent: none written.
+   */
   readonly daemonStderrDir?: string;
   /**
    * R948: GiB the memory guard keeps free below the container's cgroup limit: no new test call
