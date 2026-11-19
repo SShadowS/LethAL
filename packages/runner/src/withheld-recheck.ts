@@ -126,11 +126,16 @@ export function ruleBKilledReproduced(row: NestedRow | undefined): string | unde
 export function ruleCKillerPassedAlone(
   recheckBaseline: ReadonlyMap<string, TestOutcome>,
   killer: string | undefined,
+  recheckSet?: ReadonlySet<string>,
 ): string | undefined {
   if (killer === undefined)
     return "the killing test cannot be named (none, or two codeunits share its method name)";
   const outcome = recheckBaseline.get(killer);
-  if (outcome === undefined) return `${killer} is not in the recheck baseline`;
+  if (outcome === undefined)
+    // PR-225: name why, when the set itself left the killer out (the owner's ruling: the report names these rows).
+    return recheckSet !== undefined && !recheckSet.has(killer)
+      ? `${killer} is not in the recheck baseline: ${LEFT_OUT_OF_SET}`
+      : `${killer} is not in the recheck baseline`;
   if (outcome !== "pass")
     return `${killer} did not pass alone at the recheck baseline (${outcome})`;
   return undefined;
@@ -198,12 +203,14 @@ export function decideRecheck(a: {
   readonly recheckBaseline: ReadonlyMap<string, TestOutcome>;
   readonly main: RecheckIdentity;
   readonly recheck: RecheckIdentity;
+  /** PR-225: the tests the recheck baseline was asked to run, so rule (c) can say a killer was left out. */
+  readonly recheckSet?: ReadonlySet<string>;
 }): RecheckDecision {
   const killer = a.row === undefined ? undefined : qualifiedKillerOf(a.row);
   const checks: readonly [RecheckRule, string | undefined][] = [
     ["a", ruleAWithheldKill(a.target)],
     ["b", ruleBKilledReproduced(a.row)],
-    ["c", ruleCKillerPassedAlone(a.recheckBaseline, killer)],
+    ["c", ruleCKillerPassedAlone(a.recheckBaseline, killer, a.recheckSet)],
     ["d", ruleDSameBuild(a.main, a.recheck)],
     ["e", ruleELosesNothing(a.mainBaseline, a.recheckBaseline, killer)],
   ];
@@ -257,9 +264,44 @@ export function mainBaselineOf(events: readonly RunEvent[]): Map<string, boolean
   return m;
 }
 
+/**
+ * PR-225 (R1142, option A): the recheck baseline's tests. For each target, its candidate killers: the covering tests
+ * whose main-pass outcome under that mutant was not `pass` (a withheld kill stores its distrusted failure as `error`).
+ * Then every main-baseline test of those candidates' codeunits, because rule (e) reads the killer's whole codeunit.
+ *
+ * A killer outside this set has no recheck-baseline row, so rule (c) keeps the row `error` (unmeasured, never a kill).
+ * On y3 this was 497 tests instead of 1,161, about 20 minutes less per DO run; 12 of 409 recovered rows stayed `error`
+ * (spec docs/superpowers/specs/2026-11-19-pr225-r1142-recheck-set.md).
+ */
+export function recheckTestSetOf(
+  targets: readonly RecheckTarget[],
+  notPassOf: (t: RecheckTarget) => readonly string[],
+  mainBaseline: ReadonlyMap<string, boolean>,
+): Set<string> {
+  const candidates = new Set<string>();
+  for (const t of targets) {
+    const covering = new Set(t.coveringTests);
+    for (const n of notPassOf(t)) if (covering.has(n)) candidates.add(n);
+  }
+  const codeunits = new Set([...candidates].map(codeunitOfQualified));
+  return new Set([
+    ...candidates,
+    ...[...mainBaseline.keys()].filter((n) => codeunits.has(codeunitOfQualified(n))),
+  ]);
+}
+
+/** The reason rule (c) adds when option A left the killer out of the recheck set (the report names the row). */
+export const LEFT_OUT_OF_SET =
+  "unmeasured: it passed under the mutant in the main pass, so the recheck set left it out (R1142)";
+
 export interface RecheckDeps {
   /** The session's events so far (`mutant-scored`, `baseline-batch-finished`). */
   readonly events: readonly RunEvent[];
+  /**
+   * PR-225: each target's covering tests whose main-pass outcome under the mutant was not `pass`, read from the
+   * session's store. Required: a missing lookup must never fall back to the whole covering set silently.
+   */
+  readonly notPassOf: (t: RecheckTarget) => readonly string[];
   readonly emit: (e: RunEventInput) => void;
   readonly main: RecheckIdentity;
   readonly budgetSeconds: number;
@@ -315,15 +357,11 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   // A session with no baseline results at all: nothing proves what passed, so (e) could recover nothing.
   // (A reused snapshot still emits baseline-batch-finished, so reuse alone never lands here.)
   if (mainBaseline.size === 0) return skip("the main pass has no baseline results at all");
-  // The covering tests, plus every main-baseline test of a codeunit that holds one (rule (e) judges the whole codeunit).
-  const covering = new Set(targets.flatMap((t) => t.coveringTests));
-  const codeunits = new Set([...covering].map(codeunitOfQualified));
-  const tests = [
-    ...new Set([
-      ...covering,
-      ...[...mainBaseline.keys()].filter((n) => codeunits.has(codeunitOfQualified(n))),
-    ]),
-  ].sort();
+  // PR-225: only the candidate killers and every main-baseline test of their codeunits (rule (e) reads the codeunit).
+  const testSet = recheckTestSetOf(targets, d.notPassOf, mainBaseline);
+  if (testSet.size === 0)
+    return skip("no withheld kill has a covering test that did not pass under its mutant");
+  const tests = [...testSet].sort();
   let result: NestedRecheckResult;
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
@@ -369,6 +407,7 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
       recheckBaseline,
       main: d.main,
       recheck: result.identity,
+      recheckSet: testSet,
     });
     const durationMs = row?.durationMs ?? 0;
     if (decision.kind === "kept") {

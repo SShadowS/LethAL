@@ -343,6 +343,9 @@ async function drive(
   const emitted: RunEventInput[] = [];
   const summary = await runWithheldRecheck({
     events,
+    // PR-225: every covering test counts as a candidate here, so these driver tests keep their pre-PR-225 test set;
+    // the narrowing itself is tested in pr225-recheck-set.test.ts.
+    notPassOf: (t) => t.coveringTests,
     emit: (e) => emitted.push(e),
     main: MAIN,
     budgetSeconds: 77,
