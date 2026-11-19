@@ -28,10 +28,11 @@ const other: ArmMutant = {
 describe("R254 arm oracle", () => {
   // R-463 adds `CountBand`'s four rows, all killed (15 -> 19, 9 -> 13 killed).
   // R855 adds `Unreached`'s delete-additive-right (19 -> 20, 4 -> 5 no-coverage).
-  test("has the 20 pre-committed rows: 13 killed, 2 survived, 5 no-coverage", () => {
+  // PR-209 adds condition-true at lines 25 (killed) and 37 (no-coverage): 20 -> 22, 13 -> 14 killed, 5 -> 6 no-coverage.
+  test("has the 22 pre-committed rows: 14 killed, 2 survived, 6 no-coverage", () => {
     const n = (v: string) => R254_ARM_ORACLE.filter((r) => r.verdict === v).length;
     expect([R254_ARM_ORACLE.length, n("killed"), n("survived"), n("no-coverage")]).toEqual([
-      20, 13, 2, 5,
+      22, 14, 2, 6,
     ]);
   });
 
@@ -44,14 +45,14 @@ describe("R254 arm oracle", () => {
 
   test("two verdicts swapped with the totals unchanged is a diff", () => {
     const ms = exact().map((m) => {
-      // M0007 (19 empty-block, survived) <-> M0016 (36 empty-block, no-coverage)
+      // M0007 (19 empty-block, survived) <-> M0017 (36 empty-block, no-coverage; M0016 before PR-209's line-25 row)
       if (m.line === 19) return { ...m, verdict: "no-coverage" as const };
       if (m.line === 36) return { ...m, verdict: "survived" as const };
       return m;
     });
     expect(armOracleDiffs(ms)).toEqual([
       "M0007 src/DataBandExt.ReportExt.al line 19 empty-block: verdict no-coverage, expected survived",
-      "M0016 src/DataBandExt.ReportExt.al line 36 empty-block: verdict survived, expected no-coverage",
+      "M0017 src/DataBandExt.ReportExt.al line 36 empty-block: verdict survived, expected no-coverage",
     ]);
   });
 
@@ -101,6 +102,6 @@ describe("R254 arm oracle", () => {
   });
 
   test("an empty report is a diff for every row, never a pass", () => {
-    expect(armOracleDiffs([])).toHaveLength(20);
+    expect(armOracleDiffs([])).toHaveLength(22);
   });
 });

@@ -37,6 +37,8 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   { line: 20, operator: "remove-assignment", verdict: "survived" },
   kill(20, "shift-integer", "BandReportSumsBands", 3, "band total should be 6, got 7"),
   kill(24, "empty-block", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
+  // PR-209 (RECORDED on bc2, tables record: the arm's printed line): condition-true is default-on.
+  kill(25, "condition-true", "BandClassifiesDirectly", 1, "Band(2) should be 1, got 2"),
   kill(25, "conditional-boundary", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 1"),
   kill(26, "return-value", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
   kill(27, "return-value", "BandClassifiesDirectly", 1, "Band(2) should be 1, got 0"),
