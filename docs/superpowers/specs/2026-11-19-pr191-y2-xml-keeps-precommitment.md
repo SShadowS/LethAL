@@ -1,8 +1,46 @@
 # PR-191: y2's XML refusal texts on the serve keep-list (pre-commitment)
 
-Status: r1, committed to master before the family, the census and any keep-list change (coord PR-191, lethal-bugs, 2026-11-19).
+Status: r1 (0e295901), committed to master before the family, the census and any keep-list change; amendment 1 (§0), committed
+before any keep-list change (coord PR-191, lethal-bugs, 2026-11-19).
 Evidence: `/coord/handoff/PR-163/y2.run.events.ndjson` and `doy2.sqlite` (read-only), and `/coord/handoff/PR-191/`
-(`families.md`, `attrib.txt`, `others.txt`, `do-state.md`). Roadmap: R1092.
+(`families.md`, `attrib.txt`, `others.txt`, `do-state.md`, `census2/`). Roadmap: R1092.
+
+## 0. Amendment 1 (the opus spec-adversary's review of r1, 2026-11-19: not safe as specified; the fixes need no redesign)
+Order, stated plainly: the family was built and a first census (`census/`) ran in parallel with the review. That census used
+the kit's reader only and is NOT evidence for any keep. The cells and readers below were then built from the review, and
+`census2/` ran on them before this amendment was committed. No keep entry exists yet.
+- **HIGH-1: the census reader could not see three state kinds** the deep cells model: a manual subscriber binding that
+  outlives the request, the deep cell's SingleInstance codeunit, and XML state in the engine. **Fix, built:** a family may add
+  `readers` to the kit's `Observe` (compared on the kept daemon, the control and fresh daemons). `y2-xml` has three: raise the
+  event the deep cells' subscriber binds and report whether it ran; report the SingleInstance global; build, query and write a
+  small XmlDocument and report the text. Sensitivity: inside one test the readers see a bound subscriber (`ev=1`) and a set
+  SingleInstance value (`sv=left`); after a passing test that leaves either behind, the next test's readers see the control
+  (v3 resets both per test, even inside one request). A family without readers is unchanged (unit-tested).
+- **MED-1: M36794/M36795's shape was misread.** `CDO Xml Node List.ItemOf` takes the target wrapper **by var**; both mutants
+  skip its setter, so the target wrapper's **global** XmlNode is never set, and a later wrapper procedure uses it. **Fix,
+  built:** a cell with that shape (`UnassignedNodeByVar`). The by-value copy cell stays as a second refuser.
+- **MED-2: the deep cells add DO's other deep state:** `Commit()` after the writes, and an OutStream write into a Blob field.
+- **MED-3: one text, several builtins.** Two more cells: an unassigned XmlNode as the 2nd argument of a multi-content
+  `XmlElement.Add` (it gives the **XML-content** text, not the unassigned-node one, and joins that class), and `WriteTo` on an
+  unassigned XmlNode with an OutStream open (it **fails** with an engine error and does not refuse; the cell is dropped, since a
+  plain failure never reaches the keep-list). Other builtins that can give these texts are not measured; P4 is what would catch
+  them, and the entry comments say so (as PR-159 L4 did).
+- **Cell findings:** a two-argument `SetAttribute` on an unassigned element FAILS in the cell (an engine error on the attribute
+  collection) where DO's M36708 rows refused; the cell uses the three-argument form, which refuses. `AsXmlElement` on the
+  by-value copy fails rather than refuses; `IsXmlText` refuses. P4 checks M36708's own rows on DO.
+- **LOW-1: the XML-name slot departs from PR-159 L2** (values by name, no open pattern): DO's names hold random test data, so
+  naming values cannot keep the next run. The slot is bounded (`{1,2000}`, the longest y2 name plus about 50%) and its ends and
+  character classes are each measured. A longer DO name closes (the safe direction); P3 names such closes.
+- **LOW-2:** a cascade row carries the XML name inside its brackets, and `SAFE_TAIL` refuses words such as `panic` or `timeout`
+  in any case, which random base64 can contain. Such a close is the safe direction; P3 names it and does not count it as a miss.
+- **LOW-3: what follows a P4 failure:** if a fresh daemon gives the y2 verdict and the kept daemon did not, that text's keep is
+  withdrawn before the window is accepted.
+- **LOW-4:** the v3 gate shows only that nothing else moved; it is not evidence for the keeps.
+- **Count fix:** 13 of M36754's 16 "XML name" rows are XML-name refusals; 3 are cascade rows that quote it.
+- **census2** (`keep-census.ts --family y2-xml --refusers 7`, edge-4ebfe7913, with the three readers): 18 refusing cells,
+  12 classes, **all CLEAN**: unassigned XmlNode (3 refusers: by var, by value, after children), unassigned XmlElement (2), XML
+  content (3: plain, second Add argument, deep), XmlAttributeCollection (1), and the eight XML names (`+`, `1abc`,
+  `image/jpeg`, `application/pdf`, 16, 76 (plain and deep), 1,336 and 2,000 characters).
 
 ## 1. The measurement (y2, a fresh DO run on 196afaf7, edge-4ebfe7913)
 - **The restarts:** 82 daemon closes, 59 after a refusal and 23 after a timeout. The 59 after-refusal warm-ups (each paired
