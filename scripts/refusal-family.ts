@@ -56,6 +56,18 @@ export interface Family {
   /** The handle's declaration, per type. */
   readonly handles: Readonly<Record<string, string>>;
   readonly cells: readonly Cell[];
+  /** PR-191: support codeunits after the last cell's id (cell ids end at BASE + cells.length); widens app.json's idRanges. */
+  readonly extraIds?: number;
+  /**
+   * PR-191: extra census readers. Each is an AL Text `expr` (using the `vars` it declares) that keep-census folds into the
+   * observation it compares, beside the kit's own state, so state the kit cannot see (a bound subscriber, a SingleInstance
+   * global, XML runtime state) shows up as a difference. A family without it is measured exactly as before.
+   */
+  readonly readers?: readonly {
+    readonly name: string;
+    readonly vars: readonly string[];
+    readonly expr: string;
+  }[];
   /** PR-02: the app's `target` when the cells need one (DotNet needs `OnPrem`). */
   readonly target?: "OnPrem";
   /**
@@ -5059,6 +5071,467 @@ export const JSON_TEXT: Family = {
   testPermissions: "Disabled",
 };
 
+/**
+ * PR-191: the XML refusal texts DO's y2 window closed on, each driven by an invented cell (no corpus source text). A
+ * non-SingleInstance wrapper codeunit (51000) holds a global XmlNode; the cells call it through 2 to 4 procedures. The deep
+ * cells (depth 6, two codeunits) bind a manual subscriber and set a SingleInstance codeunit first. Cell i is codeunit
+ * BASE_ID + 1 + i (51001 to 51021); the support codeunits are 51000 and 51022 to 51025 (`extraIds`).
+ * Amendment 1 MED-3: `WriteTo(OutStream)` on an unassigned XmlNode fails with an engine error (no refusal), so it has no cell.
+ */
+const Y2_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const y2 = (method: string, call: string, vars: string[] = [], setup: string[] = []): Cell =>
+  t9("XmlCell", method, "y2", call, {
+    vars: ['W: Codeunit "Y2 Xml Node";', ...vars],
+    setup,
+  });
+const y2Name = (method: string, name: string): Cell => y2(method, `W.CreateNamed(${name});`);
+const Y2_DEEP_VARS = [
+  'Chain: Codeunit "Y2 Chain";',
+  'Sub: Codeunit "Y2 Subscriber";',
+  'Single: Codeunit "Y2 Single";',
+];
+// the SingleInstance global and the binding, then a real blob row written through an OutStream, then a Commit (DO's deep tests)
+const Y2_DEEP_SETUP = [
+  "Single.SetValue('x');",
+  "BindSubscription(Sub);",
+  "W.WriteBlob();",
+  "Commit();",
+];
+export const Y2_XML: Family = {
+  name: "y2-xml",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  known: [],
+  extraIds: 4,
+  support: `codeunit 51000 "Y2 Xml Node"
+{
+    var
+        Node: XmlNode;
+
+    procedure Init()
+    var
+        Root: XmlElement;
+    begin
+        Root := XmlElement.Create('root');
+        Root.Add(XmlElement.Create('child'));
+        Node := Root.AsXmlNode();
+    end;
+
+    procedure SetNode(var N: XmlNode)
+    begin
+        Node := N;
+    end;
+
+    procedure UnassignedAfterChildren()
+    begin
+        UnassignedAfterChildrenInner();
+    end;
+
+    local procedure UnassignedAfterChildrenInner()
+    var
+        Root: XmlElement;
+        Children: XmlNodeList;
+        Unset: XmlNode;
+        B: Boolean;
+    begin
+        Root := Node.AsXmlElement();
+        Children := Root.GetChildNodes();
+        B := Unset.IsXmlText();
+    end;
+
+    procedure CopyUnassignedInto(Target: Codeunit "Y2 Xml Node")
+    var
+        Unset: XmlNode;
+    begin
+        Target.SetNode(Unset);
+        Target.UseNode();
+    end;
+
+    procedure UseNode()
+    var
+        B: Boolean;
+    begin
+        B := Node.IsXmlText();
+    end;
+
+    // M36794/5's shape: the target is passed by var and the setter is never called, so its global stays unset
+    procedure SkipSetter(var Target: Codeunit "Y2 Xml Node")
+    begin
+        // nothing touches Target or any XML value: the first refusing statement is the caller's Target.UseNode()
+    end;
+
+    procedure SetOnlyInto(Target: Codeunit "Y2 Xml Node")
+    var
+        Unset: XmlNode;
+    begin
+        Target.SetNode(Unset);
+    end;
+
+    procedure Deep6Noop()
+    begin
+    end;
+
+    // the deep setup's state, read inside the same test (the DeepSetupOnly control)
+    procedure AssertDeepState(Single: Codeunit "Y2 Single")
+    var
+        Row: Record "Y2 Blob Row";
+        Hits: Integer;
+    begin
+        Hits := Single.TakeHits();
+        if Hits <> 1 then
+            Error('subscriber ran %1 times, expected 1', Hits);
+        if Single.GetValue() <> 'x' then
+            Error('Y2 Single value is [%1], expected [x]', Single.GetValue());
+        if not Row.Get('B1') then
+            Error('blob row B1 is missing');
+        Row.CalcFields(Blob);
+        if not Row.Blob.HasValue() then
+            Error('blob row B1 has an empty blob');
+    end;
+
+    procedure MultiContentWithUnassigned()
+    begin
+        MultiContentInner();
+    end;
+
+    local procedure MultiContentInner()
+    var
+        Root: XmlElement;
+        Unset: XmlNode;
+    begin
+        Root := XmlElement.Create('root');
+        Root.Add(XmlText.Create('first'), Unset);
+    end;
+
+    procedure WriteBlob()
+    var
+        Row: Record "Y2 Blob Row";
+        OutS: OutStream;
+    begin
+        Row.Init();
+        Row."Code" := 'B1';
+        Row.Blob.CreateOutStream(OutS);
+        OutS.WriteText('payload');
+        Row.Insert();
+    end;
+
+    procedure SetAttributeOnUnassigned()
+    begin
+        SetAttributeInner();
+    end;
+
+    local procedure SetAttributeInner()
+    var
+        E: XmlElement;
+    begin
+        E.SetAttribute('a', '', 'b');
+    end;
+
+    procedure HasAttributesOnUnassigned()
+    begin
+        HasAttributesInner();
+    end;
+
+    local procedure HasAttributesInner()
+    var
+        E: XmlElement;
+        B: Boolean;
+    begin
+        B := E.HasAttributes();
+    end;
+
+    procedure AddUnassignedToDocument()
+    begin
+        AddUnassignedInner();
+    end;
+
+    local procedure AddUnassignedInner()
+    var
+        Doc: XmlDocument;
+        Unset: XmlNode;
+    begin
+        Doc := XmlDocument.Create();
+        Doc.Add(Unset);
+    end;
+
+    procedure GetFromUnassignedCollection()
+    begin
+        GetFromCollectionInner();
+    end;
+
+    local procedure GetFromCollectionInner()
+    var
+        Coll: XmlAttributeCollection;
+        Attr: XmlAttribute;
+        B: Boolean;
+    begin
+        B := Coll.Get('a', Attr);
+    end;
+
+    procedure CreateNamed(Name: Text)
+    begin
+        CreateNamedInner(Name);
+    end;
+
+    local procedure CreateNamedInner(Name: Text)
+    var
+        E: XmlElement;
+    begin
+        E := XmlElement.Create(Name);
+    end;
+
+    procedure AlphabetName(Len: Integer): Text
+    var
+        Alphabet: Text;
+        R: Text;
+        i: Integer;
+    begin
+        Alphabet := '${Y2_ALPHABET}';
+        for i := 0 to Len - 1 do
+            R += CopyStr(Alphabet, (i mod StrLen(Alphabet)) + 1, 1);
+        exit(R);
+    end;
+
+    procedure Deep6AddUnassigned()
+    begin
+        AddUnassignedInner();
+    end;
+
+    procedure Deep6CreateNamed(Name: Text)
+    begin
+        CreateNamedInner(Name);
+    end;
+}
+
+codeunit 51022 "Y2 Chain"
+{
+    procedure RaiseProbe()
+    begin
+        OnY2Step();
+    end;
+
+    procedure ContentDeep(W: Codeunit "Y2 Xml Node")
+    begin
+        ContentStep2(W);
+    end;
+
+    local procedure ContentStep2(W: Codeunit "Y2 Xml Node")
+    begin
+        OnY2Step();
+        ContentStep3(W);
+    end;
+
+    local procedure ContentStep3(W: Codeunit "Y2 Xml Node")
+    begin
+        ContentStep4(W);
+    end;
+
+    local procedure ContentStep4(W: Codeunit "Y2 Xml Node")
+    begin
+        W.Deep6AddUnassigned();
+    end;
+
+    procedure NoopDeep(W: Codeunit "Y2 Xml Node")
+    begin
+        NoopStep2(W);
+    end;
+
+    local procedure NoopStep2(W: Codeunit "Y2 Xml Node")
+    begin
+        OnY2Step();
+        NoopStep3(W);
+    end;
+
+    local procedure NoopStep3(W: Codeunit "Y2 Xml Node")
+    begin
+        NoopStep4(W);
+    end;
+
+    local procedure NoopStep4(W: Codeunit "Y2 Xml Node")
+    begin
+        W.Deep6Noop();
+    end;
+
+    procedure NameDeep(W: Codeunit "Y2 Xml Node"; Name: Text)
+    begin
+        NameStep2(W, Name);
+    end;
+
+    local procedure NameStep2(W: Codeunit "Y2 Xml Node"; Name: Text)
+    begin
+        OnY2Step();
+        NameStep3(W, Name);
+    end;
+
+    local procedure NameStep3(W: Codeunit "Y2 Xml Node"; Name: Text)
+    begin
+        NameStep4(W, Name);
+    end;
+
+    local procedure NameStep4(W: Codeunit "Y2 Xml Node"; Name: Text)
+    begin
+        W.Deep6CreateNamed(Name);
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnY2Step()
+    begin
+    end;
+}
+
+codeunit 51023 "Y2 Subscriber"
+{
+    EventSubscriberInstance = Manual;
+
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Y2 Chain", 'OnY2Step', '', false, false)]
+    local procedure HandleStep()
+    var
+        Single: Codeunit "Y2 Single";
+    begin
+        Single.AddHit();
+    end;
+}
+
+codeunit 51024 "Y2 Single"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+        Hits: Integer;
+        Left: Codeunit "Y2 Subscriber";
+
+    procedure SetValue(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure GetValue(): Text
+    begin
+        exit(Value);
+    end;
+
+    procedure AddHit()
+    begin
+        Hits += 1;
+    end;
+
+    procedure TakeHits(): Integer
+    var
+        R: Integer;
+    begin
+        R := Hits;
+        Hits := 0;
+        exit(R);
+    end;
+
+    // a binding that outlives the test that made it (the sensitivity smoke)
+    procedure BindAndLeave()
+    begin
+        BindSubscription(Left);
+    end;
+}
+
+table 51000 "Y2 Blob Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+        field(2; Blob; Blob) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+// the census readers (Family.readers): each answer is folded into the observation the census compares
+codeunit 51025 "Y2 Probe"
+{
+    procedure EventRan(): Text
+    var
+        Chain: Codeunit "Y2 Chain";
+        Single: Codeunit "Y2 Single";
+        Dummy: Integer;
+    begin
+        Dummy := Single.TakeHits();
+        Chain.RaiseProbe();
+        exit(Format(Single.TakeHits()));
+    end;
+
+    procedure SingleValue(): Text
+    var
+        Single: Codeunit "Y2 Single";
+    begin
+        exit(Single.GetValue());
+    end;
+
+    procedure XmlText(): Text
+    var
+        Doc: XmlDocument;
+        Root: XmlElement;
+        Nodes: XmlNodeList;
+        T: Text;
+    begin
+        if not XmlDocument.ReadFrom('<r a="1"><c>x</c><c>y</c></r>', Doc) then
+            exit('readfail');
+        if not Doc.GetRoot(Root) then
+            exit('noroot');
+        Root.SetAttribute('b', '2');
+        if not Root.SelectNodes('c', Nodes) then
+            exit('noselect');
+        Doc.WriteTo(T);
+        exit(T + ' n=' + Format(Nodes.Count()));
+    end;
+}
+`,
+  readers: [
+    { name: "y2event", vars: ['Y2P1: Codeunit "Y2 Probe";'], expr: "Y2P1.EventRan()" },
+    { name: "y2single", vars: ['Y2P2: Codeunit "Y2 Probe";'], expr: "Y2P2.SingleValue()" },
+    { name: "y2xml", vars: ['Y2P3: Codeunit "Y2 Probe";'], expr: "Y2P3.XmlText()" },
+  ],
+  handles: {},
+  cells: [
+    y2("UnassignedNodeAfterChildren", "W.UnassignedAfterChildren();", [], ["W.Init();"]),
+    y2(
+      "UnassignedNodeByVar",
+      "W2.UseNode();",
+      ['W2: Codeunit "Y2 Xml Node";'],
+      ["W.Init();", "W.SkipSetter(W2);"],
+    ),
+    y2(
+      "UnassignedNodeByValue",
+      "W.CopyUnassignedInto(W2);",
+      ['W2: Codeunit "Y2 Xml Node";'],
+      ["W.Init();", "W2.Init();"],
+    ),
+    y2("UnassignedElementSetAttr", "W.SetAttributeOnUnassigned();"),
+    y2("UnassignedElementHasAttrs", "W.HasAttributesOnUnassigned();"),
+    y2("NodeAsContent", "W.AddUnassignedToDocument();"),
+    y2("AttrCollectionGet", "W.GetFromUnassignedCollection();"),
+    y2Name("Name1Plus", "'+'"),
+    y2Name("NameDigitStart", "'1abc'"),
+    y2Name("NameImageJpeg", "'image/jpeg'"),
+    y2Name("NamePdf", "'application/pdf'"),
+    y2Name("Name16Eq", "W.AlphabetName(15) + '='"),
+    y2Name("Name76", "W.AlphabetName(75) + '='"),
+    y2Name("Name1336", "W.AlphabetName(1336)"),
+    y2Name("Name2000", "W.AlphabetName(2000)"),
+    y2("NodeAsSecondContent", "W.MultiContentWithUnassigned();"),
+    y2("DeepNodeAsContent", "Chain.ContentDeep(W);", Y2_DEEP_VARS, Y2_DEEP_SETUP),
+    y2("DeepName76", "Chain.NameDeep(W, W.AlphabetName(75) + '=');", Y2_DEEP_VARS, Y2_DEEP_SETUP),
+    // controls (passing; the census ignores them): where each XmlNode cell refuses
+    y2("CtlByVarSetterOnly", "W.SkipSetter(W2);", ['W2: Codeunit "Y2 Xml Node";'], ["W.Init();"]),
+    y2(
+      "CtlByValueSetOnly",
+      "W.SetOnlyInto(W2);",
+      ['W2: Codeunit "Y2 Xml Node";'],
+      ["W.Init();", "W2.Init();"],
+    ),
+    y2("CtlDeepSetupOnly", "W.AssertDeepState(Single);", Y2_DEEP_VARS, [
+      ...Y2_DEEP_SETUP,
+      "Single.TakeHits();",
+      "Chain.NoopDeep(W);",
+    ]),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -5095,6 +5568,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [X3_REFUSALS.name]: X3_REFUSALS,
   // PR-159: appended (BC-check number 21): the two sibling texts DO's y1 window closed on, for a keep census
   [Y1_REFUSALS.name]: Y1_REFUSALS,
+  // PR-191: appended (BC-check number 22): the XML refusal texts DO's y2 window closed on, for a keep census
+  [Y2_XML.name]: Y2_XML,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
@@ -5214,7 +5689,7 @@ ${tests}${handlers.map((h) => `\n${h}`).join("")}}
         platform: "28.0.0.0",
         runtime: "17.0",
         ...(f.target !== undefined ? { target: f.target } : {}),
-        idRanges: [{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length }],
+        idRanges: [{ from: BASE_ID, to: BASE_ID + 1 + f.cells.length + (f.extraIds ?? 0) }],
         features: ["NoImplicitWith"],
         ...(f.dependencies !== undefined ? { dependencies: f.dependencies } : {}),
       },
