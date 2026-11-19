@@ -364,6 +364,21 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   PR-209's branch): re-measure the CDO slice on BC with the default set and extend R594's oracle by the 13 rows. BC is
   the oracle, so it needs no blind prediction. Scheduled by the orchestrator after PERF-10.
 
+## 0j. Amendment 9 (2026-11-19, before the manifest re-gate): the v3 legs the earlier rounds never ran in full
+- **How it was found:** the `--refresh-rows` re-gate's first row (alpha.12) gate-failed, and a full v3 gate on `current`
+  at lethal/pr209 0d355f18b (`/coord/handoff/PR-209/regate/full-current.log`) then separated PR-209's moves from the old
+  build's. On `current`: C, DBM, S3, N1, N1E, N1S, O1, X, L1, Y-A, Y-B, MO, WR, MOE, RC, D1, D1c, T PASS. Only the legs
+  below fail. Earlier rounds ran only the legs this PR changed; the full gate had not run on the branch.
+- **S1, S1E, DB, DBI, ISO, K** compare with `bcdev.baseline.json` (amendment 4 item 4 said so, but their hand-written
+  `assertCounts` stayed at 3 / 14 / 5 over 22). **Pre-committed: 3 / 17 / 6 over 26**, FROM THE TWIN (bcdev's recorded
+  table); every one of them read exactly that on `current` and on alpha.12.
+- **WRE's serve counters** (R918): `entriesSent` 430 → **464** and `pairRequests` 62 → **64**; the rest unchanged
+  (warmups 1, liveRequests 1, boundChecks 4, echoMismatches 0). `pairRequests` is one per WR kill (62 → 64 killed,
+  amendment 6). `entriesSent` is READ, not predicted: the same 464 on `current` and on alpha.12.
+- **Not PR-209's:** alpha.12 also fails leg C (it refuses `strictOrder`, PR-114a's capability facts of 2026-11-17) and X
+  (no `alone-confirm`). Both pass on `current`. Whether old manifest rows can be refreshed at all after PR-114a is a
+  separate question for the orchestrator; no figure here depends on it.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
