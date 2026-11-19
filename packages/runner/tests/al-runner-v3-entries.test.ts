@@ -3,7 +3,7 @@
 // docs/superpowers/plans/2026-10-22-r635-v3-serve-entries.md (r3) §9, tests 1-13 and 16-21; the
 // orchestrator's seams (tests 14, 15) are in orchestrator.test.ts. Call counters, no wall clock.
 import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { appendFileSync, existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -57,6 +57,7 @@ import {
   V3_ROUTINE_CLOSES,
   V3_UNIFORM_REFUSAL_CODEUNITS,
   WINDOW_BOUND_CAVEAT,
+  daemonStderrFileFor,
   pickV3Timings,
   unkeptRowReason,
   v3CallDeadlineMs,
@@ -1802,6 +1803,39 @@ describe("10: R612's keep rule per entry, in entry order", () => {
     const r = await readyRig({ mutants: ["M0001"] });
     expect(r.serve.cwds).toEqual([r.l.scratch]);
     expect(r.serve.cwds[0]).not.toBe(process.cwd());
+  });
+
+  test("PR-227 daemonStderrDir: one file per serve daemon, each holding that daemon's stderr; off writes none", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr227-rig-"));
+    const echo2: ServeScript = {
+      echo: (m, d, n) =>
+        m === "M0002"
+          ? { method: "Echo", status: "error", notRun: true, message: TIMEOUT_1S }
+          : goodEcho(m, d, n),
+      stderr: (_q, n) => `compile cache: request ${n}\n`,
+    };
+    const on = await readyRig({
+      serve: echo2,
+      mutants: ["M0001", "M0002"],
+      extra: { daemonStderrDir: join(dir, "on") },
+    });
+    expect(on.serve.daemons).toHaveLength(2);
+    const files = readdirSync(join(dir, "on")).sort();
+    expect(files).toHaveLength(2);
+    for (const f of files) {
+      expect(f).toMatch(/^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z-lane0-pid\S+\.stderr$/);
+      expect(readFileSync(join(dir, "on", f), "utf8")).toContain("compile cache: request ");
+    }
+    // off (the default): the same run writes nothing anywhere under the folder
+    await readyRig({ serve: echo2, mutants: ["M0001", "M0002"] });
+    expect(readdirSync(dir)).toEqual(["on"]);
+  });
+
+  test("PR-227 daemonStderrFileFor: absent dir -> none; the name carries the UTC start, the lane and the pid", () => {
+    expect(daemonStderrFileFor(undefined, 0)).toBeUndefined();
+    const f = daemonStderrFileFor("/d", 2, () => new Date("2026-11-19T15:30:01.250Z"));
+    expect(f?.(4242)).toBe("/d/2026-11-19T15-30-01-250Z-lane2-pid4242.stderr");
+    expect(f?.(undefined)).toBe("/d/2026-11-19T15-30-01-250Z-lane2-pidunknown.stderr");
   });
 
   test("all entries kept: one daemon", async () => {
@@ -11443,7 +11477,7 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
     expect(timed.filter((e) => e.cut !== true).every((e) => e.timings !== undefined)).toBe(true);
   });
 
-  test("timings copies only the known fields, of the right type", async () => {
+  test("timings copies the known fields of the right type; every other field goes to extra (PR-227)", async () => {
     const { r, timed } = await watchedRig({
       serve: {
         rows: allPass,
@@ -11475,11 +11509,53 @@ describe("PR-100: serve-request-timed, and the phase a daemon closed in", () => 
       resetMs: 14,
       baselineSource: "snapshot",
       engineKept: true,
+      // a known field of the wrong type (compileMs "12") is dropped, never moved to extra
+      extra: { surprise: 99 },
     });
     // the same rule as a plain function
-    expect(pickV3Timings({ engineKept: false, testsMs: Number.NaN, x: 1 })).toBeUndefined();
+    expect(pickV3Timings({ engineKept: false, testsMs: Number.NaN })).toBeUndefined();
+    expect(pickV3Timings({ engineKept: false, testsMs: Number.NaN, x: 1 })).toEqual({
+      extra: { x: 1 },
+    });
     expect(pickV3Timings("nope")).toBeUndefined();
     expect(pickV3Timings({ testsMs: 0 })).toEqual({ testsMs: 0 });
+  });
+
+  test("PR-227: extra keeps al-runner's new fields (setupParts, workspaceCache), scalars and one flat level only", () => {
+    const t = pickV3Timings({
+      setupMs: 10364.2,
+      compileMs: 0.6,
+      workspaceCache: "read",
+      engineKept: true,
+      cold: false,
+      setupParts: {
+        sourcesMs: 582.7,
+        testDataMs: 8934.2,
+        note: "x",
+        bad: Number.NaN,
+        deep: { a: 1 },
+      },
+      nested: { only: { deeper: 1 } },
+      list: [1, 2],
+      nothing: null,
+      inf: Number.POSITIVE_INFINITY,
+    });
+    expect(t).toEqual({
+      setupMs: 10364.2,
+      compileMs: 0.6,
+      engineKept: true,
+      extra: {
+        workspaceCache: "read",
+        cold: false,
+        // inside a flat object: scalars only; NaN and the deeper object are left out
+        setupParts: { sourcesMs: 582.7, testDataMs: 8934.2, note: "x" },
+      },
+    });
+    // the known fields are unchanged by extra: the same answer without the unknown ones
+    const { extra: _extra, ...known } = t ?? {};
+    expect(known).toEqual(
+      pickV3Timings({ setupMs: 10364.2, compileMs: 0.6, engineKept: true }) ?? {},
+    );
   });
 
   test("the warm-up cause: first, after-deploy, recycle, after-<reason>", async () => {

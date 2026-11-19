@@ -1566,6 +1566,17 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
   });
 
+  test("PR-227 the config key daemonStderrDir: absent by default, resolved to absolute, empty or non-string refused", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).daemonStderrDir).toBeUndefined();
+    expect("daemonStderrDir" in v({})).toBe(false);
+    expect(v({ daemonStderrDir: "/m/daemons" }).daemonStderrDir).toBe("/m/daemons");
+    expect(v({ daemonStderrDir: "rel/d" }).daemonStderrDir).toBe(resolve("rel/d"));
+    expect(() => v({ daemonStderrDir: "" })).toThrow("daemonStderrDir");
+    expect(() => v({ daemonStderrDir: 3 })).toThrow("daemonStderrDir");
+  });
+
   test("R907 the config key noClient: default from the constant, boolean only, passed through", () => {
     const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
     const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);

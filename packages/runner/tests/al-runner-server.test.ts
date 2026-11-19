@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   AlRunnerServer,
   type ServerProcessHandle,
@@ -89,7 +92,11 @@ class FakeServer implements ServerProcessHandle {
  */
 function serverWith(
   onRequest: (req: Record<string, unknown>, emit: (line: string) => void, end: () => void) => void,
-  opts: { ready?: string | null; stderr?: string } = {},
+  opts: {
+    ready?: string | null;
+    stderr?: string;
+    stderrFileFor?: (pid: number | undefined) => string;
+  } = {},
 ): { server: AlRunnerServer; handle: () => FakeServer } {
   let fake: FakeServer | undefined;
   const spawn: ServerSpawnFn = () => {
@@ -101,7 +108,7 @@ function serverWith(
     return f;
   };
   return {
-    server: new AlRunnerServer("al-runner.exe", spawn),
+    server: new AlRunnerServer("al-runner.exe", spawn, [], "--server", opts.stderrFileFor),
     handle: () => {
       if (fake === undefined) throw new Error("the fake server has not been spawned yet");
       return fake;
@@ -139,6 +146,50 @@ describe("AlRunnerServer.start", () => {
     await expect(server.start(150)).rejects.toThrow(
       /did not print its readiness line within 150 ms/,
     );
+  });
+});
+
+describe("PR-227: the daemon's full stderr to a file", () => {
+  // More than the 64 KB in-memory tail, so a file holding all of it proves the file is not the tail.
+  const big = `compile cache: hit\n${"x".repeat(100 * 1024)}\nlogin replay check: 1 compared\n`;
+
+  test("on: the whole stderr lands in the named file, and the pid reaches the name", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr227-"));
+    const pids: (number | undefined)[] = [];
+    const { server } = serverWith(() => undefined, {
+      stderr: big,
+      stderrFileFor: (pid) => {
+        pids.push(pid);
+        return join(dir, "sub", "d.stderr");
+      },
+    });
+    await server.start(2000);
+    await server.close();
+    expect(pids).toEqual([undefined]); // the fake has no pid; a real child passes its own
+    expect(readFileSync(join(dir, "sub", "d.stderr"), "utf8")).toBe(big);
+    // the in-memory tail is still bounded, as before
+    expect(server.stderrSoFar().length).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  test("off: no file is written, and the tail is kept as before", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr227-"));
+    const { server } = serverWith(() => undefined, { stderr: "compile cache: hit\n" });
+    await server.start(2000);
+    await server.close();
+    expect(readdirSync(dir)).toEqual([]);
+    expect(server.stderrSoFar()).toBe("compile cache: hit\n");
+  });
+
+  test("an unwritable file warns and never fails the daemon", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pr227-"));
+    writeFileSync(join(dir, "blocker"), "a file, not a folder");
+    const { server } = serverWith(() => undefined, {
+      stderr: "x\n",
+      stderrFileFor: () => join(dir, "blocker", "d.stderr"),
+    });
+    await server.start(2000);
+    await server.close();
+    expect(server.stderrSoFar()).toBe("x\n");
   });
 });
 
