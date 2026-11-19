@@ -295,9 +295,11 @@ export const LEND_FIGURES = {
   history: { killed: 3, survived: 0, noCoverage: 6, knownSurvivors: 17, groupedCalls: 3 },
   /** R1: `--resume-run` of an unfinished full clone. Since R621 (pre-commitment
    *  docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md) a stored no-coverage is never
-   *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 5
-   *  no-coverage and carries the other 17. Was 19 sites / 15 carried before R855. */
-  resumeWhole: { carryable: 22, carried: 17, groupedCalls: 0 },
+   *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 6
+   *  no-coverage and carries the other 20. PR-209: RECORDED on bc1 (lend observe): the message reads "26 mutant
+   *  verdict(s) may be carried", resumedFrom.carriedMutants 20, groupedCalls 0. Was 22 / 17 before PR-209, 19 sites /
+   *  15 carried before R855. */
+  resumeWhole: { carryable: 26, carried: 20, groupedCalls: 0 },
   /**
    * R2: `--resume` of K (KEPT carried, M0003's error row and the rest re-run), snapshot reused.
    * Live run 1 (BLOCKED, pre-commitment addendum): in a PARTLY carried batch `scoreBatch` re-derives

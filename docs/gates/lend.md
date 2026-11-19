@@ -33,8 +33,8 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
     "LEND_FIGURES.history.noCoverage": 6,
     "LEND_FIGURES.history.knownSurvivors": 17,
     "LEND_FIGURES.history.groupedCalls": 3,
-    "LEND_FIGURES.resumeWhole.carryable": 22,
-    "LEND_FIGURES.resumeWhole.carried": 17,
+    "LEND_FIGURES.resumeWhole.carryable": 26,
+    "LEND_FIGURES.resumeWhole.carried": 20,
     "LEND_FIGURES.resumeWhole.groupedCalls": 0,
     "LEND_FIGURES.resumeSnapshot.carryable": 9,
     "LEND_FIGURES.resumeSnapshot.carried": 7,
@@ -69,8 +69,8 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 - L1 and N0 score 3 / 0 / 6, with the 17 survivors recorded as known survivors and not run.
   `knownSurvivors` is 17. `groupedCalls` is 3.
 - R1's one batch holds 5 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
-  reuses L1's run B snapshot (no baseline test runs here), re-derives the 5 as fresh no-coverage and carries
-  the other 17 by key. `carryable` is 22, `carried` 17, `groupedCalls` 0.
+  reuses L1's run B snapshot (no baseline test runs here), re-derives the 6 as fresh no-coverage and carries
+  the other 20 by key. `carryable` is 26, `carried` 20, `groupedCalls` 0.
 - R2 has 9 KEPT rows. It carries 7 of them, every one this session covers; its two KEPT rows that this session
   leaves uncovered come back as fresh no-coverage (see "A stored no-coverage is always re-derived" below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
   `groupedCalls` 10 (1 error row plus 9 survivors; was 8).
