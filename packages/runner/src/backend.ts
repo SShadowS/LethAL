@@ -639,6 +639,11 @@ export interface ExecutionBackend {
    */
   readonly isolatesTests?: boolean;
   /**
+   * PR-235: `LETHAL_V3_BASELINE_BATCHING=off` (al-runner-v3, measure-only). The baseline snapshot key does not
+   * say whether the baseline was batched, so such a run neither reuses nor records a snapshot (as R857).
+   */
+  readonly baselineBatchingKnobOff?: boolean;
+  /**
    * R907: `--no-client`, al-runner-v3 only: tests run as a session without a client
    * (`GuiAllowed()` false, as on BC's web-service path). Absent counts as false. The session puts it
    * in its fingerprint, in `runner_build` and in the report's execution context, so nothing of such

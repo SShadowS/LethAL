@@ -1058,6 +1058,26 @@ function readSequentialSamples(): boolean {
   throw new AlRunnerV3SequentialSamplesRefusedError(v);
 }
 
+/** PR-235: `LETHAL_V3_BASELINE_BATCHING=off` turns the baseline's batching off for the session (measure-only). */
+export const BASELINE_BATCHING_ENV = "LETHAL_V3_BASELINE_BATCHING";
+
+export class AlRunnerV3BaselineBatchingKnobRefusedError extends Error {
+  constructor(value: string) {
+    super(
+      `al-runner-v3-baseline-batching-knob-refused: ${BASELINE_BATCHING_ENV} is "${value}"; use off to turn baseline batching off, or leave it unset`,
+    );
+    this.name = "AlRunnerV3BaselineBatchingKnobRefusedError";
+  }
+}
+
+/** True when the knob says `off`; unset or empty is today's behaviour; any other value is refused by name. */
+function readBaselineBatchingOff(): boolean {
+  const v = process.env[BASELINE_BATCHING_ENV];
+  if (v === undefined || v === "") return false;
+  if (v === "off") return true;
+  throw new AlRunnerV3BaselineBatchingKnobRefusedError(v);
+}
+
 /** What `crossCheckSample` returns (R951). */
 type CrossCheckResult =
   | { readonly kind: "compared"; readonly shot: BaselineAnswer }
@@ -2909,6 +2929,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly speculateOn: boolean;
   /** PR-119: `LETHAL_V3_SEQUENTIAL_SAMPLES=1`, read at construction; `seams.concurrentSamples` overrides it. */
   private readonly sequentialSamplesEnv: boolean;
+  /** PR-235: `LETHAL_V3_BASELINE_BATCHING=off`, read at construction; batching never runs when true. */
+  readonly baselineBatchingKnobOff: boolean;
   private memoryHoldNoticed = false;
   private fitNoticed = false;
   /**
@@ -3168,6 +3190,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (typeof cfg.dotnetSidecar === "string") this.sidecarPath = resolve(cfg.dotnetSidecar); // R886
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     this.sequentialSamplesEnv = readSequentialSamples();
+    this.baselineBatchingKnobOff = readBaselineBatchingOff();
+    if (this.baselineBatchingKnobOff) {
+      console.warn(
+        `[lethal] al-runner-v3: ${BASELINE_BATCHING_ENV}=off: the baseline never batches, and this session neither reuses nor records a baseline snapshot (PR-235).`,
+      );
+    }
     // R761: a default transport starts one-shot-safe; `decideTransport` turns serve on, before the
     // first deploy (the staged batch differs by transport) and the first v3 process.
     this.entries = cfg.transport === "serve-entries" && cfg.transportSource !== "default";
@@ -3427,7 +3455,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.baselineBatchingKnobOff ? `; baseline batching turned off by ${BASELINE_BATCHING_ENV}=off (PR-235)` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
@@ -3506,6 +3534,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** PR-115: whether the fill batches now: allowed, asked for coverage, and no batch has failed yet. */
   private batchingOn(coverage: boolean): boolean {
     return (
+      !this.baselineBatchingKnobOff &&
       (this.seams.baselineBatching ?? this.isBaselineBatching()) &&
       coverage &&
       this.baselineBatchingSpent === undefined
@@ -5278,7 +5307,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const s = this.baselineStats;
       const off = this.baselineBatchingSpent ?? this.baselineBatchingWhyOff;
       console.warn(
-        `[lethal] al-runner-v3 baseline batching (PR-115): ${groupAt.size > 0 ? `${s.batches} batch(es) kept, ${s.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}, ${s.orderHints} orderHints ignored` : `off (${coverage ? (off ?? "no batch to send") : "no coverage asked"})`}.`,
+        `[lethal] al-runner-v3 baseline batching (PR-115): ${groupAt.size > 0 ? `${s.batches} batch(es) kept, ${s.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}, ${s.orderHints} orderHints ignored` : `off (${this.baselineBatchingKnobOff ? `${BASELINE_BATCHING_ENV}=off` : coverage ? (off ?? "no batch to send") : "no coverage asked"})`}.`,
       );
       console.warn(
         `[lethal] al-runner-v3 baseline samples (PR-119): ${s.samplesOverlapped} overlapped, ${s.samplesSequential} sequential.`,
@@ -7581,7 +7610,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       // PR-123 (M1): the re-check's own batching line; the fill's line and counts are its own.
       const off = this.baselineBatchingSpent ?? this.baselineBatchingWhyOff;
       console.warn(
-        `[lethal] al-runner-v3 re-check batching (PR-123): ${planned > 0 ? `${stats.batches} batch(es) kept, ${stats.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}` : `off (${batchOn ? (off ?? "no batch to send") : (off ?? "not allowed")})`}`,
+        `[lethal] al-runner-v3 re-check batching (PR-123): ${planned > 0 ? `${stats.batches} batch(es) kept, ${stats.batchDiscards} discarded or failed${this.baselineBatchingSpent !== undefined ? ` (${this.baselineBatchingSpent})` : ""}` : `off (${this.baselineBatchingKnobOff ? `${BASELINE_BATCHING_ENV}=off` : batchOn ? (off ?? "no batch to send") : (off ?? "not allowed")})`}`,
       );
     }
   }

@@ -2657,6 +2657,76 @@ describe("C02-04 characterization", () => {
     expect(characterize(trace, store, report)).toMatchSnapshot();
   });
 
+  // PR-235 (S1): the snapshot key does not say whether the baseline was batched, so a knob-off run
+  // (LETHAL_V3_BASELINE_BATCHING=off) neither reuses a stored snapshot nor records one, as R857 does.
+  describe("PR-235: the baseline batching knob and baseline snapshots", () => {
+    const knobOff = <B extends CountingBackend>(b: B): B => {
+      (b as { baselineBatchingKnobOff?: boolean }).baselineBatchingKnobOff = true;
+      return b;
+    };
+    const snapshotCount = (store: ResultsStore): number =>
+      (store.db.query("SELECT COUNT(*) AS n FROM baseline_snapshots").get() as { n: number }).n;
+
+    test("knob unset: a snapshot is recorded and the resume reuses it, as today", async () => {
+      const dirs = await makeProject({ secondFile: true });
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: new CountingBackend("pass", undefined, 2),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(snapshotCount(store)).toBeGreaterThan(0);
+      const second = new CountingBackend("pass");
+      await runSession({
+        backend: second,
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+        resume: "last",
+      });
+      expect(second.baselineRuns).toBe(0);
+    });
+
+    test("knob off: a matching stored snapshot is NOT reused, the baseline runs", async () => {
+      const dirs = await makeProject({ secondFile: true });
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: new CountingBackend("pass", undefined, 2),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(snapshotCount(store)).toBeGreaterThan(0);
+      const second = knobOff(new CountingBackend("pass"));
+      await runSession({
+        backend: second,
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+        resume: "last",
+      });
+      expect(second.baselineRuns).toBeGreaterThan(0);
+    });
+
+    test("knob off: no snapshot is recorded", async () => {
+      const dirs = await makeProject({ secondFile: true });
+      const store = new ResultsStore(":memory:");
+      await runSession({
+        backend: knobOff(new CountingBackend("pass", undefined, 2)),
+        store,
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      });
+      expect(snapshotCount(store)).toBe(0);
+    });
+  });
+
   test("R272: a reused baseline's durations never reach the report's testMethods", async () => {
     // Batch 1's baseline is reused on resume (R192), and its stored verdicts carry the first run's
     // 111 ms. The resumed run measures 222 ms wherever it runs a baseline itself. The report keeps

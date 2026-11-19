@@ -61,6 +61,9 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     get isolatesTests() {
       return owner.isolatesTests === true;
     },
+    get baselineBatchingKnobOff() {
+      return owner.baselineBatchingKnobOff === true;
+    },
     ...(owner.baselineState !== undefined
       ? { baselineState: () => owner.baselineState?.() ?? Promise.resolve(undefined) }
       : {}),
