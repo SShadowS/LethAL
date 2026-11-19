@@ -33,7 +33,7 @@ mutant equal to its baseline, with the W1 company (R-583).
     "TABLES_FIGURES.assertionScreenDiscrimination": "partial",
     "TABLES_FIGURES.testPageRefused": ["Data Tests.PageActionComputesNonZero"],
     "TABLES_FIGURES.declarativeSites": { "siteCount": 1, "fileCount": 1, "file": "src/DataMainList.Page.al", "kinds": "page_declaration" },
-    "TABLES_FIGURES.notInstrumented": { "fileCount": 1, "siteCount": 5, "files": ["src/DataScopeQuery.Query.al"] }
+    "TABLES_FIGURES.notInstrumented": { "fileCount": 1, "siteCount": 6, "files": ["src/DataScopeQuery.Query.al"] }
   }
 }
 ```

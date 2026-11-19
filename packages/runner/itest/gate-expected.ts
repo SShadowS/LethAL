@@ -71,7 +71,8 @@ export const TABLES_FIGURES = {
   testPageRefused: ["Data Tests.PageActionComputesNonZero"],
   notInstrumented: {
     fileCount: 1,
-    siteCount: 5,
+    // PR-209: RECORDED on bc2 (tables record): 6 (was 5); one of the new operators' sites falls in the skipped query.
+    siteCount: 6,
     files: ["src/DataScopeQuery.Query.al"],
   },
   declarativeSites: {
