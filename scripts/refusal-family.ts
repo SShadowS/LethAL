@@ -5625,6 +5625,14 @@ codeunit 51009 "Y2C Probe"
         exit(Single.GetValue());
     end;
 
+    // PR-195 build review MED-2: the rows the "after an insert" cells write, so a row that outlived a refusal shows.
+    procedure RowCount(): Text
+    var
+        Row: Record "Y2C Row";
+    begin
+        exit(Format(Row.Count()));
+    end;
+
     procedure OverrideValue(): Text
     var
         D: Codeunit "Y2C Derive";
@@ -5679,6 +5687,7 @@ table 51001 "Y2C Order Row"
     { name: "y2single", vars: ['Y2P1: Codeunit "Y2C Probe";'], expr: "Y2P1.SingleValue()" },
     { name: "y2cover", vars: ['Y2P2: Codeunit "Y2C Probe";'], expr: "Y2P2.OverrideValue()" },
     { name: "y2order", vars: ['Y2P3: Codeunit "Y2C Probe";'], expr: "Y2P3.OrderText()" },
+    { name: "y2rows", vars: ['Y2P4: Codeunit "Y2C Probe";'], expr: "Y2P4.RowCount()" },
   ],
   handles: {},
   cells: [

@@ -18,6 +18,18 @@ Evidence: `/coord/handoff/PR-163/` (y2's events and store, read-only) and `/coor
   `y2single`, `y2cover`, `y2order`): **both classes CLEAN**, 3 refusers each; the readers' values are in every compared observation.
 - **Red checks:** the entry removed, either code point removed, the slot opened to `[0-9A-F]{4}`, and lower-case hex allowed:
   each red (5 of 5).
+- **The opus build review (no HIGH), and the re-run it led to:**
+  - MED-1: the check cut messages at 300 characters (343 of 5,058 rows), which could hide a cascade row's cause. Now it keeps
+    and compares full messages. Re-run: widened **129 of 129 equal**, PR-195's plan **9 of 9 equal**.
+  - MED-2: no census reader read the table the "after an insert" cells write. Added reader `y2rows` (that table's count);
+    census2 (`census2/`): **both classes CLEAN**, `y2rows=[0]` in the compared observations.
+  - MED-3: the "exercised" count was loose for cut rows. Now each entry counts only rows its own regex matches on a full
+    message: **51 of 51 exercised**.
+  - L4: no killed y2 mutant has a killing test in codeunit 68986, so the plan keeps its survivors; a stale mutant still shows,
+    because consecutive requests differ (8, 6, 8 and 12 passes under the four mutants, 14 with none).
+  - L5: the check sends testIsolation "test" only; LethAL also sends "codeunit" with runSelectedOnly in some windows. Stated as a
+    limit in `p5/table.md`.
+  - L6: the parallel fresh chunks now use their own cwd and cache.
 
 ## 0. Amendment 1 (the opus spec-adversary's review of r1, 2026-11-19: not safe as specified; the fixes need no redesign)
 Committed before the census and any keep-list change. The family was built in parallel with the review; it changes below.
@@ -69,7 +81,8 @@ Committed before the census and any keep-list change. The family was built in pa
   then `IsAsciiAlphaNumeric`: depth 3, a TextBuilder local holding part of the result.
 
 ## 2. The change (built after this commit)
-1. **A family `y2-collation`** in `scripts/refusal-family.ts`, invented AL: a non-SingleInstance codeunit whose procedure
+1. **A family `y2-collation`** in `scripts/refusal-family.ts`, invented AL (superseded by amendment 1 MED-1: the refusing
+   codeunit is SingleInstance, as DO's is): a non-SingleInstance codeunit whose procedure
    upper-cases a Text, loops over its characters filling a TextBuilder, and calls a local range check written in the mutated
    form (`(Ch >= '') and (Ch <= 'Z')`), at depth 3 from the test. Cells: an input starting with U+516C, one starting with
    U+041A; each also after a table insert, and one each behind a SingleInstance codeunit set first. A passing control cell

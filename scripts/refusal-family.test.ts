@@ -1387,8 +1387,16 @@ describe("PR-195: the y2-collation family", () => {
     expect(f.cells[6]?.call).not.toContain("SetOverride");
   });
 
-  test("readers: y2single, y2cover (the Override global) and y2order (text order and key order)", () => {
-    expect((f.readers ?? []).map((r) => r.name)).toEqual(["y2single", "y2cover", "y2order"]);
+  test("readers: y2single, y2cover (the Override global), y2order (text order and key order) and y2rows (the insert cells' table)", () => {
+    expect((f.readers ?? []).map((r) => r.name)).toEqual([
+      "y2single",
+      "y2cover",
+      "y2order",
+      "y2rows",
+    ]);
+    expect(f.support).toMatch(
+      /procedure RowCount\(\): Text[\s\S]*?Row: Record "Y2C Row";[\s\S]*?Row\.Count\(\)/,
+    );
     expect(f.support).toContain("exit(Format(D.GetOverride()));");
     const order = /procedure OrderText[\s\S]*?\n {4}end;/.exec(f.support)?.[0] ?? "";
     for (const s of [
