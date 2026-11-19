@@ -272,6 +272,11 @@ describe("R1127: each method starts on the client's default WorkDate", () => {
     expect(status).toContain("Obj.Add('workDate', WorkDateText);");
     expect(read("ControlApi.Codeunit.al")).toContain("Runner.StartWorkDate()));");
   });
+  test("R1131 amendment 2: HarnessInfo returns the fresh start WorkDate the same way, with no test run", () => {
+    const info = codeOnly(procedureBody(read("ControlApi.Codeunit.al"), "HarnessInfo"));
+    expect(info).toContain("Obj.Add('workDate', Format(LogInMgt.GetDefaultWorkDate(), 0, 9));");
+    expect(info.match(/\bWorkDate\(/g)).toBeNull(); // reads only, never sets the session's WorkDate
+  });
 });
 
 describe("GH-24: ObservedActive, reset per method and read after ProgressBetween", () => {

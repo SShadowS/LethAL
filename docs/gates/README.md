@@ -143,6 +143,7 @@ under an exact permission set) exist only from 1.0.0.26. From 1.0.0.27 (R1127) e
 a client session gets at login (Base Application's `GetDefaultWorkDate`: in a demo company the last G/L posting date), as
 al-runner v3 does, not on the OData session's Today. From 1.0.0.28 (R1131) every answer that ran a method returns the start
 WorkDate it set, as `workDate` (RunMany: in each per-method object; RunMutant: in its answer), and the client refuses a start
-date that moved from the batch's baseline. 1.0.0.28 is the minimum: no client path
+date that moved from the batch's baseline. `HarnessInfo` also returns `workDate`, read without running a test: each
+batch reuses a stored baseline snapshot only when that fresh date equals the snapshot's. 1.0.0.28 is the minimum: no client path
 falls back to an older control app any more, so a 404 from any of these actions, a `HarnessInfo`
 without `databaseId`, or an answer that ran a method without `workDate`, is a plain failure.

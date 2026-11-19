@@ -79,6 +79,8 @@ const MIN_PROTOCOL_VERSION = 2;
  * that is why the two were once pinned equal.
  * 1.0.0.28 (R1131) returns the start WorkDate it set as `workDate` on every answer that ran a method (RunMany's per-method
  * object, RunMutant's status), so the client can refuse a start date that moved from the batch's baseline. No fallback.
+ * HarnessInfo also returns `workDate` (the date a test call would start on now, no test run): the fresh read each
+ * batch's snapshot-reuse decision compares with the snapshot's date.
  * 1.0.0.27 (R1127) starts every test method on the WorkDate a client session gets at login (BaseApp's
  * `GetDefaultWorkDate`: the last G/L posting date in a demo company), as al-runner v3 does, instead of the OData
  * session's Today. No action changes; it is required so a run's verdicts never mix the two start dates.
