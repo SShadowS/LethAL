@@ -11,6 +11,17 @@ item overrides the section it names.
    - `BaselineSnapshot` stores `workDate` (the baseline calls' date).
    - A snapshot is reused ONLY when its stored date equals the date of this session's first test-running answer;
      otherwise the batch's baseline is re-run. A snapshot stored before this change has no date, so it is never reused.
+   - **Clarified at build (2026-11-19).** Batch 0's reuse decision comes before any test-running answer, so the session
+     has no date to compare with yet.
+     - Allowing the reuse there loops: a resume across midnight in a non-demo company reuses the old snapshot, every
+       mutant row becomes `workdate-changed`, and each later `--resume` repeats it.
+     - So a session NEVER reuses its first batch's snapshot: batch 0's baseline is always re-run, which gives the
+       session its date. Later batches reuse only on an equal date.
+     - The cost is one baseline per resume.
+     - The `workdate-changed` note says to re-run (a resume re-runs batch 0's baseline and reads the new date), not
+       "re-run with --resume" as a loop.
+   - `baselineWorkDate` in the report is the first batch's date; each batch's own date travels on its
+     `baseline-batch-finished`.
    - Carried rows keep their verdicts; the date they ran on is not recorded, as today.
    - `itest:lend` exercises this path. Its pre-committed figure: no verdict moves (one day, one date).
 2. **When `workDate` is required (overrides §2.2's "missing refuses").**
