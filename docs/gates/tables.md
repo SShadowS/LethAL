@@ -12,7 +12,7 @@ mutant equal to its baseline, with the W1 company (R-583).
 {
   "gate": "itest:tables",
   "baselines": {
-    "tables.baseline.json": { "killed": 322, "survived": 73, "no-coverage": 23 }
+    "tables.baseline.json": { "killed": 342, "survived": 83, "no-coverage": 25 }
   },
   "constants": {
     "TABLES_FIGURES.totalMutantSites": 472,
@@ -40,9 +40,10 @@ mutant equal to its baseline, with the W1 company (R-583).
 
 What the figures mean:
 
-- 322 / 73 / 23 over 418 is killed / survived / no-coverage, over the deployed mutants. The fixture
-  has 440 mutant sites before precedence removes some. R855 added 12, as pre-committed in
-  `docs/superpowers/specs/2026-11-07-r855-predictions.md`. Recorded on bc3, 2026-11-07.
+- 342 / 83 / 25 over 450 is killed / survived / no-coverage, over the deployed mutants. The fixture
+  has 472 mutant sites before precedence removes some. PR-209 (condition-true and blank-argument default-on,
+  `docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md`) added 32 rows (23 condition-true, 9 blank-argument);
+  every older row is unchanged. Recorded on bc2, 2026-11-19.
 - `untargetedTriggerCount` is 0: no trigger mutant had to run every test.
 - `groupedCalls` is 459 (R198, R206, R582): 342 + 83 scored mutants, plus 17 warm-kill replays,
   plus 17 warm-kill re-runs. This is the check that the grouped covering loop is really used. Recorded on bc2 for

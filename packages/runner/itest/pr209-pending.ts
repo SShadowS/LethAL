@@ -8,18 +8,7 @@ export const PR209_UNRECORDED = "PR-209: verdict to be recorded" as const;
 
 /** Per gate: the pinned figures that are still the OLD set's value and are to be recorded. */
 export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
-  tables: [
-    "TABLES_FIGURES.killed/survived/noCoverage (472 sites now)",
-    "TABLES_FIGURES.groupedCalls",
-    "TABLES_FIGURES.warmKills",
-    "TABLES_FIGURES.platformArtifactKills",
-  ],
-  hang: [
-    "HANG_FIGURES.warmKills",
-    "HANG_FIGURES.coldConfirmsOn",
-    "HANG_FIGURES.coldConfirmsSingle",
-    "HANG_FIGURES.stoppedCallsOn",
-  ],
+  // tables and hang: RECORDED on bc2 (every figure assertion passed before the record wrote the baseline).
   "al-runner-v3": [
     "DBM_FIGURES.killed/survived/noCoverage (126 sites now)",
     "the v3 legs' baselines (MO, WR, T, D1, S1...); L1 is not pending (slim, unchanged)",
