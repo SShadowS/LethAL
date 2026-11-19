@@ -478,6 +478,12 @@ export class BcDevMcpBackend implements ExecutionBackend {
    */
   private readonly workDates: WorkDateGuard;
   private hubWorkDateNoted = false;
+  /**
+   * R1131: the server's start WorkDate as `HarnessInfo` reported it at this batch's `deploy`/`attach`: set ONLY
+   * there, read AND cleared at the reuse decision, never cleared by `baselinePhase`, and never taken from a
+   * session-level cached harness answer.
+   */
+  private freshWorkDate: string | undefined;
   /** R739: where this backend's notices go. Default: the console, as before a session installs one. */
   private notify: (code: string, message: string) => void = (_code, message) =>
     console.warn(message);
@@ -565,13 +571,16 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   refuseReusedBaselineDate(snapshotWorkDate: string | undefined): string | undefined {
-    return this.workDates.refuseReuse(snapshotWorkDate);
+    const fresh = this.freshWorkDate;
+    this.freshWorkDate = undefined;
+    return this.workDates.refuseReuse(snapshotWorkDate, fresh);
   }
 
   noteReusedBaseline(
-    baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
+    _baseline: readonly { readonly ref: TestMethodRef; readonly verdict: TestVerdict }[],
   ): void {
-    this.workDates.noteReused(baseline);
+    // The batch's date is the one the reuse decision compared, not one re-derived from these rows.
+    this.workDates.noteReused();
   }
 
   /** R516 I1: the control app stops a run at the budget it was sent. */
@@ -1105,7 +1114,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
     // as a corrupt verdict (spec §8). Cheap OData round-trip; harmless to repeat per batch. Required
     // and unconditional — a backend configured to deploy() always has a `harnessVerifier` (see
     // `BcDevDeployment`'s doc comment), so there is no "skip if absent" branch anymore.
-    await deployment.harnessVerifier.verify();
+    this.freshWorkDate = (await deployment.harnessVerifier.verify()).workDate;
     const staged = await this.stageForCompile(instrumentedDir);
     let artifact: CompiledArtifact;
     try {
@@ -1207,7 +1216,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         "BcDevMcpBackend: no BcDevDeployment configured, so there is no verifier to attach with",
       );
     }
-    await deployment.harnessVerifier.verify();
+    this.freshWorkDate = (await deployment.harnessVerifier.verify()).workDate;
     const verification = await deployment.verifier.verify({
       appId: artifact.appId,
       artifactId: artifact.artifactId,

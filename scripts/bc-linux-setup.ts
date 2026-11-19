@@ -122,7 +122,7 @@ export const EXPECTED_KEYS = ["BC_DEV_USER", "BC_DEV_PASSWORD"] as const;
 // PR-196 (R1131): the 1.0.0.28 build (every answer that ran a method returns its start `workDate`),
 // compiled clean with alc 18.1.43 against the 28.4 packages (`/coord/handoff/PR-196/control/alc.log`).
 export const CONTROL_APP = "/coord/handoff/PR-196/control/LethAL_LethAL Control_1.0.0.28.app";
-export const CONTROL_SHA256 = "de7aa2d0ad42a51b6879bb018df32ed9989309905b50e2db7388811d303257fb";
+export const CONTROL_SHA256 = "5198d446fd872a939722f42ecd72967c1c978508e61fa92021b27d6f0858dc7f";
 const TOKEN_DIR = "/coord/handoff/R-589";
 const STATE_ROOT = join(REPO, ".kraken-local", "bc-linux");
 const BC_DEV_MCP = "/home/dev/src/bc-dev-mcp";

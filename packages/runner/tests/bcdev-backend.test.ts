@@ -200,11 +200,12 @@ async function rmStaged(instrumentedDir: string): Promise<void> {
  * reads the returned details — the orchestrator does, via its own verifier — so a resolved
  * placeholder is enough here.
  */
-function fakeHarnessVerifier(): HarnessVerifier {
+function fakeHarnessVerifier(workDate = "2026-11-19"): HarnessVerifier {
   return {
     verify: async () => ({
       protocolVersion: 2,
       serverGeneration: "f".repeat(32),
+      workDate,
       tenantGate: "unenforced" as const,
     }),
   } as unknown as HarnessVerifier;
@@ -2743,6 +2744,7 @@ describe('coverageMode "fenced" (R58)', () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: these tests run no mutant batch; every call is a baseline call
     await backend.activate(null);
     return {
       backend,
@@ -2858,6 +2860,7 @@ describe('coverageMode "fenced" (R58)', () => {
       );
       await backend.deploy(outputDir);
       backend.setLease(FAKE_LEASE);
+      backend.baselinePhase(true); // R1131: as in fencedBackend
       return {
         backend,
         cleanup: async () => {
@@ -3203,6 +3206,7 @@ describe("fenced coverage — the server-side object-id filter", () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -3396,6 +3400,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -4079,6 +4084,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     if (symbols !== undefined) backend.useBuildSymbols(symbols);
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -5059,6 +5065,44 @@ describe("BcDevMcpBackend — start WorkDate per call (R1131)", () => {
     await b.baselinePhase(false);
   }
   const many = { methods: [{ ref, budgetMs: 1000 }], requestCeilingMs: 5000, stopGraceMs: 500 };
+
+  test("the fresh date read at deploy decides reuse once: equal reuses and gives the batch its date; it survives baselinePhase and is cleared by the decision", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      // deploy() read the fresh date "2026-11-19" from the harness verifier.
+      await backend.baselinePhase(true); // runs between deploy and the decision: must not clear it
+      expect(backend.refuseReusedBaselineDate("2026-11-19")).toBeUndefined();
+      backend.noteReusedBaseline([]);
+      await backend.baselinePhase(false);
+      expect(backend.batchWorkDate()).toBe("2026-11-19");
+      // Read AND cleared: a second decision with no new deploy has no fresh date.
+      expect(backend.refuseReusedBaselineDate("2026-11-19")).toContain("no fresh start WorkDate");
+      // The reused batch's date is the compared one: a mutant answer on another date is refused.
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate("M0007");
+      const r = await backend.runMany(many);
+      expect(r.kind === "call" && r.cause).toBe("workdate-changed");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a moved date and a dateless snapshot are refused at the decision", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      expect(backend.refuseReusedBaselineDate("2026-11-18")).toContain("2026-11-18");
+    } finally {
+      await cleanup();
+    }
+    const again = await backendIn("none");
+    try {
+      expect(again.backend.refuseReusedBaselineDate(undefined)).toContain(
+        "records no start WorkDate",
+      );
+    } finally {
+      await again.cleanup();
+    }
+  });
 
   test("an equal date scores normally, and the baseline date is the batch's", async () => {
     const { backend, cleanup } = await backendIn("none");

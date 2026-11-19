@@ -4,6 +4,7 @@ import type { TestMethodRef, TestVerdict } from "../src/backend";
 import { RunMutantTransport } from "../src/run-mutant-transport";
 import {
   BaselineWorkDateUnstableError,
+  NoBaselineWorkDateError,
   WorkDateGuard,
   commonWorkDate,
 } from "../src/workdate-guard";
@@ -101,27 +102,61 @@ describe("WorkDateGuard (R1131)", () => {
     const v = pass(D2);
     expect(g.check(v)).toBe(v);
     expect(g.batchWorkDate()).toBeUndefined();
-    expect(g.refuseReuse(undefined)).toBeUndefined();
+    expect(g.refuseReuse(undefined, undefined)).toBeUndefined();
   });
 
-  test("snapshot reuse: an equal date is allowed, another date and no date are refused", () => {
-    const g = baselined(D1);
-    expect(g.refuseReuse(D1)).toBeUndefined();
-    expect(g.refuseReuse(D2)).toContain(D2);
-    expect(g.refuseReuse(undefined)).toContain("records no start WorkDate");
+  test("snapshot reuse: the fresh date equal to the snapshot's reuses, on a session's first batch too", () => {
+    // A brand-new guard has seen no answer: the fresh HarnessInfo read is what decides.
+    expect(new WorkDateGuard(true).refuseReuse(D1, D1)).toBeUndefined();
   });
 
-  test("snapshot reuse: a session with no date yet (its first batch) reuses nothing, even an equal date", () => {
-    expect(new WorkDateGuard(true).refuseReuse(D1)).toContain("no start WorkDate yet");
+  test("snapshot reuse: a moved date, a dateless snapshot and a missing fresh date are refused", () => {
+    const g = new WorkDateGuard(true);
+    expect(g.refuseReuse(D1, D2)).toContain(D2);
+    expect(g.refuseReuse(undefined, D1)).toContain("records no start WorkDate");
+    expect(g.refuseReuse(D1, undefined)).toContain("no fresh start WorkDate");
   });
 
-  test("a reused snapshot's verdicts give the batch its date", () => {
+  test("a reused snapshot gives the batch the COMPARED date, not one from its rows", () => {
     const g = new WorkDateGuard(true);
     g.baselinePhase(true);
-    g.noteReused([{ verdict: pass(D1) }, { verdict: pass() }]);
+    expect(g.refuseReuse(D1, D1)).toBeUndefined();
+    g.noteReused();
     g.baselinePhase(false);
     expect(g.batchWorkDate()).toBe(D1);
     expect(g.check(pass(D2)).workDateRefusal).toBe("workdate-changed");
+  });
+
+  test("noteReused with no accepted reuse decision is refused", () => {
+    const g = new WorkDateGuard(true);
+    expect(g.refuseReuse(D1, D2)).toBeDefined();
+    expect(() => g.noteReused()).toThrow("caller-contract");
+  });
+
+  test("a test-running answer with no batch baseline date throws by name, never fixing the date", () => {
+    const g = new WorkDateGuard(true);
+    g.baselinePhase(true);
+    g.baselinePhase(false);
+    expect(() => g.check(pass(D1))).toThrow(NoBaselineWorkDateError);
+    // And the throw left no date behind: the next answer is refused the same way.
+    expect(() => g.check(pass(D1))).toThrow(NoBaselineWorkDateError);
+  });
+
+  test("M1: a refused answer keeps the verdict's other fields (stop accounting, sessionId)", () => {
+    const v = baselined(D1).check({
+      ...pass(D2),
+      outcome: "timeout",
+      sessionId: 2037,
+      testRunsBefore: 0,
+      stopState: "confirmed",
+      stopEvidence: "bc-named-stop",
+    });
+    expect(v.outcome).toBe("error");
+    expect(v.workDateRefusal).toBe("workdate-changed");
+    expect(v.sessionId).toBe(2037);
+    expect(v.testRunsBefore).toBe(0);
+    expect(v.stopState).toBe("confirmed");
+    expect(v.stopEvidence).toBe("bc-named-stop");
   });
 
   test("commonWorkDate: the one shared date, nothing when none or two differ", () => {

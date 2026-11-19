@@ -50,7 +50,7 @@ import { serializeKey } from "../src/selection";
 import { ResultsStore } from "../src/store";
 import type { MutantVerdictRow } from "../src/store";
 import { recheckTargetsOf } from "../src/withheld-recheck";
-import { WorkDateGuard } from "../src/workdate-guard";
+import { BaselineWorkDateUnstableError, WorkDateGuard } from "../src/workdate-guard";
 import { characterize, recording, traceEvents } from "./helpers/characterize";
 import type { Trace } from "./helpers/characterize";
 import { buildFakeAppWithEntries } from "./helpers/fake-app";
@@ -1797,26 +1797,26 @@ describe("runSession --resume (R47)", () => {
 
   // R1131 (PR-196): a snapshot is reused only on an equal start WorkDate. `Dated` is a CountingBackend whose answers
   // carry `date` and go through the real guard, as bcdev's do; `seenBefore` plays "an earlier answer of this session".
+  // `fresh` is what HarnessInfo reads at each deploy (default: `date`; `null`: the read is missing).
   class Dated extends CountingBackend {
     readonly guard = new WorkDateGuard(true);
+    private pendingFresh: string | undefined;
     constructor(
-      private readonly date: string | undefined,
+      private readonly date: string | undefined | (() => string),
       abortFromDeploy?: number,
-      seenBefore?: string,
+      private readonly fresh: string | null = typeof date === "string" ? date : null,
     ) {
       super("pass", undefined, abortFromDeploy);
-      if (seenBefore !== undefined) {
-        this.guard.check({
-          ref: { codeunitId: 1, codeunitName: "x", method: "y" },
-          outcome: "pass",
-          durationMs: 1,
-          workDate: seenBefore,
-        });
-      }
+    }
+    override async deploy(dir: string) {
+      this.pendingFresh = this.fresh ?? undefined;
+      return super.deploy(dir);
     }
     override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
       const v = await super.run(ref, opts);
-      return this.date === undefined ? v : this.guard.check({ ...v, workDate: this.date });
+      if (this.date === undefined) return v;
+      const workDate = typeof this.date === "function" ? this.date() : this.date;
+      return this.guard.check({ ...v, workDate });
     }
     baselinePhase(on: boolean): void {
       this.guard.baselinePhase(on);
@@ -1825,10 +1825,12 @@ describe("runSession --resume (R47)", () => {
       return this.guard.batchWorkDate();
     }
     refuseReusedBaselineDate(d: string | undefined): string | undefined {
-      return this.guard.refuseReuse(d);
+      const fresh = this.pendingFresh;
+      this.pendingFresh = undefined;
+      return this.guard.refuseReuse(d, fresh);
     }
-    noteReusedBaseline(b: Parameters<WorkDateGuard["noteReused"]>[0]): void {
-      this.guard.noteReused(b);
+    noteReusedBaseline(): void {
+      this.guard.noteReused();
     }
   }
   const resumeWith = async (first: CountingBackend, second: Dated) => {
@@ -1854,21 +1856,50 @@ describe("runSession --resume (R47)", () => {
     };
   };
 
-  test("R1131: a resumed session re-runs batch 0's baseline even when its snapshot's date would match; a later batch on an equal date is reused", async () => {
+  test("R1131: a snapshot whose date equals the fresh read is reused, batch 0 and a later batch", async () => {
     const second = new Dated("2026-11-19");
     const r = await resumeWith(new Dated("2026-11-19", 2), second);
-    // Batch 0 ran live (it gives the session its date); batch 1 reused its snapshot.
+    expect(second.baselineRuns).toBe(0);
+    expect(r.reused).toBe(2);
+    expect(r.notReused).toBe(0);
+  });
+
+  test("R1131: a missing fresh date refuses reuse, by name", async () => {
+    const second = new Dated("2026-11-19", undefined, null);
+    const r = await resumeWith(new Dated("2026-11-19", 2), second);
+    expect(r.reused).toBe(0);
     expect(second.baselineRuns).toBeGreaterThan(0);
-    expect(r.reused).toBe(1);
-    expect(r.notReused).toBe(1);
     expect(
       r.events.some(
         (e) =>
           e.type === "warning" &&
           e.code === "resume-baseline-not-reused" &&
-          e.message.includes("no start WorkDate yet"),
+          e.message.includes("no fresh start WorkDate"),
       ),
     ).toBe(true);
+  });
+
+  test("R1131: two baseline dates inside one baseline abort the session by name", async () => {
+    let n = 0;
+    const flapping = new Dated(() => (n++ % 2 === 0 ? "2026-11-19" : "2026-11-20"));
+    const dirs = await makeProject({ secondFile: true });
+    // Two tests, so one baseline makes two calls.
+    await Bun.write(
+      join(dirs.testDir, "SandboxTests.Codeunit.al"),
+      TEST_AL.replace(
+        "    end;\n}",
+        "    end;\n\n    [Test]\n    procedure Second()\n    begin\n    end;\n}",
+      ),
+    );
+    await expect(
+      runSession({
+        backend: flapping,
+        store: new ResultsStore(":memory:"),
+        ...dirs,
+        selectorIds,
+        maxGuardsPerBatch: 1,
+      }),
+    ).rejects.toBeInstanceOf(BaselineWorkDateUnstableError);
   });
 
   test("R1131: a snapshot measured on another start WorkDate is not reused; the baseline runs again", async () => {
