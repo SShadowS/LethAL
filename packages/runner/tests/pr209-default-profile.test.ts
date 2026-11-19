@@ -203,7 +203,9 @@ describe("PR-209 M6: an older store and the two profiles", () => {
 });
 
 describe("PR-209: --profile on the command line", () => {
-  const base = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner-v3"];
+  // bcdev, as cli.test.ts does: --profile is backend-neutral, and al-runner-v3 is refused on Windows (R586 v1), where
+  // CI's check job runs.
+  const base = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
 
   test("slim excludes exactly the two and says so", () => {
     const parsed = parseCliConfig([...base, "--profile", "slim"]);
