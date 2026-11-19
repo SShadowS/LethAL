@@ -696,12 +696,12 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 {
   "gate": "itest:alrunner-v3",
   "baselines": {
-    "al-runner-v3.tables.baseline.json": { "killed": 298, "survived": 54, "no-coverage": 66 },
+    "al-runner-v3.tables.baseline.json": { "killed": 318, "survived": 64, "no-coverage": 68 },
     "al-runner-v3.layout.baseline.json": { "killed": 8, "survived": 3 },
     "al-runner-v3.symbols-lethala.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.symbols-lethalb.baseline.json": { "killed": 7, "survived": 4 },
     "al-runner-v3.multiobject.baseline.json": { "killed": 7, "survived": 1, "no-coverage": 6 },
-    "al-runner-v3.wrapped.baseline.json": { "killed": 62, "survived": 28, "no-coverage": 12 },
+    "al-runner-v3.wrapped.baseline.json": { "killed": 64, "survived": 39, "no-coverage": 13 },
     "al-runner-v3.recheck.baseline.json": { "killed": 4, "error": 4 }
   }
 }
@@ -712,9 +712,9 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 - Leg Y-B, `al-runner-v3.symbols-lethalb.baseline.json`: 7 / 4 / 0 over 11, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9). All three were recorded once under R332 on 2026-10-22, and each is identical per mutant to its .NET al-runner twin.
 
 - Leg MO, `al-runner-v3.multiobject.baseline.json`: 7 / 1 / 6 over 14, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9).
-- Leg WR, `al-runner-v3.wrapped.baseline.json`: 62 / 28 / 12 over 102, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05; R976 moved 3 more on 2026-11-14, recorded on 736fc7677).
+- Leg WR, `al-runner-v3.wrapped.baseline.json`: 64 / 39 / 13 over 116, as pre-committed (c2f67f0a), recorded once under R332 on 2026-10-24 (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05; R976 moved 3 more on 2026-11-14, recorded on 736fc7677; PR-209 added 14 `condition-true` rows on 2026-11-19, recorded on 4ebfe7913 by R849's route, the BC twins' verdicts except WrappedArms' new row, refused like its siblings).
 
-- Leg T, `al-runner-v3.tables.baseline.json`: 298 / 54 / 66 over 418, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05). Its rows differ from
+- Leg T, `al-runner-v3.tables.baseline.json`: 318 / 64 / 68 over 450, as pre-committed (R855 added rows on 2026-11-07, recorded on a0825f1d9; R975 moved 6 rows to `no-coverage` on 2026-11-13, recorded on c8fe56e05; PR-209 added 32 rows on 2026-11-19, recorded on 4ebfe7913 by R849's route, each at its BC twin's verdict). Its rows differ from
   `itest:tables`' baseline on exactly the 58 keys and transitions of the pre-commitment's list (41 Commit, 7
   duplicate key, 4 TestPage, and R975's 6 Data Main `OnValidate` rows that read `no-coverage` by line attribution).
 
