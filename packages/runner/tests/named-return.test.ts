@@ -605,6 +605,7 @@ describe("R323: a scheme-2 record never reaches a current-scheme mutant with the
       identityScheme: opts.scheme,
       // R354: what runSession computes: it always passes the mode, here the backend's.
       coverageMode: "procedure",
+      defaultOperators: 2, // PR-209: what a default run computes now
     });
     store.db.run(
       `UPDATE runs SET identity_scheme = ?, config_fingerprint = ?${opts.finished ? "" : ", finished_at = NULL"} WHERE id = ?`,

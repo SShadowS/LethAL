@@ -388,6 +388,14 @@ export interface SessionFingerprintInput {
    * mutants the run deployed at all.
    */
   readonly operators?: readonly string[];
+  /**
+   * PR-209: `2` on a run with no operator narrowing at all: its default set holds `condition-true`
+   * and `blank-argument`, which an older default run did not. An older store (no marker) therefore
+   * cannot be resumed by it, and says so by name. `--profile slim` runs the OLD set and omits both
+   * this marker and `operators`, so it keeps the old digest and resumes (and compares with) every
+   * older store. Only when set, so no other digest moves.
+   */
+  readonly defaultOperators?: 2;
   readonly lines?: readonly LineRange[];
   readonly testsOnly?: readonly string[];
   /** R745: the discovered `Codeunit.Method` names `--exclude-test` left out. In the digest only
@@ -498,6 +506,8 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     // holding a half-finished 12-hour run would stop resuming the moment this build shipped. A
     // conditional key is deterministic (same position whenever present) and costs nothing.
     ...(input.operators !== undefined ? { operators: [...input.operators].sort() } : {}),
+    // PR-209: conditional for the same reason `operators` is.
+    ...(input.defaultOperators !== undefined ? { defaultOperators: input.defaultOperators } : {}),
     // R228: conditional for the same reason `operators` is.
     ...(input.exclude !== undefined && input.exclude.length > 0
       ? { exclude: [...input.exclude].sort() }

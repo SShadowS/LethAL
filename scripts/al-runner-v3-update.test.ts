@@ -2663,6 +2663,15 @@ linuxOnly("R859: refreshRows", () => {
         async () => [await world({ readingsFrom: "nope" }), false, ["edge-aaaaaaaaa"]],
         /no hand pin/,
       ],
+      [
+        "frozen",
+        async () => [
+          await world({ readingsFrom: "edge-d72d3197d-frozen-pre-pr209" }),
+          false,
+          ["edge-aaaaaaaaa"],
+        ],
+        /is frozen/,
+      ],
       ["dirty", async () => [await world(), true, ["edge-aaaaaaaaa"]], /uncommitted/],
       ["none", async () => [await world(), false, []], /name each row/],
       // The second id is bad: the first must not be gated either.

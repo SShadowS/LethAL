@@ -359,7 +359,9 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     serveSpawns: 2,
     oneShotTestCalls: 1,
     warned: true,
+    // PR-209 amendment 9 addendum: six (DiscountedPrice condition-true), five before.
     noCoverageFiles: [
+      "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
       "src/SandboxPricing.Codeunit.al",
@@ -381,6 +383,13 @@ describe("R654 S2 leg K: the config it builds from, and what it judges", () => {
     expect(judgeLegK({ ...good, oneShotTestCalls: 12 })).toHaveLength(1);
     expect(judgeLegK({ ...good, warned: false })).toHaveLength(1);
     expect(judgeLegK({ ...good, noCoverageFiles: [] })).toHaveLength(1);
+    expect(judgeLegK({ ...good, noCoverageFiles: good.noCoverageFiles.slice(1) })).toHaveLength(1);
+    expect(
+      judgeLegK({
+        ...good,
+        noCoverageFiles: [...good.noCoverageFiles, "src/SandboxPricing.Codeunit.al"],
+      }),
+    ).toHaveLength(1);
     expect(
       judgeLegK({ ...good, noCoverageFiles: [...good.noCoverageFiles.slice(1), "src/Other.al"] }),
     ).toHaveLength(1);

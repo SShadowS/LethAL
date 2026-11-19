@@ -57,15 +57,18 @@ const PROJECTS = [
 const MUTANTS: Readonly<Record<string, number>> = {
   // R855: delete-additive/logical mutants added (app 19, data 406, wrapped 148, names 36,
   // multiobject 12, symbols 36, gift-card 60 before).
-  "fixtures/sandbox-app": 22,
-  "fixtures/sandbox-data": 418,
-  "fixtures/sandbox-harden": 21,
-  "fixtures/sandbox-hang": 38,
-  "fixtures/sandbox-wrapped": 154,
+  // PR-209: condition-true and blank-argument became default operators (app +3 +1, data +23 +9,
+  // harden +2, hang +2 -1 refused by R1136, wrapped +21 over its three symbol sets, multiobject +1,
+  // gift-card +6 +5; names and symbols +0).
+  "fixtures/sandbox-app": 26,
+  "fixtures/sandbox-data": 450,
+  "fixtures/sandbox-harden": 23,
+  "fixtures/sandbox-hang": 39,
+  "fixtures/sandbox-wrapped": 175,
   "fixtures/sandbox-names": 48,
-  "fixtures/sandbox-multiobject": 14,
+  "fixtures/sandbox-multiobject": 15,
   "fixtures/sandbox-symbols": 44,
-  "examples/gift-card": 61,
+  "examples/gift-card": 72,
 };
 
 function symbolSetsOf(rel: string): string[][] {

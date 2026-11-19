@@ -7,13 +7,16 @@
  *
  * Change a figure here only together with its gate's pre-commitment and page.
  */
-
 export const BCDEV_FIGURES = {
-  totalMutantSites: 22,
+  // PR-209 (spec §3, pre-committed): 22 + 3 condition-true + 1 blank-argument. The verdict counts are RECORDED on bc1
+  // (lethal-code, /coord/handoff/PR-209-bc/bc1-bcdev-record/gate.log): the 4 new rows are M0005, M0014, M0016 survived
+  // and M0022 no-coverage; the old rows' counts are unchanged (3 / 14 / 5). groupedCalls 20 RECORDED (one per scored
+  // mutant: 3 killed + 17 survived). warmKills stays 0: the kills are the same M0001-M0003; the record run confirms it.
+  totalMutantSites: 26,
   killed: 3,
-  survived: 14,
-  noCoverage: 5,
-  groupedCalls: 17,
+  survived: 17,
+  noCoverage: 6,
+  groupedCalls: 20,
   warmKills: 0,
   assertionScreenDiscrimination: "vacuous",
 } as const;
@@ -23,9 +26,13 @@ export const BCDEV_FIGURES = {
  * reading 2026-11-17 (/coord/handoff/PR-114/gate-dbm.log); pre-committed in the spec addendum.
  */
 export const DBM_FIGURES = {
-  totalMutantSites: 122,
-  killed: 15,
-  survived: 3,
+  // PR-209: 126 = 122 + 4 added sites (2 condition-true, 2 blank-argument); the other 21 sites the two
+  // operators meet there are refused by R868 (`hangRefused` 21: 12 condition-true, 9 blank-argument), not made.
+  // RECORDED (amendment 4, §0e item 2, from /coord/handoff/PR-209/v3rec/record.log): 17 / 5 / 104 (was 15 / 3 / 104
+  // over 122); the 4 added sites are 2 killed, 2 survived.
+  totalMutantSites: 126,
+  killed: 17,
+  survived: 5,
   noCoverage: 104,
 } as const;
 
@@ -37,23 +44,26 @@ export const ENVTOOL_FIGURES = {
 } as const;
 
 export const TABLES_FIGURES = {
-  totalMutantSites: 440,
-  killed: 322,
-  survived: 73,
-  noCoverage: 23,
+  // PR-209 (spec §3, pre-committed): 440 generated sites + 23 condition-true + 9 blank-argument. The verdict counts are
+  // RECORDED on bc2 (lethal-code, /coord/handoff/PR-209-bc/bc2-tables-record/gate.log): 342 / 83 / 25 over 450 rows, i.e.
+  // +20 killed, +10 survived, +2 no-coverage on the old 322 / 73 / 23. groupedCalls and warmKills recorded on bc2 too
+  // (below); the itest prints them and the kill positions before asserting.
+  totalMutantSites: 472,
+  killed: 342,
+  survived: 83,
+  noCoverage: 25,
   platformArtifactKills: 4,
   assertionScreenDiscrimination: "partial",
   untargetedTriggerCount: 0,
-  /** 322 killed + 73 survived scored, plus 15 warm-kill replays, plus (R582) 15 warm-kill re-runs
-   *  under the mutant. The 15 warm-kill terms are the pre-R855 figures: R855's 8 added kills may
-   *  add warm kills, which only a live run shows. The kills at position 1 re-run as single calls,
-   *  which are not grouped. */
-  groupedCalls: 395 + 15 + 15,
-  warmKills: 15,
+  /** 342 killed + 83 survived scored, plus 17 warm-kill replays, plus (R582) 17 warm-kill re-runs
+   *  under the mutant. PR-209: RECORDED on bc2 (tables record, `tables figures (first)` line): groupedCalls 459, warmKills
+   *  17 (was 395 + 15 + 15 and 15). The kills at position 1 re-run as single calls, which are not grouped. */
+  groupedCalls: 425 + 17 + 17,
+  warmKills: 17,
   killPositions: [
-    { mutantCode: "M0183", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
-    { mutantCode: "M0188", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
-    { mutantCode: "M0179", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+    { mutantCode: "M0192", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
+    { mutantCode: "M0197", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
+    { mutantCode: "M0187", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
     { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 3 },
     { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 3 },
   ],
@@ -61,7 +71,8 @@ export const TABLES_FIGURES = {
   testPageRefused: ["Data Tests.PageActionComputesNonZero"],
   notInstrumented: {
     fileCount: 1,
-    siteCount: 5,
+    // PR-209: RECORDED on bc2 (tables record): 6 (was 5); one of the new operators' sites falls in the skipped query.
+    siteCount: 6,
     files: ["src/DataScopeQuery.Query.al"],
   },
   declarativeSites: {
@@ -82,20 +93,24 @@ export const TABLES_FIGURES = {
  * and groupedCalls 42 -> 44 (26 scored + 9 + 9). `chunked.groupedCalls` 62 -> 70 is MEASURED, on bc3,
  * 2026-11-07: both legs' verdicts and killing tests were equal, and each new survivor adds
  * ceil(covering tests / 2) chunk calls.
+ * PR-209 (observed on bc3, 2026-11-19, /coord/handoff/PR-209-bc/bc3-chunked-observe/gate.log): the slice gains
+ * two condition-true survivors, so control survived 9 -> 11 and groupedCalls 44 -> 46; chunked groupedCalls
+ * 70 -> 78; the 17 kills, the killing tests and both warmKills are unchanged. `positions` was not printed
+ * (the gate stopped at the survived assertion) and stays: the same 17 killers.
  */
 export const CHUNKED_FIGURES = {
   control: {
     killed: 17,
-    survived: 9,
+    survived: 11,
     noCoverage: 2,
     warmKills: 9,
-    groupedCalls: 44,
+    groupedCalls: 46,
     /** killPosition histogram over the 17 kills. */
     positions: { 1: 8, 2: 3, 3: 3, 4: 2, 5: 1 } as Record<number, number>,
   },
   chunked: {
     warmKills: 5,
-    groupedCalls: 70,
+    groupedCalls: 78,
   },
 } as const;
 
@@ -149,92 +164,115 @@ export const LEND_MUTANTS = {
     verdict: "survived",
     killingTest: null,
   },
+  // PR-209: every code moved by the map in /coord/handoff/PR-209/count/renumber/LEND_MUTANTS.tsv, its
+  // key unchanged. M0005, M0014, M0016 and M0022 are the ADDED mutants (recorded on bc1, 2026-11-19; equal to
+  // the new rows of `bcdev.baseline.json`).
   M0005: {
-    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-left|1",
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.condition-true|1",
     verdict: "survived",
     killingTest: null,
   },
   M0006: {
-    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-right|1",
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-left|1",
     verdict: "survived",
     killingTest: null,
   },
   M0007: {
-    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-right|1",
     verdict: "survived",
     killingTest: null,
   },
   M0008: {
-    key: "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
     verdict: "survived",
     killingTest: null,
   },
   M0009: {
-    key: "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
+    key: "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
     verdict: "survived",
     killingTest: null,
   },
   M0010: {
-    key: "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Sandbox Logic|ClampPercent|lethal.return-value|1",
+    key: "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
     verdict: "survived",
     killingTest: null,
   },
   M0011: {
-    key: "2b34811c1b253fde93b24824f30d18d933316b7f64723b67d413a3b0d16956a6|Sandbox Logic|ApplyAudit|lethal.empty-block|1",
+    key: "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Sandbox Logic|ClampPercent|lethal.return-value|1",
     verdict: "survived",
     killingTest: null,
   },
   M0012: {
-    key: "9b4f290c51c1ef232af4a294bb9a0a4c404064f20bac6e893fab28b45cdf7785|Sandbox Logic|ApplyAudit|lethal.void-method-call|1",
+    key: "2b34811c1b253fde93b24824f30d18d933316b7f64723b67d413a3b0d16956a6|Sandbox Logic|ApplyAudit|lethal.empty-block|1",
     verdict: "survived",
     killingTest: null,
   },
   M0013: {
-    key: "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|LogAudit|lethal.empty-block|1",
+    key: "9b4f290c51c1ef232af4a294bb9a0a4c404064f20bac6e893fab28b45cdf7785|Sandbox Logic|ApplyAudit|lethal.void-method-call|1",
     verdict: "survived",
     killingTest: null,
   },
   M0014: {
-    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.negate-conditional|1",
+    key: "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Sandbox Logic|ApplyAudit|lethal.blank-argument|1",
     verdict: "survived",
     killingTest: null,
   },
   M0015: {
-    key: "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Sandbox Logic|LogAudit|lethal.shift-integer|1",
+    key: "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|LogAudit|lethal.empty-block|1",
     verdict: "survived",
     killingTest: null,
   },
   M0016: {
-    key: "77ee7e3d0adfcd76e1ae34e9067dcebc5c466f1172a857c730b0d43f7085d15c|Sandbox Logic|LogAudit|lethal.empty-block|1",
+    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.condition-true|1",
     verdict: "survived",
     killingTest: null,
   },
   M0017: {
-    key: "d8f839f87361f4d85b7ccd435b318285a82e1e3610237d66488e17b8bdd61de3|Sandbox Logic|LogAudit|lethal.remove-assignment|1",
+    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.negate-conditional|1",
     verdict: "survived",
     killingTest: null,
   },
   M0018: {
+    key: "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Sandbox Logic|LogAudit|lethal.shift-integer|1",
+    verdict: "survived",
+    killingTest: null,
+  },
+  M0019: {
+    key: "77ee7e3d0adfcd76e1ae34e9067dcebc5c466f1172a857c730b0d43f7085d15c|Sandbox Logic|LogAudit|lethal.empty-block|1",
+    verdict: "survived",
+    killingTest: null,
+  },
+  M0020: {
+    key: "d8f839f87361f4d85b7ccd435b318285a82e1e3610237d66488e17b8bdd61de3|Sandbox Logic|LogAudit|lethal.remove-assignment|1",
+    verdict: "survived",
+    killingTest: null,
+  },
+  M0021: {
     key: "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|DiscountedPrice|lethal.empty-block|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0019: {
+  M0022: {
+    key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.condition-true|1",
+    verdict: "no-coverage",
+    killingTest: null,
+  },
+  M0023: {
     key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0020: {
+  M0024: {
     key: "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0021: {
+  M0025: {
     key: "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.delete-additive-right|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0022: {
+  M0026: {
     key: "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
     verdict: "no-coverage",
     killingTest: null,
@@ -247,36 +285,47 @@ export type LendCode = keyof typeof LEND_MUTANTS;
  * are `LEND_MUTANTS` plus the role sets below; these are the counts and call totals.
  */
 export const LEND_FIGURES = {
-  totalMutantSites: 22,
-  /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.) */
-  fresh: { killed: 3, survived: 14, noCoverage: 5, groupedCalls: 17 },
-  /** L1 and N0: the 14 survivors carried as known survivors; 3 kills scored. */
-  history: { killed: 3, survived: 0, noCoverage: 5, knownSurvivors: 14, groupedCalls: 3 },
+  // PR-209 (spec §3): the sandbox-app fixture's 22 + 4 added rows.
+  totalMutantSites: 26,
+  /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.
+   *  PR-209: 26 sites, +3 survived, +1 no-coverage, groupedCalls 20; observed on bc1, 2026-11-19.) */
+  fresh: { killed: 3, survived: 17, noCoverage: 6, groupedCalls: 20 },
+  /** L1 and N0: the 17 survivors carried as known survivors; 3 kills scored. PR-209: RECORDED on bc1 (lend observe,
+   *  /coord/handoff/PR-209-bc/): 3 / 0 / 6, knownSurvivors 17, groupedCalls 3 (was 3 / 0 / 5, 14, 3). */
+  history: { killed: 3, survived: 0, noCoverage: 6, knownSurvivors: 17, groupedCalls: 3 },
   /** R1: `--resume-run` of an unfinished full clone. Since R621 (pre-commitment
    *  docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md) a stored no-coverage is never
-   *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 5
-   *  no-coverage and carries the other 17. Was 19 sites / 15 carried before R855. */
-  resumeWhole: { carryable: 22, carried: 17, groupedCalls: 0 },
+   *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 6
+   *  no-coverage and carries the other 20. PR-209: RECORDED on bc1 (lend observe): the message reads "26 mutant
+   *  verdict(s) may be carried", resumedFrom.carriedMutants 20, groupedCalls 0. Was 22 / 17 before PR-209, 19 sites /
+   *  15 carried before R855. */
+  resumeWhole: { carryable: 26, carried: 20, groupedCalls: 0 },
   /**
    * R2: `--resume` of K (KEPT carried, M0003's error row and the rest re-run), snapshot reused.
    * Live run 1 (BLOCKED, pre-commitment addendum): in a PARTLY carried batch `scoreBatch` re-derives
    * no-coverage from this session's coverage before any carry, so K's two no-coverage rows are fresh,
    * not carried: 9 carryable, 7 carried.
+   * PR-209: groupedCalls RECORDED on bc1 (lend observe): 13 (was 10). The 7 carried are unchanged; the 3 new survived
+   * rows are scored here, so the scored-not-carried count goes 17 - 7 = 10 to 20 - 7 = 13.
    */
-  resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 10 },
-  /** R3: K2 (all but M0022, so 21 rows); the v3 snapshot refused, the baseline re-run. Partly
-   *  carried too: 17 carried (M0018-M0021 uncovered here, re-derived, as in R2). The 21 is not a
-   *  constant because the gate does not assert it (review M-3). R855: was M0019, 18 rows, 15. */
-  resumeRefusedSnapshot: { carried: 17, groupedCalls: 0 },
+  resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 13 },
+  /** R3: K2 (all but M0026, so 25 rows); the v3 snapshot refused, the baseline re-run. Partly
+   *  carried too: 20 carried (the five no-coverage rows M0021-M0025 are re-derived here, as in R2). The 25 is not a
+   *  constant because the gate does not assert it (review M-3). R855: was M0019, 18 rows, 15; before PR-209 it was
+   *  all but M0022, 21 rows, 17 carried.
+   *  PR-209: carried RECORDED on bc1 (lend observe): 20 (was 17); the keyed carry check before it passed unchanged. */
+  resumeRefusedSnapshot: { carried: 20, groupedCalls: 0 },
   /** I2: the KEPT row in K whose `durationMs` R2 must read back from `mutant-carried`. */
   sentinel: { code: "M0004", durationMs: 987654 },
   /** K's rows: 2 killed, 5 survived, 2 no-coverage, carried by key. R855: the same nine mutants,
-   *  their codes moved (old M0005-M0008 are M0007-M0010, old M0016-M0017 are M0018-M0019). */
-  kept: ["M0001", "M0002", "M0004", "M0007", "M0008", "M0009", "M0010", "M0018", "M0019"],
+   *  their codes moved (R855: old M0005-M0008 became M0007-M0010, old M0016-M0017 became M0018-M0019;
+   *  PR-209's four added rows moved them again: M0007-M0010 are now M0008-M0011, M0018-M0019 are now
+   *  M0021 and M0023). */
+  kept: ["M0001", "M0002", "M0004", "M0008", "M0009", "M0010", "M0011", "M0021", "M0023"],
   /** K's error row (Q3): non-carryable, so re-executed. */
   keptAsError: ["M0003"],
   /** K2 leaves out only this one (the swap-additive mutant, was M0019). */
-  r3Rerun: ["M0022"],
+  r3Rerun: ["M0026"],
 } as const;
 
 /**
@@ -310,10 +359,12 @@ const TABLES = ["non-executable-sites-dropped", "not-instrumentable-files-skippe
 // Test/.alpackages apps whose build number exceeds 65535 (dependency-report-source-unavailable).
 // R739: plus resource-rebase-collision (three control-add-ins' Script/Start.js and Script/events.js rebase onto
 // one path, issue #20; the line became an event).
+// PR-209 amendment 7: D1 and D1c run `--profile slim`, which flags itself (operator-narrowed-run).
 const CDO_D = [
   "app-json-backslash-path",
   "dependency-report-source-unavailable",
   "only-narrowed-run",
+  "operator-narrowed-run",
   "resource-rebase-collision",
   "tests-only-narrowed-baseline",
 ];
@@ -364,10 +415,11 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/N1": [],
   "al-runner-v3/x-s1": [],
   // R855: Layout Beta now has 8 guards against the leg's budget of 7 (pre-committed, 2026-11-07-r855-operator-batch-precommitment.md).
-  "al-runner-v3/L1": ["oversized-batch"],
-  "al-runner-v3/MO": [],
+  // PR-209 amendment 4 (§0e items 1 and 3): L1, MO and MOE run `--profile slim`, which flags itself.
+  "al-runner-v3/L1": ["operator-narrowed-run", "oversized-batch"],
+  "al-runner-v3/MO": ["operator-narrowed-run"],
   // R918: MO and WR on serve-entries, expected to warn exactly as their one-shot legs do.
-  "al-runner-v3/MOE": [],
+  "al-runner-v3/MOE": ["operator-narrowed-run"],
   "al-runner-v3/WRE": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
   // R948 amendment 3 (master bf8a68cf): K builds through cli.ts, which turns the memory guard on.
   "al-runner-v3/K": ["al-runner-v3-memory-guard"],

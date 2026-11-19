@@ -31,9 +31,12 @@ if (dirs.length === 0) {
   console.error("usage: bun scripts/census-branch-conditions.ts <project-dir> [...]");
   process.exit(2);
 }
-// R868: the DEFAULT operators. An opt-in operator (condition-true mutates every `if` condition) would
-// count every condition as covered and hide the gap this census measures.
-const operators = [...tier1Operators, ...tier2Operators].filter((op) => op.optIn !== true);
+// R868: the operators of the OLD default set. `condition-true` mutates every `if` condition, so it
+// would count every condition as covered and hide the gap this census measures. PR-209 made it a
+// default operator, so it is left out by name, not by `optIn`.
+const operators = [...tier1Operators, ...tier2Operators].filter(
+  (op) => op.optIn !== true && op.name !== "lethal.condition-true",
+);
 
 function walk(n: ALSyntaxNode, v: (x: ALSyntaxNode) => void): void {
   v(n);

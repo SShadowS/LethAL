@@ -18,7 +18,7 @@ import {
   resolveFileLine,
   unmappedCoverageReason,
 } from "../src/line-map";
-import { generateMutationSet, operatorTiers } from "../src/orchestrator";
+import { SLIM_OPTIONS, generateMutationSet, operatorTiers } from "../src/orchestrator";
 
 /**
  * R58's crux. BC's fenced coverage reports a LINE, and this maps it to the procedure that owns it.
@@ -499,7 +499,8 @@ describe("GH-09: measured coverage rows over the namespaced sandbox-app", () => 
 
   test("GH-09: the measured namespaced rows resolve under base 1 (OverBudgetDetected to IsOverBudget, ClampPercentRuns never to IsOverBudget)", async () => {
     const repo = resolve(import.meta.dir, "../../..");
-    const set = await generateMutationSet(join(repo, "fixtures/sandbox-app"));
+    // PR-209: the mutant codes this test reads are the OLD default set's (`--profile slim`).
+    const set = await generateMutationSet(join(repo, "fixtures/sandbox-app"), { ...SLIM_OPTIONS });
     const dir = await mkdtemp(join(tmpdir(), "lethal-gh09-"));
     try {
       // The selector ids the live run used; the guard layout does not depend on the artifact id.

@@ -87,6 +87,11 @@ export interface V3BuildPin {
   };
   readonly xb: XbPin;
   /**
+   * PR-209 amendment 10: a FROZEN pin keeps readings as they were gated; only a manifest row's
+   * `readingsFrom` reaches it (`FROZEN_V3_PINS`), never `findV3Pin` by build. Not part of the digest.
+   */
+  readonly frozen?: { readonly reason: string };
+  /**
    * R782: #5798 is fixed upstream on this build: a serve test row carries `codeunit` and `method`
    * beside `name`, also for a dotted method. Only a pin with this flag lets serve-entries read the
    * row's own fields (`serveRowFieldsFor`); every other build keeps the name-only parse.
@@ -664,8 +669,10 @@ const READINGS_8078BCF49: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = 
   legT: {
     rows: T_ROWS_8078BCF49,
     // R975 (R-965 amendment 2): 6 Data Main OnValidate mutants survived -> no-coverage by line attribution.
-    counts: { killed: 326, survived: 67, noCoverage: 25 },
-    total: 418,
+    // PR-209 (amendment 6 item 4): +32 condition-true/blank-argument rows, their BC twins' 20 killed, 10 survived, 2
+    // no-coverage; printed by the confirm run (/coord/handoff/PR-209/v3rec2/confirm-wr-t.log). Was 326 / 67 / 25 over 418.
+    counts: { killed: 346, survived: 77, noCoverage: 27 },
+    total: 450,
     refusedTests: 0,
   },
   xb: { exitCode: 3, passed: 0, notRun: 0 },
@@ -809,6 +816,46 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
   },
 ];
 
+/** The readings before PR-209 moved leg T's counts: master's own, byte for byte (digest e8ce7f40...). */
+const READINGS_PRE_PR209: Omit<V3BuildPin, "id" | "version" | "binarySha256"> = {
+  ...READINGS_8078BCF49,
+  legT: {
+    ...READINGS_8078BCF49.legT,
+    counts: { killed: 326, survived: 67, noCoverage: 25 },
+    total: 418,
+  },
+};
+
+const frozenReason = (why: string): { readonly reason: string } => ({
+  reason: `Frozen by PR-209 amendment 10 (owner ruling q-20261119T154107-12f69ed1) with the readings it was gated with, before PR-209 moved leg T's counts: ${why}. Per-row detail: docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md section 0k.`,
+});
+
+/**
+ * PR-209 amendment 10: pins kept only for the gate-manifest rows that cannot move to the new readings.
+ * Reachable ONLY through a manifest row's `readingsFrom` (`handV3Pin`); never in `V3_BUILD_PINS`, so
+ * `findV3Pin` never answers a build with one. A row moves to live readings by a deliberate edit with a pass.
+ */
+export const FROZEN_V3_PINS: readonly V3BuildPin[] = [
+  {
+    id: "edge-d72d3197d-frozen-pre-pr209",
+    version: "al-runner 3.0.0-alpha.13+edge.20261105 (d72d3197d)",
+    binarySha256: "3e19dbec34826e2d057304d9e85859c04e87d69a5846bb738fe9567a00c22be4",
+    ...READINGS_PRE_PR209,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+    frozen: frozenReason(
+      "edge-42af5d384 fails leg C (serve-keep-reasons, R1000); the other rows were not re-gated",
+    ),
+  },
+  {
+    id: "alpha.12-d4bc8d3a5-frozen-pre-pr209",
+    version: "al-runner 3.0.0-alpha.12 (d4bc8d3a5)",
+    binarySha256: "c406b57f178066ebbca3a66d7f6436730b2a1956292a7ccb6120479a93ec12cf",
+    ...READINGS_PRE_PR209,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+    frozen: frozenReason("alpha.12 fails leg C (refuses strictOrder, PR-114a)"),
+  },
+];
+
 /**
  * R814: one gated build. `readingsFrom` names a hand pin in `V3_BUILD_PINS`, never another entry, and
  * the strict parse refuses any other key: an entry cannot carry a reading, so it cannot move a verdict.
@@ -857,7 +904,7 @@ const GATED_BUILD_KEYS = new Set([
 
 /** A digest of what a pin judges and changes, so an edit of a root pin cannot pass unseen. */
 export function v3ReadingsDigest(pin: V3BuildPin): string {
-  const { id: _id, version: _version, binarySha256: _sha, ...readings } = pin;
+  const { id: _id, version: _version, binarySha256: _sha, frozen: _frozen, ...readings } = pin;
   const text = JSON.stringify(readings, (_k, v: unknown) =>
     v instanceof RegExp || typeof v === "function" ? String(v) : v,
   );
@@ -935,13 +982,18 @@ export function parseGatedBuilds(
 /** Parsed on first use, so a bad row refuses on the v3 path, never at every importer's load. */
 let gatedBuildsMemo: readonly GatedBuildEntry[] | undefined;
 export function gatedBuilds(): readonly GatedBuildEntry[] {
-  gatedBuildsMemo ??= parseGatedBuilds(RAW_GATED_BUILDS, new Set(V3_BUILD_PINS.map((p) => p.id)));
+  gatedBuildsMemo ??= parseGatedBuilds(RAW_GATED_BUILDS, new Set(allHandPinIds()));
   return gatedBuildsMemo;
 }
 
-/** The hand pin with this id, or undefined. */
+/** Every hand pin id a manifest row may name: the live pins and the frozen ones. */
+export function allHandPinIds(): string[] {
+  return [...V3_BUILD_PINS, ...FROZEN_V3_PINS].map((p) => p.id);
+}
+
+/** The hand pin with this id (live or frozen), or undefined. */
 export function handV3Pin(id: string): V3BuildPin | undefined {
-  return V3_BUILD_PINS.find((p) => p.id === id);
+  return [...V3_BUILD_PINS, ...FROZEN_V3_PINS].find((p) => p.id === id);
 }
 
 /** R814: this build's entry in the committed gated builds (version line AND sha256). */
@@ -972,9 +1024,14 @@ const adoptedPins = new Map<string, string>();
  * behind master still reads a build its checkout has no entry for. An unknown id throws by name.
  */
 export function adoptV3Pin(version: string, binarySha256: string, from: string): void {
-  if (handV3Pin(from) === undefined)
+  const root = handV3Pin(from);
+  if (root === undefined)
     throw new Error(
       `al-runner-v3-unknown-readings: "${from}" is no pin in this checkout; merge master`,
+    );
+  if (root.frozen !== undefined)
+    throw new Error(
+      `al-runner-v3-unknown-readings: "${from}" is a frozen pin (PR-209 amendment 10); a live run never judges by it`,
     );
   adoptedPins.set(`${version}|${binarySha256}`, from);
 }

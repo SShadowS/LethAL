@@ -223,8 +223,8 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
       compare: compareMutants(before, now, { sameScheme: true }),
       own: before,
       now,
-      counts: { killed: 298, survived: 54, noCoverage: 66 },
-      total: 418,
+      counts: { killed: 318, survived: 64, noCoverage: 68 },
+      total: 450,
       unsupportedTests: 3,
       sleepIndex: { target: 0, test: 0 },
       knownRefusal: undefined,
@@ -233,20 +233,20 @@ describe("R647 r10 (a): judgeLegT classifies, compares and prints first, then ju
     });
   const heldLine =
     "T: held: M0157 K1: survived/-/- -> error/runner-refused/- (a named refusal: v3 notRun or LethAL §6; not BC's verdict; re-pre-commit)";
-  // R975: the own baseline's counts are 298 / 54 / 66 (`LEG_T_OWN_COUNTS`; 298 / 60 / 60 before).
-  test("T-a1: held rows, the compare on that key only, counts 298 / 53 / 66: held (no count check)", () => {
-    const j = judge(heldNow, { counts: { killed: 298, survived: 53, noCoverage: 66 } });
+  // PR-209: the own baseline's counts are 318 / 64 / 68 over 450 (`LEG_T_OWN_COUNTS`; R975's 298 / 54 / 66 over 418 before).
+  test("T-a1: held rows, the compare on that key only, counts 318 / 63 / 68: held (no count check)", () => {
+    const j = judge(heldNow, { counts: { killed: 318, survived: 63, noCoverage: 68 } });
     expect(j.outcome).toBe("held");
     expect(j.lines).toEqual([heldLine]);
   });
-  test("T-a2: pass rows, empty compare, counts 298 / 53 / 66: gate-fail", () => {
-    const j = judge(own, { counts: { killed: 298, survived: 53, noCoverage: 66 } });
+  test("T-a2: pass rows, empty compare, counts 318 / 63 / 68: gate-fail", () => {
+    const j = judge(own, { counts: { killed: 318, survived: 63, noCoverage: 68 } });
     expect(j.outcome).toBe("gate-fail");
-    expect(j.failure).toMatch(/298 \/ 53 \/ 66.*pre-committed 298 \/ 54 \/ 66 over 418/);
+    expect(j.failure).toMatch(/318 \/ 63 \/ 68.*pre-committed 318 \/ 64 \/ 68 over 450/);
   });
-  test("T-a3: pass rows, empty compare, counts 298 / 54 / 66 over 418: pass", () => {
+  test("T-a3: pass rows, empty compare, counts 318 / 64 / 68 over 450: pass", () => {
     expect(judge(own).outcome).toBe("pass");
-    expect(judge(own, { total: 417 }).outcome).toBe("gate-fail");
+    expect(judge(own, { total: 449 }).outcome).toBe("gate-fail");
   });
   test("T-a5: held rows with Sleep index 1 + 0 are gate-fail; with 0 + 0 held", () => {
     expect(judge(heldNow, { sleepIndex: { target: 1, test: 0 } }).outcome).toBe("gate-fail");

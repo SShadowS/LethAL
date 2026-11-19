@@ -11,9 +11,11 @@ import { removeRunScratchAfterAll } from "./helpers/scratch";
 removeRunScratchAfterAll();
 
 /**
- * R868. `lethal.condition-true` (#36) and `lethal.blank-argument` (#34) are OPT-IN, Tier 1.
- *   - LEAK: a default run walks neither. Its specs, its hang counts and its `numberingDigest` equal
- *     those of a run that names only the default operators. A leak is a changed default run.
+ * R868, PR-209. `lethal.condition-true` (#36) and `lethal.blank-argument` (#34) are Tier 1 and, since
+ * PR-209, DEFAULT operators (R868 made them opt-in; the old default set is now `--profile slim`).
+ *   - DEFAULT: a default run holds both operators' sites, with R868's hang rules applied.
+ *   - SLIM: `profile: "slim"` does not walk them: its specs and hang counts are the default run's
+ *     without the two, and its `numberingDigest` differs from the default's.
  *   - ON alone, each adds specs of its own name and removes nothing.
  *   - BOTH on, with `flip-boolean-literal`: no dedupe clash. The prototype threw in `dedupeSpecs`
  *     because `blank-argument` was asked about every node, a boolean literal included.
@@ -89,45 +91,51 @@ const without = (set: SetResult, drop: string): string[] =>
   specs(set).filter((s) => !s.startsWith(`${drop}|`));
 const ofName = (set: SetResult, keep: string): string[] => specs(set, keep);
 
-describe("R868: the two opt-in Tier 1 operators", () => {
+describe("R868, PR-209: the two Tier 1 operators that are default operators", () => {
   test("operatorTiers knows both as Tier 1", () => {
     expect(operatorTiers.get(COND)).toBe(1);
     expect(operatorTiers.get(BLANK)).toBe(1);
   });
 
-  test("admittedOperatorNames: exclusion never admits them, naming one does", () => {
+  test("admittedOperatorNames: exclusion admits them now; swap-workdate-today stays opt-in", () => {
     const registered = [...operatorTiers.keys()];
     const excluded = admittedOperatorNames(
       { excludeOperators: ["lethal.empty-block"] },
       registered,
     );
-    expect(excluded?.has(COND)).toBe(false);
-    expect(excluded?.has(BLANK)).toBe(false);
+    expect(excluded?.has(COND)).toBe(true);
+    expect(excluded?.has(BLANK)).toBe(true);
+    expect(excluded?.has("lethal.swap-workdate-today")).toBe(false);
     expect([
       ...(admittedOperatorNames({ operators: ["condition-true"] }, registered) ?? []),
     ]).toEqual([COND]);
   });
 
   test(
-    "LEAK: a default run walks neither operator: specs, hang counts and numberingDigest equal a run that excludes them",
+    "DEFAULT: a default run holds both operators' sites; slim does not walk them",
     async () => {
       await withProject(async (dir) => {
         const plain = await generateMutationSet(dir);
-        const excluded = await generateMutationSet(dir, { excludeOperators: [COND, BLANK] });
-        // The project holds sites for both operators (the ON tests below), and the default run
-        // holds none of them.
-        expect(specs(plain).length).toBeGreaterThan(0);
-        expect(specs(plain, COND)).toEqual([]);
-        expect(specs(plain, BLANK)).toEqual([]);
-        expect(specs(plain)).toEqual(specs(excluded));
-        expect(plain.hangRefused).toEqual(excluded.hangRefused);
-        expect(digest(plain)).toBe(digest(excluded));
-        // Naming a default operator only still leaves the opt-in ones out.
+        const slim = await generateMutationSet(dir, {
+          excludeOperators: [COND, BLANK],
+          profile: "slim",
+        });
+        // The default run holds the sites the ON tests below name.
+        expect(specs(plain, COND).map((s) => s.split("|")[2])).toEqual(["A->true", "B->true"]);
+        expect(specs(plain, BLANK).length).toBe(3);
+        // Slim is the default run without the two: the old default set.
+        expect(specs(slim, COND)).toEqual([]);
+        expect(specs(slim, BLANK)).toEqual([]);
+        expect(specs(slim)).toEqual(
+          specs(plain).filter((s) => !s.startsWith(`${COND}|`) && !s.startsWith(`${BLANK}|`)),
+        );
+        // The loop shape R868 refuses is counted in the default run and never reached by slim.
+        const total = (s: SetResult) => s.hangRefused.reduce((n, f) => n + f.sites, 0);
+        expect(total(plain)).toBe(total(slim) + 1);
+        expect(digest(plain)).not.toBe(digest(slim));
+        // Naming a default operator only runs just that one.
         const flip = await generateMutationSet(dir, { operators: [FLIP] });
         expect(specs(flip)).toEqual(ofName(plain, FLIP));
-        expect(flip.hangRefused.some((f) => JSON.stringify(f).includes("condition-true"))).toBe(
-          false,
-        );
       });
     },
     ownTimeout(60_000),
@@ -227,9 +235,8 @@ describe("R868: the two opt-in Tier 1 operators", () => {
         const names = [...new Set(specs(defaults).map((s) => s.split("|")[0] as string))];
         const all = await generateMutationSet(dir, { operators: [...names, COND, BLANK] });
         expect(specs(all, COND).length).toBe(specs(alone, COND).length);
-        expect(
-          specs(all).filter((s) => !s.startsWith(`${COND}|`) && !s.startsWith(`${BLANK}|`)),
-        ).toEqual(specs(defaults));
+        // The default run already holds both operators, so naming everything changes nothing.
+        expect(specs(all)).toEqual(specs(defaults));
       });
     },
     ownTimeout(60_000),

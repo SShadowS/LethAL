@@ -3,8 +3,10 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
+import { LAYOUT_SESSION_OPTIONS } from "../itest/layout-fixture";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
+  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -72,7 +74,8 @@ interface Built {
 
 /** Instruments both batches once, as `runSession` does, into a scratch directory. */
 async function build(root: string): Promise<Built> {
-  const set = await generateMutationSet(PROJECT);
+  // PR-209 (amendment 3): the whole fixture is measured on slim, the set its table was pre-committed on.
+  const set = await generateMutationSet(PROJECT, { ...SLIM_OPTIONS });
   const { files } = set;
   const identityOrdinals = identityOrdinalsOf(set);
   const batches = planArtifacts(files, { maxGuardsPerBatch: 7 });
@@ -110,6 +113,14 @@ async function build(root: string): Promise<Built> {
   }
   return { batchPaths: batches.map((b) => b.map((f) => f.path)), rows, dirs };
 }
+
+describe("PR-209: leg L1's session options", () => {
+  it("select --profile slim, so the default set's extra guard cannot break the span premise", () => {
+    expect(LAYOUT_SESSION_OPTIONS.profile).toBe("slim");
+    expect(LAYOUT_SESSION_OPTIONS.excludeOperators).toEqual(SLIM_OPTIONS.excludeOperators);
+    expect(LAYOUT_SESSION_OPTIONS.maxGuardsPerBatch).toBe(7);
+  });
+});
 
 describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member boundary", () => {
   let root = "";

@@ -12,6 +12,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import {
+  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -58,7 +59,10 @@ export const BARE_AND = `codeunit 50017 "P12 Bare And"
 
 async function capture(projectDir: string, symbols: readonly string[]) {
   const warnings: { code: string; message: string }[] = [];
+  // PR-209: the expected captures are R214's pre-commitment and hold the OLD default set, which is
+  // `--profile slim`. What they pin is which sites a build keeps or compiles out, not the operators.
   const set = await generateMutationSet(projectDir, {
+    ...SLIM_OPTIONS,
     preprocessorSymbols: symbols,
     emit: (e) => {
       if (e.type === "warning") warnings.push({ code: e.code, message: e.message });

@@ -122,6 +122,8 @@ const PREDICTED_NO_COVERAGE_KEYS = [
   "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
   // R855: SandboxPricing line 7 `delete-additive-right`, no-coverage; same hash as swap-additive.
   "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.delete-additive-right|1",
+  // PR-209 amendment 8: condition-true is default-on, no-coverage like its neighbours (bcdev.baseline.json).
+  "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.condition-true|1",
 ];
 const OVER_BUDGET_GAP_ID = OVER_BUDGET_GAP.gapId;
 /** A well-formed gap id that no block of sandbox-app has (step 5c asserts that first). */
@@ -350,7 +352,8 @@ async function main(): Promise<void> {
       assert.equal(g.artifactId, lastArtifact.artifactId, `step 1: ${p.name} artifactId`);
       memberTotal += g.members.length;
     }
-    assert.equal(memberTotal, 14, "step 1: 14 gap members in total");
+    // PR-209 amendment 8: 14 -> 17 (the three default-on survivors join CLAMP, APPLY and LOG_BODY).
+    assert.equal(memberTotal, 17, "step 1: 17 gap members in total");
     assert.equal(memberTotal, report.counts.survived, "step 1: every survivor is in a gap");
     assert.equal(
       blocks.length,
@@ -390,7 +393,7 @@ async function main(): Promise<void> {
       "step 1: the then-block gap names its artifact",
     );
     console.log(
-      `step 1 PASS (C02-09): explain lists 4 gaps (${gaps.map((g) => `${g.gapId}:${g.members.length}`).join(", ")}), 14 members, all unobservedBlock, all on artifact ${lastArtifact.artifactId}; 1 no-coverage block of 5; IsOverBudget ${OVER_BUDGET_GAP_ID} in neither`,
+      `step 1 PASS (C02-09): explain lists 4 gaps (${gaps.map((g) => `${g.gapId}:${g.members.length}`).join(", ")}), 17 members, all unobservedBlock, all on artifact ${lastArtifact.artifactId}; 1 no-coverage block of 6; IsOverBudget ${OVER_BUDGET_GAP_ID} in neither`,
     );
     console.log(
       `step 1 PASS: runSession ${report.counts.killed} killed / ${report.counts.survived} survived / ${report.counts.noCoverage} no-coverage, per mutant equal to bcdev.baseline.json; artifact ${lastArtifact.artifactId} (batch ${lastArtifact.batchIndex}), totalMs ${fullRunMs}; ClampPercent ${clampId}, LogAudit ${logAuditId}, IsOverBudget ${killId}`,

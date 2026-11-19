@@ -14,9 +14,9 @@
  *   1. setup: config, control and BC versions, the temp config;
  *   2. the scratch suite: the committed 70 tests plus five no-op tests, app.json unchanged;
  *   3. source run A, committed suite, fresh store, per verdict equal to tables.baseline.json;
- *   4. V1, V2, V3: `verifyFromCli` over all 73 survivors of A with the scratch suite;
+ *   4. V1, V2, V3: `verifyFromCli` over all 83 survivors of A with the scratch suite;
  *   5. scaling points: the first k survivors, k in SCALING_K (never gated);
- *   6. one library `runVerify` over the 73, with its event timeline (not lethal verify's time);
+ *   6. one library `runVerify` over the 83, with its event timeline (not lethal verify's time);
  *   7. B1, B2: fresh full runs with the scratch suite, the denominators;
  *   8. print and write every number;
  *   9. in a finally once 3 began: restore the committed tests app, checked by a fresh read-back;
@@ -96,8 +96,9 @@ const SELECTOR_IDS = { selectorId: 79399, controlId: 79398, tableId: 79397 };
 const BASE_APPLICATION_ID = "437dbf0e-84ff-417a-965d-ed2bb9650972";
 
 /** R254 moved this from 68 to 70 (the reportextension arm's two equivalent survivors). R855 moves it
- *  to 73 (PREDICTED: DataMain lines 24 and 63 and DataValidator line 15, `delete-additive-*`). */
-const SURVIVORS = 73;
+ *  to 73 (PREDICTED: DataMain lines 24 and 63 and DataValidator line 15, `delete-additive-*`). PR-209 amendment 8
+ *  moves it to 83 (tables.baseline.json, recorded on bc2: 6 condition-true and 4 blank-argument survivors added). */
+const SURVIVORS = 83;
 /** One `[Test]` string in DataTests.Codeunit.al is inside R79's comment, and discovery (correctly)
  *  does not count it. R254 added two tests (68 -> 70, measured offline). R-463 added
  *  `BandCountsFromLow` (70 -> 71, measured offline), so the scratch suite has 76. */

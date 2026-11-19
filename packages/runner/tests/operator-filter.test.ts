@@ -339,6 +339,58 @@ describe("R832: --exclude-operator", () => {
   });
 });
 
+describe("PR-209: --profile slim is derived from the profile alone", () => {
+  const SLIM_TWO = ["lethal.condition-true", "lethal.blank-argument"];
+  const slimWarnings = async (
+    dir: string,
+    extra: { excludeOperators?: string[] },
+  ): Promise<string[]> => {
+    const seen: string[] = [];
+    await generateMutationSet(dir, {
+      profile: "slim",
+      ...extra,
+      emit: (e) => {
+        if (e.type === "warning" && e.code === "operator-narrowed-run") seen.push(e.message);
+      },
+    });
+    return seen;
+  };
+
+  test("the profile alone admits a narrowed set and warns, with no excludeOperators given", async () => {
+    const registered = [...operatorTiers.keys()];
+    const admitted = admittedOperatorNames({ profile: "slim" }, registered);
+    expect(admitted).toBeDefined();
+    for (const n of SLIM_TWO) expect(admitted?.has(n)).toBe(false);
+    await withProject(FIXTURE, async (dir) => {
+      const seen = await slimWarnings(dir, {});
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toContain("--profile slim left out");
+    });
+  });
+
+  test("an unprefixed --exclude-operator naming only slim's own two is not 'left out more'", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const seen = await slimWarnings(dir, { excludeOperators: ["condition-true"] });
+      expect(seen[0]).toContain("--profile slim left out");
+      expect(seen[0]).not.toContain("left out more");
+    });
+  });
+
+  test("exclusions beyond slim's own that leave nothing are still refused", async () => {
+    await withProject(FIXTURE, async (dir) => {
+      const left = [
+        ...new Set(operatorNamesOf((await generateMutationSet(dir, { profile: "slim" })).files)),
+      ];
+      expect(left.length).toBeGreaterThan(0);
+      await expect(
+        generateMutationSet(dir, { profile: "slim", excludeOperators: left }),
+      ).rejects.toThrow(
+        "no deployable mutation site is left in this scope with --exclude-operator",
+      );
+    });
+  });
+});
+
 describe("generateMutationSet — --operator cannot resurrect a mutant dedup deletes", () => {
   test("void-method-call yields ONLY the site no Tier-2 operator claims", async () => {
     await withProject(FIXTURE, async (projectDir) => {
@@ -698,15 +750,10 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     );
 
     expect(scoped.operators?.names).toEqual(
-      // R856: an opt-in operator is not admitted by exclusion, so it is not in the list.
+      // R856: an opt-in operator is not admitted by exclusion, so it is not in the list. Since
+      // PR-209 only swap-workdate-today is opt-in: condition-true and blank-argument are admitted.
       [...operatorTiers.keys()]
-        .filter(
-          (n) =>
-            n !== "lethal.empty-block" &&
-            n !== "lethal.swap-workdate-today" &&
-            n !== "lethal.condition-true" &&
-            n !== "lethal.blank-argument",
-        )
+        .filter((n) => n !== "lethal.empty-block" && n !== "lethal.swap-workdate-today")
         .sort(),
     );
     expect(scoped.operators?.excludedSiteCount).toBe(
@@ -782,6 +829,52 @@ test.skipIf(process.platform === "win32")(
         }),
       ).rejects.toBe(stop);
       expect(captured).toEqual(["empty-block"]);
+    });
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "PR-209: `lethal run --profile slim` hands the profile and its two exclusions to runSession",
+  async () => {
+    await withProject(FIXTURE, async (projectDir) => {
+      const configPath = join(projectDir, "lethal.config.json");
+      await Bun.write(configPath, "{}");
+      const parsed = parseCliConfig([
+        "run",
+        "--project",
+        projectDir,
+        "--tests",
+        join(projectDir, "..", "tests"),
+        "--backend",
+        "al-runner-v3",
+        "--config",
+        configPath,
+        "--db",
+        ":memory:",
+        "--profile",
+        "slim",
+      ]);
+      if (parsed.mode !== "run") throw new Error("mode drift");
+      let captured: { profile?: string; excluded?: readonly string[] } | undefined;
+      const stop = new Error("captured");
+      await expect(
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as ExecutionBackend,
+          runSession: async (cfg) => {
+            captured = {
+              ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
+              ...(cfg.excludeOperators !== undefined ? { excluded: cfg.excludeOperators } : {}),
+            };
+            throw stop;
+          },
+        }),
+      ).rejects.toBe(stop);
+      expect(captured?.profile).toBe("slim");
+      expect([...(captured?.excluded ?? [])].sort()).toEqual([
+        "lethal.blank-argument",
+        "lethal.condition-true",
+      ]);
     });
   },
 );

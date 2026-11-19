@@ -12,14 +12,14 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 {
   "gate": "itest:bcdev",
   "baselines": {
-    "bcdev.baseline.json": { "killed": 3, "survived": 14, "no-coverage": 5 }
+    "bcdev.baseline.json": { "killed": 3, "survived": 17, "no-coverage": 6 }
   },
   "constants": {
-    "BCDEV_FIGURES.totalMutantSites": 22,
+    "BCDEV_FIGURES.totalMutantSites": 26,
     "BCDEV_FIGURES.killed": 3,
-    "BCDEV_FIGURES.survived": 14,
-    "BCDEV_FIGURES.noCoverage": 5,
-    "BCDEV_FIGURES.groupedCalls": 17,
+    "BCDEV_FIGURES.survived": 17,
+    "BCDEV_FIGURES.noCoverage": 6,
+    "BCDEV_FIGURES.groupedCalls": 20,
     "BCDEV_FIGURES.warmKills": 0,
     "BCDEV_FIGURES.assertionScreenDiscrimination": "vacuous"
   },
@@ -32,13 +32,14 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 
 What the figures mean:
 
-- 3 / 14 / 5 over 22 is killed / survived / no-coverage. R855 added three mutants, as
-  pre-committed (`docs/superpowers/specs/2026-11-07-r855-predictions.md`): two survivors at
-  `SandboxLogic` line 12 and one no-coverage at `SandboxPricing` line 7. Recorded on bc3, 2026-11-07.
-- `groupedCalls` is 17 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
-  plus 14 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
+- 3 / 17 / 6 over 26 is killed / survived / no-coverage. PR-209 (condition-true and blank-argument default-on) added
+  four mutants, as pre-committed (`docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md` §3): M0005, M0014 and
+  M0016 survived, M0022 no-coverage. Recorded on bc1, 2026-11-19. Before that the set had 22 mutants; R855 added three
+  mutants (`docs/superpowers/specs/2026-11-07-r855-predictions.md`).
+- `groupedCalls` is 20 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
+  plus 17 survived). If the counter stopped being wired, it would read 0 and the gate would fail.
 - Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule),
-  and must fail again to stay killed. `groupedCalls` stays 17 because all 3 kills are at position
+  and must fail again to stay killed. `groupedCalls` stays 20 because all 3 kills are at position
   1, so each re-run is one single `RunMutant` call, not a group call. Both runs check that every
   kill carries `killReproduced` and has exactly 2 mutated rows for its killing test in that run
   (the fixture's store is persistent, so the check reads only the run it made).

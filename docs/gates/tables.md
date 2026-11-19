@@ -12,20 +12,20 @@ mutant equal to its baseline, with the W1 company (R-583).
 {
   "gate": "itest:tables",
   "baselines": {
-    "tables.baseline.json": { "killed": 322, "survived": 73, "no-coverage": 23 }
+    "tables.baseline.json": { "killed": 342, "survived": 83, "no-coverage": 25 }
   },
   "constants": {
-    "TABLES_FIGURES.totalMutantSites": 440,
-    "TABLES_FIGURES.killed": 322,
-    "TABLES_FIGURES.survived": 73,
-    "TABLES_FIGURES.noCoverage": 23,
+    "TABLES_FIGURES.totalMutantSites": 472,
+    "TABLES_FIGURES.killed": 342,
+    "TABLES_FIGURES.survived": 83,
+    "TABLES_FIGURES.noCoverage": 25,
     "TABLES_FIGURES.untargetedTriggerCount": 0,
-    "TABLES_FIGURES.groupedCalls": 425,
-    "TABLES_FIGURES.warmKills": 15,
+    "TABLES_FIGURES.groupedCalls": 459,
+    "TABLES_FIGURES.warmKills": 17,
     "TABLES_FIGURES.killPositions": [
-      { "mutantCode": "M0183", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
-      { "mutantCode": "M0188", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
-      { "mutantCode": "M0179", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
+      { "mutantCode": "M0192", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
+      { "mutantCode": "M0197", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
+      { "mutantCode": "M0187", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
       { "mutantCode": "M0005", "killingTest": "BandReportSumsBands", "killPosition": 3 },
       { "mutantCode": "M0009", "killingTest": "BandReportSumsBands", "killPosition": 3 }
     ],
@@ -33,26 +33,27 @@ mutant equal to its baseline, with the W1 company (R-583).
     "TABLES_FIGURES.assertionScreenDiscrimination": "partial",
     "TABLES_FIGURES.testPageRefused": ["Data Tests.PageActionComputesNonZero"],
     "TABLES_FIGURES.declarativeSites": { "siteCount": 1, "fileCount": 1, "file": "src/DataMainList.Page.al", "kinds": "page_declaration" },
-    "TABLES_FIGURES.notInstrumented": { "fileCount": 1, "siteCount": 5, "files": ["src/DataScopeQuery.Query.al"] }
+    "TABLES_FIGURES.notInstrumented": { "fileCount": 1, "siteCount": 6, "files": ["src/DataScopeQuery.Query.al"] }
   }
 }
 ```
 
 What the figures mean:
 
-- 322 / 73 / 23 over 418 is killed / survived / no-coverage, over the deployed mutants. The fixture
-  has 440 mutant sites before precedence removes some. R855 added 12, as pre-committed in
-  `docs/superpowers/specs/2026-11-07-r855-predictions.md`. Recorded on bc3, 2026-11-07.
+- 342 / 83 / 25 over 450 is killed / survived / no-coverage, over the deployed mutants. The fixture
+  has 472 mutant sites before precedence removes some. PR-209 (condition-true and blank-argument default-on,
+  `docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md`) added 32 rows (23 condition-true, 9 blank-argument);
+  every older row is unchanged. Recorded on bc2, 2026-11-19.
 - `untargetedTriggerCount` is 0: no trigger mutant had to run every test.
-- `groupedCalls` is 425 (R198, R206, R582): 322 + 73 scored mutants, plus 15 warm-kill replays,
-  plus 15 warm-kill re-runs. This is the check that the grouped covering loop is really used. The
-  two 15s are the pre-R855 figures: the 8 added kills may add warm kills, which only a live run shows.
+- `groupedCalls` is 459 (R198, R206, R582): 342 + 83 scored mutants, plus 17 warm-kill replays,
+  plus 17 warm-kill re-runs. This is the check that the grouped covering loop is really used. Recorded on bc2 for
+  PR-209 (condition-true and blank-argument default-on).
 - Every kill is re-run once under the mutant after its confirm passed (R577's rule, on for bcdev
-  since R582), and must fail again to stay killed. The kills at position 1 (299 before R855) re-run as one
-  single `RunMutant` call each, which is not a group call. The 15 warm kills re-run their call's
+  since R582), and must fail again to stay killed. The kills at position 1 (325) re-run as one
+  single `RunMutant` call each, which is not a group call. The 17 warm kills re-run their call's
   prefix in one `RunMutantMany`. The gate checks that every kill carries `killReproduced` and has
   exactly 2 mutated rows for its killing test in that run.
-- `warmKills` is 15: kills at group positions 2 to 5. This fixture keeps no session state, so a
+- `warmKills` is 17: kills at group positions 2 to 5. This fixture keeps no session state, so a
   warm kill here only says the killer was not first in the order. Five named mutants pin the
   positions. Their ids moved with R254, R-463 and R855, but they are the same mutants.
 - Exactly one test is expected to fail in the baseline run: `Data Tests.PageActionComputesNonZero`.
