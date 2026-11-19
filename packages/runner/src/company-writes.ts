@@ -4,7 +4,10 @@
  *
  * A method writes a company when `Insert`, `Delete`, `DeleteAll` or `Rename` is called on a variable declared
  * `Record Company` / `Record 2000000006` (not `temporary`; a namespace-qualified name counts), or on a RecordRef
- * opened on it in the same procedure (`Open(Database::Company)` or 2000000006): in its own body (`direct`), or in ONE test-app procedure it calls
+ * opened on it in the same procedure (`Open(Database::Company)` or 2000000006). Known over-matches, all on the safe
+ * side (a test is left out, never wrongly kept in): "same procedure" ignores order, so a RecordRef reopened on another
+ * table after `Open(Database::Company)` still counts; `Open(Database::Company, true)` (a temporary RecordRef) counts;
+ * any namespace qualifier on `Company` matches. The write is in its own body (`direct`), or in ONE test-app procedure it calls
  * (`via <procedure>`): a bare call in the same object, or a call on a `Codeunit "X"` variable whose codeunit is in
  * the test app. A write two calls away is not listed (the stated limit). `commits` says the method or that
  * procedure calls `Commit()`.

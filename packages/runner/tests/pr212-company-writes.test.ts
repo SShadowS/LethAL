@@ -278,6 +278,8 @@ class Stub implements ExecutionBackend {
   constructor(
     private readonly kind: "bcdev" | "al-runner-v3",
     private readonly coverage: "procedure" | "none" = "procedure",
+    /** A remaining test (Plain) also covers Setup Mgt.Limit, so its mutants are covered, not no-coverage. */
+    private readonly coversSetup = false,
   ) {
     if (kind === "bcdev") Object.assign(this, servesTestApp());
   }
@@ -319,7 +321,12 @@ class Stub implements ExecutionBackend {
       durationMs: 5,
       coverage: {
         granularity: "procedure" as const,
-        entries: [{ objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" }],
+        entries: [
+          { objectType: "Codeunit", objectId: 79000, procedure: "IsOverBudget" },
+          ...(this.coversSetup
+            ? [{ objectType: "Codeunit", objectId: 79001, procedure: "Limit" }]
+            : []),
+        ],
       },
     };
   }
@@ -332,6 +339,7 @@ async function run(
   kind: "bcdev" | "al-runner-v3",
   extra: Partial<SessionConfig> = {},
   coverage: "procedure" | "none" = "procedure",
+  coversSetup = false,
 ): Promise<{ r: SessionReport; stub: Stub; events: RunEvent[] }> {
   const root = mkdtempSync(join(tmpdir(), "lethal-pr212-"));
   roots.push(root);
@@ -345,7 +353,7 @@ async function run(
   await Bun.write(join(root, "tests", "CoTests.Codeunit.al"), TESTS_AL);
   await Bun.write(join(root, "tests", "CoLib.Codeunit.al"), LIB_AL);
   await Bun.write(join(root, "tests", "app.json"), TEST_APP_JSON);
-  const stub = new Stub(kind, coverage);
+  const stub = new Stub(kind, coverage, coversSetup);
   const events: RunEvent[] = [];
   const r = await runSession({
     backend: stub,
@@ -433,6 +441,12 @@ describe("§2c (i): a no-coverage mutant in an object a left-out test names is n
       true,
     );
     expect(unreached.every((m) => m.verdict === "survived")).toBe(true);
+  });
+  test("procedure coverage: a reached-object mutant a REMAINING test covers stays survived (the survived rewrite is only for coverage none)", async () => {
+    const { r } = await run("bcdev", {}, "procedure", true);
+    const reached = r.mutants.filter((m) => m.file.endsWith("SetupMgt.al"));
+    expect(reached.length).toBeGreaterThan(0);
+    expect(reached.every((m) => m.verdict === "survived" && m.cause === undefined)).toBe(true);
   });
   test("coverage none with --keep-company-tests: nothing is marked", async () => {
     const { r } = await run("bcdev", { keepCompanyTests: true }, "none");
