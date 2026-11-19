@@ -64,6 +64,8 @@ export interface LegacyBuildReportInput {
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   readonly permissionsRefusedTests?: readonly string[];
   readonly testPageUnsupportedTests?: readonly string[];
+  /** R1135: baseline failure text by test name, for fold steps that re-match it. */
+  readonly failureMessages?: Readonly<Record<string, string>>;
   readonly runnerDisagreementTests?: readonly string[];
   readonly stopHungSessions?: boolean;
   readonly resumedFrom?: {
@@ -179,12 +181,19 @@ export function legacyBuildReport(input: LegacyBuildReportInput): SessionReport 
     readonly name: string;
     readonly outcome: TestOutcome;
     readonly classification: BaselineClassification[];
+    readonly failureMessage?: string;
   }[] = [...allNames].map((name) => {
+    const failureMessage = input.failureMessages?.[name];
     const classification: BaselineClassification[] = [];
     if (permRefused.has(name)) classification.push("tests-permission-refused");
     if (testPageUnsupported.has(name)) classification.push("tests-testpage-unsupported");
     if (stale.has(name)) classification.push("stale-test-app");
-    return { name, outcome: unsupported.has(name) ? "fail" : "skip", classification };
+    return {
+      name,
+      outcome: unsupported.has(name) ? "fail" : "skip",
+      classification,
+      ...(failureMessage !== undefined ? { failureMessage } : {}),
+    };
   });
   // `baselineGreen` is a SEPARATE flag on the old bag — a caller could set it false (e.g. a
   // deadline-exceeded/timeout baseline outcome, which is not "unsupported") with none of the sets

@@ -24,6 +24,7 @@ import {
   withheldKillOf,
 } from "./report";
 import type { BatchArtifact, CarryHidden } from "./store";
+import { describeRequestPageRefusal, describeTestPageUnsupported } from "./testpage-unsupported";
 
 /** R443: this run's numbering facts, from `mutation-set-generated`. All three or none. */
 export interface FoldedNumbering {
@@ -184,6 +185,8 @@ export interface FoldedReport {
   readonly staleTestApp?: { readonly missingTests: readonly string[] };
   readonly permissionsRefusedTests?: readonly string[];
   readonly testPageUnsupportedTests?: readonly string[];
+  /** R1135: the subset of `testPageUnsupportedTests` whose baseline failure is the request-page refusal. */
+  readonly requestPageTests?: readonly string[];
   /** R-236c: baseline verdicts classified `tests-testpage-refused`, plus the session scan's
    *  `tests-testpage-refused` event; see `SessionReport.testPageRefused`. */
   readonly testPageRefusedTests?: readonly string[];
@@ -385,6 +388,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   const staleTestApp = new Set<string>();
   const permissionsRefusedTests = new Set<string>();
   const testPageUnsupportedTests = new Set<string>();
+  const requestPageTests = new Set<string>();
   const testPageRefusedTests = new Set<string>();
   // PR-36: keyed by test, so an event seen twice (a resumed session) counts each test once
   const restrictiveDefaultTests = new Map<
@@ -554,6 +558,13 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           }
           if (v.classification.includes("tests-testpage-unsupported")) {
             testPageUnsupportedTests.add(v.name);
+            // The orchestrator's precedence (describeTestPageRefusal): the Windows TestPage text wins.
+            if (
+              describeTestPageUnsupported(v.failureMessage) === undefined &&
+              describeRequestPageRefusal(v.failureMessage) !== undefined
+            ) {
+              requestPageTests.add(v.name);
+            }
           }
           if (v.classification.includes("tests-testpage-refused")) {
             testPageRefusedTests.add(v.name);
@@ -955,6 +966,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(testPageUnsupportedTests.size > 0
       ? { testPageUnsupportedTests: [...testPageUnsupportedTests].sort() }
       : {}),
+    ...(requestPageTests.size > 0 ? { requestPageTests: [...requestPageTests].sort() } : {}),
     ...(testPageRefusedTests.size > 0
       ? { testPageRefusedTests: [...testPageRefusedTests].sort() }
       : {}),
