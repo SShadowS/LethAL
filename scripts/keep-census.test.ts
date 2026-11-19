@@ -9,6 +9,7 @@ import {
   emitCensusApp,
   groupClasses,
   judge,
+  kitAl,
   pickRefusers,
   usesKitIds,
   withKit,
@@ -39,10 +40,10 @@ describe("kit ids", () => {
   test("no family's objects use a kit id, and every cell id is above the range", () => {
     for (const f of Object.values(FAMILIES)) {
       const al = emitCensusApp(f)["src/Cells.al"] ?? "";
-      const all = ids(al.replace(KIT_AL, ""));
+      const all = ids(al.replace(kitAl(f), ""));
       expect(all.length).toBeGreaterThan(0);
       for (const n of all) expect(n > KIT_TO).toBe(true);
-      expect(usesKitIds(al.replace(KIT_AL, ""))).toBe(false);
+      expect(usesKitIds(al.replace(kitAl(f), ""))).toBe(false);
     }
   });
   test("usesKitIds sees an id in the range and ignores one outside it", () => {
@@ -53,6 +54,33 @@ describe("kit ids", () => {
     const j = JSON.parse(emitCensusApp(Object.values(FAMILIES)[0] as Family)["app.json"] ?? "{}");
     expect(j.idRanges).toContainEqual({ from: KIT_FROM, to: KIT_TO });
     expect(j.resourceFolders).toContain("LethALResources");
+  });
+});
+
+describe("family readers (PR-191)", () => {
+  const withReaders = {
+    ...(Object.values(FAMILIES)[0] as Family),
+    readers: [{ name: "probe", vars: ['P: Codeunit "Probe";'], expr: "P.Read()" }],
+  };
+  test("a reader's answer sits in Observe's exit string before dotnet=, the part the OBS line captures", () => {
+    const al = kitAl(withReaders);
+    expect(al).toContain('P: Codeunit "Probe";');
+    const at = al.indexOf("' probe=[' + P.Read() + ']' +");
+    expect(at).toBeGreaterThan(al.indexOf("' lang='"));
+    expect(at).toBeLessThan(al.indexOf("' dotnet=[len='"));
+    expect(emitCensusApp(withReaders)["src/Cells.al"]).toContain("P.Read()");
+  });
+  test("a family without readers gets the kit unchanged", () => {
+    for (const f of Object.values(FAMILIES).filter((x) => x.readers === undefined)) {
+      expect(kitAl(f)).toBe(KIT_AL);
+      expect(withKit(f).support).toBe(`${f.support}\n${KIT_AL}`);
+    }
+  });
+  test("y2-xml has its three readers, each in the census app", () => {
+    const f = FAMILIES["y2-xml"] as Family;
+    expect(f.readers?.map((r) => r.name)).toEqual(["y2event", "y2single", "y2xml"]);
+    const al = emitCensusApp(f)["src/Cells.al"] ?? "";
+    for (const r of f.readers ?? []) expect(al).toContain(`' ${r.name}=[' + ${r.expr} + ']'`);
   });
 });
 

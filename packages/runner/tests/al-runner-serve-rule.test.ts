@@ -288,7 +288,8 @@ describe("serveDaemonReusable, the rule alone", () => {
         // Never produced by the probe (F1): still closes.
         `${P}InStream method on an unassigned Variant`,
         `${P}OutStream method on an unassigned Variant`,
-        `${P}use of an unassigned XmlElement`,
+        // PR-191 keeps `use of an unassigned XmlElement` (family y2-xml); an XmlDocument was never measured.
+        `${P}use of an unassigned XmlDocument`,
         `${P}use of an InStream that was never created x`,
       ],
     },
