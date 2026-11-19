@@ -17,8 +17,8 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
   "constants": {
     "BCDEV_FIGURES.totalMutantSites": 26,
     "BCDEV_FIGURES.killed": 3,
-    "BCDEV_FIGURES.survived": 14,
-    "BCDEV_FIGURES.noCoverage": 5,
+    "BCDEV_FIGURES.survived": 17,
+    "BCDEV_FIGURES.noCoverage": 6,
     "BCDEV_FIGURES.groupedCalls": 17,
     "BCDEV_FIGURES.warmKills": 0,
     "BCDEV_FIGURES.assertionScreenDiscrimination": "vacuous"
