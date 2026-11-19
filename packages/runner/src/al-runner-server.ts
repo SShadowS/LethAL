@@ -1147,9 +1147,13 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // reached through a `var` wrapper parameter, a value copied through a by-value one, a list child never fetched; an
   // unassigned element's SetAttribute and HasAttributes; XmlDocument.Add and the second argument of a multi-content Add; an
   // unassigned collection's Get; at depth 2 to 6, the deep cells after a Commit, a Blob OutStream write, a bound manual
-  // subscriber and a set SingleInstance codeunit. Not measured (one text can come from other builtins too): every other
-  // builtin that meets an unassigned XmlNode, XmlElement or XmlAttributeCollection. The next DO window's P4 is what would
-  // catch one. Pinned by `al-runner-serve-pr191.test.ts`.
+  // subscriber and a set SingleInstance codeunit. Passing control cells show where each refuses: the by-var and by-value
+  // setters alone pass (the refusal is at the use), and the deep setup runs (subscriber hit once, SingleInstance set, blob
+  // row written) before the deep refusers' last call. Not measured (one text can come from other builtins too): every other
+  // builtin that meets an unassigned XmlNode, XmlElement or XmlAttributeCollection; the two-argument SetAttribute DO's M36708
+  // reaches (it fails in the cell, so the three-argument form is the measured refuser); and every builtin other than
+  // XmlElement.Create that gives the XML-name text (attribute names, for one). The next DO window's P4 is what would catch
+  // one. Pinned by `al-runner-serve-pr191.test.ts`.
   ["xml-unassigned-node", "use of an unassigned XmlNode"],
   ["xml-unassigned-element", "use of an unassigned XmlElement"],
   ["xml-node-as-content", "XmlNode as XML content (only XML nodes and text are pinned)"],

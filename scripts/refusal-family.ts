@@ -5075,7 +5075,7 @@ export const JSON_TEXT: Family = {
  * PR-191: the XML refusal texts DO's y2 window closed on, each driven by an invented cell (no corpus source text). A
  * non-SingleInstance wrapper codeunit (51000) holds a global XmlNode; the cells call it through 2 to 4 procedures. The deep
  * cells (depth 6, two codeunits) bind a manual subscriber and set a SingleInstance codeunit first. Cell i is codeunit
- * BASE_ID + 1 + i (51001 to 51018; 51019 is unused); the support codeunits are 51000 and 51020 to 51023 (`extraIds`).
+ * BASE_ID + 1 + i (51001 to 51021); the support codeunits are 51000 and 51022 to 51025 (`extraIds`).
  * Amendment 1 MED-3: `WriteTo(OutStream)` on an unassigned XmlNode fails with an engine error (no refusal), so it has no cell.
  */
 const Y2_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -5155,11 +5155,37 @@ export const Y2_XML: Family = {
 
     // M36794/5's shape: the target is passed by var and the setter is never called, so its global stays unset
     procedure SkipSetter(var Target: Codeunit "Y2 Xml Node")
+    begin
+        // nothing touches Target or any XML value: the first refusing statement is the caller's Target.UseNode()
+    end;
+
+    procedure SetOnlyInto(Target: Codeunit "Y2 Xml Node")
     var
         Unset: XmlNode;
-        B: Boolean;
     begin
-        B := Unset.IsXmlElement();
+        Target.SetNode(Unset);
+    end;
+
+    procedure Deep6Noop()
+    begin
+    end;
+
+    // the deep setup's state, read inside the same test (the DeepSetupOnly control)
+    procedure AssertDeepState(Single: Codeunit "Y2 Single")
+    var
+        Row: Record "Y2 Blob Row";
+        Hits: Integer;
+    begin
+        Hits := Single.TakeHits();
+        if Hits <> 1 then
+            Error('subscriber ran %1 times, expected 1', Hits);
+        if Single.GetValue() <> 'x' then
+            Error('Y2 Single value is [%1], expected [x]', Single.GetValue());
+        if not Row.Get('B1') then
+            Error('blob row B1 is missing');
+        Row.CalcFields(Blob);
+        if not Row.Blob.HasValue() then
+            Error('blob row B1 has an empty blob');
     end;
 
     procedure MultiContentWithUnassigned()
@@ -5276,7 +5302,7 @@ export const Y2_XML: Family = {
     end;
 }
 
-codeunit 51020 "Y2 Chain"
+codeunit 51022 "Y2 Chain"
 {
     procedure RaiseProbe()
     begin
@@ -5302,6 +5328,27 @@ codeunit 51020 "Y2 Chain"
     local procedure ContentStep4(W: Codeunit "Y2 Xml Node")
     begin
         W.Deep6AddUnassigned();
+    end;
+
+    procedure NoopDeep(W: Codeunit "Y2 Xml Node")
+    begin
+        NoopStep2(W);
+    end;
+
+    local procedure NoopStep2(W: Codeunit "Y2 Xml Node")
+    begin
+        OnY2Step();
+        NoopStep3(W);
+    end;
+
+    local procedure NoopStep3(W: Codeunit "Y2 Xml Node")
+    begin
+        NoopStep4(W);
+    end;
+
+    local procedure NoopStep4(W: Codeunit "Y2 Xml Node")
+    begin
+        W.Deep6Noop();
     end;
 
     procedure NameDeep(W: Codeunit "Y2 Xml Node"; Name: Text)
@@ -5331,7 +5378,7 @@ codeunit 51020 "Y2 Chain"
     end;
 }
 
-codeunit 51021 "Y2 Subscriber"
+codeunit 51023 "Y2 Subscriber"
 {
     EventSubscriberInstance = Manual;
 
@@ -5344,7 +5391,7 @@ codeunit 51021 "Y2 Subscriber"
     end;
 }
 
-codeunit 51022 "Y2 Single"
+codeunit 51024 "Y2 Single"
 {
     SingleInstance = true;
 
@@ -5395,7 +5442,7 @@ table 51000 "Y2 Blob Row"
 }
 
 // the census readers (Family.readers): each answer is folded into the observation the census compares
-codeunit 51023 "Y2 Probe"
+codeunit 51025 "Y2 Probe"
 {
     procedure EventRan(): Text
     var
@@ -5469,6 +5516,19 @@ codeunit 51023 "Y2 Probe"
     y2("NodeAsSecondContent", "W.MultiContentWithUnassigned();"),
     y2("DeepNodeAsContent", "Chain.ContentDeep(W);", Y2_DEEP_VARS, Y2_DEEP_SETUP),
     y2("DeepName76", "Chain.NameDeep(W, W.AlphabetName(75) + '=');", Y2_DEEP_VARS, Y2_DEEP_SETUP),
+    // controls (passing; the census ignores them): where each XmlNode cell refuses
+    y2("CtlByVarSetterOnly", "W.SkipSetter(W2);", ['W2: Codeunit "Y2 Xml Node";'], ["W.Init();"]),
+    y2(
+      "CtlByValueSetOnly",
+      "W.SetOnlyInto(W2);",
+      ['W2: Codeunit "Y2 Xml Node";'],
+      ["W.Init();", "W2.Init();"],
+    ),
+    y2("CtlDeepSetupOnly", "W.AssertDeepState(Single);", Y2_DEEP_VARS, [
+      ...Y2_DEEP_SETUP,
+      "Single.TakeHits();",
+      "Chain.NoopDeep(W);",
+    ]),
   ],
 };
 
