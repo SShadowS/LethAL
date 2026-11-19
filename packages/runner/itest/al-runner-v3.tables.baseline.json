@@ -130,6 +130,14 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "1247300be1944a30489f40f0f61fdfdc78c5051b873f83685eaa534e2858ffeb|Data Band Ext|Band|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "BandClassifiesDirectly",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "1247300be1944a30489f40f0f61fdfdc78c5051b873f83685eaa534e2858ffeb|Data Band Ext|Band|lethal.conditional-boundary|1",
       "verdict": "killed",
       "killingTest": "BandClassifiesDirectly",
@@ -144,6 +152,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "1539beaffea36af3b078ae2d7424bca9827efcfd209c4ba34dec17e66438bc2d|Data Scope Probe|OnValidate|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "1539beaffea36af3b078ae2d7424bca9827efcfd209c4ba34dec17e66438bc2d|Data Scope Probe|OnValidate|lethal.negate-conditional|1",
@@ -386,6 +402,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "2455a74f88d440d352c663e6a032c25e91cf145a60ab62ad1888cc8d2b081092|Data Main|OnValidate|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "2455a74f88d440d352c663e6a032c25e91cf145a60ab62ad1888cc8d2b081092|Data Main|OnValidate|lethal.conditional-boundary|1",
       "verdict": "survived",
       "killingTest": null,
@@ -578,12 +602,28 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|OnInsert|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Key Probe|OnInsert|lethal.negate-conditional|1",
       "verdict": "survived",
       "killingTest": null,
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "50d9916725af6c027cf455b5c6c5f03c36bf8194aff926cba530d4a40dd91950"
+    },
+    {
+      "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Main|OnValidate|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "2d119c2ec73ab1ae52dbba9a46ff0f4bc4d1489684b7064c985ef4a94112ee7e|Data Main|OnValidate|lethal.negate-conditional|1",
@@ -688,6 +728,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "4236821905ea84fa33a1a9b7129d6bf15ae98f7af6511ccf0228a13e993f51ac"
+    },
+    {
+      "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|FirstLevelInRange|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "FindFirstPicksTheLowestKeyInRange",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "33880a1aced9249c8c382656ef30f8da90465d9dab7ba9dc12aae0665e0fdea6|Data Find Ops|FirstLevelInRange|lethal.negate-guard|1",
@@ -1050,6 +1098,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|LastLevelInRange|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "FindLastPicksTheHighestKeyInRange",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "479449927b57b80c234dd61c6e77a2f77343a1f6b8aba9222e35154c8339cb10|Data Find Ops|LastLevelInRange|lethal.negate-guard|1",
       "verdict": "killed",
       "killingTest": "FindLastPicksTheHighestKeyInRange",
@@ -1128,6 +1184,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|PlainMembership|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "PlainMembershipSeparatesInsideAndOutsideTheSet",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "51a7f927d0aa77fb56a17a3ef4e2a54083742ed4b7199973b7816f35d212ae1f|Data Set Ops|PlainMembership|lethal.negate-guard|1",
@@ -1226,6 +1290,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|InsertWithoutTrigger|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "InsertWithoutTriggerKeepsAmount",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "586587a3782ebd0e3b9725b66bc812d0c6676a9ab2da3767b1b7e3ab918bcf35|Data Ops|InsertWithoutTrigger|lethal.negate-guard|1",
       "verdict": "killed",
       "killingTest": "InsertWithoutTriggerKeepsAmount",
@@ -1288,6 +1360,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Data Reach Ops|Classify|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Data Reach Ops|Classify|lethal.conditional-boundary|1",
@@ -1410,6 +1490,14 @@
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
     },
     {
+      "key": "64dc570e60f5eed53add02008636e675428578c912817762f9e30854b2f6d7ac|Data Reach Ops|Classify|lethal.condition-true|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "64dc570e60f5eed53add02008636e675428578c912817762f9e30854b2f6d7ac|Data Reach Ops|Classify|lethal.conditional-boundary|1",
       "verdict": "survived",
       "killingTest": null,
@@ -1424,6 +1512,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "655a0653b1c900093fdca79066d89863d9a0b4e76e61449503381aeb1a6e1d1f|Data No Trigger|OnValidate|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "NoTriggerValidateRunsWeak",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "655a0653b1c900093fdca79066d89863d9a0b4e76e61449503381aeb1a6e1d1f|Data No Trigger|OnValidate|lethal.conditional-boundary|1",
@@ -1464,6 +1560,78 @@
       "coverageFiltered": true,
       "errorClass": null,
       "mutatedTextSha256": "2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|AmountWithinCap|lethal.blank-argument|1",
+      "verdict": "killed",
+      "killingTest": "SwapReversesTheRangeComparison",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|AmountWithinCap|lethal.blank-argument|1|1",
+      "verdict": "killed",
+      "killingTest": "SwapReversesTheRangeComparison",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|NoteFlags|lethal.blank-argument|1",
+      "verdict": "killed",
+      "killingTest": "CommutativeCalleeMakesTheSwapEquivalent",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|NoteFlags|lethal.blank-argument|1|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|RunningTotal|lethal.blank-argument|1",
+      "verdict": "killed",
+      "killingTest": "SwapRedirectsTheAccumulatorWriteback",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|StampFromPair|lethal.blank-argument|1",
+      "verdict": "killed",
+      "killingTest": "WeakStampAssertionMissesTheSwap",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6f49cdbd80e1b95d5e6427e1501fc217790daee87055fa5b4e71064288bddede"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|StampFromPair|lethal.blank-argument|1|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6f49cdbd80e1b95d5e6427e1501fc217790daee87055fa5b4e71064288bddede"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|StampWithNarrow|lethal.blank-argument|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6f49cdbd80e1b95d5e6427e1501fc217790daee87055fa5b4e71064288bddede"
+    },
+    {
+      "key": "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Data Swap Ops|StampWithNarrow|lethal.blank-argument|1|1",
+      "verdict": "survived",
+      "killingTest": null,
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "6f49cdbd80e1b95d5e6427e1501fc217790daee87055fa5b4e71064288bddede"
     },
     {
       "key": "69ab2635d97b4a033d6979b89c9577ff9099ed31bfcdea22e425161990f85c56|Data Commit Ops|CommitThenFail|lethal.void-method-call|1",
@@ -1552,6 +1720,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "728a6906b0c4d20b99c442b3708113f224bd70c643f0cfc5e0d411fafad5b765|Data Set Ops|RegionRank|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "RegionRankSeparatesInsideAndOutsideTheSet",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "728a6906b0c4d20b99c442b3708113f224bd70c643f0cfc5e0d411fafad5b765|Data Set Ops|RegionRank|lethal.remove-not|1",
@@ -1816,6 +1992,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "7d10860e0a4009ee2bbcffafb671b9267a07b958a4069c396ff2221e50d06589|Data Temporal Ops|IsTimestampSet|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "IsTimestampSetSeparatesBlankFromSet",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "7d10860e0a4009ee2bbcffafb671b9267a07b958a4069c396ff2221e50d06589|Data Temporal Ops|IsTimestampSet|lethal.negate-conditional|1",
@@ -2122,12 +2306,28 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaAssert|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "ShiftKillIsAssertionEarned",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaAssert|lethal.negate-conditional|1",
       "verdict": "killed",
       "killingTest": "ShiftKillIsAssertionEarned",
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "df8ff64ae87e6ada72feb831b5b23f5fa3ad9f932647ce1ad26b4aff09db2816"
+    },
+    {
+      "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaError|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "ShiftKillIsBareErrorRaised",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "90f410fc5a5548fa38c7f617cc5a6625f0084798a2430a53a0e5b4a942e34e3a|Data Shift Ops|BandedViaError|lethal.negate-conditional|1",
@@ -2144,6 +2344,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Data Band Ext|Unreached|lethal.condition-true|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "9223e82ad7544c25083f5b08316d3c99343c1fd6ff40da16b8d09c55a9a1a837|Data Band Ext|Unreached|lethal.conditional-boundary|1",
@@ -2218,6 +2426,14 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "9932e0cb558713644e5b4276a4c8c544468ec657b6ab079a9fabe8a13e2204df|Data Set Ops|BothOutsideRange|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "BothOutsideRangeSeparatesEqualAndUnequal",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "9b029cf89caffa363e62fd5d0a3573bf24f0889fc752137aacb9db634a1b10ba|Data Swap Ops|NoteFlags|lethal.swap-call-arguments|1",
       "verdict": "survived",
       "killingTest": null,
@@ -2248,6 +2464,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "9e4b188f67531610153e7049c200a2cc47f1e53c01c649038c9c3396f21036d0|Data Main List Ext|OnOpenPage|lethal.condition-true|1",
+      "verdict": "no-coverage",
+      "killingTest": null,
+      "coverageFiltered": true,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "9e4b188f67531610153e7049c200a2cc47f1e53c01c649038c9c3396f21036d0|Data Main List Ext|OnOpenPage|lethal.negate-guard|1",
@@ -2488,6 +2712,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "b56842459cfb4b2d88cc879955c350aa93c493c30eeb198e5eb2fa6a90c8178b|Data Blank Ops|ClassifyCode|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "BlankStringKillIsAssertionEarned",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "b56842459cfb4b2d88cc879955c350aa93c493c30eeb198e5eb2fa6a90c8178b|Data Blank Ops|ClassifyCode|lethal.negate-conditional|1",
@@ -2938,6 +3170,14 @@
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
+      "key": "db0a03a2f50e1e1cc8affafadeb35ae87ec70ded19fd264743a5753f5831304e|Data Temporal Ops|IsCutoffSet|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "IsCutoffSetSeparatesBlankFromSet",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
       "key": "db0a03a2f50e1e1cc8affafadeb35ae87ec70ded19fd264743a5753f5831304e|Data Temporal Ops|IsCutoffSet|lethal.negate-conditional|1",
       "verdict": "killed",
       "killingTest": "IsCutoffSetSeparatesBlankFromSet",
@@ -3080,6 +3320,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "key": "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|OnRun|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "CommitBeforeCodeunitRunSucceeds",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "e315168a52168bfbb4fcedaf685fb51f456c87a33eb1879f610f29a75cfaebed|Data Commit Target|OnRun|lethal.remove-not|1",
@@ -3304,6 +3552,14 @@
       "coverageFiltered": false,
       "errorClass": null,
       "mutatedTextSha256": "1fcfa01809556d07889fa075b5defcc9a3efa91856e23076c4a9ac5a8acbd48e"
+    },
+    {
+      "key": "f9d3abaa9df154de33fea823ca97d565388c2e67743ff84ec55df546761d051e|Data Temporal Ops|IsDueDateSet|lethal.condition-true|1",
+      "verdict": "killed",
+      "killingTest": "IsDueDateSetSeparatesBlankFromSet",
+      "coverageFiltered": false,
+      "errorClass": null,
+      "mutatedTextSha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
     },
     {
       "key": "f9d3abaa9df154de33fea823ca97d565388c2e67743ff84ec55df546761d051e|Data Temporal Ops|IsDueDateSet|lethal.negate-conditional|1",

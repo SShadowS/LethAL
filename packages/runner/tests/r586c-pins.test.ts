@@ -915,17 +915,18 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
     }
   });
   // R975 (R-965 amendment 2): the baseline was 298/60/60 until 6 Data Main rows read no-coverage.
-  test("leg T: the counts are the committed baseline's 298/54/66 plus exactly these moves", () => {
+  // PR-209: the committed baseline is 318/64/68 over 450 (was 298/54/66 over 418; +32 default-operator rows).
+  test("leg T: the counts are the committed baseline's 318/64/68 plus exactly these moves", () => {
     const rows = need(bPin).legT.rows;
     const n = (v: string) =>
       rows.filter((r) => r.verdict === v).length - rows.filter((r) => r.from?.verdict === v).length;
     expect(need(bPin).legT.counts).toEqual({
-      killed: 298 + n("killed"),
-      survived: 54 + n("survived"),
-      noCoverage: 66 + n("no-coverage"),
+      killed: 318 + n("killed"),
+      survived: 64 + n("survived"),
+      noCoverage: 68 + n("no-coverage"),
     });
-    expect(need(bPin).legT.counts).toEqual({ killed: 326, survived: 67, noCoverage: 25 });
-    expect(need(bPin).legT.total).toBe(418);
+    expect(need(bPin).legT.counts).toEqual({ killed: 346, survived: 77, noCoverage: 27 });
+    expect(need(bPin).legT.total).toBe(450);
     expect(need(bPin).legT.refusedTests).toBe(0);
   });
   test("applyTPin: a row's `from` must equal the committed row exactly", () => {
@@ -1009,11 +1010,11 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
       noCoverage: rs.filter((r) => r.verdict === "no-coverage").length,
       error: rs.filter((r) => r.verdict === "error").length,
     });
-    // R975 (R-965): 298/60/60 until 6 Data Main rows read no-coverage.
+    // R975 (R-965): 298/60/60 until 6 Data Main rows read no-coverage. PR-209: +32 rows (20 / 10 / 2).
     expect(tally(committed.entries)).toEqual({
-      killed: 298,
-      survived: 54,
-      noCoverage: 66,
+      killed: 318,
+      survived: 64,
+      noCoverage: 68,
       error: 0,
     });
     const b = applyTPin(committed.entries, need(bPin).legT);
@@ -1023,10 +1024,11 @@ describe("edge-8078bcf49: every pinned defect gone, 48 known differences at BC's
     expect(need(b).filter((r) => r.coverageFiltered !== (r.verdict === "no-coverage"))).toEqual([]);
     for (const p of V3_BUILD_PINS.filter((x) => x.legT !== need(bPin).legT)) {
       const out = applyTPin(committed.entries, p.legT);
+      // PR-209: the 32 added rows move every earlier pin by the same 20 / 10 / 2 (was 298 / 47 / 66).
       expect(tally(need(out)), p.id).toEqual({
-        killed: 298,
-        survived: 47,
-        noCoverage: 66,
+        killed: 318,
+        survived: 57,
+        noCoverage: 68,
         error: 7,
       });
     }
