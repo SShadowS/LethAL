@@ -148,3 +148,48 @@ Common to A and B:
 - **S3** (if M0 found a URL): after `SeedWitness('S3')`, under the stop, then the witness.
   - **P2:** no answer within 30 s; an answer between 45 and 75 s after our stop; the witness free after it.
 - **The decision rule is §3's,** with the owner's ruling above for BC 29.
+
+## Amendment 2 (2026-11-19): stage 2's results, and where fix 3 goes from here
+bc4 was restarted (q-20261119T083334-eb8233a8) and restored first: setup with LethAL Control 1.0.0.28, the Continia stack, DO and
+DO Test, then doctor ok. The run used lease attempt 075 throughout. Evidence: `/coord/handoff/PR-199/m1b.log`, `m1c.log`,
+`v2-S1/`, `v3-S1/`, `restore/`.
+
+**M0: no candidate waits.** Each `HttpWaitOnly(url, 60000)` returned "failed" with an empty error text:
+
+| candidate | time to fail |
+|---|---|
+| C2 `http://192.0.2.1/` | 204 ms |
+| C3 `http://1.1.1.1:81/` | 55 ms |
+| C4 `http://example.com:81/` | 48 ms |
+
+- Stage 1 had already shown the same for `10.255.255.1` (181 ms).
+- **From bc4, an outbound HTTP call does not wait: it fails at once.** S3 is not measurable there, as the amendment allowed.
+- **A consequence for R1113:** on bc4, DO's Azure tests cannot have hung on a network wait either.
+
+**S1 (the AL loop):**
+- **Probe v1.0.0.1 was again refused by test permissions,** this time on an indirect read. The test runner's restrictive
+  permissions ignore the probe codeunit's own `Permissions`.
+- **v1.0.0.2** sets `TestPermissions = Disabled` on the probe's test codeunit. That is a probe defect, not a change to what is
+  measured.
+- **With it, P1 HELD:**
+  1. our `StopHungRun` was sent at 10.0 s and answered `stopped: true` (session 539) in 167 ms;
+  2. BC answered the held request **253 ms after the stop**, with the 400 "begin transaction world not called";
+  3. the verdict was `timeout`, classified `baseline-test-stopped`, and the run went on;
+  4. the witness then read **"free: counter 2"**: the lock was released, so the hung session's work ended.
+
+**What the rule decides:**
+- **A:** no evidence. No shape answered late, and no HTTP wait can be made on bc4.
+- **B:** stays ruled out (§3).
+- **C:** no session was seen alive.
+
+**So no change to LethAL's stop or confirmation is justified by this measurement.**
+
+**Where fix 3 goes instead.** PR-200's company-creation probe on bc4, on the same day, found the likelier cause of DO's baseline
+quarantines (`/coord/handoff/PR-200/bc4/result.md`):
+- a test that creates a company, commits, deletes it and commits (T3) got an unprompted BC 400 "begin transaction world not
+  called", and the run was quarantined;
+- from then on, every web-service call was 401, and bc4 needed a restart;
+- DO's hung tests create companies, and two of them commit.
+
+Fix 3 therefore continues in the company-writes work, preproc's PR-212, not here. PR-199 is submitted as this measurement,
+with no code change.
