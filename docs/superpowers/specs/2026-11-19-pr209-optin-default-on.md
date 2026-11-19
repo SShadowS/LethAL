@@ -87,6 +87,67 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
   - R1136's "the terminating one is still made" is corrected to match.
 - **Amendment 2 is computed WITH this rule:** counts, refusals, and every code-keyed table renumbered.
 
+## 0c. Amendment 2 (2026-11-19): counts with R1136's rule, the renumbered code tables, the figure rules. Before any code.
+- **Measured offline on master f461e9f0** (`/coord/handoff/PR-209/count/renumber/`).
+  - Scripts: `r1136.ts` (R1136's rule as a parsed-AST prototype) and `renumber.ts` (mirrors `writeInstrumentedProject`:
+    per-file `dedupeSpecs`, then `assignMutantIds`, with `identityOrdinalsOf`, read back from the emitted manifest).
+  - **Frozen:** 34 files, listed in `SHA256SUMS` (sha256
+    `738ca65a22886c4754687a84a67173007af98cb0fc57193555e7d530be291d00`), read-only. The build applies these maps; it does
+    not recompute them.
+1. **R1136's rule refuses exactly one site in all the legs:** `sandbox-hang` `HangLogic.Codeunit.al:63` (`NextRow`, called
+   in the `until` at line 72). As §0b says, that is the hang leg's proof.
+   - The line-141 `SpinUntil` mutant is made.
+   - `blank-argument` has no R1136 shape on any fixture: R868's `inLoopExitParts` already refuses the argument-in-exit-test
+     shape.
+2. **The per-leg counts, superseding §3's table where they differ:** only the hang leg changes, from +2 to **+1** (39 rows),
+   with 1 R1136-refused site. All other rows as in §3.
+3. **Key sets:** the pre-flip default key set equals every baseline file's `key` set (bcdev, names, wrapped, tables, hang,
+   harden, layout, multiobject, recheck, symbols A and B, v3 wrapped, v3 tables). In every leg, the flipped set minus the
+   two operators' rows has exactly the pre-flip keys.
+   - envtool's stale file is the exception, as stated before.
+4. **The code-keyed tables are pre-committed by these maps.**
+   - **The reproduction check passed:** today's numbering reproduces all 264 pinned codes (file, line and operator), 0
+     mismatches.
+   - **What moves:**
+
+     | table | codes that move |
+     |---|---|
+     | `EXPECTED_LAYOUT` | 7 of 11 |
+     | `V3_MO_KILLERS` | 4 of 7 |
+     | `V3_WR_KILLERS` | 62 of 62 |
+     | `V3_WR_STATE_NOTES` | 3 of 3 |
+     | `EXPECTED_WRAPPED` | 101 of 102 |
+     | `EXPECTED_WRAPPED_BC`, `PAIR_CODES`, `PAIR_REPLACES`, `KILL_TEXTS` | 2 of 3, 3, 3, 18 |
+     | chunked's codes | 9 of 9 |
+     | `TABLES_FIGURES.killPositions` | 3 of 5 |
+     | `LEND_MUTANTS` | 18 of 22 |
+     | `LEND_FIGURES` | 7 of 12 |
+     | hang's pinned codes (M0001, M0004, M0008, M0009) | 0 (codes from M0031 on shift +1) |
+
+   - Code literals in comments move by the same maps (`*_literals.tsv`).
+   - **The build applies each map mechanically.** Its review checks that each table's diff equals its map, plus the added
+     rows from `added-mutants.tsv`.
+5. **The figures (M4):**
+   - **Pre-committed:**
+     - every row count (§3, with item 2);
+     - the codes above;
+     - `DBM_FIGURES.totalMutantSites` 126 and its `hangRefused` 21;
+     - the hang leg's `hangRefused` +1;
+     - every existing row's verdict, killing test, kill position and error class, all unchanged.
+   - **Recorded only, because they depend on the new rows' verdicts, which cannot be known offline:**
+     - the new rows' verdicts;
+     - `TABLES_FIGURES`' `groupedCalls`, `warmKills`, `platformArtifactKills` and its killed/survived split;
+     - `CHUNKED_FIGURES`' positions, `warmKills` and `groupedCalls`;
+     - `HANG_FIGURES`' `warmKills`, `coldConfirms*` and `stoppedCallsOn`;
+     - `DBM_FIGURES`' killed/survived/noCoverage.
+   - **The rule for every recorded-only figure:** its change must be fully explained by the new rows, row by row, in the
+     review. A figure that moves while every new row's contribution is accounted for is a BLOCK.
+   - The hang leg's new row (line 141) is predicted **killed**, never `timeout-killed`.
+6. **Still offline-unknowable, and run first on the build:** whether L1's and WR's line-span premises survive the added
+   guards (§3a). With item 4's tables in place, a failure there now speaks only to the premise.
+7. **Pins under `docs/` and `packages/runner/tests/`** were not scanned by the count. The build greps them for the moving
+   codes, and each hit is mapped or explained in the review.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).
