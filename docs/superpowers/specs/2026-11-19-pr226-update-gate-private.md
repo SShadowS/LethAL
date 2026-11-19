@@ -58,3 +58,25 @@ checked against SHA256SUMS), writes the ledger and `.gated`, may move `current`,
 - The script's own unit tests and VERIFY, plus CI.
 - No v3 gate run is needed for the change itself: the default path's code is untouched beyond the `gateWorktree` default.
 - The private gate's first real use is lethal-bugs' gate of perf-combined into `/coord/handoff/PR-217`.
+
+## 5. Amendment 1 (2026-11-19, before the build): a pass writes a real `.gated` under `<root>` (the orchestrator)
+**The gap.** The owner wants PERF-10 to RUN on the privately gated build. `lethal run` accepts an al-runner build only
+when a `.gated` beside the binary names its sha256 and version (`checkGated` in `al-runner-v3-pin.ts`). With no `.gated`,
+it accepts only a release the shipped manifest lists. Receipts alone would leave PERF-10 refused, as before.
+
+**The change to §2 step 4:**
+- **On a `pass`,** the private gate copies the candidate into `<root>/builds/<tag>/al-runner` and writes the gate's own
+  `.gated` beside it.
+  - It is the same record a normal pass builds: version, binarySha256, the commit it was gated at, `readingsFrom` =
+    the pin it was judged by, the warn and batch facts, and `gatedAt`. It is written by the gate code, never by hand.
+  - It names the private copy's own sha256 (equal to the candidate's).
+- **Nowhere else.** Never under `/work/tools`, never `current`, never the ledger or the manifest, never a push.
+- **A `gate-fail`, `held` or `infra-fail` writes no `.gated`** and no build folder: receipts only, under
+  `<root>/private/`.
+
+**Tests added to §3:**
+- **G1:** a pass writes `<root>/builds/<tag>/.gated` and the binary copy there, and nothing outside `<root>`.
+- **G2:** a gate-fail, a held and an infra-fail each write no `.gated` anywhere.
+- **G3:** `checkGated` accepts the private copy on that `.gated` (sha256 and version match). It still refuses the same
+  binary with no `.gated` beside it, and refuses a `.gated` whose sha256 differs.
+- Each is red-checked both ways.
