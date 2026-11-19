@@ -2,7 +2,120 @@
 // `al-runner-backend.test.ts` by R654 S1 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md),
 // with the rule, which v3 uses, now in `al-runner-server.ts`.
 import { describe, expect, test } from "bun:test";
-import { AlRunnerServeDuplicateRowError, serveDaemonReusable } from "../src/al-runner-server";
+import {
+  AlRunnerServeDuplicateRowError,
+  keepNearMiss,
+  knownNearMissVariant,
+  serveDaemonReusable,
+} from "../src/al-runner-server";
+
+// PR-244: a reworded kept refusal shows as a near-miss; a kept text, an unrelated one and the two
+// pre-committed variants do not warn.
+describe("PR-244: keepNearMiss", () => {
+  // PERF-10's reworded Company text: a near-miss when PR-244 was built, KEPT since bugs' widening (master c3355859).
+  const PERF10 =
+    "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)";
+  // A synthetic rewording: a clause inserted MID-sentence into `page-no-record-onopenpage`'s text, which no suffix
+  // widening of that entry would accept, so it stays unkept.
+  const REWORDED =
+    "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
+  const REPORT =
+    "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+  const CASCADE_TAIL =
+    "NotRun: out-of-scope: a test before this one in the codeunit did not pass (SomeInventedTest: failed (Assert.IsTrue failed. invented message) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: An error was expected inside an ASSERTERROR statement.";
+
+  // PR-244 amendment 2 (bugs' keep audit): 12 PR56 entries that never match on `current`, because al-runner appends
+  // " (not pinned)"; real lines from the PR-213/PR-175 repros (al-runner's own messages).
+  const NOT_PINNED: readonly (readonly [string, string])[] = [
+    [
+      "asdecimal-text-control",
+      "NotRun: out-of-scope: AsDecimal of a Text control whose text has digits but is no number (not pinned)",
+    ],
+    [
+      "dotnet-copilot-platform-authorization",
+      "NotRun: out-of-scope: DotNet ALCopilotFunctions.IsPlatformAuthorizationConfigured for a Microsoft caller or other arguments (not pinned)",
+    ],
+    [
+      "geturl-object-type-or-arguments",
+      "NotRun: out-of-scope: GetUrl(ClientType::ODataV4; the call had 5 arguments): this object type or argument list (not pinned)",
+    ],
+    [
+      "geturl-company-characters",
+      "NotRun: out-of-scope: GetUrl(ClientType::SOAP; the call had 2 arguments): a company of other characters than letters, digits and space (not pinned)",
+    ],
+    [
+      "gotokey-statement-no-row",
+      "NotRun: out-of-scope: GoToKey, GoToRecord or the move back of a Find...Field call, as a statement for a key no row has, on a page that is neither a list nor a part (not pinned)",
+    ],
+    [
+      "yaml-blank-line-nested",
+      "NotRun: out-of-scope: ReadFromYaml of a carriage return or a blank line in a nested, list or flow form (not pinned)",
+    ],
+    [
+      "yaml-flow-quoted-key",
+      "NotRun: out-of-scope: ReadFromYaml of a flow mapping entry with this quoted key (not pinned)",
+    ],
+    [
+      "yaml-list-indent",
+      "NotRun: out-of-scope: ReadFromYaml of a mapping item in a list at another indent than 4 (not pinned)",
+    ],
+    [
+      "yaml-null-or-number",
+      "NotRun: out-of-scope: ReadFromYaml of a null form or a number other than `null` and a whole number (not pinned)",
+    ],
+    [
+      "xmlport-import-header",
+      "NotRun: out-of-scope: XmlPort import: the row of table element Header stored before its child rows is gone after them (not pinned)",
+    ],
+    [
+      "page-no-record-onopenpage",
+      "NotRun: out-of-scope: a page opened without a record whose OnOpenPage left Rec where its view has no row (not pinned)",
+    ],
+    [
+      "part-visible-other-shape",
+      "NotRun: out-of-scope: an action that makes a part visible, other than the pinned shape (a Document page opened with OpenEdit, on a stored row without an unsaved edit, whose action body only sets the variable, shows a linked part without a repeater that was hidden since the page opened): the host page or its source table has other code, an extension, a subscriber or other properties than the measured one (not pinned)",
+    ],
+  ];
+  test("amendment 2: each never-matching ' (not pinned)' line names its own keep entry with every word found", () => {
+    expect(NOT_PINNED.length).toBe(12);
+    for (const [entry, text] of NOT_PINNED) {
+      const nm = keepNearMiss(text);
+      expect([entry, nm?.entry, nm?.found === nm?.size]).toEqual([entry, entry, true]);
+    }
+  });
+
+  test("a text reworded mid-sentence names its entry (page-no-record-onopenpage) with every word found", () => {
+    const nm = keepNearMiss(REWORDED);
+    expect(nm?.entry).toBe("page-no-record-onopenpage");
+    expect(nm?.found).toBe(nm?.size);
+    expect(knownNearMissVariant("page-no-record-onopenpage", REWORDED)).toBeUndefined();
+  });
+  test("a kept text is never a near-miss: the original Company text, and PERF-10's rewording now that it is kept", () => {
+    expect(
+      keepNearMiss(
+        "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      ),
+    ).toBeUndefined();
+    expect(keepNearMiss(PERF10)).toBeUndefined();
+  });
+  test("an unrelated unkept refusal is not a near-miss", () => {
+    expect(
+      keepNearMiss(
+        "NotRun: out-of-scope: use of an XmlPort whose schema the runtime does not model",
+      ),
+    ).toBeUndefined();
+  });
+  test("the Report.RunRequestPage variant is a near-miss of its entry and a known variant", () => {
+    const nm = keepNearMiss(REPORT);
+    expect(nm?.entry).toBe("report-parameters-no-xml-declaration");
+    expect(knownNearMissVariant(nm?.entry ?? "", REPORT)).toBeDefined();
+  });
+  test("the ASSERTERROR cascade tail is a near-miss of cascade-manual-binding and a known variant", () => {
+    const nm = keepNearMiss(CASCADE_TAIL);
+    expect(nm?.entry).toBe("cascade-manual-binding");
+    expect(knownNearMissVariant(nm?.entry ?? "", CASCADE_TAIL)).toBeDefined();
+  });
+});
 
 // The measured texts (`/coord/handoff/R-612/measure.md`, probe `main.stdout`), verbatim.
 const HTTP =

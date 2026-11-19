@@ -1411,6 +1411,85 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
     /^NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table \(not pinned\)$/,
 };
 
+/** PR-244: lowercase words of 3+ letters or digits, not all digits. */
+function nearMissWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3 && !/^\d+$/.test(w)),
+  );
+}
+
+/**
+ * PR-244: the literal words of each keep entry's regex, derived once, on first use. Both branches of an alternation
+ * count, so an entry such as `http`, `commit` or `dotnet-exception` has more words than any one text of it holds: a
+ * reworded text of one branch may stay under 0.8 and is then left to the restart-storm backstop.
+ */
+let keepEntryWords: [string, Set<string>][] | undefined;
+function keepWords(): [string, Set<string>][] {
+  keepEntryWords ??= Object.entries(V3_SERVE_SAFE_REFUSALS).map(([name, re]) => {
+    const literal = re.source
+      .replace(
+        /\\[sSdDwW]|\\(.)|\[[^\]]*\]|\(\?:|\{\d+(?:,\d*)?\}|[()|?*+^$]/g,
+        (_m, esc: string | undefined) => (esc !== undefined ? esc : " "),
+      )
+      .replace("NotRun: out-of-scope: ", "");
+    return [name, nearMissWords(literal)];
+  });
+  return keepEntryWords;
+}
+
+/**
+ * PR-244: for a refusal text that no keep entry matches, the keep entry whose literal words it holds
+ * at least 80% of (entries of 8+ words only): a reworded kept refusal. `undefined` for a kept text
+ * or when no entry is close. Warning only: it never changes a keep decision.
+ */
+export function keepNearMiss(
+  text: string,
+): { readonly entry: string; readonly found: number; readonly size: number } | undefined {
+  if (Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(text))) return undefined;
+  const have = nearMissWords(text.replace(/^NotRun: out-of-scope: /, ""));
+  let best: { entry: string; found: number; size: number } | undefined;
+  for (const [entry, words] of keepWords()) {
+    // PR-244 amendment 2: entries of at least 7 literal words (`yaml-list-indent` has 7).
+    if (words.size < 7) continue;
+    let found = 0;
+    for (const w of words) if (have.has(w)) found += 1;
+    if (
+      found / words.size >= 0.8 &&
+      (best === undefined || found / words.size > best.found / best.size)
+    )
+      best = { entry, found, size: words.size };
+  }
+  return best;
+}
+
+/** PR-244 (pre-committed): unmeasured variants of kept classes, shown once as known, never as the warning. */
+export const KNOWN_NEAR_MISS_VARIANTS: readonly {
+  readonly entry: string;
+  readonly contains: string;
+  readonly why: string;
+}[] = [
+  {
+    entry: "report-parameters-no-xml-declaration",
+    contains: "given to Report.RunRequestPage",
+    why: "an unmeasured report method of a kept class",
+  },
+  {
+    entry: "cascade-manual-binding",
+    contains: "An error was expected inside an ASSERTERROR",
+    why: "an unmeasured cascade tail of a kept class",
+  },
+];
+
+export function knownNearMissVariant(
+  entry: string,
+  text: string,
+): (typeof KNOWN_NEAR_MISS_VARIANTS)[number] | undefined {
+  return KNOWN_NEAR_MISS_VARIANTS.find((v) => v.entry === entry && text.includes(v.contains));
+}
+
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
  *  the daemon, never from the rows. */
 export type ServeDaemonRule = "v2" | "v3";

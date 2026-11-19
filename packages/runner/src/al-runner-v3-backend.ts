@@ -72,6 +72,8 @@ import {
   type ServerTestLine,
   V3_SERVE_SAFE_REFUSALS,
   defaultServerSpawn,
+  keepNearMiss,
+  knownNearMissVariant,
   serveDaemonReusable,
 } from "./al-runner-server";
 import {
@@ -2960,6 +2962,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R939: daemons closed, by reason, and the refusal families among them (`closeLane`). */
   private readonly closes = new Map<V3DaemonCloseReason, number>();
   private readonly closeFamilies = new Map<string, number>();
+  /**
+   * PR-244: refusal texts already checked for a keep near-miss, the known variants already shown, and refusal closes
+   * per family, THIS SESSION (cleared by `setNotify`, as the other once-per-session flags are; `closeFamilies` above
+   * is the backend's lifetime count for the close line and is not touched).
+   */
+  private readonly nearMissChecked = new Set<string>();
+  private readonly nearMissKnownShown = new Set<string>();
+  private readonly stormFamilies = new Map<string, number>();
   /** R939: the closes so far, by reason and refusal family (the close line; tests). */
   daemonCloses(): {
     readonly byReason: ReadonlyMap<V3DaemonCloseReason, number>;
@@ -3037,6 +3047,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (family !== undefined) {
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
       lane.stats.refusalCloses += 1; // PR-99 (§6): a floor, per lane
+      // PR-244: a backstop for a reworded keep entry (warning only; the keep decision is unchanged). Counted per
+      // session, so a reused backend's next session warns on its own 10th close.
+      const n = (this.stormFamilies.get(family) ?? 0) + 1;
+      this.stormFamilies.set(family, n);
+      if (n === 10)
+        this.notify(
+          "al-runner-v3-refusal-restart-storm",
+          `[lethal] al-runner-v3-refusal-restart-storm: "${family}" closed the daemon 10 times this session (${(detail?.text ?? "").slice(0, 200)}); a reworded keep entry, or an unkept refusal class worth measuring`,
+        );
+    }
+    const text = detail?.text;
+    if (text !== undefined && !this.nearMissChecked.has(text)) {
+      this.nearMissChecked.add(text);
+      const nm = keepNearMiss(text);
+      const known = nm === undefined ? undefined : knownNearMissVariant(nm.entry, text);
+      if (nm !== undefined && known !== undefined) {
+        if (!this.nearMissKnownShown.has(nm.entry)) {
+          this.nearMissKnownShown.add(nm.entry);
+          console.warn(
+            `[lethal] al-runner-v3: a known unmeasured variant of keep entry ${nm.entry} closed the daemon (${known.why}); not kept, as pre-committed (PR-244)`,
+          );
+        }
+      } else if (nm !== undefined) {
+        this.notify(
+          "al-runner-v3-keep-near-miss",
+          `[lethal] al-runner-v3-keep-near-miss: "${text.slice(0, 200)}" almost matches keep entry ${nm.entry} (${nm.found}/${nm.size} words) but does not: a rewording, or an unmeasured variant; it closes the daemon as before (PR-244)`,
+        );
+      }
     }
     if (V3_ROUTINE_CLOSES.has(reason)) return;
     this.closeSink?.({
@@ -3160,6 +3198,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.testDataOffBuild = undefined;
       this.demoDownloadWarned = false;
       this.demoMayDownloadWarned = false;
+      // PR-244: the near-miss and storm warnings are per session too.
+      this.nearMissChecked.clear();
+      this.nearMissKnownShown.clear();
+      this.stormFamilies.clear();
     }
   }
   private readonly compiler: ArtifactCompiler;
