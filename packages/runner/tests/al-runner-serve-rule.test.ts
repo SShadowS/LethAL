@@ -2,7 +2,54 @@
 // `al-runner-backend.test.ts` by R654 S1 (plan docs/superpowers/plans/2026-10-22-r654-retire-dotnet-alrunner.md),
 // with the rule, which v3 uses, now in `al-runner-server.ts`.
 import { describe, expect, test } from "bun:test";
-import { AlRunnerServeDuplicateRowError, serveDaemonReusable } from "../src/al-runner-server";
+import {
+  AlRunnerServeDuplicateRowError,
+  keepNearMiss,
+  knownNearMissVariant,
+  serveDaemonReusable,
+} from "../src/al-runner-server";
+
+// PR-244: a reworded kept refusal shows as a near-miss; a kept text, an unrelated one and the two
+// pre-committed variants do not warn.
+describe("PR-244: keepNearMiss", () => {
+  const PERF10 =
+    "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)";
+  const REPORT =
+    "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+  const CASCADE_TAIL =
+    "NotRun: out-of-scope: a test before this one in the codeunit did not pass (SomeInventedTest: failed (Assert.IsTrue failed. invented message) and left a manual event subscription bound that it would have unbound later: the bindings this test starts with are not BC's; this failure is not trusted: An error was expected inside an ASSERTERROR statement.";
+
+  test("the PERF-10 reworded Company FindSet text names company-findset with every word found", () => {
+    const nm = keepNearMiss(PERF10);
+    expect(nm?.entry).toBe("company-findset");
+    expect(nm?.found).toBe(nm?.size);
+    expect(knownNearMissVariant("company-findset", PERF10)).toBeUndefined();
+  });
+  test("the original kept text is never a near-miss", () => {
+    expect(
+      keepNearMiss(
+        "NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
+      ),
+    ).toBeUndefined();
+  });
+  test("an unrelated unkept refusal is not a near-miss", () => {
+    expect(
+      keepNearMiss(
+        "NotRun: out-of-scope: use of an XmlPort whose schema the runtime does not model",
+      ),
+    ).toBeUndefined();
+  });
+  test("the Report.RunRequestPage variant is a near-miss of its entry and a known variant", () => {
+    const nm = keepNearMiss(REPORT);
+    expect(nm?.entry).toBe("report-parameters-no-xml-declaration");
+    expect(knownNearMissVariant(nm?.entry ?? "", REPORT)).toBeDefined();
+  });
+  test("the ASSERTERROR cascade tail is a near-miss of cascade-manual-binding and a known variant", () => {
+    const nm = keepNearMiss(CASCADE_TAIL);
+    expect(nm?.entry).toBe("cascade-manual-binding");
+    expect(knownNearMissVariant(nm?.entry ?? "", CASCADE_TAIL)).toBeDefined();
+  });
+});
 
 // The measured texts (`/coord/handoff/R-612/measure.md`, probe `main.stdout`), verbatim.
 const HTTP =
