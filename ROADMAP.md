@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**41 of 1097 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**42 of 1098 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -390,6 +390,7 @@ that ordering is the priority.
 - **R1126** · al-runner v3 starts a test session with no application areas (upstream #8333): a TestPage finds a control whose area the company's experience tier does not enable, so a test BC fails passes on v3 (87 such passing tests and 5 kills in stored runs, all in Microsoft's Subcontracting tests; DO not affected) · [R1126.md](docs/roadmap/R1126.md) · open — waits on upstream #8333; regression entry u8333-session-app-areas (PR-175) flags the fix in the daily…
 - **R1127** · LethAL's two backends start a test with different WorkDates in a demo company: v3 (a client session) gets BC's login default, the last G/L entry date, while bcdev (an OData session) gets Today, so a WorkDate-dependent test can give different verdicts · [R1127.md](docs/roadmap/R1127.md) · done (7669e5cc) — LethAL Control 1.0.0.27 starts every bcdev test on BaseApp's GetDefaultWorkDate, as a…
 - **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · done (3bc17254)
+- **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · open
 
 ## Product gaps a real project hits
 
