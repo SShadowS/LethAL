@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**48 of 1108 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**49 of 1110 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -381,7 +381,7 @@ that ordering is the priority.
 - **R1057** · A timeout-killed verdict depends on which covering test LethAL meets first: with a second killing test, one window scores timeout-killed and the next killed (R-984 t5 vs t6) · [R1057.md](docs/roadmap/R1057.md) · done (31b9c761)
 - **R1066** · An error met before any timeout or fail still ends a mutant's covering walk, so error-vs-killed depends on which covering test is met first (left out of R1057's fix) · [R1066.md](docs/roadmap/R1066.md) · done (c49521c1) — PR-81: a non-terminal error is held and the walk goes on…
 - **R1067** · On al-runner-v3, a kill measured on a test run ALONE is confirmed by running its whole codeunit unmutated, so a test that fails (or hangs) only when run alone can be scored killed (or timeout-killed) · [R1067.md](docs/roadmap/R1067.md) · done (274a9aac)
-- **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · open
+- **R1069** · A hang no static rule can see: removing a filter call before a copy loop lets the loop iterate the table it inserts into (DO t7: CDODocumentTemplateLine, void-method-call, timeout-killed) · [R1069.md](docs/roadmap/R1069.md) · closed 2026-11-19 — measured, rare in effect (1 timeout in 43,511 DO mutants, the original site), caught by…
 - **R1096** · On v3 serve, tests left out by excludeTests still RUN hidden: a left-out refusal or hang never reaches R612, so the daemon is reused after state its own rule says should close it (warm-ups, gapped entries, coverage windows) · [R1096.md](docs/roadmap/R1096.md) · closed 2026-11-16 — measured clean (PR-95): hidden excluded tests leave a kept daemon clean; the remaining…
 - **R1104** · Hang refusal for remove-not on `while not S.EOS` when the InStream S is read earlier in a block that holds the loop (R173's 'EOS is false at the start' fails after a pre-read): 7 DO sites refused, 2 hangs per 3 scored lost; P4 held in DO window x1 · [R1104.md](docs/roadmap/R1104.md) · closed 2026-11-18 — P4 held in DO window x1, the first on a head with PR-109 (orchestrator ruling; PR-154)
 - **R1105** · R173's other failing case: remove-not on `while not S.EOS` over an EMPTY stream (a blob with no value) has EOS true at the start, so the mutant loop can never exit; not refused today · [R1105.md](docs/roadmap/R1105.md) · closed 2026-11-17 — measured (PR-110): the only static rule fails PR-37's bar (0 hangs in 3 scored sites)…
@@ -1153,6 +1153,8 @@ that ordering is the priority.
 - **R1145** · An al-runner launcher prefix (alRunnerV3.launcher), so performance runs can wrap the daemons (perf, stderr capture) while LethAL still hashes and gates the real binary · [R1145.md](docs/roadmap/R1145.md) · open
 - **R1146** · Adopt al-runner's stopAfterFirstFailure (upstream #8484) for mutant requests: the fork's version cut DO test time 20-23% with 0 moved verdicts (PR-223); re-measure upstream's before use · [R1146.md](docs/roadmap/R1146.md) · open — trigger: the first gated `current` that contains upstream #8484
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — measure first (coord PR-228): census of DO's cut kinds, a direct kept-vs-fresh DO check on `current`…
+- **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — measure first: survivors' seconds in tests outside reachedBy (codeunit-order rule), then a v3 A/B on a…
+- **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
 
 ---
 
