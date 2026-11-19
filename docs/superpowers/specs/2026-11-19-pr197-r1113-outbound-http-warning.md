@@ -87,6 +87,22 @@ sets, and files the reach-based ranking as its own item.
   (P3).
 - No control-app change.
 
+## Amendment 1 (2026-11-19, after the build and its opus review; not a prediction)
+- **P1 missed.** The dry run on the build prints 112 of 112, not 113.
+  - The 113th codeunit is `CDOTestRunnerGetMethods`, which has `Subtype = Test` but no `[Test]` method, so no run executes
+    it. The prototype counted `Subtype = Test`; discovery counts codeunits with tests, rightly.
+  - Both Azure codeunits are listed, as predicted.
+  - Evidence, re-run on the final head: `/coord/handoff/PR-197/dryrun-do.txt`.
+- **The second printed line was wrong for al-runner.** al-runner v3 opens no connection (ADR-027;
+  `V3_SERVE_SAFE_REFUSALS.http`). The line now reads: "On BC a call made from them goes out to the network; ... (al-runner v3
+  opens no connection, ADR-027.)".
+- **Unread now covers:**
+  - a file the object-header reader refuses, which is caught per codeunit so the other codeunits keep their class;
+  - a codeunit with a preprocessor directive inside its object text while a policy is written there. The policy may be in an
+    inactive `#if` arm, and reading it as `block` would hide an open codeunit.
+- **The dry run starts the native parser before discovery.** Discovery's tree finder needs it.
+- **The unread count is its own line,** as §3.3 says.
+
 ## 6. Filed alongside
 - **The ranking:** an item for procedure-level reach, which orders the `open` list by whether a call path to `HttpClient` is
   found, with the prototype's data and the cost figures above.

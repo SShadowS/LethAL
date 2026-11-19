@@ -154,6 +154,18 @@ exports[`C02-04 characterization 1: one batch, sequential 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -854,6 +866,18 @@ exports[`C02-04 characterization 2: two batches 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -1957,6 +1981,18 @@ exports[`C02-04 characterization 3: grouped, chunked 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -2896,6 +2932,18 @@ exports[`C02-04 characterization 4: warm kills 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -3751,6 +3799,18 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -4637,6 +4697,18 @@ exports[`C02-04 characterization 6: section G unattested 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -5698,6 +5770,18 @@ exports[`C02-04 characterization 6b: section G unattested, two batches whose dep
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -6772,6 +6856,18 @@ exports[`C02-04 characterization 7: lease lost mid-batch 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -7367,6 +7463,18 @@ exports[`C02-04 characterization 8: R194 rule 2b 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -8248,6 +8356,18 @@ exports[`C02-04 characterization 9: no green baseline 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -8606,6 +8726,18 @@ Refusing to measure: every mutant covered only by these would be recorded no-cov
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 3,
         "tests": [
           {
@@ -8818,6 +8950,18 @@ exports[`C02-04 characterization 12: baseline in-flight 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {
@@ -9233,6 +9377,18 @@ exports[`C02-04 characterization 13: baseline pre-dispatch retry 1`] = `
     },
     {
       "event": {
+        "httpPolicy": {
+          "codeunits": 1,
+          "handler": [],
+          "open": [
+            {
+              "codeunit": "Sandbox Tests",
+              "file": "SandboxTests.Codeunit.al",
+              "policy": "",
+            },
+          ],
+          "unread": [],
+        },
         "seq": 2,
         "tests": [
           {

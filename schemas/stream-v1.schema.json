@@ -785,6 +785,93 @@
             "type": "string"
           }
         },
+        "httpPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "codeunits",
+            "open",
+            "handler",
+            "unread"
+          ],
+          "properties": {
+            "codeunits": {
+              "type": "number"
+            },
+            "open": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "codeunit",
+                  "file",
+                  "policy"
+                ],
+                "properties": {
+                  "codeunit": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "handler": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "codeunit",
+                  "file",
+                  "policy"
+                ],
+                "properties": {
+                  "codeunit": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "unread": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "codeunit",
+                  "file",
+                  "policy"
+                ],
+                "properties": {
+                  "codeunit": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "policy": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "httpPolicyFailed": {
+          "type": "string"
+        },
         "seq": {
           "type": "number"
         },
