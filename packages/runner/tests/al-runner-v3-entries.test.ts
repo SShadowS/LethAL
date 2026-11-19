@@ -1688,6 +1688,94 @@ describe("R939: why each serve daemon closed", () => {
     expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
   });
 
+  // PR-244: the near-miss and restart-storm warnings. Warning only: the daemon closes as before.
+  describe("PR-244: keep near-miss and restart storm", () => {
+    // A synthetic rewording (a clause inserted mid-sentence into `page-no-record-onopenpage`): unkept, and no suffix
+    // widening of that entry would keep it. (PERF-10's Company text is kept since bugs' widening, master c3355859.)
+    const REWORDED =
+      "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
+    const REPORT_VARIANT =
+      "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+    const textFor =
+      (text: string, who: readonly string[]): RowsFn =>
+      (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          who.includes(m) && x.method === "A"
+            ? { ...x, status: "error" as const, notRun: true, message: text }
+            : x,
+        );
+    const near = (seen: [string, string][]) =>
+      seen.filter(([c]) => c === "al-runner-v3-keep-near-miss");
+    const storm = (seen: [string, string][]) =>
+      seen.filter(([c]) => c === "al-runner-v3-refusal-restart-storm");
+
+    test("a reworded text warns once at its first close; the same text again does not; the daemon still closes", async () => {
+      const { r, seen } = await watched(textFor(REWORDED, ["M0001", "M0002"]));
+      expect(near(seen).length).toBe(1);
+      expect(near(seen)[0]?.[1]).toMatch(
+        /keep entry page-no-record-onopenpage \((\d+)\/\1 words\)/,
+      );
+      // the keep decision is unchanged: the refusal closed the daemon, and counted by reason
+      expect([...r.b.daemonCloses().byReason]).toEqual([["refusal", 2]]);
+    });
+    test("a known variant prints a plain line, never the warning", async () => {
+      const lines: string[] = [];
+      const orig = console.warn;
+      console.warn = (...a: unknown[]) => void lines.push(a.join(" "));
+      try {
+        const { r, seen } = await watched(textFor(REPORT_VARIANT, ["M0001", "M0002"]));
+        expect(near(seen)).toEqual([]);
+        expect([...r.b.daemonCloses().byReason]).toEqual([["refusal", 2]]);
+      } finally {
+        console.warn = orig;
+      }
+      expect(lines.filter((l) => l.includes("known unmeasured variant")).length).toBe(1);
+    });
+    test("an unkept family warns a storm at its 10th close only", async () => {
+      const ids = Array.from({ length: 11 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+      const r = await rig({
+        serve: { rows: textFor(WITH_EVENTS, ids) },
+        oneShotRows: allPass,
+      });
+      const seen: [string, string][] = [];
+      r.b.setNotify((c, m) => seen.push([c, m]));
+      await baseline(r.b, SUITE1);
+      for (let i = 0; i < 11; i++) {
+        await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+        expect(storm(seen).length).toBe(i + 1 < 10 ? 0 : 1);
+      }
+      expect(r.b.daemonCloses().refusalFamilies.get("WithEvents subscriber …")).toBe(11);
+      expect(near(seen)).toEqual([]);
+    });
+    test("a reused backend's next session (setNotify) warns again: its own 10th close, and a near-miss text the last session reported", async () => {
+      const ids = Array.from({ length: 22 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+      const r = await rig({
+        serve: {
+          rows: (m, cu, d, n) =>
+            ids.indexOf(m) >= 20
+              ? textFor(REWORDED, ids)(m, cu, d, n)
+              : textFor(WITH_EVENTS, ids)(m, cu, d, n),
+        },
+        oneShotRows: allPass,
+      });
+      const first: [string, string][] = [];
+      r.b.setNotify((c, m) => first.push([c, m]));
+      await baseline(r.b, SUITE1);
+      for (let i = 0; i < 10; i++) await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+      await r.b.prefetchMutants(plans([ids[20] ?? ""], SUITE1));
+      expect(storm(first).length).toBe(1);
+      expect(near(first).length).toBe(1);
+      const second: [string, string][] = [];
+      r.b.setNotify((c, m) => second.push([c, m]));
+      for (let i = 10; i < 19; i++) await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+      expect(storm(second).length).toBe(0);
+      await r.b.prefetchMutants(plans([ids[19] ?? ""], SUITE1));
+      expect(storm(second).length).toBe(1);
+      await r.b.prefetchMutants(plans([ids[21] ?? ""], SUITE1));
+      expect(near(second).length).toBe(1);
+    });
+  });
+
   test("a timeout row: reason timeout, no family", async () => {
     const { r } = await watched(timedOutFor("M0002"));
     const c = r.b.daemonCloses();

@@ -46,6 +46,45 @@ after the orchestrator's ruling. Scripts and outputs: `/coord/handoff/PR-241/` (
 - A miss of 1-3 on this slice is reported as measured (the slice may have different unit sizes than y3), not explained
   away; a miss of 5 is a BLOCK for adoption.
 
+## 0d. Amendment 4 (2026-11-19, coord PR-246, before any further A/B): §1's packing estimate was WRONG; the corrected figure
+- **The error:** §1 said y3's requests are small because "the unit, not a cap, sets the size", and `pack.py` merged
+  requests by entries alone. Both came from the code survey's inference, never measured against y3's sizing events.
+- **Measured now** (`/coord/handoff/PR-246/sized.py`, `pack-budget.py`; y3's `serve-request-sized` events, one per request,
+  each listing its codeunit calls, entries and measured per-entry cost):
+  - y3's prefetch requests are bound by R987's **4 GiB measured-cost budget**: cost/budget p50 0.85, p90 1.65. DO's entries
+    are memory-heavy, so a request fills the budget at ~20 entries. The 16-unmeasured cap bit once in 5,052 requests.
+  - Re-simulated with the budget enforced (the cap packing goes through): 64 entries: 5,052 -> 4,899 prefetch requests,
+    **~94 s wall saved** (not ~1,770 s); 128: ~101 s; 256: ~105 s.
+- **So lever 2 as packing is about 0.4% of the mutant phase on DO**, and amendment 3's small 73 -> 59 on the slice had the
+  same cause. The knob stays as merged (off by default, verdict-neutral); no speed A/B of packing is worth running on DO.
+- **Where the fixed cost could still be cut** (for the orchestrator; not measured here): R987's per-request budget
+  (requests would grow only if the 4 GiB per-request budget grew, against the container's 32 GiB and 3 lanes), or the
+  per-entry memory growth itself (upstream #8026, resource files that entries replace), which is what makes DO's requests
+  small; and upstream's per-request floor (R1092).
+
+## 0c. Amendment 3 (2026-11-19, the A/B's result): packing is SAFE; its speed is NOT shown on this slice
+Run 20:27-21:52Z, arms A, B (64), A2 back to back on `lethal/pr-241` cd660eb34, `current` 4ebfe7913; outputs
+`/coord/handoff/PR-241/ab-{A,B,A2}/`, comparison `ab-compare.py`/`ab-compare.txt`.
+- **Bound 5 (correctness): MET.** 1,006 mutants in every arm; per mutant on the full site key, 0 verdict and 0
+  `killingTest` differences (A-B, A-A2, A2-B); counts identical (390 killed / 423 survived / 154 no-coverage / 39 error);
+  timeout-killed sets equal (0); warning-code sets identical. B did pack: 69.4 entries per prefetch request against 56.1.
+- **Bound 4 (live within ±2%): MET.** 75 live requests (1,504 entries) in every arm.
+- **Bound 1 (prefetch requests ≤ 45% of A): MISSED.** 59 against 73 (81%). This slice's units are already large (A sent
+  56.1 entries per prefetch request; y3 sent 22.8), so packing had little to merge: 14 fewer requests, about 13-19
+  lane-seconds of fixed cost at the per-request cost measured in the same arms.
+- **Bounds 2 and 3 (fixed cost ≤ 50%; mutant phase ≥ 4% faster): met on paper, but CONFOUNDED, so not claimed.**
+  - Mutant phase: A 1,371.7 s, B 709.9 s, A2 1,143.8 s; prefetch setup+baseline: A 120.9 s, B 55.6 s, A2 98.4 s.
+  - The box changed speed under the arms: during A, three other lanes' full VERIFY runs and a v3 itest ran
+    (`/coord/locks/heavy-peaks.tsv`, 20:28-21:00Z); A2 had no logged heavy job but was still slower than B.
+  - The proof it was the box: LIVE requests are identical in every arm and packing never touches them, yet their
+    setup+baseline was A 130.9 s, B 59.2 s, A2 107.2 s, the same fall as prefetch's (B/A 0.45 live, 0.46 prefetch).
+    So packing's own share of B's speed is about nil here; the rest is box noise.
+- **So:** the knob is correct (verdict-neutral, red-tested, A/B-equal) and stays off by default. Its speed claim still rests
+  on §1's model (fixed cost per request × requests removed), unproven live.
+- **To prove the speed** (proposed, for the orchestrator): a slice chosen for SMALL units (y3-like ≤ 25 entries per
+  prefetch request, picked from y3's events), on a quiet box with the arms interleaved (A, B, A, B), judged on
+  requests removed × the per-request fixed cost measured in the same arm, which is robust to box speed, and on wall.
+
 ## 1. Measured offline (y3: `/coord/handoff/PR-204/y3.run.events.ndjson`, 7,959 `serve-request-timed` events, 3 lanes)
 - **The "fixed" cost IS fixed.** Least squares per kind, cost = a + b·entries + c·tests:
   - prefetch (5,052 requests): setup 973 ms + al-runner baseline 577 ms; entries and tests explain ~nothing (R² 0.01-0.02;

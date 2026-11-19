@@ -299,6 +299,8 @@ export async function lanesRig(
     afterLaneCopy?: (dir: string) => Promise<void>;
     /** R778: turn the kill-pair batch ON (default off: these tests measure today's per-kill pair). */
     pairBatch?: boolean;
+    /** PR-241: the pack cap (the backend's `packEntries` option; the env var is not read when set). */
+    packEntries?: number;
   } = {},
 ): Promise<LanesRig> {
   await initParser();
@@ -355,6 +357,7 @@ export async function lanesRig(
       alcPath: "/fake/alc",
       coverage: "none",
       transport: "serve-entries",
+      ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
     },
     one.spawn,
     fakeAlc(),

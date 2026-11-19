@@ -1055,6 +1055,11 @@ export interface ExecutionBackend {
     opts?: {
       readonly remainingMs?: () => number;
       /**
+       * PR-241: `plans` packs several split-prefetch units: how many plans each holds, in order (sums to
+       * `plans.length`). Absent: one unit. A request never mixes units whose flags or guards differ.
+       */
+      readonly unitSizes?: readonly number[];
+      /**
        * R912: every covered mutant of the call, passed with the first window only. The backend warms
        * up for all of them, as a whole-batch prefetch did, so a window cannot change what is warm.
        */
