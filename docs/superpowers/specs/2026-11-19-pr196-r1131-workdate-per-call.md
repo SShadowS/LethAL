@@ -34,7 +34,10 @@ item overrides the section it names.
      mismatching mutant is re-run against it. A second move in the same batch falls back to (A).
 
    (B) keeps verdicts on a long run crossing a date (DO windows run for hours). It cannot make a false kill, because a
-   kill is confirmed on the date it ran under. **Recommendation: (B).** Two baseline calls disagreeing WITHIN one baseline
+   kill is confirmed on the date it ran under. Recommendation was (B).
+   **RULED (orchestrator, 2026-11-19): (A).** A posting during a run is rare. (A) is never wrong, only conservative: the
+   affected rows read `error` / `workdate-changed` by name, and the user re-runs. (B) adds a mid-batch re-baseline path for
+   a rare case, which is more code to trust. Two baseline calls disagreeing WITHIN one baseline
    still refuse the batch (`BaselineWorkDateUnstableError`).
 5. **Hub mode** (`coverageMode: "procedure"`, which sends the baseline to bc-dev-mcp, bcdev-backend.ts): its answers
    carry no `workDate`, and its session follows its own date rule. The comparison does not apply there. The report says
