@@ -28,11 +28,11 @@ export const BCDEV_FIGURES = {
 export const DBM_FIGURES = {
   // PR-209: 126 = 122 + 4 added sites (2 condition-true, 2 blank-argument); the other 21 sites the two
   // operators meet there are refused by R868 (`hangRefused` 21: 12 condition-true, 9 blank-argument), not made.
-  // killed/survived/noCoverage below are the OLD 122-site figures, still to be recorded
-  // (`PR209_PENDING["al-runner-v3"]`).
+  // RECORDED (amendment 4, §0e item 2, from /coord/handoff/PR-209/v3rec/record.log): 17 / 5 / 104 (was 15 / 3 / 104
+  // over 122); the 4 added sites are 2 killed, 2 survived.
   totalMutantSites: 126,
-  killed: 15,
-  survived: 3,
+  killed: 17,
+  survived: 5,
   noCoverage: 104,
 } as const;
 
@@ -410,10 +410,11 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   "al-runner-v3/N1": [],
   "al-runner-v3/x-s1": [],
   // R855: Layout Beta now has 8 guards against the leg's budget of 7 (pre-committed, 2026-11-07-r855-operator-batch-precommitment.md).
-  "al-runner-v3/L1": ["oversized-batch"],
-  "al-runner-v3/MO": [],
+  // PR-209 amendment 4 (§0e items 1 and 3): L1, MO and MOE run `--profile slim`, which flags itself.
+  "al-runner-v3/L1": ["operator-narrowed-run", "oversized-batch"],
+  "al-runner-v3/MO": ["operator-narrowed-run"],
   // R918: MO and WR on serve-entries, expected to warn exactly as their one-shot legs do.
-  "al-runner-v3/MOE": [],
+  "al-runner-v3/MOE": ["operator-narrowed-run"],
   "al-runner-v3/WRE": ["compiled-out-sites", "coverage-refused-mutants", "coverage-refused-object"],
   // R948 amendment 3 (master bf8a68cf): K builds through cli.ts, which turns the memory guard on.
   "al-runner-v3/K": ["al-runner-v3-memory-guard"],

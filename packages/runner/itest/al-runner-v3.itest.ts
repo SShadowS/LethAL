@@ -95,7 +95,12 @@ import { AlcCompileError, ArtifactCompiler, defaultArtifactIo } from "../src/art
 import { type RunCliConfig, buildBackend, v3RecheckOf } from "../src/cli";
 import type { EventSubscriber } from "../src/events";
 import { formatFailure } from "../src/format-failure";
-import { BASELINE_TIMEOUT_DEFAULT, type SessionConfig, runSession } from "../src/orchestrator";
+import {
+  BASELINE_TIMEOUT_DEFAULT,
+  SLIM_OPTIONS,
+  type SessionConfig,
+  runSession,
+} from "../src/orchestrator";
 import { effectiveBuildSymbols } from "../src/preprocessor-symbols";
 import { type SpawnFn, defaultSpawn } from "../src/publisher";
 import type { MutantOutcome, SessionReport } from "../src/report";
@@ -1843,7 +1848,8 @@ async function legMO(scratch: string, serve = false): Promise<SessionReport> {
       ...(serve ? { transport: "serve-entries" as const } : {}),
     }),
   );
-  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids });
+  // PR-209 amendment 4 (§0e item 3, RULED (b)): MO and MOE run `--profile slim`, so the baseline stays 14 rows.
+  const r = await session(scratch, b, { projectDir, testDir, selectorIds: ids, ...SLIM_OPTIONS });
   assertKillers(r, b, leg, V3_MO_KILLERS);
   assertCounts(r, leg, 7, 1, 6, 14);
   assertCleanLeg(r, b, leg);

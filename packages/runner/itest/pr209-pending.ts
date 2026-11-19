@@ -10,8 +10,7 @@ export const PR209_UNRECORDED = "PR-209: verdict to be recorded" as const;
 export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
   // tables and hang: RECORDED on bc2 (every figure assertion passed before the record wrote the baseline).
   "al-runner-v3": [
-    "DBM_FIGURES.killed/survived/noCoverage (126 sites now)",
-    "the v3 legs' baselines (MO, WR, T, D1, S1...); L1 is not pending (slim, unchanged)",
+    "the WR and T baselines (R849 expected files) and leg T's hand-pin counts; O1 and D1 re-run with the CDO path",
   ],
 };
 

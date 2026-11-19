@@ -831,10 +831,11 @@ export const V3_MO_KILLERS: readonly V3Killer[] = [
   ["M0001", "src/MultiControl.Codeunit.al", 4, "empty-block", "ControlDoubles"],
   ["M0002", "src/MultiControl.Codeunit.al", 5, "return-value", "ControlDoubles"],
   ["M0007", "src/MultiPair.Codeunit.al", 12, "empty-block", "ReachedBothWays"],
-  ["M0010", "src/MultiPair.Codeunit.al", 14, "return-value", "ReachedBothWays"],
-  ["M0011", "src/MultiPair.Codeunit.al", 14, "delete-additive-right", "ReachedBothWays"],
-  ["M0012", "src/MultiPair.Codeunit.al", 14, "swap-additive", "ReachedBothWays"],
-  ["M0013", "src/MultiPair.Codeunit.al", 15, "return-value", "ReachedBothWays"],
+  // PR-209 amendment 4 (§0e item 3): MO runs `--profile slim`, so these are the pre-flip codes again.
+  ["M0009", "src/MultiPair.Codeunit.al", 14, "return-value", "ReachedBothWays"],
+  ["M0010", "src/MultiPair.Codeunit.al", 14, "delete-additive-right", "ReachedBothWays"],
+  ["M0011", "src/MultiPair.Codeunit.al", 14, "swap-additive", "ReachedBothWays"],
+  ["M0012", "src/MultiPair.Codeunit.al", 15, "return-value", "ReachedBothWays"],
 ];
 
 /**
