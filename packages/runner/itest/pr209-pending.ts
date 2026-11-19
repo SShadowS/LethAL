@@ -8,7 +8,6 @@ export const PR209_UNRECORDED = "PR-209: verdict to be recorded" as const;
 
 /** Per gate: the pinned figures that are still the OLD set's value and are to be recorded. */
 export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
-  bcdev: ["BCDEV_FIGURES.killed/survived/noCoverage/groupedCalls (26 sites now)"],
   tables: [
     "TABLES_FIGURES.killed/survived/noCoverage (472 sites now)",
     "TABLES_FIGURES.groupedCalls",
