@@ -610,7 +610,7 @@ that ordering is the priority.
 - **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · done (d3ba626d, 7a062e09) — live proof on bc4 matched every pre-committed row (PR-171 retry, 2026-11-18)
 - **R1124** · Not measured: does Azure DevOps' PublishMutationReport@2 build tab render `lethal export --format mutation-elements-html`'s page, which loads its bundle from jsDelivr? Waits on Azure DevOps access · [R1124.md](docs/roadmap/R1124.md) · open — waiting on Azure DevOps access (an organisation with the Stryker Mutator extension); split from R1080…
 - **R1133** · `lethal run --dry-run` passes on a config that the real run then refuses (al-runner v3: V3EnvironmentUnknownError, R938): a dry run never builds the backend, so none of the backend's config pre-flight refusals run · [R1133.md](docs/roadmap/R1133.md) · done (2498d46b)
-- **R1134** · The outbound-HTTP pre-run line lists every test codeunit with no blocking TestHttpRequestPolicy, unranked: on DO all 113; a procedure-level reach to HttpClient would order it by evidence · [R1134.md](docs/roadmap/R1134.md) · open
+- **R1134** · The outbound-HTTP pre-run line lists every test codeunit with no blocking TestHttpRequestPolicy, unranked: on DO all 113; a procedure-level reach to HttpClient would order it by evidence · [R1134.md](docs/roadmap/R1134.md) · open — HELD (PR-200, 2026-11-19): DO's hung tests reach no HttpClient send through explicit calls, and the…
 
 ## Backends and tooling
 
