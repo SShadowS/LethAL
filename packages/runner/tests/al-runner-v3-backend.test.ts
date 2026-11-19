@@ -55,7 +55,6 @@ import {
   V3_NO_CLIENT_DEFAULT,
   validateAlRunnerV3Config,
 } from "../src/al-runner-v3-config";
-import { v3SectionPassThrough } from "../src/cli";
 import {
   MESSAGE_PREFIX_REASON,
   type V3ContractResult,
@@ -69,6 +68,7 @@ import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-
 import { AlcCompileError, type ArtifactIo, ArtifactPrepareError } from "../src/artifact";
 import { killMessageOf, looksLikeAssertionFailure } from "../src/assertion-screen";
 import type { RunOpts, TestMethodRef } from "../src/backend";
+import { v3SectionPassThrough } from "../src/cli";
 import { noGreenBaselineNote, runOnce } from "../src/orchestrator";
 import { describeTestPermissionsRefusal } from "../src/permission-canary";
 import type { SpawnFn } from "../src/publisher";
