@@ -67,6 +67,62 @@ item overrides the section it names.
      mutant on its frozen baseline, and each report carries a `baselineWorkDate` equal to that server's CRONUS last G/L
      date.
 
+## 0b. Amendment 2 (2026-11-19, after the Opus review of the build; orchestrator ruling (2))
+- **The review BLOCKED the batch-0 clarification of amendment 1 item 1** ("a session never reuses its first batch's
+  snapshot"):
+  - it breaks `itest:lend`, whose R1, R2 and RP assert batch-0 reuse;
+  - it costs users: every bcdev `--resume` would re-run its first baseline, so R192's reuse is lost for single-batch
+    projects.
+- **The root cause:** at batch 0's reuse decision no test has run, so the session has no date.
+- **The ruling (2):** the control app returns the date WITHOUT running a test, on a call the client already makes
+  before each batch.
+- **The change, replacing amendment 1 item 1's batch-0 clarification:**
+  1. **Control 1.0.0.28** (the same bump) also returns `workDate` = `Format(LogInMgt.GetDefaultWorkDate(), 0, 9)` on
+     the control call the client makes before each batch's baseline or reuse decision. **That call is `HarnessInfo`**
+     (the adversary-light review): `harnessVerifier.verify()`, which `BcDevMcpBackend.deploy()` and `attach()` call first,
+     and which runs in every batch's `deployStep` before `scoreBatch`. It is not a lease call: the lease and
+     `serverGeneration` reads are once per session. The date is computed the same way a test-running call computes its
+     start date, in a web-service session of the same user and company.
+     - **Builder rule:**
+       - the backend keeps the fresh date, set ONLY in `deploy`/`attach`;
+       - it is read AND cleared at the reuse decision;
+       - it is not cleared in `baselinePhase(true)` (which runs between deploy and the decision);
+       - it is never read from the session-level cached harness answer (cli.ts).
+     - **A non-demo company's pooled session** can return an old date across midnight, the reused-session rule §0a item 7
+       notes. The safe direction holds: a stale equal read reuses, and then every answer that differs scores
+       `workdate-changed`.
+  2. **At EVERY batch's reuse decision, batch 0 included,** the client compares that FRESH date with the snapshot's
+     stored date. It reuses only on equality, and re-runs the baseline otherwise. A dateless snapshot is never reused.
+     If the fresh read is missing on a 1.0.0.28 answer, that is a protocol error, refused by name.
+  3. **The batch's comparison date** is that batch's baseline date: from the live baseline's answers, or, on reuse, the
+     snapshot's date (which equals the fresh read).
+     - The guard's session-wide `sessionDate` is dropped. This fixes the review's M2: a later batch no longer compares
+       against the first answer's date.
+     - **No fallback that lets a mutant answer set the batch date** (the adversary-light review). On reuse, the guard
+       takes the date that was COMPARED (the fresh read, equal to `snapshot.workDate`), not one re-derived from the
+       surviving rows.
+       - A test-running answer that arrives with no batch baseline date set throws by name; there is no `??=`.
+       - Otherwise a reused batch whose rows carry no date would let the first mutant answer define the date, and a
+         date-driven failure could score as a kill. One red-checked test pins this.
+  4. **Pre-committed:**
+     - `itest:lend` passes UNCHANGED (R1, R2 and RP still reuse batch 0 on one day, one date);
+     - every other frozen gate is as amendment 1 item 7 says.
+  5. **Tests, red-checked both ways:**
+     - same date → reuses (batch 0 and a later batch);
+     - moved date → re-runs;
+     - a dateless snapshot is never reused;
+     - a missing fresh date refuses.
+- **The review's minor points, folded in:**
+  - **M1:** the guard keeps the verdict's other fields (stop accounting, sessionId) when it marks `workdate-changed`.
+  - **M3:** two baseline dates inside one batch's baseline abort the SESSION by name (`BaselineWorkDateUnstableError`),
+    not just the batch. That is conservative and rare; it is stated here, matching the code, with an orchestrator-level
+    test.
+  - **M4:**
+    - the CHANGELOG line states the reuse rule exactly;
+    - R1131's status is set done in the branch;
+    - servers.md's proof rows move only with code's re-proof.
+  - **M5** is moot: R192's reuse is kept.
+
 ## 1. The problem (checked in the source before writing)
 - Since PR-180 the control app sets each test's start WorkDate to Base Application's `LogInMgt.GetDefaultWorkDate()`:
   - `RunMethod.Codeunit.al` reads it on every call;
