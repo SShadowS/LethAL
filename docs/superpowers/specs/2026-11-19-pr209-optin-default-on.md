@@ -323,8 +323,9 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
     survivors each verify call names), steps 3-5's counts and refusals, `GATE_WARNINGS` verify/* all `[]`;
   - `packages/runner/tests/gap-pins.test.ts` returns to the default set (its `SLIM_OPTIONS` removed): the offline proof of
     the four keys and the unchanged ids.
-- **Run:** `LETHAL_ITEST_BCDEV=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json` `itest:verify`, on bc1 (its proven server),
-  against `bcdev.baseline.json`. Any difference is a BLOCK.
+- **Run:** `LETHAL_ITEST_VERIFY=1 LETHAL_ITEST_CONFIG=lethal.config.bc1.json` `itest:verify`, on bc1 (its proven server),
+  against `bcdev.baseline.json`. Any difference is a BLOCK. (Corrected 2026-11-19: this line first said
+  `LETHAL_ITEST_BCDEV=1`, under which the gate skips; that attempt measured nothing.)
 - **The other gates not yet run under PR-209** (same method: an Opus read of each itest, figures from the code and the
   recorded twins):
   - **itest:agreement** (`sandbox-harden`; twin `harden.baseline.json`, 23 rows, recorded on bc3) MOVES:
@@ -340,9 +341,11 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
     nothing the set moves (by procedure+operator; no mutants; print only).
   - **itest:envtool** (host-only) was already stale before PR-209 (master generates 22 against its 19). Its own rule
     re-records only against a same-day bcdev run, through the owner; not moved here.
-- **Runs** (each its proven server, bc1 per `docs/gates/servers.md`): `itest:verify`, `itest:agreement`
-  (`LETHAL_ITEST_AGREEMENT=1`), `itest:verify-scale` (`LETHAL_ITEST_VERIFY_SCALE=1`), `itest:testapp`
-  (`LETHAL_ITEST_TESTAPP=1`), all with `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`. Any difference is a BLOCK.
+- **Runs** (each its proven server, bc1 per `docs/gates/servers.md`): `itest:verify` (`LETHAL_ITEST_VERIFY=1`),
+  `itest:agreement` (`LETHAL_ITEST_AGREEMENT=1`), `itest:verify-scale` (`LETHAL_ITEST_VERIFY_SCALE=1` and
+  `LETHAL_VERIFY_SCALE_OUT=<file>`, which it requires), `itest:testapp` (`LETHAL_ITEST_TESTAPP=1`), all with
+  `LETHAL_ITEST_CONFIG=lethal.config.bc1.json`. Any difference is a BLOCK. (Corrected 2026-11-19: verify's and
+  verify-scale's variables; the first attempts skipped or refused before measuring anything.)
 
 ## 0h. Amendment 7 (2026-11-19): D1 and D1c run slim, RULED (b) by the orchestrator
 - **Observed** (`/coord/handoff/PR-209/v3rec2/o1d1.log`, checkout `/work/lethal-wt/cdo-r396`): O1 PASS; D1 63 / 15 / 0 over
