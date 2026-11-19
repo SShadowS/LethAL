@@ -1372,6 +1372,27 @@ describe("R885: demo data, on the serve path", () => {
     expect(on.serve.daemons[0] ?? []).not.toContain("--no-download");
   });
 
+  test("PR-237: every serve daemon's argv carries --timings only when serveTimings is on", async () => {
+    // a run with a restart (M0002's echo times out), so a SECOND daemon must carry it too
+    const script: ServeScript = {
+      echo: (m, d, n) =>
+        m === "M0002"
+          ? { method: "Echo", status: "error", notRun: true, message: TIMEOUT_1S }
+          : goodEcho(m, d, n),
+    };
+    const on = await readyRig({
+      serve: script,
+      mutants: ["M0001", "M0002"],
+      extra: { serveTimings: true },
+    });
+    expect(on.serve.daemons.length).toBeGreaterThanOrEqual(2);
+    for (const argv of on.serve.daemons) expect(argv).toContain("--timings");
+    const off = await readyRig({ serve: script, mutants: ["M0001", "M0002"] });
+    for (const argv of off.serve.daemons) expect(argv).not.toContain("--timings");
+    const offExplicit = await readyRig({ mutants: ["M0001"], extra: { serveTimings: false } });
+    for (const argv of offExplicit.serve.daemons) expect(argv).not.toContain("--timings");
+  });
+
   test("R956: the daemon argv carries --license <path> only when the license is set", async () => {
     const on = (
       await readyRig({

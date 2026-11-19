@@ -21,7 +21,8 @@
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *     "recheckWithheldKills": true,                          // PR-144, ON by default (PR-182); false opts out and saves about 10% of a run with many withheld rows (nothing when there are none). After the main pass, re-run the withheld-kill rows under method isolation. A row the recheck does not recover stays `error`: unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9 TestPage-only killers, 7 killers red at BC's baseline). Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
  *     "recheckBudgetSeconds": 3600,                          // PR-144; the recheck's own time budget (the main pass's --time-budget does not cover it)
- *     "daemonStderrDir": "<optional folder>"                 // PR-227; off by default. Each serve daemon's FULL stderr goes to <folder>/<utc>-lane<N>-pid<P>.stderr (LethAL itself keeps a 64 KB tail in memory). For measurement runs
+ *     "daemonStderrDir": "<optional folder>",                // PR-227; off by default. Each serve daemon's FULL stderr goes to <folder>/<utc>-lane<N>-pid<P>.stderr (LethAL itself keeps a 64 KB tail in memory). For measurement runs
+ *     "serveTimings": false                                  // PR-237; off by default. true passes --timings to every serve daemon: stderr gains the compile-cache and timing lines (with daemonStderrDir, they are kept). For measurement runs; verdicts unchanged (measured)
  *   }
  *
  * `serverMode` and `selectorMode` are refused by name (the static selector only, and no v2-style serve).
@@ -75,6 +76,8 @@ export interface AlRunnerV3ConfigSection {
    * processes are not daemons and get none. Absent: none written.
    */
   readonly daemonStderrDir?: string;
+  /** PR-237: `--timings` on every serve daemon (stderr only: compile-cache and timing lines). Default `false`. */
+  readonly serveTimings: boolean;
   /**
    * R948: GiB the memory guard keeps free below the container's cgroup limit: no new test call
    * starts while the container uses more than `memory.max` less this, and the run stops with its
@@ -155,6 +158,7 @@ export const V3_ISOLATION_DEFAULT = "auto";
 
 const KEYS = [
   "daemonStderrDir",
+  "serveTimings",
   "recheckWithheldKills",
   "recheckBudgetSeconds",
   "memoryHeadroomGb",
@@ -327,6 +331,11 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.downloadDemoData" must be a boolean, got ${JSON.stringify(r.downloadDemoData)} (R885).`,
     );
   }
+  if (r.serveTimings !== undefined && typeof r.serveTimings !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.serveTimings" must be a boolean, got ${JSON.stringify(r.serveTimings)} (PR-237).`,
+    );
+  }
   if (r.noClient !== undefined && typeof r.noClient !== "boolean") {
     throw new Error(
       `al-runner-v3-config-refused: "alRunnerV3.noClient" must be a boolean, got ${JSON.stringify(r.noClient)} (R907).`,
@@ -401,6 +410,7 @@ export function validateAlRunnerV3Config(
     ...(typeof r.daemonStderrDir === "string"
       ? { daemonStderrDir: resolve(r.daemonStderrDir) }
       : {}),
+    serveTimings: r.serveTimings === true,
   };
 }
 

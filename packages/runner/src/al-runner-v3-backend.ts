@@ -929,6 +929,8 @@ export interface AlRunnerV3Config {
   readonly daemonMaxRequests?: number;
   /** PR-227: `alRunnerV3.daemonStderrDir`: every serve daemon's full stderr, one file each. Absent: none written. */
   readonly daemonStderrDir?: string;
+  /** PR-237: `alRunnerV3.serveTimings`: `--timings` on every serve daemon. Absent or false: not passed. */
+  readonly serveTimings?: boolean;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
@@ -7815,6 +7817,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       "--environment",
       this.environmentChoice.value,
       ...(this.cfg.license !== undefined ? ["--license", this.cfg.license.path] : []), // R956
+      ...(this.cfg.serveTimings === true ? ["--timings"] : []), // PR-237
       ...(this.noDownload() ? ["--no-download"] : []),
       ...(this.sidecarPath !== undefined
         ? [

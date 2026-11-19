@@ -1567,6 +1567,18 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
   });
 
+  test("PR-237 the config key serveTimings: off by default, boolean only, passed on by the CLI only when on", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).serveTimings).toBe(false);
+    expect(v({ serveTimings: true }).serveTimings).toBe(true);
+    expect(v({ serveTimings: false }).serveTimings).toBe(false);
+    expect(() => v({ serveTimings: "yes" })).toThrow("serveTimings");
+    expect(v3SectionPassThrough(v({ serveTimings: true })).serveTimings).toBe(true);
+    expect("serveTimings" in v3SectionPassThrough(v({}))).toBe(false);
+    expect("serveTimings" in v3SectionPassThrough(v({ serveTimings: false }))).toBe(false);
+  });
+
   test("PR-227 the config key daemonStderrDir: absent by default, resolved to absolute, empty or non-string refused", () => {
     const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
     const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
