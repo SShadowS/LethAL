@@ -362,6 +362,8 @@ export interface RunRow {
 export interface TestNarrowing {
   readonly testsOnly: readonly string[];
   readonly excludeTests: readonly string[];
+  /** PR-212: the `testKeyOf` of each test a BC run left out because it writes the Company table. Absent when none. */
+  readonly companyWrites?: readonly string[];
 }
 
 /** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
@@ -524,14 +526,16 @@ function parseTestNarrowing(value: string | null, runId: number): TestNarrowing 
     typeof parsed !== "object" ||
     parsed === null ||
     !strings((parsed as Record<string, unknown>).testsOnly) ||
-    !strings((parsed as Record<string, unknown>).excludeTests)
+    !strings((parsed as Record<string, unknown>).excludeTests) ||
+    ((parsed as Record<string, unknown>).companyWrites !== undefined &&
+      !strings((parsed as Record<string, unknown>).companyWrites))
   ) {
     throw new Error(
       `store.ts: run ${runId} has a corrupt "test_narrowing" column value ${JSON.stringify(value)}`,
     );
   }
-  const { testsOnly, excludeTests } = parsed as TestNarrowing;
-  return { testsOnly, excludeTests };
+  const { testsOnly, excludeTests, companyWrites } = parsed as TestNarrowing;
+  return { testsOnly, excludeTests, ...(companyWrites !== undefined ? { companyWrites } : {}) };
 }
 
 /** Verdicts `invalidateBatch` leaves as they are (and so does the R513 read-time rewrite). */
@@ -1045,6 +1049,10 @@ export class ResultsStore {
           : JSON.stringify({
               testsOnly: info.testNarrowing.testsOnly,
               excludeTests: [...new Set(info.testNarrowing.excludeTests)].sort(),
+              ...(info.testNarrowing.companyWrites !== undefined &&
+              info.testNarrowing.companyWrites.length > 0
+                ? { companyWrites: [...new Set(info.testNarrowing.companyWrites)].sort() }
+                : {}),
             }),
         info.resumeInputs === undefined ? null : JSON.stringify(info.resumeInputs),
       ) as {

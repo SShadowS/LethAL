@@ -192,6 +192,103 @@ baseline leg is narrowed; same-tier dedup collisions throw. The must-changes bel
    - The review checks this.
    - (`EXPECTED_LAYOUT`'s split goes with item 2's revert.)
 
+## 0e. Amendment 4 (2026-11-19, after the first record runs; before any v3 record is written)
+- **The BC side so far:** bcdev RECORDED on bc1 exactly as pre-committed: 22 old rows byte-identical, +3 condition-true and +1
+  blank-argument (3 survived, 1 no-coverage), groupedCalls 20, warmKills 0.
+  - The other BC legs failed only on figures that depend on the new rows. Every observed value was sent, and they are being
+    pinned: lend L0; wrapped 12 survived + 2 killed of the 14; harden's 2 rows both killed; chunked survived 9 → 11, with the
+    same 17 killers in both legs; hang +1 refused site and line 141 killed.
+- **The v3 record attempt** (/coord/handoff/PR-209/v3rec/record.log) wrote nothing, as the guards meant it to. What it
+  showed:
+  1. **L1's warning set moves (missed by amendment 3):** running `--profile slim` flags `operator-narrowed-run`. That is the
+     slim profile's stated design (§2 item 2: a slim report never reads as a full one). **Pre-committed:**
+     `GATE_WARNINGS["al-runner-v3/L1"]` becomes `["operator-narrowed-run", "oversized-batch"]`. L1's rows are unchanged
+     (11, slim).
+  2. **DBM:** 17 / 5 / 104 over 126 (was 15 / 3 / 104 over 122). The 4 new sites: 2 killed, 2 survived. DBM is a figures
+     leg with no baseline file, so these are recorded figures.
+  3. **v3 baselines on a pinned build follow R849** (docs/gates/alrunner-v3.md, "The route for a row to change on a pinned
+     build"): the run must equal an expected file committed BEFORE it, with each added row's verdict pre-committed or shown
+     equal to the BC row. Never a copy of the run.
+     - **WR** (`al-runner-v3.wrapped.baseline.json`, +14) and **T** (`al-runner-v3.tables.baseline.json`, +32): the
+       expected files take each added row's verdict from the BC twin's recorded row (`bcdev.wrapped.baseline.json`,
+       `tables.baseline.json`), once those are recorded. A v3 row that differs from its BC twin is a v3 difference to
+       report, not to absorb.
+     - **T** also moves its hand pins and `v3ReadingsDigest` (new counts), so per R849 step 2 it is a re-gate of the pinned
+       build. Its details are stated in the commit that lands it.
+     - **MO** (`al-runner-v3.multiobject.baseline.json`, +1) has NO BC twin. **NEEDS A RULING:** the refused record run
+       already showed the new row's verdict (counts 8 / 1 / 6, so the new condition-true row was killed), so a "prediction"
+       written now is not blind. Options:
+       - (a) pre-commit it from an independent reading of the fixture (which test covers the guard, and why it must fail),
+         and state that the run had been seen;
+       - (b) leave MO's new row unrecorded (MO runs `--profile slim`, like L1), so its baseline stays 14.
+       - **Recommendation: (a)** if the reading is unambiguous, else (b).
+       - **RULED (orchestrator): (b).** After a run has been seen, a "prediction" cannot be blind, however careful the
+         reading, and MO's job is multi-object coverage, not the operator set.
+       - **Pre-committed:**
+         - legs MO and MOE (the same fixture) run `--profile slim`, like L1;
+         - `al-runner-v3.multiobject.baseline.json` stays as it is (14 rows), and is not re-recorded;
+         - `V3_MO_KILLERS` returns to its PRE-flip table (round 2's 4 moved codes are reverted);
+         - `GATE_WARNINGS["al-runner-v3/MO"]` and `["al-runner-v3/MOE"]` become `["operator-narrowed-run"]` (both were
+           `[]`).
+       - Gating the new operators' multi-object behaviour, if it is wanted, is its own task with a blind prediction.
+  4. **S1, S1E, DB, DBI, ISO** compare against `bcdev.baseline.json`. They pass once bcdev's re-recorded file lands
+     (observed 3 / 17 / 6 over 26, equal to bc1's).
+  5. **O1 and D1 were run with `LETHAL_ITEST_V3_CDO=1`** instead of the checkout path (`/work/src/do-lethal`, at 5f2a71d):
+     my mistake. They are invalid, and re-run with the path.
+
+## 0f. Amendment 5 (2026-11-19): §0c item 5's "kill position unchanged" over-claimed; the corrected rule
+- **What happened** (hang record, bc2): an EXISTING row moved its kill position. The `return-value` mutant at
+  `HangLogic.Codeunit.al` line 147 (old M0038, now M0039) was a warm kill at position 2 and is now killed at position 1.
+  Its verdict is still killed.
+- **The cause, from the code** (an Opus read; test-order.ts `orderCoveringTests`, orchestrator.ts `recordKill`):
+  - kill position is the killing TEST's place in that mutant's own grouped call;
+  - the tests are ordered by a session-wide KILL LEDGER: tests that already killed mutants in the same procedure go first.
+  - PR-209's new mutant at line 141 is killed by `SpinUntilReachesTheTarget`, one more kill for that test in `SpinUntil`.
+    By line 147 it leads the order and kills at position 1.
+  - `SpinUntilAtZeroExitsEarly` leaves at line 142 and cannot reach line 147, so the killer is the same test either way.
+  - The fixture's own header says this arm is "DESIGNED AROUND THE KILL LEDGER".
+  - warmKills stays 4: M0031 joins the warm kills and M0039 leaves them.
+  - The ledger is a cost heuristic, never a verdict rule (test-order.ts).
+- **The corrected rule, replacing §0c item 5's "kill position unchanged":**
+  - an existing row's verdict, killing test, error class and mutated text never move (checked by the baseline diff, row by
+    row, at each record);
+  - its kill position MAY move, but only inside a procedure that gains a killed mutant, and only as the kill ledger orders
+    it. Each such move is named in the review with its procedure.
+  - Any other move of a kill position is still a BLOCK.
+- **Pinned:**
+  - `EXPECTED_ON` line 147 `return-value` killPosition 2 → 1;
+  - line 141 `condition-true` killPosition 2 (recorded).
+  - **The settling evidence is the hang record's baseline diff:** the line-147 row must be byte-identical, killing test
+    included. A different killer there is a BLOCK.
+  - **Settled:** the hang record (bc2) kept the line-147 row byte-identical, killed by `SpinUntilReachesTheTarget`.
+
+## 0g. Amendment 6 (2026-11-19, before the v3 WR and T records): the v3 pre-commitments for those two legs
+- **State:** every BC leg recorded and confirmed (all 8 PASS at lethal/pr209-figs 4960b3ff1). A v3 run at d6b04f87e
+  (`/coord/handoff/PR-209/v3rec2/run.log`): L1, MO, MOE and DBM PASS under amendment 4.
+- **1. WR's WrappedArms count moves 3 → 4 (missed by amendment 4).** `judgeWrArms` pins exactly three rows in
+  `src/WrappedArms.Codeunit.al`. PR-209 adds `condition-true` in `Pick` there: the BC twin `bcdev.wrapped.baseline.json`
+  (recorded on bc3) now holds four `Wrapped Arms|Pick` rows (empty-block, return-value, condition-true,
+  conditional-boundary), three before. **Pre-committed:** exactly FOUR rows, each still `no-coverage` with the refusal
+  note, and no other row carrying it. The rule is unchanged; only the count follows the generated set.
+- **2. O1 and D1's checkout is `/work/lethal-wt/cdo-r396`** (at 5f2a71d, with the 17 pinned `Test/.alpackages` apps), as
+  docs/gates/alrunner-v3.md names it. Amendment 4 item 5 named `/work/src/do-lethal`, which has no `.alpackages`: wrong
+  again; the run refused it by name (0 of 17 apps).
+- **3. T's expected file** (`packages/runner/itest/expected/al-runner-v3.tables.baseline.json`, committed with this
+  amendment, before any T record):
+  - the 418 committed v3 rows verbatim;
+  - the 32 added rows (23 condition-true, 9 blank-argument): the key and `mutatedTextSha256` from the refused record's dump
+    (keys and hashes can only come from a run; R849 step 6); verdict, killingTest, coverageFiltered and errorClass from the
+    BC twin row in `tables.baseline.json` (recorded on bc2);
+  - order: the gate's own (`sortedForDisk`).
+  - **Disclosed:** the dump's 32 rows already equal their BC twins on every field. So the file equals that run's rows; it
+    is built from the twins, not copied.
+- **4. T's hand-pin counts** (`legT.counts` of the readings the current pin uses, total 418 → 450) are NOT predicted here.
+  They are read from the T record run's printed count line, then pinned. That moves the readings digest, so the manifest
+  rows are re-gated with `--refresh-rows` (as R-965 did), in the window the orchestrator sets: after y3, before the
+  redeploy, not across lethal-bugs' daily update (next 2026-11-20 ~07:47Z).
+- **5. WR's expected file** follows the same construction from `bcdev.wrapped.baseline.json` once a WR record run past
+  item 1 dumps its keys. It lands in its own master commit before WR's record, with WR's `assertCounts` figures.
+
 ## 1. What is true today (read from master 8ddd1736)
 - Three operators are opt-in (`optIn: true`): `swap-workdate-today`, `condition-true` and `blank-argument`. An opt-in
   operator runs only when `--operator` names it (orchestrator.ts, `op.optIn !== true || admittedOperators?.has(...)`).

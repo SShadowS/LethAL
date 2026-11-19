@@ -28,6 +28,14 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Added
 
+- **A BC run leaves out test methods that write the Company table; `--keep-company-tests` runs them** (PR-212, R1113).
+  Found by parse, in the method or one test-app procedure it calls. They are named in `excludedTests` (reason
+  `company-write`), flagged `tests-narrowed`, and a warning `company-write-tests-left-out` lists each with its path and
+  `commits` (with the flag, `company-write-tests-kept`). A no-coverage mutant in an object they name (under coverage
+  `none`, a survived one) reads `error` / `left-out-test-reach`. Explain schema v33, verify schema v9. PR-197's HTTP
+  line no longer cites R1113. No fixture writes a company, so no BC gate leg sees either warning (R736).
+  **An unfinished store made before this change, on a project with company-writing tests, no longer resumes** (the
+  config digest changed): run again, or pass `--keep-company-tests`, which keeps the old test set.
 - **Eight capability facts for `al-runner-v3`, and a gate leg for the daemon baseline over several test codeunits** (PR-114a,
   the first half of R1106). Leg C of `itest:alrunner-v3` goes from 28 to 36 facts: a new kind, `capability`, checks that
   no state crosses test codeunits in one request, that an excluded OnRun carries nothing, and how the SingleInstance

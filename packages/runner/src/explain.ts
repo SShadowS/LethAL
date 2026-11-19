@@ -289,8 +289,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 32: PR-196 (R1131) added the cause value `workdate-changed` to `$.notMeasured[].cause` and the caveat value
  * `workdate-changed` to `$.caveats[].caveat`. New values, so it bumps (R233); v31 is frozen.
+ *
+ * 33: PR-212 (R1113) added the cause value `left-out-test-reach` to `$.notMeasured[].cause`. A new value, so it
+ * bumps (R233); v32 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 32;
+export const EXPLAIN_SCHEMA_VERSION = 33;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a
