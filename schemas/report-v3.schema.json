@@ -486,7 +486,8 @@
               "kill-not-reproduced",
               "confirm-stopped",
               "test-discovery-failed",
-              "workdate-changed"
+              "workdate-changed",
+              "left-out-test-reach"
             ]
           },
           "withheldKill": {
@@ -1469,7 +1470,8 @@
             "enum": [
               "compiled-out",
               "preproc-undecided-kept",
-              "exclude-test"
+              "exclude-test",
+              "company-write"
             ]
           }
         }

@@ -821,8 +821,8 @@ export interface CapNumbers {
 }
 
 /** R759: why a test is in `excludedTests`: outside the source run's `--tests-only` globs, or named
- *  by its `--exclude-test`. */
-export const VERIFY_EXCLUSION_REASONS = ["tests-only", "exclude-test"] as const;
+ *  by its `--exclude-test`, or (PR-212) left out by a BC run because it writes the Company table. */
+export const VERIFY_EXCLUSION_REASONS = ["tests-only", "exclude-test", "company-write"] as const;
 export type VerifyExclusionReason = (typeof VERIFY_EXCLUSION_REASONS)[number];
 
 /** R759: one test the source run left out of its own suite. */
@@ -848,7 +848,9 @@ export async function leftOutBySource(
   if (
     narrowing === null ||
     narrowing === undefined ||
-    (narrowing.testsOnly.length === 0 && narrowing.excludeTests.length === 0)
+    (narrowing.testsOnly.length === 0 &&
+      narrowing.excludeTests.length === 0 &&
+      (narrowing.companyWrites ?? []).length === 0)
   ) {
     return out;
   }
@@ -867,12 +869,15 @@ export async function leftOutBySource(
   }
   const insideKeys = new Set(inside.map(testKeyOf));
   const excluded = new Set(narrowing.excludeTests);
+  const companyWrites = new Set(narrowing.companyWrites ?? []);
   for (const ref of whole) {
     const key = testKeyOf(ref);
     if (!insideKeys.has(key)) {
       out.set(key, { test: qualifiedTestName(ref), reason: "tests-only" });
     } else if (excluded.has(key)) {
       out.set(key, { test: qualifiedTestName(ref), reason: "exclude-test" });
+    } else if (companyWrites.has(key)) {
+      out.set(key, { test: qualifiedTestName(ref), reason: "company-write" });
     }
   }
   return out;
@@ -1367,8 +1372,9 @@ export async function verifyDependencyFingerprint(
  *  there means "not measured" only from v8 on (the v5 rule). v7 is frozen.
  *  R873 did NOT bump: it added no field or value, so the v5/v8 absence rule does not apply. It
  *  narrowed `killed`: a pre-R873 v8 `killed` row may be a kill by a flaky new test, which a reader
- *  can tell from `newTests[].state` (not `stable`); from R873 on such a row reads `error`. */
-export const VERIFY_SCHEMA_VERSION = 8;
+ *  can tell from `newTests[].state` (not `stable`); from R873 on such a row reads `error`.
+ *  9 since PR-212 added the `excludedTests[].reason` value `company-write` (a value domain grew). v8 is frozen. */
+export const VERIFY_SCHEMA_VERSION = 9;
 export const VERIFY_VERDICTS = ["killed", "survived", "error", "skipped"] as const;
 export const KILLED_BY = ["assertion", "runtime-error", "other"] as const;
 export const NEW_TEST_STATES = [
