@@ -95,3 +95,18 @@ on any class outside the measured set.
       the warnings).
 - **(4) goes to the orchestrator and the owner** with the exposure above. It is not built here.
 - **(3) is not built.**
+
+## Amendment 1 (2026-11-19, from the Opus build review, before submit)
+- **Per session, really:** the checked-text set, the known variants shown and a storm count per family are cleared by
+  `setNotify`, as the backend's other once-per-session flags are. So a reused backend's next session warns on its own 10th
+  close and on a text the last session reported. `closeFamilies` (the close line's lifetime count) is untouched. Tested,
+  and red-checked by removing the reset.
+- **A known false-alarm source,** not seen in y2, y3, PERF-10 or the v3 gate: a `cascade` refusal whose tail is a panic or
+  a timeout fails `SAFE_TAIL` on purpose, but holds all of the `cascade` entry's 8 words, so it prints the near-miss
+  warning. That is acceptable for a warning (the daemon closes either way). Timeouts stay out of the v3 gate (R164), so no
+  gate leg prints it. Should it appear in a real run, add it as a third known variant by a pre-commitment.
+- **Misses, stated:**
+  - an entry with an alternation (`http`, `commit`, `dotnet-exception`) has words from every branch, so a reworded text of
+    one branch may stay under 0.8;
+  - a refusal that closes a WARM-UP carries no text and no family, so neither check sees it.
+  - The storm backstops the first, not the second.
