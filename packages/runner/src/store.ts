@@ -16,6 +16,7 @@ import {
   twinSiteOf,
 } from "./selection";
 import { RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
+import { commonWorkDate } from "./workdate-guard";
 
 /** R644: two faced lists name the same tests (order ignored); a `null` (no record) equals nothing. */
 /** PR-21: a stored JSON text, or `undefined` when it does not parse (the reader then has no value). */
@@ -2247,12 +2248,15 @@ export class ResultsStore {
         `store.ts: baseline_snapshots row for run ${row.run_id} batch ${row.batch_index} has a corrupt payload — expected a JSON array of observations`,
       );
     }
+    const workDate = commonWorkDate(baseline as BaselineObservation[]);
     return {
       runId: row.run_id,
       batchIndex: row.batch_index,
       batchHash: row.batch_hash,
       testAppHash: row.test_app_hash,
       baseline: baseline as BaselineObservation[],
+      // R1131: the date its baseline verdicts carry; absent on a snapshot from before it.
+      ...(workDate !== undefined ? { workDate } : {}),
       // PR-21: unparseable state is no state (the serve resume then re-runs its baseline, by name)
       ...(row.backend_state !== null
         ? { backendState: parseJsonOrUndefined(row.backend_state) }

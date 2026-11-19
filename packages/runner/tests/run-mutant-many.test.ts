@@ -77,6 +77,8 @@ function entry(
     method,
     lineNo: 20000 + i * 10,
     sessionId: SESSION,
+    // R1131: every entry ran a method, so it carries the start WorkDate it ran under.
+    workDate: "2026-11-19",
     codeunitResults: JSON.stringify({ testResults }),
     durationMs: 40 + i,
     observedActive,

@@ -92,7 +92,8 @@
               "time-budget-reached",
               "nondebuggable-no-coverage",
               "withheld-kills",
-              "isolated-recheck-kills"
+              "isolated-recheck-kills",
+              "workdate-changed"
             ]
           }
         },
@@ -484,7 +485,8 @@
               "runner-refused",
               "kill-not-reproduced",
               "confirm-stopped",
-              "test-discovery-failed"
+              "test-discovery-failed",
+              "workdate-changed"
             ]
           },
           "withheldKill": {
@@ -1403,6 +1405,9 @@
       }
     },
     "dependencySourceSha256": {
+      "type": "string"
+    },
+    "baselineWorkDate": {
       "type": "string"
     },
     "numberingDigest": {

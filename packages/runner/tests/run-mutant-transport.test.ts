@@ -56,6 +56,8 @@ function echo(over: Record<string, unknown> = {}): Record<string, unknown> {
     // R206 §2.1: every answer that ran carries the session keys (control app 1.0.0.18).
     testRunsBefore: 0,
     sessionId: 2037,
+    // R1131: every answer that ran a method carries its start WorkDate (control app 1.0.0.28).
+    workDate: "2026-11-19",
     // GH-24: every answer that ran carries this test's own reach attestation (control app 1.0.0.19).
     observedActive: true,
     ...over,

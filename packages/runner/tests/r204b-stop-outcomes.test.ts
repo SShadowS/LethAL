@@ -465,6 +465,7 @@ describe("R-204b Part R: the stop's outcome is settled before the call returns (
       codeunitResults: JSON.stringify({ testResults: [{ method: "Hangs", result: 2 }] }),
       testRunsBefore: 0,
       sessionId: 2037,
+      workDate: "2026-11-19",
       observedActive: true,
     });
     const c = start({

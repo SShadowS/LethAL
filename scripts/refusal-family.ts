@@ -5532,6 +5532,184 @@ codeunit 51025 "Y2 Probe"
   ],
 };
 
+/**
+ * PR-195: the collation refusal DO's y2 window closed on (`ordering of the character U+516C (no collation weight)`), driven by
+ * an invented cell (no corpus source text). `InRange` is written in the shape the mutant has: `Ch >= 'A'` turned into
+ * `Ch >= ''`, so a Char compare becomes a Text compare. Depth 3: test -> Derive -> Clean -> InRange. Cell i is codeunit
+ * BASE_ID + 1 + i (51001 to 51007); the support codeunits are 51000 and 51008 to 51009 (`extraIds`).
+ */
+const y2c = (method: string, code: string, setup: string[] = [], vars: string[] = []): Cell =>
+  t9("Collation", method, "y2c", "W.SetOverride(7); Result := W.Derive(T);", {
+    vars: ['W: Codeunit "Y2C Derive";', "Ch: Char;", "T: Text;", "Result: Text;", ...vars],
+    setup: [`Ch := ${code};`, "T := Format(Ch) + 'AB';", ...setup],
+  });
+const Y2C_ROW = ['Row: Record "Y2C Row";'];
+const Y2C_ROW_SETUP = ["Row.Init();", "Row.Code := 'R1';", "Row.Insert();"];
+const Y2C_SINGLE = ['Single: Codeunit "Y2C Single";'];
+const Y2C_SINGLE_SETUP = ["Single.SetValue('x');"];
+export const Y2_COLLATION: Family = {
+  name: "y2-collation",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8203",
+  known: [],
+  extraIds: 2,
+  testPermissions: "Disabled",
+  support: `codeunit 51000 "Y2C Derive"
+{
+    SingleInstance = true;
+
+    var
+        Override: Integer;
+
+    procedure SetOverride(N: Integer)
+    begin
+        Override := N;
+    end;
+
+    procedure GetOverride(): Integer
+    begin
+        exit(Override);
+    end;
+
+    procedure Derive(Name: Text): Text
+    begin
+        exit(Clean(Name));
+    end;
+
+    local procedure Clean(Value: Text): Text
+    var
+        Result: TextBuilder;
+        Ch: Char;
+        i: Integer;
+    begin
+        Value := UpperCase(Value);
+        for i := 1 to StrLen(Value) do begin
+            Ch := Value[i];
+            if InRange(Ch) then
+                Result.Append(Format(Ch))
+            else
+                Result.Append('-');
+        end;
+        exit(Result.ToText());
+    end;
+
+    local procedure InRange(Ch: Char): Boolean
+    begin
+        exit(((Ch >= '') and (Ch <= 'Z')) or ((Ch >= '0') and (Ch <= '9')));
+    end;
+}
+
+codeunit 51008 "Y2C Single"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+
+    procedure SetValue(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure GetValue(): Text
+    begin
+        exit(Value);
+    end;
+}
+
+codeunit 51009 "Y2C Probe"
+{
+    procedure SingleValue(): Text
+    var
+        Single: Codeunit "Y2C Single";
+    begin
+        exit(Single.GetValue());
+    end;
+
+    // PR-195 build review MED-2: the rows the "after an insert" cells write, so a row that outlived a refusal shows.
+    procedure RowCount(): Text
+    var
+        Row: Record "Y2C Row";
+    begin
+        exit(Format(Row.Count()));
+    end;
+
+    procedure OverrideValue(): Text
+    var
+        D: Codeunit "Y2C Derive";
+    begin
+        exit(Format(D.GetOverride()));
+    end;
+
+    // text al-runner already orders: reported, so a change in it shows in the census
+    procedure OrderText(): Text
+    var
+        Row: Record "Y2C Order Row" temporary;
+        Acute: Text;
+        Tilde: Text;
+        R: Text;
+    begin
+        Acute := 'é';
+        Tilde := '~';
+        R := Format(Acute > 'Z') + Format(Acute < 'a') + Format(Acute > 'z') + Format(Acute < 'z');
+        R += '|' + Format(Tilde > 'a') + Format(Tilde < 'a') + Format(Tilde > 'Z') + Format(Tilde < 'Z');
+        Row.Code := 'Z';
+        Row.Insert();
+        Row.Code := 'É';
+        Row.Insert();
+        R += '|';
+        if Row.FindSet() then
+            repeat
+                R += Row.Code + ',';
+            until Row.Next() = 0;
+        exit(R);
+    end;
+}
+
+table 51000 "Y2C Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+
+table 51001 "Y2C Order Row"
+{
+    fields
+    {
+        field(1; "Code"; Code[20]) { }
+    }
+    keys { key(PK; "Code") { Clustered = true; } }
+}
+`,
+  readers: [
+    { name: "y2single", vars: ['Y2P1: Codeunit "Y2C Probe";'], expr: "Y2P1.SingleValue()" },
+    { name: "y2cover", vars: ['Y2P2: Codeunit "Y2C Probe";'], expr: "Y2P2.OverrideValue()" },
+    { name: "y2order", vars: ['Y2P3: Codeunit "Y2C Probe";'], expr: "Y2P3.OrderText()" },
+    { name: "y2rows", vars: ['Y2P4: Codeunit "Y2C Probe";'], expr: "Y2P4.RowCount()" },
+  ],
+  handles: {},
+  cells: [
+    y2c("CjkPlain", "20844"),
+    y2c("CyrillicPlain", "1050"),
+    y2c("CjkAfterInsert", "20844", Y2C_ROW_SETUP, Y2C_ROW),
+    y2c("CyrillicAfterInsert", "1050", Y2C_ROW_SETUP, Y2C_ROW),
+    y2c("CjkAfterSingle", "20844", Y2C_SINGLE_SETUP, Y2C_SINGLE),
+    y2c("CyrillicAfterSingle", "1050", Y2C_SINGLE_SETUP, Y2C_SINGLE),
+    // control (passing; the census ignores it): ASCII only, so no collation weight is needed. The expected text follows the
+    // AL above: UpperCase, then every character kept. The mutated shape compares as Text, and ' ' >= '' and ' ' <= 'Z' hold,
+    // so the space is kept too (measured on al-runner). It errors only on a mismatch.
+    t9(
+      "Collation",
+      "CtlAscii",
+      "y2c",
+      "Result := W.Derive('ABC 12'); if Result <> 'ABC 12' then Error('Derive gave [%1], expected [ABC 12]', Result);",
+      { vars: ['W: Codeunit "Y2C Derive";', "Result: Text;"] },
+    ),
+  ],
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -5570,6 +5748,8 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [Y1_REFUSALS.name]: Y1_REFUSALS,
   // PR-191: appended (BC-check number 22): the XML refusal texts DO's y2 window closed on, for a keep census
   [Y2_XML.name]: Y2_XML,
+  // PR-195: appended (BC-check number 23): the collation refusal DO's y2 window closed on, for a keep census
+  [Y2_COLLATION.name]: Y2_COLLATION,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */

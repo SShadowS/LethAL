@@ -65,6 +65,12 @@ export interface BaselineSnapshot {
   readonly batchHash: string;
   readonly testAppHash: string;
   readonly baseline: readonly BaselineObservation[];
+  /**
+   * R1131: the start WorkDate the baseline calls ran under (the one date its verdicts carry), or `undefined`
+   * for a snapshot stored before control app 1.0.0.28, or whose verdicts carry none or disagree. A snapshot
+   * without a date is never reused on a backend that compares dates (`refuseReusedBaselineDate`).
+   */
+  readonly workDate?: string;
   /** PR-21 (L5): the backend's own baseline state stored with it (al-runner v3 on serve), if any. */
   readonly backendState?: unknown;
 }

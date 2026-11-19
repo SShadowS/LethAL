@@ -227,6 +227,8 @@ export interface FoldedReport {
   readonly dependencyReportSources?: readonly DependencyReportSourceRecord[];
   /** R565 — see `SessionReport.dependencySourceSha256`. Absent for an older stream. */
   readonly dependencySourceSha256?: string;
+  /** R1131 — see `SessionReport.baselineWorkDate`. The first batch's; absent for an older stream. */
+  readonly baselineWorkDate?: string;
   /** R206 — see `SessionReport.warmKills`. */
   readonly warmKills: number;
   /** R175 — see `SessionReport.unplaceableCount`. */
@@ -391,6 +393,9 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
   >();
   const baselineStoppedTests = new Set<string>();
   let stoppedBudgetMs: number | undefined;
+  // R1131: the first batch's baseline start WorkDate (ponytail: a later batch on another date, after midnight,
+  // is not recorded here; its rows carry `workdate-changed` only if a batch's own answers moved).
+  let baselineWorkDate: string | undefined;
   const runnerDisagreementTests = new Set<string>();
   let testBuildSymbols: readonly string[] = [];
   let excludedTests: readonly ExcludedTestRecord[] = [];
@@ -525,6 +530,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "baseline-batch-finished":
         sawBaselineBatchFinished = true;
         if (e.stoppedBudgetMs !== undefined) stoppedBudgetMs = e.stoppedBudgetMs;
+        baselineWorkDate ??= e.workDate;
         // R106: a batch with at least one GREEN test is a batch that reaches the coverage filter.
         // A batch whose baseline is entirely red does not — `runSession` records every mutant
         // "no green baseline tests" and `continue`s BEFORE step 5 — so it owes no `coverage-split`
@@ -1019,6 +1025,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     ...(sourceSha256 !== undefined ? { sourceSha256 } : {}),
     ...(dependencyReportSources !== undefined ? { dependencyReportSources } : {}),
     ...(dependencySourceSha256 !== undefined ? { dependencySourceSha256 } : {}),
+    ...(baselineWorkDate !== undefined ? { baselineWorkDate } : {}),
   };
 }
 

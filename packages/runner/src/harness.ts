@@ -77,6 +77,10 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.28 (R1131) returns the start WorkDate it set as `workDate` on every answer that ran a method (RunMany's per-method
+ * object, RunMutant's status), so the client can refuse a start date that moved from the batch's baseline. No fallback.
+ * HarnessInfo also returns `workDate` (the date a test call would start on now, no test run): the fresh read each
+ * batch's snapshot-reuse decision compares with the snapshot's date.
  * 1.0.0.27 (R1127) starts every test method on the WorkDate a client session gets at login (BaseApp's
  * `GetDefaultWorkDate`: the last G/L posting date in a demo company), as al-runner v3 does, instead of the OData
  * session's Today. No action changes; it is required so a run's verdicts never mix the two start dates.
@@ -91,7 +95,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.27";
+export const MIN_CONTROL_VERSION = "1.0.0.28";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
@@ -372,6 +376,8 @@ interface HarnessInfo {
   readonly serverGeneration?: unknown;
   /** R969: the lease row's database id (1.0.0.26). */
   readonly databaseId?: unknown;
+  /** R1131 (1.0.0.28): the start WorkDate a test-running call would set now, ISO text. */
+  readonly workDate?: unknown;
   readonly tenantCountReachable?: unknown;
   readonly tenantCount?: unknown;
   readonly isolationModes?: unknown;
@@ -429,6 +435,11 @@ export interface HarnessDetails {
   /** R969: minted with the lease row and never by `ForceResetLease`, so an unchanged id across a
    *  generation change means the database survived (the lease was reset by hand). Never empty. */
   readonly databaseId: string;
+  /**
+   * R1131: the start WorkDate this server would give a test-running call now (ISO date), read from `HarnessInfo`
+   * without running a test. The bcdev backend compares it with a stored baseline's date at its reuse decision.
+   */
+  readonly workDate: string;
   readonly tenantGate: "enforced" | "unenforced";
 }
 
@@ -1037,10 +1048,18 @@ export class HarnessVerifier {
         `HarnessInfo databaseId ${JSON.stringify(info.databaseId)} is missing or empty — LethAL Control ${MIN_CONTROL_VERSION} or newer reports it (R969); upgrade the control app on this server`,
       );
     }
+    // R1131: required from 1.0.0.28 on, for the same reason: a missing date would let a stored baseline's
+    // date compare with nothing.
+    if (typeof info.workDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(info.workDate)) {
+      throw new HarnessVerificationError(
+        `HarnessInfo workDate ${JSON.stringify(info.workDate)} is missing or not an ISO date — LethAL Control ${MIN_CONTROL_VERSION} or newer reports it (R1131); upgrade the control app on this server`,
+      );
+    }
     return {
       protocolVersion: info.protocolVersion,
       serverGeneration: info.serverGeneration,
       databaseId: info.databaseId,
+      workDate: info.workDate,
       tenantGate: this.checkSingleTenant(info),
     };
   }

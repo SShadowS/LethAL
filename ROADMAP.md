@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**42 of 1097 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**43 of 1099 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -389,7 +389,9 @@ that ordering is the priority.
 - **R1116** · al-runner v3 raises no error on a bare Insert() of an existing key (upstream #8267): a mutant that inserts a duplicate key can score SURVIVED where BC kills it · [R1116.md](docs/roadmap/R1116.md) · open — waits on upstream #8267; PR-155/PR-166 (2026-11-18): 0 of the 50 DO candidates was a false survivor…
 - **R1126** · al-runner v3 starts a test session with no application areas (upstream #8333): a TestPage finds a control whose area the company's experience tier does not enable, so a test BC fails passes on v3 (87 such passing tests and 5 kills in stored runs, all in Microsoft's Subcontracting tests; DO not affected) · [R1126.md](docs/roadmap/R1126.md) · open — waits on upstream #8333; regression entry u8333-session-app-areas (PR-175) flags the fix in the daily…
 - **R1127** · LethAL's two backends start a test with different WorkDates in a demo company: v3 (a client session) gets BC's login default, the last G/L entry date, while bcdev (an OData session) gets Today, so a WorkDate-dependent test can give different verdicts · [R1127.md](docs/roadmap/R1127.md) · done (7669e5cc) — LethAL Control 1.0.0.27 starts every bcdev test on BaseApp's GetDefaultWorkDate, as a…
-- **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · open
+- **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · done (3bc17254)
+- **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · open
+- **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · open
 
 ## Product gaps a real project hits
 
@@ -608,7 +610,7 @@ that ordering is the priority.
 - **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · done (d3ba626d, 7a062e09) — live proof on bc4 matched every pre-committed row (PR-171 retry, 2026-11-18)
 - **R1124** · Not measured: does Azure DevOps' PublishMutationReport@2 build tab render `lethal export --format mutation-elements-html`'s page, which loads its bundle from jsDelivr? Waits on Azure DevOps access · [R1124.md](docs/roadmap/R1124.md) · open — waiting on Azure DevOps access (an organisation with the Stryker Mutator extension); split from R1080…
 - **R1133** · `lethal run --dry-run` passes on a config that the real run then refuses (al-runner v3: V3EnvironmentUnknownError, R938): a dry run never builds the backend, so none of the backend's config pre-flight refusals run · [R1133.md](docs/roadmap/R1133.md) · done (2498d46b)
-- **R1134** · The outbound-HTTP pre-run line lists every test codeunit with no blocking TestHttpRequestPolicy, unranked: on DO all 113; a procedure-level reach to HttpClient would order it by evidence · [R1134.md](docs/roadmap/R1134.md) · open
+- **R1134** · The outbound-HTTP pre-run line lists every test codeunit with no blocking TestHttpRequestPolicy, unranked: on DO all 113; a procedure-level reach to HttpClient would order it by evidence · [R1134.md](docs/roadmap/R1134.md) · open — HELD (PR-200, 2026-11-19): DO's hung tests reach no HttpClient send through explicit calls, and the…
 
 ## Backends and tooling
 
