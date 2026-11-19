@@ -117,6 +117,17 @@ export interface V3BuildPin {
     readonly cdoWorkDate: string;
     readonly issue: string;
     readonly evidence: string;
+    /**
+     * PR-233 (pre-commitment master d46eaa1ee): this build refuses every row insert in the CDO set's session after the
+     * partner apps' `OnAfterLogin` (al-runner f9116dc96, #8149). A KNOWN COVERAGE LOSS tracked on #8239, never "correct":
+     * BC measured runs the inserts (bc4). `judgeOrderProbe` then expects exactly `O1_PARTNER_LOGIN_TESTS` refused with
+     * exactly `text`. R1149 removes it when upstream's P2 lands.
+     */
+    readonly partnerLoginRefusal?: {
+      readonly text: string;
+      readonly issue: string;
+      readonly evidence: string;
+    };
   };
 }
 

@@ -1627,18 +1627,20 @@ async function legO1(scratch: string, version: string): Promise<void> {
       );
     for (const d of stamp()) dates.add(d);
     for (const rq of done) {
-      const reads = rq.entries
-        .filter((e) => e.kind !== "W")
-        .map((e) => {
-          const msgs = rq.lines
-            .filter((l) => l.entry === e.id)
-            .map((l) =>
-              e.kind === "C"
-                ? `${l.status}${l.message ? ` (${l.message})` : ""}`
+      // PR-233: W entries are printed too (test=status), so a refused writer is named in the log, not only in the
+      // failure text (which the receipt and the leg line cut short).
+      const reads = rq.entries.map((e) => {
+        const msgs = rq.lines
+          .filter((l) => l.entry === e.id)
+          .map((l) =>
+            e.kind === "C"
+              ? `${l.status}${l.message ? ` (${l.message})` : ""}`
+              : e.kind === "W"
+                ? `${l.name.slice(l.name.lastIndexOf(".") + 1)}=${l.status}`
                 : (l.message ?? l.status),
-            );
-          return `${e.id}: ${msgs.join(" ")}`;
-        });
+          );
+        return `${e.id}: ${msgs.join(" ")}`;
+      });
       console.log(`  O1: ${rq.label}: ${reads.join(" | ")}`);
     }
     // R771 addendum 2: a pinned build's login WorkDate, for the CDO set only (it holds Base Application).
@@ -1651,7 +1653,19 @@ async function legO1(scratch: string, version: string): Promise<void> {
     console.log(
       `  O1: ${set.name} set: commit kind judged as ${runs ? "runs (pin: commit-under-test-isolation gone)" : "refused (pin does not record commit-under-test-isolation gone)"}`,
     );
-    const j = judgeOrderProbe(done, [...dates], login, runs);
+    // PR-233: the CDO set (the one with partner apps) judges the f9116dc96 row-insert refusal; the own set never does.
+    const partnerText = activePin?.o1?.partnerLoginRefusal?.text;
+    if (set.name === "cdo")
+      console.log(
+        `  O1: cdo set: partner-login row inserts judged as ${partnerText !== undefined ? `refused (pin ${activePin?.id}, ${activePin?.o1?.partnerLoginRefusal?.issue})` : "pass, or held when refused by exactly the f9116dc96 text (no pin field)"}`,
+      );
+    const j = judgeOrderProbe(
+      done,
+      [...dates],
+      login,
+      runs,
+      set.name === "cdo" ? (partnerText !== undefined ? { pinned: partnerText } : {}) : undefined,
+    );
     console.log(`  O1: ${set.name} set: ${j.outcome} (${done.length} requests, one daemon)`);
     results.push({ set: set.name, ...j });
   }

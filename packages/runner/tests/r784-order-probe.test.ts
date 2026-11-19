@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test";
 import { V3_GATE_LEGS, gateOutcome } from "../itest/al-runner-v3-gate";
 import {
   type O1Request,
+  O1_PARTNER_LOGIN_TESTS,
+  O1_PARTNER_LOGIN_TEXT,
   O1_PLAN,
   combineO1Sets,
   judgeIsolateProbe,
@@ -454,5 +456,132 @@ describe("R804: O1's commit requests", () => {
         p.id,
         p.legC["commit-under-test-isolation"]?.verdict === "gone",
       ]);
+  });
+});
+
+// PR-233: the CDO set on builds carrying al-runner f9116dc96. Pre-commitment
+// docs/superpowers/specs/2026-11-19-pr233-o1-partner-login-precommitment.md (master d46eaa1ee).
+describe("PR-233: the partner-login row-insert refusal in O1's CDO set", () => {
+  const refuse = (text: string) => (l: O1Request["lines"][number]) =>
+    O1_PARTNER_LOGIN_TESTS.some((t) => l.name.endsWith(`.${t}`))
+      ? { ...l, status: "error", message: text }
+      : l;
+  // The measured answer on plain 0e6397742: a flagged (commit-runs) build, the 4 row inserts refused.
+  const measured = (text = O1_PARTNER_LOGIN_TEXT) => answers(refuse(text), true);
+  const pinned = { pinned: O1_PARTNER_LOGIN_TEXT };
+
+  test("the 4 tests are the row inserts, and the text is the measured one", () => {
+    expect([...O1_PARTNER_LOGIN_TESTS]).toEqual([
+      "InsertRow",
+      "InsertDepRow",
+      "CommitLocalRow",
+      "CommitDepRow",
+    ]);
+    expect(O1_PARTNER_LOGIN_TEXT).toMatch(
+      /^NotRun: out-of-scope: a read of a global of SingleInstance codeunit Server Setting Impl\.: OnAfterLogin raised/,
+    );
+    expect(O1_PARTNER_LOGIN_TEXT).toMatch(/what BC leaves there is not pinned$/);
+  });
+  test("pinned: the measured answer passes", () => {
+    expect(judgeOrderProbe(measured(), TODAY, undefined, true, pinned)).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
+  });
+  test("pinned: one of the 4 passing again is a gate-fail (upstream changed: re-pre-commit)", () => {
+    const j = judgeOrderProbe(
+      answers(
+        (l) => (l.name.endsWith(".InsertDepRow") ? l : refuse(O1_PARTNER_LOGIN_TEXT)(l)),
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      pinned,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("InsertDepRow is pass");
+  });
+  test("pinned: a 5th test refused with the same text is a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.name.endsWith(".SetMark")
+            ? { ...l, status: "error", message: O1_PARTNER_LOGIN_TEXT }
+            : refuse(O1_PARTNER_LOGIN_TEXT)(l),
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      pinned,
+    );
+    expect(j.outcome).toBe("gate-fail");
+    expect(j.lines.join("\n")).toContain("SetMark is error");
+  });
+  test("pinned: a text one character off is a gate-fail", () => {
+    const j = judgeOrderProbe(
+      measured(`${O1_PARTNER_LOGIN_TEXT}.`),
+      TODAY,
+      undefined,
+      true,
+      pinned,
+    );
+    expect(j.outcome).toBe("gate-fail");
+  });
+  test("pinned: a carried writer value in an R entry is still a gate-fail", () => {
+    const j = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.name.endsWith(".ReadRows")
+            ? { ...l, message: "ROWS=1" }
+            : refuse(O1_PARTNER_LOGIN_TEXT)(l),
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      pinned,
+    );
+    expect(j.outcome).toBe("gate-fail");
+  });
+  test("no pin field: the measured answer is HELD for PR-233's O1 pin, never a pass", () => {
+    const j = judgeOrderProbe(measured(), TODAY, undefined, true, {});
+    expect(j.outcome).toBe("held");
+    expect(j.lines).toHaveLength(1);
+    // 8 W and C entries x 2 row inserts each (W: InsertRow, InsertDepRow; C: CommitLocalRow, CommitDepRow)
+    expect(j.lines[0]).toContain("held for PR-233's O1 pin: 16 row-insert tests");
+    expect(j.lines[0]).toContain("8239");
+  });
+  test("no pin field: a 5th refused test, or another text, is a gate-fail, not held", () => {
+    const fifth = judgeOrderProbe(
+      answers(
+        (l) =>
+          l.name.endsWith(".SetIso")
+            ? { ...l, status: "error", message: O1_PARTNER_LOGIN_TEXT }
+            : refuse(O1_PARTNER_LOGIN_TEXT)(l),
+        true,
+      ),
+      TODAY,
+      undefined,
+      true,
+      {},
+    );
+    expect(fifth.outcome).toBe("gate-fail");
+    expect(
+      judgeOrderProbe(measured("NotRun: something else"), TODAY, undefined, true, {}).outcome,
+    ).toBe("gate-fail");
+  });
+  test("no pin field: the all-pass answer still passes", () => {
+    expect(judgeOrderProbe(answers(undefined, true), TODAY, undefined, true, {})).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
+  });
+  test("the own set (no partnerLogin): the refusal is a gate-fail as before, never held", () => {
+    expect(judgeOrderProbe(measured(), TODAY, undefined, true).outcome).toBe("gate-fail");
+  });
+  test("no pin in this landing carries the field (pins are per exact binary, pre-committed per build)", () => {
+    expect(V3_BUILD_PINS.filter((p) => p.o1?.partnerLoginRefusal !== undefined)).toEqual([]);
   });
 });

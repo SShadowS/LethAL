@@ -229,15 +229,43 @@ export function o1CdoApps(
  * R771: `loginWorkDate`, from a build pin, replaces the clock for WorkDate: the build runs Base
  * Application's login code, so in a demo company every Reader entry starts at that one date (R0.0 on
  * the fresh daemon included). A writer value still fails, and a pin naming a writer value is refused.
+ * PR-233 (pre-commitment master d46eaa1ee): `partnerLogin` is the CDO set's only (absent: the own set, judged as before).
+ * With `pinned` (a pin's `o1.partnerLoginRefusal.text`), exactly `O1_PARTNER_LOGIN_TESTS` must be refused with exactly that
+ * text in every W and C entry; a pass or any other answer there is a gate-fail. Without it, those tests refused with exactly
+ * `O1_PARTNER_LOGIN_TEXT` make the set `held` (a known coverage loss waiting for a pre-committed pin), never a pass; any
+ * other deviation is a gate-fail as before.
  */
 export function judgeOrderProbe(
   requests: readonly O1Request[],
   today: readonly string[],
   loginWorkDate?: string,
   commitRuns = false,
+  partnerLogin?: { readonly pinned?: string },
 ): { readonly outcome: "pass" | "held" | "gate-fail"; readonly lines: string[] } {
   const bad: string[] = [];
   const held: string[] = [];
+  const partnerHeld: string[] = [];
+  /** PR-233: one of the 4 row-insert tests in the CDO set; returns true when it judged the row (else: judge as before). */
+  const partnerRow = (
+    at: string,
+    t: string,
+    l: { readonly status: string; readonly message?: string },
+  ): boolean => {
+    if (partnerLogin === undefined || !O1_PARTNER_LOGIN_TESTS.includes(t)) return false;
+    const refused = l.status === "error";
+    if (partnerLogin.pinned !== undefined) {
+      if (!refused || l.message !== partnerLogin.pinned)
+        bad.push(
+          `${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed refused by the pin's partner-login text (PR-233, #8239)`,
+        );
+      return true;
+    }
+    if (refused && l.message === O1_PARTNER_LOGIN_TEXT) {
+      partnerHeld.push(`${at}: ${t}`);
+      return true;
+    }
+    return false;
+  };
   if (
     loginWorkDate !== undefined &&
     O1_WRITER_VALUES.some((v) => `WORKDATE=${loginWorkDate}`.includes(v))
@@ -275,6 +303,7 @@ export function judgeOrderProbe(
         for (const t of O1_COMMIT_TESTS) {
           const l = mine.find((x) => x.name.endsWith(`.${t}`));
           if (l === undefined) bad.push(`${at}: no row for ${t}`);
+          else if (partnerRow(at, t, l)) continue;
           else if (commitRuns) {
             if (l.status !== "pass")
               bad.push(`${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed pass`);
@@ -293,6 +322,7 @@ export function judgeOrderProbe(
         for (const t of O1_WRITE_TESTS) {
           const l = mine.find((x) => x.name.endsWith(`.${t}`));
           if (l === undefined) bad.push(`${at}: no row for ${t}`);
+          else if (partnerRow(at, t, l)) continue;
           else if (l.status !== "pass")
             bad.push(`${at}: ${t} is ${l.status} (${l.message ?? ""}), pre-committed pass`);
         }
@@ -315,8 +345,27 @@ export function judgeOrderProbe(
     }
   }
   if (bad.length > 0) return { outcome: "gate-fail", lines: bad };
+  if (partnerHeld.length > 0)
+    held.push(
+      `held for PR-233's O1 pin: ${partnerHeld.length} row-insert tests refused after the partner login (al-runner f9116dc96, a known coverage loss on #8239; first: ${partnerHeld[0]}); re-pre-commit this build's pin with o1.partnerLoginRefusal`,
+    );
   return held.length > 0 ? { outcome: "held", lines: held } : { outcome: "pass", lines: [] };
 }
+
+/**
+ * PR-233: the tests O1's CDO set loses on builds carrying al-runner f9116dc96: the 4 that insert a row (measured on plain
+ * 0e6397742, `/coord/handoff/PR-233/o1-base/gate.log`: in every W and C entry, these and no others).
+ */
+export const O1_PARTNER_LOGIN_TESTS: readonly string[] = [
+  "InsertRow",
+  "InsertDepRow",
+  "CommitLocalRow",
+  "CommitDepRow",
+];
+
+/** PR-233: the refusal text those tests answer, exactly (status `error`, `notRun`). */
+export const O1_PARTNER_LOGIN_TEXT =
+  "NotRun: out-of-scope: a read of a global of SingleInstance codeunit Server Setting Impl.: OnAfterLogin raised to the login subscribers of the partner dependency apps changed it before the first test, and it is not the one codeunit of the one subscriber's app with the measured globals (two Integer, a List of [Text], a Text): what BC leaves there is not pinned";
 
 /** R807: O1's seed sub-check codeunit (`fixtures/sandbox-order-tests`): one test that reports Random, CreateGuid and a SystemId. */
 export const O1_SEED_CODEUNIT = 77055;
