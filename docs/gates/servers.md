@@ -305,12 +305,24 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The proof below predates the control build of coord PR-180 (R1127, 2026-11-18).** That build changes only each test's start
-WorkDate (the client's default, BaseApp's `GetDefaultWorkDate`), and no bcdev-gate fixture reads the default WorkDate. It is
-proven on `bc4` (its table below), not yet on `bc1`-`bc3`. They get it through `bc-linux-setup.ts`, and their re-proof under it
-is still to run.
+**The current proof for `bc2` and `bc3` is coord PR-189's, on 2026-11-19, under the control build of coord PR-180 (R1127)**
+(the first table below):
+- Master 223db302; one server at a time, each under its own coord lease (`/coord/handoff/PR-189/prove.sh`).
+- `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.26 and read the build back by sha256. The tests fixtures'
+  `.alpackages` were filled from each server first.
+- Every gate's first line named its server, and each passed its own comparison with its baseline. `lethal doctor` was clean, and
+  each lease was released healthy.
 
-**The proof of record is R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below).** Head c13e4d0d (branch
+**`bc1` is still on R-990's 1.0.0.26 build, so every bcdev run on it refuses** (the client's minimum moved with PR-180). It is to
+be proven once under the next control build (coord PR-196, R1131) rather than twice (orchestrator, 2026-11-19). Until then, no gate
+runs on it.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc2` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish`, and `itest:hang` | 1.0.0.27 | `/coord/handoff/PR-189/bc2/<gate>.log`, `run.log`, `setup.log` beside them |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.27 | `/coord/handoff/PR-189/bc3/<gate>.log`, `run.log`, `setup.log` beside them |
+
+**The previous proof, R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below)** is kept as history. Head c13e4d0d (branch
 lethal/r-990, whose client requires 1.0.0.26), one server at a time under one coord lease each (`bc-linux-setup.ts --held-lease`),
 released after a clean `lethal doctor`. Setup upgraded each server from 1.0.0.25. Every gate's first line named its server, and each
 passed its own comparison with its baseline; `verify-scale` is measurement mode. The tests fixtures' `.alpackages` were filled from
