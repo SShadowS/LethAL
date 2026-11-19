@@ -978,13 +978,14 @@ export function judgeKillers(rows: readonly V3RowFacts[], killers: readonly V3Ki
 const WR_ARMS_FILE = "src/WrappedArms.Codeunit.al";
 
 /**
- * Leg WR's by-name refusal: exactly three `WrappedArms` rows, each `no-coverage` with `refusal` as
- * its note, and no other row carrying that note. Empty is a pass.
+ * Leg WR's by-name refusal: exactly four `WrappedArms` rows, each `no-coverage` with `refusal` as
+ * its note, and no other row carrying that note. Empty is a pass. PR-209 amendment 6 item 1: four since condition-true
+ * is default-on (`Pick` gains one; the BC twin `bcdev.wrapped.baseline.json` holds the same four), three before.
  */
 export function judgeWrArms(rows: readonly V3RowFacts[], refusal: string): string[] {
   const out: string[] = [];
   const arms = rows.filter((r) => r.file.replace(/\\/g, "/") === WR_ARMS_FILE);
-  if (arms.length !== 3) out.push(`${arms.length} WrappedArms row(s), pre-committed 3`);
+  if (arms.length !== 4) out.push(`${arms.length} WrappedArms row(s), pre-committed 4`);
   for (const r of arms) {
     if (r.verdict !== "no-coverage" || r.failureNote !== refusal) {
       out.push(

@@ -1972,7 +1972,7 @@ function logServeCounters(b: AlRunnerV3Backend, leg: "MOE" | "WRE"): void {
 
 /**
  * WR (R602): `sandbox-wrapped` whole, config symbol WRAPDEF, coverage ON. 102 mutants (R855: was 98): the 8
- * single-wrapper files score as `none` does (killer constant), and the three `WrappedArms` mutants
+ * single-wrapper files score as `none` does (killer constant), and the four `WrappedArms` mutants (three before PR-209)
  * (the two-arm control, which the index has no rule for) read no-coverage with the refusal sentence.
  * That refusal costs 2 kills `none` finds (M0001, M0003), named, not hidden. Pre-committed 62 / 37 / 3
  * (R855: was 58 / 37 / 3).
@@ -2782,6 +2782,8 @@ async function legD(scratch: string, leg: "D1" | "D1c"): Promise<void> {
     testsOnly: ["Src/Recipients/CDORecipientMgtTests.Codeunit.al"],
     dependencyPackageDirs: [join(CDO, "Test", ".alpackages")],
     ...(V3_WORKERS > 1 ? { workers: V3_WORKERS } : {}),
+    // PR-209 amendment 7 (RULED (b)): slim keeps the slice on R594's oracle (65 mutants); R1139 extends the oracle.
+    ...SLIM_OPTIONS,
   });
   if (leg === "D1") assertCounts(r, leg, 53, 12, 0, 65);
   else assertCounts(r, leg, 53, 8, 4, 65);

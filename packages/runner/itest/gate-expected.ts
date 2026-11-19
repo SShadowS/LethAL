@@ -356,10 +356,12 @@ const TABLES = ["non-executable-sites-dropped", "not-instrumentable-files-skippe
 // Test/.alpackages apps whose build number exceeds 65535 (dependency-report-source-unavailable).
 // R739: plus resource-rebase-collision (three control-add-ins' Script/Start.js and Script/events.js rebase onto
 // one path, issue #20; the line became an event).
+// PR-209 amendment 7: D1 and D1c run `--profile slim`, which flags itself (operator-narrowed-run).
 const CDO_D = [
   "app-json-backslash-path",
   "dependency-report-source-unavailable",
   "only-narrowed-run",
+  "operator-narrowed-run",
   "resource-rebase-collision",
   "tests-only-narrowed-baseline",
 ];
