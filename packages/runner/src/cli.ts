@@ -1191,7 +1191,13 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              --dry-run added. Every other execution flag (--workers ...) is
                              refused with --dry-run, because a dry run executes no tests.
                              --backend is optional; every backend lists the #if arms of alc's
-                             build
+                             build. With --backend and a config, it also runs the config
+                             pre-flight a real run does (config keys, environment, license,
+                             packages folder, alc, selector ids) and refuses by the same error
+                             names; it does NOT run what needs the al-runner binary (the pinned-
+                             build check) or a server. By choice of scope it does not check the
+                             accept list (lethal.accepted.json) or the equivalence-marks file
+                             either, so a malformed one still passes a dry run.
 
 RUN — cost and recovery
   --max-guards-per-batch <n> cap guards per published build. Publish cost scales with guard
@@ -3464,6 +3470,21 @@ export function v3RecheckOf(a: {
  * function is the only caller in `cli.ts`, and it always validates immediately before starting,
  * so that ordering holds on every path that reaches it.
  */
+export function validateEnvToolSection(configFile: LethalConfigFile): EnvToolConfigSection {
+  // Item 6 (final review): see `resolveEnvToolSession`. PR-194: pure (config and process.env), so a
+  // dry run calls it too.
+  const bcdevRaw = configFile.bcdev ?? {};
+  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
+    const v = (bcdevRaw as Record<string, unknown>)[key];
+    return typeof v === "string" && v !== "";
+  });
+  return validateEnvToolConfig(configFile.envTool, {
+    env: process.env,
+    hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
+    bcdevDeclaredKeys,
+  });
+}
+
 export async function resolveEnvToolSession(
   parsed: RunCliConfig,
   configFile: LethalConfigFile,
@@ -3493,15 +3514,7 @@ export async function resolveEnvToolSession(
   // its own to check that against, so the overlap is computed here, from the SAME raw bcdev
   // section `startEnvToolSession` below reads, and handed in as plain key names.
   const bcdevRaw = configFile.bcdev ?? {};
-  const bcdevDeclaredKeys = (READS_KEYS as readonly string[]).filter((key) => {
-    const v = (bcdevRaw as Record<string, unknown>)[key];
-    return typeof v === "string" && v !== "";
-  });
-  const envCfg = validateEnvToolConfig(configFile.envTool, {
-    env: process.env,
-    hasPackageCachePath: Boolean(configFile.bcdev?.packageCachePath),
-    bcdevDeclaredKeys,
-  });
+  const envCfg = validateEnvToolSection(configFile);
   const makeClient =
     deps.makeClient ??
     ((cfg: EnvToolConfigSection) => new EnvToolClient(cfg, undefined, parsed.projectDir));
@@ -3570,6 +3583,155 @@ export async function v3CoverageMode(
 }
 
 /**
+ * PR-194 (R1133): every refusal a real run makes from the config, the files it names and the flags
+ * alone, before it builds or spawns anything. ONE function: `buildBackend` calls it where it
+ * refused before, and `lethal run --dry-run` calls it too, so the two refuse by the same error
+ * names and texts. It spawns nothing and calls no server. What needs the al-runner binary
+ * (`--version`, the `.gated` pin check, R814) or a server is NOT here.
+ *
+ * `envToolDeployed`: a deploy came from an env-tool session. `deferBcdevSection`: the bcdev
+ * section is filled in by provisioning (`envTool`), so a dry run cannot judge it.
+ */
+export async function preflightRunConfig(a: {
+  readonly parsed: Pick<BackendInputs, "backendKind" | "projectDir">;
+  readonly configFile: LethalConfigFile;
+  readonly selectorIds: SelectorConfig;
+  readonly source?: ReadonlyMap<string, Buffer> | undefined;
+  readonly resolvedProbing?: ResolvedAssemblyProbingPaths | undefined;
+  readonly alToolPaths?: typeof defaultAlToolPaths;
+  readonly alcRunnable?: ((p: string) => boolean) | undefined;
+  readonly envToolDeployed?: boolean;
+  readonly deferBcdevSection?: boolean;
+}): Promise<{
+  readonly preprocessorSymbols: readonly string[];
+  readonly probing: ResolvedAssemblyProbingPaths;
+  readonly v3?: {
+    readonly c: ReturnType<typeof validateAlRunnerV3Config>;
+    readonly environmentChoice: Awaited<ReturnType<typeof chooseV3Environment>>;
+    readonly license: Awaited<ReturnType<typeof readLicenseIdentity>> | undefined;
+    readonly alcPath: string;
+  };
+  readonly bcdev?: {
+    readonly c: BcDevConfigSection;
+    readonly alcPath: string;
+    readonly altoolPath: string | undefined;
+  };
+}> {
+  const { parsed, configFile } = a;
+  const alToolPaths = a.alToolPaths ?? defaultAlToolPaths;
+  // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
+  // list must fail immediately rather than after a compile that silently used the other branch.
+  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
+  // R900: a missing folder is refused by name instead of surfacing later as AL0451 in every batch.
+  const probing =
+    a.resolvedProbing ?? (await assemblyProbingPathsFor(parsed.projectDir, configFile));
+  if (parsed.backendKind === "al-runner-v3") {
+    refuseV3Platform();
+    // R888: the run's first check (runFromCli) already warned about unreadable packages; stay quiet.
+    await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
+      packageDirs: configuredPackageCaches(configFile),
+      warn: () => {},
+    });
+    const c = validateAlRunnerV3Config(configFile.alRunnerV3);
+    // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
+    // environment is unknown (owner's ruling A), before the version check, alc or any compile.
+    const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
+    // R956: the license file is read (and hashed) here, before anything runs; unreadable is refused by name.
+    const license = c.license !== undefined ? await readLicenseIdentity(c.license) : undefined;
+    await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
+    if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, a.alcRunnable);
+    const alcPath = c.alcPath ?? (await alToolPaths())?.alcPath;
+    if (alcPath === undefined) {
+      throw new Error(
+        'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
+      );
+    }
+    return { preprocessorSymbols, probing, v3: { c, environmentChoice, license, alcPath } };
+  }
+
+  if (a.deferBcdevSection === true) {
+    // The bcdev fields come from provisioning, but the envTool section and the alc lookup do not.
+    validateEnvToolSection(configFile);
+    assertBcdevToolsLocated(configFile.bcdev ?? {}, await alToolPaths(), true);
+    await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
+      packageDirs: configuredPackageCaches(configFile),
+      warn: () => {},
+    });
+    return { preprocessorSymbols, probing };
+  }
+  const c = validateBcDevConfig(configFile.bcdev);
+  // Important 3 (Task 7 review): a worker backend that silently drops `envToolDeploy` would build
+  // a `ContainerDeployer` and publish via altool to an env-tool-provisioned HTTPS environment —
+  // exactly the plausible-silent-default this project forbids. Every caller building a bcdev
+  // backend for a config with an `envTool` section MUST thread `deploy` through; a call site that
+  // forgets throws here, loudly, rather than silently falling back to altool. Checked BEFORE any
+  // I/O (`defaultAlToolPaths`, `mkdir`) so this is reachable without a real alc/altool install.
+  const envToolDeploy = a.envToolDeployed === true;
+  if (configFile.envTool !== undefined && !envToolDeploy) {
+    throw new Error(
+      "buildBackend: bcdev config has an `envTool` section configured but no env-tool deploy was " +
+        "supplied — refusing to fall back to ContainerDeployer/altool, which would silently " +
+        "publish outside the configured environment tool",
+    );
+  }
+  const resolved = assertBcdevToolsLocated(c, await alToolPaths(), envToolDeploy);
+  // R3/R4: validated after alc/altool are confirmed present (so the "could not locate..." guard
+  // above still fires first when BOTH are wrong) but before any compiler touches the target.
+  await validateSelectorIdsForProject(parsed.projectDir, a.selectorIds, a.source, {
+    packageDirs: configuredPackageCaches(configFile),
+    warn: () => {},
+  });
+  return {
+    preprocessorSymbols,
+    probing,
+    bcdev: { c, alcPath: resolved.alcPath, altoolPath: resolved.altoolPath },
+  };
+}
+
+/**
+ * PR-194: the bcdev alc/altool lookup, shared by `preflightRunConfig` and, for an `envTool` run, by
+ * `runFromCliWithAccept` BEFORE it provisions a billed environment. Reads only `alcPath`/`altoolPath`
+ * of the bcdev section and the AL extension folder. Returns the resolved paths, alc defined.
+ */
+export function assertBcdevToolsLocated(
+  c: Pick<BcDevConfigSection, "alcPath" | "altoolPath">,
+  toolPaths: { readonly alcPath: string; readonly altoolPath: string } | undefined,
+  envToolDeploy: boolean,
+): { readonly alcPath: string; readonly altoolPath: string | undefined } {
+  const resolved = resolveAlToolPaths(c, toolPaths);
+  // R43/R64: a configured `alcPath`/`altoolPath` SATISFIES the requirement below — the gate exists
+  // to catch "no AL compiler/publisher anywhere", and an explicit path is one. Compilation is
+  // always local, so alc is required everywhere; altool is spawned only by `ContainerDeployer`
+  // (the non-envTool branch of `deployerFor`).
+  if (resolved.alcPath === undefined) {
+    // R21: the env-tool publish path never touches altool, so naming it there would be a confusing gate.
+    if (envToolDeploy) {
+      throw new Error(
+        "could not locate alc.exe under the AL Language VS Code extension install " +
+          "(~/.vscode/extensions/ms-dynamics-smb.al-*); alc.exe is required because compilation " +
+          "is always local, even when publishing through envTool — install the AL extension, or " +
+          "set bcdev.alcPath",
+      );
+    }
+    throw new Error(
+      "could not locate alc.exe/altool.exe under the AL Language VS Code extension install " +
+        "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, set bcdev.alcPath " +
+        "and bcdev.altoolPath",
+    );
+  }
+  // R64: the container publish path spawns altool, so a pinned `alcPath` alone must NOT wave it
+  // through to fail later at publish time.
+  if (!envToolDeploy && resolved.altoolPath === undefined) {
+    throw new Error(
+      "could not locate altool.exe under the AL Language VS Code extension install " +
+        "(~/.vscode/extensions/ms-dynamics-smb.al-*); publishing to a container spawns altool — " +
+        "install the extension, or set bcdev.altoolPath",
+    );
+  }
+  return { alcPath: resolved.alcPath, altoolPath: resolved.altoolPath };
+}
+
+/**
  * R586 (plan r2 §9): the al-runner-v3 backend from the `alRunnerV3` section. Sequential. The
  * transport is serve-entries where proven and one-shot otherwise (R761), unless the config names
  * one. Coverage is turned off (with a warning) by `v3CoverageMode`.
@@ -3579,9 +3741,8 @@ async function buildAlRunnerV3Backend(
   configFile: LethalConfigFile,
   scratchDir: string,
   deps: {
-    readonly alToolPaths: typeof defaultAlToolPaths;
-    /** R834: replaces the check that `alRunnerV3.alcPath` is executable. Injected by tests. */
-    readonly alcRunnable?: (p: string) => boolean;
+    /** PR-194: what `preflightRunConfig` resolved for v3. */
+    readonly v3: NonNullable<Awaited<ReturnType<typeof preflightRunConfig>>["v3"]>;
     readonly spawn?: SpawnFn;
     /** R635: the serve-entries daemon's spawn. */
     readonly serverSpawn?: ServerSpawnFn;
@@ -3596,26 +3757,8 @@ async function buildAlRunnerV3Backend(
     readonly assemblyProbingPaths: readonly string[];
   },
 ): Promise<ExecutionBackend> {
-  refuseV3Platform();
-  // R888: the run's first check (runFromCli) already warned about unreadable packages; stay quiet.
-  await validateSelectorIdsForProject(parsed.projectDir, deps.selectorIds, deps.source, {
-    packageDirs: configuredPackageCaches(configFile),
-    warn: () => {},
-  });
-  const c = validateAlRunnerV3Config(configFile.alRunnerV3);
-  // R938: the target project (the dir LethAL runs), not the tests dir. Refuses by name when the
-  // environment is unknown (owner's ruling A), before the version check, alc or any compile.
-  const environmentChoice = await chooseV3Environment(parsed.projectDir, c.environment);
-  // R956: the license file is read (and hashed) here, before anything runs; unreadable is refused by name.
-  const license = c.license !== undefined ? await readLicenseIdentity(c.license) : undefined;
-  await assertBcVersionMatchesPackages(c.packagesDir, c.bcVersion);
-  if (c.alcPath !== undefined) assertAlcRunnable(c.alcPath, deps.alcRunnable);
-  const alcPath = c.alcPath ?? (await deps.alToolPaths())?.alcPath;
-  if (alcPath === undefined) {
-    throw new Error(
-      'could not locate alc under the AL Language VS Code extension install; --backend al-runner-v3 compiles every batch with alc before v3 runs it (R586). Install the extension, or set "alRunnerV3.alcPath".',
-    );
-  }
+  // PR-194: the config refusals ran in `preflightRunConfig`; this takes what they resolved.
+  const { c, environmentChoice, license, alcPath } = deps.v3;
   const { mode: coverage, offFiles: coverageOffFiles } = await v3CoverageMode(
     c.coverage,
     parsed.projectDir,
@@ -3708,20 +3851,26 @@ export async function buildBackend(
   /** R900: the list `runFromCli` resolved before provisioning; absent, resolved here. */
   resolvedProbing?: ResolvedAssemblyProbingPaths,
 ): Promise<ExecutionBackend> {
-  // R101(c): validated FIRST, for both backends, before anything is constructed — a typo'd symbol
-  // list must fail immediately rather than after a compile that silently used the other branch.
-  const preprocessorSymbols = validatePreprocessorSymbols(configFile.preprocessorSymbols);
-  // R900: checked before anything is built: a missing folder is refused by name instead of
-  // surfacing later as AL0451 in every batch.
-  const probing = resolvedProbing ?? (await assemblyProbingPathsFor(parsed.projectDir, configFile));
+  // PR-194: every config refusal, in the one function `--dry-run` calls too.
+  const pre = await preflightRunConfig({
+    parsed,
+    configFile,
+    selectorIds,
+    source,
+    resolvedProbing,
+    ...(deps.alToolPaths !== undefined ? { alToolPaths: deps.alToolPaths } : {}),
+    alcRunnable: deps.alcRunnable,
+    envToolDeployed: envToolDeploy !== undefined,
+  });
+  const { preprocessorSymbols, probing } = pre;
   const assemblyProbingPaths = probing.paths;
   if (assemblyProbingPaths.length > 0) {
     console.warn(`[lethal] alc assembly probing paths: ${describeAssemblyProbingPaths(probing)}`);
   }
   if (parsed.backendKind === "al-runner-v3") {
+    if (pre.v3 === undefined) throw new Error("preflightRunConfig returned no v3 section");
     return buildAlRunnerV3Backend(parsed, configFile, scratchDir, {
-      alToolPaths: deps.alToolPaths ?? defaultAlToolPaths,
-      ...(deps.alcRunnable !== undefined ? { alcRunnable: deps.alcRunnable } : {}),
+      v3: pre.v3,
       ...(deps.alRunnerSpawn !== undefined ? { spawn: deps.alRunnerSpawn } : {}),
       ...(deps.alRunnerServerSpawn !== undefined ? { serverSpawn: deps.alRunnerServerSpawn } : {}),
       ...(deps.alRunnerCandidate === true ? { candidate: true as const } : {}),
@@ -3735,72 +3884,10 @@ export async function buildBackend(
     });
   }
 
-  const c = validateBcDevConfig(configFile.bcdev);
-
-  // Important 3 (Task 7 review): a worker backend that silently drops `envToolDeploy` would build
-  // a `ContainerDeployer` and publish via altool to an env-tool-provisioned HTTPS environment —
-  // exactly the plausible-silent-default this project forbids. Every caller building a bcdev
-  // backend for a config with an `envTool` section MUST thread `deploy` through; a call site that
-  // forgets throws here, loudly, rather than silently falling back to altool. Checked BEFORE any
-  // I/O (`defaultAlToolPaths`, `mkdir`) so this is reachable without a real alc/altool install.
-  if (configFile.envTool !== undefined && envToolDeploy === undefined) {
-    throw new Error(
-      "buildBackend: bcdev config has an `envTool` section configured but no env-tool deploy was " +
-        "supplied — refusing to fall back to ContainerDeployer/altool, which would silently " +
-        "publish outside the configured environment tool",
-    );
-  }
-
-  const alToolPaths = deps.alToolPaths ?? defaultAlToolPaths;
-  const toolPaths = await alToolPaths();
-  const resolved = resolveAlToolPaths(c, toolPaths);
-  // R43/R64: a configured `alcPath`/`altoolPath` SATISFIES the requirement below — the gate exists
-  // to catch "no AL compiler/publisher anywhere", and an explicit path is one. Which of the two a
-  // session actually needs depends on the publish route, so the gate asks for exactly those:
-  // compilation is always local, so alc is required everywhere; altool is spawned only by
-  // `ContainerDeployer` (the non-envTool branch of `deployerFor`).
-  if (resolved.alcPath === undefined) {
-    // R21: the env-tool publish path (`envToolDeploy` defined, `deployerFor` below takes the
-    // env-tool branch) never constructs a `ContainerDeployer` and so never touches
-    // `toolPaths.altoolPath` — altool.exe is irrelevant there. `alc.exe` is still genuinely
-    // required on EVERY path: compilation is always local, env-tool or not. Naming altool.exe as
-    // a requirement on a path that never uses it is a confusing gate for an install that only
-    // has the AL compiler and not the (server-publish-only) altool binary.
-    if (envToolDeploy !== undefined) {
-      throw new Error(
-        "could not locate alc.exe under the AL Language VS Code extension install " +
-          "(~/.vscode/extensions/ms-dynamics-smb.al-*); alc.exe is required because compilation " +
-          "is always local, even when publishing through envTool — install the AL extension, or " +
-          "set bcdev.alcPath",
-      );
-    }
-    throw new Error(
-      "could not locate alc.exe/altool.exe under the AL Language VS Code extension install " +
-        "(~/.vscode/extensions/ms-dynamics-smb.al-*); install the extension, set bcdev.alcPath " +
-        "and bcdev.altoolPath",
-    );
-  }
-  // R64: the container publish path spawns altool, so a pinned `alcPath` alone must NOT wave it
-  // through to fail later at publish time — but a pinned `altoolPath` genuinely satisfies it, the
-  // same way `alcPath` satisfies the compiler half. Before that override existed this branch was
-  // unreachable (no extension meant no alc either), which is why the message is separate: "install
-  // the extension" is unhelpful advice for someone who did pin a compiler and nothing else.
-  if (envToolDeploy === undefined && resolved.altoolPath === undefined) {
-    throw new Error(
-      "could not locate altool.exe under the AL Language VS Code extension install " +
-        "(~/.vscode/extensions/ms-dynamics-smb.al-*); publishing to a container spawns altool — " +
-        "install the extension, or set bcdev.altoolPath",
-    );
-  }
-  // R3/R4: validated here — after alc/altool are confirmed present (so the "could not locate..."
-  // guard above still fires first when BOTH conditions are wrong, matching this function's prior
-  // error-priority for an incomplete install) but before any compiler/deployer object touches the
-  // target project, and well before an actual `alc` invocation would burn a live BC round trip on
-  // an AL0297.
-  await validateSelectorIdsForProject(parsed.projectDir, selectorIds, source, {
-    packageDirs: configuredPackageCaches(configFile),
-    warn: () => {},
-  });
+  const { bcdev } = pre;
+  if (bcdev === undefined) throw new Error("preflightRunConfig returned no bcdev section");
+  const { c } = bcdev;
+  const resolved = { alcPath: bcdev.alcPath, altoolPath: bcdev.altoolPath };
   const outputDir = join(scratchDir, "publish");
   await mkdir(outputDir, { recursive: true });
   const compiler = new ArtifactCompiler(
@@ -6987,6 +7074,19 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
   const dryRunExclude = resolveExclude(dryRunConfig ?? {}, parsed.exclude);
   // R205: one snapshot for the lines and the listing, as `runFromCli` does for a run.
   const dryRunSource = await readTargetSource(parsed.projectDir);
+  // PR-194 (R1133): the refusals the real run makes from the config before it executes anything.
+  // Only with a config AND a named backend: a dry run must still work before any config exists
+  // (issue #21), and without `--backend` there is no backend to judge. With an `envTool` section the
+  // bcdev fields come from provisioning, so the bcdev section is left to the real run.
+  if (dryRunConfig !== undefined && parsed.backendKind !== undefined) {
+    await preflightRunConfig({
+      parsed: { backendKind: parsed.backendKind, projectDir: parsed.projectDir },
+      configFile: dryRunConfig,
+      selectorIds: resolveSelectorIds({}, validateSelectorIdsConfig(dryRunConfig.selectorIds)),
+      source: dryRunSource,
+      deferBcdevSection: dryRunConfig.envTool !== undefined,
+    });
+  }
   const dryRunLines = await resolveLineRanges(parsed, defaultSpawn, dryRunSource);
   await printDryRun(parsed.projectDir, parsed.only, {
     dbPath: parsed.dbPath,
