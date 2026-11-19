@@ -734,7 +734,8 @@ async function legS1(
     }
     throw e;
   }
-  assertCounts(r, leg, 3, 14, 5, 22);
+  // PR-209 amendment 9: bcdev.baseline.json's table under the default set (was 3 / 14 / 5 over 22).
+  assertCounts(r, leg, 3, 17, 6, 26);
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), leg);
   must(
     r.baselineGreen && r.unsupportedTests.length === 0,
@@ -848,7 +849,7 @@ async function legDBI(scratch: string, version: string): Promise<void> {
     }
     throw e;
   }
-  assertCounts(r, "DBI", 3, 14, 5, 22);
+  assertCounts(r, "DBI", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "DBI");
   must(r.validity.executionContexts[0]?.isolateTests === true, "DBI: the report hides the mode");
   must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "DBI: a state note under --isolate-tests");
@@ -1497,7 +1498,7 @@ async function legISO(scratch: string, version: string): Promise<void> {
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
-  assertCounts(r, "ISO", 3, 14, 5, 22);
+  assertCounts(r, "ISO", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "ISO");
   must(r.validity.executionContexts[0]?.isolateTests === true, "ISO: the report hides the mode");
   must(tagged(r, V3_STATE_NOTE_TAG).length === 0, "ISO: a state note under --isolate-tests");
@@ -1942,8 +1943,9 @@ const MOE_WRE_PINS: Record<"MOE" | "WRE", Readonly<Record<string, number>>> = {
     boundChecks: 4, // R987: 3 -> 4 (pre-commitment master 2c0976bc)
     // R975 (R-965 amendment 4): 448 until the 6 twin OnOpenPage mutants read no-coverage and were not sent.
     // R976 (R-973): 436 until the 3 twin OnOpenPage empty-block mutants read no-coverage too.
-    entriesSent: 430,
-    pairRequests: 62,
+    // PR-209 amendment 9: 464 (read on current and alpha.12; was 430) and 64 pair requests, one per WR kill (was 62).
+    entriesSent: 464,
+    pairRequests: 64,
     echoMismatches: 0,
   },
 };
@@ -2093,7 +2095,7 @@ async function legK(scratch: string): Promise<void> {
     testDir: fixture("sandbox-tests"),
     selectorIds: { selectorId: 79199, controlId: 79198, tableId: 79197 },
   });
-  assertCounts(r, "K", 3, 14, 5, 22);
+  assertCounts(r, "K", 3, 17, 6, 26); // PR-209 amendment 9 (was 3 / 14 / 5 over 22)
   await assertPerMutant(r, join(HERE, "bcdev.baseline.json"), "K");
   const facts = {
     coverage: b.capabilities().coverage,
