@@ -65,7 +65,6 @@ import {
 } from "./gate-warnings";
 import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
-import { refuseIfPr209Pending } from "./pr209-pending";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { R254_ARM_FILE, armOracleDiffs } from "./r254-arm-oracle";
 import {
@@ -83,7 +82,6 @@ if (!process.env.LETHAL_ITEST_TABLES) {
   const challenged = await emitSkipped("tables", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
-refuseIfPr209Pending("tables");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");

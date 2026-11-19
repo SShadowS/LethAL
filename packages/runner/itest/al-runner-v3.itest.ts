@@ -232,7 +232,6 @@ import {
   printLayoutTable,
 } from "./layout-fixture";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
-import { refuseIfPr209Pending } from "./pr209-pending";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
 import {
   ARMS_REFUSAL,
@@ -248,7 +247,6 @@ if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   const challenged = await emitSkipped("alrunner-v3", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
-refuseIfPr209Pending("al-runner-v3");
 
 // R762: this gate (and the update gate, which runs it) measures the probe, never replays it: every
 // session it starts, `buildBackend`'s included, runs the contract probe fresh.

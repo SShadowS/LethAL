@@ -59,7 +59,6 @@ import {
   settleThrown,
 } from "./gate-warnings";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
-import { refuseIfPr209Pending } from "./pr209-pending";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { assertDirectTransportReach, assertReachEvidence } from "./reach-evidence";
 
@@ -71,7 +70,6 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
   const challenged = await emitSkipped("bcdev", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
-refuseIfPr209Pending("bcdev");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");

@@ -49,7 +49,6 @@ import {
   settleThrown,
 } from "./gate-warnings";
 import { assertKillsReproduced } from "./kill-reproduction";
-import { refuseIfPr209Pending } from "./pr209-pending";
 import {
   WRAPPED_PROJECT_DIR,
   WRAPPED_SELECTOR_IDS,
@@ -68,7 +67,6 @@ if (!process.env.LETHAL_ITEST_BCDEV) {
   const challenged = await emitSkipped("bcdev-wrapped", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
-refuseIfPr209Pending("bcdev-wrapped");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONNECTION_DIR = join(HERE, "..", "..", "..", "fixtures", "sandbox-app");

@@ -102,7 +102,6 @@ import {
   settleThrown,
 } from "./gate-warnings";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
-import { refuseIfPr209Pending } from "./pr209-pending";
 import { assertReachEvidence, assertReachIdenticalAcrossLegs } from "./reach-evidence";
 
 if (!process.env.LETHAL_ITEST_CHUNKED) {
@@ -110,7 +109,6 @@ if (!process.env.LETHAL_ITEST_CHUNKED) {
   const challenged = await emitSkipped("chunked", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
-refuseIfPr209Pending("chunked");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");

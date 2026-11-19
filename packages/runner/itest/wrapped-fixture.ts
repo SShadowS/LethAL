@@ -374,7 +374,7 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
  * two-arm shape, so `WrappedArms` is SCORED there: its three rows replace al-runner's refusals.
  * Every other row is the al-runner table's ("adds": alc compiles the union of the symbols).
  */
-export const EXPECTED_WRAPPED_BC_ALL: readonly WrappedRow[] = EXPECTED_WRAPPED.map(
+export const EXPECTED_WRAPPED_BC: readonly WrappedRow[] = EXPECTED_WRAPPED.map(
   (r) =>
     [
       row("M0001", ARMS, 7, "empty-block", "Pick", "killed", "ArmsPick"),
@@ -383,12 +383,6 @@ export const EXPECTED_WRAPPED_BC_ALL: readonly WrappedRow[] = EXPECTED_WRAPPED.m
       row("M0004", ARMS, 9, "return-value", "Pick", "killed", "ArmsPick"),
     ].find((a) => a.code === r.code) ?? r,
 );
-
-/**
- * PR-209: every row now has its recorded verdict (bc3, 2026-11-19), so this is the whole table; the name
- * stays because `gate-pages.test.ts` reads it.
- */
-export const EXPECTED_WRAPPED_BC: readonly WrappedRow[] = EXPECTED_WRAPPED_BC_ALL;
 
 /** The C1 pair's three rows under the "replaces" reading: al-runner compiled `WrappedPairB`. */
 export const PAIR_REPLACES: readonly WrappedRow[] = [
@@ -578,7 +572,7 @@ export function assertBcWrappedRun(
   const problems: string[] = [];
   if (report.batches !== 1) problems.push(`the run planned ${report.batches} batches, not 1`);
   if (!report.baselineGreen) problems.push("the baseline must be green");
-  problems.push(...diffRows(EXPECTED_WRAPPED_BC_ALL, wrappedRows(report)));
+  problems.push(...diffRows(EXPECTED_WRAPPED_BC, wrappedRows(report)));
   problems.push(...twinDifferences(report));
   problems.push(...killTextDifferences(report));
   for (const w of warnings)

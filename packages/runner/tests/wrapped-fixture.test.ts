@@ -6,8 +6,7 @@ import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   ARMS_REFUSAL,
   EXPECTED_WRAPPED,
-  // PR-209: the whole table, the 14 rows awaiting a verdict included (`EXPECTED_WRAPPED_BC` is the recorded view).
-  EXPECTED_WRAPPED_BC_ALL as EXPECTED_WRAPPED_BC,
+  EXPECTED_WRAPPED_BC,
   KILL_TEXTS,
   PAIR_CODES,
   PAIR_REPLACES,
