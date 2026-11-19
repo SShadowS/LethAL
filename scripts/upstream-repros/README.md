@@ -106,6 +106,14 @@ Two wrong answers (not refusals), so the daily update flags their fixes; 240 tes
   - Two apps, `A` then `T`.
   - The issue's `Measure` test is left out: it fails on purpose on both sides, so it can never flip.
 
+## Coverage (PR-213)
+
+`u7995-null-value-type` (#7995, as #8268 reduced its Regex case; 244 tests in all): a never-assigned DotNet value passed where a
+.NET parameter is a value type is refused. BC's answers are measured (bc3, PR-213): `new DateTimeOffset(DateTime, null)` and
+`new Regex(String, RegexOptions, null)` fail with code `DotNetCreate:NullReference`, and `Convert.ToString(null Byte, 2)` returns
+`0`. Three tests differ on current; the control matches. The daily scan's "#7995: no regression entry" becomes "entry still
+differs from BC in 3 test(s)".
+
 ## Coverage (R-997)
 
 In the set (13 repros, 44 tests, about 50 s for both builds): #7811, #7812, #7818, #7819, #7853, #7854, #7922, #8006, #8027,
