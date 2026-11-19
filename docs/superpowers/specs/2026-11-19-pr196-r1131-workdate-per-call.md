@@ -3,6 +3,56 @@
 Coord task PR-196, lethal-preproc, 2026-11-19. Spec before code; spec-adversary next. Related: [[R1131]], [[R1127]], PR-180
 (control 1.0.0.27).
 
+## 0a. Amendment 1: the spec-adversary review of r1 (86e6a2ba)
+The review found no false-kill path. It confirmed the reported date IS each method's start date: RunMany sets it before
+each method, and the runner's Initialize stores and restores it. Five points change the spec; item 4 needs a ruling. Each
+item overrides the section it names.
+1. **Reused baselines and resume (overrides §2.2's baseline rule).**
+   - `BaselineSnapshot` stores `workDate` (the baseline calls' date).
+   - A snapshot is reused ONLY when its stored date equals the date of this session's first test-running answer;
+     otherwise the batch's baseline is re-run. A snapshot stored before this change has no date, so it is never reused.
+   - Carried rows keep their verdicts; the date they ran on is not recorded, as today.
+   - `itest:lend` exercises this path. Its pre-committed figure: no verdict moves (one day, one date).
+2. **When `workDate` is required (overrides §2.2's "missing refuses").**
+   - It is required exactly when a method RAN: one per RunMany `methods` entry, and on a RunMethod answer whose
+     `codeunitResults` is not an error. That is the same rule as `sessionId` (`AddSessionKeys`).
+   - An answer where no test ran (R688 `test-discovery-failed`, RunMany's `ResolvePairs` exit, a caught phase-2 error)
+     carries no date and keeps today's handling.
+   - RunMethod's date goes through a getter into `BuildStatus`, because `TestResultsToJSON` is Base Application's own
+     shape.
+3. **The scoring site (overrides §2.2's "scores error").**
+   - A date mismatch is returned by the backend as a step with `cause: "workdate-changed"`, and it takes the
+     orchestrator's `step.cause` branch (as R198's causes do). It is never a plain error outcome, which would be a
+     transport error and abort the session.
+   - **Every test-running answer is compared:** mutant, kill-reproduce, kill-confirmation, warm-prefix and group (R198)
+     answers.
+4. **The unit of the date (overrides §2.2's "ONE date per session"; NEEDS A RULING).** Each batch has its own
+   baseline, so the comparison is per batch. On the first mismatch inside a batch:
+   - **(A)** the mismatching answer, and every later one in that batch, is `error` / `workdate-changed`. Simple; a date
+     move costs that batch's remaining verdicts.
+   - **(B)** the batch's baseline is re-run ONCE on the new date and becomes that batch's baseline for the rest. The
+     mismatching mutant is re-run against it. A second move in the same batch falls back to (A).
+
+   (B) keeps verdicts on a long run crossing a date (DO windows run for hours). It cannot make a false kill, because a
+   kill is confirmed on the date it ran under. **Recommendation: (B).** Two baseline calls disagreeing WITHIN one baseline
+   still refuse the batch (`BaselineWorkDateUnstableError`).
+5. **Hub mode** (`coverageMode: "procedure"`, which sends the baseline to bc-dev-mcp, bcdev-backend.ts): its answers
+   carry no `workDate`, and its session follows its own date rule. The comparison does not apply there. The report says
+   so: `baselineWorkDate` is absent, plus a one-line note. A refusal would break a supported mode.
+6. **Report and plumbing (adds to §2.3):**
+   - `workdate-changed` joins the closed `MutantErrorCause` set: `ERROR_CAUSE_INTERPRETATIONS`, the schema enum, and
+     their pinned counts.
+   - `baselineWorkDate` travels on an event (as `baseline-batch-finished`'s date), so a report rebuilt from events keeps
+     it. It is REQUIRED on a bcdev report outside hub mode, so a silent drop fails a test.
+   - `errorClassOf` passes the new cause through. No bcdev baseline holds an error row, so no frozen figure moves.
+7. **Wording and proof:**
+   - R1131's "also catches the midnight change of a non-demo company" is true only for fresh sessions. A reused session's
+     `GetDefaultWorkDate` returns its own old WorkDate. Reworded in R1131 when this lands.
+   - **The live proof** (lethal-code, under leases) is the full re-proof CLAUDE.md requires after a control-build change:
+     every BC gate on every server listed for it (`docs/gates/servers.md`), plus bc4, with 1.0.0.28. Each passes per
+     mutant on its frozen baseline, and each report carries a `baselineWorkDate` equal to that server's CRONUS last G/L
+     date.
+
 ## 1. The problem (checked in the source before writing)
 - Since PR-180 the control app sets each test's start WorkDate to Base Application's `LogInMgt.GetDefaultWorkDate()`:
   - `RunMethod.Codeunit.al` reads it on every call;
