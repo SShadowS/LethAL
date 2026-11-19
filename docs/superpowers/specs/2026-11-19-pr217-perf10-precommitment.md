@@ -129,3 +129,13 @@ stands.
 
 **Comparisons:** speed against y2 (the request) AND y3 (the orchestrator), each labelled; verdict attribution per the request
 (rerun ONLY the moved mutants on plain 0e6397742, reported y2 / plain base / perf-combined).
+
+## Amendment 2 (2026-11-19, before any run; the orchestrator's two adjustments)
+1. **One regate of `current`**, at master after PR-209, PR-236 (the private gate accepts the candidate's own pin) and the
+   perf-combined pin (its own pre-commitment, `2026-11-19-pr217-perfcombined-pin-precommitment.md`) are all on master. It is run
+   by lethal-bugs and also serves PR-209's moved readings (preproc's proposal). The private gate then runs at that commit.
+2. **`--profile slim` for the run AND the control.** PR-209 turns two new operators on by default, which adds mutants. slim keeps
+   y2's and y3's mutation set. **Checked in triage before the main run:** 43,511 deployed and numbering digest b8e0a379433f (y3's,
+   = y2's). Any other count or digest stops PERF-10 before the main run; it is reported, not adjusted.
+3. **LethAL head:** master after those merges (amendment 1 named "master with PR-227 and PR-233"; it is now that head, which
+   also holds PR-209 and PR-236). The commit list against df6d0073 grows accordingly and is reported the same way.
