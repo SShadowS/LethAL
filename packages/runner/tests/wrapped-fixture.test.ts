@@ -6,7 +6,8 @@ import { writeInstrumentedProject } from "@lethal/schemata";
 import {
   ARMS_REFUSAL,
   EXPECTED_WRAPPED,
-  EXPECTED_WRAPPED_BC,
+  // PR-209: the whole table, the 14 rows awaiting a verdict included (`EXPECTED_WRAPPED_BC` is the recorded view).
+  EXPECTED_WRAPPED_BC_ALL as EXPECTED_WRAPPED_BC,
   KILL_TEXTS,
   PAIR_CODES,
   PAIR_REPLACES,
@@ -22,7 +23,6 @@ import {
 import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { buildLineMap } from "../src/line-map";
 import {
-  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -51,10 +51,7 @@ interface Built {
 }
 
 async function build(root: string): Promise<Built> {
-  // PR-209: the table this reads (`EXPECTED_WRAPPED`, in the itest) holds the OLD default set, which
-  // is `--profile slim`; its re-pin to the new default is the gate round's (spec 0c item 4).
   const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
-    ...SLIM_OPTIONS,
     preprocessorSymbols: WRAPPED_SYMBOLS,
     backend: { kind: "al-runner-v3" },
   });
@@ -188,9 +185,9 @@ describe("R-300b: the wrapped leg's checker", () => {
 
   it("refuses a wrapped row that differs from its twin, and a position-wins or dropped line", () => {
     const moved = EXPECTED_WRAPPED.map((r) =>
-      r.code === "M0027" ? { ...r, verdict: "no-coverage" as const, coveringTests: [] } : r,
+      r.code === "M0032" ? { ...r, verdict: "no-coverage" as const, coveringTests: [] } : r,
     ).map((r) => {
-      if (r.code !== "M0027") return r;
+      if (r.code !== "M0032") return r;
       const { killingTest: _k, ...rest } = r;
       return rest;
     });
@@ -205,16 +202,16 @@ describe("R-300b: the wrapped leg's checker", () => {
 
   // R343: strict parity, one red-going case per direction.
   it("refuses a twin row with no wrapped partner (the old twin-only swap-additive)", () => {
-    const noWrapped = EXPECTED_WRAPPED.filter((r) => r.code !== "M0011");
+    const noWrapped = EXPECTED_WRAPPED.filter((r) => r.code !== "M0014");
     expect(twinDifferences(reportOf(noWrapped))).toEqual([
-      "M0019 (src/WrappedPreTwin.Codeunit.al) has no wrapped partner",
+      "M0023 (src/WrappedPreTwin.Codeunit.al) has no wrapped partner",
     ]);
   });
 
   it("refuses a wrapped row with no twin", () => {
-    const noTwin = EXPECTED_WRAPPED.filter((r) => r.code !== "M0036");
+    const noTwin = EXPECTED_WRAPPED.filter((r) => r.code !== "M0042");
     expect(twinDifferences(reportOf(noTwin))).toEqual([
-      "M0027 (src/WrappedTop.Codeunit.al) has no twin mutant at Grow|9|lethal.swap-additive",
+      "M0032 (src/WrappedTop.Codeunit.al) has no twin mutant at Grow|9|lethal.swap-additive",
     ]);
   });
 
@@ -248,7 +245,6 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
     const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
     try {
       const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
-        ...SLIM_OPTIONS, // PR-209: see `build` above
         preprocessorSymbols: WRAPPED_SYMBOLS,
         backend: { kind: "bcdev" },
       });
@@ -350,17 +346,17 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
     const duplicateKey = (r: WrappedReport): WrappedReport => ({
       ...r,
       mutants: r.mutants.map((m) =>
-        m.mutantCode === "M0075"
+        m.mutantCode === "M0087"
           ? { ...m, killingTestFailure: "The record in table Wrapped Band Row already exists." }
           : m,
       ),
     });
     const report = bcReportOf(EXPECTED_WRAPPED_BC);
     expect(() => assertBcWrappedRun(duplicateKey(report), "t", [])).toThrow(
-      "M0075: killingTestFailure",
+      "M0087: killingTestFailure",
     );
     expect(() => assertWrappedRun(duplicateKey(reportOf(EXPECTED_WRAPPED)), "t", [])).toThrow(
-      "M0075: killingTestFailure",
+      "M0087: killingTestFailure",
     );
     expect(() =>
       assertBcWrappedRun(report, "t", [

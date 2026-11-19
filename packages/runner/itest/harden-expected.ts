@@ -1,5 +1,6 @@
 import { type MutantOutcome, type SessionReport, mutantRef } from "../src/report";
 import { assertGateBaseline } from "./baseline-guard";
+import { PR209_UNRECORDED } from "./pr209-pending";
 
 /**
  * C02-03: the pre-committed per-mutant table for `fixtures/sandbox-harden`, and the three checks
@@ -195,6 +196,35 @@ export const EXPECTED: readonly ExpectedMutant[] = [
     scope: "OnValidate",
     verdict: "killed",
     killingTest: "AmountValidateDoublesIt",
+  },
+];
+
+/**
+ * PR-209: the two mutants `lethal.condition-true` adds to the default set (M0010 and M0020 in the
+ * default numbering). Their verdicts come from the record run, so they stay out of `EXPECTED`
+ * (which the gate's verdict checks and the answer key read): until then the live leg finds two
+ * mutants the table does not predict, and `refuseIfPr209Pending("harden")` stops the gate first.
+ */
+export const EXPECTED_ADDED: readonly {
+  readonly file: string;
+  readonly line: number;
+  readonly operator: string;
+  readonly scope: string;
+  readonly verdict: typeof PR209_UNRECORDED;
+}[] = [
+  {
+    file: L,
+    line: 23,
+    operator: "lethal.condition-true",
+    scope: "FirstAmount",
+    verdict: PR209_UNRECORDED,
+  },
+  {
+    file: L,
+    line: 41,
+    operator: "lethal.condition-true",
+    scope: "BonusFor",
+    verdict: PR209_UNRECORDED,
   },
 ];
 

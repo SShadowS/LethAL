@@ -20,6 +20,7 @@ import { BaselineRecordedError, RECORD_BASELINE_ENV, readGateBaseline } from "./
 import {
   ANSWER_KILLERS,
   EXPECTED,
+  EXPECTED_ADDED,
   type ExpectedMutant,
   HardenGateError,
   assertHardenAnswers,
@@ -114,7 +115,8 @@ describe("C02-03: sandbox-harden's mutant set is exactly the pre-committed one",
   test("C02-03: the deployed mutant set equals the pre-committed table", async () => {
     const m = await manifest();
     expect(sorted(m.mutants.map((e) => siteOf(e.file, e.startLine, e.operatorName)))).toEqual(
-      sorted(EXPECTED.map((r) => siteOf(r.file, r.line, r.operator))),
+      // PR-209: the default set is the 21 recorded rows plus the 2 added `condition-true` rows (23).
+      sorted([...EXPECTED, ...EXPECTED_ADDED].map((r) => siteOf(r.file, r.line, r.operator))),
     );
   });
 

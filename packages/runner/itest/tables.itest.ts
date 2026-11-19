@@ -65,6 +65,7 @@ import {
 } from "./gate-warnings";
 import { killReproductionFailures } from "./kill-reproduction";
 import { assertNotInstrumentedEvidence } from "./notinstrumented-evidence";
+import { refuseIfPr209Pending } from "./pr209-pending";
 import { acquireProbeLease, odataReadRegisteredArtifact } from "./probe-lease";
 import { armOracleDiffs } from "./r254-arm-oracle";
 import {
@@ -82,6 +83,7 @@ if (!process.env.LETHAL_ITEST_TABLES) {
   const challenged = await emitSkipped("tables", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
+refuseIfPr209Pending("tables");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
@@ -301,12 +303,12 @@ const EXPECTED = {
   // R36 moved this from 63/10 to 64/9, deliberately and in one direction only.
   //
   // `RequireCategoryAFails` used to assert merely that AN error occurred, so deleting
-  // `DataMain.Get(MainNo)` (M0034) was invisible: with no `Get` the record is blank and
+  // `DataMain.Get(MainNo)` (M0037, PR-209 numbering) was invisible: with no `Get` the record is blank and
   // `TestField(Category, 'A')` still raises, just for a different reason. The mutant was correctly
   // reported survived — the fixture genuinely did not catch it — but this fixture exists so that a
   // BROKEN OPERATOR FAILS, and it was carrying the project's signature "test passes for the wrong
   // reason" inside itself. The test now asserts the error names the record it loaded, which a
-  // blank record cannot do, so M0034 is killable and killed.
+  // blank record cannot do, so M0037 is killable and killed.
   // R30 moved this from 64/9/2 to 69/9/6, and the delta is entirely NEW sites — every pre-existing
   // mutant kept its verdict (checked per-mutant against the previous `tables.baseline.json`, not
   // inferred from the totals).
@@ -329,7 +331,7 @@ const EXPECTED = {
   // `lethal.remove-commit` mutant any gate has ever KILLED. Until now the operator shipped proven
   // on its refusals and unproven on its claims — both pre-existing `Commit` sites are shadowed
   // negatives, correctly refused, so no gate had ever generated one.
-  // R71 moved this from 81 to 84, and one of the three is the point: M0088, the fixture's only
+  // R71 moved this from 81 to 84, and one of the three is the point: M0092, the fixture's only
   // `lethal.swap-rec-xrec` mutant, KILLED by `Data Tests.ScopeProbeTracksFieldChange`. The operator
   // ships with its claim proven live rather than only its refusals — the gap R73 had just closed
   // for `RemoveCommit`, not reopened one operator later.
@@ -411,7 +413,7 @@ const EXPECTED = {
   // R73 moved this from 9 to 12, and TWO of the three additions are worth reading rather than
   // accepting:
   //
-  //   M0012 `remove-commit` in `CommitThenRun` SURVIVED, and that CONTRADICTS R72's premise.
+  //   M0013 `remove-commit` in `CommitThenRun` SURVIVED, and that CONTRADICTS R72's premise.
   //     R72 says deleting a `Commit()` before a `Codeunit.Run` makes the platform refuse the call.
   //     Measured on `sandbox-probes` it does — write, then `Codeunit.Run`, in a test method, aborts
   //     with "An error occurred and the transaction is stopped." Measured HERE, with the write and
@@ -594,7 +596,7 @@ const EXPECTED = {
    * R457 TOOK THIS FROM 3 TO 4: `run-trigger-forced` is now kept unless the table provably has no
    * trigger of that kind and no observer, and it is declared by EDIT (flip-boolean-literal's
    * false->true RunTrigger flip as well as swap-modify-flag's forward direction). The one KILLED
-   * mutant that gains it is M0247 (M0242 before R855's 12 added mutants shifted codes by 5; M0223 before R254's arm shifted codes by 15, M0238 before
+   * mutant that gains it is M0259 (PR-209 numbering; M0247, and M0242 before R855's 12 added mutants shifted codes by 5; M0223 before R254's arm shifted codes by 15, M0238 before
    * R-463's `CountBand` shifted them by 4 more;
    * `Data Ops.InsertWithoutTrigger`, Insert(false)->true), a named
    * OVER-TAG: its kill is earned by the test's own Error. Pre-committed in
@@ -670,7 +672,10 @@ const EXPECTED = {
    * R855: 12 added mutants sort before `DataMain.Table.al`'s Processed and Flagged triggers (two in
    * `DataMain.Table.al` itself, lines 24 and 63), so the three pins move again
    * (M0179/M0183/M0175 -> M0183/M0188/M0179), same mutants. M0005 and M0009 do not move: the one
-   * new `DataBandExt` mutant (line 38) sorts after them. The killPosition values and the count 15
+   * new `DataBandExt` mutant (line 38) sorts after them.
+   * PR-209: the 32 added `condition-true`/`blank-argument` mutants move the three pins again
+   * (M0183/M0188/M0179 -> M0192/M0197/M0187), same mutants (the map is /coord/handoff/PR-209/count/renumber/);
+   * M0005 and M0009 still do not move. The killPosition values and the count 15
    * are NOT re-derived here: the 8 added kills may add warm kills, which only a live run shows.
    * R-463 r2 (MEASURED, its live run 2026-10-09): M0005 and M0009 move from position 2 to 3. They take
    * the object-level fallback, and `BandCountsFromLow` (1 member, sorting between
@@ -1201,7 +1206,7 @@ function assertVerdictTable(report: SessionReport): void {
     deleteGroup.explanation.includes("Delete(false)"),
     "the Delete mechanism must explain ITS own mechanism",
   );
-  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0247 (was M0242 before R855), an over-tag.
+  // Mechanism 4, R457. Pinned BY MUTANT: the only KILLED forced mutant is M0259 (was M0247 before PR-209, M0242 before R855), an over-tag.
   // Survived and no-coverage mutants also carry the tag but never enter the screen's kill list.
   const forcedGroup = groupOf("run-trigger-forced");
   const forcedScreened = forcedGroup.mutants.map(mutantOf);
@@ -1224,7 +1229,7 @@ function assertVerdictTable(report: SessionReport): void {
         96,
       ],
     ],
-    "the ONE screened forced kill is M0247 (Insert(false)->true, an over-tag: its test raises its own " +
+    "the ONE screened forced kill is M0259 (Insert(false)->true, an over-tag: its test raises its own " +
       "Error). It disappearing means the conservative rule dropped the tag on a table that has an " +
       "OnInsert, the under-tagging direction; a verdict change means a diagnosis moved a verdict",
   );

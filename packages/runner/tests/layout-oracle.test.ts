@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  EXPECTED_LAYOUT,
+  // PR-209: the whole table, the row awaiting its verdict included; the recorded view is `EXPECTED_LAYOUT`.
+  EXPECTED_LAYOUT_ALL as EXPECTED_LAYOUT,
   type LayoutReport,
   type LayoutRow,
   assertLayoutLegsEqual,
@@ -47,7 +48,9 @@ const UNFIXED: readonly LayoutRow[] = EXPECTED_LAYOUT.map((r) =>
 );
 
 describe("R353 layout oracle", () => {
-  test("the pre-committed table passes, and pins 8 killed / 3 survived over eleven refs", () => {
+  // PR-209: twelve refs: the eleven recorded ones plus 1/M0002, the added `condition-true` row whose
+  // verdict a record run supplies (it is neither killed nor survived yet).
+  test("the pre-committed table passes, and pins 8 killed / 3 survived over twelve refs", () => {
     expect(() => assertLayoutRun(reportOf(EXPECTED_LAYOUT), "one-shot")).not.toThrow();
     expect(EXPECTED_LAYOUT.map((r) => r.ref)).toEqual([
       "0/M0001",
@@ -61,8 +64,10 @@ describe("R353 layout oracle", () => {
       "1/M0006",
       "1/M0007",
       "1/M0008",
+      "1/M0009",
     ]);
     expect(EXPECTED_LAYOUT.filter((r) => r.verdict === "killed").length).toBe(8);
+    expect(EXPECTED_LAYOUT.filter((r) => r.verdict === "survived").length).toBe(3);
   });
 
   test("the unfixed table fails naming EVERY moved ref, not the first", () => {
@@ -73,17 +78,17 @@ describe("R353 layout oracle", () => {
       message = (err as Error).message;
     }
     expect(message).toContain("R353 layout one-shot");
-    expect(message).toContain("1/M0007");
     expect(message).toContain("1/M0008");
-    expect(message).not.toContain("1/M0006");
+    expect(message).toContain("1/M0009");
+    expect(message).not.toContain("1/M0007");
   });
 
   test("a missing and an extra ref are both named", () => {
     const rows = EXPECTED_LAYOUT.filter((r) => r.ref !== "0/M0003");
-    const extra = EXPECTED_LAYOUT.find((r) => r.ref === "1/M0008");
-    if (extra === undefined) throw new Error("no 1/M0008 row");
-    expect(() => assertLayoutRun(reportOf([...rows, { ...extra, ref: "1/M0009" }]), "x")).toThrow(
-      /0\/M0003 missing[\s\S]*1\/M0009 unexpected/,
+    const extra = EXPECTED_LAYOUT.find((r) => r.ref === "1/M0009");
+    if (extra === undefined) throw new Error("no 1/M0009 row");
+    expect(() => assertLayoutRun(reportOf([...rows, { ...extra, ref: "1/M0010" }]), "x")).toThrow(
+      /0\/M0003 missing[\s\S]*1\/M0010 unexpected/,
     );
   });
 
@@ -98,9 +103,9 @@ describe("R353 layout oracle", () => {
 
   test("an attribution other than exact fails", () => {
     const rows = EXPECTED_LAYOUT.map((r) =>
-      r.ref === "1/M0002" ? { ...r, coverageAttribution: "object" as const } : r,
+      r.ref === "1/M0003" ? { ...r, coverageAttribution: "object" as const } : r,
     );
-    expect(() => assertLayoutRun(reportOf(rows), "x")).toThrow(/1\/M0002/);
+    expect(() => assertLayoutRun(reportOf(rows), "x")).toThrow(/1\/M0003/);
   });
 
   test("a one-batch run fails on the batch count", () => {
@@ -119,8 +124,8 @@ describe("R353 layout oracle", () => {
     } catch (err) {
       message = (err as Error).message;
     }
-    expect(message).toContain("1/M0007");
     expect(message).toContain("1/M0008");
-    expect(message).not.toContain("1/M0006");
+    expect(message).toContain("1/M0009");
+    expect(message).not.toContain("1/M0007");
   });
 });

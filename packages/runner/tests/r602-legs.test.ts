@@ -49,7 +49,7 @@ import { ARMS_REFUSAL } from "../itest/wrapped-fixture";
 
 describe("R602 build review B1: WR pins its three state notes exactly", () => {
   test("the constant is the measured set: three, all BandYRun kills (R975 dropped M0090, M0096; R976 M0089)", () => {
-    expect(V3_WR_STATE_NOTES).toEqual(["0/M0075", "0/M0076", "0/M0082"]);
+    expect(V3_WR_STATE_NOTES).toEqual(["0/M0087", "0/M0088", "0/M0094"]);
   });
   test("the measured notes pass; none, an extra and a missing note are each named", () => {
     expect(judgeStateNotes([...V3_WR_STATE_NOTES].reverse(), V3_WR_STATE_NOTES)).toEqual([]);

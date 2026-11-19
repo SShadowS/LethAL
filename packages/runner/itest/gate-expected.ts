@@ -7,6 +7,7 @@
  *
  * Change a figure here only together with its gate's pre-commitment and page.
  */
+import { PR209_UNRECORDED } from "./pr209-pending";
 
 export const BCDEV_FIGURES = {
   totalMutantSites: 22,
@@ -23,7 +24,11 @@ export const BCDEV_FIGURES = {
  * reading 2026-11-17 (/coord/handoff/PR-114/gate-dbm.log); pre-committed in the spec addendum.
  */
 export const DBM_FIGURES = {
-  totalMutantSites: 122,
+  // PR-209: 126 = 122 + 4 added sites (2 condition-true, 2 blank-argument); the other 21 sites the two
+  // operators meet there are refused by R868 (`hangRefused` 21: 12 condition-true, 9 blank-argument), not made.
+  // killed/survived/noCoverage below are the OLD 122-site figures, still to be recorded
+  // (`PR209_PENDING["al-runner-v3"]`).
+  totalMutantSites: 126,
   killed: 15,
   survived: 3,
   noCoverage: 104,
@@ -51,9 +56,9 @@ export const TABLES_FIGURES = {
   groupedCalls: 395 + 15 + 15,
   warmKills: 15,
   killPositions: [
-    { mutantCode: "M0183", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
-    { mutantCode: "M0188", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
-    { mutantCode: "M0179", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
+    { mutantCode: "M0192", killingTest: "ProcessedRequiresCategory", killPosition: 5 },
+    { mutantCode: "M0197", killingTest: "FlaggedFiresModifyTrigger", killPosition: 4 },
+    { mutantCode: "M0187", killingTest: "CategoryGuardNeedsCalcFields", killPosition: 2 },
     { mutantCode: "M0005", killingTest: "BandReportSumsBands", killPosition: 3 },
     { mutantCode: "M0009", killingTest: "BandReportSumsBands", killPosition: 3 },
   ],
@@ -149,98 +154,128 @@ export const LEND_MUTANTS = {
     verdict: "survived",
     killingTest: null,
   },
-  M0005: {
+  // PR-209: every code moved by the map in /coord/handoff/PR-209/count/renumber/LEND_MUTANTS.tsv, its
+  // key unchanged. M0005, M0014, M0016 and M0022 are the ADDED mutants: they sit in `LEND_ADDED_MUTANTS`
+  // (no baseline row yet, so `lend-seed.test.ts`'s equality with `bcdev.baseline.json` still holds).
+  M0006: {
     key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-left|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0006: {
+  M0007: {
     key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-right|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0007: {
+  M0008: {
     key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.negate-conditional|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0008: {
+  M0009: {
     key: "fc15ec3036dca5e21a2e79675b48f28e5815811f32dff4eb3426e0ff803575bb|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0009: {
+  M0010: {
     key: "58ade303c82ea175e1cabd4e46b8cd818e3a59a66b60578ef4d85077548d40e9|Sandbox Logic|ClampPercent|lethal.conditional-boundary|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0010: {
+  M0011: {
     key: "40277aa121cd95030531672f906db4dc1f238ef3179b8c58d7815e6a8fe957f5|Sandbox Logic|ClampPercent|lethal.return-value|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0011: {
+  M0012: {
     key: "2b34811c1b253fde93b24824f30d18d933316b7f64723b67d413a3b0d16956a6|Sandbox Logic|ApplyAudit|lethal.empty-block|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0012: {
+  M0013: {
     key: "9b4f290c51c1ef232af4a294bb9a0a4c404064f20bac6e893fab28b45cdf7785|Sandbox Logic|ApplyAudit|lethal.void-method-call|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0013: {
+  M0015: {
     key: "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|LogAudit|lethal.empty-block|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0014: {
+  M0017: {
     key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.negate-conditional|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0015: {
+  M0018: {
     key: "63b9fa65d3452236af3d725f80a805268813f9012185c0296fe552908eae1d6d|Sandbox Logic|LogAudit|lethal.shift-integer|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0016: {
+  M0019: {
     key: "77ee7e3d0adfcd76e1ae34e9067dcebc5c466f1172a857c730b0d43f7085d15c|Sandbox Logic|LogAudit|lethal.empty-block|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0017: {
+  M0020: {
     key: "d8f839f87361f4d85b7ccd435b318285a82e1e3610237d66488e17b8bdd61de3|Sandbox Logic|LogAudit|lethal.remove-assignment|1",
     verdict: "survived",
     killingTest: null,
   },
-  M0018: {
+  M0021: {
     key: "e7216a276891ae7f02f66d83d4fad98fdc3ca56552d617d1f70fa371f7cfc667|Sandbox Pricing|DiscountedPrice|lethal.empty-block|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0019: {
+  M0023: {
     key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0020: {
+  M0024: {
     key: "98656555452a91ccc91c88a8a0bc3f58192db5f5153792b959447d06cff62cf1|Sandbox Pricing|DiscountedPrice|lethal.return-value|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0021: {
+  M0025: {
     key: "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.delete-additive-right|1",
     verdict: "no-coverage",
     killingTest: null,
   },
-  M0022: {
+  M0026: {
     key: "d7143458adf859fcca3a104795916421514185dbe83b5e6366d0f68f86e9389d|Sandbox Pricing|DiscountedPrice|lethal.swap-additive|1",
     verdict: "no-coverage",
     killingTest: null,
   },
 } as const;
 export type LendCode = keyof typeof LEND_MUTANTS;
+
+/**
+ * PR-209: the four mutants the two new default operators add to `sandbox-app`. Their verdicts are
+ * recorded by the record run; until then each is the sentinel and `itest:lend` refuses to run.
+ */
+export const LEND_ADDED_MUTANTS = {
+  M0005: {
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.condition-true|1",
+    verdict: PR209_UNRECORDED,
+    killingTest: null,
+  },
+  M0014: {
+    key: "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Sandbox Logic|ApplyAudit|lethal.blank-argument|1",
+    verdict: PR209_UNRECORDED,
+    killingTest: null,
+  },
+  M0016: {
+    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.condition-true|1",
+    verdict: PR209_UNRECORDED,
+    killingTest: null,
+  },
+  M0022: {
+    key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.condition-true|1",
+    verdict: PR209_UNRECORDED,
+    killingTest: null,
+  },
+} as const;
 
 /**
  * R618 `itest:lend`: the pre-committed figures of each leg (plan r2 §6). Per-mutant expectations
@@ -272,11 +307,11 @@ export const LEND_FIGURES = {
   sentinel: { code: "M0004", durationMs: 987654 },
   /** K's rows: 2 killed, 5 survived, 2 no-coverage, carried by key. R855: the same nine mutants,
    *  their codes moved (old M0005-M0008 are M0007-M0010, old M0016-M0017 are M0018-M0019). */
-  kept: ["M0001", "M0002", "M0004", "M0007", "M0008", "M0009", "M0010", "M0018", "M0019"],
+  kept: ["M0001", "M0002", "M0004", "M0008", "M0009", "M0010", "M0011", "M0021", "M0023"],
   /** K's error row (Q3): non-carryable, so re-executed. */
   keptAsError: ["M0003"],
   /** K2 leaves out only this one (the swap-additive mutant, was M0019). */
-  r3Rerun: ["M0022"],
+  r3Rerun: ["M0026"],
 } as const;
 
 /**

@@ -44,9 +44,9 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
     "LEND_FIGURES.resumeRefusedSnapshot.groupedCalls": 0,
     "LEND_FIGURES.sentinel.code": "M0004",
     "LEND_FIGURES.sentinel.durationMs": 987654,
-    "LEND_FIGURES.kept": ["M0001", "M0002", "M0004", "M0007", "M0008", "M0009", "M0010", "M0018", "M0019"],
+    "LEND_FIGURES.kept": ["M0001", "M0002", "M0004", "M0008", "M0009", "M0010", "M0011", "M0021", "M0023"],
     "LEND_FIGURES.keptAsError": ["M0003"],
-    "LEND_FIGURES.r3Rerun": ["M0022"]
+    "LEND_FIGURES.r3Rerun": ["M0026"]
   },
   "notPinned": {
     "warningMessages": "the exact texts of history-backend-build-changed (N1), snapshot-backend-build-changed (R3) and the RN refusals are built in the itest from run ids",
@@ -58,6 +58,11 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 - R855 added three `sandbox-app` mutants: two survivors and one no-coverage, as pre-committed. The
   figures below hold them. Codes moved with them: the nine KEPT rows are the same
   mutants as before under new codes, and `r3Rerun` is the same `swap-additive` mutant (was M0019).
+- PR-209 (condition-true and blank-argument became default operators) adds four more `sandbox-app` mutants
+  (M0005, M0014, M0016, M0022 in the default numbering; verdicts to be recorded) and renumbers the rest by
+  the map in `/coord/handoff/PR-209/count/renumber/`: the KEPT rows are the same mutants under new codes
+  and `r3Rerun` is the same `swap-additive` mutant (now M0026). The counts below are still the 22-row
+  figures until the record run.
 - L0, N1 and N5 score 3 / 14 / 5 over 22, per mutant equal to `bcdev.baseline.json`. Nothing is
   lent. `groupedCalls` is 17.
 - L1 and N0 score 3 / 0 / 5, with the 14 survivors recorded as known survivors and not run.
@@ -69,7 +74,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   leaves uncovered come back as fresh no-coverage (see "A stored no-coverage is always re-derived" below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
   `groupedCalls` 10 (1 error row plus 9 survivors; was 8).
 - R3's K2 has 21 rows (not asserted). It carries 17 of them, every one this session covers, re-derives the four uncovered
-  ones, and scores M0022 as no-coverage. `carried` is 17.
+  ones, and scores M0026 (was M0022) as no-coverage. `carried` is 17.
 - The sentinel row (M0004 in K) has `durationMs` 987654.
 
 ### A stored no-coverage is always re-derived

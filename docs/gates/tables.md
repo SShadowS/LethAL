@@ -23,9 +23,9 @@ mutant equal to its baseline, with the W1 company (R-583).
     "TABLES_FIGURES.groupedCalls": 425,
     "TABLES_FIGURES.warmKills": 15,
     "TABLES_FIGURES.killPositions": [
-      { "mutantCode": "M0183", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
-      { "mutantCode": "M0188", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
-      { "mutantCode": "M0179", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
+      { "mutantCode": "M0192", "killingTest": "ProcessedRequiresCategory", "killPosition": 5 },
+      { "mutantCode": "M0197", "killingTest": "FlaggedFiresModifyTrigger", "killPosition": 4 },
+      { "mutantCode": "M0187", "killingTest": "CategoryGuardNeedsCalcFields", "killPosition": 2 },
       { "mutantCode": "M0005", "killingTest": "BandReportSumsBands", "killPosition": 3 },
       { "mutantCode": "M0009", "killingTest": "BandReportSumsBands", "killPosition": 3 }
     ],

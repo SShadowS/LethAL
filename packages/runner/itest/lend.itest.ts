@@ -63,7 +63,7 @@ import {
   printItestTarget,
   readFixtureConfig,
 } from "./config-path";
-import { LEND_FIGURES, LEND_MUTANTS, type LendCode } from "./gate-expected";
+import { LEND_ADDED_MUTANTS, LEND_FIGURES, LEND_MUTANTS, type LendCode } from "./gate-expected";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
 import {
   checkGateWarnings,
@@ -77,6 +77,7 @@ import {
 import { PENDING_SUFFIX, REVOKED_SUFFIX, seedRunFrom } from "./lend-seed";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
 import type { NormalizedMutant } from "./mutant-equality";
+import { refuseIfPr209Pending } from "./pr209-pending";
 
 if (!process.env.LETHAL_ITEST_LEND) {
   console.log(
@@ -85,6 +86,8 @@ if (!process.env.LETHAL_ITEST_LEND) {
   const challenged = await emitSkipped("lend", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
+
+refuseIfPr209Pending("lend");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");
@@ -102,10 +105,20 @@ const CLOSED_WORLD = "|closed-world:public";
 const LEND_CODE = /^(history-|resume-|snapshot-|carry-refused-renumbered$)/;
 
 const CODES = Object.keys(LEND_MUTANTS) as LendCode[];
-const keyOfCode = (c: LendCode): string => LEND_MUTANTS[c].key;
-const keySet = (codes: readonly string[]): Set<string> =>
-  new Set(codes.map((c) => keyOfCode(c as LendCode)));
-const ALL = keySet(CODES);
+// PR-209: the 4 added mutants (verdict to be recorded) are in ALL by key, but in no verdict set
+// below (NO_COVERAGE, SURVIVED): the record run places them. `refuseIfPr209Pending("lend")` keeps
+// the gate from running until it has.
+const ALL_BY_CODE: Readonly<Record<string, { readonly key: string }>> = {
+  ...LEND_MUTANTS,
+  ...LEND_ADDED_MUTANTS,
+};
+const keyOfCode = (c: string): string => {
+  const m = ALL_BY_CODE[c];
+  if (m === undefined) throw new Error(`lend: no mutant ${c}`);
+  return m.key;
+};
+const keySet = (codes: readonly string[]): Set<string> => new Set(codes.map((c) => keyOfCode(c)));
+const ALL = keySet([...CODES, ...Object.keys(LEND_ADDED_MUTANTS)]);
 const KEPT = keySet(LEND_FIGURES.kept);
 /**
  * R618 live run 1, then R621: a stored no-coverage is never carried; it is re-derived from this
@@ -576,7 +589,7 @@ async function main(): Promise<void> {
     assert.deepEqual(
       carriedKeys(r3.report),
       carriedInPartBatch(new Set([...ALL].filter((k) => !keySet(LEND_FIGURES.r3Rerun).has(k)))),
-      "R3: all but M0022 and the no-coverage rows carried, by key (partly carried batch)",
+      "R3: all but M0026 and the no-coverage rows carried, by key (partly carried batch)",
     );
     assertFrozen("R3", baseline, r3.report);
     assert.equal(

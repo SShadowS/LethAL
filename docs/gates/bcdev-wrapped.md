@@ -28,7 +28,7 @@ in `#if` blocks. It runs two legs, one session each: `coverageMode: "fenced"` an
 
 The fenced leg scores 64 killed and 38 survived.
 
-R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035), all killed as pre-committed, recorded on bc3 on 2026-11-07.
+R855 added four `delete-additive-right` rows (M0010, M0018, M0026, M0035; M0013, M0022, M0031, M0041 since PR-209 added 14 `condition-true` rows), all killed as pre-committed, recorded on bc3 on 2026-11-07.
 
 ## History
 

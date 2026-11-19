@@ -112,6 +112,7 @@ import {
   stopWordsProblem,
 } from "./hang-stop-rows";
 import { killReproductionFailures, latestRunId } from "./kill-reproduction";
+import { refuseIfPr209Pending } from "./pr209-pending";
 
 if (!process.env.LETHAL_ITEST_HANG) {
   console.log(
@@ -122,6 +123,7 @@ if (!process.env.LETHAL_ITEST_HANG) {
   const challenged = await emitSkipped("hang", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
+refuseIfPr209Pending("hang");
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..", "..");

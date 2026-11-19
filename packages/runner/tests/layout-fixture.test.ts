@@ -34,14 +34,16 @@ const EXPECTED_MUTANTS = [
   "0/M0002 src/LayoutAlpha.Codeunit.al 5 lethal.return-value IsBig",
   "0/M0003 src/LayoutAlpha.Codeunit.al 5 lethal.conditional-boundary IsBig",
   "1/M0001 src/LayoutBeta.Codeunit.al 4 lethal.empty-block Grow",
-  "1/M0002 src/LayoutBeta.Codeunit.al 5 lethal.conditional-boundary Grow",
-  "1/M0003 src/LayoutBeta.Codeunit.al 6 lethal.return-value Grow",
-  // R855: lethal.delete-additive-right is a new row (Beta now has 8 guards), M0004; later codes +1.
-  "1/M0004 src/LayoutBeta.Codeunit.al 6 lethal.delete-additive-right Grow",
-  "1/M0005 src/LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
-  "1/M0006 src/LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
-  "1/M0007 src/LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
-  "1/M0008 src/LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
+  // PR-209: lethal.condition-true on `if X > 10` is a new row (Beta now has 9 guards), 1/M0002; later codes +1.
+  "1/M0002 src/LayoutBeta.Codeunit.al 5 lethal.condition-true Grow",
+  "1/M0003 src/LayoutBeta.Codeunit.al 5 lethal.conditional-boundary Grow",
+  "1/M0004 src/LayoutBeta.Codeunit.al 6 lethal.return-value Grow",
+  // R855: lethal.delete-additive-right is a new row, then M0005; later codes +1.
+  "1/M0005 src/LayoutBeta.Codeunit.al 6 lethal.delete-additive-right Grow",
+  "1/M0006 src/LayoutBeta.Codeunit.al 6 lethal.swap-additive Grow",
+  "1/M0007 src/LayoutBeta.Codeunit.al 7 lethal.return-value Grow",
+  "1/M0008 src/LayoutBeta.Codeunit.al 37 lethal.empty-block Twice",
+  "1/M0009 src/LayoutBeta.Codeunit.al 38 lethal.return-value Twice",
 ];
 
 /**
@@ -72,10 +74,11 @@ interface Built {
 }
 
 /** Instruments both batches once, as `runSession` does, into a scratch directory. */
-async function build(root: string): Promise<Built> {
-  // PR-209: `EXPECTED_LAYOUT` (itest) holds the OLD default set, which is `--profile slim`; its
-  // re-pin to the new default is the gate round's (spec 0c item 4).
-  const set = await generateMutationSet(PROJECT, { ...SLIM_OPTIONS });
+async function build(
+  root: string,
+  options: Parameters<typeof generateMutationSet>[1] = {},
+): Promise<Built> {
+  const set = await generateMutationSet(PROJECT, options);
   const { files } = set;
   const identityOrdinals = identityOrdinalsOf(set);
   const batches = planArtifacts(files, { maxGuardsPerBatch: 7 });
@@ -117,9 +120,11 @@ async function build(root: string): Promise<Built> {
 describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member boundary", () => {
   let root = "";
   let built: Built | undefined;
+  let slimBuilt: Built | undefined;
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "lethal-r353-"));
-    built = await build(root);
+    built = await build(join(root, "default"));
+    slimBuilt = await build(join(root, "slim"), { ...SLIM_OPTIONS });
   });
   afterAll(() => {
     removeScratchDir(root);
@@ -139,8 +144,15 @@ describe("R353: sandbox-layout splits at maxGuardsPerBatch 7 across a member bou
     expect(get().rows).toEqual(EXPECTED_MUTANTS);
   });
 
-  it("batch 0's layout misplaces batch 1's covered lines, and batch 1's own does not", async () => {
-    const [dir0, dir1] = get().dirs;
+  // PR-209 FINDING (round 2, spec 0c item 6 / 3a): this premise does NOT hold on the DEFAULT set. The
+  // added `condition-true` guard lengthens instrumented Grow from line 46 to line 60, past the end of
+  // the 40-line verbatim file, and the baseline's executed lines (the final else arm, lines 54-57) then
+  // fall past batch 0's index instead of onto Twice. So this test measures the OLD emission (slim),
+  // where the premise holds, and the default's failure is reported to the orchestrator as a BLOCK
+  // (the fix, a longer `Twice` comment or a fixture ripple, is its own pre-commitment).
+  it("batch 0's layout misplaces batch 1's covered lines, and batch 1's own does not (slim emission; the default breaks the premise)", async () => {
+    if (slimBuilt === undefined) throw new Error("beforeAll did not build the slim batches");
+    const [dir0, dir1] = slimBuilt.dirs;
     if (dir0 === undefined || dir1 === undefined) throw new Error("expected two batch dirs");
     const stale = await buildAlRunnerCoverageIndex(dir0);
     const own = await buildAlRunnerCoverageIndex(dir1);

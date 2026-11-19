@@ -8,7 +8,7 @@
  *
  * At `maxGuardsPerBatch` 7 the fixture splits into two batches, and batch 1 instruments the file
  * batch 0 copied verbatim. With R349's per-deploy reset removed, the one-shot leg reads batch 1's
- * coverage through batch 0's layout and 1/M0007 and 1/M0008 go from killed to survived with
+ * coverage through batch 0's layout and 1/M0008 and 1/M0009 go from killed to survived with
  * `GrowAboveTen` as their covering test. The verdict alone would catch that, but the covering
  * tests and the attribution are pinned too, because the frozen baseline compares neither.
  *
@@ -16,6 +16,7 @@
  * code alone. Kept out of `al-runner.itest.ts` because that script runs its gate at import (R186).
  */
 import { join } from "node:path";
+import { PR209_UNRECORDED } from "./pr209-pending";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
 export const LAYOUT_PROJECT_DIR = join(FIXTURES, "sandbox-layout");
@@ -23,7 +24,7 @@ export const LAYOUT_TEST_DIR = join(FIXTURES, "sandbox-layout-tests");
 /** The top of the target's range, 79700-79749, per the `pickSelectorIds` convention. */
 export const LAYOUT_SELECTOR_IDS = { selectorId: 79749, controlId: 79748, tableId: 79747 };
 /**
- * Alpha has 3 raw specs and Beta 8 (R855 added delete-additive-right), so first fit at 7 gives
+ * Alpha has 3 raw specs and Beta 9 (R855 added delete-additive-right, PR-209 condition-true), so first fit at 7 gives
  * exactly two batches, and Beta alone is over the budget (the oversized-batch warning, expected).
  */
 export const LAYOUT_MAX_GUARDS = 7;
@@ -40,7 +41,7 @@ export interface LayoutRow {
   readonly line: number;
   readonly operatorName: string;
   readonly procedureName: string;
-  readonly verdict: "killed" | "survived";
+  readonly verdict: "killed" | "survived" | typeof PR209_UNRECORDED;
   readonly killingTest?: string;
   /** Full qualified names, compared as a complete set. */
   readonly coveringTests: readonly string[];
@@ -48,7 +49,7 @@ export interface LayoutRow {
 }
 
 /** The spec's fixed table, every field written out. Sorted by batch, then code. */
-export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
+export const EXPECTED_LAYOUT_ALL: readonly LayoutRow[] = [
   {
     ref: "0/M0001",
     file: ALPHA,
@@ -96,6 +97,17 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     ref: "1/M0002",
     file: BETA,
     line: 5,
+    operatorName: "lethal.condition-true",
+    procedureName: "Grow",
+    // PR-209: added row; its verdict comes from the record run.
+    verdict: PR209_UNRECORDED,
+    coveringTests: ["Layout Tests.GrowAboveTen"],
+    coverageAttribution: "exact",
+  },
+  {
+    ref: "1/M0003",
+    file: BETA,
+    line: 5,
     operatorName: "lethal.conditional-boundary",
     procedureName: "Grow",
     verdict: "survived",
@@ -103,21 +115,10 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
   {
-    ref: "1/M0003",
-    file: BETA,
-    line: 6,
-    operatorName: "lethal.return-value",
-    procedureName: "Grow",
-    verdict: "killed",
-    killingTest: "GrowAboveTen",
-    coveringTests: ["Layout Tests.GrowAboveTen"],
-    coverageAttribution: "exact",
-  },
-  {
     ref: "1/M0004",
     file: BETA,
     line: 6,
-    operatorName: "lethal.delete-additive-right",
+    operatorName: "lethal.return-value",
     procedureName: "Grow",
     verdict: "killed",
     killingTest: "GrowAboveTen",
@@ -128,7 +129,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     ref: "1/M0005",
     file: BETA,
     line: 6,
-    operatorName: "lethal.swap-additive",
+    operatorName: "lethal.delete-additive-right",
     procedureName: "Grow",
     verdict: "killed",
     killingTest: "GrowAboveTen",
@@ -138,6 +139,17 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
   {
     ref: "1/M0006",
     file: BETA,
+    line: 6,
+    operatorName: "lethal.swap-additive",
+    procedureName: "Grow",
+    verdict: "killed",
+    killingTest: "GrowAboveTen",
+    coveringTests: ["Layout Tests.GrowAboveTen"],
+    coverageAttribution: "exact",
+  },
+  {
+    ref: "1/M0007",
+    file: BETA,
     line: 7,
     operatorName: "lethal.return-value",
     procedureName: "Grow",
@@ -146,7 +158,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
   {
-    ref: "1/M0007",
+    ref: "1/M0008",
     file: BETA,
     line: 37,
     operatorName: "lethal.empty-block",
@@ -157,7 +169,7 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
   {
-    ref: "1/M0008",
+    ref: "1/M0009",
     file: BETA,
     line: 38,
     operatorName: "lethal.return-value",
@@ -168,6 +180,14 @@ export const EXPECTED_LAYOUT: readonly LayoutRow[] = [
     coverageAttribution: "exact",
   },
 ];
+
+/**
+ * The rows that have a recorded verdict: what the committed baseline and the gate page describe
+ * (`gate-pages.test.ts` reads this). PR-209's added rows join it when a record run supplies them.
+ */
+export const EXPECTED_LAYOUT: readonly LayoutRow[] = EXPECTED_LAYOUT_ALL.filter(
+  (r) => r.verdict !== PR209_UNRECORDED,
+);
 
 export interface LayoutMutant {
   readonly batchIndex: number;
@@ -255,7 +275,7 @@ export function assertLayoutRun(report: LayoutReport, leg: string): void {
       problems.push(`${refOf(m)} is in ${m.file}, batch ${m.batchIndex} holds only ${want}`);
     }
   }
-  problems.push(...diffRows(EXPECTED_LAYOUT, layoutRows(report)));
+  problems.push(...diffRows(EXPECTED_LAYOUT_ALL, layoutRows(report)));
   if (problems.length > 0) {
     throw new Error(
       `R353 layout ${leg}: rows differ from the pre-committed table (${SPEC}):\n${problems.map((p) => `  - ${p}`).join("\n")}`,

@@ -227,6 +227,7 @@ import {
   printLayoutTable,
 } from "./layout-fixture";
 import { compareMutants, keyOf, normalizeForComparison } from "./mutant-equality";
+import { refuseIfPr209Pending } from "./pr209-pending";
 import { assertSymbolBuild, printSymbolTable } from "./symbol-fixture";
 import {
   ARMS_REFUSAL,
@@ -242,6 +243,7 @@ if (!process.env.LETHAL_ITEST_ALRUNNER_V3) {
   const challenged = await emitSkipped("alrunner-v3", "the leg's env var is unset");
   process.exit(challenged ? 1 : 0);
 }
+refuseIfPr209Pending("al-runner-v3");
 
 // R762: this gate (and the update gate, which runs it) measures the probe, never replays it: every
 // session it starts, `buildBackend`'s included, runs the contract probe fresh.
@@ -1726,8 +1728,9 @@ function assertCleanLeg(
  * two batches, EXPECTED_LAYOUT per ref. It is R349's stale-layout check on v3 (R666): v3 reports a
  * target file's coverage in the batch's EMITTED line numbers, so batch 1 must read it through its own
  * coverage index. It proves both index guards together, `resetLayoutState()` clearing the index AND
- * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0007 and 1/M0008 survived, covered
- * by GrowAboveTen. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
+ * `deploy()` assigning the new one; removing both (L-R3) turns 1/M0008 and 1/M0009 survived (1/M0007 and 1/M0008 before PR-209's
+ * added `condition-true` row), covered by GrowAboveTen. PR-209: the added guard may break the leg's
+ * span premise (instrumented Grow now runs to line 60 of a 40-line verbatim file): run L1 first. Removing either alone stays green (R-654 S2 L-R1, L-R2). See
  * docs/gates/alrunner-v3.md.
  */
 async function legL1(scratch: string): Promise<SessionReport> {
