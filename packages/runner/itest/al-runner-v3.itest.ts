@@ -677,7 +677,8 @@ const S1E_PINS = {
   // (docs/superpowers/specs/2026-11-14-r987-request-sizing-precommitment.md, master 2c0976bc).
   boundChecks: 4,
   warmups: 1,
-  entriesSent: 48,
+  // PR-209 amendment 9 addendum: 54 (read on current; was 48).
+  entriesSent: 54,
   pairBatchRequests: 1,
   pairBatchStored: 3,
   pairBatchServed: 3,

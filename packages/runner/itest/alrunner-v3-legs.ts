@@ -1062,9 +1062,10 @@ export function judgeLegK(f: LegKFacts): string[] {
     );
   if (!f.warned) out.push("K: AL_RUNNER_V3_NOT_AUTHORITATIVE was not printed");
   const off = f.noCoverageFiles.filter((p) => !p.replace(/\\/g, "/").endsWith(NO_COVERAGE_FILE));
-  if (f.noCoverageFiles.length !== 5 || off.length > 0)
+  // PR-209 amendment 9 addendum: 6 (DiscountedPrice condition-true joins; bcdev.baseline.json), was 5.
+  if (f.noCoverageFiles.length !== 6 || off.length > 0)
     out.push(
-      `K: ${f.noCoverageFiles.length} no-coverage mutant(s) (${off.length} outside ${NO_COVERAGE_FILE}), pre-committed 5, all in ${NO_COVERAGE_FILE}`,
+      `K: ${f.noCoverageFiles.length} no-coverage mutant(s) (${off.length} outside ${NO_COVERAGE_FILE}), pre-committed 6, all in ${NO_COVERAGE_FILE}`,
     );
   return out;
 }
