@@ -5075,7 +5075,8 @@ export const JSON_TEXT: Family = {
  * PR-191: the XML refusal texts DO's y2 window closed on, each driven by an invented cell (no corpus source text). A
  * non-SingleInstance wrapper codeunit (51000) holds a global XmlNode; the cells call it through 2 to 4 procedures. The deep
  * cells (depth 6, two codeunits) bind a manual subscriber and set a SingleInstance codeunit first. Cell i is codeunit
- * BASE_ID + 1 + i (51001 to 51019); the support codeunits are 51000 and 51020 to 51023 (`extraIds`).
+ * BASE_ID + 1 + i (51001 to 51018; 51019 is unused); the support codeunits are 51000 and 51020 to 51023 (`extraIds`).
+ * Amendment 1 MED-3: `WriteTo(OutStream)` on an unassigned XmlNode fails with an engine error (no refusal), so it has no cell.
  */
 const Y2_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const y2 = (method: string, call: string, vars: string[] = [], setup: string[] = []): Cell =>
@@ -5173,21 +5174,6 @@ export const Y2_XML: Family = {
     begin
         Root := XmlElement.Create('root');
         Root.Add(XmlText.Create('first'), Unset);
-    end;
-
-    procedure WriteUnassignedToOpenStream()
-    begin
-        WriteUnassignedInner();
-    end;
-
-    local procedure WriteUnassignedInner()
-    var
-        Row: Record "Y2 Blob Row" temporary;
-        OutS: OutStream;
-        Unset: XmlNode;
-    begin
-        Row.Blob.CreateOutStream(OutS);
-        Unset.WriteTo(OutS);
     end;
 
     procedure WriteBlob()
@@ -5481,7 +5467,6 @@ codeunit 51023 "Y2 Probe"
     y2Name("Name1336", "W.AlphabetName(1336)"),
     y2Name("Name2000", "W.AlphabetName(2000)"),
     y2("NodeAsSecondContent", "W.MultiContentWithUnassigned();"),
-    y2("UnassignedNodeWriteTo", "W.WriteUnassignedToOpenStream();"),
     y2("DeepNodeAsContent", "Chain.ContentDeep(W);", Y2_DEEP_VARS, Y2_DEEP_SETUP),
     y2("DeepName76", "Chain.NameDeep(W, W.AlphabetName(75) + '=');", Y2_DEEP_VARS, Y2_DEEP_SETUP),
   ],

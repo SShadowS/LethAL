@@ -709,7 +709,7 @@ const SAFE_TAIL = `(?!.*(?:${V3_TAIL_UNSAFE_WORDS.map(anyCase).join("|")}))`;
  * measured type (`DOTNET_CLEAN_EXCEPTIONS`), a call on a variable that holds no object, an assembly that
  * is not there at all, a member or overload not found, a stream never created, and the one policy member
  * `System.TimeZoneInfo.Local`. Never measured, so still closing: an
- * unassigned Variant used as a stream, an unassigned XmlElement, and every other wording. The two
+ * unassigned Variant used as a stream, and every other wording (an unassigned XmlElement was kept later, by PR-191). The two
  * free-text tails take `SAFE_TAIL`, and no entry spans a line break. Not in the update gate's
  * `serve-keep-reasons` fact (it runs without the .NET helper): a reworded text stops matching and the
  * daemon closes again, the safe direction, counted in `v3DaemonCloses`.
@@ -797,6 +797,13 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-159: the Integer values the GetTable keep covers, each by name: 123 (PR-133) and 12345 (family `y1-refusals`, census
   // CLEAN at /coord/handoff/PR-159/census/, a plain call and one behind an `IsRecord` guard). No integer pattern.
   GETTABLEINT: "(?:123|12345)",
+  // PR-191 (spec 2026-11-19-pr191-y2-xml-keeps-precommitment.md, amendment 1 LOW-1): the XML element names DO's M36754 passes
+  // (an inner text made the name: base64 of a blob, a MIME type) hold random test data, so this slot is a bounded character
+  // class, not names. Its ends and classes are each measured by family `y2-xml` (census CLEAN, /coord/handoff/PR-191/census3/):
+  // `+`, a leading digit, `/` (`image/jpeg`, `application/pdf`), a trailing `=`, and 16, 76, 1,336 and 2,000 characters. The
+  // bound is the longest y2 name (1,336) plus about 50%. A longer name, or any other character, closes. The empty name is
+  // PR-56's `xml-name-empty`.
+  XMLNAME: "[A-Za-z0-9+/=]{1,2000}",
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1133,6 +1140,24 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // SaveAs-with-layout errors and the placeholder Pdf read (they need BaseApp's own reports). Pinned by `al-runner-serve-pr133.test.ts`.
   // PR-159 (spec 2026-11-18-pr159-y1-sibling-keeps-precommitment.md): 12345 joins 123 by name (slot %GETTABLEINT%).
   ["recordref-gettable-integer-123", "RecordRef.GetTable of Integer %GETTABLEINT%"],
+  // PR-191 (spec 2026-11-19-pr191-y2-xml-keeps-precommitment.md, with amendment 1): the five XML texts DO's y2 window closed
+  // its daemon on 30 times (8 mutants in DO's XML wrapper codeunits), each driven by invented cells of family `y2-xml` and
+  // measured CLEAN by the strict census with three extra readers that see a leftover subscriber binding, a SingleInstance
+  // global and XML engine state (`--refusers 7`, /coord/handoff/PR-191/census3/). The refusers: a never-set wrapper global
+  // reached through a `var` wrapper parameter, a value copied through a by-value one, a list child never fetched; an
+  // unassigned element's SetAttribute and HasAttributes; XmlDocument.Add and the second argument of a multi-content Add; an
+  // unassigned collection's Get; at depth 2 to 6, the deep cells after a Commit, a Blob OutStream write, a bound manual
+  // subscriber and a set SingleInstance codeunit. Not measured (one text can come from other builtins too): every other
+  // builtin that meets an unassigned XmlNode, XmlElement or XmlAttributeCollection. The next DO window's P4 is what would
+  // catch one. Pinned by `al-runner-serve-pr191.test.ts`.
+  ["xml-unassigned-node", "use of an unassigned XmlNode"],
+  ["xml-unassigned-element", "use of an unassigned XmlElement"],
+  ["xml-node-as-content", "XmlNode as XML content (only XML nodes and text are pinned)"],
+  ["xml-attribute-collection-other", "XmlAttributeCollection method on something else"],
+  [
+    "xml-name-measured-chars",
+    "XML name `%XMLNAME%` (only plain names without a prefix are pinned)",
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

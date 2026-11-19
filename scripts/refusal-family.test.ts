@@ -1287,22 +1287,23 @@ describe("PR-159: the y1-refusals family", () => {
 describe("PR-191: the y2-xml family", () => {
   const f = Y2_XML;
 
-  test("19 cells, distinct names, support ids clear of every cell id, app.json range covers them", () => {
-    expect(f.cells).toHaveLength(19);
+  test("18 cells, distinct names, support ids clear of every cell id, app.json range covers them", () => {
+    expect(f.cells).toHaveLength(18);
     const names = f.cells.map((c, i) => cellName(c, i));
     expect(new Set(names).size).toBe(names.length);
     const ids = [...f.support.matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
     expect(ids).toEqual([51000, 51020, 51021, 51022, 51023]);
     const range = JSON.parse(emitApp(f)["app.json"] ?? "{}").idRanges[0];
-    expect(range).toEqual({ from: 51000, to: 51000 + 1 + 19 + 4 });
+    expect(range).toEqual({ from: 51000, to: 51000 + 1 + 18 + 4 });
   });
 
   test("extraIds moves the idRanges end by exactly that much; a family without it is unchanged", () => {
     const end = (x: Family) => JSON.parse(emitApp(x)["app.json"] ?? "{}").idRanges[0].to;
-    expect(end({ ...f, extraIds: 0 })).toBe(51000 + 1 + 19);
-    expect(end({ ...f, extraIds: 7 })).toBe(51000 + 1 + 19 + 7);
+    const n = f.cells.length;
+    expect(end({ ...f, extraIds: 0 })).toBe(51000 + 1 + n);
+    expect(end({ ...f, extraIds: 7 })).toBe(51000 + 1 + n + 7);
     const { extraIds: _drop, ...none } = f;
-    expect(end(none)).toBe(51000 + 1 + 19);
+    expect(end(none)).toBe(51000 + 1 + n);
     const y1 = Y1_REFUSALS;
     expect(end(y1)).toBe(51000 + 1 + y1.cells.length);
   });
