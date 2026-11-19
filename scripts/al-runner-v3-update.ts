@@ -85,8 +85,10 @@ import {
   warnFactReadings,
 } from "../packages/runner/src/al-runner-v3-pin";
 import {
+  FROZEN_V3_PINS,
   type GatedBuildEntry,
   V3_BUILD_PINS,
+  allHandPinIds,
   alphaOfEntry,
   findV3Pin,
   gatedBuilds,
@@ -1463,8 +1465,13 @@ export async function refreshRows(
   for (const id of ids) {
     const row = rows.find((r) => r.id === id);
     if (row === undefined) return refuse(`${id} is not a row of ${deps.manifestPath}`);
-    if (handV3Pin(row.readingsFrom) === undefined)
+    const rowPin = handV3Pin(row.readingsFrom);
+    if (rowPin === undefined)
       refuse(`${id}: its pin "${row.readingsFrom}" is no hand pin in this checkout`);
+    if (rowPin?.frozen !== undefined)
+      refuse(
+        `${id}: its pin "${row.readingsFrom}" is frozen (PR-209 amendment 10); a frozen row moves to live readings only by a deliberate edit of readingsFrom with a pass, never by a refresh`,
+      );
     const suffix = `-${commitOfVersion(row.version)}`;
     const dirs = (await readdir(root))
       .filter((n) => n.endsWith(suffix) && existsSync(join(root, n, "al-runner")))
@@ -1554,7 +1561,7 @@ export async function refreshRows(
           ...(g.batchFacts !== undefined ? { batchFacts: g.batchFacts } : {}),
         };
       });
-      parseGatedBuilds(next, new Set(V3_BUILD_PINS.map((p) => p.id)));
+      parseGatedBuilds(next, new Set(allHandPinIds()));
       // The receipt goes first, so a crash cannot leave a row with no receipt.
       await mkdir(dir, { recursive: true });
       await writeFile(
@@ -1955,7 +1962,9 @@ const V3_PIN_FROM_ENV_NAME = `export const V3_PIN_FROM_ENV = "${V3_PIN_FROM_ENV}
 
 /** Every hand pin's readings digest, for `masterPinDigests`. */
 export function pinDigests(): Record<string, string> {
-  return Object.fromEntries(V3_BUILD_PINS.map((p) => [p.id, v3ReadingsDigest(p)]));
+  return Object.fromEntries(
+    [...V3_BUILD_PINS, ...FROZEN_V3_PINS].map((p) => [p.id, v3ReadingsDigest(p)]),
+  );
 }
 
 /** The digests master's own code computes, in the pin worktree (its script, its pins). */

@@ -12,6 +12,7 @@ import {
   v3InstallHint,
 } from "../src/al-runner-v3-pin";
 import {
+  FROZEN_V3_PINS,
   type GatedBuildEntry,
   V3_BUILD_PINS,
   adoptV3Pin,
@@ -105,6 +106,65 @@ describe("R814: the committed file", () => {
       if (root !== undefined)
         expect([e.id, v3ReadingsDigest(root)]).toEqual([e.id, e.readingsDigest]);
     }
+  });
+  // PR-209 amendment 10: live rows read the new readings, frozen rows keep the old ones.
+  const OLD_DIGEST = "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac";
+  const NEW_DIGEST = "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15";
+  /** The ids of rows whose digest differs from its hand pin's today. */
+  const badRows = (rows: readonly GatedBuildEntry[]) =>
+    rows
+      .filter((e) => {
+        const p = handV3Pin(e.readingsFrom);
+        return p === undefined || v3ReadingsDigest(p) !== e.readingsDigest;
+      })
+      .map((e) => e.id);
+  test("PR-209 amendment 10: live rows sit at the new digest, frozen rows at the old one", () => {
+    const rows = gatedBuilds();
+    const frozen = rows.filter((e) => handV3Pin(e.readingsFrom)?.frozen !== undefined);
+    expect(frozen.length).toBe(11);
+    for (const e of frozen) expect([e.id, e.readingsDigest]).toEqual([e.id, OLD_DIGEST]);
+    for (const e of rows.filter((x) => !frozen.includes(x)))
+      expect([e.id, e.readingsDigest]).toEqual([e.id, NEW_DIGEST]);
+    expect(badRows(rows)).toEqual([]);
+  });
+  test("PR-209 amendment 10: a frozen row with the new digest fails, and a live row with the old digest fails", () => {
+    const rows = gatedBuilds();
+    const frozen = rows.find((e) => handV3Pin(e.readingsFrom)?.frozen !== undefined);
+    const off = badRows(rows);
+    const live = rows.find(
+      (e) => handV3Pin(e.readingsFrom)?.frozen === undefined && !off.includes(e.id),
+    );
+    if (frozen === undefined || live === undefined) throw new Error("need a row of each kind");
+    const swap = (id: string, readingsDigest: string) =>
+      rows.map((e) => (e.id === id ? { ...e, readingsDigest } : e));
+    // Rows already off before the swap (a row awaiting its refresh) are not this test's concern.
+    const newBad = (r: readonly GatedBuildEntry[]) => badRows(r).filter((i) => !off.includes(i));
+    expect(newBad(swap(frozen.id, NEW_DIGEST))).toEqual([frozen.id]);
+    expect(newBad(swap(live.id, OLD_DIGEST))).toEqual([live.id]);
+  });
+  test("PR-209 amendment 10: the frozen readings' digest is the old one, and alpha.12's equals its row's", () => {
+    expect(FROZEN_V3_PINS.length).toBe(2);
+    for (const p of FROZEN_V3_PINS) {
+      expect(p.frozen?.reason).toContain("PR-209 amendment 10");
+      expect(v3ReadingsDigest(p)).toBe(OLD_DIGEST);
+    }
+    const a12 = gatedBuilds().find((e) => e.id === "alpha.12-d4bc8d3a5");
+    const pin = handV3Pin(a12?.readingsFrom ?? "");
+    expect(pin?.frozen).toBeDefined();
+    expect(pin === undefined ? "" : v3ReadingsDigest(pin)).toBe(a12?.readingsDigest ?? "no row");
+    expect(pin?.o1?.cdoApps).toBe(18);
+  });
+  test("PR-209 amendment 10: findV3Pin never answers a build with a frozen pin; adoption refuses one", () => {
+    for (const id of ["edge-d72d3197d", "alpha.12-d4bc8d3a5"]) {
+      const live = V3_BUILD_PINS.find((p) => p.id === id);
+      if (live === undefined) throw new Error(`no live pin ${id}`);
+      const found = findV3Pin(live.version, live.binarySha256);
+      expect(found?.id).toBe(id);
+      expect(found?.frozen).toBeUndefined();
+      expect(found?.legT.total).toBe(450);
+    }
+    expect(V3_BUILD_PINS.some((p) => p.frozen !== undefined)).toBe(false);
+    expect(() => adoptV3Pin("v", sha("x"), "edge-d72d3197d-frozen-pre-pr209")).toThrow("frozen");
   });
   test("the digest moves when a reading moves, and ignores the build's identity", () => {
     const root = handV3Pin(ROOT_PIN);
