@@ -73,7 +73,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   the other 20 by key. `carryable` is 26, `carried` 20, `groupedCalls` 0.
 - R2 has 9 KEPT rows. It carries 7 of them, every one this session covers; its two KEPT rows that this session
   leaves uncovered come back as fresh no-coverage (see "A stored no-coverage is always re-derived" below). It re-runs the other 10, one of them from an `error` row. `carried` is 7, `nonCarryableRows` 1,
-  `groupedCalls` 10 (1 error row plus 9 survivors; was 8).
+  `groupedCalls` 13 (1 error row plus 12 survivors; PR-209's 3 new survivors are scored here).
 - R3's K2 has 21 rows (not asserted). It carries 17 of them, every one this session covers, re-derives the four uncovered
   ones, and scores M0026 (was M0022) as no-coverage. `carried` is 17.
 - The sentinel row (M0004 in K) has `durationMs` 987654.
