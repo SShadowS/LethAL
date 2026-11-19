@@ -488,6 +488,26 @@ function buildScenarioReport(): SessionReport {
       reason:
         "in-flight-unknown: RunMutant M0007 (Sales Post Mgt..ArchiveBatch) returned no confirmation before the session's durable tier quarantine tripped",
     },
+    // PR-247: the session's test costs, so the snapshot pins the `costlyTests` section too.
+    {
+      type: "test-costs",
+      tests: [
+        {
+          test: "Sales Helper Tests.ComputeTotalMultipliesQtyByPrice",
+          batchIndex: 0,
+          runs: 3,
+          ownMs: 90,
+          msUnderSurvivors: 0,
+        },
+        {
+          test: "Sales Approval Tests.ApproveBatchSendsRequest",
+          batchIndex: 2,
+          runs: 1,
+          ownMs: 30,
+          msUnderSurvivors: 30,
+        },
+      ],
+    },
     { type: "session-finished", elapsedMs: 125000 },
   ];
 

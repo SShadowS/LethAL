@@ -1030,6 +1030,41 @@ describe("generated JSON Schemas — report and stream (R152)", () => {
     expect(conformsTo(reportSchema, doc)).toEqual([]);
   });
 
+  test("PR-247: costlyTests is additive under v3: optional; a report WITH it validates, a bad one does not", () => {
+    const without = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, "docs/campaign/2026-08-16-gift-card/rehearsal.report.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    expect("costlyTests" in without).toBe(false);
+    expect((reportSchema as { required: string[] }).required).not.toContain("costlyTests");
+    expect(conformsTo(reportSchema, without)).toEqual([]);
+    const costlyTests = {
+      scope: "this-session",
+      carriedMutants: 2,
+      totalOwnMs: 30,
+      ambiguousKills: 1,
+      top: [
+        {
+          test: "Sandbox Tests.A",
+          coveredMutants: 2,
+          runs: 2,
+          ownMs: 30,
+          share: 1,
+          meanMs: 15,
+          baselineMs: 12,
+          kills: 1,
+          killRate: 0.5,
+          msUnderSurvivors: 10,
+        },
+      ],
+    };
+    expect(conformsTo(reportSchema, { ...without, costlyTests })).toEqual([]);
+    const bad = { ...without, costlyTests: { ...costlyTests, scope: "x" } };
+    expect(conformsTo(reportSchema, bad)).not.toEqual([]);
+  });
+
   test("R351: coverageArmNames is additive under v3: a report without it validates, and with it", () => {
     // v3 was edited in place, which is sound only while the field stays OPTIONAL. Making it
     // required on a row or a survivor group would reject every report written before R351.
