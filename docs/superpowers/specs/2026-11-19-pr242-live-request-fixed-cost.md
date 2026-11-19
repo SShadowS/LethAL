@@ -76,3 +76,22 @@ refusal restarts.
      stderr summary line gains the split.
 2. **L2:** preproc's A/B, arm B, confirms or refutes the prediction above.
 3. **L3:** only after both, with an adversarial spec review of the scoring-order change.
+
+## Amendment 1 (2026-11-19): PR-241's builder choice, so L2 becomes L2'
+Preproc reports PR-241's build (its spec amendment 1, master f38e7b778):
+- one packed prefetch request is ONE `prefetchMutants` call (the units' plans concatenated, `unitSizes` marking the
+  boundaries);
+- `batchKillPairs` still runs PER UNIT (the plans sliced by `unitSizes`), after the whole packed prefetch.
+
+**So:**
+- **For PR-241's A/B (arm B against arm A, the same scope),** the prediction that applies is the second branch of L2: the
+  live-request count is unchanged within ±2%, and no kill's verdict, killing test or reproduction changes.
+- **L2' (new, LethAL, PR-242's lever):** merge the per-unit pair batches of one packed call into one batch, chunked by
+  memory cost as today.
+  - Scoring order does not change: every unit of the pack is scored after the whole packed prefetch already, and the
+    merged batch runs before the first of them, as each unit's batch does today.
+  - A pair still serves only its own kill (`takeStoredPair`'s checks are unchanged).
+  - **Predicted** (`/coord/handoff/PR-242/pack-sim.py`, a lower bound): on top of arm B, pair-batch requests about 950 →
+    about 635, **about 157 s** of wall per DO run; at 128 entries about 245 s.
+  - **Next:** a spec of its own, with red tests (the merged batch must store exactly what the per-unit batches stored,
+    pair for pair) and an A/B against PR-241's arm B.
