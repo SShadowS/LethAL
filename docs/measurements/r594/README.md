@@ -2,7 +2,8 @@
 
 **The default operator set, measured 2026-11-19 for R1139 (coord PR-229).** `bc3-A.default.report.json` and
 `bc3-B.default.report.json` hold the slice under the default set, with `condition-true` and `blank-argument` on (PR-209
-head `b452b65b0`). They ran on bc3, BC 28.4.53241.56646, with LethAL Control 1.0.0.28.
+head `b452b65b0`). They ran on bc3, BC 28.4.53241.56646, with the LethAL Control build the setup script pins (`lethal doctor` read it as the
+version in `extensions/lethal-control/app.json`).
 - **Results:** A 63 killed / 15 survived over 78; B 63 / 11 / 4 no-coverage over 78. The 65 rows below plus 13 new ones in
   `CDORecipientMgt.Codeunit.al`: `condition-true` at lines 15, 28, 34, 36, 44, 60, 64, 70, 78 and 85, and
   `blank-argument` at 36, 40 and 42. The new rows are 10 killed and 3 survived (`condition-true` at 44, 78, 85).
