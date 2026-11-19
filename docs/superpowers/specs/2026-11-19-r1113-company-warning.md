@@ -99,6 +99,19 @@ lethal-preproc, 2026-11-19 (coord PR-200's follow-up). No code yet.
     flow reads one): exact when it exists; otherwise fall back to (i).
 - **Recommendation: (i), with (iii) when a coverage source is given.** Before the build, the count of DO's no-coverage
   mutants (i) would mark is measured and stated.
+- **RULED (orchestrator, 2026-11-19): (i), with (iii) when a store with those tests' coverage is given.** Over-approximating
+  toward "unmeasured" is the safe direction, and the list makes it checkable.
+- **Measured on DO before the build** (`/coord/handoff/PR-212/reach-count.ts`, `.txt`; a text reader over y2's store and DO's
+  test app):
+  - 12 target objects are named by the 16 methods or their helpers;
+  - **1,346 of y2's 26,829 no-coverage mutants (5.0%) would read UNMEASURED.**
+  - The biggest contributors: `CDO Data Upgrade` 378 (1 method), `CDO Subscribers` 298 (1 method), `CDO Setup` 153 + 127 (the
+    hub: its table and page, named by 15 methods), `CDO Azure Blob Storage` 86, `CDO Azure Blob Folder Mgt.` 79.
+  - The one-hop limit is not too wide: the two largest come from single methods that name those objects themselves.
+- **Built in PR-212:**
+  - a no-coverage mutant in a named object becomes UNMEASURED with the reason `left-out-test-reach`, and is listed;
+  - with a coverage source, only the mutants those tests actually cover.
+  - Pre-committed on DO: 1,346 ± the parser's difference from the text reader, explained.
 
 ## 3. Tests, if built (red-checked both ways)
 - **Detection, on parsed AL:**
