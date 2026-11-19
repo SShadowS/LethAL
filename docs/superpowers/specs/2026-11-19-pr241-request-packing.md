@@ -23,6 +23,29 @@ after the orchestrator's ruling. Scripts and outputs: `/coord/handoff/PR-241/` (
 - **§3 recorded figures add:** live-request count, entries per live request and live wall (for lethal-code's PR-242,
   which pre-commits the live saving per packing factor against arm B).
 
+## 0b. Amendment 2 (2026-11-19, the build done; the A/B pre-committed before it runs)
+- **Built** on `lethal/pr-241` cd660eb34 (VERIFY 15,194/0; Opus build review: no BLOCK, its three should-fixes applied):
+  `LETHAL_V3_PACK_ENTRIES=<n>`, off by default. Under it, one packed request is ONE `prefetchMutants` call over the lane's
+  consecutive units (`unitSizes` marks them); `batchKillPairs` still runs per unit. **Packing is OFF under a time
+  budget** (R912's deadline clamp would otherwise drop a whole packed request), so §2's "a stop loses at most one window"
+  holds.
+- **The A/B** (`/coord/handoff/PR-241/ab.sh`), after PERF-10's control ends, on `current` (4ebfe7913):
+  - PR-94's DO e-document slice (`--only` its four codeunits, R-942's source and the PR-67 v3 config), `--workers 3`,
+    NO `--time-budget` (an outer `timeout` of 7,200 s only), fresh stores, heavy slot `--peak 18`.
+  - One checkout (`lethal/pr-241`); arms run back to back: A (knob unset), B (`LETHAL_V3_PACK_ENTRIES=64`), then A2
+    (unset again) to see drift.
+- **Pre-committed bounds for B against A** (the slice's unit sizes are not known offline; these are y3's ratios):
+  1. B's prefetch requests ≤ 45% of A's;
+  2. B's prefetch setup+baseline lane-seconds ≤ 50% of A's;
+  3. B's mutant-phase wall at least 4% below A's AND below A2's (drift check);
+  4. live requests: B within ±2% of A (lethal-code's PR-242 amendment 1, master bced1dccc: per-unit pair batches);
+  5. **must hold, or no adoption:** every mutant's verdict equal to A's per mutant on the full site key;
+     `killingTest` may differ only as R197's ledger orders it (named per mutant); the timeout-killed set equal; no new
+     warning code; daemon peak RSS per request recorded, and no lane's peak above A's by more than R987's per-request
+     budget (4 GiB).
+- A miss of 1-3 on this slice is reported as measured (the slice may have different unit sizes than y3), not explained
+  away; a miss of 5 is a BLOCK for adoption.
+
 ## 1. Measured offline (y3: `/coord/handoff/PR-204/y3.run.events.ndjson`, 7,959 `serve-request-timed` events, 3 lanes)
 - **The "fixed" cost IS fixed.** Least squares per kind, cost = a + b·entries + c·tests:
   - prefetch (5,052 requests): setup 973 ms + al-runner baseline 577 ms; entries and tests explain ~nothing (R² 0.01-0.02;
