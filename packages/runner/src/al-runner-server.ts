@@ -804,6 +804,9 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // bound is the longest y2 name (1,336) plus about 50%. A longer name, or any other character, closes. The empty name is
   // PR-56's `xml-name-empty`.
   XMLNAME: "[A-Za-z0-9+/=]{1,2000}",
+  // PR-195 (spec 2026-11-19-pr195-y2-collation-keep-precommitment.md): the two code points DO's codeunit 68986 meets under the
+  // four toggle-blank-string mutants of `IsAsciiAlphaNumeric`, each by name (U+516C CJK, U+041A Cyrillic). No code-point pattern.
+  COLLCHAR: "(?:516C|041A)",
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1162,6 +1165,15 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "xml-name-measured-chars",
     "XML name `%XMLNAME%` (only plain names without a prefix are pinned)",
   ],
+  // PR-195 (spec 2026-11-19-pr195-y2-collation-keep-precommitment.md, with amendment 1): y2's collation refusal (4 closes,
+  // 214.2 s), an unmodelled sort weight, not a state question (BC's answer reported on upstream #8203). Family `y2-collation`
+  // (a SingleInstance refuser with a global set, a TextBuilder filled in a loop, depth 3; after an insert or a SingleInstance
+  // value) measured CLEAN by the strict census with readers for that global, a SingleInstance value and text ordering
+  // (`--refusers 7`, /coord/handoff/PR-195/census/), AND a direct DO check (P5, /coord/handoff/PR-195/p5/): the 4 mutants'
+  // requests, then no mutant, then 3 other mutants of the file, on ONE daemon, every row equal to fresh daemons. Not measured:
+  // the same code points from another operation (a key or record ordering); in DO only codeunit 68986 holds such characters.
+  // Pinned by `al-runner-serve-pr195.test.ts`.
+  ["collation-no-weight-measured", "ordering of the character U+%COLLCHAR% (no collation weight)"],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
