@@ -45,6 +45,36 @@ lethal-preproc, 2026-11-19 (coord PR-200's follow-up). No code yet.
    - **Revisit after T4.** If T4 hangs or breaks the tier as T3 did, a default `--exclude-test` for such tests on BC 29, with
      a flag to keep them, is the next step.
 
+## 2a. Amendment 1 (2026-11-19, after T4): option (3), with a recommendation. FOR THE ORCHESTRATOR'S RULING.
+- **The new evidence** (R1113, master bdb328d5): T4, DO's exact shape, broke bc4 like T3 did, on its first run.
+  - The baseline test passed. The 400 came at a kill confirmation in the mutant phase, after the committing test had run
+    repeatedly, and then every web-service call was 401.
+  - PR-199 showed that outbound HTTP fails fast on bc4, so HTTP cannot have hung DO there.
+  - **Company writes in tests are the measured cause on BC 29.**
+- **The unit is the METHOD, not the codeunit.** Excluding the 4 codeunits would drop every test in them.
+  - By a text reader over DO's test app (`/coord/handoff/PR-200/company-methods.ts`, `.tsv`; names only), **16 test methods
+    write a company, directly or through `CreateOtherCompanyWithSetup`:** Folder 12, ABS Auth 2, ABS Setup 1, Data Upgrade 1.
+    That is out of about 1,979 tests.
+  - **All three hung tests are among the 16.**
+- **The rule must be "writes a company", not "writes and commits":** only 2 of the 16 commit visibly, and two of the three
+  hung tests (the Folder and Upgrade ones) do not. T4 also broke only after repeated runs in one tier. A commit-only rule
+  would have missed two of the three.
+- **Recommendation: (3a).** On BC backends (bcdev, envtool), a default run LEAVES OUT every selected test method that writes
+  the Company table, directly or one hop through a test-app procedure.
+  - Left out by name, recorded in `excludedTests` with the reason `company-write` (the same path as `--exclude-test`: R745's
+    records, the baseline narrowed and said so).
+  - **The opt-in:** `--keep-company-tests`, for a server the user can restart.
+  - **The line:** the warning of §2 item 1 becomes the notice of what was left out and why, with the opt-in named.
+  - **The cost on DO:** 16 of about 1,979 tests; mutants covered only by those tests lose those killers. The report says so,
+    as for `--exclude-test`.
+  - **All BC versions, not only 29:** LethAL cannot rely on knowing the server's version before the run. Where `Company.Insert`
+    fails at once (bc1-bc3), leaving the tests out loses nothing: they would fail anyway.
+  - al-runner v3 is unaffected: it opens no BC tier.
+- **The alternative (3b): warn only** (§2 as ruled), and leave the exclusion to the user. It loses no test by default. But a
+  user who misses the line loses a whole server (two restarts measured) and the run, which is R1113's original harm.
+- **The detection in the build is the parser's**, not this text reader. The pre-committed DO figure is 16 methods, the three
+  hung ones included; any difference is explained before it lands.
+
 ## 3. Tests, if built (red-checked both ways)
 - **Detection, on parsed AL:**
   - a direct write;

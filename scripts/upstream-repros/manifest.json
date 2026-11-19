@@ -133,6 +133,20 @@
       }
     },
     {
+      "id": "u7995-null-value-type",
+      "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7995",
+      "bcEvidence": "measured on BC 28.4 W1 (bc3, lethal-bugs, PR-213, 2026-11-19, /coord/handoff/PR-213/result.md) with an invented probe of these exact calls: a never-assigned DotNet TimeSpan into new DateTimeOffset(DateTime, TimeSpan) and into new Regex(String, RegexOptions, TimeSpan) fails with code DotNetCreate:NullReference ('Cannot create an instance of the following .NET Framework object: ...'); Convert.ToString of a never-assigned Byte in base 2 returns '0'; the control passes. #8268 reduced #7995's Regex case to this form; al-runner edge-4ebfe7913 refuses the three null calls ('has no overload taking N argument(s) of the given types (..., null)'). The entry's own app has not run on BC: its calls are the probe's, renumbered",
+      "rerun": [
+        "the 27 mutants over 11 call shapes #8268 lists (RSA.SignData with a null padding, CertificateRequest constructors, CreateSelfSigned, X509Certificate2.Export, new Regex with a null timeout) in Microsoft's crypto and System Application test apps (R-932, R-953): their refused rows under the ledger keys `DotNet ... has no overload taking N argument(s) of the given types (..., null)`"
+      ],
+      "tests": {
+        "Codeunit58390.NullTimeSpanIntoDateTimeOffset": { "status": "pass" },
+        "Codeunit58391.NullByteIsZero": { "status": "pass" },
+        "Codeunit58392.NullTimeSpanIntoRegex": { "status": "pass" },
+        "Codeunit58393.EveryArgumentAssigned": { "status": "pass" }
+      }
+    },
+    {
       "id": "u7837-table-connection",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7837",
       "bcEvidence": "measured on BC 28.4 W1 (bc2, lethal-bugs, 2026-11-15, /coord/handoff/PR-30/bc-run/result.md): the refusal family table-connection's BC-check app (app 51000000-0000-4000-8000-000000051008), 22 cells run twice in one session, all pass; these three tests' shapes are among them (a string carrying the marker, an Insert with its trigger on a CRM table, the exact marker). Each test registers its own connection name, after unregistering a leftover of it. Posted on #7837 (6898468955)",
