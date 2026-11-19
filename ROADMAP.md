@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**42 of 1096 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**41 of 1096 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -607,7 +607,7 @@ that ordering is the priority.
 - **R1121** · On Linux BC, a mutant that newly routes a test into an RDLC report render is scored KILLED by the platform's stub error ("RDLC report rendering is not implemented on Linux BC"), a false kill · [R1121.md](docs/roadmap/R1121.md) · done (this commit) — PR-143: R72's screen lists these kills under mechanism `linux-rdlc-stub`, kept killed…
 - **R1122** · Proposal: confirm only the noted al-runner v3 survivors on BC (the [v3-refused-test-nearby] ones), since the unnoted ones agreed with BC 945 of 947 times · [R1122.md](docs/roadmap/R1122.md) · done (d3ba626d, 7a062e09) — live proof on bc4 matched every pre-committed row (PR-171 retry, 2026-11-18)
 - **R1124** · Not measured: does Azure DevOps' PublishMutationReport@2 build tab render `lethal export --format mutation-elements-html`'s page, which loads its bundle from jsDelivr? Waits on Azure DevOps access · [R1124.md](docs/roadmap/R1124.md) · open — waiting on Azure DevOps access (an organisation with the Stryker Mutator extension); split from R1080…
-- **R1133** · `lethal run --dry-run` passes on a config that the real run then refuses (al-runner v3: V3EnvironmentUnknownError, R938): a dry run never builds the backend, so none of the backend's config pre-flight refusals run · [R1133.md](docs/roadmap/R1133.md) · open — filed by lethal-preproc from coord PR-187; the fix is coord PR-194 (2026-11-19)
+- **R1133** · `lethal run --dry-run` passes on a config that the real run then refuses (al-runner v3: V3EnvironmentUnknownError, R938): a dry run never builds the backend, so none of the backend's config pre-flight refusals run · [R1133.md](docs/roadmap/R1133.md) · done (2498d46b)
 
 ## Backends and tooling
 
