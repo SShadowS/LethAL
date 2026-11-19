@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**45 of 1103 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**46 of 1104 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -392,7 +392,7 @@ that ordering is the priority.
 - **R1131** · Once bcdev starts tests on the client's default WorkDate (R1127), that date is a live G/L read on every call and no record shows it: a posting during a run moves later calls' start date away from the baseline's · [R1131.md](docs/roadmap/R1131.md) · done (3bc17254)
 - **R1135** · On LethAL's bcdev path, Report.RunRequestPage fails with "The report request page cannot be used in background or server sessions": the control app's OData session cannot show a request page, so a test that reaches one gets a different error text than on BC's test runner or al-runner · [R1135.md](docs/roadmap/R1135.md) · done (162fceb8) — PR-215: the refusal is named as a third shape of tests-testpage-unsupported…
 - **R1136** · condition-true can make a same-object helper's guard always true and so a `repeat ... until Helper() = 0` loop endless; R868's name rules cannot see it (the R164 Next()-contract shape) · [R1136.md](docs/roadmap/R1136.md) · open
-- **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · open — measure first: is CDO Variant Setup UI Tests.U_CopyCriteriaFromLine_TakesTheCriteriaOfThePickedLine…
+- **R1141** · The withheld-kill recheck keeps 96 of DO's withheld kills as error because ONE test of their codeunit passes in the main baseline but fails alone in the recheck's method-isolation baseline · [R1141.md](docs/roadmap/R1141.md) · open — measured 2026-11-19: the test is order-dependent in DO's own code…
 
 ## Product gaps a real project hits
 
@@ -1148,6 +1148,7 @@ that ordering is the priority.
 - **R1130** · A fixture test project's own .alpackages (from a full symbol-tar extraction) silently changed itest:alrunner-v3's readings: v3 reads it beside packagesDir, so N1, N1E, N1S, WR and WRE turned test data off; the itest now hands v3 a copy without it · [R1130.md](docs/roadmap/R1130.md) · done (bb021380)
 - **R1132** · Shell writes into source (`cat >> file <<EOF`) still pass: no-shell-edits blocks only `sed -i`, and the advisory hook (PR-122) only warns; a PR-179 builder appended test code by heredoc. Proposal: block such writes into the repo, for the owner to rule at the advisory's week review (2026-11-24) · [R1132.md](docs/roadmap/R1132.md) · open — a proposal (hook changes need the owner's word); filed by lethal-preproc from coord PR-179, 2026-11-18
 - **R1142** · The withheld-kill recheck's own baseline costs about 2,088 s per DO run against 46.5 s of target rows: can it be smaller or reused? · [R1142.md](docs/roadmap/R1142.md) · open — measure first: which part of the 1,161-test method-isolation baseline the 516 targets' rules actually…
+- **R1140** · DO's y3 `error` mutants, mined (757 in the main pass, 61 classes, identical to y2; 348 after the withheld-kill recheck, which recovered only by-design cascades): three al-runner refusals met only under mutation filed as upstream #8486, and four narrower shapes of filed refusals reported on #7760, #8036 and #7764; the rest is by design or already filed · [R1140.md](docs/roadmap/R1140.md) · open
 
 ---
 
