@@ -3475,7 +3475,10 @@ async function singleStep(
         ? { cause: out.verdict.stopRefusal }
         : out.verdict.runnerRow !== undefined
           ? { cause: out.verdict.runnerRow }
-          : {}),
+          : // R1131: the bcdev backend's start-WorkDate refusal, taken as a step cause like R198's.
+            out.verdict.workDateRefusal !== undefined
+            ? { cause: out.verdict.workDateRefusal }
+            : {}),
     testBudgetMs: ms,
     testBudgetSource: source,
     groupBudgetMs: ms,
@@ -6074,6 +6077,19 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
           reused = undefined;
         }
       }
+      // R1131: a bcdev snapshot is reused only on an equal start WorkDate. A snapshot without one (stored
+      // before control app 1.0.0.28) is never reused; this batch's baseline runs again.
+      if (reused !== undefined && backend.refuseReusedBaselineDate !== undefined) {
+        const why = backend.refuseReusedBaselineDate(reused.workDate);
+        if (why !== undefined) {
+          emit({
+            type: "warning",
+            code: "resume-baseline-not-reused",
+            message: `[lethal] resume-baseline-not-reused: run ${reused.runId}'s batch ${reused.batchIndex} baseline is not reused, because ${why}; batch ${batchIdx}'s baseline runs again (R1131).`,
+          });
+          reused = undefined;
+        }
+      }
       // R-236c: a snapshot is found by its two hashes from ANY run of this identity scheme (R318), so
       // it can come from a run with a wider --tests-only. The TestPage scan read only this session's
       // tests, so a saved row for any other test is DROPPED: it must not come back green and be
@@ -6283,6 +6299,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // one. This is also the ONLY place `unsupportedTests`/`staleTestApp`/`testPageUnsupported` are
   // now sourced from — report-fold.ts folds them from `classification` here, not from a
   // session-level accumulator in this function (event-stream refactor, spec 2026-08-05 §A).
+  const batchWorkDate = backend.batchWorkDate?.();
   emit({
     type: "baseline-batch-finished",
     batchIndex: batchIdx,
@@ -6291,6 +6308,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     ...(baseline.some((b) => stoppedByUs(b.verdict))
       ? { stoppedBudgetMs: scope.baselineTimeoutMs }
       : {}),
+    // R1131: the start WorkDate this batch's baseline ran under (bcdev outside hub mode).
+    ...(batchWorkDate !== undefined ? { workDate: batchWorkDate } : {}),
     verdicts: baseline.map((b) => {
       const classification: BaselineClassification[] = [];
       // R139: a line-count answer is the transport reporting that RunMutant did not return one
@@ -13298,6 +13317,12 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               // about whether a strand has a cause.
               cause = "stranded";
             }
+          } else if (confirm.workDateRefusal !== undefined) {
+            // R1131: the confirmation started on another WorkDate than the batch's baseline (or the batch
+            // had already moved). Its pass or fail says nothing about the killer: `error`, never `unstable`.
+            verdict = "error";
+            cause = confirm.workDateRefusal;
+            failureNote = `${confirm.failureMessage ?? "workdate-changed"} (confirming ${ref.method}; the kill is unconfirmed)`;
           } else if (sessionWasReused(confirm)) {
             // R206 §2.1: the confirmation ran in a session another call had run tests in, so it
             // did not measure the killer cold. Not a kill.

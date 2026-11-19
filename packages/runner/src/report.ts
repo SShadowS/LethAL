@@ -284,7 +284,9 @@ export type Caveat =
   | "nondebuggable-no-coverage"
   | "withheld-kills"
   // PR-144: the recheck recovered at least one withheld kill.
-  | "isolated-recheck-kills";
+  | "isolated-recheck-kills"
+  // R1131: at least one row was not scored because its start WorkDate moved from the batch's baseline.
+  | "workdate-changed";
 
 /**
  * R403 phase C: one test the arm filter dealt with, as `SessionReport.excludedTests` lists it.
@@ -789,6 +791,17 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "Not a change to any kill or survivor the main pass scored.",
     basis: "R1108",
   },
+  "workdate-changed": {
+    meaning:
+      "At least one mutant is `error` / `workdate-changed`: an answer started on another WorkDate than its " +
+      "batch's baseline (`baselineWorkDate` is the first batch's), so it was not scored, and neither was " +
+      "anything after it in that batch. In a demo company a posting during the run moves the start date. " +
+      "The affected rows are outside `mutationScore`. Re-run them (a resume re-runs the first batch's baseline and reads the new date) on a quiet company (R1131).",
+    entailedNegative:
+      "Not a wrong kill and not a wrong survivor: no verdict was taken under a moved date. Not a claim that " +
+      "the baseline was wrong, and not a measure of how many rows a date move would have changed.",
+    basis: "R1131",
+  },
 };
 
 /**
@@ -890,7 +903,10 @@ export type MutantErrorCause =
   | "confirm-stopped"
   // R688: under the mutant BC's suite discovery listed no methods for a covering test codeunit, and
   // with no mutant active its test ran; the other covering tests ran and none killed it.
-  | "test-discovery-failed";
+  | "test-discovery-failed"
+  // R1131: an answer's start WorkDate differed from the batch's baseline date (or an earlier answer of the
+  // batch had), so the row is not scored.
+  | "workdate-changed";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -1192,6 +1208,20 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "failed under it. Not `unstable`: the test passed with no mutant active. It does not say " +
       "the tests that did not run would miss the mutant.",
     basis: "R688",
+  },
+  "workdate-changed": {
+    meaning:
+      "An answer for this mutant (a covering test, its unmutated confirmation, its reproduction or its " +
+      "replay) started on a different WorkDate than this batch's baseline, or an earlier answer of the " +
+      "same batch had. In a demo company the start date is the last G/L posting date, so a posting during " +
+      "the run moves it; so does midnight in a company with no demo data, for a fresh session. The row is " +
+      "not scored, and neither is the rest of the batch (R1131). The note names both dates. Re-run: " +
+      "a resume re-executes an `error` outcome and re-runs the first batch's baseline, so it reads the new date.",
+    entailedNegative:
+      "Not `killed`, not `survived`, not `unstable`: a start date that moved can change a test's " +
+      "verdict, so no test ran under the same conditions as the baseline. A date move can cost a " +
+      "verdict here, never invent one.",
+    basis: "R1131",
   },
 };
 
@@ -1902,6 +1932,14 @@ export interface SessionReport {
    * Absent on a report from before R565.
    */
   readonly dependencySourceSha256?: string;
+  /**
+   * R1131: the start WorkDate (an ISO date) the FIRST batch's baseline ran under, as control app 1.0.0.28
+   * returns it. Every later answer on a bcdev run is compared with its batch's baseline date, and a
+   * mismatch is an `error` / `workdate-changed` row. Written on every bcdev run outside hub mode; absent on
+   * al-runner, in hub mode (`coverageMode: "procedure"`, whose baseline answers carry no date), and on a
+   * report from before R1131. In a demo company it is the last G/L posting date; otherwise today.
+   */
+  readonly baselineWorkDate?: string;
   /**
    * R443: sha256 of this run's identity numbering OUTPUT (`numberingDigestOf`, selection.ts): every
    * numbered site with its ordinal. Two runs with equal digests give every key to the same mutant.
@@ -3238,6 +3276,8 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (mutants.some((m) => m.withheldKill !== undefined)) caveats.push("withheld-kills");
   // PR-144 - see CAVEAT_INTERPRETATIONS["isolated-recheck-kills"].
   if (mutants.some((m) => m.isolatedRecheck !== undefined)) caveats.push("isolated-recheck-kills");
+  // R1131 - see CAVEAT_INTERPRETATIONS["workdate-changed"]; the count is in the banner's error breakdown.
+  if (mutants.some((m) => m.cause === "workdate-changed")) caveats.push("workdate-changed");
   // R221: `--exclude` narrows the measured scope exactly as `--only` does, so it raises the same
   // caveat. Pushed once even when both flags are used -- the caveat says "this is not a project
   // score", and that is one fact however many flags produced it.
@@ -3686,6 +3726,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     ...(input.dependencySourceSha256 !== undefined
       ? { dependencySourceSha256: input.dependencySourceSha256 }
       : {}),
+    ...(input.baselineWorkDate !== undefined ? { baselineWorkDate: input.baselineWorkDate } : {}),
     // R443: the recorded numbering facts a mark's proof is made from (`lethal explain`).
     ...(input.numbering !== undefined
       ? {
@@ -3793,7 +3834,7 @@ function summarizeRunnerContexts(
  * `error N [unstable 0]`. R-204b adds `stop-outcome-unconfirmed`, the error a stop leaves behind
  * when its group's answer arrived but could not be used (R665). R514 adds `reused-budget-stale`, R516 `timeout-unconfirmed`,
  * R534 `runner-test-error` and `runner-refused`, R577 `kill-not-reproduced`, R658 `confirm-stopped`,
- * R688 `test-discovery-failed`.
+ * R688 `test-discovery-failed`, R1131 `workdate-changed`.
  */
 function errorBreakdown(r: SessionReport): string {
   const named: MutantErrorCause[] = [
@@ -3809,6 +3850,7 @@ function errorBreakdown(r: SessionReport): string {
     "kill-not-reproduced",
     "confirm-stopped",
     "test-discovery-failed",
+    "workdate-changed",
   ];
   const parts: string[] = [];
   for (const cause of named) {
@@ -3928,6 +3970,13 @@ export function renderConsole(r: SessionReport): string {
         : ' They are in codeunits isolation "auto" kept on "test"; "method" runs them one test per session (R1102, #8218).';
     lines.push(
       `at least ${withheld} of the ${r.counts.errors} error mutant(s) are withheld kills: a covering test failed under the mutant, but al-runner v3 did not trust the failure after an earlier test of its codeunit was refused, failed or ran out of time. The score leaves them out (validity.caveats "withheld-kills").${remedy}`,
+    );
+  }
+  // R1131: rows not scored because the start WorkDate moved from the batch's baseline (ruling A).
+  const dateMoved = r.mutants.filter((m) => m.cause === "workdate-changed").length;
+  if (dateMoved > 0) {
+    lines.push(
+      `${dateMoved} mutant(s) were not scored: their start WorkDate moved from the batch's baseline${r.baselineWorkDate !== undefined ? ` (${r.baselineWorkDate})` : ""}, and so did the rest of that batch. They are outside the score. Re-run (validity.caveats "workdate-changed", R1131).`,
     );
   }
   // R206: warm kills are a fact about HOW the kills were measured, stated beside the score.

@@ -49,6 +49,7 @@ import {
   RunMutantTransport,
 } from "../src/run-mutant-transport";
 import { buildCoverageIndex, coverageFilter } from "../src/selection";
+import { BaselineWorkDateUnstableError } from "../src/workdate-guard";
 import { buildFakeApp, buildFakeAppWithEntries } from "./helpers/fake-app";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -199,11 +200,12 @@ async function rmStaged(instrumentedDir: string): Promise<void> {
  * reads the returned details — the orchestrator does, via its own verifier — so a resolved
  * placeholder is enough here.
  */
-function fakeHarnessVerifier(): HarnessVerifier {
+function fakeHarnessVerifier(workDate = "2026-11-19"): HarnessVerifier {
   return {
     verify: async () => ({
       protocolVersion: 2,
       serverGeneration: "f".repeat(32),
+      workDate,
       tenantGate: "unenforced" as const,
     }),
   } as unknown as HarnessVerifier;
@@ -2269,6 +2271,7 @@ function capturingRunMutantFactory(
       status: "ran",
       testRunsBefore: 0,
       sessionId: 2037,
+      workDate: "2026-11-19",
       targetAppId: b.targetAppId,
       artifactId: b.artifactId,
       attemptId: b.attemptId,
@@ -2660,6 +2663,7 @@ describe('coverageMode "fenced" (R58)', () => {
         status: "ran",
         testRunsBefore: 0,
         sessionId: 2037,
+        workDate: "2026-11-19",
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -2740,6 +2744,7 @@ describe('coverageMode "fenced" (R58)', () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: these tests run no mutant batch; every call is a baseline call
     await backend.activate(null);
     return {
       backend,
@@ -2811,6 +2816,7 @@ describe('coverageMode "fenced" (R58)', () => {
           status: "ran",
           testRunsBefore: 0,
           sessionId: 2037,
+          workDate: "2026-11-19",
           targetAppId: b.targetAppId,
           artifactId: b.artifactId,
           attemptId: b.attemptId,
@@ -2854,6 +2860,7 @@ describe('coverageMode "fenced" (R58)', () => {
       );
       await backend.deploy(outputDir);
       backend.setLease(FAKE_LEASE);
+      backend.baselinePhase(true); // R1131: as in fencedBackend
       return {
         backend,
         cleanup: async () => {
@@ -3135,6 +3142,7 @@ describe("fenced coverage — the server-side object-id filter", () => {
         status: "ran",
         testRunsBefore: 0,
         sessionId: 2037,
+        workDate: "2026-11-19",
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -3198,6 +3206,7 @@ describe("fenced coverage — the server-side object-id filter", () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -3293,6 +3302,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
         status: "ran",
         testRunsBefore: 0,
         sessionId: 2037,
+        workDate: "2026-11-19",
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -3390,6 +3400,7 @@ describe("fenced coverage — the thin-coverage diagnostic", () => {
     );
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -4007,6 +4018,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
         status: "ran",
         testRunsBefore: 0,
         sessionId: 2037,
+        workDate: "2026-11-19",
         targetAppId: b.targetAppId,
         artifactId: b.artifactId,
         attemptId: b.attemptId,
@@ -4072,6 +4084,7 @@ describe("fenced coverage: #if-wrapped objects are refused by name (R298)", () =
     if (symbols !== undefined) backend.useBuildSymbols(symbols);
     await backend.deploy(outputDir);
     backend.setLease(FAKE_LEASE);
+    backend.baselinePhase(true); // R1131: as in fencedBackend
     await backend.activate(null);
     return {
       backend,
@@ -4594,6 +4607,7 @@ function scriptedTransportFetch(run: "orphan" | "pass"): {
       status: "ran",
       testRunsBefore: 0,
       sessionId: 2037,
+      workDate: "2026-11-19",
       targetAppId: b.targetAppId,
       artifactId: b.artifactId,
       attemptId: b.attemptId,
@@ -4954,6 +4968,253 @@ describe("R552: the user's package cache is never written", () => {
     } finally {
       await rmStaged(dir);
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// R1131 (PR-196): the bcdev backend compares every test-running answer's start WorkDate with the batch's baseline.
+describe("BcDevMcpBackend — start WorkDate per call (R1131)", () => {
+  const ref: TestMethodRef = { codeunitId: 79100, codeunitName: "Ours", method: "Alpha" };
+  const OURS = `codeunit 79100 "Ours"
+{
+    procedure Alpha()
+    begin
+    end;
+}
+`;
+  /** The control app's answers, scripted: each call takes the next date from `dates`. */
+  class DatedTransport extends RunMutantTransport {
+    static dates: string[] = [];
+    private static next(): string {
+      const d = DatedTransport.dates.shift();
+      if (d === undefined) throw new Error("DatedTransport: no date scripted for this call");
+      return d;
+    }
+    override async run(req: Parameters<RunMutantTransport["run"]>[0]) {
+      return {
+        ref: req.ref,
+        outcome: "pass" as const,
+        durationMs: 5,
+        workDate: DatedTransport.next(),
+      };
+    }
+    override async runMany(req: Parameters<RunMutantTransport["runMany"]>[0]) {
+      const workDate = DatedTransport.next();
+      const verdicts = req.methods.map((m) => ({
+        ref: m.ref,
+        outcome: "pass" as const,
+        durationMs: 5,
+        workDate,
+      }));
+      const r: RunMutantManyResult = {
+        kind: "verdicts",
+        endedBy: "complete",
+        ranCount: verdicts.length,
+        verdicts,
+        durationMs: 5,
+      };
+      return r;
+    }
+  }
+  const factory = (targetAppId: string, artifactId: string, controlState: ControlState) =>
+    new DatedTransport(
+      { baseUrl: "http://bc:7048/BC", company: "CRONUS", username: "u", password: "p" },
+      targetAppId,
+      artifactId,
+      (async (_url: unknown) => new Response("{}")) as typeof fetch,
+      { controlState },
+    );
+  async function backendIn(coverageMode: "none" | "procedure") {
+    const outputDir = scratch("lethal-r1131-");
+    await writeDeployInputs(outputDir);
+    await Bun.write(join(outputDir, "Ours.Codeunit.al"), OURS);
+    const notes: string[] = [];
+    const backend = new BcDevMcpBackend(
+      {
+        mcpCommand: ["unused"],
+        project: "/al",
+        server: "http://bc",
+        serverInstance: "BC",
+        coverageMode,
+        ...(await controlStaging(outputDir)),
+      },
+      () => {
+        throw new Error("bc-dev-mcp must not be contacted here");
+      },
+      makeDeployment(outputDir, { Codeunits: [{ Id: 79100, Name: "Ours" }] }),
+      factory,
+    );
+    backend.setNotify((code) => notes.push(code));
+    await backend.deploy(outputDir);
+    backend.setLease(FAKE_LEASE);
+    return {
+      backend,
+      notes,
+      cleanup: async () => {
+        await rmStaged(outputDir);
+        await rm(outputDir, { recursive: true, force: true });
+      },
+    };
+  }
+  /** One batch's baseline on `date`, then the bracket closed. */
+  async function baselineOn(b: BcDevMcpBackend, date: string) {
+    DatedTransport.dates = [date];
+    await b.baselinePhase(true);
+    await b.activate(null);
+    await b.run(ref, { coverage: "none", timeoutMs: 1000 });
+    await b.baselinePhase(false);
+  }
+  const many = { methods: [{ ref, budgetMs: 1000 }], requestCeilingMs: 5000, stopGraceMs: 500 };
+
+  test("the fresh date read at deploy decides reuse once: equal reuses and gives the batch its date; it survives baselinePhase and is cleared by the decision", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      // deploy() read the fresh date "2026-11-19" from the harness verifier.
+      await backend.baselinePhase(true); // runs between deploy and the decision: must not clear it
+      expect(backend.refuseReusedBaselineDate("2026-11-19")).toBeUndefined();
+      backend.noteReusedBaseline([]);
+      await backend.baselinePhase(false);
+      expect(backend.batchWorkDate()).toBe("2026-11-19");
+      // Read AND cleared: a second decision with no new deploy has no fresh date.
+      expect(backend.refuseReusedBaselineDate("2026-11-19")).toContain("no fresh start WorkDate");
+      // The reused batch's date is the compared one: a mutant answer on another date is refused.
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate("M0007");
+      const r = await backend.runMany(many);
+      expect(r.kind === "call" && r.cause).toBe("workdate-changed");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a moved date and a dateless snapshot are refused at the decision", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      expect(backend.refuseReusedBaselineDate("2026-11-18")).toContain("2026-11-18");
+    } finally {
+      await cleanup();
+    }
+    const again = await backendIn("none");
+    try {
+      expect(again.backend.refuseReusedBaselineDate(undefined)).toContain(
+        "records no start WorkDate",
+      );
+    } finally {
+      await again.cleanup();
+    }
+  });
+
+  test("an equal date scores normally, and the baseline date is the batch's", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      expect(backend.batchWorkDate()).toBe("2026-11-19");
+      DatedTransport.dates = ["2026-11-19"];
+      await backend.activate("M0007");
+      const r = await backend.runMany(many);
+      expect(r.kind).toBe("verdicts");
+      if (r.kind === "verdicts") expect(r.verdicts[0]?.outcome).toBe("pass");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a grouped call on another date is a per-mutant call-level workdate-changed, never a verdict", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate("M0007");
+      const r = await backend.runMany(many);
+      expect(r.kind).toBe("call");
+      if (r.kind !== "call") return;
+      expect(r.cause).toBe("workdate-changed");
+      expect(r.methodIndex).toBe(1);
+      expect(r.verdict.outcome).toBe("error");
+      expect(r.verdict.workDateRefusal).toBe("workdate-changed");
+      expect(r.verdict.failureMessage).toContain("2026-11-20");
+      expect(r.verdict.failureMessage).toContain("2026-11-19");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("the rest of the batch is refused too, even on the baseline's date again (ruling A)", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      DatedTransport.dates = ["2026-11-20", "2026-11-19"];
+      await backend.activate("M0007");
+      await backend.runMany(many);
+      await backend.activate("M0008");
+      const again = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(again.outcome).toBe("error");
+      expect(again.workDateRefusal).toBe("workdate-changed");
+      expect(again.failureMessage).toContain("earlier answer in this batch");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("an unmutated confirmation on another date is a refusal, not a pass", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate(null);
+      const v = await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      expect(v.outcome).toBe("error");
+      expect(v.workDateRefusal).toBe("workdate-changed");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("two baseline calls on different dates refuse the batch", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      DatedTransport.dates = ["2026-11-19", "2026-11-20"];
+      await backend.baselinePhase(true);
+      await backend.activate(null);
+      await backend.run(ref, { coverage: "none", timeoutMs: 1000 });
+      await expect(backend.run(ref, { coverage: "none", timeoutMs: 1000 })).rejects.toBeInstanceOf(
+        BaselineWorkDateUnstableError,
+      );
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("a new batch's baseline starts clean: the earlier batch's move does not carry over", async () => {
+    const { backend, cleanup } = await backendIn("none");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate("M0007");
+      await backend.runMany(many);
+      await baselineOn(backend, "2026-11-20");
+      DatedTransport.dates = ["2026-11-20"];
+      await backend.activate("M0009");
+      const r = await backend.runMany(many);
+      expect(r.kind).toBe("verdicts");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  test("hub mode (coverageMode procedure) compares nothing, reports no date, and says so once", async () => {
+    const { backend, notes, cleanup } = await backendIn("procedure");
+    try {
+      await baselineOn(backend, "2026-11-19");
+      await baselineOn(backend, "2026-11-19");
+      expect(backend.batchWorkDate()).toBeUndefined();
+      DatedTransport.dates = ["2026-11-25"];
+      await backend.activate("M0007");
+      const r = await backend.runMany(many);
+      expect(r.kind).toBe("verdicts");
+      expect(notes.filter((c) => c === "workdate-not-compared")).toHaveLength(1);
+    } finally {
+      await cleanup();
     }
   });
 });

@@ -78,6 +78,13 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
   own test runner and `al-runner-v3` see it. Before, it was the OData session's Today, so a test that reads the default
   WorkDate could give a different verdict on the two backends. A non-demo company is unchanged. Needs LethAL Control
   1.0.0.27: the minimum is now 1.0.0.27 (`MIN_CONTROL_VERSION`).
+- **`bcdev` refuses a start WorkDate that moved during a run** (R1131, coord PR-196). The control app now returns the
+  start date each test ran under. A batch's baseline fixes one date; a later answer on another date, and the rest of that
+  batch, is `error` / `workdate-changed` (never a kill or a survivor), and the report names `baselineWorkDate` (the first
+  batch's). Two baseline calls inside one batch that disagree stop the session (`BaselineWorkDateUnstableError`). A
+  `--resume` baseline snapshot, batch 0's included, is reused only when the server's start date, read by `HarnessInfo` at
+  that batch's deploy, equals the date stored with the snapshot; otherwise the baseline runs again. A snapshot with no
+  date is never reused. Needs LethAL Control 1.0.0.28: the minimum is now 1.0.0.28. The explain schema is v32.
 - **tree-sitter-al 4.5.0 to 4.6.0** (R855, coord R-861). Valid AL that 4.5.0 could not read now parses: long `if` chains with `#if` inside, `end;` in both arms of a `#if/#else`, `#if` regions in routine headers and var sections, qualified and numeric `extends`, and split procedure preambles. A dotted base name is read by its last segment (a numeric one by object id), so refusals such as R487's still fire. A member with two `#if` var blocks, or a nested one, gets one latch with every arm's `var` blanked, proved with `alc`. No mutant identity moves: the five-set diff is identical on 575 projects.
 
 - **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's

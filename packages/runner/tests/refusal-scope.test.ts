@@ -309,6 +309,7 @@ function orphanServer() {
       status: "ran",
       testRunsBefore: 0,
       sessionId: 2037,
+      workDate: "2026-11-19",
       targetAppId: b.targetAppId,
       artifactId: b.artifactId,
       attemptId: b.attemptId,

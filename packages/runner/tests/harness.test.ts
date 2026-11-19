@@ -60,6 +60,7 @@ function info(over: Record<string, unknown> = {}): Record<string, unknown> {
     protocolVersion: 2,
     serverGeneration: SERVER_GENERATION,
     databaseId: DATABASE_ID,
+    workDate: "2026-11-19",
     tenantCountReachable: false,
     isolationModes: ["Codeunit"],
     testTypes: ["codeunit"],
@@ -312,27 +313,32 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
   test("GH-24: refuses 1.0.0.18", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.18" }));
     expect(message).toContain("1.0.0.18");
-    expect(message).toContain("1.0.0.27");
+    expect(message).toContain("1.0.0.28");
   });
 
   test("R-689b: refuses 1.0.0.23, the build before the discovery error and InstalledDependents", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.23" }));
-    expect(message).toContain("reports version 1.0.0.23, older than the 1.0.0.27");
+    expect(message).toContain("reports version 1.0.0.23, older than the 1.0.0.28");
   });
 
   test("R847: refuses 1.0.0.24, the build before ObjectOwners and FieldOwners", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.24" }));
-    expect(message).toContain("reports version 1.0.0.24, older than the 1.0.0.27");
+    expect(message).toContain("reports version 1.0.0.24, older than the 1.0.0.28");
   });
 
   test("R969: refuses 1.0.0.25, the build before databaseId", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.25" }));
-    expect(message).toContain("reports version 1.0.0.25, older than the 1.0.0.27");
+    expect(message).toContain("reports version 1.0.0.25, older than the 1.0.0.28");
   });
 
   test("R1127: refuses 1.0.0.26, the build whose tests start on the OData session's Today", async () => {
     const message = await messageFrom(info({ semver: "1.0.0.26" }));
-    expect(message).toContain("reports version 1.0.0.26, older than the 1.0.0.27");
+    expect(message).toContain("reports version 1.0.0.26, older than the 1.0.0.28");
+  });
+
+  test("R1131: refuses 1.0.0.27, the build whose answers carry no start WorkDate", async () => {
+    const message = await messageFrom(info({ semver: "1.0.0.27" }));
+    expect(message).toContain("reports version 1.0.0.27, older than the 1.0.0.28");
   });
 
   test("R969: refuses a payload with no databaseId, and an empty one, rather than recording none", async () => {
@@ -341,6 +347,19 @@ describe("HarnessVerifier control-app version gate (R28)", () => {
       expect(message).toMatch(/HarnessInfo databaseId .* is missing or empty/);
       expect(message).toContain("R969");
     }
+  });
+
+  test("R1131: refuses a payload with no workDate, or one that is not an ISO date, by name", async () => {
+    for (const workDate of [undefined, "", "19/11/2026"]) {
+      const message = await messageFrom(info({ workDate }));
+      expect(message).toMatch(/HarnessInfo workDate .* is missing or not an ISO date/);
+      expect(message).toContain("R1131");
+    }
+  });
+
+  test("R1131: returns the start WorkDate it read", async () => {
+    const { details } = await verifyQuiet(verifier(okFetch(info())));
+    expect(details.workDate).toBe("2026-11-19");
   });
 
   test("R969: returns the database id it read", async () => {

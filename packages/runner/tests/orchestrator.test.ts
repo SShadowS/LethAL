@@ -16559,6 +16559,78 @@ describe("runSession — Layer 5C-B2: a proven-complete lost ack earns one fresh
     expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
   });
 
+  // ——— R1131 (PR-196): a start-WorkDate refusal is a step cause, never a plain transport error ———
+  test("R1131 a covering answer on a moved WorkDate is error / workdate-changed, and the session runs on", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    const dispatches = { count: 0 };
+    const report = await runSessionForTest(
+      m2Answers(
+        [
+          {
+            outcome: "error",
+            failureMessage: "workdate-changed: Alpha started on WorkDate 2026-11-20",
+            workDateRefusal: "workdate-changed",
+          },
+        ],
+        dispatches,
+      ),
+      { quarantineDir: dir, lease },
+    );
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("workdate-changed");
+    expect(m2?.failureNote).toContain("2026-11-20");
+    expect(dispatches.count).toBe(1);
+    expect(report.quarantined).toBeUndefined();
+    // Not a transport abort: the session scored the next mutant, and says so in the caveats.
+    expect(report.mutants.find((m) => m.mutantCode === "M0003")).toBeDefined();
+    expect(report.validity.caveats).toContain("workdate-changed");
+    // The banner counts them, beside the other named error causes.
+    expect(renderConsole(report)).toContain("workdate-changed 1");
+  });
+
+  test("R1131 a kill whose unmutated confirmation starts on a moved WorkDate is error / workdate-changed, not unstable", async () => {
+    const dir = freshTmpDir();
+    const client = new FakeLeaseClient();
+    client.reconcileStatus = tombstoned;
+    const { lease } = leaseCfg(client);
+    let activeMutant: string | null = null;
+    let m2Ran = false;
+    const backend = leaseBackend({
+      activate: async (id) => {
+        activeMutant = id;
+      },
+      run: async (ref) => {
+        if (activeMutant === "M0002") {
+          m2Ran = true;
+          return { ref, outcome: "fail" as const, durationMs: 1, failureMessage: "x", attestation: ATTESTED };
+        }
+        // The confirmation (no mutant, after M0002's kill) starts on another date.
+        if (m2Ran && activeMutant === null) {
+          m2Ran = false;
+          return {
+            ref,
+            outcome: "error" as const,
+            durationMs: 1,
+            failureMessage: "workdate-changed: Alpha started on WorkDate 2026-11-20",
+            workDateRefusal: "workdate-changed" as const,
+          };
+        }
+        return { ref, outcome: "pass" as const, durationMs: 1, attestation: ATTESTED };
+      },
+    });
+    const report = await runSessionForTest(backend, { quarantineDir: dir, lease });
+    const m2 = report.mutants.find((m) => m.mutantCode === "M0002");
+    expect(m2?.verdict).toBe("error");
+    expect(m2?.cause).toBe("workdate-changed");
+    expect(m2?.cause).not.toBe("unstable");
+    expect(report.counts.unstable).toBe(0);
+    expect(report.counts.killed).toBe(0);
+  });
+
   // ——— R-204b Part R: a lost answer after a stop that may have been accepted is never retried ———
   const lostAfter = (stopState?: StopState): Partial<TestVerdict> => ({
     ...LOST_ANSWER,

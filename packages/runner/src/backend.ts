@@ -248,6 +248,19 @@ export interface TestVerdict {
   readonly testRunsBefore?: number;
   readonly sessionId?: number;
   /**
+   * R1131 (control app 1.0.0.28), bcdev answers that RAN a method (not hub mode): the start WorkDate the
+   * method ran under, an ISO date text (`2026-11-19`). The backend compares it with the batch's baseline
+   * date. Absent on al-runner, on hub mode and on every answer where no test ran.
+   */
+  readonly workDate?: string;
+  /**
+   * R1131: set (with outcome `error`) by the bcdev backend on an answer whose `workDate` differs from the
+   * batch's baseline date, or that follows such an answer in the same batch. The orchestrator lifts it
+   * into the step's cause, as it does `stopRefusal`; the row is `error` / `workdate-changed`, never a
+   * kill, a survivor or `unstable`.
+   */
+  readonly workDateRefusal?: "workdate-changed";
+  /**
    * R-204b (R202): what became of the stop LethAL sent for THIS call, settled before the call
    * returned. Absent: no stop was sent. On a grouped call, `refused` only if EVERY stop attempt in
    * it was refused. The orchestrator retries a lost answer only when this is absent or `refused`:
@@ -425,7 +438,8 @@ export type RunManyCause =
   | "group-run-error"
   | "group-answer-malformed"
   | "stopped-after-completion"
-  | "stop-outcome-unconfirmed";
+  | "stop-outcome-unconfirmed"
+  | "workdate-changed";
 
 export type RunManyResult =
   | {
@@ -967,6 +981,20 @@ export interface ExecutionBackend {
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
   baselinePhase?(on: boolean): void | Promise<void>;
+
+  /**
+   * R1131, OPTIONAL (bcdev outside hub mode): the start WorkDate the current batch's baseline ran under (its
+   * baseline calls, or a reused snapshot's verdicts), or `undefined` when none is known. Read when the batch's
+   * baseline ends; it travels on `baseline-batch-finished` as `workDate`.
+   */
+  batchWorkDate?(): string | undefined;
+
+  /**
+   * R1131, OPTIONAL (bcdev outside hub mode): why a stored snapshot whose baseline ran on `snapshotWorkDate`
+   * (`undefined`: a snapshot from before control 1.0.0.28) is NOT reused, or `undefined` when it is. Reuse needs
+   * an equal date: a snapshot measured on another day's start date is not this session's baseline.
+   */
+  refuseReusedBaselineDate?(snapshotWorkDate: string | undefined): string | undefined;
 
   /**
    * R948, OPTIONAL (al-runner v3): the session's stop state, given once with the budget floor. The

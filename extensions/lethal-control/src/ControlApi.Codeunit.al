@@ -9,6 +9,8 @@ using System.Tooling;
 using System.TestTools.CodeCoverage;
 // R389: "Application Dependency" (table 2000000209), read by DependentCount.
 using System.Apps;
+// R1131: LogInManagement.GetDefaultWorkDate, for HarnessInfo's `workDate`.
+using System.Environment;
 
 /// <summary>The OData-exposed control surface (registered as a web service by the install codeunit;
 /// procedures are OData V4 unbound actions /ODataV4/LethALControl_&lt;Proc&gt;). Layer 5C-A.</summary>
@@ -69,6 +71,7 @@ codeunit 91003 "LC Control API"
         LeaseOpKind: Text;
         LeaseExpiresAt: Text;
         LeaseTokenPresent: Boolean;
+        LogInMgt: Codeunit LogInManagement;
     begin
         if ClientProtocol < 2 then
             Error(ProtocolIncompatibleErr(ClientProtocol));
@@ -81,6 +84,9 @@ codeunit 91003 "LC Control API"
         Obj.Add('serverGeneration', State.CurrentServerGeneration());
         // R969 (1.0.0.26): the database's own id; the client refuses an empty one.
         Obj.Add('databaseId', State.CurrentDatabaseId());
+        // R1131 (1.0.0.28): the start date a test-running call would set now, with no test run. The client
+        // compares it with a stored baseline's date at its reuse decision.
+        Obj.Add('workDate', Format(LogInMgt.GetDefaultWorkDate(), 0, 9));
         Obj.Add('tenantCountReachable', false);
         Obj.Add('isolationModes', Isolation);
         Obj.Add('testTypes', TestTypes);
@@ -942,7 +948,7 @@ codeunit 91003 "LC Control API"
                 ClaimStatus := 'lease-invalid'
             else
                 ClaimStatus := ClaimReason;
-            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, ClaimReason, -1));
+            exit(BuildStatus(ClaimStatus, TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, ClaimReason, -1, ''));
         end;
 
         // PHASE 2 — run exactly one method OUTSIDE the lease lock, behind a catchable boundary.
@@ -966,10 +972,10 @@ codeunit 91003 "LC Control API"
         // R203): our own stop tombstoned this op while the session was still finishing.
         State.TryFinishRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Verified, FinishReason);
         if not Verified then
-            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1));
+            exit(BuildStatus('lease-invalid', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, '', false, false, false, FinishReason, -1, ''));
 
         Ran := true;
-        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore));
+        exit(BuildStatus('ran', TargetAppId, ArtifactId, AttemptId, MutantId, TestCodeunitId, TestMethod, CodeunitResults, ObservedAny, IdentityMismatch, ObservedActive, '', TestRunsBefore, Runner.StartWorkDate()));
     end;
 
     /// <summary>
@@ -1509,7 +1515,7 @@ codeunit 91003 "LC Control API"
     /// on phase-1 refusals, where it may differ from Status (e.g. Status 'lease-invalid' with Reason
     /// 'op-in-flight' for a still-active same-attempt duplicate claim), and since R198/R203 on ONE
     /// phase-3 refusal: 'op-stopped', the op our own stop tombstoned while the session finished.</summary>
-    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; ObservedActive: Boolean; Reason: Text; TestRunsBefore: Integer): Text
+    local procedure BuildStatus(Status: Text; TargetAppId: Text; ArtifactId: Text; AttemptId: Text; MutantId: Text; TestCodeunitId: Integer; TestMethod: Text; CodeunitResults: Text; ObservedAny: Boolean; IdentityMismatch: Boolean; ObservedActive: Boolean; Reason: Text; TestRunsBefore: Integer; WorkDateText: Text): Text
     var
         Obj: JsonObject;
         Out: Text;
@@ -1529,6 +1535,9 @@ codeunit 91003 "LC Control API"
         Obj.Add('observedActive', ObservedActive);
         Obj.Add('identityMismatch', IdentityMismatch);
         AddSessionKeys(Obj, Status, TestRunsBefore);
+        // R1131: the start WorkDate the method ran under; blank when no method ran (a fail-closed answer).
+        if WorkDateText <> '' then
+            Obj.Add('workDate', WorkDateText);
         Obj.WriteTo(Out);
         exit(Out);
     end;

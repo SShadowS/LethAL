@@ -255,6 +255,28 @@ describe("R1127: each method starts on the client's default WorkDate", () => {
     expect(note).toBeLessThan(run);
     expect(body.match(/\bWorkDate\(/g)?.length).toBe(1); // \b: GetDefaultWorkDate( is not a set
   });
+  test("R1131: each answer that ran a method returns the start WorkDate it set, as ISO text", () => {
+    // RunMany: one `workDate` per per-method object, from the date it set before that method.
+    const many = codeOnly(procedureBody(read("RunMany.Codeunit.al"), "RunAll"));
+    expect(many).toContain("One.Add('workDate', Format(StartWorkDate, 0, 9));");
+    // RunMethod: read back right after the set, before the run, and handed out through a getter.
+    const method = codeOnly(procedureBody(read("RunMethod.Codeunit.al"), "RunOneMethod"));
+    const set = at(method, "WorkDate(LogInMgt.GetDefaultWorkDate());");
+    const text = at(method, "StartWorkDateText := Format(WorkDate, 0, 9);");
+    expect(set).toBeLessThan(text);
+    expect(text).toBeLessThan(at(method, "Mgt.RunAllTests(Line);"));
+    expect(read("RunMethod.Codeunit.al")).toContain("procedure StartWorkDate(): Text");
+    // BuildStatus adds it only when a method ran (a blank date is a fail-closed answer).
+    const status = codeOnly(procedureBody(read("ControlApi.Codeunit.al"), "BuildStatus"));
+    expect(status).toContain("if WorkDateText <> '' then");
+    expect(status).toContain("Obj.Add('workDate', WorkDateText);");
+    expect(read("ControlApi.Codeunit.al")).toContain("Runner.StartWorkDate()));");
+  });
+  test("R1131 amendment 2: HarnessInfo returns the fresh start WorkDate the same way, with no test run", () => {
+    const info = codeOnly(procedureBody(read("ControlApi.Codeunit.al"), "HarnessInfo"));
+    expect(info).toContain("Obj.Add('workDate', Format(LogInMgt.GetDefaultWorkDate(), 0, 9));");
+    expect(info.match(/\bWorkDate\(/g)).toBeNull(); // reads only, never sets the session's WorkDate
+  });
 });
 
 describe("GH-24: ObservedActive, reset per method and read after ProgressBetween", () => {
