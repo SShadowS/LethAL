@@ -78,9 +78,19 @@ item overrides the section it names.
   before each batch.
 - **The change, replacing amendment 1 item 1's batch-0 clarification:**
   1. **Control 1.0.0.28** (the same bump) also returns `workDate` = `Format(LogInMgt.GetDefaultWorkDate(), 0, 9)` on
-     the control call the client makes before each batch's baseline or reuse decision (the builder names which call:
-     the status or lease answer the client already reads there). It is computed the same way a test-running call
-     computes its start date, in a web-service session.
+     the control call the client makes before each batch's baseline or reuse decision. **That call is `HarnessInfo`**
+     (the adversary-light review): `harnessVerifier.verify()`, which `BcDevMcpBackend.deploy()` and `attach()` call first,
+     and which runs in every batch's `deployStep` before `scoreBatch`. It is not a lease call: the lease and
+     `serverGeneration` reads are once per session. The date is computed the same way a test-running call computes its
+     start date, in a web-service session of the same user and company.
+     - **Builder rule:**
+       - the backend keeps the fresh date, set ONLY in `deploy`/`attach`;
+       - it is read AND cleared at the reuse decision;
+       - it is not cleared in `baselinePhase(true)` (which runs between deploy and the decision);
+       - it is never read from the session-level cached harness answer (cli.ts).
+     - **A non-demo company's pooled session** can return an old date across midnight, the reused-session rule §0a item 7
+       notes. The safe direction holds: a stale equal read reuses, and then every answer that differs scores
+       `workdate-changed`.
   2. **At EVERY batch's reuse decision, batch 0 included,** the client compares that FRESH date with the snapshot's
      stored date. It reuses only on equality, and re-runs the baseline otherwise. A dateless snapshot is never reused.
      If the fresh read is missing on a 1.0.0.28 answer, that is a protocol error, refused by name.
@@ -88,6 +98,12 @@ item overrides the section it names.
      snapshot's date (which equals the fresh read).
      - The guard's session-wide `sessionDate` is dropped. This fixes the review's M2: a later batch no longer compares
        against the first answer's date.
+     - **No fallback that lets a mutant answer set the batch date** (the adversary-light review). On reuse, the guard
+       takes the date that was COMPARED (the fresh read, equal to `snapshot.workDate`), not one re-derived from the
+       surviving rows.
+       - A test-running answer that arrives with no batch baseline date set throws by name; there is no `??=`.
+       - Otherwise a reused batch whose rows carry no date would let the first mutant answer define the date, and a
+         date-driven failure could score as a kill. One red-checked test pins this.
   4. **Pre-committed:**
      - `itest:lend` passes UNCHANGED (R1, R2 and RP still reuse batch 0 on one day, one date);
      - every other frozen gate is as amendment 1 item 7 says.
