@@ -257,6 +257,9 @@ describe("RunMutantMany: the workDate rule (R1131)", () => {
     if (r.kind !== "call") throw new Error("expected a call-level answer");
     expect(r.cause).toBe("group-answer-malformed");
     expect(r.verdict.failureMessage).toContain("entry 2");
-    expect(r.verdict.failureMessage).toContain("workDate");
+    // The refusal's own words (the answer text quoted after it also names the key).
+    expect(r.verdict.failureMessage).toContain(
+      "entry 2: answer ran a method but carries no ISO workDate",
+    );
   });
 });
