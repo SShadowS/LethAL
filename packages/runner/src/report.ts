@@ -297,7 +297,8 @@ export interface ExcludedTestRecord {
   readonly test: string;
   readonly file: string;
   /** R745: `exclude-test` = left out by `--exclude-test`, never run; raises `tests-narrowed`. */
-  readonly reason: "compiled-out" | "preproc-undecided-kept" | "exclude-test";
+  /** PR-212 (R1113): `company-write` = a BC run left it out by default because it writes the Company table; same effect. */
+  readonly reason: "compiled-out" | "preproc-undecided-kept" | "exclude-test" | "company-write";
 }
 
 /**
@@ -906,7 +907,9 @@ export type MutantErrorCause =
   | "test-discovery-failed"
   // R1131: an answer's start WorkDate differed from the batch's baseline date (or an earlier answer of the
   // batch had), so the row is not scored.
-  | "workdate-changed";
+  | "workdate-changed"
+  // PR-212 (R1113): no remaining test covers this mutant, and it sits in an object a left-out company-writing test names.
+  | "left-out-test-reach";
 
 /**
  * What each `MutantErrorCause` MEANS for a reader, and — because both are facts about LethAL's OWN
@@ -1222,6 +1225,18 @@ export const ERROR_CAUSE_INTERPRETATIONS: Record<MutantErrorCause, Interpretatio
       "verdict, so no test ran under the same conditions as the baseline. A date move can cost a " +
       "verdict here, never invent one.",
     basis: "R1131",
+  },
+  "left-out-test-reach": {
+    meaning:
+      "This run left out test methods that write the Company table (`excludedTests`, reason `company-write`), and no test " +
+      "that ran covers this mutant. It sits in an object one of the left-out methods names (a variable type or an " +
+      "object reference, in the method or in one test-app procedure it calls), so one of them might cover it. It is NOT " +
+      "MEASURED: not survived, not no-coverage. Over-approximate on purpose: an object only NAMED by such a method may " +
+      "still be untested. Run with `--keep-company-tests` on a server you can restart to measure it (R1113).",
+    entailedNegative:
+      "Not `survived` and not `no-coverage`: no verdict was taken. Not a claim that a left-out test covers it, and not a " +
+      "claim that none does. A mutant in an object no left-out method names keeps its own `no-coverage`.",
+    basis: "R1113",
   },
 };
 
@@ -3289,7 +3304,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
   if (input.lines !== undefined) caveats.push("line-narrowed");
   // See CAVEAT_INTERPRETATIONS["tests-narrowed"] for what this caveat means to a reader.
   // R745: also raised by any test `--exclude-test` left out.
-  const testsExcludedByName = (input.excludedTests ?? []).some((t) => t.reason === "exclude-test");
+  const testsExcludedByName = (input.excludedTests ?? []).some(
+    (t) => t.reason === "exclude-test" || t.reason === "company-write",
+  );
   if ((input.testsOnly !== undefined && input.testsOnly.length > 0) || testsExcludedByName)
     caveats.push("tests-narrowed");
   if (notInstrumented.files.length > 0) caveats.push("uninstrumentable-files");
@@ -3851,6 +3868,7 @@ function errorBreakdown(r: SessionReport): string {
     "confirm-stopped",
     "test-discovery-failed",
     "workdate-changed",
+    "left-out-test-reach",
   ];
   const parts: string[] = [];
   for (const cause of named) {
@@ -4051,6 +4069,12 @@ export function renderConsole(r: SessionReport): string {
   if (testsLeftOut.length > 0) {
     lines.push(
       `TESTS EXCLUDED: ${testsLeftOut.length} test(s) left out by --exclude-test and never run: ${testsLeftOut.map((t) => t.test).join(", ")}. A mutant only they kill reads survived or no-coverage. See excludedTests.`,
+    );
+  }
+  const companyLeftOut = (r.excludedTests ?? []).filter((t) => t.reason === "company-write");
+  if (companyLeftOut.length > 0) {
+    lines.push(
+      `COMPANY-WRITING TESTS LEFT OUT: ${companyLeftOut.length} test(s) write the Company table and were not run (BC default, R1113; --keep-company-tests runs them): ${companyLeftOut.map((t) => t.test).join(", ")}. A mutant only they cover reads error / left-out-test-reach (not measured), never survived. See excludedTests.`,
     );
   }
   const testsCompiledOut = (r.excludedTests ?? []).filter((t) => t.reason === "compiled-out");

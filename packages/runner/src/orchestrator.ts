@@ -18,6 +18,7 @@ import {
   evaluateArms,
   formatRefusal,
   initParser,
+  normalizeAlName,
   parseAL,
   procedureLikeNameNode,
   startsInInactiveArm,
@@ -132,6 +133,7 @@ import {
   resumableTestApp,
   sameClosedWorld,
 } from "./closed-world";
+import { companyWriteLines, companyWriteMethods } from "./company-writes";
 import {
   V3_NOCOV_REFUSAL_LEAD,
   assertSameScope,
@@ -1753,6 +1755,12 @@ export interface SessionConfig {
    * `survived` or `no-coverage`; the report says so (`tests-narrowed`, `excludedTests`).
    */
   readonly excludeTests?: readonly string[];
+  /**
+   * PR-212 (R1113): run the test methods that write the Company table. By default a bcdev run (envtool too) LEAVES
+   * THEM OUT by name (`excludedTests`, reason `company-write`; `tests-narrowed`), and a no-coverage mutant in an
+   * object they name is `error` / `left-out-test-reach`. al-runner-v3 never leaves them out.
+   */
+  readonly keepCompanyTests?: boolean;
   /**
    * PR-144, the withheld-kill recheck's nested session only: `Codeunit.Method` names; the suite is cut to
    * exactly these, after `--tests-only`. Sound only where each test runs alone, so it is refused unless the
@@ -6857,6 +6865,10 @@ async function runSessionBody(
   // the test-app identity). A name matching no test in THIS run's suite is refused here, before the
   // lease and any deploy.
   let tests = chosen.tests;
+  // PR-212: one parse of the test app, read before the suite is narrowed (the company-write check needs it) and
+  // shared with the TestPage scan and the digests below.
+  const testFiles = await readTestAppSources(cfg.testDir);
+  const testModel = buildTestAppModel(testFiles);
   const excludeTestRecords: { test: string; file: string; reason: "exclude-test" }[] = [];
   // R759: the same tests by `testKeyOf`, recorded on the run row for `lethal verify`.
   const excludeTestKeys: string[] = [];
@@ -6883,6 +6895,32 @@ async function runSessionBody(
       excludeTestKeys.push(testKeyOf(t));
     }
   }
+  // PR-212 (R1113): on a BC backend, the test methods that write the Company table are left out by name, through
+  // the same records as `--exclude-test`, unless `--keep-company-tests`. al-runner-v3 opens no BC tier: untouched.
+  const companyWrites = isBcdev(caps.kind) ? companyWriteMethods(testModel, tests) : [];
+  const companyLeftOut = cfg.keepCompanyTests === true ? [] : companyWrites;
+  const companyRecords: { test: string; file: string; reason: "company-write" }[] = [];
+  if (companyLeftOut.length > 0) {
+    const out = new Set(companyLeftOut.map((m) => testKeyOf(m.test)));
+    if (tests.every((t) => out.has(testKeyOf(t)))) {
+      throw new Error(
+        "every test in this run's suite writes the Company table and would be left out; nothing would run. Refusing rather than reporting every mutant as no-coverage. Pass --keep-company-tests to run them.",
+      );
+    }
+    tests = tests.filter((t) => !out.has(testKeyOf(t)));
+    for (const { test: t } of companyLeftOut) {
+      if (t.file === undefined) {
+        throw new Error(
+          `company-write: discovery gave no file for ${qualifiedTestName(t)}; refusing to record an exclusion without one.`,
+        );
+      }
+      companyRecords.push({ test: qualifiedTestName(t), file: t.file, reason: "company-write" });
+      excludeTestKeys.push(testKeyOf(t));
+    }
+  }
+  // §2c (i): the objects the left-out methods name. A no-coverage mutant in one is not measured (see `record`).
+  // Set on every session, so a store reused by a later session never keeps an earlier one's set.
+  setLeftOutReach(cfg.store, new Set(companyLeftOut.flatMap((m) => [...m.reach])));
   // PR-144: the recheck's nested session runs exactly its targets' covering tests. Each runs alone under
   // method isolation, so leaving the others out cannot change what a kept test sees; under any other mode it
   // could, so it is refused. A name with no test is refused: a smaller suite than asked for is a wrong baseline.
@@ -6929,7 +6967,7 @@ async function runSessionBody(
     .filter((x) => armPolicyApplied || x.reason === "preproc-undecided-kept")
     .map((x) => ({ test: qualifiedTestName(x.test), file: x.file, reason: x.reason }));
   // R745: the tests `--exclude-test` left out ride the same list, reason `exclude-test`.
-  excludedTests.push(...excludeTestRecords);
+  excludedTests.push(...excludeTestRecords, ...companyRecords);
   const unverifiedTestFiles = testArmEvidence.kind === "none" ? [...testArmEvidence.files] : [];
   // PR-197 (R1113 fix 2): the TestHttpRequestPolicy of every codeunit in the FINAL list, the one the baseline runs.
   // A nested recheck session (keepOnlyTests) does not repeat it; a failure never stops the run.
@@ -6965,6 +7003,16 @@ async function runSessionBody(
       message: `[lethal] --exclude-test left ${excludeTestRecords.length} test(s) out of the run and they never run: ${excludeTestRecords.map((r) => r.test).join(", ")}. A mutant only they kill is reported SURVIVED or NO-COVERAGE.`,
     });
   }
+  // PR-212 (R1113): names each method, its path and `commits`, and the opt-in. The main session only (a recheck repeats it).
+  if (cfg.keepOnlyTests === undefined) {
+    const lines = companyWriteLines(
+      companyWrites,
+      cfg.keepCompanyTests === true,
+      chosen.tests.length,
+    );
+    if (lines.length > 0)
+      emit({ type: "warning", code: "company-write-tests-left-out", message: lines.join("\n") });
+  }
   if (tests.length === 0) throw new Error("no tests discovered");
   // R-236c: before the run row and before any test is sent (status and quarantine checks run
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
@@ -6974,8 +7022,6 @@ async function runSessionBody(
   // the per-test digests `lethal verify` compares against, recorded on the run row below.
   // (The parser was initialised before discovery, R403.)
   // R-371: ONE parse of the test sources, shared by the scan and the digests.
-  const testFiles = await readTestAppSources(cfg.testDir);
-  const testModel = buildTestAppModel(testFiles);
   const testPageRefused: ReadonlyMap<string, string> = isBcdev(caps.kind)
     ? scanTestPageModel(testModel, tests)
     : new Map();
@@ -7169,8 +7215,8 @@ async function runSessionBody(
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
     // R745: the tests actually left out (matched, discovered spelling), only when non-empty.
-    ...(excludeTestRecords.length > 0
-      ? { excludeTests: excludeTestRecords.map((r) => r.test) }
+    ...(excludeTestRecords.length + companyRecords.length > 0
+      ? { excludeTests: [...excludeTestRecords, ...companyRecords].map((r) => r.test) }
       : {}),
     // C02-06, R214: the EFFECTIVE symbols (config plus app.json), so an app.json change also
     // breaks a resume.
@@ -14872,6 +14918,13 @@ function carriedReproduction(
   return c.reproducedFailure !== undefined ? { reproducedFailure: c.reproducedFailure } : {};
 }
 
+// PR-212: per store, the normalised object names a session's left-out company-writing tests name (§2c).
+const leftOutReach = new WeakMap<ResultsStore, ReadonlySet<string>>();
+function setLeftOutReach(store: ResultsStore, names: ReadonlySet<string>): void {
+  if (names.size === 0) leftOutReach.delete(store);
+  else leftOutReach.set(store, names);
+}
+
 export function record(
   store: ResultsStore,
   runId: number,
@@ -14959,6 +15012,21 @@ export function record(
   stopEvidence?: StopEvidence,
 ): number {
   const key = identityKeyOf(m);
+  // PR-212 §2c (i): no remaining test covers this mutant, and a left-out company-writing test names its object,
+  // so it is not measured: `error` / `left-out-test-reach`, never `no-coverage` and never `survived`. Here, because
+  // `no-coverage` is recorded from many places. A carried verdict keeps what its own run recorded.
+  if (
+    verdict === "no-coverage" &&
+    carried !== true &&
+    leftOutReach.get(store)?.has(normalizeAlName(key.codeunitName)) === true
+  ) {
+    // biome-ignore lint/style/noParameterAssign: one rewrite of three positional arguments; a wrapper would re-spell 28
+    verdict = "error";
+    // biome-ignore lint/style/noParameterAssign: see above
+    cause = "left-out-test-reach";
+    // biome-ignore lint/style/noParameterAssign: see above
+    failureNote = `not measured: no test that ran covers it, and ${key.codeunitName} is named by a test method this run left out because it writes the Company table (--keep-company-tests runs them)`;
+  }
   const reproduced =
     reproduction !== undefined
       ? {
