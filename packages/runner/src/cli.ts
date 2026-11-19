@@ -121,6 +121,7 @@ export { EQUIVALENCE_MARKS_FILENAME, loadEquivalenceMarks } from "./equivalence-
 import { type AcceptResult, computeAcceptResult, loadAcceptList } from "./accept-list";
 import { changedLineSurvivors, renderChangedLineSurvivors } from "./changed-line-survivors";
 import type { ReportView } from "./changed-line-survivors";
+import { companyWriteLines, companyWriteMethods } from "./company-writes";
 import { discoverTests } from "./discovery";
 import type { EventSubscriber, RunEvent } from "./events";
 import { type ExplainOutput, assertExplainableReport, explain } from "./explain";
@@ -170,6 +171,7 @@ import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-select
 import { RunMutantTransport } from "./run-mutant-transport";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
+import { buildTestAppModel, readTestAppSources } from "./testpage-scan";
 import { createTimingFold, foldTimingFile } from "./timing-summary";
 import {
   AlRunnerV2RetiredError,
@@ -512,6 +514,8 @@ export interface DryRunCliConfig {
   readonly allowLargeRun?: true;
   readonly testDir?: string;
   readonly timeBudgetSeconds?: number;
+  /** PR-212: `--keep-company-tests`, said back by the dry run's company-writes line. */
+  readonly keepCompanyTests?: true;
 }
 
 export interface RunCliConfig {
@@ -590,6 +594,8 @@ export interface RunCliConfig {
    * and raises `tests-narrowed`; the report names each test in `excludedTests`.
    */
   readonly excludeTests?: readonly string[];
+  /** PR-212 (R1113): `--keep-company-tests` runs the test methods that write the Company table; by default a BC run leaves them out. */
+  readonly keepCompanyTests?: boolean;
   /**
    * R44: `--max-guards-per-batch <n>` bounds how many injected guards go into one published
    * artifact. Absent means no limit.
@@ -1167,7 +1173,13 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              a name that matches no test is refused). CAN CHANGE A VERDICT like
                              --tests-only; the report flags 'tests-narrowed' and lists it in
                              excludedTests
-  --skip-known-survivors     skip mutants a prior finished run recorded as survivors
+  --keep-company-tests       run the test methods that write the Company table (Insert, Delete or
+                             Rename on a Record Company, in the method or in one test-app procedure
+                             it calls). A BC run (bcdev, envtool) LEAVES THEM OUT by default and
+                             names them: on BC 29 they broke the server's tier (R1113). A write two
+                             calls away is not seen. Use it on a server you can restart. Also read
+                             by --dry-run. al-runner-v3 never leaves them out
+  --skip-known-survivors    skip mutants a prior finished run recorded as survivors
   --confirm-from <v3.json>   deploy only the mutants an al-runner-v3 report selects: its survivors
                              noted '[v3-refused-test-nearby]', its no-coverage rows noted by R609,
                              and a seeded sample of its unnoted survivors (R1122). Join the result
@@ -1518,6 +1530,8 @@ export const RUN_FLAGS = {
   "tests-only": { type: "string", multiple: true },
   // R745: repeatable — see `RunCliConfig.excludeTests`.
   "exclude-test": { type: "string", multiple: true },
+  // PR-212: see `RunCliConfig.keepCompanyTests`.
+  "keep-company-tests": { type: "boolean", default: false },
   // R44: see `RunCliConfig.maxGuardsPerBatch`.
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
@@ -1612,6 +1626,7 @@ const RUN_ONLY_FLAGS = [
   "resume-run",
   "retry-stranded",
   "stop-hung-sessions",
+  "keep-company-tests",
   "allow-large-run",
   "fresh-probe",
   "isolate-tests",
@@ -2451,6 +2466,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
       ...(values["allow-large-run"] === true ? { allowLargeRun: true as const } : {}),
       ...(values.tests !== undefined ? { testDir: values.tests } : {}),
       ...(timeBudgetSeconds !== undefined ? { timeBudgetSeconds } : {}),
+      ...(values["keep-company-tests"] === true ? { keepCompanyTests: true as const } : {}),
       ...only,
       ...exclude,
       ...operators,
@@ -2601,6 +2617,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["allow-large-run"] === true ? { allowLargeRun: true } : {}),
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
+    ...(values["keep-company-tests"] === true ? { keepCompanyTests: true } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
     ...(values["fail-on-survivors"] === true ? { failOnSurvivors: true as const } : {}),
@@ -4937,6 +4954,7 @@ export async function runFromCliWithAccept(
                 : {}),
               ...(parsed.testsOnly !== undefined ? { testsOnly: parsed.testsOnly } : {}),
               ...(parsed.excludeTests !== undefined ? { excludeTests: parsed.excludeTests } : {}),
+              ...(parsed.keepCompanyTests === true ? { keepCompanyTests: true } : {}),
               ...(parsed.maxGuardsPerBatch !== undefined
                 ? { maxGuardsPerBatch: parsed.maxGuardsPerBatch }
                 : {}),
@@ -7081,6 +7099,27 @@ export async function dryRunFromCli(parsed: DryRunCliConfig): Promise<number> {
       console.log(
         `outbound HTTP check failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+    // PR-212 (R1113): BC backends only, over the whole suite. Prints nothing when no method writes a company.
+    if (parsed.backendKind !== "al-runner-v3") {
+      try {
+        const all = await discoverTests(parsed.testDir);
+        const found = companyWriteMethods(
+          buildTestAppModel(await readTestAppSources(parsed.testDir)),
+          all,
+        );
+        for (const line of companyWriteLines(
+          found,
+          parsed.keepCompanyTests === true,
+          all.length,
+          "a real run's report lists all",
+        ))
+          console.log(line);
+      } catch (err) {
+        console.log(
+          `company writes check failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   } else {
     console.log("outbound HTTP: not checked (no test project; pass --tests)");

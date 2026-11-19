@@ -106,6 +106,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'if (values["isolate-tests"] === true && backendArg !== "al-runner-v3") {': "v3",
     'instrumentedDir: join(scratchDir, "al-runner-v3"),': "path-name",
     'if (parsed.backendKind === "al-runner-v3") {': "v3",
+    // PR-212: the dry run's company-writes line is for BC backends only
+    'if (parsed.backendKind !== "al-runner-v3") {': "v3",
     // R1018: the al-runner binary is pinned once per run, on v3 only
     'if (parsed.backendKind !== "al-runner-v3" || typeof section !== "object" || section === null)':
       "v3",
