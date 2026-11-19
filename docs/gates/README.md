@@ -139,6 +139,8 @@ read by key, so the clash check can see an installed app that is not a dependent
 1.0.0.25. `HarnessInfo`'s `databaseId` (R969: the lease row's id, minted with the row and never by
 `ForceResetLease`, so `--resume-run` can carry verdicts across a lease reset on a database that
 survived) and `InherentPermissions = X` on "LC Control State" (R999: a target's selector calls it
-under an exact permission set) exist only from 1.0.0.26, and 1.0.0.26 is the minimum: no client path
+under an exact permission set) exist only from 1.0.0.26. From 1.0.0.27 (R1127) every test method starts on the WorkDate
+a client session gets at login (Base Application's `GetDefaultWorkDate`: in a demo company the last G/L posting date), as
+al-runner v3 does, not on the OData session's Today. 1.0.0.27 is the minimum: no client path
 falls back to an older control app any more, so a 404 from any of these actions, or a `HarnessInfo`
 without `databaseId`, is a plain failure.

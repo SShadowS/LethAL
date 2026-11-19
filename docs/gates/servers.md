@@ -305,7 +305,12 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The current proof is R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below).** Head c13e4d0d (branch
+**The proof below predates the control build of coord PR-180 (R1127, 2026-11-18).** That build changes only each test's start
+WorkDate (the client's default, BaseApp's `GetDefaultWorkDate`), and no bcdev-gate fixture reads the default WorkDate. It is
+proven on `bc4` (its table below), not yet on `bc1`-`bc3`. They get it through `bc-linux-setup.ts`, and their re-proof under it
+is still to run.
+
+**The proof of record is R-990's, on 2026-11-14, under LethAL Control 1.0.0.26 (the table right below).** Head c13e4d0d (branch
 lethal/r-990, whose client requires 1.0.0.26), one server at a time under one coord lease each (`bc-linux-setup.ts --held-lease`),
 released after a clean `lethal doctor`. Setup upgraded each server from 1.0.0.25. Every gate's first line named its server, and each
 passed its own comparison with its baseline; `verify-scale` is measurement mode. The tests fixtures' `.alpackages` were filled from
@@ -603,9 +608,20 @@ nothing about them changes.
   - **Re-proved on the fresh database with the Continia apps** (2026-11-18, the table below).
   - **A user's dependency that needs Full-Text Search** is now a doctor check: R1110, coord PR-128.
 
-### bc4 proof table (re-proof 2026-11-18, LethAL Control 1.0.0.26)
+### bc4 proof table (2026-11-18, LethAL Control 1.0.0.27; the 1.0.0.26 re-proof the same day is kept below it)
 
-**How it ran:**
+**Under 1.0.0.27 (coord PR-180):**
+- **The build:** branch lethal/pr-180 at 8e62c9d6, after `bc-linux-setup.ts` upgraded bc4 from 1.0.0.26 (read back by sha256).
+- **The 13 non-hang gates:** run under one held coord lease by lethal-code (`/coord/handoff/PR-180/gates/run.sh`, `run.log`).
+  Each log's `[itest target]` line names `bc4`, and each passed its own comparison with its baseline.
+- **After the 13:** `doctor` was ok and the lease was released healthy. Then the hang gate ran under its own lease and passed.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc4` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.27 | `/coord/handoff/PR-180/gates/<gate>.log`, `run.log`, `setup.log` beside them |
+| `bc4` | `itest:hang` (400 form) | 1.0.0.27 | `/coord/handoff/R-658/hang-bc4-20261118T225101Z-2029916/` (log `/coord/handoff/PR-180/gates/hang.log`) |
+
+**Under 1.0.0.26, the re-proof earlier that day:**
 - **The build:** master 2f8e2ee7, on the fresh database with the Continia 30 stack and DO installed.
 - **The 13 non-hang gates:** run under one held coord lease by lethal-code (`/coord/handoff/bc4-reproof/run.sh`, `rest.sh`,
   `run.log`). Each log's `[itest target]` line names `bc4`.

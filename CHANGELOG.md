@@ -73,6 +73,11 @@ each one, and [`ROADMAP.md`](ROADMAP.md) indexes them.
 
 ### Changed
 
+- **`bcdev` starts every test on the WorkDate a BC client session gets at login** (R1127, coord PR-180). In a demo
+  company such as CRONUS, that is the last G/L entry's posting date (Base Application's `GetDefaultWorkDate`), as BC's
+  own test runner and `al-runner-v3` see it. Before, it was the OData session's Today, so a test that reads the default
+  WorkDate could give a different verdict on the two backends. A non-demo company is unchanged. Needs LethAL Control
+  1.0.0.27: the minimum is now 1.0.0.27 (`MIN_CONTROL_VERSION`).
 - **tree-sitter-al 4.5.0 to 4.6.0** (R855, coord R-861). Valid AL that 4.5.0 could not read now parses: long `if` chains with `#if` inside, `end;` in both arms of a `#if/#else`, `#if` regions in routine headers and var sections, qualified and numeric `extends`, and split procedure preambles. A dotted base name is read by its last segment (a numeric one by object id), so refusals such as R487's still fire. A member with two `#if` var blocks, or a nested one, gets one latch with every arm's `var` blanked, proved with `alc`. No mutant identity moves: the five-set diff is identical on 575 projects.
 
 - **The README's operator counts are per tier** (R868). Opt-in operators now sit in Tier 1 as well as Tier 2, so each tier's
