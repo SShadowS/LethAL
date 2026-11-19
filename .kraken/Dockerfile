@@ -63,6 +63,8 @@ RUN curl -fsSL -o /tmp/ms.deb "https://packages.microsoft.com/config/ubuntu/24.0
 # Login shells (bash -l: kraken's setup, ssh sessions) rebuild PATH from /etc/profile, so ENV alone is not enough
 RUN printf '%s\n' 'export PATH=/opt/cargo/bin:/opt/dotnet:$PATH' 'export DOTNET_ROOT=/opt/dotnet' 'export RUSTUP_HOME=/opt/rustup' 'export DOTNET_CLI_TELEMETRY_OPTOUT=1' > /etc/profile.d/lethal-tools.sh \
     && chown -R dev:dev /opt/rustup /opt/cargo
+# samply profiler for alrunner's PERF-10 daemon profiles (owner, q-20261119T094804-96e84ab3); a late layer, like alsem's image
+RUN CARGO_HOME=/opt/cargo cargo install samply --version 0.13.1 --locked && rm -rf /opt/cargo/registry /opt/cargo/git && chown -R dev:dev /opt/cargo && samply --version
 # MCP sibling repos live on the work volume (kraken-setup.sh); .mcp.json names /home/dev/src/<repo>
 RUN ln -s /work/src /home/dev/src && chown -h dev:dev /home/dev/src
 # pi coding agent (newest). Its state and login (auth.json, settings, sessions) default to ~/.pi/agent,
