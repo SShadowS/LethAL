@@ -221,8 +221,9 @@ The legs:
   warning identical to one-shot. Each serve leg asserts `pairRequests` = killed and zero echo mismatches, fallbacks
   and refused batches (`assertServeCounters`). A T re-record now records from a serve session unless
   `LETHAL_ITEST_V3_TRANSPORT=one-shot` is set (the rows were measured identical on both transports).
-- D1, D1c: the Continia Document Output slice, compared per mutant with R594's BC oracle
-  (`docs/measurements/r594/bc3-A.report.json`, `bc3-B.report.json`). No source text is committed.
+- D1, D1c: the Continia Document Output slice under the default set, compared per mutant with the BC oracle extended by
+  R1139 (PR-229: `docs/measurements/r594/bc3-A.default.report.json`, `bc3-B.default.report.json`; 78 mutants, R594's
+  65 plus `condition-true` and `blank-argument`'s 13). D1 63 / 15 / 0, D1c 63 / 11 / 4. No source text is committed.
   - `LETHAL_ITEST_V3_CDO` names the checkout. It is `/work/lethal-wt/cdo-r396`, the read-only measurement checkout,
     which has the `Test/.alpackages` the legs compile against. `/work/src/do-lethal` has none.
   - The pre-commitment binds the corpus by content, not by path. Each D leg refuses to start
@@ -268,7 +269,7 @@ The legs:
 
 ### Legs L1, Y-A, Y-B and K (R654 S2)
 
-**`--profile slim` (PR-209, amendments 3, 4 and 7).** Legs L1, MO, MOE, D1 and D1c run with `--profile slim`, which leaves out `condition-true` and `blank-argument` (default operators since PR-209), so their tables stay the ones pre-committed before. Because slim narrows the run, each of these legs' warning sets includes `operator-narrowed-run`.
+**`--profile slim` (PR-209, amendments 3, 4 and 7).** Legs L1, MO and MOE run with `--profile slim` (D1 and D1c did until PR-229 extended their BC oracle), which leaves out `condition-true` and `blank-argument` (default operators since PR-209), so their tables stay the ones pre-committed before. Because slim narrows the run, each of these legs' warning sets includes `operator-narrowed-run`.
 
 These legs were ported from `itest:alrunner` before the .NET al-runner was retired (R654 S3, 2026-10-22). They are pre-committed in `docs/superpowers/specs/2026-10-22-r654-v3-gate-legs-precommitment.md` (43115c78). Each runs one-shot, with coverage `"al-runner"` and a packages folder that holds only the Microsoft apps of `fixtures/sandbox-tests/.alpackages`.
 
@@ -722,6 +723,12 @@ Leg T is judged against the committed alpha.2 baseline with the pinned keys over
 
 ## History
 
+- 2026-11-19 (PR-229, R1139; spec `docs/superpowers/specs/2026-11-19-pr229-r1139-cdo-slice-default-set.md`, amendment 1):
+  D1 and D1c run the default set again, judged by the BC oracle extended on bc3 (`bc3-A.default`, `bc3-B.default`):
+  - D1 63 / 15 / 0 and D1c 63 / 11 / 4 over 78; 63 state notes (one per kill) and 63 kill pairs;
+  - `operator-narrowed-run` left their warning set;
+  - 6 old rows (3 per leg) name a different killing test than R594's. The verdicts are unchanged, and the cause is the
+    kill ledger's promotion after a new mutant's kill, measured.
 - 2026-11-19 (PR-209, spec `docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md`, amendments 3, 4 and 7): `lethal.condition-true` and `lethal.blank-argument` became default operators, so every figure of a default run moved (S1 3 / 17 / 6 over 26, WR 64 / 39 / 13 over 116, T 318 / 64 / 68 over 450, DBM 17 / 5 / 104 over 126). Legs L1, MO, MOE, D1 and D1c run `--profile slim` (the default set from before PR-209), so their rows keep the old tables, and their warning sets now hold `operator-narrowed-run`.
   - Amendment 9: S1, S1E, DB, DBI, ISO and K count 3 / 17 / 6 over 26; S1E/DB `entriesSent` 54; K's no-coverage 6; WRE `entriesSent` 464, `pairRequests` 64.
   - Amendment 10 (owner ruling (b), q-20261119T154107-12f69ed1): leg T's moved counts move the shared readings digest (e8ce7f40 → df57baf0). The 7 manifest rows that passed a refresh (edge-4ebfe7913, 5a58a0f16, a184cfc79, 847b1fa5a, c8fe56e05, 736fc7677, 2bd87774f) read the new readings. The 11 older rows keep a FROZEN copy of the old readings under their own pin ids (`edge-d72d3197d-frozen-pre-pr209`, `alpha.12-d4bc8d3a5-frozen-pre-pr209`), labelled with the reason: edge-42af5d384 and alpha.12 fail leg C facts added after they were gated (R1000, PR-114a); the other 9 were not re-gated. A frozen pin is never chosen for a live run. Logs: `/coord/handoff/PR-209/regate/`.
