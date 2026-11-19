@@ -67,7 +67,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
 - L0, N1 and N5 score 3 / 17 / 6 over 26, per mutant equal to `bcdev.baseline.json`. Nothing is
   lent. `groupedCalls` is 20.
 - L1 and N0 score 3 / 0 / 6, with the 17 survivors recorded as known survivors and not run.
-  `knownSurvivors` is 17. `groupedCalls` is 3. (Before PR-209: 3 / 0 / 5 and 14.)
+  `knownSurvivors` is 17. `groupedCalls` is 3.
 - R1's one batch holds 5 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
   reuses L1's run B snapshot (no baseline test runs here), re-derives the 5 as fresh no-coverage and carries
   the other 17 by key. `carryable` is 22, `carried` 17, `groupedCalls` 0.
