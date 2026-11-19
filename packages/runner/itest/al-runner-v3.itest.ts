@@ -2008,7 +2008,9 @@ async function legWR(scratch: string, serve = false): Promise<SessionReport> {
   must(arms.length === 0, `${leg}: the WrappedArms refusal differs: ${arms.join("; ")}`);
   // R975 (R-965 amendment 2): 6 unwrapped twin OnOpenPage mutants read no-coverage by line attribution;
   // R976 (R-973): their 3 empty-block mutants too (62 / 31 / 9 before).
-  assertCounts(r, leg, 62, 28, 12, 102);
+  // PR-209 (amendments 4 and 6): +14 condition-true rows, the BC twins' 2 killed and 12 survived, except WrappedArms'
+  // new `Pick` row, no-coverage by the refusal (BC: survived): 64 / 39 / 13 over 116, as printed (was 62 / 28 / 12 over 102).
+  assertCounts(r, leg, 64, 39, 13, 116);
   assertCleanLeg(r, b, leg, V3_WR_STATE_NOTES);
   if (serve) logServeCounters(b, "WRE");
   return r;
