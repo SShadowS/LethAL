@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { writeInstrumentedProject } from "@lethal/schemata";
 import { buildAlRunnerCoverageIndex, normalizeFileKey } from "../src/al-runner-coverage";
 import {
+  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -72,7 +73,9 @@ interface Built {
 
 /** Instruments both batches once, as `runSession` does, into a scratch directory. */
 async function build(root: string): Promise<Built> {
-  const set = await generateMutationSet(PROJECT);
+  // PR-209: `EXPECTED_LAYOUT` (itest) holds the OLD default set, which is `--profile slim`; its
+  // re-pin to the new default is the gate round's (spec 0c item 4).
+  const set = await generateMutationSet(PROJECT, { ...SLIM_OPTIONS });
   const { files } = set;
   const identityOrdinals = identityOrdinalsOf(set);
   const batches = planArtifacts(files, { maxGuardsPerBatch: 7 });

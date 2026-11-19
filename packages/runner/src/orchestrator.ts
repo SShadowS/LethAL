@@ -292,7 +292,7 @@ import {
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
-import type { CarriedVerdict, ResumeIndex } from "./resume";
+import type { CarriedVerdict, ResumeIndex, SessionFingerprintInput } from "./resume";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -498,6 +498,27 @@ const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Op
 const optInOperatorNames: ReadonlySet<string> = new Set(
   allOperators.filter((op) => op.optIn === true).map((op) => op.name),
 );
+
+/**
+ * PR-209: the two operators `--profile slim` leaves out (they became default operators, and slim is
+ * the old default set). Under slim they are NOT WALKED, so their specs never enter `dedupeSpecs`
+ * and the slim set is the old default set by construction.
+ */
+export const SLIM_LEFT_OUT: readonly string[] = ["lethal.condition-true", "lethal.blank-argument"];
+
+/** What `--profile slim` hands `generateMutationSet`: the two names left out, and the profile that stops the walk. */
+export const SLIM_OPTIONS = {
+  excludeOperators: SLIM_LEFT_OUT,
+  profile: "slim" as const,
+} as const;
+
+/** Profile names `--profile` knows. */
+export const PROFILES: readonly string[] = ["slim"];
+
+/** The operator names a slim run admits: every registered one but the two, and the opt-in ones. */
+function slimOperatorNames(registered: readonly string[]): readonly string[] {
+  return registered.filter((n) => !SLIM_LEFT_OUT.includes(n) && !optInOperatorNames.has(n)).sort();
+}
 
 /** R856: the one operator whose hang rule is read at the dispatch (see `clockSwapHangs`). */
 const CLOCK_SWAP = "lethal.swap-workdate-today";
@@ -725,6 +746,8 @@ export interface MutationSetOptions {
   readonly operators?: readonly string[];
   /** R832: operators that contribute NO mutants (`--exclude-operator`). Refused beside `operators`. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`. The CLI also puts the two operators in `excludeOperators`; this one makes the walk skip them. */
+  readonly profile?: "slim";
   /**
    * Issue #19: line ranges a mutant must touch (`--lines`, `--changed-since`). Absent means no line
    * filter. Applied after per-file dedup and after `operators`, for the same reason `operators` is:
@@ -1116,9 +1139,20 @@ export async function generateMutationSet(
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
   const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
   const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
+  // PR-209: `--profile slim` alone admits exactly what its walk produces, so its specs need no
+  // narrowing pass and stay as the older default run left them (raw, deduped later per file).
+  const slimAlone =
+    options.profile === "slim" &&
+    admittedOperators !== undefined &&
+    JSON.stringify([...admittedOperators].sort()) ===
+      JSON.stringify(slimOperatorNames([...operatorTiers.keys()]));
+  const narrowsSpecs = admittedOperators !== undefined && !slimAlone;
   // R856: the operators this run WALKS. Opt-in ones only when `--operator` named them.
+  // PR-209: under `--profile slim` the two default operators it leaves out are not walked either.
   const walkedOperators = allOperators.filter(
-    (op) => op.optIn !== true || admittedOperators?.has(op.name) === true,
+    (op) =>
+      (op.optIn !== true || admittedOperators?.has(op.name) === true) &&
+      !(options.profile === "slim" && SLIM_LEFT_OUT.includes(op.name)),
   );
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
@@ -1370,7 +1404,7 @@ export async function generateMutationSet(
     // a full run deletes. `dedupeSpecs` returns the surviving spec OBJECTS, so reference identity
     // is the join (the same technique `cli.ts`'s dry-run summary already uses).
     let fileSpecs = specs;
-    if (admittedOperators !== undefined) {
+    if (admittedOperators !== undefined && narrowsSpecs) {
       const survivedDedup = new Set(dedupeSpecs(specs, tierOf));
       const selected: MutationSpec[] = [];
       for (const spec of specs) {
@@ -1383,8 +1417,7 @@ export async function generateMutationSet(
     // Issue #19: after dedup and after the operator filter, so both stay strict subsets. Dedup is
     // re-run only when the operator filter has not already reduced to dedup survivors.
     if (lineRanges !== undefined) {
-      const survivedDedup =
-        admittedOperators !== undefined ? undefined : new Set(dedupeSpecs(fileSpecs, tierOf));
+      const survivedDedup = narrowsSpecs ? undefined : new Set(dedupeSpecs(fileSpecs, tierOf));
       const selected: MutationSpec[] = [];
       for (const spec of fileSpecs) {
         if (survivedDedup !== undefined && !survivedDedup.has(spec)) continue;
@@ -1498,7 +1531,9 @@ export async function generateMutationSet(
   // R832: `--exclude-operator` admits every other operator, so one with no site here is normal.
   // Only a run left with nothing at all is refused. Leaving out an operator with no site loses
   // nothing, so unlike `--exclude` that is not refused.
-  if (excludingOperators && producedInstrumentable.size === 0) {
+  // PR-209: not under `--profile slim`, which IS the older default run, and that run never refused
+  // an empty set here (the run itself refuses one later, as it always did).
+  if (excludingOperators && options.profile !== "slim" && producedInstrumentable.size === 0) {
     throw new Error(
       `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
     );
@@ -1654,9 +1689,11 @@ export async function generateMutationSet(
   if (admittedOperators !== undefined) {
     warn(
       "operator-narrowed-run",
-      excludingOperators
-        ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
-        : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
+      options.profile === "slim"
+        ? `[lethal] --profile slim left out ${SLIM_LEFT_OUT.join(", ")} (default operators since PR-209; not walked at all${(options.excludeOperators?.length ?? 0) > SLIM_LEFT_OUT.length ? `, and --exclude-operator left out more: ${excludedByOperator} mutation site(s) excluded` : ""}). The score below does not cover them — it is not a full-default score.`
+        : excludingOperators
+          ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
+          : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
   // R565: read once every lookup this generation made is done.
@@ -1726,6 +1763,8 @@ export interface SessionConfig {
   readonly exclude?: readonly string[];
   /** R832: `--exclude-operator`. See `MutationSetOptions.excludeOperators`. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`. See `MutationSetOptions.profile`. */
+  readonly profile?: "slim";
   /**
    * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
    * registered operator. See `MutationSetOptions.operators`.
@@ -4692,6 +4731,11 @@ function assertSameBuildSymbols(
   );
 }
 
+/** PR-209 (M6): why a default run will not resume a store an older default run wrote, and the way to. */
+function olderDefaultResumeMessage(subject: string): string {
+  return `${subject} was recorded by a default run made BEFORE PR-209, whose default set did not hold lethal.condition-true and lethal.blank-argument. This run's default set does, so it measures more mutants and cannot carry that run's verdicts. Resume it with --profile slim (the older default set), or drop the resume flag to run from scratch.`;
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
@@ -4714,6 +4758,8 @@ function resolveResume(
   pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
   /** R886: the v3 settings of this session; a resumed run must have recorded the same. */
   resumeInputs?: ResumeInputs,
+  /** PR-209: the digest an OLDER default run recorded for this same configuration; set only on a run with no operator narrowing. */
+  olderDefaultFingerprint?: string,
 ):
   | {
       runId: number;
@@ -4778,6 +4824,21 @@ function resolveResume(
         : {}),
     });
     if (found === null) {
+      // PR-209 (M6): an unfinished run of the OLDER default set has another digest, so the search
+      // above cannot find it. Name it rather than claim there is none.
+      if (olderDefaultFingerprint !== undefined) {
+        const older = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: olderDefaultFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (older !== null)
+          throw new Error(olderDefaultResumeMessage(`--resume found run ${older}`));
+      }
       // R325: an unfinished run keyed under another identity scheme has a different fingerprint,
       // so the search above cannot find it. Name it rather than claim there is none.
       const other = cfg.store.unfinishedRunUnderOtherScheme({
@@ -4921,6 +4982,12 @@ function resolveResume(
       // anyway, as "scoped differently"). NULL is unknown and matches no build.
       assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
       assertSameResumeInputs(row, `--resume-run ${id}`, resumeInputs); // R886
+      if (
+        olderDefaultFingerprint !== undefined &&
+        row.configFingerprint === olderDefaultFingerprint
+      ) {
+        throw new Error(olderDefaultResumeMessage(`--resume-run ${id}`));
+      }
       if (row.configFingerprint !== configFingerprint) {
         throw new Error(
           `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -6690,6 +6757,11 @@ async function runSessionBody(
   // report treat it as the same scope as naming them all.
   const admittedForRun = admittedOperatorNames(cfg, [...operatorTiers.keys()]);
   const resolvedOperators = admittedForRun === undefined ? undefined : [...admittedForRun].sort();
+  const slimIsOlderDefault =
+    cfg.profile === "slim" &&
+    resolvedOperators !== undefined &&
+    JSON.stringify(resolvedOperators) ===
+      JSON.stringify(slimOperatorNames([...operatorTiers.keys()]));
   // PR-171: every refusal that needs only the flags and the v3 file, before the run is announced.
   const confirmPlan =
     cfg.confirm === undefined
@@ -7138,7 +7210,7 @@ async function runSessionBody(
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
   // knew would abort.
-  const configFingerprint = sessionFingerprint({
+  const fingerprintBase: SessionFingerprintInput = {
     projectDir: cfg.projectDir,
     testDir: cfg.testDir,
     backend: backendName,
@@ -7164,7 +7236,11 @@ async function runSessionBody(
     // R127: part of the fingerprint for the same reason `only` is — two runs that deployed
     // different mutant sets are not resumable into one another, and a resume that carried
     // verdicts across an operator-scope change would report them as this run's own measurement.
-    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    // PR-209 (M6): `--profile slim` with no other exclusion IS the older default set, so it keeps
+    // the older digest (no key) and resumes, and compares with, every older store.
+    ...(resolvedOperators !== undefined && !slimIsOlderDefault
+      ? { operators: resolvedOperators }
+      : {}),
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
@@ -7194,7 +7270,15 @@ async function runSessionBody(
       discovery.treeOnlyTests.length > 0,
       discovery.splitTests.length > 0,
     ),
+  };
+  // PR-209 (M6): a run with no operator narrowing carries the marker; the same input WITHOUT it is
+  // the digest an older default run recorded, so `resolveResume` can name that store.
+  const configFingerprint = sessionFingerprint({
+    ...fingerprintBase,
+    ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
   });
+  const olderDefaultFingerprint =
+    resolvedOperators === undefined ? sessionFingerprint(fingerprintBase) : undefined;
   const resolvedResume = resolveResume(
     cfg,
     backendName,
@@ -7213,6 +7297,7 @@ async function runSessionBody(
       ...(sessionDatabaseId !== undefined ? { databaseId: sessionDatabaseId } : {}),
     },
     resumeInputs,
+    olderDefaultFingerprint,
   );
 
   const runId = cfg.store.createRun({
@@ -7324,6 +7409,7 @@ async function runSessionBody(
       : resolvedOperators !== undefined
         ? { operators: resolvedOperators }
         : {}),
+    ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.exactSites !== undefined ? { exactSites: cfg.exactSites } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),

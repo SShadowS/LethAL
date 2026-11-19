@@ -36,6 +36,11 @@ import {
  * that goes through a record field, a setup table, a JSON or text round trip, an event publisher
  * whose subscribers step, `Codeunit.Run`, a `var` parameter written back to the caller, a key field
  * written on a cursor record, and a call graph that leaves the object and comes back.
+ *
+ * R1136 (by name, both polarities): `condition-true` on an `if` that `exit`s from a procedure a loop's
+ * exit test calls, and `blank-argument` anywhere inside such a procedure. NOT SEEN there: a helper
+ * reached through a chain of helpers (`until A()` where A calls B and B holds the guard), a helper
+ * the loop reaches through another object, and a loop whose exit value comes from a `var` parameter.
  */
 
 /**
@@ -205,6 +210,62 @@ export function calleeRecurses(
 }
 
 // ---------------------------------------------------------------------------------------------
+// R1136: a helper whose result is a loop's exit value.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * The same-object procedure names called (bare, `this.P`, `Rec.P`) inside the exit test of a
+ * `repeat ... until C` or `while C do` anywhere in `obj`.
+ */
+function calledInExitTests(obj: ALSyntaxNode, ctx: SemanticContext): ReadonlySet<string> {
+  return cached(ctx, obj, "exitTestCalls", () => {
+    const names = procedureNamesOf(obj, ctx);
+    const out = new Set<string>();
+    visitAll(obj, (l) => {
+      if (l.rawKind !== "while_statement" && l.rawKind !== "repeat_statement") return;
+      const cond = l.childForFieldName("condition");
+      if (cond === null) return;
+      visitAll(cond, (n) => {
+        const c = calleeOf(n, names, ctx);
+        if (c !== null) out.add(c);
+      });
+    });
+    return out;
+  });
+}
+
+/** Does the procedure holding `node` answer to a name a loop's exit test of the same object calls? */
+function inProcCalledInExitTest(node: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const own = enclosingProcedureNames(node);
+  const obj = objectOf(node);
+  if (own === null || obj === null) return false;
+  const called = calledInExitTests(obj, ctx);
+  return [...own].some((n) => called.has(n));
+}
+
+/**
+ * R1136, `lethal.condition-true`: `if C then ... exit(...)` in a procedure P that a loop's exit test
+ * calls (`until P() = 0`). Forced true, the helper always takes its early exit, which can make the
+ * loop endless. A name rule cannot tell that polarity from the terminating one, so BOTH are refused.
+ */
+export function helperGuardHangs(ifNode: ALSyntaxNode, ctx: SemanticContext): boolean {
+  const arm = ifNode.childForFieldName("then_branch");
+  if (arm === null) return false;
+  let exits = false;
+  visitAll(arm, (x) => {
+    if (x.rawKind === "exit_statement") exits = true;
+  });
+  return exits && inProcCalledInExitTest(ifNode, ctx);
+}
+
+/**
+ * R1136, `lethal.blank-argument`: a site anywhere inside a procedure that a loop's exit test of the
+ * same object calls (`GetNextPeriodStart` in `while Date < Limit do Date := GetNextPeriodStart(...)`).
+ * `inLoopExitParts` covers an argument written IN the test, not one inside the helper it calls.
+ */
+export const siteInExitTestHelper = inProcCalledInExitTest;
+
+// ---------------------------------------------------------------------------------------------
 // #36 condition-true: the then-arm runs always.
 // ---------------------------------------------------------------------------------------------
 
@@ -326,6 +387,7 @@ function thenArmHangsUncached(ifNode: ALSyntaxNode, ctx: SemanticContext): boole
   const obj = objectOf(ifNode);
   if (arm === null || obj === null) return false;
   if (callsBackIntoEnclosing(arm, ctx)) return true;
+  if (helperGuardHangs(ifNode, ctx)) return true;
   const cond = ifNode.childForFieldName("condition");
   if (cond !== null && conditionStepsCursor(cond)) return true;
   let loopInside = false;

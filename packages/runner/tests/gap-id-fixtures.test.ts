@@ -4,14 +4,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { MutantManifest } from "@lethal/schemata";
 import { writeInstrumentedProject } from "@lethal/schemata";
-import { generateMutationSet, identityOrdinalsOf, operatorTiers } from "../src/orchestrator";
+import {
+  SLIM_OPTIONS,
+  generateMutationSet,
+  identityOrdinalsOf,
+  operatorTiers,
+} from "../src/orchestrator";
 
 // C02-09: the gap-id predictions over sandbox-app, through the real operator set and the real
 // writer. They live here, not in schemata, because the runner owns spec generation.
 const REPO = resolve(import.meta.dir, "../../..");
 
 async function manifestOfFixture(name: string): Promise<MutantManifest> {
-  const set = await generateMutationSet(join(REPO, "fixtures", name));
+  // PR-209: the gap members pinned below are the OLD default set's (`--profile slim`).
+  const set = await generateMutationSet(join(REPO, "fixtures", name), { ...SLIM_OPTIONS });
   const dir = await mkdtemp(join(tmpdir(), "lethal-gap-"));
   try {
     await writeInstrumentedProject({

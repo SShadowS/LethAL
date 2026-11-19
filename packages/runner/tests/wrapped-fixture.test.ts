@@ -22,6 +22,7 @@ import {
 import { alRunnerCoverageFromServer, buildAlRunnerCoverageIndex } from "../src/al-runner-coverage";
 import { buildLineMap } from "../src/line-map";
 import {
+  SLIM_OPTIONS,
   generateMutationSet,
   identityOrdinalsOf,
   operatorTiers,
@@ -50,7 +51,10 @@ interface Built {
 }
 
 async function build(root: string): Promise<Built> {
+  // PR-209: the table this reads (`EXPECTED_WRAPPED`, in the itest) holds the OLD default set, which
+  // is `--profile slim`; its re-pin to the new default is the gate round's (spec 0c item 4).
   const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
+    ...SLIM_OPTIONS,
     preprocessorSymbols: WRAPPED_SYMBOLS,
     backend: { kind: "al-runner-v3" },
   });
@@ -244,6 +248,7 @@ describe("R497: sandbox-wrapped on bcdev (the itest:bcdev-wrapped table, offline
     const root = await mkdtemp(join(tmpdir(), "lethal-r497-fixture-"));
     try {
       const set = await generateMutationSet(WRAPPED_PROJECT_DIR, {
+        ...SLIM_OPTIONS, // PR-209: see `build` above
         preprocessorSymbols: WRAPPED_SYMBOLS,
         backend: { kind: "bcdev" },
       });

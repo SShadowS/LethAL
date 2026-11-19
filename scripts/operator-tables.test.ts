@@ -75,7 +75,7 @@ describe("operator tables", () => {
   it("the README's prose counts are the registry's counts", () => {
     const total = defaultT1 + defaultT2;
     const readme = read("README.md");
-    expect(optInCount).toBe(3);
+    expect(optInCount).toBe(1); // PR-209: only swap-workdate-today is opt-in now (was 3)
     expect(readme).toContain(
       `<!-- operators: summary -->${total} operators, in two tiers${plusOptIn}<!-- /operators: summary -->`,
     );

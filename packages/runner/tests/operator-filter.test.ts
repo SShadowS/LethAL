@@ -698,15 +698,10 @@ describe("runSession — --operator reaches both the mutant set AND the report",
     );
 
     expect(scoped.operators?.names).toEqual(
-      // R856: an opt-in operator is not admitted by exclusion, so it is not in the list.
+      // R856: an opt-in operator is not admitted by exclusion, so it is not in the list. Since
+      // PR-209 only swap-workdate-today is opt-in: condition-true and blank-argument are admitted.
       [...operatorTiers.keys()]
-        .filter(
-          (n) =>
-            n !== "lethal.empty-block" &&
-            n !== "lethal.swap-workdate-today" &&
-            n !== "lethal.condition-true" &&
-            n !== "lethal.blank-argument",
-        )
+        .filter((n) => n !== "lethal.empty-block" && n !== "lethal.swap-workdate-today")
         .sort(),
     );
     expect(scoped.operators?.excludedSiteCount).toBe(
@@ -782,6 +777,52 @@ test.skipIf(process.platform === "win32")(
         }),
       ).rejects.toBe(stop);
       expect(captured).toEqual(["empty-block"]);
+    });
+  },
+);
+
+test.skipIf(process.platform === "win32")(
+  "PR-209: `lethal run --profile slim` hands the profile and its two exclusions to runSession",
+  async () => {
+    await withProject(FIXTURE, async (projectDir) => {
+      const configPath = join(projectDir, "lethal.config.json");
+      await Bun.write(configPath, "{}");
+      const parsed = parseCliConfig([
+        "run",
+        "--project",
+        projectDir,
+        "--tests",
+        join(projectDir, "..", "tests"),
+        "--backend",
+        "al-runner-v3",
+        "--config",
+        configPath,
+        "--db",
+        ":memory:",
+        "--profile",
+        "slim",
+      ]);
+      if (parsed.mode !== "run") throw new Error("mode drift");
+      let captured: { profile?: string; excluded?: readonly string[] } | undefined;
+      const stop = new Error("captured");
+      await expect(
+        runFromCli(parsed, {
+          validateSelectorIdsForProject: async () => {},
+          buildBackend: async () => ({}) as ExecutionBackend,
+          runSession: async (cfg) => {
+            captured = {
+              ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
+              ...(cfg.excludeOperators !== undefined ? { excluded: cfg.excludeOperators } : {}),
+            };
+            throw stop;
+          },
+        }),
+      ).rejects.toBe(stop);
+      expect(captured?.profile).toBe("slim");
+      expect([...(captured?.excluded ?? [])].sort()).toEqual([
+        "lethal.blank-argument",
+        "lethal.condition-true",
+      ]);
     });
   },
 );

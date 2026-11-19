@@ -993,6 +993,7 @@ const base = (root: string) =>
     identityScheme: IDENTITY_SCHEME,
     coverageMode: "procedure",
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
+    defaultOperators: 2, // PR-209: what a default run computes now
   }) as const;
 
 describe("R424: runSession", () => {

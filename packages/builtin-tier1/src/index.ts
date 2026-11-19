@@ -84,7 +84,7 @@ export const tier1Operators: readonly MutationOperator[] = [
   deleteLogicalLeft,
   deleteAdditiveRight,
   deleteAdditiveLeft,
-  // R868, GitHub #36 and #34. OPT-IN (`optIn: true`): a default run never walks them.
+  // R868, GitHub #36 and #34. Default since PR-209; `--profile slim` does not walk them.
   conditionTrue,
   blankArgument,
 ];
