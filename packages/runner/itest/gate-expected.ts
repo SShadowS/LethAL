@@ -305,8 +305,10 @@ export const LEND_FIGURES = {
    * Live run 1 (BLOCKED, pre-commitment addendum): in a PARTLY carried batch `scoreBatch` re-derives
    * no-coverage from this session's coverage before any carry, so K's two no-coverage rows are fresh,
    * not carried: 9 carryable, 7 carried.
+   * PR-209: groupedCalls RECORDED on bc1 (lend observe): 13 (was 10). The 7 carried are unchanged; the 3 new survived
+   * rows are scored here, so the scored-not-carried count goes 17 - 7 = 10 to 20 - 7 = 13.
    */
-  resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 10 },
+  resumeSnapshot: { carryable: 9, carried: 7, nonCarryableRows: 1, groupedCalls: 13 },
   /** R3: K2 (all but M0022, so 21 rows); the v3 snapshot refused, the baseline re-run. Partly
    *  carried too: 17 carried (M0018-M0021 uncovered here, re-derived, as in R2). The 21 is not a
    *  constant because the gate does not assert it (review M-3). R855: was M0019, 18 rows, 15. */

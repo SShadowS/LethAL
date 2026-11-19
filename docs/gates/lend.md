@@ -39,7 +39,7 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
     "LEND_FIGURES.resumeSnapshot.carryable": 9,
     "LEND_FIGURES.resumeSnapshot.carried": 7,
     "LEND_FIGURES.resumeSnapshot.nonCarryableRows": 1,
-    "LEND_FIGURES.resumeSnapshot.groupedCalls": 10,
+    "LEND_FIGURES.resumeSnapshot.groupedCalls": 13,
     "LEND_FIGURES.resumeRefusedSnapshot.carried": 17,
     "LEND_FIGURES.resumeRefusedSnapshot.groupedCalls": 0,
     "LEND_FIGURES.sentinel.code": "M0004",
