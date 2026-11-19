@@ -80,3 +80,68 @@ it accepts only a release the shipped manifest lists. Receipts alone would leave
 - **G3:** `checkGated` accepts the private copy on that `.gated` (sha256 and version match). It still refuses the same
   binary with no `.gated` beside it, and refuses a `.gated` whose sha256 differs.
 - Each is red-checked both ways.
+
+## 6. Amendment 2 (2026-11-19, before the build): the Opus spec-adversary review, and the orchestrator's PERF-10 ruling
+The review (`/coord/handoff/PR-226/spec-review.md`) found two BLOCKs and six should-fixes in §2. Each is fixed here. Where
+this section and §2 or §5 differ, this section decides.
+
+**BLOCK 1: the al-runner cache.** The gate's itest defaults `LETHAL_ALRUNNER_V3_CACHE` to
+`/work/tools/al-runtime-rs/cache` (measured: 162 `compile/` entries written there on 2026-11-19), so a private gate would
+write under /work/tools.
+- The private gate sets `LETHAL_ALRUNNER_V3_CACHE=<root>/cache` in the gate's env.
+- Before the first gate, it seeds that folder by copying the shared cache (`cp -a`, read-only on the source), so the gate
+  runs on the artifacts the pre-commitment measured.
+- **P5 asserts the cache variable is under `<root>`.** P1-P4 assert the fake gate was given it.
+
+**BLOCK 2: the CLI.** Today the CLI is a chain of `process.argv.includes(...)` ending in `dailyOnce`, which pushes. So
+`--root=x` (an unknown spelling) or a mode flag after the new ones would reach the edge or daily path.
+- One strict argument reader (`parseUpdateArgs`) runs BEFORE every branch and is the only dispatcher.
+- It refuses by name:
+  - any argument it does not know, including `--root=` and `--local-candidate=` forms;
+  - a flag value that starts with `-`, or a missing value;
+  - `--root` or `--local-candidate` alone;
+  - either of them with any mode flag (`--regate`, `--edge`, `--edge-rejudge`, `--refresh-rows`, `--pin-digests`).
+- With no argument it returns the default (daily) mode, and each existing mode parses as today.
+- **Tests:** `--root=x`, `--root x --local-candidate y --edge`, `--root --local-candidate y`, and an unknown flag are each
+  refused, and NO daily, edge or other mode runs (fakes count the entries). Each existing mode still parses to its
+  mode.
+
+**The private run, as built:**
+1. **Environment.** It refuses by name when its own environment sets any `LETHAL_ITEST_V3_*` (except `_CDO`), any
+   `LETHAL_ALRUNNER_V3_*`, or `LETHAL_V3_PIN_FROM`. The lane's shell must not choose the gate's legs, pin or cache.
+2. **Load.** It runs only under `scripts/heavy-slot.sh --peak gate` (the instructions say so). It calls
+   `skippedForTheDay`, so the memory and heavy-job checks see it as they see the daily gate.
+3. **Lock and log.** It takes `<root>/.gate.lock`, uses `<root>/gate-worktree` (the lock's orphan check and its message
+   name that worktree), and logs to `<root>/private/update.log`, never the daily logs.
+4. **Reading `current`.** `readCurrentGated` takes the SHARED root (`/work/tools/al-runner-v3`, a parameter, read-only),
+   never `deps.root`.
+   - The missing legs are computed read-only, as `gatedWithAllLegs` does. When legs are missing, the candidate is judged
+     at this script's own commit (`{...current, lethalCommit: self}`), under the same conditions as the edge path's
+     fallback. When `self` cannot serve, it is refused by name.
+   - The re-gate of `current` is never called.
+5. **One folder per run:** `<root>/private/<tag>@<commit>-<nonce>/`, so an old pass receipt can never sit beside a new
+   result.
+   - The tag is `local-<sha256[:12]>` of the candidate's bytes, so two builds of one commit never share it.
+6. **The pass check** compares the receipt's `pinApplied` with `pinRootOf(gated)` for both the private and the refresh
+   path. For refresh this is the same value, because its `gated` always carries `readingsFrom`. Tests P1 and P6 use a
+   `current` with NO `readingsFrom`.
+7. **On a pass** (amendment 1): copy the candidate to `<root>/builds/<tag>/al-runner` (mode 755), check the copy's sha256
+   against the receipt's, and write the gate's own `.gated` beside it. On any other outcome: no `.gated`, no build folder.
+
+**Which file PERF-10 points LethAL at** (the orchestrator's ruling, option (a)):
+- **`<root>/builds/<tag>/al-runner`, the gated copy of the real binary.** It is the only file a private pass admits.
+  `checkGated` hashes the exact path LethAL runs, so a wrapper is never the gated build.
+- **The P-core pinning needs no wrapper:** run the whole `lethal run` under `taskset -c 0-11`, and every child daemon
+  inherits it.
+- **perf counts** come from outside (for example a watcher that attaches `perf stat` to new `al-runner serve` pids).
+- **Full daemon stderr beyond LethAL's 64 KB** is not available without a LethAL change.
+- **Option (c)**, `alRunnerV3.launcher` (a command prefix, with `path` still the hashed real binary), is filed as its own
+  roadmap item, not built here.
+- **Option (b)**, gating a wrapper script, is refused. A record that hashes a script and trusts it for a binary it does
+  not hash is the weakness the owner refused.
+
+**Nits:**
+- R3 also tests `/work/toolsx` as ACCEPTED, so a plain `startsWith("/work/tools")` is caught.
+- The instructions say to remove `<root>/gate-worktree` with `git worktree remove` before cleaning the handoff folder.
+- K runs because the candidate path keeps `candidate: true` (`regateAt` undefined); a test asserts the receipt is read
+  as a candidate.
