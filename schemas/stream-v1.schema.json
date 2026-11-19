@@ -2707,6 +2707,57 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "tests",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "test-costs"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "batchIndex",
+              "runs",
+              "ownMs",
+              "msUnderSurvivors"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "batchIndex": {
+                "type": "number"
+              },
+              "runs": {
+                "type": "number"
+              },
+              "ownMs": {
+                "type": "number"
+              },
+              "msUnderSurvivors": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "elapsedMs",
         "seq"
       ],

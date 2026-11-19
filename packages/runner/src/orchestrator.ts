@@ -43,6 +43,7 @@ import {
   canCarryMutationSelectorVar,
   clipMutationText,
   coarseIdentityTupleOf,
+  compareCodeUnits,
   dedupeSpecs,
   describeObjectKinds,
   flatNamesFor,
@@ -5188,6 +5189,17 @@ function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[])
 }
 
 /**
+ * PR-247: per qualified test, the mutant-phase rows the store recorded against a mutant this session:
+ * how many, their summed own time, and the part under mutants scored `survived`, per batch. Filled where
+ * the rows are written (`commitRecord`), so every path (lanes, chunked groups) is counted; only rows that
+ * carry a mutant code (never baseline rows, never the unmutated confirmation rows).
+ */
+type TestCostsAcc = Map<
+  string,
+  { batchIndex: number; test: string; runs: number; ownMs: number; msUnderSurvivors: number }
+>;
+
+/**
  * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
  * after the lease is open, and shared by every batch.
  */
@@ -5210,6 +5222,8 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
+  /** PR-247: this session's mutant-phase test costs; see `TestCostsAcc`. */
+  readonly testCosts: TestCostsAcc;
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
@@ -6070,6 +6084,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     emit,
     outcomes,
     killLedger,
+    testCosts,
     sessionReuse,
     groupRuns,
   } = scope;
@@ -6636,6 +6651,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     attestation,
     emit,
     killLedger,
+    testCosts,
     memberCountsByTest: memberCounts,
     groupRuns,
     sessionReuse,
@@ -7763,6 +7779,7 @@ async function runSessionBody(
   });
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
+  const testCosts: TestCostsAcc = new Map(); // PR-247: emitted as `test-costs` before `session-finished`
   // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
   // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
   let baselineGreenOverall = testPageRefusedNames.length === 0;
@@ -8142,6 +8159,7 @@ async function runSessionBody(
       emit,
       outcomes,
       killLedger,
+      testCosts,
       sessionReuse,
       groupRuns,
       minMutantBudgetMs,
@@ -9733,6 +9751,21 @@ async function runSessionBody(
       backend: cfg.backend,
     });
   }
+  // PR-247: the mutant phase's test costs, once, sorted by test (code units); nothing when no mutant test ran.
+  if (testCosts.size > 0) {
+    emit({
+      type: "test-costs",
+      tests: [...testCosts.values()]
+        .sort((a, b) => a.batchIndex - b.batchIndex || compareCodeUnits(a.test, b.test))
+        .map((c) => ({
+          test: c.test,
+          batchIndex: c.batchIndex,
+          runs: c.runs,
+          ownMs: c.ownMs,
+          msUnderSurvivors: c.msUnderSurvivors,
+        })),
+    });
+  }
   const totalMs = Date.now() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
@@ -10200,6 +10233,7 @@ async function runNamedMutantsBody(
       emit,
       outcomes,
       killLedger: newKillLedger(),
+      testCosts: new Map(),
       sessionReuse: { warned: false },
       groupRuns,
       minMutantBudgetMs,
@@ -10476,6 +10510,7 @@ async function runProbes(
       ...scope,
       outcomes,
       killLedger: newKillLedger(),
+      testCosts: new Map(),
       emit: probeEmit,
     };
     const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
@@ -10502,6 +10537,7 @@ async function runProbes(
         attestation,
         emit: probeEmit,
         killLedger: probeScope.killLedger,
+        testCosts: probeScope.testCosts,
         memberCountsByTest: plan.memberCountsByTest,
         groupRuns: scope.groupRuns,
         sessionReuse: scope.sessionReuse,
@@ -11768,6 +11804,7 @@ async function confirmWarm(p: {
     failureMessage: string | undefined;
     opKind?: "single" | "many";
     sessionId?: number;
+    callId?: string;
   }>;
   /** PR-51 (F1): `reproduceKill` runs the (single, position 1) killer alone. Unused by the warm replay. */
   readonly alone?: true;
@@ -12103,6 +12140,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
       failureMessage: v.failureMessage,
       opKind,
       ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+      ...(v.callId !== undefined ? { callId: v.callId } : {}),
     });
     feedAttestation(args.attestation, v.attestation);
   };
@@ -12620,6 +12658,8 @@ interface RunMutantsArgs {
   readonly emit: RunEmitter;
   /** R197: kills seen so far this session, shared across batches and shards. */
   readonly killLedger: KillLedger;
+  /** PR-247: see `TestCostsAcc`. */
+  readonly testCosts: TestCostsAcc;
   /** R197: members covered per test at THIS batch's baseline; empty under coverage "none". */
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
@@ -12888,6 +12928,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       failureMessage: string | undefined;
       opKind?: "single" | "many";
       sessionId?: number;
+      /** PR-247: the call the row came from; `ownTimeCharge` charges a row with no own time its call's wall once. */
+      callId?: string;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     // R688: the test codeunits whose discovery this mutant blanked, confirmed with no mutant active
@@ -13060,6 +13102,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             failureMessage: v.failureMessage,
             opKind: step.opKind,
             ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+            ...(v.callId !== undefined ? { callId: v.callId } : {}),
           });
           if (v.outcome === "pass" || v.outcome === "fail") {
             attempted.add(testKeyOf(ref));
@@ -13930,6 +13973,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         reproduction,
         stopEvidence,
       );
+      const costWalls = new Set<string>(); // PR-247: per mutant, the calls already charged
       for (const t of testResultBuffer) {
         args.store.recordTestResult(
           args.runId,
@@ -13943,6 +13987,31 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           t.sessionId,
           t.ownDurationMs,
         );
+        // PR-247: the rows written against a mutant, counted where they are written. Only rows that
+        // carry a mutant code: the unmutated confirmation rows are not mutation time under a mutant.
+        if (t.mutantCode === null) continue;
+        const test = qualifiedTestName(t.ref);
+        const key = `${args.batchIndex}\0${test}`;
+        const acc = args.testCosts.get(key) ?? {
+          batchIndex: args.batchIndex,
+          test,
+          runs: 0,
+          ownMs: 0,
+          msUnderSurvivors: 0,
+        };
+        // R963: own time when present, else the call's wall once per call, else `durationMs`.
+        const own = ownTimeCharge(
+          {
+            durationMs: t.durationMs,
+            ...(t.ownDurationMs !== undefined ? { measuredDurationMs: t.ownDurationMs } : {}),
+            ...(t.callId !== undefined ? { callId: t.callId } : {}),
+          },
+          costWalls,
+        );
+        acc.runs += 1;
+        acc.ownMs += own;
+        if (verdict === "survived") acc.msUnderSurvivors += own;
+        args.testCosts.set(key, acc);
       }
     };
     // R688 (S10): a discovery confirm that did not pass stops the session, after the record above.
@@ -14031,7 +14100,10 @@ export function measuredDurationOf(
  * row with none and a call id is charged its call's wall once per call id (never once per row, never
  * 0 for the whole call); a row with neither (a backend that sets no call id) its own `durationMs`.
  */
-export function ownTimeCharge(v: TestVerdict, chargedCalls: Set<string>): number {
+export function ownTimeCharge(
+  v: Pick<TestVerdict, "measuredDurationMs" | "callId" | "durationMs">,
+  chargedCalls: Set<string>,
+): number {
   if (v.measuredDurationMs !== undefined) return v.measuredDurationMs;
   if (v.callId === undefined) return v.durationMs;
   if (chargedCalls.has(v.callId)) return 0;

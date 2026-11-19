@@ -617,6 +617,130 @@ describe("runSession", () => {
     expect(backend.deploys.length).toBeGreaterThan(0);
   });
 
+  test("PR-247: one test-costs event, summing exactly the mutant rows the store wrote (not baseline rows)", async () => {
+    const dirs = await makeProject();
+    // The first mutant that becomes active is killed; every later one survives.
+    let killed: string | undefined;
+    const backend = new StubBackend(
+      CAPS_NST,
+      (mutant) => {
+        if (mutant === null) return "pass";
+        killed ??= mutant;
+        return mutant === killed ? "fail" : "pass";
+      },
+      ["IsOverBudget"],
+    );
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(report.counts.killed).toBeGreaterThan(0);
+    expect(report.counts.survived).toBeGreaterThan(0);
+    const costEvents = events.filter((e) => e.type === "test-costs");
+    expect(costEvents.length).toBe(1);
+    const [ev] = costEvents;
+    if (ev === undefined || ev.type !== "test-costs") throw new Error("no test-costs event");
+    // The event sits after the mutant phase and before session-finished.
+    const types = events.map((e) => e.type);
+    expect(types.indexOf("test-costs")).toBeLessThan(types.indexOf("session-finished"));
+    expect(types.indexOf("test-costs")).toBeGreaterThan(types.lastIndexOf("mutant-scored"));
+    // The oracle: the store's own mutant rows, joined to the mutant's verdict.
+    const rows = store.db
+      .query(
+        `SELECT t.codeunit_name || '.' || t.method AS test, COUNT(*) AS runs,
+                SUM(COALESCE(t.own_duration_ms, t.duration_ms)) AS own,
+                SUM(CASE WHEN m.verdict = 'survived' THEN COALESCE(t.own_duration_ms, t.duration_ms) ELSE 0 END) AS surv
+           FROM test_results t JOIN mutants m ON m.id = t.mutant_row_id
+          WHERE t.mutant_code IS NOT NULL GROUP BY test ORDER BY test`,
+      )
+      .all() as Array<{ test: string; runs: number; own: number; surv: number }>;
+    // The unmutated confirmation rows (a kill's NONE confirm) sit on a mutant's row but carry no mutant
+    // code: they exist here, and must NOT be counted.
+    const confirm = store.db
+      .query(
+        "SELECT COUNT(*) AS n FROM test_results WHERE mutant_row_id IS NOT NULL AND mutant_code IS NULL",
+      )
+      .get() as { n: number };
+    expect(confirm.n).toBeGreaterThan(0);
+    // Baseline rows exist too, and must NOT be in the event.
+    const baseline = store.db
+      .query("SELECT COUNT(*) AS n FROM test_results WHERE mutant_row_id IS NULL")
+      .get() as { n: number };
+    expect(baseline.n).toBeGreaterThan(0);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(ev.tests).toEqual(
+      rows.map((r) => ({
+        test: r.test,
+        batchIndex: 0,
+        runs: r.runs,
+        ownMs: r.own,
+        msUnderSurvivors: r.surv,
+      })),
+    );
+    expect(ev.tests.some((t) => t.msUnderSurvivors > 0)).toBe(true);
+    expect(ev.tests.some((t) => t.msUnderSurvivors < t.ownMs)).toBe(true);
+    // And the folded report carries the section.
+    expect(report.costlyTests?.totalOwnMs).toBe(rows.reduce((s, r) => s + r.own, 0));
+    store.close();
+  });
+
+  test("PR-247: rows of one call with no own time charge the call's wall once, not once per row", async () => {
+    const dirs = await makeProject(TWO_TEST_AL);
+    // Every row costs 100 ms of wall and has no own time. A mutant's two tests share ONE call id.
+    class OneCallBackend extends StubBackend {
+      override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+        const v = await super.run(ref, opts);
+        return { ...v, durationMs: 100, callId: `call-${this.activations.length}` };
+      }
+    }
+    const backend = new OneCallBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    const ev = events.find((e) => e.type === "test-costs");
+    if (ev === undefined || ev.type !== "test-costs") throw new Error("no test-costs event");
+    const rowsPerMutant = store.db
+      .query(
+        "SELECT COUNT(*) AS rows, COUNT(DISTINCT mutant_row_id) AS mutants FROM test_results WHERE mutant_code IS NOT NULL",
+      )
+      .get() as { rows: number; mutants: number };
+    // Two rows per mutant, so charging per row would give twice the per-call total.
+    expect(rowsPerMutant.rows).toBe(2 * rowsPerMutant.mutants);
+    expect(ev.tests.reduce((s, t) => s + t.runs, 0)).toBe(rowsPerMutant.rows);
+    expect(ev.tests.reduce((s, t) => s + t.ownMs, 0)).toBe(100 * rowsPerMutant.mutants);
+    store.close();
+  });
+
+  test("PR-247: a session that ran no mutant test emits no test-costs", async () => {
+    const dirs = await makeProject();
+    // A red baseline: no test is green, so no mutant is run against any test.
+    const backend = new StubBackend(CAPS_NST, () => "fail", ["IsOverBudget"]);
+    const store = new ResultsStore(":memory:");
+    const events: RunEvent[] = [];
+    const report = await runSession({
+      backend,
+      store,
+      ...dirs,
+      selectorIds,
+      emit: [createEmitter([(e) => events.push(e)])],
+    });
+    expect(events.filter((e) => e.type === "test-costs")).toEqual([]);
+    expect(report.costlyTests).toBeUndefined();
+    expect(events.some((e) => e.type === "session-finished")).toBe(true);
+    store.close();
+  });
+
   test("survive: tests pass under every mutant", async () => {
     const dirs = await makeProject();
     const backend = new StubBackend(CAPS_NST, () => "pass", ["IsOverBudget"]);

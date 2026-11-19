@@ -1389,6 +1389,40 @@ export interface ExecutionContext {
   readonly license?: { readonly path: string; readonly sha256: string };
 }
 
+/** PR-247: one row of `SessionReport.costlyTests.top`. */
+export interface CostlyTestRow {
+  readonly test: string;
+  /** Mutants (final outcome, carried ones not counted) whose `coveringTests` name this test. */
+  readonly coveredMutants: number;
+  /** Test rows recorded under a mutant. The unmutated confirmation rows (the NONE confirm, the warm-kill replay, `confirmFoundNone`) are left out. */
+  readonly runs: number;
+  /** Their own time, charged as R963 does (own time, else the call's wall once per call, else `durationMs`). */
+  readonly ownMs: number;
+  /** `ownMs / totalOwnMs` (0 when `totalOwnMs` is 0). */
+  readonly share: number;
+  /** `ownMs / runs`. */
+  readonly meanMs: number;
+  readonly baselineMs?: number;
+  /** Kills (final outcome) credited to this test: exactly ONE of the mutant's covering tests matches `.endsWith("." + killingTest)`. */
+  readonly kills: number;
+  /** `kills / coveredMutants`, 0 when no mutant is covered. */
+  readonly killRate: number;
+  readonly msUnderSurvivors: number;
+}
+
+/** PR-247: see `SessionReport.costlyTests`. */
+export interface CostlyTests {
+  /** `this-session`: `carriedMutants` carried mutants' earlier sessions are not in the stream, so their tests are not counted. */
+  readonly scope: "whole-run" | "this-session";
+  readonly carriedMutants: number;
+  /** Summed over EVERY test, not just `top`. */
+  readonly totalOwnMs: number;
+  /** Kills whose `killingTest` matched more than one covering test (two codeunits sharing a method name): credited to nobody. */
+  readonly ambiguousKills: number;
+  /** The 20 tests with the most `ownMs`; ties by `test` (code units). */
+  readonly top: readonly CostlyTestRow[];
+}
+
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
 export interface TestMethodRecord {
   /** Qualified `Codeunit.method`, the name `coveringTests` and `reachedBy` use. */
@@ -1469,6 +1503,12 @@ export interface SessionReport {
    * before R272. `lethal explain` lists a gap's covering tests from it (`gaps[].coveringTests`).
    */
   readonly testMethods?: readonly TestMethodRecord[];
+  /**
+   * PR-247: which tests take the mutation test time, from the session's `test-costs` event(s). Absent
+   * when the stream has none (an older stream, or a session that ran no mutant test). A rarely-killing
+   * test can be a mutant's only killer: this is a cost list, never a list of tests to remove.
+   */
+  readonly costlyTests?: CostlyTests;
   readonly backend: string;
   readonly authoritative: boolean;
   /**
@@ -3731,6 +3771,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     survivorsByProcedure,
     testFiles,
     ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
+    ...(input.costlyTests !== undefined ? { costlyTests: input.costlyTests } : {}),
     // R586 (C1) and R553: the backend's own declared kind, never derived from `authoritative`.
     // `kind` is required on `BackendCapabilities` (R586), so no inference is needed here.
     backend: input.caps.kind,
@@ -4292,6 +4333,22 @@ export function renderConsole(r: SessionReport): string {
           : ""
       }`,
     );
+  }
+  // PR-247: one line. It never says "remove": a rarely-killing test can be a mutant's only killer.
+  if (r.costlyTests !== undefined) {
+    const c = r.costlyTests;
+    const pct = (x: number) => Math.round(x * 100);
+    const top10 = c.top.slice(0, 10).reduce((s, t) => s + t.share, 0);
+    const [first] = c.top;
+    if (first !== undefined) {
+      lines.push(
+        `costly tests: the top ${Math.min(10, c.top.length)} take ${pct(top10)}% of the mutation test time; the top one, ${first.test}, ${pct(first.share)}%, killed ${pct(first.killRate)}% of the ${first.coveredMutants} mutants it covers${
+          c.scope === "this-session"
+            ? ` (this session only: ${c.carriedMutants} carried mutants' tests not counted)`
+            : ""
+        }${c.ambiguousKills > 0 ? ` (${c.ambiguousKills} kills could not be credited to one test)` : ""}`,
+      );
+    }
   }
   // R60, scoped by R69 Phase 2 Task 5 to FENCED verdicts only — printed on EVERY run that measured
   // or carried at least one, including a `full` one, because this limit does not depend on scope,
