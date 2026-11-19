@@ -462,6 +462,13 @@ export async function readReceipt(
     };
   // The gate ran at `.gated`'s commit: a hand pin edited since then is not what it judged by.
   const hand = pinApplied !== undefined ? (expect.pinOf ?? handV3Pin)(pinApplied) : undefined;
+  // R1150 (PR-238): a pass judged by a pin this checkout lacks could not be checked here, and every reader of the
+  // `.gated` it would write refuses that pin (`adoptV3Pin`); so it stops now, before any copy, ledger or `current` move.
+  if (r.outcome === "pass" && pinApplied !== undefined && hand === undefined)
+    return {
+      outcome: "infra-fail",
+      why: `the gate applied pin ${pinApplied}, which this checkout does not have: run from a checkout that has it, or re-gate current at this checkout`,
+    };
   if (
     r.outcome === "pass" &&
     expect.candidate === true &&
