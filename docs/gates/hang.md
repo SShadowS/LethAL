@@ -73,7 +73,7 @@ it exists. The method undercounts a path that runs through a third app. See R634
 {
   "gate": "itest:hang",
   "baselines": {
-    "hang.single.baseline.json": { "killed": 24, "survived": 9, "timeout-killed": 5 }
+    "hang.single.baseline.json": { "killed": 25, "survived": 9, "timeout-killed": 5 }
   },
   "constants": {
     "HANG_FIGURES.budgetMs": 20000,
@@ -90,7 +90,7 @@ it exists. The method undercounts a path that runs through a third app. See R634
 }
 ```
 
-- The SINGLE leg scores 24 killed, 9 survived and 5 timeout-killed.
+- The SINGLE leg scores 25 killed, 9 survived and 5 timeout-killed.
 - Each mutant gets a 20 s budget. That is far above a terminating mutant's measured 66 to 141 ms,
   and far below anything that would make a slow but correct mutant look like a hang.
 - The ON leg has 4 warm kills (R206), all in the `SpinUntil` arm: three warm failures and one warm
@@ -128,6 +128,11 @@ it exists. The method undercounts a path that runs through a third app. See R634
   with `killPosition` where it was pre-committed) is asserted by the gate and not pinned here.
 
 ## History
+
+2026-11-19 (PR-209): ON leg observed on bc2, 2026-11-19: 25 killed, 5 timeout-killed, 9 survived (one added `condition-true`
+kill at `HangLogic.Codeunit.al` line 141), and the R447 `hang-refused` row now names 3 sites (line 63 is R1136-refused). The SINGLE
+leg uses the same table, so its figure is 25 killed. `hang.single.baseline.json` is not re-recorded in this commit; the OFF leg was not
+reached. The HANG_FIGURES counts below are still the old ones.
 
 2026-11-09 (R893, coord task R-894): `hang.single.baseline.json` moved from identity scheme 47 to 48, on `bc2`, by R332's procedure.
 Only the scheme line changed, and the confirm passed. Logs: `/coord/handoff/R-894/bc2/`.

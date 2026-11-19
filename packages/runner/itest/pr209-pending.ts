@@ -15,13 +15,6 @@ export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
     "TABLES_FIGURES.warmKills",
     "TABLES_FIGURES.platformArtifactKills",
   ],
-  chunked: [
-    "CHUNKED_FIGURES.control.positions",
-    "CHUNKED_FIGURES.control.warmKills",
-    "CHUNKED_FIGURES.control.groupedCalls",
-    "CHUNKED_FIGURES.chunked.warmKills",
-    "CHUNKED_FIGURES.chunked.groupedCalls",
-  ],
   hang: [
     "HANG_FIGURES.warmKills",
     "HANG_FIGURES.coldConfirmsOn",
@@ -32,9 +25,6 @@ export const PR209_PENDING: Readonly<Record<string, readonly string[]>> = {
     "DBM_FIGURES.killed/survived/noCoverage (126 sites now)",
     "the v3 legs' baselines (MO, WR, T, D1, S1...); L1 is not pending (slim, unchanged)",
   ],
-  lend: ["LEND_MUTANTS' 4 added rows (M0005, M0014, M0016, M0022) and LEND_FIGURES' counts"],
-  "bcdev-wrapped": ["EXPECTED_WRAPPED_BC / EXPECTED_WRAPPED: 14 added condition-true rows"],
-  harden: ["harden's 2 added condition-true rows (verdicts)"],
 };
 
 /**

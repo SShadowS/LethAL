@@ -25,9 +25,9 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   "constants": {
     "LEND_FIGURES.totalMutantSites": 26,
     "LEND_FIGURES.fresh.killed": 3,
-    "LEND_FIGURES.fresh.survived": 14,
-    "LEND_FIGURES.fresh.noCoverage": 5,
-    "LEND_FIGURES.fresh.groupedCalls": 17,
+    "LEND_FIGURES.fresh.survived": 17,
+    "LEND_FIGURES.fresh.noCoverage": 6,
+    "LEND_FIGURES.fresh.groupedCalls": 20,
     "LEND_FIGURES.history.killed": 3,
     "LEND_FIGURES.history.survived": 0,
     "LEND_FIGURES.history.noCoverage": 5,
@@ -59,12 +59,13 @@ It passed on bc1, bc2 and bc3 at 7084eece (see [servers.md](servers.md) and Hist
   figures below hold them. Codes moved with them: the nine KEPT rows are the same
   mutants as before under new codes, and `r3Rerun` is the same `swap-additive` mutant (was M0019).
 - PR-209 (condition-true and blank-argument became default operators) adds four more `sandbox-app` mutants
-  (M0005, M0014, M0016, M0022 in the default numbering; verdicts to be recorded) and renumbers the rest by
+  (M0005, M0014, M0016, M0022 in the default numbering) and renumbers the rest by
   the map in `/coord/handoff/PR-209/count/renumber/`: the KEPT rows are the same mutants under new codes
-  and `r3Rerun` is the same `swap-additive` mutant (now M0026). The counts below are still the 22-row
-  figures until the record run.
-- L0, N1 and N5 score 3 / 14 / 5 over 22, per mutant equal to `bcdev.baseline.json`. Nothing is
-  lent. `groupedCalls` is 17.
+  and `r3Rerun` is the same `swap-additive` mutant (now M0026). Their verdicts were observed on bc1 (L0) and
+  equal `bcdev.baseline.json`'s new rows: M0005, M0014 and M0016 survived, M0022 no-coverage. Only L0's counts
+  were reached; the `history`, `resume*` and `sentinel` figures below are still the 22-row ones and may move.
+- L0, N1 and N5 score 3 / 17 / 6 over 26, per mutant equal to `bcdev.baseline.json`. Nothing is
+  lent. `groupedCalls` is 20.
 - L1 and N0 score 3 / 0 / 5, with the 14 survivors recorded as known survivors and not run.
   `knownSurvivors` is 14. `groupedCalls` is 3.
 - R1's one batch holds 5 stored no-coverage rows, so since R621 it is not carried whole. It deploys once,
@@ -233,3 +234,6 @@ The live results are in `/coord/handoff/R-618/redcheck-live-results.md`, the off
   `GATE_WARNINGS["lend/RL"]` is the set prediction 2 names. The first attempt stopped at the gate-warnings guard before RL's
   assertions, because that set was not yet committed. Log: `/coord/handoff/PR-04/lend-bc1.log`. The negative leg (a real
   restart changes both ids) waits for the next server1 restart.
+- PR-209: L0 observed on bc1, 2026-11-19: 3 / 17 / 6 over 26, `groupedCalls` 20; the four added rows' verdicts pinned
+  (M0005, M0014, M0016 survived; M0022 no-coverage). The gate stopped at L0, so the later legs' figures (`history`, `resume*`,
+  RL's 3 / 14 / 5) are not yet re-measured and may move.

@@ -7,8 +7,6 @@
  *
  * Change a figure here only together with its gate's pre-commitment and page.
  */
-import { PR209_UNRECORDED } from "./pr209-pending";
-
 export const BCDEV_FIGURES = {
   // PR-209 (spec §3, pre-committed): 22 + 3 condition-true + 1 blank-argument. The verdict counts are RECORDED on bc1
   // (lethal-code, /coord/handoff/PR-209-bc/bc1-bcdev-record/gate.log): the 4 new rows are M0005, M0014, M0016 survived
@@ -93,20 +91,24 @@ export const TABLES_FIGURES = {
  * and groupedCalls 42 -> 44 (26 scored + 9 + 9). `chunked.groupedCalls` 62 -> 70 is MEASURED, on bc3,
  * 2026-11-07: both legs' verdicts and killing tests were equal, and each new survivor adds
  * ceil(covering tests / 2) chunk calls.
+ * PR-209 (observed on bc3, 2026-11-19, /coord/handoff/PR-209-bc/bc3-chunked-observe/gate.log): the slice gains
+ * two condition-true survivors, so control survived 9 -> 11 and groupedCalls 44 -> 46; chunked groupedCalls
+ * 70 -> 78; the 17 kills, the killing tests and both warmKills are unchanged. `positions` was not printed
+ * (the gate stopped at the survived assertion) and stays: the same 17 killers.
  */
 export const CHUNKED_FIGURES = {
   control: {
     killed: 17,
-    survived: 9,
+    survived: 11,
     noCoverage: 2,
     warmKills: 9,
-    groupedCalls: 44,
+    groupedCalls: 46,
     /** killPosition histogram over the 17 kills. */
     positions: { 1: 8, 2: 3, 3: 3, 4: 2, 5: 1 } as Record<number, number>,
   },
   chunked: {
     warmKills: 5,
-    groupedCalls: 70,
+    groupedCalls: 78,
   },
 } as const;
 
@@ -161,8 +163,13 @@ export const LEND_MUTANTS = {
     killingTest: null,
   },
   // PR-209: every code moved by the map in /coord/handoff/PR-209/count/renumber/LEND_MUTANTS.tsv, its
-  // key unchanged. M0005, M0014, M0016 and M0022 are the ADDED mutants: they sit in `LEND_ADDED_MUTANTS`
-  // (no baseline row yet, so `lend-seed.test.ts`'s equality with `bcdev.baseline.json` still holds).
+  // key unchanged. M0005, M0014, M0016 and M0022 are the ADDED mutants (recorded on bc1, 2026-11-19; equal to
+  // the new rows of `bcdev.baseline.json`).
+  M0005: {
+    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.condition-true|1",
+    verdict: "survived",
+    killingTest: null,
+  },
   M0006: {
     key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.delete-logical-left|1",
     verdict: "survived",
@@ -203,8 +210,18 @@ export const LEND_MUTANTS = {
     verdict: "survived",
     killingTest: null,
   },
+  M0014: {
+    key: "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Sandbox Logic|ApplyAudit|lethal.blank-argument|1",
+    verdict: "survived",
+    killingTest: null,
+  },
   M0015: {
     key: "63c4f230d49983a82f9a54edf57f787ba2196df2de23c5374a9921c523fc408f|Sandbox Logic|LogAudit|lethal.empty-block|1",
+    verdict: "survived",
+    killingTest: null,
+  },
+  M0016: {
+    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.condition-true|1",
     verdict: "survived",
     killingTest: null,
   },
@@ -233,6 +250,11 @@ export const LEND_MUTANTS = {
     verdict: "no-coverage",
     killingTest: null,
   },
+  M0022: {
+    key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.condition-true|1",
+    verdict: "no-coverage",
+    killingTest: null,
+  },
   M0023: {
     key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.conditional-boundary|1",
     verdict: "no-coverage",
@@ -257,41 +279,15 @@ export const LEND_MUTANTS = {
 export type LendCode = keyof typeof LEND_MUTANTS;
 
 /**
- * PR-209: the four mutants the two new default operators add to `sandbox-app`. Their verdicts are
- * recorded by the record run; until then each is the sentinel and `itest:lend` refuses to run.
- */
-export const LEND_ADDED_MUTANTS = {
-  M0005: {
-    key: "241fff269e9c9b9a336099e4588ad85b0198a155d98dccc6e48adf1e551f6341|Sandbox Logic|ClampPercent|lethal.condition-true|1",
-    verdict: PR209_UNRECORDED,
-    killingTest: null,
-  },
-  M0014: {
-    key: "68eef1763bb45ee8e7516190d3e31bfb031e144e8ca640198681ce5da363f62f|Sandbox Logic|ApplyAudit|lethal.blank-argument|1",
-    verdict: PR209_UNRECORDED,
-    killingTest: null,
-  },
-  M0016: {
-    key: "5cba655a6ac203ce40d31b0b4974a7b2f308cfec342a35d8e1a4f8d8c09c5c03|Sandbox Logic|LogAudit|lethal.condition-true|1",
-    verdict: PR209_UNRECORDED,
-    killingTest: null,
-  },
-  M0022: {
-    key: "4b61c09033d7c8404656624ea1865b451a890db32d8212d97f8a77e9a5c2634a|Sandbox Pricing|DiscountedPrice|lethal.condition-true|1",
-    verdict: PR209_UNRECORDED,
-    killingTest: null,
-  },
-} as const;
-
-/**
  * R618 `itest:lend`: the pre-committed figures of each leg (plan r2 §6). Per-mutant expectations
  * are `LEND_MUTANTS` plus the role sets below; these are the counts and call totals.
  */
 export const LEND_FIGURES = {
-  // PR-209 (spec §3, pre-committed): the sandbox-app fixture's 22 + 4 (LEND_ADDED_MUTANTS).
+  // PR-209 (spec §3): the sandbox-app fixture's 22 + 4 added rows.
   totalMutantSites: 26,
-  /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.) */
-  fresh: { killed: 3, survived: 14, noCoverage: 5, groupedCalls: 17 },
+  /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.
+   *  PR-209: 26 sites, +3 survived, +1 no-coverage, groupedCalls 20; observed on bc1, 2026-11-19.) */
+  fresh: { killed: 3, survived: 17, noCoverage: 6, groupedCalls: 20 },
   /** L1 and N0: the 14 survivors carried as known survivors; 3 kills scored. */
   history: { killed: 3, survived: 0, noCoverage: 5, knownSurvivors: 14, groupedCalls: 3 },
   /** R1: `--resume-run` of an unfinished full clone. Since R621 (pre-commitment

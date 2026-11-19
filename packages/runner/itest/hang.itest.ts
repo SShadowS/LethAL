@@ -344,6 +344,8 @@ const EXPECTED_ON: ReadonlyArray<{
   // --- position was PRE-COMMITTED from the dry-run manifest in
   // --- docs/superpowers/specs/2026-09-03-r206-build-precommitment.md before this gate ran.
   { line: 140, operator: "lethal.empty-block", verdict: "killed", killPosition: 1 },
+  // PR-209: the added `condition-true` row (observed on bc2, 2026-11-19); no killPosition is pinned.
+  { line: 141, operator: "lethal.condition-true", verdict: "killed" },
   { line: 141, operator: "lethal.conditional-boundary", verdict: "killed", killPosition: 1 },
   { line: 142, operator: "lethal.return-value", verdict: "killed", killPosition: 1 },
   { line: 143, operator: "lethal.remove-assignment", verdict: "survived" },
@@ -723,13 +725,13 @@ function assertHangRefusedRow(label: string, report: SessionReport): void {
         file: "src/HangLogic.Codeunit.al",
         reason: "hang-refused",
         kinds: "codeunit_declaration",
-        sites: 2,
+        sites: 3,
       },
     ],
-    `[${label}] R447: expected exactly one hang-refused row with 2 sites`,
+    `[${label}] R447: expected exactly one hang-refused row with 3 sites (PR-209: line 63 is R1136-refused)`,
   );
   assert.ok(
-    report.validity.scoreDescribes.includes("; 2 hang-refused site(s) in 1 file(s) not mutated"),
+    report.validity.scoreDescribes.includes("; 3 hang-refused site(s) in 1 file(s) not mutated"),
     `[${label}] R447: scoreDescribes must name the hang-refused sites; got ${JSON.stringify(report.validity.scoreDescribes)}`,
   );
   assert.equal(

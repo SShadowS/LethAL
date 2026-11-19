@@ -12,7 +12,7 @@ its paired `.vscode/launch.<x>.json` (see [servers.md](servers.md)).
 {
   "gate": "itest:bcdev",
   "baselines": {
-    "bcdev.baseline.json": { "killed": 3, "survived": 14, "no-coverage": 5 }
+    "bcdev.baseline.json": { "killed": 3, "survived": 17, "no-coverage": 6 }
   },
   "constants": {
     "BCDEV_FIGURES.totalMutantSites": 26,
@@ -34,7 +34,7 @@ What the figures mean:
 
 - 3 / 17 / 6 over 26 is killed / survived / no-coverage. PR-209 (condition-true and blank-argument default-on) added
   four mutants, as pre-committed (`docs/superpowers/specs/2026-11-19-pr209-optin-default-on.md` §3): M0005, M0014 and
-  M0016 survived, M0022 no-coverage. Recorded on bc1, 2026-11-19. Before that, 3 / 14 / 5 over 22; R855 added three
+  M0016 survived, M0022 no-coverage. Recorded on bc1, 2026-11-19. Before that the set had 22 mutants; R855 added three
   mutants (`docs/superpowers/specs/2026-11-07-r855-predictions.md`).
 - `groupedCalls` is 20 (R198). That is one `RunMutantMany` call for each scored mutant (3 killed
   plus 17 survived). If the counter stopped being wired, it would read 0 and the gate would fail.

@@ -40,7 +40,6 @@
  */
 import { join } from "node:path";
 import type { EventSubscriber } from "../src/events";
-import { PR209_UNRECORDED } from "./pr209-pending";
 
 /**
  * R739: a subscriber that keeps EVERY warning event's message (no de-duplication by code), for a
@@ -103,7 +102,7 @@ export interface WrappedRow {
   readonly line: number;
   readonly operatorName: string;
   readonly procedureName: string;
-  readonly verdict: "killed" | "survived" | "no-coverage" | typeof PR209_UNRECORDED;
+  readonly verdict: "killed" | "survived" | "no-coverage";
   readonly killingTest?: string;
   /** Full qualified names, compared as a complete set. */
   readonly coveringTests: readonly string[];
@@ -187,16 +186,17 @@ export function killTextDifferences(report: WrappedReport): string[] {
 /** The spec's table under the "adds" reading (the reading LethAL's own arm choice assumes). */
 export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0001", ARMS, 7, "empty-block", "Pick", "no-coverage"),
-  // PR-209: each `condition-true` row is an ADDED mutant; its verdict is filled in by the record run.
-  row("M0002", ARMS, 8, "condition-true", "Pick", PR209_UNRECORDED),
+  // PR-209: each `condition-true` row is an ADDED mutant; verdicts recorded on bc3, 2026-11-19 (12 survived, 2 killed).
+  // M0002 (WrappedArms) reads no-coverage here like the rest of that file (al-runner refuses its coverage).
+  row("M0002", ARMS, 8, "condition-true", "Pick", "no-coverage"),
   row("M0003", ARMS, 8, "conditional-boundary", "Pick", "no-coverage"),
   row("M0004", ARMS, 9, "return-value", "Pick", "no-coverage"),
   row("M0005", PAIR_A, 10, "empty-block", "Pick", "killed", "PairPick"),
-  row("M0006", PAIR_A, 11, "condition-true", "Pick", PR209_UNRECORDED),
+  row("M0006", PAIR_A, 11, "condition-true", "Pick", "survived", "PairPick"),
   row("M0007", PAIR_A, 11, "conditional-boundary", "Pick", "survived", "PairPick"),
   row("M0008", PAIR_A, 12, "return-value", "Pick", "killed", "PairPick"),
   row("M0009", PRE, 9, "empty-block", "Grow", "killed", "GrowPre"),
-  row("M0010", PRE, 10, "condition-true", "Grow", PR209_UNRECORDED),
+  row("M0010", PRE, 10, "condition-true", "Grow", "survived", "GrowPre"),
   row("M0011", PRE, 10, "conditional-boundary", "Grow", "survived", "GrowPre"),
   row("M0012", PRE, 11, "return-value", "Grow", "killed", "GrowPre"),
   // R855: the four `delete-additive-right` rows (M0013, M0022, M0031, M0041) shift every later code.
@@ -206,7 +206,7 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0016", PRE, 35, "empty-block", "Twice", "killed", "TwicePre"),
   row("M0017", PRE, 36, "return-value", "Twice", "killed", "TwicePre"),
   row("M0018", PRE_TWIN, 9, "empty-block", "Grow", "killed", "GrowPreTwin"),
-  row("M0019", PRE_TWIN, 10, "condition-true", "Grow", PR209_UNRECORDED),
+  row("M0019", PRE_TWIN, 10, "condition-true", "Grow", "survived", "GrowPreTwin"),
   row("M0020", PRE_TWIN, 10, "conditional-boundary", "Grow", "survived", "GrowPreTwin"),
   row("M0021", PRE_TWIN, 11, "return-value", "Grow", "killed", "GrowPreTwin"),
   row("M0022", PRE_TWIN, 11, "delete-additive-right", "Grow", "killed", "GrowPreTwin"),
@@ -215,7 +215,7 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0025", PRE_TWIN, 35, "empty-block", "Twice", "killed", "TwicePreTwin"),
   row("M0026", PRE_TWIN, 36, "return-value", "Twice", "killed", "TwicePreTwin"),
   row("M0027", TOP, 7, "empty-block", "Grow", "killed", "GrowTop"),
-  row("M0028", TOP, 8, "condition-true", "Grow", PR209_UNRECORDED),
+  row("M0028", TOP, 8, "condition-true", "Grow", "survived", "GrowTop"),
   row("M0029", TOP, 8, "conditional-boundary", "Grow", "survived", "GrowTop"),
   row("M0030", TOP, 9, "return-value", "Grow", "killed", "GrowTop"),
   row("M0031", TOP, 9, "delete-additive-right", "Grow", "killed", "GrowTop"),
@@ -225,7 +225,7 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0035", TOP, 34, "remove-assignment", "Twice", "killed", "TwiceTop"),
   row("M0036", TOP, 36, "return-value", "Twice", "killed", "TwiceTop"),
   row("M0037", TOP_TWIN, 7, "empty-block", "Grow", "killed", "GrowTopTwin"),
-  row("M0038", TOP_TWIN, 8, "condition-true", "Grow", PR209_UNRECORDED),
+  row("M0038", TOP_TWIN, 8, "condition-true", "Grow", "survived", "GrowTopTwin"),
   row("M0039", TOP_TWIN, 8, "conditional-boundary", "Grow", "survived", "GrowTopTwin"),
   row("M0040", TOP_TWIN, 9, "return-value", "Grow", "killed", "GrowTopTwin"),
   row("M0041", TOP_TWIN, 9, "delete-additive-right", "Grow", "killed", "GrowTopTwin"),
@@ -236,14 +236,23 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0046", TOP_TWIN, 36, "return-value", "Twice", "killed", "TwiceTopTwin"),
   // R536, pre-committed in docs/superpowers/specs/2026-10-09-r536-wrapped-table-page-precommitment.md.
   row("M0047", TRIG, 19, "empty-block", "", "killed", "ClampTrigger", TRIG_TESTS),
-  row("M0048", TRIG, 20, "condition-true", "", PR209_UNRECORDED),
+  row("M0048", TRIG, 20, "condition-true", "", "survived", "ClampTrigger", TRIG_TESTS),
   row("M0049", TRIG, 20, "conditional-boundary", "", "survived", "ClampTrigger", TRIG_TESTS),
   row("M0050", TRIG, 21, "remove-assignment", "", "killed", "ClampTrigger", TRIG_TESTS),
   row("M0051", TRIG, 21, "shift-integer", "", "killed", "ClampTrigger", TRIG_TESTS),
   row("M0052", TRIG, 35, "empty-block", "Doubled", "killed", "DoubledTrigger"),
   row("M0053", TRIG, 36, "return-value", "Doubled", "killed", "DoubledTrigger"),
   row("M0054", TRIG_TWIN, 19, "empty-block", "", "killed", "ClampTriggerTwin", TRIG_TWIN_TESTS),
-  row("M0055", TRIG_TWIN, 20, "condition-true", "", PR209_UNRECORDED),
+  row(
+    "M0055",
+    TRIG_TWIN,
+    20,
+    "condition-true",
+    "",
+    "survived",
+    "ClampTriggerTwin",
+    TRIG_TWIN_TESTS,
+  ),
   row(
     "M0056",
     TRIG_TWIN,
@@ -271,13 +280,13 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0062", VIEW, 28, "remove-assignment", "", "survived", "LabelView"),
   row("M0063", VIEW, 28, "flip-boolean-literal", "", "survived", "LabelView"),
   row("M0064", VIEW, 32, "empty-block", "Label", "killed", "LabelView"),
-  row("M0065", VIEW, 33, "condition-true", "Label", PR209_UNRECORDED),
+  row("M0065", VIEW, 33, "condition-true", "Label", "survived", "LabelView"),
   row("M0066", VIEW, 33, "conditional-boundary", "Label", "survived", "LabelView"),
   row("M0067", VIEW_TWIN, 27, "empty-block", "", "survived", "LabelViewTwin"),
   row("M0068", VIEW_TWIN, 28, "remove-assignment", "", "survived", "LabelViewTwin"),
   row("M0069", VIEW_TWIN, 28, "flip-boolean-literal", "", "survived", "LabelViewTwin"),
   row("M0070", VIEW_TWIN, 32, "empty-block", "Label", "killed", "LabelViewTwin"),
-  row("M0071", VIEW_TWIN, 33, "condition-true", "Label", PR209_UNRECORDED),
+  row("M0071", VIEW_TWIN, 33, "condition-true", "Label", "survived", "LabelViewTwin"),
   row("M0072", VIEW_TWIN, 33, "conditional-boundary", "Label", "survived", "LabelViewTwin"),
   // R545, pre-committed in docs/superpowers/specs/2026-10-09-r545-wrapped-pageext-precommitment.md.
   // The extension's never-run OnOpenPage is placed by the EXTENSION object, which only ScaledXtra
@@ -286,14 +295,14 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0074", XTRA, 15, "remove-assignment", "", "survived", "ScaledXtra"),
   row("M0075", XTRA, 15, "flip-boolean-literal", "", "survived", "ScaledXtra"),
   row("M0076", XTRA, 19, "empty-block", "Scaled", "killed", "ScaledXtra"),
-  row("M0077", XTRA, 20, "condition-true", "Scaled", PR209_UNRECORDED),
+  row("M0077", XTRA, 20, "condition-true", "Scaled", "survived", "ScaledXtra"),
   row("M0078", XTRA, 20, "conditional-boundary", "Scaled", "survived", "ScaledXtra"),
   row("M0079", XTRA, 21, "return-value", "Scaled", "killed", "ScaledXtra"),
   row("M0080", XTRA_TWIN, 14, "empty-block", "", "survived", "ScaledXtraTwin"),
   row("M0081", XTRA_TWIN, 15, "remove-assignment", "", "survived", "ScaledXtraTwin"),
   row("M0082", XTRA_TWIN, 15, "flip-boolean-literal", "", "survived", "ScaledXtraTwin"),
   row("M0083", XTRA_TWIN, 19, "empty-block", "Scaled", "killed", "ScaledXtraTwin"),
-  row("M0084", XTRA_TWIN, 20, "condition-true", "Scaled", PR209_UNRECORDED),
+  row("M0084", XTRA_TWIN, 20, "condition-true", "Scaled", "survived", "ScaledXtraTwin"),
   row("M0085", XTRA_TWIN, 20, "conditional-boundary", "Scaled", "survived", "ScaledXtraTwin"),
   row("M0086", XTRA_TWIN, 21, "return-value", "Scaled", "killed", "ScaledXtraTwin"),
   // R550, pre-committed in docs/superpowers/specs/2026-10-09-r550-wrapped-report-precommitment.md.
@@ -309,7 +318,7 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0093", BAND, 53, "remove-assignment", "", "survived", "BandYRun", BAND_TESTS),
   row("M0094", BAND, 53, "shift-integer", "", "killed", "BandYRun", BAND_TESTS),
   row("M0095", BAND, 57, "empty-block", "Band", "killed", "BandYDirect", BAND_TESTS),
-  row("M0096", BAND, 58, "condition-true", "Band", PR209_UNRECORDED),
+  row("M0096", BAND, 58, "condition-true", "Band", "killed", "BandYDirect", BAND_TESTS),
   row("M0097", BAND, 58, "conditional-boundary", "Band", "killed", "BandYDirect", BAND_TESTS),
   row("M0098", BAND, 59, "return-value", "Band", "killed", "BandYDirect", BAND_TESTS),
   row("M0099", BAND, 60, "return-value", "Band", "killed", "BandYDirect", BAND_TESTS),
@@ -333,7 +342,16 @@ export const EXPECTED_WRAPPED: readonly WrappedRow[] = [
   row("M0108", BAND_TWIN, 53, "remove-assignment", "", "survived", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0109", BAND_TWIN, 53, "shift-integer", "", "killed", "BandYRunTwin", BAND_TWIN_TESTS),
   row("M0110", BAND_TWIN, 57, "empty-block", "Band", "killed", "BandYDirectTwin", BAND_TWIN_TESTS),
-  row("M0111", BAND_TWIN, 58, "condition-true", "Band", PR209_UNRECORDED),
+  row(
+    "M0111",
+    BAND_TWIN,
+    58,
+    "condition-true",
+    "Band",
+    "killed",
+    "BandYDirectTwin",
+    BAND_TWIN_TESTS,
+  ),
   row(
     "M0112",
     BAND_TWIN,
@@ -360,20 +378,17 @@ export const EXPECTED_WRAPPED_BC_ALL: readonly WrappedRow[] = EXPECTED_WRAPPED.m
   (r) =>
     [
       row("M0001", ARMS, 7, "empty-block", "Pick", "killed", "ArmsPick"),
-      row("M0002", ARMS, 8, "condition-true", "Pick", PR209_UNRECORDED),
+      row("M0002", ARMS, 8, "condition-true", "Pick", "survived", "ArmsPick"),
       row("M0003", ARMS, 8, "conditional-boundary", "Pick", "survived", "ArmsPick"),
       row("M0004", ARMS, 9, "return-value", "Pick", "killed", "ArmsPick"),
     ].find((a) => a.code === r.code) ?? r,
 );
 
 /**
- * PR-209: the rows of `EXPECTED_WRAPPED_BC_ALL` that have a recorded verdict, which is what the
- * committed baseline and the gate page describe (`gate-pages.test.ts` reads this). The 14 added
- * `condition-true` rows join when a record run supplies their verdicts.
+ * PR-209: every row now has its recorded verdict (bc3, 2026-11-19), so this is the whole table; the name
+ * stays because `gate-pages.test.ts` reads it.
  */
-export const EXPECTED_WRAPPED_BC: readonly WrappedRow[] = EXPECTED_WRAPPED_BC_ALL.filter(
-  (r) => r.verdict !== PR209_UNRECORDED,
-);
+export const EXPECTED_WRAPPED_BC: readonly WrappedRow[] = EXPECTED_WRAPPED_BC_ALL;
 
 /** The C1 pair's three rows under the "replaces" reading: al-runner compiled `WrappedPairB`. */
 export const PAIR_REPLACES: readonly WrappedRow[] = [
