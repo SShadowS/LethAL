@@ -128,8 +128,8 @@
     "binarySha256": "36613897149173c87b2ef2b7b59a1250a8999a8e566800be0ef35d4a91a1f632",
     "readingsFrom": "edge-d72d3197d",
     "readingsDigest": "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15",
-    "lethalCommit": "ac9bceb5e9e9e98c6f25f5fce6a17d877afadfe0",
-    "gatedAt": "2026-11-19T18:00:21.162Z",
+    "lethalCommit": "a6344ca1fb44c3015b8afec36f2bad6bf53d9dda",
+    "gatedAt": "2026-11-19T18:30:01.914Z",
     "dotnetSidecarSha256": "a32a6e4a8d793dde62a843d289921374d7a37222f7c9e4aa3d63d1c6f08059a5",
     "warnFacts": {
       "serve-keep-reasons": "matches"
