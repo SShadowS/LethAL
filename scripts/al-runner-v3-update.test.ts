@@ -3346,15 +3346,25 @@ linuxOnly("PR-226: privateGateOnce", () => {
     for (const name of ["cache", "builds", "private", "gate-worktree"]) {
       const w = await world();
       const tools = join(scratch, "tools");
-      const target = join(tools, "target");
-      await mkdir(target, { recursive: true });
+      // The link leads OUTSIDE the tools root: only the symbolic-link refusal can stop it.
+      const outside = join(scratch, "elsewhere");
+      const inside = join(tools, "target");
+      await mkdir(outside, { recursive: true });
+      await mkdir(inside, { recursive: true });
       await mkdir(priv, { recursive: true });
-      await symlink(target, join(priv, name));
-      await expect(w.run({ toolsRoot: tools }), name).rejects.toThrow(
-        new RegExp(`al-runner-v3-private-refused.*${name}`),
-      );
-      expect(await readdir(target), name).toEqual([]);
-      expect(w.seen.gates).toEqual([]);
+      for (const [target, why] of [
+        [outside, /is a symbolic link/],
+        [inside, /(is a symbolic link|which is)/],
+      ] as const) {
+        await rm(join(priv, name), { force: true });
+        await symlink(target, join(priv, name));
+        await expect(w.run({ toolsRoot: tools }), `${name} -> ${target}`).rejects.toThrow(why);
+        await expect(w.run({ toolsRoot: tools }), name).rejects.toThrow(
+          new RegExp(`al-runner-v3-private-refused.*${name}`),
+        );
+        expect(await readdir(target), name).toEqual([]);
+        expect(w.seen.gates).toEqual([]);
+      }
     }
   });
 
