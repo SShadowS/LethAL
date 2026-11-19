@@ -10702,7 +10702,11 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
       const storeOf = (r: Rig) =>
         (
           r.b as unknown as {
-            lane: { prefetch: { pairStore: Map<string, { through?: string | undefined }> } };
+            lane: {
+              prefetch: {
+                pairStore: Map<string, { through?: string | undefined; cu: number; seq: number }>;
+              };
+            };
           }
         ).lane.prefetch.pairStore;
       const counts = (r: Rig) => r.b.entriesStats();
@@ -10771,6 +10775,34 @@ describe("PR-94: runSelectedOnly on prefix-cut requests", () => {
         for (const [k, v] of storeOf(r)) storeOf(r).set(k, { ...v, through: undefined });
         await r.b.sendKillPair("M0001", ref("C"));
         expect(counts(r)).toMatchObject({ pairBatchServed: 1, pairBatchRefused: 0 });
+        expect(r.b.pairRefusalReasons()).toEqual({
+          otherCodeunit: 0,
+          notPrefetched: 0,
+          notAfterKill: 0,
+          cutBeforeKiller: 0,
+        });
+      });
+
+      test("PR-242 (M1): each refusal is counted under its own reason, and the reasons sum to pairBatchRefused", async () => {
+        const zero = { otherCodeunit: 0, notPrefetched: 0, notAfterKill: 0, cutBeforeKiller: 0 };
+        // a killer after `through`
+        const cut = await batched();
+        await cut.b.sendKillPair("M0001", ref("C"));
+        expect(cut.b.pairRefusalReasons()).toEqual({ ...zero, cutBeforeKiller: 1 });
+        // the pair stored for another codeunit than the killing call
+        const other = await batched();
+        for (const [k, v] of storeOf(other)) storeOf(other).set(k, { ...v, cu: v.cu + 1 });
+        await other.b.sendKillPair("M0001", ref("B"));
+        expect(other.b.pairRefusalReasons()).toEqual({ ...zero, otherCodeunit: 1 });
+        // the pair's request did not run after the kill's prefetch
+        const early = await batched();
+        for (const [k, v] of storeOf(early)) storeOf(early).set(k, { ...v, seq: 0 });
+        await early.b.sendKillPair("M0001", ref("B"));
+        expect(early.b.pairRefusalReasons()).toEqual({ ...zero, notAfterKill: 1 });
+        for (const x of [cut, other, early])
+          expect(counts(x).pairBatchRefused).toBe(
+            Object.values(x.b.pairRefusalReasons()).reduce((a, b) => a + b, 0),
+          );
       });
     });
   });
