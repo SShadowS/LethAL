@@ -290,8 +290,9 @@ export const LEND_FIGURES = {
   /** L0 (fill), N1, N5: nothing lent, the frozen table. (R855: 22 sites, +2 survived, +1 no-coverage.
    *  PR-209: 26 sites, +3 survived, +1 no-coverage, groupedCalls 20; observed on bc1, 2026-11-19.) */
   fresh: { killed: 3, survived: 17, noCoverage: 6, groupedCalls: 20 },
-  /** L1 and N0: the 14 survivors carried as known survivors; 3 kills scored. */
-  history: { killed: 3, survived: 0, noCoverage: 5, knownSurvivors: 14, groupedCalls: 3 },
+  /** L1 and N0: the 17 survivors carried as known survivors; 3 kills scored. PR-209: RECORDED on bc1 (lend observe,
+   *  /coord/handoff/PR-209-bc/): 3 / 0 / 6, knownSurvivors 17, groupedCalls 3 (was 3 / 0 / 5, 14, 3). */
+  history: { killed: 3, survived: 0, noCoverage: 6, knownSurvivors: 17, groupedCalls: 3 },
   /** R1: `--resume-run` of an unfinished full clone. Since R621 (pre-commitment
    *  docs/superpowers/specs/2026-10-22-r585-lend-precommitment.md) a stored no-coverage is never
    *  carried, so the batch is not carried whole: it deploys, reuses B's snapshot, re-derives the 5

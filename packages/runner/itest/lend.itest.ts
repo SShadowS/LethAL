@@ -276,6 +276,8 @@ function lendCodes(events: readonly RunEvent[]): string[] {
 }
 
 function assertCodes(leg: string, events: readonly RunEvent[], want: readonly string[]): void {
+  // PR-209: print the observed list BEFORE asserting, so a record or observe run shows it. Print only.
+  console.log(`  ${leg}: lent codes ${JSON.stringify(lendCodes(events))}`);
   assert.deepEqual(
     lendCodes(events),
     [...want].sort(),
@@ -345,6 +347,10 @@ function assertCounts(
   want: { killed: number; survived: number; noCoverage: number; groupedCalls: number },
   knownSurvivors = 0,
 ): void {
+  // PR-209: print the observed counts BEFORE asserting, so a record or observe run shows every leg's figures. Print only.
+  console.log(
+    `  ${leg}: counts ${JSON.stringify({ killed: r.counts.killed, survived: r.counts.survived, noCoverage: r.counts.noCoverage, knownSurvivors: r.counts.knownSurvivors, groupedCalls: r.groupedCalls, mutants: r.mutants.length })}`,
+  );
   assert.deepEqual(
     {
       killed: r.counts.killed,
