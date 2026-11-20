@@ -94,6 +94,37 @@ describe("assertGateWarnings", () => {
     );
   });
 
+  // PR-264 (PR-252 amendment 3): a sleep of server1 is the environment, never a build's property.
+  const SLEPT =
+    "[lethal] the machine was suspended (or its clock stepped) for 2178 s at 2026-11-20T13:41:22.432Z";
+  test("PR-264: a gate whose only extra code is run-suspended passes, and the log prints it with its length", () => {
+    const logged: string[] = [];
+    const real = console.log;
+    console.log = (...a: unknown[]) => {
+      logged.push(a.join(" "));
+    };
+    try {
+      expect(() =>
+        assertGateWarnings("g", "l", ["a", "run-suspended"], ["a"], { "run-suspended": SLEPT }),
+      ).not.toThrow();
+    } finally {
+      console.log = real;
+    }
+    expect(logged.some((l) => l.includes("run-suspended") && l.includes("for 2178 s"))).toBe(true);
+  });
+
+  test("PR-264: run-suspended beside any other new code still fails, naming that code alone", () => {
+    expect(() =>
+      assertGateWarnings("g", "l", ["a", "run-suspended", "x"], ["a"], { "run-suspended": SLEPT }),
+    ).toThrow(/Extra: \["x"\]\. Missing: \[\]/);
+  });
+
+  test("PR-264: a missing expected code still fails with run-suspended present", () => {
+    expect(() => assertGateWarnings("g", "l", ["run-suspended"], ["a"])).toThrow(
+      /Extra: \[\]\. Missing: \["a"\]/,
+    );
+  });
+
   test("R852: only an extra code's message is printed, not an expected one's", () => {
     let text = "";
     try {
