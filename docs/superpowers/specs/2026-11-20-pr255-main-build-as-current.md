@@ -90,3 +90,29 @@ Any difference the amendment did not pre-commit is a BLOCK, and `current` does n
   the merge.
 - **After `current` moves:** the daily update's edge track sees edge 4ebfe7913 as behind and does nothing. R1146's DO re-measure
   (and R1098, R1092 and R1048, per the PR-240 sweep note) becomes due on the new `current`.
+
+## Amendment 2 (2026-11-20 ~15:35Z): the target is upstream main ccd0f823d, not 9835579c6 (orchestrator: move `current` once)
+- **Why:** upstream main now carries #8365, kept sources (the takeover merged in f8a64df3b, train-261120q #8572). On 9835579c6
+  each request re-read its sources and re-ran test discovery, about 1.6 s per request (PR-255's fixed-cost driver). So
+  `current` moves ONCE, to the newest main with it. **9835579c6 never becomes `current`.** Its hand pin `main-9835579c6` and its
+  private PASS are SUPERSEDED: the pin is replaced, not kept beside the new one.
+- **The commit:** ccd0f823d918524d88f295c4822d99219430d6fe, the merge of train-261120s (#8579), 2026-11-20 13:58Z.
+  - Upstream's push checks passed (check, corpus, merge push check).
+  - It contains f8a64df3b (#8365), f7b156fb4 (#8484) and f9116dc96 (O1).
+  - Built here with the same recipe: `al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)`, sha256
+    bc3595c4e2ff9c2ae63c7c02e1133155005414464f59ecd22dca9d4ab281ad7c.
+- **Its private gate** (`--root /coord/handoff/PR-255/root --local-candidate`, judged at master f7db4a6c; receipts
+  root/private/local-bc3595c4e2ff@f7db4a6c...-56b734c1-.../): HELD on O1 alone, and every other leg passed.
+  - O1: the same 16 row-insert refusals after the partner login (f9116dc96, #8239).
+  - Leg C: the same note as 9835579c6 (`setfilter-boolean-language-words` MOVED to pass; a keep entry now inert).
+  - So it reads exactly as amendment 1 predicted for 9835579c6.
+- **The hand pin:** `main-ccd0f823d`, version `al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)`, that sha256.
+  - It REPLACES `main-9835579c6`, with the same readings: the root edge-d72d3197d's plus ONLY `o1.partnerLoginRefusal`.
+  - Its readings digest is therefore the same, d60c889b..., because the digest leaves out id, version and sha256.
+- **Predictions:**
+  - the private gate from master after the pin merges: PASS, applied pin `main-ccd0f823d`;
+  - the real `--main`: re-gates current, then PASS with `pinApplied` `main-ccd0f823d`, a ledger row `main-ccd0f823d` on track
+    `main`, and `current` moved FORWARD to `<root>/main-ccd0f823d/`.
+  - Any other difference is a BLOCK.
+- **Fixed cost:** re-measured on ccd0f823d against 9835579c6 with the raw driver (interleaved, the same cores). Reported in the
+  result; it is not a gate figure.
