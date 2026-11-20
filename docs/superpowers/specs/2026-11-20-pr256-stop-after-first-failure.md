@@ -59,6 +59,14 @@ build (lethal-bugs, PR-255: 9835579c66, which contains #8484); LethAL builds its
   read; live single-mutant sends are `liveCall`/`aloneCall` (the NONE confirm via `lastActivated === null` needs its own
   exclusion); the walk order is `lane.plan.budgets`; stop rows must be skipped by `firstKeptRefusal`, `unkeptRowReason`,
   `serveDaemonReusable` and `batchRefusalReason`.
+- **(b) stays off on `current` (measured, 2026-11-20).** lethal-bugs' raw serve driver (PR-255, y3-shaped plan of 16.8
+  entries per request, CPUs 12-21, 99 warm requests per build; data `/coord/handoff/PR-255/fixed-{main,edge}.ndjson`): the
+  fixed cost per request is a median of 1,695 ms on main 9835579c6 (`current`; p90 3,352 ms; setup 1,623 ms) and 2,159 ms
+  on edge-4ebfe7913 (p90 4,274 ms). Each extra request that (b) creates costs about 1.7 s on `current`, so (b) is a net loss
+  on main as on y3 (`model-b-reading.md`). It pays only on a build that keeps sources between requests (PERF-10's
+  perf-combined: 90 ms median; #8365, not upstream). The path is stop groups: PR-257 measured them on DO's multi-mutant
+  layout (`docs/measurements/2026-11-20-pr257-perf18-stop-groups.md`: 0 verdicts moved, every stop accepted by §0a's rule,
+  none triggered by an echo). PR-256 stays held until upstream merges stop groups and `current` carries them.
 
 ## 1. The contract (upstream 9835579c6, `docs/manual/tool-protocol.md`; PR #8484, f7b156fb4)
 - `runTests` field `stopAfterFirstFailure` (true/false), per request; also a serve start option and a CLI flag.
