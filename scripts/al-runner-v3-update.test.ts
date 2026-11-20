@@ -51,6 +51,7 @@ import {
   expectedSha,
   gateOne,
   isUnderRoot,
+  mainOnce,
   movesUnder,
   parseGateLegs,
   parseUpdateArgs,
@@ -2242,6 +2243,212 @@ linuxOnly("R814: the two tracks", () => {
   });
 });
 
+// PR-255: `--main <binary>` gates a local build of an upstream main commit as an edge candidate.
+linuxOnly("PR-255: --main", () => {
+  const ROOT_PIN = "alpha.12-d4bc8d3a5";
+  const MAIN_V = "al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)";
+  const MAIN_DIR = "main-9835579c6";
+  const OLD_EDGE = "edge-4ebfe7913-4ebfe7913";
+  const OLD_GATED = JSON.stringify({
+    version: "al-runner 3.0.0-alpha.14+edge.20261115 (4ebfe7913)",
+    binarySha256: sha("edgebin"),
+    lethalCommit: GATED_COMMIT,
+    readingsFrom: ROOT_PIN,
+  });
+  /** `current` is an edge build with a hand pin; the main binary sits outside the build folders. */
+  async function setupEdge(): Promise<string> {
+    await setup();
+    const dir = join(root, OLD_EDGE);
+    await mkdir(dir);
+    await writeFile(join(dir, "al-runner"), "edgebin");
+    await writeFile(join(dir, ".gated"), OLD_GATED);
+    await rm(join(root, "current"));
+    await symlink(dir, join(root, "current"));
+    const bin = join(root, "build", "al-runner");
+    await mkdir(dirname(bin));
+    await writeFile(bin, "mainbin");
+    return bin;
+  }
+  /** Every path under `root` with its bytes (a link: its target). */
+  async function tree(dir = root): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isSymbolicLink()) out[p] = `-> ${await readlink(p)}`;
+      else if (e.isDirectory()) Object.assign(out, await tree(p));
+      else out[p] = await readFile(p, "utf8");
+    }
+    return out;
+  }
+  const ledger = async () =>
+    existsSync(join(root, "gated-builds.jsonl"))
+      ? (await readFile(join(root, "gated-builds.jsonl"), "utf8"))
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l))
+      : [];
+  const mainFake = (o: Parameters<typeof fake>[0] = {}) =>
+    fake({ outcome: "pass", pinApplied: ROOT_PIN, realSha: true, version: MAIN_V, ...o });
+
+  test("refusals: an edge, a release, a main line with no commit or a short date are refused by name; nothing written, no gate", async () => {
+    for (const version of [
+      "al-runner 3.0.0-alpha.14+edge.20261120 (9835579c6)",
+      "al-runner 3.0.0-alpha.14 (abc1234)",
+      "al-runner 3.0.0-alpha.14+main.20261120",
+      "al-runner 3.0.0-alpha.14+main.2026112 (9835579c6)",
+    ]) {
+      const bin = await setupEdge();
+      const before = await tree();
+      const { deps, seen } = mainFake({ version });
+      await expect(mainOnce(deps, bin), version).rejects.toThrow(
+        /al-runner-v3-main-refused: .*not an upstream main build/,
+      );
+      expect(seen.gates).toEqual([]);
+      expect(await tree()).toEqual(before);
+    }
+  });
+
+  test("a pass writes main-<commit>/, a ledger row main-<commit> on track main, moves current forward; the old edge folder is byte-identical", async () => {
+    const bin = await setupEdge();
+    const oldEdge = await tree(join(root, OLD_EDGE));
+    const { deps, seen } = mainFake();
+    const order: string[] = [];
+    deps.commitOrder = async (b, h) => {
+      order.push(`${b}..${h}`);
+      return "ahead";
+    };
+    expect(await mainOnce(deps, bin)).toBe("pass");
+    expect(order).toEqual(["4ebfe7913..9835579c6"]);
+    expect(seen.gates).toEqual([GATED_COMMIT]);
+    expect(seen.envs[0]?.LETHAL_V3_PIN_FROM).toBe(ROOT_PIN);
+    expect(await readFile(join(root, MAIN_DIR, "al-runner"), "utf8")).toBe("mainbin");
+    const g = JSON.parse(await readFile(join(root, MAIN_DIR, ".gated"), "utf8"));
+    expect(g).toMatchObject({
+      version: MAIN_V,
+      binarySha256: sha("mainbin"),
+      readingsFrom: ROOT_PIN,
+    });
+    const [r, ...more] = await ledger();
+    expect(more).toEqual([]);
+    expect(r).toMatchObject({ id: MAIN_DIR, track: "main", version: MAIN_V });
+    expect("tag" in r).toBe(false);
+    expect(seen.published).toEqual([MAIN_DIR]);
+    expect(await current()).toBe(join(root, MAIN_DIR));
+    expect(await tree(join(root, OLD_EDGE))).toEqual(oldEdge);
+    expect(await readFile(join(root, OLD_EDGE, ".gated"), "utf8")).toBe(OLD_GATED);
+    expect(existsSync(join(root, "rejudge"))).toBe(false);
+  });
+
+  test("review HIGH, the real shape: a pass on the build's OWN hand pin (root plus o1.partnerLoginRefusal) writes that pin into .gated and the ledger row, with that pin's digest", async () => {
+    const bin = await setupEdge();
+    const candPin = pr236CandidatePin(ROOT_PIN, MAIN_V, sha("mainbin"), { id: "main-cand" });
+    const m = mainFake({ pinApplied: candPin.id, pinDigest: v3ReadingsDigest(candPin) });
+    const deps = { ...m.deps, handPin: pinLookup(candPin) };
+    expect(await mainOnce(deps, bin)).toBe("pass");
+    const g = JSON.parse(await readFile(join(root, MAIN_DIR, ".gated"), "utf8"));
+    expect(g.readingsFrom).toBe("main-cand");
+    const [r, ...more] = await ledger();
+    expect(more).toEqual([]);
+    expect(r).toMatchObject({
+      id: MAIN_DIR,
+      track: "main",
+      readingsFrom: "main-cand",
+      readingsDigest: v3ReadingsDigest(candPin),
+    });
+    expect(r.readingsDigest).not.toBe(digestOfPin(ROOT_PIN));
+    expect(await current()).toBe(join(root, MAIN_DIR));
+  });
+
+  test("review MED: a second --main of a commit that has passed (its folder exists) is refused by name; nothing written, no gate", async () => {
+    const bin = await setupEdge();
+    await mkdir(join(root, MAIN_DIR));
+    await writeFile(join(root, MAIN_DIR, "al-runner"), "mainbin");
+    const before = await tree();
+    const { deps, seen } = mainFake();
+    await expect(mainOnce(deps, bin)).rejects.toThrow(
+      /al-runner-v3-main-refused: .*main-9835579c6 exists: main 9835579c6 has passed already/,
+    );
+    expect(seen.gates).toEqual([]);
+    expect(await tree()).toEqual(before);
+  });
+
+  test("behind or diverged: no gate, no folder, no row, current stays", async () => {
+    for (const order of ["behind", "diverged"] as const) {
+      const bin = await setupEdge();
+      const { deps, seen } = mainFake({ order });
+      expect(await mainOnce(deps, bin)).toBe("not-ahead");
+      expect(seen.gates).toEqual([]);
+      expect(existsSync(join(root, MAIN_DIR))).toBe(false);
+      expect(await ledger()).toEqual([]);
+      expect(await current()).toBe(join(root, OLD_EDGE));
+      expect(seen.logs.join("\n")).toContain("current never moves backwards");
+    }
+  });
+
+  test("in use: the pass is installed and its row written, current is deferred", async () => {
+    const bin = await setupEdge();
+    const { deps, seen } = mainFake({ inUse: true });
+    expect(await mainOnce(deps, bin)).toBe("pass");
+    expect(existsSync(join(root, MAIN_DIR, ".gated"))).toBe(true);
+    expect((await ledger()).map((r) => r.id)).toEqual([MAIN_DIR]);
+    expect(await current()).toBe(join(root, OLD_EDGE));
+    expect(seen.logs.join("\n")).toContain("deferred: in use");
+  });
+
+  test("a gate-fail goes to failed/main-<commit>@<commit>, a held to held/main-<commit>; current stays", async () => {
+    let bin = await setupEdge();
+    expect(await mainOnce(mainFake({ outcome: "gate-fail" }).deps, bin)).toBe("gate-fail");
+    expect(existsSync(join(failedAt(MAIN_DIR), "al-runner"))).toBe(true);
+    expect(await current()).toBe(join(root, OLD_EDGE));
+    bin = await setupEdge();
+    expect(await mainOnce(mainFake({ outcome: "held" }).deps, bin)).toBe("held");
+    expect(existsSync(join(root, "held", MAIN_DIR, "al-runner"))).toBe(true);
+    expect(await current()).toBe(join(root, OLD_EDGE));
+  });
+
+  test("after a main current, edge (behind it) and the daily run never move current or gate a main build", async () => {
+    const bin = await setupEdge();
+    expect(await mainOnce(mainFake().deps, bin)).toBe("pass");
+    const order: string[] = [];
+    const e = edgeOf({ outcome: "pass", pinApplied: ROOT_PIN }, "4ebfe7913");
+    e.deps.commitOrder = async (b, h) => {
+      order.push(`${b}..${h}`);
+      return "behind";
+    };
+    expect(await edgeOnce(e.deps)).toBe("skipped");
+    const d = edgeOf(
+      { outcome: "pass", pinApplied: ROOT_PIN, tags: ["edge", "v3.0.0-alpha.2"] },
+      "4ebfe7913",
+    );
+    d.deps.commitOrder = e.deps.commitOrder;
+    expect(await dailyOnce(d.deps)).toEqual({ edge: "skipped", releases: [] });
+    expect(order[0]?.startsWith("9835579c6..")).toBe(true);
+    expect([...e.seen.gates, ...d.seen.gates]).toEqual([]);
+    expect(await current()).toBe(join(root, MAIN_DIR));
+  });
+
+  test("custody: bytes that change after the sha was taken are refused at the gate; nothing installed", async () => {
+    const bin = await setupEdge();
+    const { deps, seen } = mainFake();
+    deps.heavyJobs = async () => {
+      await writeFile(bin, "swapped");
+      return 0;
+    };
+    await expect(mainOnce(deps, bin)).rejects.toThrow(/not the custody-checked/);
+    expect(seen.gates).toEqual([]);
+    expect(existsSync(join(root, MAIN_DIR))).toBe(false);
+    expect(await current()).toBe(join(root, OLD_EDGE));
+  });
+
+  test("the lock: a held .gate.lock skips the run, gates nothing", async () => {
+    const bin = await setupEdge();
+    await writeFile(join(root, ".gate.lock"), JSON.stringify({ pid: 4242, startedAt: "t" }));
+    const { deps, seen } = mainFake({ procs: { 4242: "bun scripts/al-runner-v3-update.ts" } });
+    expect(await mainOnce(deps, bin)).toBe("skipped");
+    expect(seen.gates).toEqual([]);
+  });
+});
+
 describe("R814: publishToMaster, on real git repositories", () => {
   /** Master's hand pins, as `--pin-digests` reports them. */
   const digestsOf = async () => ({ "root-pin": sha("d") });
@@ -2860,6 +3067,10 @@ describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)
       sha: "c893e3633",
     });
     expect(parseUpdateArgs(["--regate", FULL])).toEqual({ mode: "regate", commit: FULL });
+    expect(parseUpdateArgs(["--main", "/b/al-runner"])).toEqual({
+      mode: "main",
+      binary: "/b/al-runner",
+    });
     expect(parseUpdateArgs(["--root", "/x/r", "--local-candidate", "/x/c"])).toEqual({
       mode: "private",
       root: "/x/r",
@@ -2913,6 +3124,7 @@ describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)
       ["--edge-rejudge", "c893e3633"],
       ["--refresh-rows", "a"],
       ["--pin-digests"],
+      ["--main", "/b"],
     ];
     for (const m of modes) {
       for (const argv of [
@@ -2927,6 +3139,8 @@ describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)
 
   test("two mode flags are refused (one dispatcher, one mode)", () => {
     expect(refused(["--edge", "--pin-digests"])).toMatch(/one mode/);
+    expect(refused(["--main", "/b", "--edge"])).toMatch(/one mode/);
+    expect(refused(["--main"])).toMatch(/--main needs a value/);
   });
 
   function counters() {
@@ -2936,6 +3150,7 @@ describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)
       refreshRows: async (ids) => void ran.push(`refresh-rows:${ids.join(",")}`),
       edge: async () => void ran.push("edge"),
       edgeRejudge: async (sha) => void ran.push(`edge-rejudge:${sha}`),
+      main: async (b) => void ran.push(`main:${b}`),
       regate: async (c) => void ran.push(`regate:${c}`),
       daily: async () => void ran.push("daily"),
       privateGate: async (r, c) => void ran.push(`private:${r}:${c}`),
@@ -2970,6 +3185,7 @@ describe("PR-226: parseUpdateArgs and dispatchUpdate (the one strict dispatcher)
       [["--refresh-rows", "a,b"], "refresh-rows:a,b"],
       [["--edge-rejudge", "c893e3633"], "edge-rejudge:c893e3633"],
       [["--regate", FULL], `regate:${FULL}`],
+      [["--main", "/b"], "main:/b"],
       [["--root", "/r", "--local-candidate", "/c"], "private:/r:/c"],
     ];
     for (const [argv, want] of cases) {

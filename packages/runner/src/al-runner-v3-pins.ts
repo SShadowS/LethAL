@@ -793,6 +793,27 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     ...READINGS_8078BCF49,
     o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
+  {
+    // PR-255 (pre-commitment master a5ae23d6a, amendment 1 f7588531a): upstream MAIN 9835579c6, built here with upstream's
+    // recipe and gated as `current` (owner, q-20261120T084258-a6351212). The live root edge-d72d3197d's readings (the same
+    // constants, so it moves with them) plus ONLY O1's partner-login refusal (PR-233, #8239: a known coverage loss, not BC's
+    // behaviour). The private gate held on O1 alone.
+    id: "main-9835579c6",
+    version: "al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)",
+    binarySha256: "b91d49d7b6af8ea9ed7bd429f14312cde19025c0676a1278822f37dfaca03d24",
+    ...READINGS_8078BCF49,
+    o1: {
+      ...O1_8078BCF49,
+      cdoApps: 18,
+      partnerLoginRefusal: {
+        // equal to the itest's O1_PARTNER_LOGIN_TEXT (pinned by pr255-main-pin.test.ts)
+        text: "NotRun: out-of-scope: a read of a global of SingleInstance codeunit Server Setting Impl.: OnAfterLogin raised to the login subscribers of the partner dependency apps changed it before the first test, and it is not the one codeunit of the one subscriber's app with the measured globals (two Integer, a List of [Text], a Text): what BC leaves there is not pinned",
+        issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8239",
+        evidence:
+          "/coord/handoff/PR-255/root/private/ (main 9835579c6, 2026-11-20): the 16 row inserts of O1's CDO set refused with exactly this text, as PR-233 predicted; BC runs them (bc4, #8239 issuecomment-7014017475)",
+      },
+    },
+  },
 ];
 
 /** The readings before PR-209 moved leg T's counts: master's own, byte for byte (digest e8ce7f40...). */
@@ -841,11 +862,12 @@ export const FROZEN_V3_PINS: readonly V3BuildPin[] = [
  * `readingsDigest` binds it to that pin's readings as they were gated: an edit of the hand pin fails
  * `r814-gated-builds.test.ts` until a person re-gates (a mechanical entry never moves with no run).
  * `track: "release"` is the manifest: what a user may install (`tag` names it). `track: "edge"` is
- * the record of what `current` was; a user cannot fetch one once edge moves.
+ * the record of what `current` was; a user cannot fetch one once edge moves. PR-255: `track: "main"` is a locally
+ * built upstream main commit gated by `--main`: like edge, a record of what `current` was, never the manifest.
  */
 export interface GatedBuildEntry {
   readonly id: string;
-  readonly track: "edge" | "release";
+  readonly track: "edge" | "release" | "main";
   readonly tag?: string;
   readonly version: string;
   readonly binarySha256: string;
@@ -895,7 +917,8 @@ function gatedBuildFault(e: Record<string, unknown>): string | undefined {
   for (const k of Object.keys(e)) if (!GATED_BUILD_KEYS.has(k)) return `unknown key "${k}"`;
   for (const k of ["id", "version", "readingsFrom", "gatedAt"])
     if (typeof e[k] !== "string" || e[k] === "") return `no ${k}`;
-  if (e.track !== "edge" && e.track !== "release") return "track must be edge or release";
+  if (e.track !== "edge" && e.track !== "release" && e.track !== "main")
+    return "track must be edge, release or main";
   if (e.track === "release" && typeof e.tag !== "string") return "a release needs its tag";
   if (typeof e.binarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.binarySha256))
     return "no binarySha256";
