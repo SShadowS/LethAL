@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**56 of 1120 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**55 of 1120 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1164,7 +1164,7 @@ that ordering is the priority.
 - **R1154** · Per-lane sums of serve-request walls double-count overlapping requests: PERF-10's '~7,000 unexplained lane-s' was ~5,900 lane-s of overlap; clip overlaps in every timing sum, and find why one request per lane stays open ~33 min on a second daemon · [R1154.md](docs/roadmap/R1154.md) · open
 - **R1155** · y2/y3 verdicts on edge-4ebfe7913 that ran through a by-value record copy are suspect (that build guessed the copy keeps the caller's filters); 2,204 private-corpus mutants are labelled, and they clear once `current` is a build that measures the shape · [R1155.md](docs/roadmap/R1155.md) · open — trigger: `current` moves to a build that runs or refuses these shapes as BC does…
 - **R1156** · al-runner v3's per-send bound check costs 237 ms per send on DO (69 MB of instrumented .al): 2,381 lane-s, 90% of perf10c's lane idle · [R1156.md](docs/roadmap/R1156.md) · open
-- **R1157** · VERIFY's longer per-test timeout reads only io pressure: under CPU contention, R917 and other near-limit tests time out at 5 s · [R1157.md](docs/roadmap/R1157.md) · open
+- **R1157** · VERIFY's longer per-test timeout reads only io pressure: under CPU contention, R917 and other near-limit tests time out at 5 s · [R1157.md](docs/roadmap/R1157.md) · done (8c09923f4)
 
 ---
 
