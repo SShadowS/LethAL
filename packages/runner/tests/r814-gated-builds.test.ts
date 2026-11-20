@@ -95,6 +95,17 @@ describe("R814: an entry cannot carry a reading", () => {
     expect(() => parseGatedBuilds([row({ lethalCommit: "abc" })], HAND)).toThrow("lethalCommit");
     expect(() => parseGatedBuilds({}, HAND)).toThrow("not an array");
   });
+  test("PR-255: track main parses (no tag needed); any other new track, nightly, still refuses", () => {
+    const main = row({
+      id: "main-9835579c6",
+      track: "main",
+      version: "al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)",
+    });
+    expect(parseGatedBuilds([main], HAND)).toEqual([main] as unknown as GatedBuildEntry[]);
+    expect(() => parseGatedBuilds([row({ track: "nightly" })], HAND)).toThrow(
+      "track must be edge, release or main",
+    );
+  });
 });
 
 describe("R814: the committed file", () => {
@@ -285,6 +296,10 @@ describe("R814: checkGated", () => {
       batchFacts: { "batch-no-cross-row": "matches", "batch-lane-hint-only": "diverged" },
     });
     await expect(checkGated(p, v, { findBuild: () => entry("edge") })).rejects.toThrow(
+      "not a gated build",
+    );
+    // PR-255: a main row is a record of what `current` was, never the manifest.
+    await expect(checkGated(p, v, { findBuild: () => entry("main") })).rejects.toThrow(
       "not a gated build",
     );
     await expect(checkGated(p, v, { findBuild: () => undefined })).rejects.toThrow(

@@ -841,11 +841,12 @@ export const FROZEN_V3_PINS: readonly V3BuildPin[] = [
  * `readingsDigest` binds it to that pin's readings as they were gated: an edit of the hand pin fails
  * `r814-gated-builds.test.ts` until a person re-gates (a mechanical entry never moves with no run).
  * `track: "release"` is the manifest: what a user may install (`tag` names it). `track: "edge"` is
- * the record of what `current` was; a user cannot fetch one once edge moves.
+ * the record of what `current` was; a user cannot fetch one once edge moves. PR-255: `track: "main"` is a locally
+ * built upstream main commit gated by `--main`: like edge, a record of what `current` was, never the manifest.
  */
 export interface GatedBuildEntry {
   readonly id: string;
-  readonly track: "edge" | "release";
+  readonly track: "edge" | "release" | "main";
   readonly tag?: string;
   readonly version: string;
   readonly binarySha256: string;
@@ -895,7 +896,8 @@ function gatedBuildFault(e: Record<string, unknown>): string | undefined {
   for (const k of Object.keys(e)) if (!GATED_BUILD_KEYS.has(k)) return `unknown key "${k}"`;
   for (const k of ["id", "version", "readingsFrom", "gatedAt"])
     if (typeof e[k] !== "string" || e[k] === "") return `no ${k}`;
-  if (e.track !== "edge" && e.track !== "release") return "track must be edge or release";
+  if (e.track !== "edge" && e.track !== "release" && e.track !== "main")
+    return "track must be edge, release or main";
   if (e.track === "release" && typeof e.tag !== "string") return "a release needs its tag";
   if (typeof e.binarySha256 !== "string" || !/^[0-9a-f]{64}$/.test(e.binarySha256))
     return "no binarySha256";

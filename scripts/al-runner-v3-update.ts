@@ -8,6 +8,8 @@
  *   bun scripts/al-runner-v3-update.ts --edge        (the edge track only, `edgeOnce`)
  *   bun scripts/al-runner-v3-update.ts --edge-rejudge <edge sha>   (R639: a KEPT edge binary,
  *                                                     re-gated at `.gated`'s commit, `edgeRejudge`)
+ *   bun scripts/al-runner-v3-update.ts --main <binary>   (PR-255: a LOCAL build of an upstream main commit,
+ *                                                     `+main.YYYYMMDD (<commit>)`, gated as edge, `mainOnce`)
  *   bun scripts/al-runner-v3-update.ts --refresh-rows <id>[,<id>...]   (R859: in a BRANCH's
  *                                                     checkout, `refreshRows`; see its comment)
  *   scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts --root <dir> --local-candidate <build>
@@ -675,6 +677,12 @@ export interface GateOneOpts {
   /** R814: a numbered release: its pass joins the manifest and never moves `current`. */
   readonly release?: boolean;
   /**
+   * PR-255 `--main`: the local `binary` of an upstream main commit, gated as an edge candidate (moves `current` only
+   * forward; behind or diverged gates nothing; `inUse` defers). `tag` is `main-<commit>`: its folder, `failed/`,
+   * `held/` and infra count; its ledger row is that id on `track: "main"`.
+   */
+  readonly main?: true;
+  /**
    * R859 `--refresh-rows`: gate the kept `binary` as a candidate by `gated.readingsFrom`, at
    * `gated.lethalCommit`, and on a pass return at once: no `failed/`, `held/`, build folder, ledger
    * row, `.gated` or `current` is written. The caller writes the manifest row.
@@ -878,7 +886,7 @@ export async function gateOne(
         await deps.log(
           `${deps.now()} ${tag}: ${order} current (${gated.version}): current never moves backwards; a person decides`,
         );
-        if (opts.binary === undefined) return "not-ahead";
+        if (opts.binary === undefined || opts.main === true) return "not-ahead";
         movesCurrent = false; // A rejudge still measures the kept build.
       }
     }
@@ -965,7 +973,7 @@ export async function gateOne(
     };
     if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.`);
     // R639 §6 step 8: a rejudge's evidence, whatever the outcome; nothing old is moved or rewritten.
-    const rejudge = opts.binary !== undefined && !refresh;
+    const rejudge = opts.binary !== undefined && !refresh && opts.main !== true;
     if (rejudge) await keep(join(root, "rejudge", `${name}@${commit}`));
     if (priv) {
       // One folder per run: an old pass receipt can never sit beside a new result.
@@ -1101,7 +1109,9 @@ export async function gateOne(
     const dirName =
       opts.regateAt !== undefined
         ? undefined
-        : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
+        : opts.main === true
+          ? tag
+          : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
     const dest =
       dirName === undefined ? await readlink(join(root, "current")) : join(root, dirName);
     if (dirName !== undefined) {
@@ -1165,8 +1175,8 @@ export async function gateOne(
           id:
             opts.release === true
               ? `${tag.replace(/^v3\.0\.0-/, "")}-${commitOfVersion(version)}`
-              : `edge-${commitOfVersion(version)}`,
-          track: opts.release === true ? "release" : "edge",
+              : `${opts.main === true ? "main" : "edge"}-${commitOfVersion(version)}`,
+          track: opts.release === true ? "release" : opts.main === true ? "main" : "edge",
           ...(opts.release === true ? { tag } : {}),
           version,
           binarySha256: sha,
@@ -1579,6 +1589,48 @@ export async function takeGateLock(
   if (!(await linkLock(lock, body))) return skip("another run took it over first");
   await deps.log(`${deps.now()} ${what}: took over the stale gate lock ${lock}`);
   return { release };
+}
+
+/** PR-255: the version line of a local upstream main build; group 1 is its commit. */
+const MAIN_VERSION = /\+main\.\d{8} \(([0-9a-f]{7,40})\)$/;
+
+/**
+ * PR-255 `--main <binary>` (pre-commitment 2026-11-20-pr255-main-build-as-current): gate ONE local build of an upstream
+ * main commit as an edge candidate, under the gate lock. Its version must read `+main.YYYYMMDD (<hex>)`, or it is
+ * refused by name (a throw) before anything is written. Its sha256 is taken once and checked at the gate. Never
+ * downloads; never reads or writes `edge.last-seen`.
+ */
+export async function mainOnce(
+  deps: UpdateDeps,
+  binary: string,
+): Promise<Outcome | "skipped" | "not-ahead"> {
+  const refuse = (why: string): never => {
+    throw new Error(`al-runner-v3-main-refused: ${why}`);
+  };
+  if (!existsSync(binary)) refuse(`${binary} does not exist`);
+  const version = (await deps.versionOf(binary)).trim();
+  const commit = MAIN_VERSION.exec(version)?.[1];
+  if (commit === undefined)
+    return refuse(
+      `${binary} reports "${version}": not an upstream main build (+main.YYYYMMDD (<commit>))`,
+    );
+  const sha = await sha256OfFile(binary);
+  if (await skippedForTheDay(deps, "main")) return "skipped";
+  const lock = await takeGateLock(deps, "main");
+  if (lock === undefined) return "skipped";
+  try {
+    const current = await gatedWithAllLegs(deps, "main");
+    if (current === undefined) return "skipped";
+    const outcome = await gateOne(deps, `main-${commit}`, current, {
+      binary,
+      binarySha256: sha,
+      main: true,
+    });
+    await publishPending(deps); // As a rejudge: a pass can move `current`, so its row goes out now.
+    return outcome;
+  } finally {
+    await lock.release();
+  }
 }
 
 /** The kept folders of `tag`: `failed/<tag>@*` and `held/<tag>`, each with a binary and a receipt. */
@@ -2538,6 +2590,7 @@ export type UpdateMode =
   | { readonly mode: "refresh-rows"; readonly ids: readonly string[] }
   | { readonly mode: "edge-rejudge"; readonly sha: string }
   | { readonly mode: "regate"; readonly commit: string }
+  | { readonly mode: "main"; readonly binary: string }
   | { readonly mode: "private"; readonly root: string; readonly candidate: string };
 
 /** A bad command line. A class of its own, extending `Error` directly. */
@@ -2555,7 +2608,14 @@ export class UpdateArgsError extends Error {
  */
 export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
   const BARE = ["--pin-digests", "--edge"];
-  const VALUE = ["--refresh-rows", "--edge-rejudge", "--regate", "--root", "--local-candidate"];
+  const VALUE = [
+    "--refresh-rows",
+    "--edge-rejudge",
+    "--regate",
+    "--main",
+    "--root",
+    "--local-candidate",
+  ];
   const seen = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
@@ -2571,7 +2631,7 @@ export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
       i++;
     } else throw new UpdateArgsError(`unknown argument ${JSON.stringify(a)}`);
   }
-  const modes = [...BARE, "--refresh-rows", "--edge-rejudge", "--regate"].filter((f) =>
+  const modes = [...BARE, "--refresh-rows", "--edge-rejudge", "--regate", "--main"].filter((f) =>
     seen.has(f),
   );
   const [root, candidate] = [seen.get("--root"), seen.get("--local-candidate")];
@@ -2599,6 +2659,8 @@ export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
       return { mode: "refresh-rows", ids: v.split(",").filter((s) => s !== "") };
     case "--edge-rejudge":
       return { mode: "edge-rejudge", sha: v };
+    case "--main":
+      return { mode: "main", binary: v };
     default:
       if (!FULL_SHA.test(v))
         throw new UpdateArgsError("--regate needs a full 40-character LethAL commit sha (F6)");
@@ -2612,6 +2674,7 @@ export interface UpdateHandlers {
   refreshRows(ids: readonly string[]): Promise<void>;
   edge(): Promise<void>;
   edgeRejudge(sha: string): Promise<void>;
+  main(binary: string): Promise<void>;
   regate(commit: string): Promise<void>;
   daily(): Promise<void>;
   privateGate(root: string, candidate: string): Promise<void>;
@@ -2629,6 +2692,8 @@ export async function dispatchUpdate(argv: readonly string[], h: UpdateHandlers)
       return h.edge();
     case "edge-rejudge":
       return h.edgeRejudge(m.sha);
+    case "main":
+      return h.main(m.binary);
     case "regate":
       return h.regate(m.commit);
     case "private":
@@ -2666,6 +2731,11 @@ if (import.meta.main) {
       const out = await edgeRejudge(realEdgeDeps(), sha);
       console.log(`al-runner-v3-update --edge-rejudge: ${out}`);
       process.exitCode = updateExitCode(true, [out]);
+    },
+    main: async (binary) => {
+      const out = await mainOnce(realDeps(), resolve(binary));
+      console.log(`al-runner-v3-update --main: ${out}`);
+      process.exitCode = out === "pass" ? 0 : 2;
     },
     regate: async (regateAt) => {
       const out = await updateOnce(realDeps(), { regateAt });
