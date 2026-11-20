@@ -4,6 +4,21 @@ lethal-preproc, 2026-11-20 (coord PR-252). Offline. No code; build only after th
 `/coord/handoff/PR-252/notes.md`; PERF-10's events `/coord/handoff/PR-217/perf10c.run.events.ndjson`; y3's
 `/coord/handoff/PR-204/y3.run.events.ndjson`.
 
+## 0a. Amendment 1 (2026-11-20, the rulings and the cause; before the build lands)
+- **RULED:** build it (Q1); report timestamps stay on wall time. **The cause (kraken):** server1 is a laptop and it
+  SUSPENDED 06:46:03Z-07:18:59Z (1,976 s); the owner keeps suspend on, so expect more. Linux `CLOCK_MONOTONIC` does not
+  count suspended time, so the monotonic helper EXCLUDES a sleep from durations and deadlines: the right behaviour.
+- **Added (orchestrator): suspend detection.** The run samples `wall − monotonic`; when that gap grows by more than a
+  threshold (pre-committed: 30 s) between two samples, a suspend of that length is recorded with its wall time.
+  - **Reported through a new WARNING code** `run-suspended` (`[lethal] the machine was suspended for N s at <ISO wall
+    time>; durations and deadlines exclude it (monotonic clock)`), one per suspend, plus the total in the pre-run/stats
+    lines. A warning lands in the report's existing warnings, so NO SessionReport field and no schema ripple (CLAUDE.md's
+    field ripple would regenerate every committed sample report live).
+  - Gates never suspend, so no gate's warning set moves (`GATE_WARNINGS` unchanged); a gate that did see one would fail by
+    name, which is right.
+  - **Red tests:** a stepped wall clock (+60 s between two samples with the monotonic clock still) emits exactly one
+    `run-suspended` with N ≈ 60 and its wall time; a +10 s step (under the threshold) emits none; a backward step emits none.
+
 ## 1. What the "wait" is (measured)
 - PR-251 saw one prefetch request per lane whose untimed part was the same 1,967.19 s. It is not a wait:
   - each request's `serve-request-timed` is followed by its own `serve-request-sized`, and lane 1's request 798 was
