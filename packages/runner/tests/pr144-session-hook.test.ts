@@ -13,6 +13,7 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "../src/backend";
+import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import type { RunEvent } from "../src/events";
 import { V3_DAEMON_CHURN_CLOSES } from "../src/mutant-windows";
 import { generateMutationSet, runSession } from "../src/orchestrator";
@@ -94,7 +95,8 @@ class StubBackend implements ExecutionBackend {
     readonly opts: {
       methodIsolation?: boolean;
       serveEntries?: boolean;
-      refuse?: boolean;
+      /** A number: only the first N mutant runs are refused (PR-277: the rest survive, so not every row errors). */
+      refuse?: boolean | number;
       /** PR-277: called on each mutant run (1-based), before it answers. */
       onMutantRun?: (n: number, b: StubBackend) => void;
     } = {},
@@ -136,7 +138,11 @@ class StubBackend implements ExecutionBackend {
       this.mutantRuns += 1;
       this.opts.onMutantRun?.(this.mutantRuns, this);
     }
-    if (active !== null && this.opts.refuse === true) {
+    const refuse = this.opts.refuse;
+    if (
+      active !== null &&
+      (refuse === true || (typeof refuse === "number" && this.mutantRuns <= refuse))
+    ) {
       return {
         ref,
         outcome: "error",
@@ -362,6 +368,7 @@ describe("PR-277: a stopped session skips the recheck; a signal abandons one in 
     runner?: (req: RecheckRequest) => Promise<never>;
     timeBudgetSeconds?: number;
     clockMs?: () => number;
+    refuse?: number;
   }) {
     const log: string[] = [];
     const calls: RecheckRequest[] = [];
@@ -390,7 +397,7 @@ describe("PR-277: a stopped session skips the recheck; a signal abandons one in 
             store,
             new StubBackend(log, {
               serveEntries: true,
-              refuse: true,
+              refuse: o.refuse ?? true,
               ...(onMutantRun !== undefined
                 ? { onMutantRun: (n: number, b: StubBackend) => onMutantRun(n, b, h) }
                 : {}),
@@ -477,6 +484,7 @@ describe("PR-277: a stopped session skips the recheck; a signal abandons one in 
     const log: string[] = [];
     let hooks: Hooks | undefined;
     const r = await stoppedRun({
+      refuse: 1,
       onMutantRun: (_n, _b, h) => {
         hooks = h;
       },
@@ -497,7 +505,57 @@ describe("PR-277: a stopped session skips the recheck; a signal abandons one in 
       (e) => e.type === "warning" && e.code === "withheld-recheck-failed",
     );
     expect(failed?.type === "warning" ? failed.message : "").toContain("SIGTERM or SIGINT");
-    expect(r.report.mutants.every((m) => m.verdict === "error")).toBe(true);
+    expectWithheldStayError(r.report);
     expect(r.events.at(-1)?.type).toBe("session-finished");
+    // The report is a signal stop, so the CLI exits 7.
+    expect(r.report.timeBudget?.stoppedBySignal).toBe(true);
+    expect(exitCodeForReport(r.report)).toBe(TIME_BUDGET_EXIT_CODE);
   });
+
+  test("ONE signal during a recheck: the nested run stops gracefully (not aborted), rows stay error, the report is a signal stop (exit 7)", async () => {
+    const seen: { stop: boolean | undefined; abort: boolean | undefined }[] = [];
+    let hooks: Hooks | undefined;
+    const r = await stoppedRun({
+      refuse: 1,
+      onMutantRun: (_n, _b, h) => {
+        hooks = h;
+      },
+      runner: async (req) => {
+        hooks?.stop?.();
+        // `stop` alone must not abort: only `again` does.
+        seen.push({ stop: req.stop?.aborted, abort: req.signal?.aborted });
+        return {
+          rows: [],
+          baseline: [{ name: "Sandbox Tests.T", outcome: "pass" as const }],
+          baselineElapsedMs: 1,
+          identity: {},
+        } as never;
+      },
+    });
+    expect(seen).toEqual([{ stop: true, abort: false }]);
+    // Closed once, before the runner: the second signal's close never ran.
+    expect(r.log).toEqual(["closeDaemons"]);
+    expect(r.events.some((e) => e.type === "mutant-rechecked")).toBe(false);
+    const failed = r.events.find(
+      (e) => e.type === "warning" && e.code === "withheld-recheck-failed",
+    );
+    expect(failed?.type === "warning" ? failed.message : "").toContain("stopped it");
+    expectWithheldStayError(r.report);
+    expect(r.report.timeBudget).toMatchObject({ stoppedBySignal: true, unscheduledCount: 0 });
+    expect(exitCodeForReport(r.report)).toBe(TIME_BUDGET_EXIT_CODE);
+  });
+
+  test("no signal: no late time-budget-reached, exit 0 (control)", async () => {
+    const r = await stoppedRun({ refuse: 1 });
+    expect(r.events.some((e) => e.type === "time-budget-reached")).toBe(false);
+    expect(exitCodeForReport(r.report)).toBe(0);
+  });
+
+  function expectWithheldStayError(report: Awaited<ReturnType<typeof stoppedRun>>["report"]) {
+    const withheld = report.mutants.filter((m) => m.withheldKill !== undefined);
+    expect(withheld.length).toBeGreaterThan(0);
+    expect(withheld.every((m) => m.verdict === "error")).toBe(true);
+    // Not every row errors, so the exit code reads the stop, not "nothing scored".
+    expect(report.mutants.some((m) => m.verdict !== "error")).toBe(true);
+  }
 });

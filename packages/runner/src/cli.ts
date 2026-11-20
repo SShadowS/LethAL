@@ -3458,7 +3458,8 @@ export function v3RecheckOf(a: {
     }));
     const exactSites = new Set(req.targets.map((t) => recheckSiteKey(t.mutant)));
     const backend = await a.build(methodConfig, join(a.scratchRoot, "recheck"));
-    // PR-277 (R1158): a signal during the recheck closes the nested daemons at once; the main session abandons the run.
+    // PR-277 (R1158): a second signal during the recheck closes the nested daemons at once; the main session abandons
+    // the run.
     const closeOnSignal = () => {
       backend.close?.().catch(() => {});
     };
@@ -3469,9 +3470,19 @@ export function v3RecheckOf(a: {
     try {
       const report = await a.runSession({
         ...base,
-        // PR-277: the main session owns the signals; the nested one never registers its own (R1158: it took a
-        // second SIGTERM as its own first, so the process did not end).
-        registerStopSignal: () => () => {},
+        // PR-277: the main session owns the process signals; the nested one never registers its own (R1158: it took
+        // a second SIGTERM as its own first, so the process did not end). The main session's first signal (`stop`)
+        // and second (`signal`) each spend the nested budget, so it starts nothing new.
+        registerStopSignal: (stop) => {
+          const on = [req.stop, req.signal].filter((s) => s !== undefined);
+          for (const s of on) {
+            if (s.aborted) stop();
+            else s.addEventListener("abort", stop, { once: true });
+          }
+          return () => {
+            for (const s of on) s.removeEventListener("abort", stop);
+          };
+        },
         backend,
         store,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),

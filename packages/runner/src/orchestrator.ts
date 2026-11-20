@@ -6729,29 +6729,40 @@ export const SECOND_SIGNAL_GRACE_MS = 10_000;
  * budget (the run stops at its next check and writes its report). PR-277 (R1158): the SECOND calls `again`
  * (abandon the recheck, close the daemons, so the report can still be written) and ends the process with the
  * signal stop's exit code after `graceMs` if it has not ended by then; a third ends it at once. The returned
- * remover runs when the session ends; a signal after that takes the default action.
+ * remover runs when the session ends: it also clears a pending grace timer, so the CLI writing the report is
+ * never cut off; a signal after that takes the default action.
  */
 export function registerProcessStopSignal(
   stop: () => void,
   again: () => void,
-  opts: { readonly exit?: (code: number) => void; readonly graceMs?: number } = {},
+  opts: {
+    readonly exit?: (code: number) => void;
+    readonly graceMs?: number;
+    /** Test seam: the grace timer. */
+    readonly timer?: { set: (fn: () => void, ms: number) => unknown; clear: (h: unknown) => void };
+  } = {},
 ): () => void {
   const signals = ["SIGTERM", "SIGINT"] as const;
   const exit = opts.exit ?? ((code: number) => process.exit(code));
+  const timer = opts.timer ?? {
+    set: (fn: () => void, ms: number) => setTimeout(fn, ms).unref(),
+    clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  };
   let seen = 0;
+  let grace: unknown;
   const handler = (): void => {
     seen += 1;
     if (seen === 1) stop();
     else if (seen > 2) exit(SIGNAL_STOP_EXIT_CODE);
     else {
       again();
-      // Unref'd: a session that writes its report within the grace exits with the report's own code.
-      setTimeout(() => exit(SIGNAL_STOP_EXIT_CODE), opts.graceMs ?? SECOND_SIGNAL_GRACE_MS).unref();
+      grace = timer.set(() => exit(SIGNAL_STOP_EXIT_CODE), opts.graceMs ?? SECOND_SIGNAL_GRACE_MS);
     }
   };
   for (const s of signals) process.on(s, handler);
   return () => {
     for (const s of signals) process.off(s, handler);
+    if (grace !== undefined) timer.clear(grace);
   };
 }
 
@@ -7521,14 +7532,15 @@ async function runSessionBody(
     clockMs(),
     clockMs,
   );
-  // PR-277 (R1158): any signal abandons a recheck in progress (it cannot start after one, see below); the second also
-  // closes the daemons, so nothing the report waits on can hang.
+  // PR-277 (R1158, amendment 1): the first signal spends the budget and stops a recheck in progress gracefully (its
+  // nested budget); the second aborts it and closes the daemons, so nothing the report waits on can hang.
+  const recheckStop = new AbortController();
   const recheckAbort = new AbortController();
   cleanups.push(
     (cfg.registerStopSignal ?? registerProcessStopSignal)(
       () => {
         timeBudget.stop();
-        recheckAbort.abort();
+        recheckStop.abort();
       },
       () => {
         recheckAbort.abort();
@@ -9808,6 +9820,7 @@ async function runSessionBody(
     await runWithheldRecheck({
       ...(stopped !== undefined ? { stopped } : {}),
       abort: recheckAbort.signal,
+      stopSignal: recheckStop.signal,
       events: [...collectedEvents],
       // PR-225: each target's candidate killers, from this run's own stored test results.
       notPassOf: (t) => cfg.store.notPassTestsOf(runId, t.mutant.mutantId, t.batchIndex),
@@ -9822,6 +9835,19 @@ async function runSessionBody(
       budgetSeconds: cfg.recheck.budgetSeconds,
       runner: cfg.recheck.runner,
       backend: cfg.backend,
+    });
+  }
+  // PR-277: a signal that came after the main pass's last check (during the recheck, or just before it) still makes
+  // the report a signal stop, so the CLI exits with the stop's code. Nothing was left unscheduled.
+  if (timeBudget.signalled && timeBudget.reached === undefined) {
+    emit({
+      type: "time-budget-reached",
+      budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
+      ...(timeBudget.memory !== undefined
+        ? { stoppedByMemory: timeBudget.memory }
+        : { stoppedBySignal: true as const }),
+      unscheduledCount: 0,
+      batchesNotStarted: 0,
     });
   }
   // PR-247: the mutant phase's test costs, once, sorted by test (code units); nothing when no mutant test ran.

@@ -65,8 +65,10 @@ export interface RecheckRequest {
   /** The targets' covering tests, `Codeunit.Method`, each once. The nested baseline is exactly these. */
   readonly tests: readonly string[];
   readonly budgetSeconds: number;
-  /** PR-277: aborted when a SIGTERM or SIGINT arrives during the recheck; the runner closes its daemons. */
+  /** PR-277: aborted by a SECOND SIGTERM or SIGINT: the runner closes its daemons and the run is abandoned. */
   readonly signal?: AbortSignal;
+  /** PR-277: aborted by the FIRST signal: the runner spends the nested budget, so the nested session stops gracefully. */
+  readonly stop?: AbortSignal;
 }
 
 /** Runs the nested session: method isolation, fresh serve daemons, the pinned config. */
@@ -308,8 +310,10 @@ export interface RecheckDeps {
   readonly runner: RecheckRunner;
   /** PR-277: what stopped the session (`stopNameOf`), when something did: the recheck then does not start. */
   readonly stopped?: string;
-  /** PR-277: aborted by a SIGTERM or SIGINT during the recheck: it is abandoned at once and its rows stay error. */
+  /** PR-277: aborted by a SECOND SIGTERM or SIGINT: the recheck is abandoned at once and its rows stay error. */
   readonly abort?: AbortSignal;
+  /** PR-277: aborted by the FIRST signal: the nested session stops gracefully; its rows still stay error. */
+  readonly stopSignal?: AbortSignal;
   /** The backend's own facts, read after `decideTransport`. */
   readonly backend: {
     readonly methodIsolation?: boolean;
@@ -402,8 +406,9 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
       tests,
       budgetSeconds: d.budgetSeconds,
       ...(abort !== undefined ? { signal: abort } : {}),
+      ...(d.stopSignal !== undefined ? { stop: d.stopSignal } : {}),
     });
-    // PR-277: a signal abandons the nested run at once (the runner closes its daemons); never wait on it.
+    // PR-277: a second signal abandons the nested run at once (the runner closes its daemons); never wait on it.
     result =
       abort === undefined
         ? await run
@@ -417,6 +422,16 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
           ]);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
+    d.emit({
+      type: "warning",
+      code: RECHECK_FAILED_CODE,
+      message: `[lethal] the withheld-kill recheck failed (${why}); ${targets.length} withheld kill(s) stay error (PR-144).`,
+    });
+    return { targets: targets.length, recovered: 0, skipped: `failed: ${why}` };
+  }
+  // PR-277: a nested run a signal stopped part-way did not finish normally: nothing in it recovers a row.
+  if (d.stopSignal?.aborted === true) {
+    const why = "a SIGTERM or SIGINT stopped it";
     d.emit({
       type: "warning",
       code: RECHECK_FAILED_CODE,

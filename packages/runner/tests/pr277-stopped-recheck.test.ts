@@ -66,6 +66,7 @@ const NESTED: NestedRecheckResult = {
 async function drive(o: {
   stopped?: string;
   abort?: AbortSignal;
+  stopSignal?: AbortSignal;
   notPass?: readonly string[];
   runner?: (req: RecheckRequest) => Promise<NestedRecheckResult>;
 }) {
@@ -91,6 +92,7 @@ async function drive(o: {
     },
     ...(o.stopped !== undefined ? { stopped: o.stopped } : {}),
     ...(o.abort !== undefined ? { abort: o.abort } : {}),
+    ...(o.stopSignal !== undefined ? { stopSignal: o.stopSignal } : {}),
   });
   return { log, emitted, summary };
 }
@@ -172,7 +174,60 @@ describe("runWithheldRecheck: a signal during the recheck (PR-277 part 2)", () =
   });
 });
 
+describe("runWithheldRecheck: the first signal during the recheck (amendment 1)", () => {
+  test("the runner gets the stop signal; a run it stopped part-way recovers nothing (no baseline event, no row)", async () => {
+    const ac = new AbortController();
+    let got: AbortSignal | undefined;
+    const r = await drive({
+      stopSignal: ac.signal,
+      runner: async (req) => {
+        got = req.stop;
+        ac.abort(); // the first signal arrives while the nested session runs; it then returns gracefully
+        return NESTED;
+      },
+    });
+    expect(got).toBe(ac.signal);
+    expect(r.emitted).toHaveLength(1);
+    expect(r.emitted[0]).toMatchObject({ type: "warning", code: "withheld-recheck-failed" });
+    expect(r.summary.recovered).toBe(0);
+  });
+
+  test("a stop signal that never fired: the rows are rechecked (control)", async () => {
+    const r = await drive({ stopSignal: new AbortController().signal });
+    expect(r.emitted.map((e) => e.type)).toEqual(["recheck-baseline-finished", "mutant-rechecked"]);
+  });
+});
+
 describe("registerProcessStopSignal: the second signal (PR-277 part 2)", () => {
+  test("the remover clears a pending grace timer, so exit(7) never fires after the session ended", () => {
+    const order: string[] = [];
+    const pending = new Map<number, () => void>();
+    let next = 0;
+    const off = registerProcessStopSignal(
+      () => order.push("stop"),
+      () => order.push("again"),
+      {
+        exit: (code) => order.push(`exit ${code}`),
+        timer: {
+          set: (fn) => {
+            next += 1;
+            pending.set(next, fn);
+            return next;
+          },
+          clear: (h) => {
+            pending.delete(h as number);
+          },
+        },
+      },
+    );
+    process.emit("SIGTERM");
+    process.emit("SIGTERM");
+    expect(pending.size).toBe(1);
+    off();
+    expect(pending.size).toBe(0);
+    expect(order).toEqual(["stop", "again"]);
+  });
+
   test("first spends the budget; second runs `again` and ends the process after the grace; third ends it at once", async () => {
     const order: string[] = [];
     const off = registerProcessStopSignal(
