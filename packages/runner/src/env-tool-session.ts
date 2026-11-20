@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ActivationConfig } from "./activation";
 import type { BcDevConfigSection } from "./cli";
+import { monoNow } from "./clock";
 import { EnvToolError, renderCommand } from "./env-tool";
 import type { EnvToolClient, EnvToolConfigSection, EnvToolReadyBlock } from "./env-tool";
 import { HarnessVerificationError } from "./harness";
@@ -182,7 +183,9 @@ export async function startEnvToolSession(args: {
       // requested" in ~2s, and the BC endpoint answers ~391s later. Publishing before that fails
       // against a dead endpoint.
       await client.run(startBlock, "startEnv", { ...supplied, envId });
-      await waitUntilReady(client, readyBlock, { ...supplied, envId }, now, sleep);
+      // PR-252: the readiness budget is a DURATION, so it rides the monotonic clock (a test injects
+      // `now`); `now` (wall) stays for the expiry check and the written `startedAtMs`.
+      await waitUntilReady(client, readyBlock, { ...supplied, envId }, args.now ?? monoNow, sleep);
     }
 
     // 2. resolve.

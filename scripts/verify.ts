@@ -56,8 +56,8 @@
  *      skipped (CI)`. See `acquireSlot` for the known ceilings (pid reuse).
  *      Known limit: a SIGTERM or SIGHUP sent to verify alone releases the lock, but the orphaned
  *      `bun test` child may keep running (Ctrl-C reaches the whole group and is fine).
- *   2. If io pressure `full` avg10 is >= 5.0 when read just before the test step (after the slot
- *      wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
+ *   2. If io pressure `full` avg10 is >= 5.0, or (R1157) cpu `some` avg60 is >= 20.0, when read just
+ *      before the test step (after the slot wait), the test child gets `--timeout=15000` (bun's default is 5000). Unreadable pressure
  *      (Windows) keeps the default, except on the Windows CI job (R726), which gets 60000. Receipt line: `per-test timeout: ...`. See `testTimeout`.
  *   3. A whole-run wall limit of 900 s on every child that verify runs (typecheck, `bun test`; `RUN_LIMIT_S`),
  *      besides the per-file one.
@@ -1009,6 +1009,12 @@ export const DEFAULT_TIMEOUT_MS = 5000;
 export const RAISED_TIMEOUT_MS = 15000;
 export const IO_FULL_RAISE = 5.0;
 /**
+ * R1157: CPU contention raises it too. cpu `some` avg60 at start, measured on seven VERIFYs on
+ * 2026-11-20: every run that failed only on 5 s timeouts read 37.5 or more, every pass 15.8 or less.
+ * avg60, not avg10: a brief dip (one failing run read avg10 21.7, avg60 48.3) must not lower it.
+ */
+export const CPU_SOME_RAISE = 20.0;
+/**
  * R726: the Windows CI job has had single-worker async-I/O stalls of about 130 s (resume.test.ts,
  * corpus-snapshot.test.ts), which timed out 27 and 6 tests at 5 s. io pressure cannot be read
  * there, so the rule is by platform. 60 s still catches a real hang; the per-file watchdog stays.
@@ -1047,6 +1053,14 @@ export function testTimeout(
     return {
       ms: RAISED_TIMEOUT_MS,
       line: `per-test timeout: ${RAISED_TIMEOUT_MS} ms (io full avg10 ${m[1]} >= ${IO_FULL_RAISE})`,
+    };
+  }
+  // R1157: an unreadable cpu part (`cpu skipped (...)`) matches nothing and keeps the default.
+  const c = /cpu some [\d.]+\/([\d.]+)\//.exec(pressure ?? "");
+  if (c?.[1] !== undefined && Number(c[1]) >= CPU_SOME_RAISE) {
+    return {
+      ms: RAISED_TIMEOUT_MS,
+      line: `per-test timeout: ${RAISED_TIMEOUT_MS} ms (cpu some avg60 ${c[1]} >= ${CPU_SOME_RAISE})`,
     };
   }
   return { ms: DEFAULT_TIMEOUT_MS, line: `per-test timeout: ${DEFAULT_TIMEOUT_MS} ms (default)` };

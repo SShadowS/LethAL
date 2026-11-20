@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**52 of 1116 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**56 of 1122 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1155,12 +1155,18 @@ that ordering is the priority.
 - **R1143** · Reuse an earlier run's withheld-kill recheck baseline when the build, sources and test app are the same (R1142's option B); filed, not built · [R1143.md](docs/roadmap/R1143.md) · open
 - **R1145** · An al-runner launcher prefix (alRunnerV3.launcher), so performance runs can wrap the daemons (perf, stderr capture) while LethAL still hashes and gates the real binary · [R1145.md](docs/roadmap/R1145.md) · open
 - **R1146** · Adopt al-runner's stopAfterFirstFailure (upstream #8484) for mutant requests: the fork's version cut DO test time 20-23% with 0 moved verdicts (PR-223); re-measure upstream's before use · [R1146.md](docs/roadmap/R1146.md) · open — trigger: the first gated `current` that contains upstream #8484
-- **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — measure first (coord PR-228): census of DO's cut kinds, a direct kept-vs-fresh DO check on `current`…
+- **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — parked (orchestrator, 2026-11-20, coord PR-228): measured and built, the ON path is unsafe as…
 - **R1148** · Survived mutants run every covering test, but on DO only 52% of those tests reach the mutated statement: pruning covering tests to the reaching ones (statement grain, codeunit-order safe) is the largest LethAL-owned speed lever left · [R1148.md](docs/roadmap/R1148.md) · open — measure first: survivors' seconds in tests outside reachedBy (codeunit-order rule), then a v3 A/B on a…
 - **R1149** · Restore leg O1's full corpus-set expectation (every write test passes) when al-runner's P2 lets a partner login's memo reads run with BC's value; until then O1 names the f9116dc96 row-insert refusal as a known coverage loss (PR-233) · [R1149.md](docs/roadmap/R1149.md) · open — trigger: the first gated `current` carrying upstream's P2 (the partner-OnAfterLogin memo probe, #8239)
 - **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
 - **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · open
 - **R1152** · Leg C's serve-keep-reasons checks only some keep-list entries: a reworded refusal text (the Company-table one, upstream since edge-4ebfe7913) passed every gate and turned into a DO restart storm (PERF-10, 2026-11-19) · [R1152.md](docs/roadmap/R1152.md) · open — add a serve-keep-reasons case per keep entry that can be produced without the .NET helper, starting…
+- **R1154** · PERF-10's '~5,900 lane-s of overlapping serve requests' was a machine suspend, not overlap: old event files mix Date.now request walls with monotonic atMs, so a request in flight across a sleep looks 33 min long; exclude suspends when summing old runs (PR-252 makes new runs' walls monotonic) · [R1154.md](docs/roadmap/R1154.md) · closed 2026-11-20 — the overlap was a suspend (PR-273); PR-252 (monotonic durations) and PR-264…
+- **R1155** · y2/y3 verdicts on edge-4ebfe7913 that ran through a by-value record copy are suspect (that build guessed the copy keeps the caller's filters); 2,204 private-corpus mutants are labelled, and they clear once `current` is a build that measures the shape · [R1155.md](docs/roadmap/R1155.md) · open — trigger: `current` moves to a build that runs or refuses these shapes as BC does…
+- **R1156** · al-runner v3's per-send bound check costs 237 ms per send on DO (69 MB of instrumented .al): 2,381 lane-s, 90% of perf10c's lane idle · [R1156.md](docs/roadmap/R1156.md) · open
+- **R1157** · VERIFY's longer per-test timeout reads only io pressure: under CPU contention, R917 and other near-limit tests time out at 5 s · [R1157.md](docs/roadmap/R1157.md) · done (8c09923f4)
+- **R1158** · A SIGTERM-stopped v3 run still runs the withheld-kill recheck (a second SIGTERM is ignored; SIGKILL needed), and a recheck baseline of 0 tests took 547 s · [R1158.md](docs/roadmap/R1158.md) · open
+- **R1159** · Three findings from moving `current` to upstream main ccd0f823d: a new RelationFieldNo refusal (the largest DO coverage loss; BC measured 0, edge-4ebfe7913 answered 1), the repro gate's .NET repros refused for BC build 53758, and a repro control that was never measured · [R1159.md](docs/roadmap/R1159.md) · open — trigger: al-runner pins the RelationFieldNo cell (asked, q-20261120T172525-254a31af); then re-measure…
 
 ---
 

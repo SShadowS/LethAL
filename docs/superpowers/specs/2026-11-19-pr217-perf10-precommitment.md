@@ -139,3 +139,27 @@ stands.
    = y2's). Any other count or digest stops PERF-10 before the main run; it is reported, not adjusted.
 3. **LethAL head:** master after those merges (amendment 1 named "master with PR-227 and PR-233"; it is now that head, which
    also holds PR-209 and PR-236). The commit list against df6d0073 grows accordingly and is reported the same way.
+
+**What happened since amendment 2 (recorded, not a prediction):** the first start (19:37Z) was stopped at 20:18Z by a restart storm
+(a keep-list text reworded upstream, the Company-table refusal); the pair was widened with a kept-vs-fresh check (28/28,
+master c3355859), and the run restarted at 22:36:11Z (tag perf10b) from master c3355859. The pre-run checks of amendment 2 held
+on both starts. The private compile cache is warm from the stopped start.
+
+## Amendment 3 (2026-11-19 ~23:55Z): ADDED MID-RUN, NOT A PRE-COMMITMENT
+**Written at 77 minutes into the restarted run, from what the run showed.** The orchestrator's ruling, with its honesty
+conditions. It is a reporting rule, decided after seeing data; nothing here predicts.
+
+- **What the run showed:** 24 of its first 33 daemon closes were refusals with a text y3 never met (0 in y3's events and store):
+  `Record.SetFilter(): a record handed by value whose view the probe did not measure (...)`, from al-runner's
+  `al-vm/src/records/by_value_view.rs` (BY_VALUE_VIEW). It is present in plain upstream 0e6397742, in perf-combined and in
+  upstream main c5861dcd9, and ABSENT at edge-4ebfe7913. So it is upstream's new refusal, not the fork's. y3 ran these tests.
+- **The rule:** a mutant whose covering tests include a NotRun row with that refusal is SET ASIDE, the same way as the owner's
+  O1 set-aside rule (amendment 1), and reported apart: how many, and their y2/y3 verdicts.
+- **Honesty conditions (the orchestrator's):**
+  1. this amendment says plainly that it was added mid-run;
+  2. the result gives BOTH speed figures (over ALL covered mutants, and over those not set aside) and BOTH verdict tables (all,
+     and with the set-aside), so the set-aside hides nothing;
+  3. the restarts on this refusal and their warm-up cost are counted separately.
+- **After PERF-10:** this refusal loses tests y3 ran, and the next `current` update brings it to every DO run. So: an upstream
+  report (duplicate search first, invented repro, BC's answer on a leased server), and a keep-list candidate with the usual
+  kept-vs-fresh proof.

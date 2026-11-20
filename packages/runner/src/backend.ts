@@ -505,8 +505,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 /**
  * PR-88: what the request-sized sink gets (`ExecutionBackend.setRequestSizedSink`), per serve request that
  * gave a reading; also the body of the `serve-request-sized` event. Bytes throughout. `g` is the peak less
- * the floor. `calls` lists each call with its test entries in the request and its highest cost per entry
- * after the reading.
+ * the floor. `calls` lists each call with its test entries in the request and its recent price per entry
+ * (max of the last K readings; PR-246) after the reading.
  */
 export type V3RequestSized = {
   /** PR-99: the lane (0 = the owner's) whose daemon served the request. */

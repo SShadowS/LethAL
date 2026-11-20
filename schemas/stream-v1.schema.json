@@ -2694,6 +2694,22 @@
             }
           }
         },
+        "stoppedByDaemonChurn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lane",
+            "closes"
+          ],
+          "properties": {
+            "lane": {
+              "type": "number"
+            },
+            "closes": {
+              "type": "number"
+            }
+          }
+        },
         "seq": {
           "type": "number"
         },

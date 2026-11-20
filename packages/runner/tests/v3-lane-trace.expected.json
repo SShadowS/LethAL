@@ -281,6 +281,7 @@
   "l4Excluded": 0,
   "l4Widened": 0,
   "l4OrderBroken": 0,
+  "refusedCutEntries": 0,
   "keptDrifts": 0,
   "selectedOnlyRequests": 2,
   "selectedOnlyTestsSkipped": 4,

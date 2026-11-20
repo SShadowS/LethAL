@@ -1590,6 +1590,35 @@ describe("R616b a longer per-test timeout only under measured io pressure", () =
     expect(t.line).toBe("per-test timeout: 5000 ms (default)");
     expect(testTimeout(press("5.00"), "linux", false).ms).toBe(15000); // the edge is inclusive
   });
+  // R1157: CPU contention (cpu `some` avg60 >= 20) raises it too; figures from 2026-11-20's VERIFYs.
+  const cpu = (avg10: string, avg60: string, ioFull = "0.00"): string =>
+    `io some 0.40/0.89/0.62 full ${ioFull}/0.00/0.00; cpu some ${avg10}/${avg60}/44.57 full 0.00/0.00/0.00`;
+  test("R1157: cpu some avg60 48.27 (io full 0) raises to 15000 and names the cpu rule", () => {
+    const t = testTimeout(cpu("21.66", "48.27"), "linux", false);
+    expect(t.ms).toBe(15000);
+    expect(t.line).toBe("per-test timeout: 15000 ms (cpu some avg60 48.27 >= 20)");
+  });
+  test("R1157: cpu some avg60 15.84 keeps 5000; exactly 20.00 raises (inclusive)", () => {
+    expect(testTimeout(cpu("10.92", "15.84"), "linux", false).ms).toBe(5000);
+    expect(testTimeout(cpu("1.00", "20.00"), "linux", false).ms).toBe(15000);
+  });
+  test("R1157: a high avg10 with a low avg60 keeps 5000 (avg60 is read, not avg10)", () => {
+    expect(testTimeout(cpu("81.00", "10.00"), "linux", false).ms).toBe(5000);
+  });
+  test("R1157: no readable cpu part keeps today's result", () => {
+    const t = testTimeout(
+      "io some 0.40/0.89/0.62 full 0.00/0.00/0.00; cpu skipped (cannot read /proc/pressure/cpu: ENOENT)",
+      "linux",
+      false,
+    );
+    expect(t.ms).toBe(5000);
+    expect(t.line).toBe("per-test timeout: 5000 ms (default)");
+  });
+  test("R1157: io full >= 5 still raises with low CPU, and names the io rule", () => {
+    expect(testTimeout(cpu("1.00", "2.00", "7.00"), "linux", false).line).toBe(
+      "per-test timeout: 15000 ms (io full avg10 7.00 >= 5)",
+    );
+  });
   test("unreadable pressure keeps the default and says so", () => {
     for (const p of [
       undefined,

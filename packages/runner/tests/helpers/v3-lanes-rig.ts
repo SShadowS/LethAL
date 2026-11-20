@@ -48,20 +48,11 @@ export const SLEEPER_AL = `codeunit 79000 "Logic"
     end;
 }
 `;
-const testAl = `codeunit ${CU} "Tests${CU}"
+/** PR-250: the test codeunit with `methods` (default A and B). */
+const testAlOf = (methods: readonly string[]) => `codeunit ${CU} "Tests${CU}"
 {
     Subtype = Test;
-
-    [Test]
-    procedure A()
-    begin
-    end;
-
-    [Test]
-    procedure B()
-    begin
-    end;
-}
+${methods.map((m) => `\n    [Test]\n    procedure ${m}()\n    begin\n    end;\n`).join("")}}
 `;
 
 export interface FakeRow {
@@ -123,6 +114,10 @@ export interface Req {
   readonly mutants: string[];
   /** PR-99 test 10: the request carried `runSelectedOnly: true` (PR-94). */
   readonly selectedOnly: boolean;
+  /** PR-250: each entry's `excludeTests`, by entry id (absent: none). */
+  readonly excludes: Record<string, readonly string[]>;
+  /** PR-250 (`honorExcludes`): excluded tests that RAN with their rows hidden (an unflagged request, R1094). */
+  readonly hiddenRan: string[];
 }
 
 export interface ServeCtl {
@@ -133,6 +128,11 @@ export interface ServeCtl {
   echo?: (m: string, daemon: number, n: number) => FakeRow;
   /** PR-98: the fake child's pid for daemon `d`; absent (as in a real fake) unless a test asks. */
   pid?: (daemon: number) => number;
+  /**
+   * PR-250: leave out the rows of an entry's `excludeTests`, by prefix as v3 does (default: rows as `rows`
+   * gives). With `runSelectedOnly` they do not run; without it they run hidden (`Req.hiddenRan`).
+   */
+  honorExcludes?: boolean;
 }
 
 function fakeServe(ctl: ServeCtl) {
@@ -174,6 +174,12 @@ function fakeServe(ctl: ServeCtl) {
             ids: entries.map((e) => String(e.id)),
             mutants,
             selectedOnly: body.runSelectedOnly === true,
+            excludes: Object.fromEntries(
+              entries
+                .filter((e) => Array.isArray(e.excludeTests))
+                .map((e) => [String(e.id), (e.excludeTests as string[]).map(String)]),
+            ),
+            hiddenRan: [],
           };
           requests.push(req);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
@@ -213,7 +219,17 @@ function fakeServe(ctl: ServeCtl) {
                       message: `LETHAL-ECHO:${m}:true`,
                     },
                   ]
-                : ctl.rows(m, cu, daemon, n);
+                : ctl.rows(m, cu, daemon, n).filter((r) => {
+                    const name = `Codeunit${cu}.${r.method}`;
+                    const out =
+                      ctl.honorExcludes === true &&
+                      (req.excludes[String(e.id)] ?? []).some((x) =>
+                        name.toLowerCase().startsWith(x.toLowerCase()),
+                      );
+                    // R1094: unflagged, v3 still RUNS an excluded test and only hides its row
+                    if (out && !req.selectedOnly) req.hiddenRan.push(name);
+                    return !out;
+                  });
             for (const r of rs) lines.push(testLine(cu, r, String(e.id)));
             per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
           }
@@ -244,6 +260,9 @@ function fakeOneShot(rows: RowsFn) {
       method: r.method,
       name: `Codeunit${cu}.${r.method}`,
       status: r.status,
+      // PR-250: a refusal's text and notRun, as v3 writes them
+      ...(r.message !== undefined ? { message: r.message } : {}),
+      ...(r.notRun === true ? { notRun: true } : {}),
     }));
     return { exitCode: 0, stdout: JSON.stringify({ tests }), stderr: "" };
   };
@@ -281,6 +300,8 @@ export interface LanesRig {
   readonly serve: ReturnType<typeof fakeServe>;
   readonly one: ReturnType<typeof fakeOneShot>;
   readonly notices: string[];
+  /** PR-250: the test codeunit's tests (`SUITE` unless `methods` was given). */
+  readonly suite: readonly TestMethodRef[];
   /** `rm -rf` of the scratch root. */
   dispose(): Promise<void>;
 }
@@ -301,8 +322,11 @@ export async function lanesRig(
     pairBatch?: boolean;
     /** PR-241: the pack cap (the backend's `packEntries` option; the env var is not read when set). */
     packEntries?: number;
+    /** PR-250: the test codeunit's methods, in order (default A and B). */
+    methods?: readonly string[];
   } = {},
 ): Promise<LanesRig> {
+  const suite = o.methods === undefined ? SUITE : o.methods.map(ref);
   await initParser();
   const root = await mkdtemp(join(tmpdir(), "lethal-v3lanes-"));
   rigRoots.push(root);
@@ -333,7 +357,7 @@ export async function lanesRig(
     join(testDir, "app.json"),
     JSON.stringify({ id: "ff7935bb-9fe2-4f7a-adf3-aa7132a41fe7", name: "Tests" }),
   );
-  await writeFile(join(testDir, `Tests${CU}.Codeunit.al`), testAl);
+  await writeFile(join(testDir, `Tests${CU}.Codeunit.al`), testAlOf(suite.map((t) => t.method)));
   const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
   await writeFile(
     join(deps, "Microsoft_System.app"),
@@ -370,8 +394,8 @@ export async function lanesRig(
   (b as unknown as { pairBatch: boolean }).pairBatch = o.pairBatch === true;
   if (o.afterLaneCopy !== undefined) b.seams.afterLaneCopy = o.afterLaneCopy;
   b.useBuildSymbols([]);
-  b.useDiscoveredTests(SUITE);
-  b.useSessionTests(SUITE);
+  b.useDiscoveredTests(suite);
+  b.useSessionTests(suite);
   b.useMutantBudgetFloor(1000, 1000);
   const views = o.lanes === 0 ? [] : b.lanes(o.lanes ?? 3);
   await b.deploy(batch);
@@ -384,6 +408,7 @@ export async function lanesRig(
     serve,
     one,
     notices,
+    suite,
     dispose: () => rm(root, { recursive: true, force: true }),
   };
 }
@@ -395,7 +420,7 @@ export async function laneBaseline(r: LanesRig): Promise<void> {
   r.b.baselinePhase(true);
   try {
     await v0.activate(null);
-    for (const t of SUITE) await v0.run(t, OPTS);
+    for (const t of r.suite) await v0.run(t, OPTS);
   } finally {
     r.b.baselinePhase(false);
   }

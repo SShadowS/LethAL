@@ -680,7 +680,7 @@ export type RunEventInput =
        * throughout: the daemon's `floor` and `start` resident size, the `sampledPeak` of the 200 ms
        * sampler, `hwm` (`VmHWM`, present only when its reset was verified) and `g` (the peak less the
        * floor). `peakSource` says which the estimator used. `calls` lists each call with its test
-       * entries in the request and its highest cost per entry after the reading. Debug: events stream
+       * entries in the request and its recent price per entry (max of the last K readings; PR-246) after the reading. Debug: events stream
        * only, not the report.
        */
       readonly type: "serve-request-sized";
@@ -712,6 +712,8 @@ export type RunEventInput =
         readonly boundBytes: number;
         readonly source: string;
       };
+      /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
+      readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
     }
   | {
       /**

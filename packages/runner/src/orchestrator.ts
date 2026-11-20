@@ -121,6 +121,7 @@ import {
   isolateBreakingMutants,
   parseAlcErrors,
 } from "./bisect";
+import { createSuspendWatch, monoNow, suspendMessage } from "./clock";
 import {
   type ClosedWorldResult,
   PENDING_SUFFIX,
@@ -219,6 +220,8 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  DaemonChurnGuard,
+  type DaemonChurnStop,
   ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
@@ -1879,7 +1882,7 @@ export interface SessionConfig {
    * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
    */
   readonly registerStopSignal?: (stop: () => void) => () => void;
-  /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to `Date.now`. */
+  /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to the monotonic `monoNow` (PR-252). */
   readonly clockMs?: () => number;
   /**
    * R53 (`--stop-hung-sessions`), OPT-IN, default off.
@@ -5571,7 +5574,7 @@ async function closeLeaseScope(a: {
   // failure here must not mask/replace whatever real error is already
   // propagating.
   a.emit({ type: "phase-entered", phase: "teardown" });
-  const teardownStartedMs = Date.now();
+  const teardownStartedMs = monoNow();
   // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
   // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
   if (!a.safety.isUnsafe) {
@@ -5591,7 +5594,7 @@ async function closeLeaseScope(a: {
   await (
     a.backend as { drainControlRequests?: (ms: number) => Promise<void> }
   ).drainControlRequests?.(CONTROL_DRAIN_MS);
-  a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+  a.emit({ type: "phase-left", phase: "teardown", elapsedMs: monoNow() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
   // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
   // refusal on its own calls is included). Handed back AFTER the cleanup above, for the caller to
@@ -6097,7 +6100,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     testCount: tests.length,
     batchIndex: batchIdx,
   });
-  const baselineStartedMs = Date.now();
+  const baselineStartedMs = monoNow();
   const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
   // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
   // instrumented source against this exact test app stands in for re-running it. Both hashes
@@ -6351,7 +6354,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // emit, so a baseline that aborted used to report 0 ms and silently
   // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
   // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
-  const baselineElapsedMs = Date.now() - baselineStartedMs;
+  const baselineElapsedMs = monoNow() - baselineStartedMs;
   emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
   if (safety.isUnsafe) return "unsafe"; // the caller stops the session: no mutant scheduling, no next batch
   // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
@@ -6628,7 +6631,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     phase: "mutants",
     detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})${longNote}`,
   });
-  const mutantsStartedMs = Date.now();
+  const mutantsStartedMs = monoNow();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
   const mutantLoopArgs = {
@@ -6664,7 +6667,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   } else {
     await runMutantsOnBackend({ ...mutantLoopArgs, backend });
   }
-  emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
+  emit({ type: "phase-left", phase: "mutants", elapsedMs: monoNow() - mutantsStartedMs });
   // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
   // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
   // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
@@ -6777,7 +6780,29 @@ async function runSessionBody(
   // This is the ONLY fan-out — R104 deleted `cli.ts`'s `fanOutEmit`, which existed only to squeeze
   // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
-  const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
+  // PR-250: the daemon-churn guard reads the stream LAST, so its warning follows the close that tripped it
+  // in every subscriber; it stops through the budget (`timeBudget`, made below, before any daemon starts).
+  const churn = new DaemonChurnGuard();
+  const suspendWatch = createSuspendWatch();
+  const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
+  const emit: RunEmitter = createEmitter([
+    (e) => collectedEvents.push(e),
+    ...(cfg.emit ?? []),
+    (e) => {
+      const s = churn.see(e);
+      if (s !== undefined) onChurn.stop?.(s);
+    },
+    // PR-252: a suspend is seen at the next event (ponytail: no timer; events are frequent in a run).
+    () => {
+      const s = suspendWatch.sample();
+      if (s !== undefined)
+        emit({
+          type: "warning",
+          code: "run-suspended",
+          message: suspendMessage(Math.round(s.ms / 1000), new Date(s.atWallMs).toISOString()),
+        });
+    },
+  ]);
   // R631: a tripwire. LethAL-built trees hold no links (the roots refused above), so this never
   // fires unless something LethAL builds starts carrying one; then the report says so.
   cleanups.push(
@@ -7467,9 +7492,9 @@ async function runSessionBody(
   // that field's doc comment) are folded from the `phase-left` events emitted below, not tracked in
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
-  const sessionStartedMs = Date.now();
+  const sessionStartedMs = monoNow();
   // R912: the `--time-budget` clock starts with the session, and is shared by every batch.
-  const clockMs = cfg.clockMs ?? Date.now;
+  const clockMs = cfg.clockMs ?? monoNow;
   // R955: always one: with no `--time-budget` it is unlimited until a SIGTERM or SIGINT spends it,
   // and then the run stops through the same checks and writes its report (time-budget-reached).
   const timeBudget = new TimeBudget(
@@ -7478,8 +7503,16 @@ async function runSessionBody(
     clockMs,
   );
   cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
+  onChurn.stop = (s) => {
+    emit({
+      type: "warning",
+      code: "al-runner-v3-daemon-churn",
+      message: `[lethal] al-runner-v3-daemon-churn: lane ${s.lane}'s serve daemon closed ${s.closes} times in a row with no mutant scored anywhere in the session, so the budget is spent: no mutant or batch starts after the ones in flight. Read its serve-daemon-closed events for the refusal that keeps closing it (PR-250)`,
+    });
+    timeBudget.stopForChurn(s);
+  };
   emit({ type: "phase-entered", phase: "generate" });
-  const generateStartedMs = Date.now();
+  const generateStartedMs = monoNow();
   const {
     files: generatedFiles,
     duplicateObjects,
@@ -7593,7 +7626,7 @@ async function runSessionBody(
   if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
     throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
   }
-  const generateMutationSetMs = Date.now() - generateStartedMs;
+  const generateMutationSetMs = monoNow() - generateStartedMs;
   // R307 section 3 (fail closed, I3), R442: the coarse tuples of every site this run numbered no
   // ordinal for. A mutant matching one is not skipped by history, not carried by resume and takes
   // no equivalence mark this run (`isCarryDisabled`); its key is still written. Undefined when
@@ -7767,6 +7800,8 @@ async function runSessionBody(
   // memory guard stops the session through the budget (R955's path).
   cfg.backend.useStopHandle?.({
     spent: () => timeBudget.exhausted,
+    // PR-250: the churn guard's stop is a spent budget, never `signalled` (it kills nothing); a real signal,
+    // before or after it, still is one.
     signalled: () => timeBudget.signalled,
     stopForMemory: (info) => timeBudget.stopForMemory(info),
   });
@@ -8552,7 +8587,7 @@ async function runSessionBody(
           cfg.backend,
           cfg.testDir,
           dependentsTarget,
-          Date.now,
+          monoNow,
         );
         if (dependents !== null && Array.isArray(dependents.read)) {
           dependentNames = [...dependents.read, ...dependents.transitive].map(
@@ -8594,7 +8629,7 @@ async function runSessionBody(
             targetDependencies: dependenciesOf(projectManifest),
             transitive: dependents.transitive,
             startedMs: dependents.startedMs,
-            now: Date.now,
+            now: monoNow,
             // R847: the keyed read of what is new, for an installed app that is not a dependent.
             ...(cfg.backend.installedVersions !== undefined &&
             cfg.backend.objectOwners !== undefined &&
@@ -8626,7 +8661,7 @@ async function runSessionBody(
         }
       }
       let compiled: CompiledArtifact | null = null;
-      const deployStartedMs = Date.now();
+      const deployStartedMs = monoNow();
       /**
        * Deploys `batchDir` once, with every guard the first deploy had (R709, the version-conflict
        * retry, R90's outcome record). Returns alc's rejection, or the compiled artifact; any other
@@ -8873,7 +8908,7 @@ async function runSessionBody(
               undefined,
               removed.get(m) ?? restNote,
             );
-          emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
+          emit({ type: "phase-left", phase: "deploy", elapsedMs: monoNow() - deployStartedMs });
           continue; // batch aborted, next batch still attempted
         }
         for (const m of failedExecute) {
@@ -8936,7 +8971,7 @@ async function runSessionBody(
       // continue after it — not from the acquire grant's now-stale `lastCompletedOpSeq`.
       if (leaseSession !== undefined) leaseSession.rebindBackend(cfg.backend);
       {
-        const deployElapsedMs = Date.now() - deployStartedMs;
+        const deployElapsedMs = monoNow() - deployStartedMs;
         emit({
           type: "batch-published",
           batchIndex: batchIdx,
@@ -9621,6 +9656,7 @@ async function runSessionBody(
         ? { stoppedBySignal: true as const }
         : {}),
       ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -9766,7 +9802,7 @@ async function runSessionBody(
         })),
     });
   }
-  const totalMs = Date.now() - sessionStartedMs;
+  const totalMs = monoNow() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
   // the SAME `cfg` fields the `run-configured` event above (~line 1933) was built from, one source,
@@ -10138,6 +10174,8 @@ async function runNamedMutantsBody(
   // The section G gate and a lost lease only EMIT `batch-invalidated`; runSession applies them in
   // the fold. Here they are collected and applied to the returned outcomes before returning.
   const invalidations: Array<{ batchIndex: number; reason: string }> = [];
+  // PR-252: suspend detection is deliberately not wired on this attach path (a few named mutants;
+  // durations are monotonic anyway).
   const emit: RunEmitter = createEmitter([
     (e) => {
       if (e.type === "batch-invalidated") {
@@ -12987,11 +13025,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // reached. Every capped walk is noted on its `failureNote` and warned by name below.
     let hangs = 0; // non-replay timeouts met so far
     let capRef: TestMethodRef | undefined; // the 3rd hang's ref: set only on a capped walk
-    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop) ran out between two covering
-    // steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
+    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop, nor PR-250's churn stop unless a
+    // signal came too) ran out between two covering steps. The mutant is dropped unrecorded; see the exit
+    // right after the `for await`.
     let budgetCut = false;
     const clockSpent = (): boolean =>
-      args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
+      args.timeBudget?.exhausted === true &&
+      args.timeBudget.memory === undefined &&
+      (args.timeBudget.churn === undefined || args.timeBudget.signalled);
     // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
     type WalkSnap = HeldTimeout["snap"];
     const snapNow = (): WalkSnap => ({
@@ -14029,7 +14070,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // mutant whose calls ended while it arrived may hold a killed al-runner's answer, not a result.
     // It is never recorded: it and the rest are left out, as the baseline drops such a call. Not for
     // the memory guard's stop (it also sets `signalled`, R948): it kills nothing, and the group in
-    // flight keeps its verdicts.
+    // flight keeps its verdicts. PR-250's churn stop does not set `signalled`, so a real signal after it
+    // still drops the mutant here.
     if (args.timeBudget?.signalled === true && args.timeBudget.memory === undefined) {
       if (args.sink === undefined) budgetSpent(at);
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");

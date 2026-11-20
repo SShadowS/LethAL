@@ -2238,6 +2238,8 @@ export interface SessionReport {
       readonly boundBytes: number;
       readonly source: string;
     };
+    /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
+    readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -4508,7 +4510,18 @@ export function renderConsole(r: SessionReport): string {
   if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
     const mem = r.timeBudget.stoppedByMemory;
-    if (mem !== undefined) {
+    const churn = r.timeBudget.stoppedByDaemonChurn;
+    if (churn !== undefined) {
+      // PR-250: the churn guard happens in the mutant phase only, so no baseline was stopped.
+      lines.push(
+        `STOPPED BY THE DAEMON-CHURN GUARD: lane ${churn.lane}'s al-runner-v3 serve daemon closed ${churn.closes} times in a row with no mutant scored anywhere in the session (al-runner-v3-daemon-churn, PR-250); the --time-budget did not run out. Read the serve-daemon-closed events for the refusal that keeps closing it, then continue with --resume.`,
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
+      );
+      if (r.timeBudget.stoppedBySignal === true)
+        lines.push(
+          "A STOP SIGNAL (SIGTERM or SIGINT) also arrived; a mutant whose calls it ended was left out (R955).",
+        );
+    } else if (mem !== undefined) {
       // R948: no --time-budget was spent; say memory, never "--time-budget 0 s".
       const gib = (n: number) => (n / 2 ** 30).toFixed(1);
       lines.push(
@@ -4544,7 +4557,7 @@ export function renderConsole(r: SessionReport): string {
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );
     }
-    if (mem === undefined && r.timeBudget.stoppedBySignal !== true) {
+    if (mem === undefined && churn === undefined && r.timeBudget.stoppedBySignal !== true) {
       lines.push(
         `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
       );
