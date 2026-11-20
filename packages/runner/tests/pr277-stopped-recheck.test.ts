@@ -69,6 +69,8 @@ async function drive(o: {
   stopSignal?: AbortSignal;
   notPass?: readonly string[];
   runner?: (req: RecheckRequest) => Promise<NestedRecheckResult>;
+  /** Runs inside the pre-recheck `closeDaemons`. */
+  duringClose?: () => void;
 }) {
   const log: string[] = [];
   const emitted: RunEventInput[] = [];
@@ -88,6 +90,7 @@ async function drive(o: {
       serveEntries: true,
       closeDaemons: async () => {
         log.push("closeDaemons");
+        o.duringClose?.();
       },
     },
     ...(o.stopped !== undefined ? { stopped: o.stopped } : {}),
@@ -190,6 +193,15 @@ describe("runWithheldRecheck: the first signal during the recheck (amendment 1)"
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: "withheld-recheck-failed" });
     expect(r.summary.recovered).toBe(0);
+  });
+
+  test("a signal during the pre-recheck closeDaemons: the runner never runs; the stopped skip warning", async () => {
+    const ac = new AbortController();
+    const r = await drive({ stopSignal: ac.signal, duringClose: () => ac.abort() });
+    expect(r.log).toEqual(["closeDaemons"]);
+    expect(r.emitted).toHaveLength(1);
+    expect(r.emitted[0]).toMatchObject({ type: "warning", code: RECHECK_SKIPPED_STOPPED_CODE });
+    expect(r.summary.skipped).toContain("SIGTERM or SIGINT");
   });
 
   test("a stop signal that never fired: the rows are rechecked (control)", async () => {

@@ -345,6 +345,11 @@ export const RECHECK_FAILED_CODE = "withheld-recheck-failed";
 /** PR-277 (R1158): the session stopped, so the recheck did not start. */
 export const RECHECK_SKIPPED_STOPPED_CODE = "al-runner-v3-recheck-skipped-stopped";
 
+/** PR-277: read through a call, so a signal that fires between two reads is seen (no narrowing). */
+function fired(s: AbortSignal | undefined): boolean {
+  return s?.aborted === true;
+}
+
 /** PR-277: what stopped a session, for the skip warning; `undefined` when nothing did. */
 export function stopNameOf(b: {
   readonly reached?: unknown;
@@ -369,14 +374,15 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   if (targets.length === 0) return { targets: 0, recovered: 0 };
   // PR-277 (R1158): a stopped session ends at once. The recheck cannot fill in what the stop left out, and the user
   // (or a guard) asked the run to end; its withheld kills stay error, as with the recheck off.
-  if (d.stopped !== undefined) {
+  const skipStopped = (by: string): RecheckSummary => {
     d.emit({
       type: "warning",
       code: RECHECK_SKIPPED_STOPPED_CODE,
-      message: `[lethal] ${RECHECK_SKIPPED_STOPPED_CODE}: the session was stopped by ${d.stopped}, so the withheld-kill recheck did not start; ${targets.length} withheld kill(s) stay error (PR-277).`,
+      message: `[lethal] ${RECHECK_SKIPPED_STOPPED_CODE}: the session was stopped by ${by}, so the withheld-kill recheck did not start; ${targets.length} withheld kill(s) stay error (PR-277).`,
     });
-    return { targets: targets.length, recovered: 0, skipped: `stopped by ${d.stopped}` };
-  }
+    return { targets: targets.length, recovered: 0, skipped: `stopped by ${by}` };
+  };
+  if (d.stopped !== undefined) return skipStopped(d.stopped);
   const skip = (why: string): RecheckSummary => {
     d.emit({
       type: "warning",
@@ -400,6 +406,8 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
     await d.backend.closeDaemons?.();
+    // PR-277: a signal during that close: no nested backend is built.
+    if (fired(d.stopSignal) || fired(d.abort)) return skipStopped("a SIGTERM or SIGINT (R955)");
     const abort = d.abort;
     const run = d.runner({
       targets,
@@ -430,7 +438,7 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     return { targets: targets.length, recovered: 0, skipped: `failed: ${why}` };
   }
   // PR-277: a nested run a signal stopped part-way did not finish normally: nothing in it recovers a row.
-  if (d.stopSignal?.aborted === true) {
+  if (fired(d.stopSignal)) {
     const why = "a SIGTERM or SIGINT stopped it";
     d.emit({
       type: "warning",

@@ -9839,15 +9839,24 @@ async function runSessionBody(
   }
   // PR-277: a signal that came after the main pass's last check (during the recheck, or just before it) still makes
   // the report a signal stop, so the CLI exits with the stop's code. Nothing was left unscheduled.
-  if (timeBudget.signalled && timeBudget.reached === undefined) {
+  // The churn guard too, when it tripped on the last mutant (no check came after it).
+  if (
+    (timeBudget.signalled || timeBudget.churn !== undefined) &&
+    timeBudget.reached === undefined
+  ) {
     emit({
       type: "time-budget-reached",
       budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
-      ...(timeBudget.memory !== undefined
-        ? { stoppedByMemory: timeBudget.memory }
-        : { stoppedBySignal: true as const }),
+      // The same stop fields as the main path above.
+      ...(timeBudget.signalled && timeBudget.memory === undefined
+        ? { stoppedBySignal: true as const }
+        : {}),
+      ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
       unscheduledCount: 0,
       batchesNotStarted: 0,
+      // The run is stored finished (above): the banner and caveat say there is nothing to resume.
+      afterMainPass: true,
     });
   }
   // PR-247: the mutant phase's test costs, once, sorted by test (code units); nothing when no mutant test ran.

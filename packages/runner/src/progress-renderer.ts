@@ -181,7 +181,9 @@ export function createProgressRenderer(
         const why =
           head === "TIME BUDGET REACHED" ? `--time-budget ${event.budgetSeconds} s used up; ` : "";
         write(
-          `${head}: ${why}${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
+          event.afterMainPass === true
+            ? `${head} AFTER THE MAIN PASS: every mutant was scored; the run is finished and there is nothing to resume (PR-277).`
+            : `${head}: ${why}${event.unscheduledCount} mutant(s) left out of this report, and ${event.batchesNotStarted} later batch(es) never started. Run with --resume to continue.`,
         );
         break;
       }

@@ -17,6 +17,7 @@ import { TIME_BUDGET_EXIT_CODE, exitCodeForReport } from "../src/cli";
 import type { RunEvent } from "../src/events";
 import { V3_DAEMON_CHURN_CLOSES } from "../src/mutant-windows";
 import { generateMutationSet, runSession } from "../src/orchestrator";
+import { CAVEAT_INTERPRETATIONS, renderConsole } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { type RecheckRequest, recheckSiteKey, shouldRunRecheck } from "../src/withheld-recheck";
 
@@ -541,8 +542,57 @@ describe("PR-277: a stopped session skips the recheck; a signal abandons one in 
     );
     expect(failed?.type === "warning" ? failed.message : "").toContain("stopped it");
     expectWithheldStayError(r.report);
-    expect(r.report.timeBudget).toMatchObject({ stoppedBySignal: true, unscheduledCount: 0 });
+    expect(r.report.timeBudget).toMatchObject({
+      stoppedBySignal: true,
+      unscheduledCount: 0,
+      afterMainPass: true,
+    });
     expect(exitCodeForReport(r.report)).toBe(TIME_BUDGET_EXIT_CODE);
+    // The banner says nothing is left to resume; it never tells the user to --resume.
+    const text = renderConsole(r.report);
+    expect(text).toContain("STOPPED BY SIGNAL (SIGTERM or SIGINT) AFTER THE MAIN PASS");
+    expect(text).toContain("there is nothing to resume");
+    expect(text).not.toContain("--resume");
+  });
+
+  test("a normal signal stop (in the mutants phase) still says --resume, not 'after the main pass' (control)", async () => {
+    const r = await stoppedRun({ onMutantRun: (n, _b, h) => (n === 2 ? h.stop?.() : undefined) });
+    expect(r.report.timeBudget?.afterMainPass).toBeUndefined();
+    const text = renderConsole(r.report);
+    expect(text).toContain("Run with --resume to continue.");
+    expect(text).not.toContain("AFTER THE MAIN PASS");
+  });
+
+  test("the caveat's interpretation names the after-main-pass case", () => {
+    expect(CAVEAT_INTERPRETATIONS["time-budget-reached"].meaning).toContain(
+      "`timeBudget.afterMainPass`",
+    );
+    expect(CAVEAT_INTERPRETATIONS["time-budget-reached"].meaning).toContain(
+      "there is nothing to resume",
+    );
+  });
+
+  test("the churn guard tripping on the LAST mutant: a late time-budget-reached that carries the churn", async () => {
+    const total = (await stoppedRun({ refuse: 1 })).report.mutants.length;
+    expect(total).toBeGreaterThan(1);
+    const r = await stoppedRun({
+      refuse: 1,
+      onMutantRun: (n, b) => {
+        if (n !== total) return;
+        for (let i = 0; i < V3_DAEMON_CHURN_CLOSES; i++)
+          b.sink?.({ lane: 0, reason: "refusal", phase: "live" });
+      },
+    });
+    expect(r.report.timeBudget).toMatchObject({
+      stoppedByDaemonChurn: { lane: 0, closes: V3_DAEMON_CHURN_CLOSES },
+      afterMainPass: true,
+      unscheduledCount: 0,
+    });
+    expect(r.report.timeBudget?.stoppedBySignal).toBeUndefined();
+    expect(r.skip).toHaveLength(1); // the recheck did not start
+    expect(renderConsole(r.report)).toContain(
+      "STOPPED BY THE DAEMON-CHURN GUARD AFTER THE MAIN PASS",
+    );
   });
 
   test("no signal: no late time-budget-reached, exit 0 (control)", async () => {

@@ -738,7 +738,10 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "are not in the score. `timeBudget.unscheduledCount` counts those of the batch it stopped in; " +
       "`timeBudget.batchesNotStarted` counts the batches after it, which never started and whose " +
       "mutants are not counted. The run is not finished, so `--resume` continues it, carrying " +
-      "the verdicts already scored and running only the rest.",
+      "the verdicts already scored and running only the rest. Except when `timeBudget.afterMainPass` is set " +
+      "(PR-277): a signal (or guard) came after the main pass had scored every mutant, so nothing was left out, " +
+      "the run is finished and there is nothing to resume; only the withheld-kill recheck was cut short or not " +
+      "started, so its withheld kills stay error.",
     entailedNegative:
       "Not a statement about any mutant that was left out. Not a wrong verdict: every mutant that is " +
       "in the report ran to completion. Its test run was never cut short by the budget; only a " +
@@ -2240,6 +2243,12 @@ export interface SessionReport {
     };
     /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
     readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+    /**
+     * PR-277: the stop came after the main pass had scored every mutant (during the withheld-kill recheck, or just
+     * before it). Nothing was left out, the run is finished and there is nothing to resume; only the recheck was cut
+     * short, so its withheld kills stay error.
+     */
+    readonly afterMainPass?: true;
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -4507,7 +4516,18 @@ export function renderConsole(r: SessionReport): string {
     );
   }
   // R912: a qualifier on the score: the mutants not reached are not in it.
-  if (r.timeBudget !== undefined) {
+  if (r.timeBudget?.afterMainPass === true) {
+    // PR-277: the stop came after every mutant was scored: nothing to resume.
+    const by =
+      r.timeBudget.stoppedByMemory !== undefined
+        ? "THE MEMORY GUARD"
+        : r.timeBudget.stoppedByDaemonChurn !== undefined
+          ? "THE DAEMON-CHURN GUARD"
+          : "SIGNAL (SIGTERM or SIGINT)";
+    lines.push(
+      `STOPPED BY ${by} AFTER THE MAIN PASS: every mutant was scored, so the stop left nothing unscheduled; the run is finished and there is nothing to resume. Only the withheld-kill recheck was cut short or not started, so its withheld kills stay error (PR-277).`,
+    );
+  } else if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
     const mem = r.timeBudget.stoppedByMemory;
     const churn = r.timeBudget.stoppedByDaemonChurn;

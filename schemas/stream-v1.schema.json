@@ -2710,6 +2710,9 @@
             }
           }
         },
+        "afterMainPass": {
+          "const": true
+        },
         "seq": {
           "type": "number"
         },
