@@ -68,6 +68,7 @@ import { dirname } from "node:path";
 import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
 import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
+import { monoNow } from "./clock";
 
 /** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
  *  here from `al-runner-transport.ts` by R654 S1, because the daemon (which v3 keeps) decodes it. */
@@ -236,7 +237,7 @@ export class LineReader {
    */
   /** `capMs` is the timer cap; only a test lowers it, to reach "capped timer fired early". */
   async next(deadlineMs: number, capMs: number = MAX_TIMER_MS): Promise<ReadLineOutcome> {
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
@@ -253,7 +254,7 @@ export class LineReader {
         this.buf = "";
       }
       if (this.done) return { kind: "eof" };
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       if (remaining <= 0) return { kind: "timeout" };
       let timer: ReturnType<typeof setTimeout> | undefined;
       // The read stays pending across a capped timer, so no chunk is ever dropped.
@@ -485,9 +486,9 @@ export class AlRunnerServer {
     );
 
     const tests: ServerTestLine[] = [];
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     for (;;) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       if (remaining <= 0) {
         throw new Error(
           `al-runner --server: no summary line within ${deadlineMs} ms (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
@@ -570,14 +571,14 @@ export class AlRunnerServer {
     proc.write(`${JSON.stringify(body)}\n`);
     const tests: Record<string, unknown>[] = [];
     const entrySummaries: Record<string, unknown>[] = [];
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     const fail = (kind: AlRunnerServerRequestError["kind"], why: string) =>
       new AlRunnerServerRequestError(
         kind,
         `${why} (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
       );
     for (;;) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
       if (next.kind === "timeout")
         throw fail("deadline", `no summary line within ${deadlineMs} ms`);

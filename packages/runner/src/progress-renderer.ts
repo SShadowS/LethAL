@@ -30,6 +30,7 @@
  * `RunEvent["type"]`; the event types this renderer deliberately does not surface (the `default`
  * case below) fall through silently rather than throwing on a shape it doesn't handle.
  */
+import { monoNow } from "./clock";
 import type { EventSubscriber, RunEvent } from "./events";
 import { httpPolicyLines } from "./http-policy";
 
@@ -84,7 +85,7 @@ export function createProgressRenderer(
   const noteMutantResolved = (durationMs?: number): void => {
     mutantsDone += 1;
     if (durationMs !== undefined) scoredDurationsMs.push(durationMs);
-    const now = Date.now();
+    const now = monoNow();
     if (lastMutantRenderAt === undefined || now - lastMutantRenderAt >= opts.heartbeatMs) {
       lastMutantRenderAt = now;
       renderMutantProgress();

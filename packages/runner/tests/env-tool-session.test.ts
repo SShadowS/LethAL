@@ -434,6 +434,62 @@ describe("startEnvToolSession", () => {
     ).rejects.toThrow(/did not reach status "Running"/);
   });
 
+  it("PR-252: a +2,000 s wall-clock step during readiness polling does not exhaust the budget", async () => {
+    const cfg = harness({ envId: undefined }).cfg;
+    const readyWhen = {
+      command: ["env", "get", "{envId}", "--status-json"],
+      reads: { status: "status" },
+      equals: "Running",
+      pollSeconds: 0,
+      timeoutSeconds: 100,
+    };
+    const realNow = Date.now;
+    let polls = 0;
+    let offset = 0;
+    try {
+      Date.now = () => realNow() + offset;
+      const client = new EnvToolClient(
+        { ...cfg, startEnv: { command: ["env", "start", "{envId}"] }, readyWhen },
+        {
+          spawn: async (argv) => {
+            const line = argv.join(" ");
+            if (line.includes("--status-json")) {
+              polls += 1;
+              if (polls === 1) offset += 2_000_000; // the machine slept mid-readiness
+              return {
+                exitCode: 0,
+                stdout: `{"status":"${polls >= 3 ? "Running" : "Starting"}"}`,
+                stderr: "",
+              };
+            }
+            const out = resolveOut();
+            const key = Object.keys(out).find((k) => line.includes(k));
+            return {
+              exitCode: 0,
+              stdout: key === undefined ? "{}" : (out[key] ?? "{}"),
+              stderr: "",
+            };
+          },
+        },
+      );
+      await startEnvToolSession({
+        cfg: { ...cfg, startEnv: { command: ["env", "start", "{envId}"] }, readyWhen },
+        bcdevRaw: BCDEV_RAW,
+        projectDir: "C:/proj",
+        testDir: "C:/tests",
+        runId: "r252",
+        client,
+        makePublisher: () => ({ publishFile: async () => {} }),
+        verifyHarness: async () => {},
+        sleep: async () => {},
+        stateDir: scratch("lethal-envstate-"),
+      });
+      expect(polls).toBe(3);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   // Final review item 1: a provisioned environment used to leak whenever ANYTHING after
   // `createEnv` succeeded threw — a `readyWhen` timeout, a symbols failure, a `publishApps` typo,
   // a control-app publish rejection — because the object carrying `teardown` was only constructed

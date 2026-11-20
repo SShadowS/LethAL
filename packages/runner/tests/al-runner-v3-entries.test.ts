@@ -13029,3 +13029,40 @@ describe("PR-119: cross-check samples beside the daemon", () => {
     });
   });
 });
+
+describe("PR-252: a request's wallMs is a monotonic interval", () => {
+  for (const [name, step] of [
+    ["forward", 2_000_000],
+    ["backward", -2_000_000],
+  ] as const) {
+    test(`a wall clock ${name} step of 2,000 s during a prefetch leaves wallMs small, non-negative and the request unfailed`, async () => {
+      const realNow = Date.now;
+      let offset = 0;
+      let armed = false;
+      try {
+        Date.now = () => realNow() + offset;
+        const r = await rig({
+          serve: {
+            rows: (m, cu, d, n) => {
+              if (armed) offset += step; // the wall clock steps while the request is in flight
+              return allPass(m, cu, d, n);
+            },
+          },
+        });
+        const timed: V3RequestTimed[] = [];
+        r.b.setRequestTimedSink((e) => timed.push(e));
+        await baseline(r.b, SUITE1);
+        armed = true;
+        await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+        expect(timed.length).toBeGreaterThan(0);
+        for (const e of timed) {
+          expect(e.failed).toBeUndefined();
+          expect(e.wallMs).toBeGreaterThanOrEqual(0);
+          expect(e.wallMs).toBeLessThan(100_000);
+        }
+      } finally {
+        Date.now = realNow;
+      }
+    });
+  }
+});

@@ -3,6 +3,7 @@ import { appendFileSync } from "node:fs";
 import type { ActivationConfig, FetchFn } from "./activation";
 import type { StopEvidence, StopState, TestMethodRef, TestOutcome, TestVerdict } from "./backend";
 import { bcFetch, bounded } from "./bc-fetch";
+import { monoNow as clockMono } from "./clock";
 import { describeThrown } from "./describe-error";
 import { UnfilteredExtensionsQueryError } from "./harness";
 import { assertAttemptId, parseOperationStatus } from "./lease";
@@ -108,7 +109,7 @@ function stampManyStop(
  * (WSL2 time sync) cannot shorten or lengthen a measured duration. `Date.now()` stays only for
  * wall timestamps (trace `at:`, poll `sentAt`).
  */
-export const transportClock = { now: (): number => Math.floor(performance.now()) };
+export const transportClock = { now: (): number => clockMono() };
 const monoNow = (): number => transportClock.now();
 
 /**
