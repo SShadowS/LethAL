@@ -49,6 +49,12 @@ build (lethal-bugs, PR-255: 9835579c66, which contains #8484); LethAL builds its
   nor is stopped. Then §0a's acceptance rule and the per-mutant use (prefetch included, where the saving is) build on it,
   measured as PR-223 did. Not chosen: an echo that passes and reports another way (rewrites R635's echo contract and every
   fake), or the echo in a separate request (loses same-request vouching).
+- **HELD by the orchestrator (2026-11-20); PR-256 stays claimed.** The contract for the future build, from alrunner's
+  `stopGroup` draft (PERF-18), replacing the opt-out ask above: (1) `stopGroup` with the stop OFF is refused, so groups are
+  sent only with the stop on; (2) mixed grouped and ungrouped entries in one request are refused, so EVERY entry gets a
+  group: each mutant's entries share that mutant's group, and the echo gets its OWN unique group, so its planned failure
+  stops only itself. alrunner keeps both refusals (fail loudly). The build then: §0a's acceptance rule, groups per mutant
+  on prefetch and live, the echo's own group, the notRun trap first, measured on PR-223's sample.
 - What the builder verified for that build (kept): the capability sits beside `learnSkipAfterTimeout`'s `test --help`
   read; live single-mutant sends are `liveCall`/`aloneCall` (the NONE confirm via `lastActivated === null` needs its own
   exclusion); the walk order is `lane.plan.budgets`; stop rows must be skipped by `firstKeptRefusal`, `unkeptRowReason`,
