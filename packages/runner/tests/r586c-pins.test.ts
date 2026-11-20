@@ -778,6 +778,7 @@ describe("R771: the edge build a157b2d34 (alpha.5's readings plus N1E)", () => {
       "edge-2c63a382e",
       "alpha.12-d4bc8d3a5", // R807
       "edge-d72d3197d", // R-815
+      "main-9835579c6", // PR-255: the root's readings
     ]);
     expect(serveRowFieldsFor(A_VERSION, A_SHA)).toBe(true);
     expect(serveRowFieldsFor(A_VERSION, flip(A_SHA))).toBe(false);
