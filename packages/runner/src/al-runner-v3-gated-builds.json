@@ -316,5 +316,29 @@
       "batch-lane-hint-only": "matches",
       "batch-lane-strict-reruns": "matches"
     }
+  },
+  {
+    "id": "main-ccd0f823d",
+    "track": "main",
+    "version": "al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)",
+    "binarySha256": "bc3595c4e2ff9c2ae63c7c02e1133155005414464f59ecd22dca9d4ab281ad7c",
+    "readingsFrom": "main-ccd0f823d",
+    "readingsDigest": "d60c889b7afb23a3077b667b7f6b512aca95923b6f3b4ae2266d1a0c5d045521",
+    "lethalCommit": "c62ac71ef4d3cbfa3d6517e7e1f8e9fa40d14712",
+    "gatedAt": "2026-11-20T17:12:49.299Z",
+    "warnFacts": {
+      "serve-keep-reasons": "diverged"
+    },
+    "batchFacts": {
+      "batch-no-cross-singleinstance": "matches",
+      "batch-no-cross-library-global": "matches",
+      "batch-no-cross-row": "matches",
+      "batch-no-cross-subscriber": "matches",
+      "batch-onrun-excluded-no-carry": "matches",
+      "batch-onrun-included-duplicates": "matches",
+      "batch-lane-hint-only": "matches",
+      "batch-lane-strict-reruns": "matches"
+    },
+    "dotnetSidecarSha256": "1fdb6bc6505f3cb7410952091529046102739a1af497cbead90d4b3e52b87276"
   }
 ]
