@@ -160,7 +160,7 @@ describe("PR-241 backend: one packed prefetch call", () => {
   const sizesOf = (r: LanesRig) => real(r).map((q) => q.mutants.length);
   const priv = (r: LanesRig) =>
     r.b as unknown as {
-      costByCall: Map<number, number>;
+      costByCall: Map<number, number[]>;
       cutAfterLastCovering: (cu: number, m: string, base: unknown) => unknown;
       modeOfCall: (cu: number) => unknown;
       laneList: {
@@ -205,7 +205,7 @@ describe("PR-241 backend: one packed prefetch call", () => {
 
   test("4: the byte budget still splits a packed request", async () => {
     const { r, prefetch } = await start(64);
-    priv(r).costByCall.set(CU, 3 * 2 ** 30); // two groups would cost 6 GiB of the 4 GiB budget
+    priv(r).costByCall.set(CU, [3 * 2 ** 30]); // two groups would cost 6 GiB of the 4 GiB budget
     const all = [unitPlans(0), unitPlans(1)].flat();
     await prefetch(all, { unitSizes: [5, 5] });
     expect(sizesOf(r)).toEqual(Array(10).fill(1));

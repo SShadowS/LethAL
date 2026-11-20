@@ -47,6 +47,7 @@ import {
   AlRunnerV3ServeStopUnsetError,
   AlRunnerV3TransportFrozenError,
   AlRunnerV3UnprovenBatchError,
+  COST_READINGS_KEPT,
   ISOLATED_BASELINE_PROCESSES,
   MEMORY_WATCH_OVER_TICKS,
   SPECULATE_BASELINE_ENV,
@@ -3310,6 +3311,7 @@ describe("the gate's transport flags (itest:alrunner-v3 harness)", () => {
 
 describe("R987: entries per serve request follow the daemon growth measured per codeunit", () => {
   const GiB = 2 ** 30;
+  const MiB = 2 ** 20;
   const g = (mutantId: string, ...codeunits: number[]): EntryGroup => ({ mutantId, codeunits });
 
   test("groupsThatFit: 16 unmeasured codeunit entries, 4 GiB of measured cost, 256 entries, never 0", () => {
@@ -3487,11 +3489,11 @@ describe("R987: entries per serve request follow the daemon growth measured per 
     expect(reused.sizes).toEqual([32, 32, 32, 32]);
   });
 
-  test("growth is read from the daemon's floor, not from a request's higher start", async () => {
+  test("PR-246: growth is read from the request's own start, not from the daemon's floor", async () => {
     // A daemon that keeps what each request grew it by. 16 groups on CU at 0.125 GiB a test entry:
     // +2 GiB, to 2.5 GiB. Then 16 groups on CU2 at 0.25: +4 GiB on top, to 6.5 GiB. From its 2.5 GiB
-    // start CU2 would read 0.25 GiB a test entry (4 / 16) and the next request take 16 groups; from the
-    // 0.5 GiB floor it reads 0.375 (6 / 16), so 10 groups (3.75 GiB), 20 entries.
+    // start CU2 reads 0.25 GiB a test entry (4 / 16): 16 test entries fit 4 GiB, so 32 entries. (The
+    // floor model read 0.375 (6 / 16): 10 groups, 20 entries.)
     const mem = await prefetchOf(
       new Map([
         [CU, 0.125 * GiB],
@@ -3500,7 +3502,106 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       [...onCu(mids(1, 16)), ...onCu2(mids(17, 60))],
       { stack: true },
     );
-    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 20]);
+    expect(mem.sizes.slice(0, 3)).toEqual([32, 32, 32]);
+  });
+
+  test("PR-246 (a): memory the daemon holds is not charged to a request's entries", async () => {
+    // CU's 16 test entries grow the daemon 1 GiB (to 1.5 GiB, 1 GiB over its floor). CU2's 16 then grow
+    // it 160 MB: 10 MB an entry, not (1 GiB + 160 MB) / 16 = ~72 MB. Red: the floor formula.
+    const sized: V3RequestSized[] = [];
+    await prefetchOf(
+      new Map([
+        [CU, GiB / 16],
+        [CU2, 10 * MiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 16))],
+      { stack: true, sized },
+    );
+    const second = sized.find((e) => e.calls.some((c) => c.call === CU2));
+    expect(second?.start).toBe(1.5 * GiB);
+    expect(second?.calls[0]?.cost).toBeCloseTo(10 * MiB, 0);
+  });
+
+  /** PR-246: feed a backend readings directly (cost per entry = growth / 16 test entries) and read its prices. */
+  const pricing = async () => {
+    const r = await rig();
+    const inner = r.b as unknown as {
+      noteEntryCost: (...a: unknown[]) => void;
+      costOf: (call: number) => number | undefined;
+    };
+    const sent = Array.from({ length: 16 }, () => ({ codeunit: CU, echo: false }));
+    // `over`: how far the request's start is over the daemon's floor (1 GiB).
+    const read = (growth: number, over = 0) =>
+      inner.noteEntryCost(0, GiB + over, GiB, GiB + over + growth, sent, {
+        source: "hwm",
+        sampledPeak: undefined,
+      });
+    return { read, price: () => inner.costOf(CU), costOf: inner.costOf.bind(inner) };
+  };
+
+  test("PR-246 (b): a call's price is its recent readings, not its highest ever", async () => {
+    const p = await pricing();
+    p.read(500 * MiB * 16);
+    for (let i = 0; i < 5; i++) p.read(10 * MiB * 16);
+    // The 500 MB reading has aged out of the last 5. Red: the highest-ever rule, or K > 5.
+    expect(p.price()).toBe(10 * MiB);
+  });
+
+  test("PR-246 (c): a call's price is the highest of its last K readings, K = 5", async () => {
+    expect(COST_READINGS_KEPT).toBe(5);
+    const p = await pricing();
+    // 50 is the oldest of the last 5: K = 4 would have dropped it.
+    for (const mb of [50, 10, 10, 10, 10]) p.read(mb * MiB * 16);
+    expect(p.price()).toBe(50 * MiB);
+  });
+
+  test("PR-246: a reading from a daemon that holds memory may raise a price, never lower it", async () => {
+    const p = await pricing();
+    for (const mb of [50, 10, 10, 10, 10]) p.read(mb * MiB * 16);
+    // Held: low (it may have reused memory): dropped, so the 50 does not age out.
+    p.read(5 * MiB * 16, GiB);
+    expect(p.price()).toBe(50 * MiB);
+    p.read(80 * MiB * 16, GiB); // held: above the price: raises it
+    expect(p.price()).toBe(80 * MiB);
+    // Near the floor a low reading counts: five of them age the 80 out.
+    for (let i = 0; i < COST_READINGS_KEPT; i++) p.read(5 * MiB * 16);
+    expect(p.price()).toBe(5 * MiB);
+  });
+
+  test("PR-246: a peak below the start reads 0, never a negative cost", async () => {
+    const p = await pricing();
+    p.read(-100 * MiB);
+    expect(p.price()).toBe(0);
+  });
+
+  test("PR-246 (e): a call no request ran is unmeasured, and goes 16 at a time", async () => {
+    const p = await pricing();
+    expect(p.price()).toBeUndefined();
+    p.read(MiB * 16);
+    expect(p.price()).toBe(MiB);
+    expect(p.costOf(CU2)).toBeUndefined();
+    expect(
+      groupsThatFit(
+        Array.from({ length: 60 }, (_, i) => g(`M${i}`, CU2)),
+        p.costOf,
+      ),
+    ).toBe(16);
+  });
+
+  test("PR-246 (d): a kept daemon's held memory no longer shrinks every later request", async () => {
+    // CU2 costs 10 MB an entry, on a daemon that holds 2.5 GiB after CU. The floor model priced CU2 at
+    // (2 GiB + 160 MB) / 16 = ~138 MB an entry (about 29 test entries a request, 58 entries); marginal
+    // growth prices it at 10 MB: 256-entry requests.
+    const r = await prefetchOf(
+      new Map([
+        [CU, 0.125 * GiB],
+        [CU2, 10 * MiB],
+      ]),
+      [...onCu(mids(1, 16)), ...onCu2(mids(17, 100))],
+      { stack: true },
+    );
+    expect(r.sizes[1]).toBe(32); // CU2 unmeasured
+    expect(r.sizes[2]).toBe(168); // all 84 remaining groups in one request
   });
 
   test("a codeunit no request has measured goes 16 at a time, even after cheap ones", async () => {
@@ -3659,7 +3760,7 @@ describe("R987: entries per serve request follow the daemon growth measured per 
       expect(lines.filter((m) => m.includes(`codeunit ${CU2} `)).length).toBe(1);
       for (const l of lines)
         expect(l).toMatch(
-          /requests carrying codeunit \d+ hold about \d+ test entries \(its highest measured cost: \d+ MiB per entry, from a hwm peak\)/,
+          /requests carrying codeunit \d+ hold about \d+ test entries \(its recent measured cost: \d+ MiB per entry, from a hwm peak\)/,
         );
     });
 
