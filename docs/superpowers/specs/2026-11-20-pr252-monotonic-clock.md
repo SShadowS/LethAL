@@ -46,6 +46,31 @@ lethal-preproc, 2026-11-20 (coord PR-252). Offline. No code; build only after th
   - the fallback broken (no wall when boot is missing) turns the existing +60 s test red;
   - a boot reader returning seconds, not ms, turns the boot +60 s test red (N would be about 0.06).
 - **Gates:** whatever `selectLegs` names for the diff, on the final head.
+- **As built (PR-264):**
+  - The seconds-not-ms red check went red through the `readBootMs` parse test. The boot +60 s test injects
+    `clock.boot` and never calls the reader.
+  - So a test that reads the boot clock THROUGH `readBootMs` (a fake `/proc/uptime`) was added, and red-checked.
+  - So was a suspend during failed boot reads (reported on recovery from the kept baseline).
+
+## 0c. Amendment 3 (2026-11-20, the orchestrator's ruling, before any code): `run-suspended` is an ENVIRONMENT warning
+- **Found:** PR-264's v3 gate (leg WR) and tables gate at 876887eb2 both failed on one extra warning, `run-suspended`
+  (2,178 s). server1 really slept about 13:05:04Z-13:41:22Z: CLOCK_BOOTTIME minus CLOCK_MONOTONIC grew by 2,177 s.
+  The owner keeps suspend on. Deadlines are monotonic, so a sleep cannot change a verdict, but any gate spanning one
+  would fail on its warning set at random.
+- **Ruled:** gate warning-set comparisons leave `run-suspended` out, and the gate log prints it with its message (which
+  carries the length).
+  - **Mechanism:** `LOGGED_ONLY` in `packages/runner/itest/gate-warnings.ts`, which already holds `lease-renew-blip`
+    for the same reason (R852). `assertGateWarnings` prints each logged-only code's message and leaves it out of the
+    comparison, and so does hang's baseline leg.
+  - No `GATE_WARNINGS` set changes. Observe mode still prints every code.
+  - Runtime behaviour is unchanged: the warning is still emitted in the report.
+- **Pre-committed tests:**
+  - a gate whose only extra code is `run-suspended` passes, and its message is printed;
+  - `run-suspended` plus any other new code still fails, naming that code and not `run-suspended`;
+  - a missing expected code still fails when `run-suspended` is present.
+- **Red check, both directions:** with `run-suspended` removed from `LOGGED_ONLY`, the "passes" test goes red. The
+  "still fails" test already goes red with every code logged-only (a constant-true filter).
+- **Gates:** every leg `selectLegs` names, on the final head.
 
 ## 1. What the "wait" is (measured)
 - PR-251 saw one prefetch request per lane whose untimed part was the same 1,967.19 s. It is not a wait:
