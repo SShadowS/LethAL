@@ -82,6 +82,7 @@ import {
   cliOk,
   wantsEnvelope,
 } from "./cli-envelope";
+import { monoNow } from "./clock";
 import {
   ConfirmBackendNotBcdevError,
   ConfirmInputNotReportError,
@@ -6739,7 +6740,7 @@ export async function verifyFromCli(
     readonly runVerify?: typeof runVerify;
   } = {},
 ): Promise<number> {
-  const started = Date.now();
+  const started = monoNow();
   const write = deps.write ?? ((t: string) => process.stdout.write(t));
   const print = (o: VerifyOutput): number => {
     write(`${JSON.stringify(o, null, 2)}\n`);
@@ -6831,7 +6832,7 @@ export async function verifyFromCli(
       ),
     );
   } catch (err) {
-    const out = refusalOutput(err, { totalMs: Date.now() - started });
+    const out = refusalOutput(err, { totalMs: monoNow() - started });
     if (out === undefined) throw err;
     return print(out);
   } finally {

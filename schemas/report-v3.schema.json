@@ -311,6 +311,85 @@
         }
       }
     },
+    "costlyTests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "carriedMutants",
+        "totalOwnMs",
+        "ambiguousKills",
+        "top"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "whole-run",
+            "this-session"
+          ]
+        },
+        "carriedMutants": {
+          "type": "number"
+        },
+        "totalOwnMs": {
+          "type": "number"
+        },
+        "ambiguousKills": {
+          "type": "number"
+        },
+        "top": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "coveredMutants",
+              "runs",
+              "ownMs",
+              "share",
+              "meanMs",
+              "kills",
+              "killRate",
+              "msUnderSurvivors"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "coveredMutants": {
+                "type": "number"
+              },
+              "runs": {
+                "type": "number"
+              },
+              "ownMs": {
+                "type": "number"
+              },
+              "share": {
+                "type": "number"
+              },
+              "meanMs": {
+                "type": "number"
+              },
+              "baselineMs": {
+                "type": "number"
+              },
+              "kills": {
+                "type": "number"
+              },
+              "killRate": {
+                "type": "number"
+              },
+              "msUnderSurvivors": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    },
     "backend": {
       "type": "string"
     },
@@ -1739,6 +1818,22 @@
             },
             "source": {
               "type": "string"
+            }
+          }
+        },
+        "stoppedByDaemonChurn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lane",
+            "closes"
+          ],
+          "properties": {
+            "lane": {
+              "type": "number"
+            },
+            "closes": {
+              "type": "number"
             }
           }
         }

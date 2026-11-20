@@ -1,20 +1,20 @@
-// PR-217: the perf-combined pin (pre-commitment docs/superpowers/specs/2026-11-19-pr217-perfcombined-pin-precommitment.md,
-// master d2153c9ed): a fork test build for PERF-10, never `current`. It must equal the live root edge-d72d3197d's readings
-// plus ONLY o1.partnerLoginRefusal, so any change to the root moves it too, and nothing else can ride on it.
+// PR-255: the hand pin of upstream main 9835579c6 (pre-commitment docs/superpowers/specs/2026-11-20-pr255-main-build-as-current.md,
+// amendment 1): the live root edge-d72d3197d's readings plus ONLY o1.partnerLoginRefusal, so any change to the root moves it
+// too, and nothing else can ride on it.
 import { describe, expect, test } from "bun:test";
 import { O1_PARTNER_LOGIN_TEXT } from "../itest/alrunner-v3-legs";
-import { V3_BUILD_PINS, gatedBuilds, handV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
+import { V3_BUILD_PINS, handV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
 
-const ID = "perfcombined-2bb4b6861";
+const ID = "main-9835579c6";
 
-describe("PR-217: the perf-combined pin", () => {
+describe("PR-255: the main 9835579c6 pin", () => {
   const pin = handV3Pin(ID);
   const root = handV3Pin("edge-d72d3197d");
 
   test("names the exact binary", () => {
-    expect(pin?.version).toBe("al-runner 3.0.0-alpha.14 (2bb4b6861)");
+    expect(pin?.version).toBe("al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)");
     expect(pin?.binarySha256).toBe(
-      "f824dee326e1f9dc3e63045214297353d8e32299ca2677f4bfc3184411b2fc9b",
+      "b91d49d7b6af8ea9ed7bd429f14312cde19025c0676a1278822f37dfaca03d24",
     );
   });
 
@@ -34,7 +34,6 @@ describe("PR-217: the perf-combined pin", () => {
       o1: o1Rest,
     };
     expect(v3ReadingsDigest(stripped)).toBe(v3ReadingsDigest(root));
-    // and the field is what the root lacks
     expect(root.o1?.partnerLoginRefusal).toBeUndefined();
   });
 
@@ -43,11 +42,11 @@ describe("PR-217: the perf-combined pin", () => {
     expect(pin?.o1?.partnerLoginRefusal?.issue).toMatch(/\/8239$/);
   });
 
-  test("it is the only pin with the field, never the last (current's) pin, and no gated-build row names it", () => {
+  test("it is the only pin with the field, and it comes after the root edge-d72d3197d", () => {
     expect(
       V3_BUILD_PINS.filter((p) => p.o1?.partnerLoginRefusal !== undefined).map((p) => p.id),
     ).toEqual([ID]);
-    expect(V3_BUILD_PINS[V3_BUILD_PINS.length - 1]?.id).not.toBe(ID);
-    expect(gatedBuilds().some((r) => r.readingsFrom === ID)).toBe(false);
+    const ids = V3_BUILD_PINS.map((p) => p.id);
+    expect(ids.indexOf(ID)).toBeGreaterThan(ids.indexOf("edge-d72d3197d"));
   });
 });

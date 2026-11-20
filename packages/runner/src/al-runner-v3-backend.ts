@@ -72,6 +72,8 @@ import {
   type ServerTestLine,
   V3_SERVE_SAFE_REFUSALS,
   defaultServerSpawn,
+  keepNearMiss,
+  knownNearMissVariant,
   serveDaemonReusable,
 } from "./al-runner-server";
 import {
@@ -207,11 +209,14 @@ import type {
 import {
   type OtherFile,
   hashAlTree,
-  hashTestDir,
   listOtherFiles,
   otherFilesDrift,
+  printAlTree,
+  printTestDir,
+  scanAlTree,
   scanTestDir,
 } from "./baseline-snapshot";
+import { monoNow } from "./clock";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
@@ -309,7 +314,7 @@ export class AlRunnerV3UnprovenBatchError extends Error {
 }
 
 /** R631/R655: a link under a bound root (`ProjectSymlinkRefusedError`) is unproven drift, by path. */
-async function linkIsUnproven(hash: Promise<string>, where: string): Promise<string> {
+async function linkIsUnproven<T>(hash: Promise<T>, where: string): Promise<T> {
   return hash.catch((err: unknown) => {
     if (err instanceof ProjectSymlinkRefusedError) {
       throw new AlRunnerV3UnprovenBatchError(`a link is in ${where} (${err.linkPath})`);
@@ -1455,6 +1460,10 @@ interface DepsEntry {
 /** §3 (I7, F3, F4): what alc proved, bound to what v3 reads. */
 interface BatchProof {
   readonly activeHashExceptSelector: string;
+  /** PR-259 (R1156): the bound print of the same read of `active/`, compared before every send. */
+  readonly activePrint: string;
+  /** PR-259: the bound print of the test dir's `.al` files, from the read `testDirHash` came from. */
+  readonly testDirPrint: string;
   readonly activeAppJsonSha256: string;
   readonly testDirHash: string;
   /** R608: the non-.al files of `active/` and of the test dir (`.alpackages` included). */
@@ -1491,6 +1500,11 @@ interface CallRows {
   readonly windowed?: boolean;
   /** PR-20 (L4): the entry's `excludeTests` (R998's left-out run and the cut after the last covering test). */
   readonly excluded?: readonly string[];
+  /**
+   * PR-250: set when the entry went out with the cut before a baseline-refused test: its `excludeTests`
+   * without that cut. A coverage window (never sent with `runSelectedOnly`) leaves out these instead.
+   */
+  readonly noRefusedCut?: { readonly excluded: readonly string[] | undefined };
   /** R762 A: sent without `--coverage-json`; a caller that wants coverage must not reuse it. */
   readonly noCoverage?: boolean;
   /**
@@ -1498,6 +1512,28 @@ interface CallRows {
    * prefetched rows carry it; a stored kill pair is used only for a kill served from such rows.
    */
   readonly prefetchSeq?: number;
+}
+
+/**
+ * R1004, PR-20: the tests a plain codeunit entry of `group` leaves out. PR-250: `withRefusedCut` false
+ * leaves out the cut before a baseline-refused test (an unflagged request never carries it).
+ */
+type ExcludedFn = (
+  codeunit: number,
+  group: EntryGroup,
+  withRefusedCut: boolean,
+) => readonly string[] | undefined;
+
+/** What `send` answers. */
+interface SendAnswer {
+  readonly sent: readonly SentEntry[];
+  readonly rows: ReadonlyMap<string, readonly V3Row[]>;
+  /** PR-94: the request carried `runSelectedOnly`, so `suiteMissing` checks the order of every entry. */
+  readonly selectedOnly: boolean;
+  /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
+  readonly cut?: SentCut;
+  /** PR-250: the request went out with the refused-test cut: each entry's `excludeTests` without it. */
+  readonly noCutExcluded?: ReadonlyMap<string, readonly string[] | undefined>;
 }
 
 /**
@@ -1758,6 +1794,8 @@ export interface V3EntriesStats {
   l4Excluded: number;
   l4Widened: number;
   l4OrderBroken: number;
+  /** PR-250, once per (mutant, codeunit) as the L4 counters: mutant entries cut before a baseline-refused test. */
+  refusedCutEntries: number;
   /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
   keptDrifts: number;
   /** PR-94: prefetch and live requests sent with `runSelectedOnly` (every entry whole or a prefix cut), the
@@ -1869,6 +1907,7 @@ function newLaneStats(): Omit<V3EntriesStats, V3PhaseTimer> {
     l4Excluded: 0,
     l4Widened: 0,
     l4OrderBroken: 0,
+    refusedCutEntries: 0,
     keptDrifts: 0,
     selectedOnlyRequests: 0, // PR-94, per lane under PR-99
     selectedOnlyTestsSkipped: 0,
@@ -2140,7 +2179,11 @@ async function writeAlcWrites(
 
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
 interface TestDirRead {
-  readonly testScan: { readonly hash: string; readonly hasExtensionObject: boolean };
+  readonly testScan: {
+    readonly hash: string;
+    readonly hasExtensionObject: boolean;
+    readonly print: string;
+  };
   readonly testOther: ReadonlyMap<string, OtherFile>;
   /** sha256 of the app.json BYTES (what `assertBound` checks per run), not of decoded text. */
   readonly testAppJsonSha256: string;
@@ -2877,6 +2920,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private coveringOf = new Map<string, Map<number, Set<string>>>();
   /** PR-20 review 1: the (mutant, codeunit) entries `mutantExcludes` has counted in the stats. */
   private l4Counted = new Set<string>();
+  /** PR-250: the codeunits whose `al-runner-v3-baseline-refused-cut` line was printed (once per session). */
+  private readonly refusedCutSaid = new Set<number>();
+  /** PR-250: the (mutant, codeunit) entries `countRefusedCuts` has counted (sent with the cut). */
+  private refusedCutCounted = new Set<string>();
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
   /** R778 (A2): the backend-wide count of `request()` calls (every lane); see `CallRows.prefetchSeq`. */
@@ -2978,6 +3025,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R939: daemons closed, by reason, and the refusal families among them (`closeLane`). */
   private readonly closes = new Map<V3DaemonCloseReason, number>();
   private readonly closeFamilies = new Map<string, number>();
+  /**
+   * PR-244: refusal texts already checked for a keep near-miss, the known variants already shown, and refusal closes
+   * per family, THIS SESSION (cleared by `setNotify`, as the other once-per-session flags are; `closeFamilies` above
+   * is the backend's lifetime count for the close line and is not touched).
+   */
+  private readonly nearMissChecked = new Set<string>();
+  private readonly nearMissKnownShown = new Set<string>();
+  private readonly stormFamilies = new Map<string, number>();
   /** R939: the closes so far, by reason and refusal family (the close line; tests). */
   daemonCloses(): {
     readonly byReason: ReadonlyMap<V3DaemonCloseReason, number>;
@@ -3055,6 +3110,34 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (family !== undefined) {
       this.closeFamilies.set(family, (this.closeFamilies.get(family) ?? 0) + 1);
       lane.stats.refusalCloses += 1; // PR-99 (§6): a floor, per lane
+      // PR-244: a backstop for a reworded keep entry (warning only; the keep decision is unchanged). Counted per
+      // session, so a reused backend's next session warns on its own 10th close.
+      const n = (this.stormFamilies.get(family) ?? 0) + 1;
+      this.stormFamilies.set(family, n);
+      if (n === 10)
+        this.notify(
+          "al-runner-v3-refusal-restart-storm",
+          `[lethal] al-runner-v3-refusal-restart-storm: "${family}" closed the daemon 10 times this session (${(detail?.text ?? "").slice(0, 200)}); a reworded keep entry, or an unkept refusal class worth measuring`,
+        );
+    }
+    const text = detail?.text;
+    if (text !== undefined && !this.nearMissChecked.has(text)) {
+      this.nearMissChecked.add(text);
+      const nm = keepNearMiss(text);
+      const known = nm === undefined ? undefined : knownNearMissVariant(nm.entry, text);
+      if (nm !== undefined && known !== undefined) {
+        if (!this.nearMissKnownShown.has(nm.entry)) {
+          this.nearMissKnownShown.add(nm.entry);
+          console.warn(
+            `[lethal] al-runner-v3: a known unmeasured variant of keep entry ${nm.entry} closed the daemon (${known.why}); not kept, as pre-committed (PR-244)`,
+          );
+        }
+      } else if (nm !== undefined) {
+        this.notify(
+          "al-runner-v3-keep-near-miss",
+          `[lethal] al-runner-v3-keep-near-miss: "${text.slice(0, 200)}" almost matches keep entry ${nm.entry} (${nm.found}/${nm.size} words) but does not: a rewording, or an unmeasured variant; it closes the daemon as before (PR-244)`,
+        );
+      }
     }
     if (V3_ROUTINE_CLOSES.has(reason)) return;
     this.closeSink?.({
@@ -3178,6 +3261,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.testDataOffBuild = undefined;
       this.demoDownloadWarned = false;
       this.demoMayDownloadWarned = false;
+      // PR-244: the near-miss and storm warnings are per session too.
+      this.nearMissChecked.clear();
+      this.nearMissKnownShown.clear();
+      this.stormFamilies.clear();
     }
   }
   private readonly compiler: ArtifactCompiler;
@@ -3199,7 +3286,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R635: the serve daemon's spawn (serve-entries only). */
     private readonly serverSpawn: ServerSpawnFn = defaultServerSpawn,
     /** R651: the clock of the phase timers only (a test's fake clock). */
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = monoNow,
   ) {
     // R938: a backend built directly cannot run with an unknown environment either.
     if ((cfg.environmentChoice as V3EnvironmentChoice | undefined)?.value === undefined) {
@@ -4025,6 +4112,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.latchBy = undefined;
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
     this.l4Counted = new Set();
+    this.refusedCutCounted = new Set();
     this.baselineRows = new Map();
     this.uniformWatch = new UniformRefusalWatch();
     this.union = new Set();
@@ -4149,10 +4237,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       }
       const { testScan, testOther, testAppJsonSha256 } = post;
+      // R655: active/ is LethAL's copy and holds no link; one refuses here, by path. PR-259: the hash and
+      // the bound print come from ONE read.
+      const activeScan = await linkIsUnproven(scanAlTree(active), "the staged batch");
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
-        // R655: active/ is LethAL's copy and holds no link; one refuses here, by path.
-        activeHashExceptSelector: await linkIsUnproven(hashAlTree(active), "the staged batch"),
+        activeHashExceptSelector: activeScan.hash,
+        activePrint: activeScan.print,
+        testDirPrint: testScan.print,
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         testDirHash: testScan.hash,
         activeOther: await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
@@ -4609,9 +4701,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
   ): Promise<BaselineAnswer | undefined> {
     const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
-    const started = Date.now();
+    const started = monoNow();
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
-    const wallMs = Date.now() - started;
+    const wallMs = monoNow() - started;
     if (daemon.dirty) {
       await this.closeLaneIn(
         "baseline",
@@ -4654,13 +4746,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane.inFlight = "baseline";
     try {
       const totalTests = group.reduce((n, id) => n + (this.testsPerCodeunit.get(id) ?? 1), 0);
-      const timedAt = Date.now();
+      const timedAt = monoNow();
       const emit = (extra: { readonly failed?: true; readonly timings?: V3Timings }): void => {
         if (!this.inBaseline) return;
         this.requestTimedSink?.({
           kind: "baseline",
           lane: lane.index,
-          wallMs: Date.now() - timedAt,
+          wallMs: monoNow() - timedAt,
           entries: group.length,
           tests: totalTests,
           ...extra,
@@ -4677,7 +4769,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await this.closeLane(lane, "request-failed");
         throw missingDependencyOr(err);
       }
-      const wallMs = Date.now() - timedAt;
+      const wallMs = monoNow() - timedAt;
       const timings = pickV3Timings(answer.summary.timings);
       emit(timings !== undefined ? { timings } : {});
       await this.refuseDaemonDependencySkip(lane, daemon); // R590, R885: throws as today
@@ -5904,7 +5996,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       timedOut = true;
       controller.abort();
     }, deadlineMs);
-    const started = Date.now();
+    const started = monoNow();
     this.spawnCount += 1;
     this.transportFrozen = true; // R761
     try {
@@ -5915,11 +6007,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ...this.cacheEnv(),
       });
       this.watchTestDataOff(res.stdout, res.stderr); // R885
-      return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
+      return { res, wallMs: monoNow() - started, timedOut, deadlineMs };
     } catch (err) {
       return {
         spawnError: err instanceof Error ? err.message : String(err),
-        wallMs: Date.now() - started,
+        wallMs: monoNow() - started,
       };
     } finally {
       clearTimeout(timer);
@@ -5930,7 +6022,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /**
    * R766 (b): lanes 1..N-1 read their own copy `active.<k>/` of the proved tree (timestamps kept, so
    * the "other files" proof sees the same mtimes). Each copy is checked once against the proof, by
-   * `assertBound(lane)` (the .al hash, the other files, `app.json`, the selector, the resource file):
+   * `assertBound(lane)` (the .al bound print, the other files, `app.json`, the selector, the resource file):
    * a copy that differs refuses by name. Every lane also gets its own cwd `daemon-<k>/`.
    */
   private async copyLanes(active: string): Promise<void> {
@@ -6571,8 +6663,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
     // R655: a link that appears in active/ mid-run is drift, as in the test dir (R631).
-    const activeHashNow = await linkIsUnproven(hashAlTree(dir), `${dir} after the alc proof`);
-    if (activeHashNow !== proof.activeHashExceptSelector) {
+    // PR-259 (R1156): every .al byte is read, compared by its bound print (not a SHA-256).
+    const activePrintNow = await linkIsUnproven(printAlTree(dir), `${dir} after the alc proof`);
+    if (activePrintNow !== proof.activePrint) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
     const activeOtherDrift = await linkIsUnproven(
@@ -6617,11 +6710,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     // R631: a link that appears in the test dir mid-run is drift like any other change.
-    const testDirHashNow = await linkIsUnproven(
-      hashTestDir(this.cfg.testDir),
+    const testDirPrintNow = await linkIsUnproven(
+      printTestDir(this.cfg.testDir),
       "the test dir after the alc proof",
     );
-    if (testDirHashNow !== proof.testDirHash) {
+    if (testDirPrintNow !== proof.testDirPrint) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
       );
@@ -6688,6 +6781,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (served !== undefined) {
       lane.pairVerdict = undefined;
       return { ...served, ref };
+    }
+    // PR-250: a test a mutant entry leaves out before a baseline-refused test does not run under a mutant,
+    // so it is not measured: an error that the walk holds (`runner-refused`, PR-81), so another test can
+    // still kill the mutant; never a pass, never a kill.
+    const refusedCut =
+      this.entries &&
+      !this.inBaseline &&
+      lane.lastActivated !== null &&
+      !this.oneShotCodeunits.has(ref.codeunitId)
+        ? this.refusedCut(ref.codeunitId)
+        : undefined;
+    if (refusedCut?.methods.has(ref.method.toLowerCase()) === true) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 0,
+        failureMessage: `baseline-refused-cut: ${ref.codeunitName}.${ref.method} was not run under this mutant: codeunit ${ref.codeunitId}'s entry is cut before ${refusedCut.test}, whose baseline refusal the daemon does not keep ("${refusedCut.text.slice(0, 200)}"); not measured (PR-250)`,
+        operation: "completed-accepted",
+        runnerRow: "runner-refused",
+      };
     }
     // PR-51 (F1): an explicit alone request ignores every stored call and every routing state.
     const forced = opts.alone === true;
@@ -7925,7 +8038,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.transportFrozen = true; // R761
     const [cu] = smallest;
     const mode = this.modeOfCall(cu);
-    const started = Date.now();
+    const started = monoNow();
     // Timed as a warm-up (review r1), so its seconds show where the warm-up count does.
     await lane.timed("warmupMs", async () => {
       try {
@@ -7947,7 +8060,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
           throw new AlRunnerV3EntriesRefusedError(
             err.code,
-            `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+            `${why}; found before the baseline by the probe of codeunit ${cu} (${monoNow() - started} ms, R927)`,
           );
         }
         // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
@@ -8235,13 +8348,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mode: RequestMode,
     groupCount: number = groups.length,
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
-    excluded?: (codeunit: number, group: EntryGroup) => readonly string[] | undefined,
-  ): Promise<{
-    readonly sent: readonly SentEntry[];
-    readonly rows: ReadonlyMap<string, readonly V3Row[]>;
-    readonly selectedOnly: boolean;
-    readonly cut?: SentCut;
-  }> {
+    excluded?: ExcludedFn,
+  ): Promise<SendAnswer> {
     // PR-100: the kind in flight on the lane, for `serve-daemon-closed`'s phase; closes inside the
     // request (a failure, an unreadable answer, a dependency skip, a batch refusal) read it.
     const prev = lane.inFlight;
@@ -8264,15 +8372,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
      *  in this request's body (on the daemon of the call's own mode). */
     alone?: { readonly call: number; readonly selection: IsolatedSelection },
     /** R1004: the tests each plain codeunit entry leaves out (PR-20: per group, for the L4 cut). */
-    excluded?: (codeunit: number, group: EntryGroup) => readonly string[] | undefined,
-  ): Promise<{
-    readonly sent: readonly SentEntry[];
-    readonly rows: ReadonlyMap<string, readonly V3Row[]>;
-    /** PR-94: the request carried `runSelectedOnly`, so `suiteMissing` checks the order of every entry. */
-    readonly selectedOnly: boolean;
-    /** R895: the answer was cut at a timeout row; only a prefetch or live request can be. */
-    readonly cut?: SentCut;
-  }> {
+    excluded?: ExcludedFn,
+  ): Promise<SendAnswer> {
     const daemon = lane.daemonFor(mode);
     const s = this.serveStopSeconds();
     if (daemon === undefined || s === undefined)
@@ -8280,12 +8381,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // PR-24 (L2): a restarted daemon's lazy warm-up is not counted toward R952's request bound, so the
     // daemon serves `daemonMaxRequests` requests as a daemon warmed at its start did, not one fewer.
     if (!(kind === "warmup" && daemon.proven !== undefined)) daemon.requests += 1;
-    const encode = (gs: readonly EntryGroup[]) =>
+    const encode = (gs: readonly EntryGroup[], withRefusedCut: boolean) =>
       encodeGroups(
         gs,
         this.requireEchoId(),
         (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
-        excluded,
+        excluded === undefined ? undefined : (cu, g) => excluded(cu, g, withRefusedCut),
       );
     // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
     // `runSelectedOnly`, so the excluded tail does not run. Never in `requestBase` (the baseline and the
@@ -8301,13 +8402,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             this.neverFlag,
           )
         : { flag: false, refused: false, skipped: 0 };
-    let sent = encode(groups);
+    let sent = encode(groups, true);
     let selectedOnly = decide(sent);
+    // PR-250: the cut before a baseline-refused test goes out only in a request sent with
+    // `runSelectedOnly`, as PR-102's `through` cut below: unflagged, `excludeTests` only hides rows while v3
+    // still runs the refused test, so its refusal would dirty the daemon unseen. Unflagged, the entries are
+    // encoded again without it (today's request), so the refusal shows and closes the daemon as before.
+    let noCutExcluded: Map<string, readonly string[] | undefined> | undefined;
+    if (selectedOnly.flag) {
+      const plain = encode(groups, false);
+      const same = (a?: readonly string[], b?: readonly string[]) =>
+        JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+      const withCut = sent.filter((e, i) => !same(e.excludeTests, plain[i]?.excludeTests));
+      if (withCut.length > 0) {
+        noCutExcluded = new Map(plain.map((e) => [e.id, e.excludeTests] as const));
+        this.countRefusedCuts(lane, withCut);
+      }
+    } else {
+      sent = encode(groups, false);
+      selectedOnly = decide(sent);
+    }
     // PR-102 (H1): a kill pair's `through` cut goes out only in a request sent with `runSelectedOnly`.
     // Without the flag, `excludeTests` only hides rows while v3 still runs the tail (R1094), so a hidden
     // refusal or hang would go unseen. Unflagged, the pair is today's request.
     if (!selectedOnly.flag && groups.some((g) => g.through !== undefined)) {
-      sent = encode(groups.map(withoutThrough));
+      sent = encode(groups.map(withoutThrough), false);
       selectedOnly = decide(sent);
     }
     const tests = sent.reduce(
@@ -8342,7 +8461,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // PR-100: one `serve-request-timed` per send, after the answer or the throw and before any decode
     // check. A warm-up's cause is read (and used up) here.
-    const timedAt = Date.now();
+    const timedAt = monoNow();
     const emitTimed = (extra: {
       readonly cut?: true;
       readonly failed?: true;
@@ -8357,7 +8476,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.requestTimedSink?.({
         kind,
         lane: lane.index,
-        wallMs: Date.now() - timedAt,
+        wallMs: monoNow() - timedAt,
         entries: sent.length,
         tests,
         ...(selectedOnly.flag ? { selectedOnly: true as const } : {}),
@@ -8457,6 +8576,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       rows: decoded.rows,
       selectedOnly: selectedOnly.flag,
       ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}),
+      ...(noCutExcluded !== undefined ? { noCutExcluded } : {}),
     };
   }
 
@@ -8571,7 +8691,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
-    const started = Date.now();
+    const started = monoNow();
     // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
     // PR-99: the LANE's counters that sent the request: another lane's are never read or written here.
     const before = { ...lane.stats };
@@ -8592,10 +8712,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           // R998: the warm-up's, at the codeunit's end only; PR-20 (L4): and the tests after the
           // mutant's last covering one
           // PR-102: a kill pair's group is cut after its killer, uncounted
-          (cu, g) =>
+          // PR-250: and, in a request sent with `runSelectedOnly` only, the cut before a baseline-refused test
+          (cu, g, withRefusedCut) =>
             g.through !== undefined
-              ? this.cutAfterKiller(cu, g.through)
-              : this.mutantExcludes(lane, cu, g.mutantId),
+              ? this.cutAfterKiller(cu, g.through, withRefusedCut)
+              : this.mutantExcludes(lane, cu, g.mutantId, withRefusedCut),
         ),
       );
     } finally {
@@ -8726,7 +8847,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ? { proveGrowth: proveInfo.proveGrowth }
         : {}),
     });
-    const wallMs = Date.now() - started;
+    const wallMs = monoNow() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
     for (const [i, e] of sent.entries()) {
@@ -8784,6 +8905,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         wallMs,
         callId: requestCallId,
         ...(e.excludeTests !== undefined ? { excluded: e.excludeTests } : {}),
+        ...(answer.noCutExcluded?.has(e.id) === true
+          ? { noRefusedCut: { excluded: answer.noCutExcluded.get(e.id) } }
+          : {}),
         coverage: { kind: "unavailable", why: "an entries answer carries no coverage (R635 §5)" },
         ...(echoWhy !== undefined
           ? {
@@ -8931,9 +9055,64 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * still runs follows a left-out one, and none starts from other state than at the baseline (a
    * refused test can change the codeunit's globals before v3 refuses it, which v3's cascades do not
    * track; review 2-3). The warm-up keeps `leftOutNames`: it only compares, and a difference there
-   * fails loudly.
+   * fails loudly. PR-250: joined by `refusedCut`'s tests (the union).
    */
-  private mutantLeftOutNames(cu: number): readonly string[] | undefined {
+  private mutantLeftOutNames(cu: number, withRefusedCut = true): readonly string[] | undefined {
+    const r998 = this.r998TailNames(cu);
+    const cut = withRefusedCut ? this.refusedCut(cu) : undefined;
+    if (cut === undefined) return r998;
+    return [...new Set([...(r998 ?? []), ...cut.names])].sort();
+  }
+
+  /**
+   * PR-250 (docs/superpowers/specs/2026-11-20-pr250-baseline-refused-cut.md): the first test of `cu`, in
+   * its baseline order, whose BASELINE row is a refusal the daemon does not keep (R998's rows: a notRun
+   * that no `V3_SERVE_SAFE_REFUSALS` entry keeps; never a fail, a pass or a timeout), and the tests from it
+   * on that every mutant entry of `cu` leaves out. #8059: a name that starts a test before it stays in.
+   * `undefined` when there is none, when `cu` runs its tests one at a time (a per-test call id, or a
+   * codeunit `isolateTests` or isolation auto runs per test: its whole-codeunit baseline rows are stale),
+   * when that test itself cannot be left out, or when R998's left-out run already holds every one of them
+   * (nothing new is cut). It goes out only in a request sent with `runSelectedOnly` (`sendInFlight`).
+   */
+  private refusedCut(cu: number):
+    | {
+        readonly test: string;
+        readonly text: string;
+        readonly names: readonly string[];
+        /** The cut tests, lower-case methods. */
+        readonly methods: ReadonlySet<string>;
+      }
+    | undefined {
+    if (cu < 0 || this.isolatedRefs.has(cu) || this.perTest(cu)) return undefined;
+    const rows = this.baselineRows.get(cu) ?? [];
+    const at = rows.findIndex(
+      (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    const first = rows[at];
+    if (first === undefined) return undefined;
+    const tail = rows.slice(at);
+    const inTail = new Set(tail.map((r) => r.method.toLowerCase()));
+    const stay = [
+      ...rows.slice(0, at).map((r) => r.method),
+      ...this.discovered.filter((t) => t.codeunitId === cu).map((t) => t.method),
+    ]
+      .map((m) => m.toLowerCase())
+      .filter((m) => !inTail.has(m));
+    const cut = tail.filter((r) => !stay.some((s) => s.startsWith(r.method.toLowerCase())));
+    if (cut[0] !== first) return undefined;
+    const names = [...new Set(cut.map((r) => `Codeunit${cu}.${r.method}`))].sort();
+    const r998 = new Set((this.r998TailNames(cu) ?? []).map((n) => n.toLowerCase()));
+    if (names.every((n) => r998.has(n.toLowerCase()))) return undefined;
+    return {
+      test: first.name,
+      text: first.message ?? "",
+      names,
+      methods: new Set(cut.map((r) => r.method.toLowerCase())),
+    };
+  }
+
+  /** R998: the run of `leftOutNames` at the end of `cu`'s baseline order (see `mutantLeftOutNames`). */
+  private r998TailNames(cu: number): readonly string[] | undefined {
     const out = this.leftOutNames(cu);
     if (out === undefined) return undefined;
     const names = new Set(out.map((n) => n.toLowerCase()));
@@ -8957,15 +9136,27 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * covering test or a discovered test of `cu` is not in it. #8059: a tail test whose name starts
    * another test that must run stays in (v3 matches `excludeTests` by prefix).
    */
-  private mutantExcludes(lane: Lane, cu: number, mutantId: string): readonly string[] | undefined {
-    const base = this.mutantLeftOutNames(cu);
-    const out = this.cutAfterLastCovering(cu, mutantId, base);
+  private mutantExcludes(
+    lane: Lane,
+    cu: number,
+    mutantId: string,
+    /** PR-250: with `refusedCut`'s tests (only a request sent with `runSelectedOnly` carries them). */
+    withRefusedCut = true,
+  ): readonly string[] | undefined {
+    const out = this.cutAfterLastCovering(
+      cu,
+      mutantId,
+      this.mutantLeftOutNames(cu, withRefusedCut),
+    );
     // Review 1: counted once per (mutant, codeunit), cut or not, so the stats line gives the share
     // left out (`tests left out` over `of`); re-sends, kill pairs and live repeats count nothing.
+    // PR-250: counted on the lists without its cut, as before it.
     const key = `${mutantId}|${cu}`;
     if (mutantId !== SELECTOR_RESOURCE_NONE && !this.l4Counted.has(key)) {
       this.l4Counted.add(key);
-      const added = (out?.length ?? 0) - (base?.length ?? 0);
+      const base = this.mutantLeftOutNames(cu, false);
+      const added =
+        (this.cutAfterLastCovering(cu, mutantId, base)?.length ?? 0) - (base?.length ?? 0);
       lane.stats.l4MutantEntries += 1;
       lane.stats.l4WholeTests += new Set(this.baselineOrder(cu)).size;
       if (added > 0) {
@@ -8974,6 +9165,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     return out;
+  }
+
+  /**
+   * PR-250: counts the mutant entries of a request that went out WITH `refusedCut`'s tests (once per
+   * mutant and codeunit), and names each cut codeunit once per session.
+   */
+  private countRefusedCuts(lane: Lane, sent: readonly SentEntry[]): void {
+    for (const e of sent) {
+      if (e.echo || e.mutantId === SELECTOR_RESOURCE_NONE) continue;
+      const cu = callOf(e);
+      const cut = this.refusedCut(cu);
+      if (cut === undefined) continue;
+      const key = `${e.mutantId}|${cu}`;
+      if (this.refusedCutCounted.has(key)) continue;
+      this.refusedCutCounted.add(key);
+      lane.stats.refusedCutEntries += 1;
+      if (this.refusedCutSaid.has(cu)) continue;
+      this.refusedCutSaid.add(cu);
+      this.notify(
+        "al-runner-v3-baseline-refused-cut",
+        `[lethal] al-runner-v3-baseline-refused-cut: codeunit ${cu}'s baseline refused ${cut.test} ("${cut.text.slice(0, 200)}"), a refusal the daemon does not keep, so a mutant entry of codeunit ${cu} sent with runSelectedOnly leaves out ${cut.names.length} test(s) from it on; a mutant covered by one of them is error, never survived, unless another test kills it (PR-250)`,
+      );
+    }
   }
 
   /** PR-20 (L4): `mutantExcludes`' list, uncounted: R998's run `base`, and the cut if it applies. */
@@ -8989,8 +9203,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * PR-102: the `excludeTests` of a kill pair's entry for `cu`: `cutAfterLastCovering`'s cut with the
    * covering set `{killer}`, R998's run as the base, and none of `mutantExcludes`' counting.
    */
-  private cutAfterKiller(cu: number, killer: string): readonly string[] | undefined {
-    return this.cutAfter(cu, new Set([killer.toLowerCase()]), this.mutantLeftOutNames(cu));
+  private cutAfterKiller(
+    cu: number,
+    killer: string,
+    withRefusedCut = true,
+  ): readonly string[] | undefined {
+    return this.cutAfter(
+      cu,
+      new Set([killer.toLowerCase()]),
+      this.mutantLeftOutNames(cu, withRefusedCut),
+    );
   }
 
   private cutAfter(
@@ -9052,7 +9274,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
     if (
       one === undefined &&
-      (selectedOnly || out.size > (this.mutantLeftOutNames(cu)?.length ?? 0))
+      // PR-250: an unflagged entry never carries the refused-test cut, so its base is without it
+      (selectedOnly || out.size > (this.mutantLeftOutNames(cu, false)?.length ?? 0))
     ) {
       const at = new Map(this.baselineOrder(cu).map((m, i) => [m, i] as const));
       let prev = -1;
@@ -9580,7 +9803,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const cu = this.callId(ref);
     this.union.add(cu);
-    const started = Date.now();
+    const started = monoNow();
     let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
     try {
       out = await this.request(
@@ -9598,7 +9821,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         err instanceof AlRunnerServerRequestError
       ) {
         // As `liveCall` maps the same throw (a refusal latches).
-        const noneVerdict = this.liveFailure(lane, ref, err, Date.now() - started);
+        const noneVerdict = this.liveFailure(lane, ref, err, monoNow() - started);
         lane.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
@@ -9636,7 +9859,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     ref: TestMethodRef,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
-    const started = Date.now();
+    const started = monoNow();
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
@@ -9653,7 +9876,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           verdict: refusalVerdict(
             ref,
             `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
-            Date.now() - started,
+            monoNow() - started,
           ),
         };
       }
@@ -9661,7 +9884,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       lane.rowsByCodeunit.set(id, call);
       return { call };
     } catch (err) {
-      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
+      return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
     }
   }
 
@@ -9674,7 +9897,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     ref: TestMethodRef,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
-    const started = Date.now();
+    const started = monoNow();
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
@@ -9697,13 +9920,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           verdict: refusalVerdict(
             ref,
             `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
-            Date.now() - started,
+            monoNow() - started,
           ),
         };
       }
       return { call };
     } catch (err) {
-      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
+      return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
     }
   }
 
@@ -9744,7 +9967,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     const echoId = this.requireEchoId();
-    const started = Date.now();
+    const started = monoNow();
     let next: CallRows;
     let checked = false;
     try {
@@ -9782,12 +10005,21 @@ export class AlRunnerV3Backend implements ExecutionBackend {
             this.callId(ref),
             true,
             undefined,
-            call.excluded ?? this.mutantLeftOutNames(this.callId(ref)),
+            // PR-250: never the refused-test cut (a window is never sent with `runSelectedOnly`)
+            call.noRefusedCut !== undefined
+              ? call.noRefusedCut.excluded
+              : (call.excluded ?? this.mutantLeftOutNames(this.callId(ref), false)),
           ),
         );
         const after = await echoOk();
         const echoWhy = before ?? after;
-        const differ = rowsClass(cov.rows) !== rowsClass(call.rows);
+        // PR-250: the entry has no rows for the tests its cut left out; the window ran them
+        const cutOut = new Set(
+          call.noRefusedCut !== undefined ? (call.excluded ?? []).map((n) => n.toLowerCase()) : [],
+        );
+        const differ =
+          rowsClass(cov.rows.filter((r) => !cutOut.has(r.name.toLowerCase()))) !==
+          rowsClass(call.rows);
         next = {
           ...call,
           coverage: cov.coverage,
@@ -9820,7 +10052,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         lane.timers.windowMs += this.now() - windowT0;
       }
     } catch (err) {
-      const v = this.liveFailure(lane, ref, err, Date.now() - started);
+      const v = this.liveFailure(lane, ref, err, monoNow() - started);
       return {
         verdict:
           checked && v.failureMessage !== undefined
@@ -9896,7 +10128,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // PR-113: a plain request made while the baseline runs is timed as `baseline`; the mutant phase's
     // coverage and echo windows (also plain requests) keep no event.
-    const timedAt = Date.now();
+    const timedAt = monoNow();
     const timedTests = one !== undefined ? 1 : (this.testsPerCodeunit.get(cu) ?? 1);
     const emitBaseline = (extra: {
       readonly failed?: true;
@@ -9906,7 +10138,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.requestTimedSink?.({
         kind: "baseline",
         lane: lane.index,
-        wallMs: Date.now() - timedAt,
+        wallMs: monoNow() - timedAt,
         entries: 1,
         tests: timedTests,
         ...extra,
@@ -9967,7 +10199,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.

@@ -5,6 +5,7 @@
  */
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import { SUSPEND_SECONDS } from "./clock";
 import type { RunEvent } from "./events";
 
 const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown"] as const;
@@ -54,6 +55,9 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
   const mutantPhases: { from: number; to: number; reqs: Map<number, Req[]> }[] = [];
   let untimed = false;
   let memoryHolds = 0;
+  /** PR-252: `run-suspended` warnings and their total seconds. */
+  let suspends = 0;
+  let suspendedS = 0;
   let idleCloses = 0;
   const timeOf = (e: RunEvent): number | undefined => e.atMs ?? opts.now?.();
   const kinds = new Map<string, { n: number; ms: number }>();
@@ -103,6 +107,10 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           break;
         case "warning":
           if (e.code === "al-runner-v3-lane-memory-hold") memoryHolds += 1;
+          if (e.code === "run-suspended") {
+            suspends += 1;
+            suspendedS += Number(SUSPEND_SECONDS.exec(e.message)?.[1] ?? 0);
+          }
           break;
         case "session-finished":
           finished = true;
@@ -292,6 +300,11 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
       if (mutantsMs !== undefined && covered > 0)
         lines.push(
           `  per covered mutant: ${(mutantsMs / 1000 / covered).toFixed(2)} s (${covered} scored with coverage over the mutants phase)`,
+        );
+
+      if (suspends > 0 && lines.length > 0)
+        lines.push(
+          `  suspended ${suspends} time(s), ${suspendedS.toLocaleString("en-US")} s (the machine slept; durations exclude it)`,
         );
 
       if (lines.length === 0) return undefined;

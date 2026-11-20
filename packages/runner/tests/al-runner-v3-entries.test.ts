@@ -1689,6 +1689,94 @@ describe("R939: why each serve daemon closed", () => {
     expect(seen.filter(([code]) => code.includes("daemon"))).toEqual([]);
   });
 
+  // PR-244: the near-miss and restart-storm warnings. Warning only: the daemon closes as before.
+  describe("PR-244: keep near-miss and restart storm", () => {
+    // A synthetic rewording (a clause inserted mid-sentence into `page-no-record-onopenpage`): unkept, and no suffix
+    // widening of that entry would keep it. (PERF-10's Company text is kept since bugs' widening, master c3355859.)
+    const REWORDED =
+      "NotRun: out-of-scope: a page opened without a record whose OnOpenPage, as the runner now explains, left Rec where its view has no row";
+    const REPORT_VARIANT =
+      "NotRun: out-of-scope: a parameters string without the XML declaration in this form, given to Report.RunRequestPage (which character BC's filter error names is not pinned)";
+    const textFor =
+      (text: string, who: readonly string[]): RowsFn =>
+      (m, cu, d, n) =>
+        allPass(m, cu, d, n).map((x) =>
+          who.includes(m) && x.method === "A"
+            ? { ...x, status: "error" as const, notRun: true, message: text }
+            : x,
+        );
+    const near = (seen: [string, string][]) =>
+      seen.filter(([c]) => c === "al-runner-v3-keep-near-miss");
+    const storm = (seen: [string, string][]) =>
+      seen.filter(([c]) => c === "al-runner-v3-refusal-restart-storm");
+
+    test("a reworded text warns once at its first close; the same text again does not; the daemon still closes", async () => {
+      const { r, seen } = await watched(textFor(REWORDED, ["M0001", "M0002"]));
+      expect(near(seen).length).toBe(1);
+      expect(near(seen)[0]?.[1]).toMatch(
+        /keep entry page-no-record-onopenpage \((\d+)\/\1 words\)/,
+      );
+      // the keep decision is unchanged: the refusal closed the daemon, and counted by reason
+      expect([...r.b.daemonCloses().byReason]).toEqual([["refusal", 2]]);
+    });
+    test("a known variant prints a plain line, never the warning", async () => {
+      const lines: string[] = [];
+      const orig = console.warn;
+      console.warn = (...a: unknown[]) => void lines.push(a.join(" "));
+      try {
+        const { r, seen } = await watched(textFor(REPORT_VARIANT, ["M0001", "M0002"]));
+        expect(near(seen)).toEqual([]);
+        expect([...r.b.daemonCloses().byReason]).toEqual([["refusal", 2]]);
+      } finally {
+        console.warn = orig;
+      }
+      expect(lines.filter((l) => l.includes("known unmeasured variant")).length).toBe(1);
+    });
+    test("an unkept family warns a storm at its 10th close only", async () => {
+      const ids = Array.from({ length: 11 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+      const r = await rig({
+        serve: { rows: textFor(WITH_EVENTS, ids) },
+        oneShotRows: allPass,
+      });
+      const seen: [string, string][] = [];
+      r.b.setNotify((c, m) => seen.push([c, m]));
+      await baseline(r.b, SUITE1);
+      for (let i = 0; i < 11; i++) {
+        await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+        expect(storm(seen).length).toBe(i + 1 < 10 ? 0 : 1);
+      }
+      expect(r.b.daemonCloses().refusalFamilies.get("WithEvents subscriber …")).toBe(11);
+      expect(near(seen)).toEqual([]);
+    });
+    test("a reused backend's next session (setNotify) warns again: its own 10th close, and a near-miss text the last session reported", async () => {
+      const ids = Array.from({ length: 22 }, (_, i) => `M${String(i + 1).padStart(4, "0")}`);
+      const r = await rig({
+        serve: {
+          rows: (m, cu, d, n) =>
+            ids.indexOf(m) >= 20
+              ? textFor(REWORDED, ids)(m, cu, d, n)
+              : textFor(WITH_EVENTS, ids)(m, cu, d, n),
+        },
+        oneShotRows: allPass,
+      });
+      const first: [string, string][] = [];
+      r.b.setNotify((c, m) => first.push([c, m]));
+      await baseline(r.b, SUITE1);
+      for (let i = 0; i < 10; i++) await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+      await r.b.prefetchMutants(plans([ids[20] ?? ""], SUITE1));
+      expect(storm(first).length).toBe(1);
+      expect(near(first).length).toBe(1);
+      const second: [string, string][] = [];
+      r.b.setNotify((c, m) => second.push([c, m]));
+      for (let i = 10; i < 19; i++) await r.b.prefetchMutants(plans([ids[i] ?? ""], SUITE1));
+      expect(storm(second).length).toBe(0);
+      await r.b.prefetchMutants(plans([ids[19] ?? ""], SUITE1));
+      expect(storm(second).length).toBe(1);
+      await r.b.prefetchMutants(plans([ids[21] ?? ""], SUITE1));
+      expect(near(second).length).toBe(1);
+    });
+  });
+
   test("a timeout row: reason timeout, no family", async () => {
     const { r } = await watched(timedOutFor("M0002"));
     const c = r.b.daemonCloses();
@@ -2526,6 +2614,41 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
     const cov = since(r, n0).find((q) => q.body.coverage === true);
     expect(cov?.body.excludeTests).toEqual([`Codeunit${CU}.B`]);
+  });
+
+  // PR-250 (review MED-2): the entry went out with the cut before B (flagged), but a coverage window is never
+  // sent with runSelectedOnly, so it leaves out what the entry would without that cut; the rows of the tests
+  // the cut left out of the entry are not compared, so the pass still reads.
+  test("PR-250: the coverage request never carries the refused-test cut, and the pass is scored", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B"
+          ? {
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: "NotRun: out-of-scope: InStream method on an unassigned Variant",
+            }
+          : x,
+      );
+    const { r, n0 } = await windowOf({
+      suite: SUITE_ABC,
+      serve: { rows: bMid },
+      oneShotRows: bMid,
+    });
+    const entry = r.serve.requests
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .find((e) => String(e.id).startsWith("M0001|") && String(e.test) === `Codeunit${CU}.`);
+    expect(entry?.excludeTests).toEqual([`Codeunit${CU}.B`, `Codeunit${CU}.C`]);
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const cov = since(r, n0).find((q) => q.body.coverage === true);
+    expect(cov).toBeDefined();
+    expect(cov?.body.excludeTests).toBeUndefined();
   });
 
   test("the coverage request's rows disagree with the entry's -> error entries-coverage-disagreement", async () => {
@@ -5374,9 +5497,10 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     expect(v.outcome).toBe("pass");
   });
 
-  // R998 (review 2-3): a refused test with a test after it stays in the mutant entries, so the test
-  // after it starts from the baseline's state; the warm-up (which only compares) still leaves it out.
-  test("R998: a refused test in the middle of its codeunit stays in the mutant entries (only a trailing run is left out)", async () => {
+  // R998 (review 2-3) left a refused test with a test after it IN the mutant entries; PR-250 (option 2) cuts
+  // the mutant entries before it instead: it and every later test are left out, so no test after it runs from
+  // other state. The warm-up (which only compares) still leaves out B alone.
+  test("R998, PR-250: a refused test in the middle of its codeunit is cut from the mutant entries with every test after it", async () => {
     const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
     const bMid: RowsFn = (m, cu, d, n) =>
       (cu === CU
@@ -5394,7 +5518,9 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
       .filter((e) => String(e.test) === `Codeunit${CU}.`);
     expect(mutantEntries.length).toBeGreaterThan(0);
-    expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
+    expect(mutantEntries.map((e) => e.excludeTests)).toEqual(
+      mutantEntries.map(() => [`Codeunit${CU}.B`, `Codeunit${CU}.C`]),
+    );
   });
 
   // PR-24 (L2): a restarted daemon's lazy warm-up leaves out what the whole-union warm-up does
@@ -13003,4 +13129,41 @@ describe("PR-119: cross-check samples beside the daemon", () => {
       expect(t.rep()).toMatchObject({ samplesOverlapped: 0, samplesSequential: 2 });
     });
   });
+});
+
+describe("PR-252: a request's wallMs is a monotonic interval", () => {
+  for (const [name, step] of [
+    ["forward", 2_000_000],
+    ["backward", -2_000_000],
+  ] as const) {
+    test(`a wall clock ${name} step of 2,000 s during a prefetch leaves wallMs small, non-negative and the request unfailed`, async () => {
+      const realNow = Date.now;
+      let offset = 0;
+      let armed = false;
+      try {
+        Date.now = () => realNow() + offset;
+        const r = await rig({
+          serve: {
+            rows: (m, cu, d, n) => {
+              if (armed) offset += step; // the wall clock steps while the request is in flight
+              return allPass(m, cu, d, n);
+            },
+          },
+        });
+        const timed: V3RequestTimed[] = [];
+        r.b.setRequestTimedSink((e) => timed.push(e));
+        await baseline(r.b, SUITE1);
+        armed = true;
+        await r.b.prefetchMutants(plans(["M0001", "M0002"]));
+        expect(timed.length).toBeGreaterThan(0);
+        for (const e of timed) {
+          expect(e.failed).toBeUndefined();
+          expect(e.wallMs).toBeGreaterThanOrEqual(0);
+          expect(e.wallMs).toBeLessThan(100_000);
+        }
+      } finally {
+        Date.now = realNow;
+      }
+    });
+  }
 });

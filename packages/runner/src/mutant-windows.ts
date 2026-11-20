@@ -7,6 +7,7 @@
 import type { MutantManifestEntry } from "@lethal/schemata";
 import { ENTRIES_CHUNK_CAP } from "./al-runner-v3-entries";
 import type { TestMethodRef } from "./backend";
+import type { RunEvent } from "./events";
 import { testKeyOf } from "./selection";
 
 /** A window holds mutants until their estimated covering-test time would pass this. */
@@ -155,6 +156,45 @@ export interface MemoryStop {
   readonly source: string;
 }
 
+/** PR-250: the lane whose daemon churned, and its closes in a row with no mutant scored. */
+export interface DaemonChurnStop {
+  readonly lane: number;
+  readonly closes: number;
+}
+
+/**
+ * PR-250 (the owner): this many serve-daemon closes in a row on one lane, in the mutant phase, with no
+ * mutant scored anywhere in the session in between, stop the session (`al-runner-v3-daemon-churn`).
+ * From the events: y2 and y3 reached at most 6 per lane, PERF-10b's churn 10 at minute 42 (the spec).
+ */
+export const V3_DAEMON_CHURN_CLOSES = 10;
+
+/**
+ * PR-250: the churn guard over the session's event stream. `see` returns the stop on the close that
+ * reaches `V3_DAEMON_CHURN_CLOSES` on one lane, once; a `mutant-scored` resets every lane. Only closes in
+ * the `mutants` phase count (by `phase-entered`; the close's own `phase` says `baseline` for a coverage
+ * window or an echo request too, so it is not read).
+ */
+export class DaemonChurnGuard {
+  private readonly runs = new Map<number, number>();
+  private inMutants = false;
+  private tripped = false;
+  see(e: RunEvent): DaemonChurnStop | undefined {
+    if (e.type === "phase-entered") this.inMutants = e.phase === "mutants";
+    else if (e.type === "mutant-scored") this.runs.clear();
+    else if (e.type === "serve-daemon-closed" && this.inMutants && !this.tripped) {
+      const lane = e.lane ?? 0;
+      const closes = (this.runs.get(lane) ?? 0) + 1;
+      this.runs.set(lane, closes);
+      if (closes >= V3_DAEMON_CHURN_CLOSES) {
+        this.tripped = true;
+        return { lane, closes };
+      }
+    }
+    return undefined;
+  }
+}
+
 export class TimeBudget {
   /** Set by the first `reach`; later calls change nothing. */
   reached:
@@ -189,8 +229,17 @@ export class TimeBudget {
     this.memory ??= info;
     this.stop();
   }
+  /**
+   * PR-250: set by the daemon-churn guard: one lane's serve daemon closed `closes` times in a row with no
+   * mutant scored. It spends the budget (it kills nothing, the group in flight keeps its verdicts) but is
+   * NOT a signal: `signalled` stays a SIGTERM's or SIGINT's (or the memory guard's) alone, in either order.
+   */
+  churn: DaemonChurnStop | undefined;
+  stopForChurn(info: DaemonChurnStop): void {
+    this.churn ??= info;
+  }
   remainingMs(): number {
-    if (this.signalled) return 0;
+    if (this.signalled || this.churn !== undefined) return 0;
     return this.startMs + this.seconds * 1000 - this.now();
   }
   get exhausted(): boolean {

@@ -712,6 +712,28 @@ export type RunEventInput =
         readonly boundBytes: number;
         readonly source: string;
       };
+      /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
+      readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
+    }
+  | {
+      /**
+       * PR-247: once per session, after the mutant phase and before `session-finished`; not emitted when no
+       * mutant test ran (a quarantined session still emits it: the time was spent). One entry per test per
+       * batch that ran under at least one mutant THIS session, sorted by `batchIndex` then `test` (code units).
+       * Only rows that carry a mutant code count (the mutant's own runs and its R577 reproduction); the
+       * unmutated confirmation rows (the NONE confirm, the warm-kill replay, `confirmFoundNone`), the baseline
+       * and the withheld-kill recheck are left out. `ownMs` is charged as R963 does: a row's own time, else
+       * its call's wall once per call, else its `durationMs`. `msUnderSurvivors` is the part of `ownMs` whose
+       * mutant was scored `survived`.
+       */
+      readonly type: "test-costs";
+      readonly tests: readonly {
+        readonly test: string;
+        readonly batchIndex: number;
+        readonly runs: number;
+        readonly ownMs: number;
+        readonly msUnderSurvivors: number;
+      }[];
     }
   | { readonly type: "session-finished"; readonly elapsedMs: number };
 
