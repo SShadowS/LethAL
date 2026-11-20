@@ -3,7 +3,7 @@
     {
       "id": "u8193-page-caption-procedure",
       "issue": "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8193",
-      "bcEvidence": "inferred, not measured on a BC server: Microsoft ships the shape (Base Application page 5911 Service Comment Sheet, procedure Caption(): Text called from OnAfterGetCurrRecord), so AL binds the unqualified Caption() to the page's own procedure. al-runner edge-4ebfe7913 refuses both Caption cells with 'too many arguments' and passes the renamed control (PR-80, lethal-bugs, 2026-11-16)",
+      "bcEvidence": "MEASURED on BC 29.0.54011.57673 (bc4, lethal-bugs, 2026-11-20, R1159): all three tests pass on BC. The control OpenPageWithOtherName has its OWN key (2,'B',10) since 2026-11-20: with the old shared key (1,'A',10), BC fails it with 'The record in table Args Line already exists' under codeunit isolation once OpenPageWithCaptionProcedure has run (also measured), so the old 'BC: passes' was an unmeasured inference. al-runner edge-4ebfe7913 refuses both Caption cells with 'too many arguments'; main ccd0f823d passes all three (#8193 fixed) (PR-80, lethal-bugs, 2026-11-16)",
       "rerun": [
         "PR-75's BaseApp x Tests-Fixed Asset baseline: ERM Fixed Assets.BlankDepreciationBookCodeOnPurchDocOpen and PreviewPostingDoesNotConsumeNumberSeries"
       ],
