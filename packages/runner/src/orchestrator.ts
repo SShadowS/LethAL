@@ -219,6 +219,8 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  DaemonChurnGuard,
+  type DaemonChurnStop,
   ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
@@ -6777,7 +6779,18 @@ async function runSessionBody(
   // This is the ONLY fan-out — R104 deleted `cli.ts`'s `fanOutEmit`, which existed only to squeeze
   // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
-  const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
+  // PR-250: the daemon-churn guard reads the stream LAST, so its warning follows the close that tripped it
+  // in every subscriber; it stops through the budget (`timeBudget`, made below, before any daemon starts).
+  const churn = new DaemonChurnGuard();
+  const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
+  const emit: RunEmitter = createEmitter([
+    (e) => collectedEvents.push(e),
+    ...(cfg.emit ?? []),
+    (e) => {
+      const s = churn.see(e);
+      if (s !== undefined) onChurn.stop?.(s);
+    },
+  ]);
   // R631: a tripwire. LethAL-built trees hold no links (the roots refused above), so this never
   // fires unless something LethAL builds starts carrying one; then the report says so.
   cleanups.push(
@@ -7478,6 +7491,14 @@ async function runSessionBody(
     clockMs,
   );
   cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
+  onChurn.stop = (s) => {
+    emit({
+      type: "warning",
+      code: "al-runner-v3-daemon-churn",
+      message: `[lethal] al-runner-v3-daemon-churn: lane ${s.lane}'s serve daemon closed ${s.closes} times in a row with no mutant scored anywhere in the session, so the run stops and writes its report; read its serve-daemon-closed events for the refusal that keeps closing it (PR-250)`,
+    });
+    timeBudget.stopForChurn(s);
+  };
   emit({ type: "phase-entered", phase: "generate" });
   const generateStartedMs = Date.now();
   const {
@@ -7767,7 +7788,8 @@ async function runSessionBody(
   // memory guard stops the session through the budget (R955's path).
   cfg.backend.useStopHandle?.({
     spent: () => timeBudget.exhausted,
-    signalled: () => timeBudget.signalled,
+    // PR-250: the churn guard's stop is a spent budget to the backend, never a signal: it kills nothing.
+    signalled: () => timeBudget.signalled && timeBudget.churn === undefined,
     stopForMemory: (info) => timeBudget.stopForMemory(info),
   });
   // R198: group runs, on a backend that has the call. `undefined` is the sequential loop.
@@ -9617,10 +9639,9 @@ async function runSessionBody(
     emit({
       type: "time-budget-reached",
       budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
-      ...(timeBudget.signalled && timeBudget.memory === undefined
-        ? { stoppedBySignal: true as const }
-        : {}),
+      ...(timeBudget.signalled && !timeBudget.byGuard ? { stoppedBySignal: true as const } : {}),
       ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -12987,11 +13008,11 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // reached. Every capped walk is noted on its `failureNote` and warned by name below.
     let hangs = 0; // non-replay timeouts met so far
     let capRef: TestMethodRef | undefined; // the 3rd hang's ref: set only on a capped walk
-    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop) ran out between two covering
-    // steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
+    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory or PR-250 churn stop) ran out between
+    // two covering steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
     let budgetCut = false;
     const clockSpent = (): boolean =>
-      args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
+      args.timeBudget?.exhausted === true && !args.timeBudget.byGuard;
     // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
     type WalkSnap = HeldTimeout["snap"];
     const snapNow = (): WalkSnap => ({
@@ -14029,8 +14050,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // mutant whose calls ended while it arrived may hold a killed al-runner's answer, not a result.
     // It is never recorded: it and the rest are left out, as the baseline drops such a call. Not for
     // the memory guard's stop (it also sets `signalled`, R948): it kills nothing, and the group in
-    // flight keeps its verdicts.
-    if (args.timeBudget?.signalled === true && args.timeBudget.memory === undefined) {
+    // flight keeps its verdicts. Nor for PR-250's churn guard.
+    if (args.timeBudget?.signalled === true && !args.timeBudget.byGuard) {
       if (args.sink === undefined) budgetSpent(at);
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
       break;

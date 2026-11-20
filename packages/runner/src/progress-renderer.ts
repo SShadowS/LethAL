@@ -167,9 +167,11 @@ export function createProgressRenderer(
         const head =
           event.stoppedByMemory !== undefined
             ? "STOPPED BY THE MEMORY GUARD"
-            : event.stoppedBySignal === true
-              ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
-              : "TIME BUDGET REACHED";
+            : event.stoppedByDaemonChurn !== undefined
+              ? "STOPPED BY THE DAEMON-CHURN GUARD"
+              : event.stoppedBySignal === true
+                ? "STOPPED BY SIGNAL (SIGTERM or SIGINT)"
+                : "TIME BUDGET REACHED";
         if (event.baselineStopped !== undefined) {
           write(
             `${head} IN THE ${event.baselineStopped.inAutoRebaseline === true ? "AUTO ISOLATION RE-" : ""}BASELINE: ${event.baselineStopped.testsRun} of ${event.baselineStopped.testsTotal} test(s) ran.`,

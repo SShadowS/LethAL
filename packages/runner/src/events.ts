@@ -712,6 +712,8 @@ export type RunEventInput =
         readonly boundBytes: number;
         readonly source: string;
       };
+      /** PR-250: present when the daemon-churn guard stopped the session: the lane, and its daemon closes in a row with no mutant scored. */
+      readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
     }
   | {
       /**

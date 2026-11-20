@@ -1757,6 +1757,8 @@ export interface V3EntriesStats {
   l4Excluded: number;
   l4Widened: number;
   l4OrderBroken: number;
+  /** PR-250, once per (mutant, codeunit) as the L4 counters: mutant entries cut before a baseline-refused test. */
+  refusedCutEntries: number;
   /** PR-56: requests after a kept refusal whose rows drifted from the baseline (the daemon closed, the request re-run). */
   keptDrifts: number;
   /** PR-94: prefetch and live requests sent with `runSelectedOnly` (every entry whole or a prefix cut), the
@@ -1868,6 +1870,7 @@ function newLaneStats(): Omit<V3EntriesStats, V3PhaseTimer> {
     l4Excluded: 0,
     l4Widened: 0,
     l4OrderBroken: 0,
+    refusedCutEntries: 0,
     keptDrifts: 0,
     selectedOnlyRequests: 0, // PR-94, per lane under PR-99
     selectedOnlyTestsSkipped: 0,
@@ -2861,6 +2864,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private coveringOf = new Map<string, Map<number, Set<string>>>();
   /** PR-20 review 1: the (mutant, codeunit) entries `mutantExcludes` has counted in the stats. */
   private l4Counted = new Set<string>();
+  /** PR-250: the codeunits whose `al-runner-v3-baseline-refused-cut` line was printed (once per session). */
+  private readonly refusedCutSaid = new Set<number>();
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
   /** R778 (A2): the backend-wide count of `request()` calls (every lane); see `CallRows.prefetchSeq`. */
@@ -6713,6 +6718,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       lane.pairVerdict = undefined;
       return { ...served, ref };
     }
+    // PR-250: a test a mutant entry leaves out before a baseline-refused test does not run under a mutant,
+    // so it is not measured: an error that the walk holds (`runner-refused`, PR-81), so another test can
+    // still kill the mutant; never a pass, never a kill.
+    const refusedCut =
+      this.entries &&
+      !this.inBaseline &&
+      lane.lastActivated !== null &&
+      !this.oneShotCodeunits.has(ref.codeunitId)
+        ? this.refusedCut(ref.codeunitId)
+        : undefined;
+    if (refusedCut?.methods.has(ref.method.toLowerCase()) === true) {
+      return {
+        ref,
+        outcome: "error",
+        durationMs: 0,
+        failureMessage: `baseline-refused-cut: ${ref.codeunitName}.${ref.method} was not run under this mutant: codeunit ${ref.codeunitId}'s entry is cut before ${refusedCut.test}, whose baseline refusal the daemon does not keep ("${refusedCut.text.slice(0, 200)}"); not measured (PR-250)`,
+        operation: "completed-accepted",
+        runnerRow: "runner-refused",
+      };
+    }
     // PR-51 (F1): an explicit alone request ignores every stored call and every routing state.
     const forced = opts.alone === true;
     let call = forced ? undefined : lane.rowsByCodeunit.get(this.callId(ref));
@@ -8955,9 +8980,62 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * still runs follows a left-out one, and none starts from other state than at the baseline (a
    * refused test can change the codeunit's globals before v3 refuses it, which v3's cascades do not
    * track; review 2-3). The warm-up keeps `leftOutNames`: it only compares, and a difference there
-   * fails loudly.
+   * fails loudly. PR-250: joined by `refusedCut`'s tests (the union).
    */
   private mutantLeftOutNames(cu: number): readonly string[] | undefined {
+    const r998 = this.r998TailNames(cu);
+    const cut = this.refusedCut(cu);
+    if (cut === undefined) return r998;
+    return [...new Set([...(r998 ?? []), ...cut.names])].sort();
+  }
+
+  /**
+   * PR-250 (docs/superpowers/specs/2026-11-20-pr250-baseline-refused-cut.md): the first test of `cu`, in
+   * its baseline order, whose BASELINE row is a refusal the daemon does not keep (R998's rows: a notRun
+   * that no `V3_SERVE_SAFE_REFUSALS` entry keeps; never a fail, a pass or a timeout), and the tests from it
+   * on that every mutant entry of `cu` leaves out. #8059: a name that starts a test before it stays in.
+   * `undefined` when there is none, when `cu` runs a test alone, when that test itself cannot be left
+   * out, or when R998's left-out run already holds every one of them (nothing new is cut).
+   */
+  private refusedCut(cu: number):
+    | {
+        readonly test: string;
+        readonly text: string;
+        readonly names: readonly string[];
+        /** The cut tests, lower-case methods. */
+        readonly methods: ReadonlySet<string>;
+      }
+    | undefined {
+    if (this.isolatedRefs.has(cu)) return undefined;
+    const rows = this.baselineRows.get(cu) ?? [];
+    const at = rows.findIndex(
+      (r) => isNamedRefusalRow(r) && !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    const first = rows[at];
+    if (first === undefined) return undefined;
+    const tail = rows.slice(at);
+    const inTail = new Set(tail.map((r) => r.method.toLowerCase()));
+    const stay = [
+      ...rows.slice(0, at).map((r) => r.method),
+      ...this.discovered.filter((t) => t.codeunitId === cu).map((t) => t.method),
+    ]
+      .map((m) => m.toLowerCase())
+      .filter((m) => !inTail.has(m));
+    const cut = tail.filter((r) => !stay.some((s) => s.startsWith(r.method.toLowerCase())));
+    if (cut[0] !== first) return undefined;
+    const names = [...new Set(cut.map((r) => `Codeunit${cu}.${r.method}`))].sort();
+    const r998 = new Set((this.r998TailNames(cu) ?? []).map((n) => n.toLowerCase()));
+    if (names.every((n) => r998.has(n.toLowerCase()))) return undefined;
+    return {
+      test: first.name,
+      text: first.message ?? "",
+      names,
+      methods: new Set(cut.map((r) => r.method.toLowerCase())),
+    };
+  }
+
+  /** R998: the run of `leftOutNames` at the end of `cu`'s baseline order (see `mutantLeftOutNames`). */
+  private r998TailNames(cu: number): readonly string[] | undefined {
     const out = this.leftOutNames(cu);
     if (out === undefined) return undefined;
     const names = new Set(out.map((n) => n.toLowerCase()));
@@ -8995,6 +9073,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (added > 0) {
         lane.stats.l4Entries += 1;
         lane.stats.l4Excluded += added;
+      }
+      const cut = this.refusedCut(cu);
+      if (cut !== undefined) {
+        lane.stats.refusedCutEntries += 1;
+        if (!this.refusedCutSaid.has(cu)) {
+          this.refusedCutSaid.add(cu);
+          this.notify(
+            "al-runner-v3-baseline-refused-cut",
+            `[lethal] al-runner-v3-baseline-refused-cut: codeunit ${cu}'s baseline refused ${cut.test} ("${cut.text.slice(0, 200)}"), a refusal the daemon does not keep, so every mutant entry of codeunit ${cu} leaves out ${cut.names.length} test(s) from it on; a mutant covered by one of them is error, never survived, unless another test kills it (PR-250)`,
+          );
+        }
       }
     }
     return out;
@@ -9991,7 +10080,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.
