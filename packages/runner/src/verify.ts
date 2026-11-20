@@ -13,6 +13,7 @@ import { killMessageOf, looksLikeAssertionFailure } from "./assertion-screen";
 import type { CoverageMode, ExecutionBackend, TestMethodRef } from "./backend";
 import { hashTargetSource } from "./baseline-snapshot";
 import type { BcDevMcpBackend } from "./bcdev-backend";
+import { monoNow } from "./clock";
 import {
   ClosedWorldChangedError,
   type ClosedWorldResult,
@@ -1721,7 +1722,7 @@ export async function runVerify(
   },
   deps: VerifyDeps,
 ): Promise<VerifyOutput> {
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? monoNow;
   const started = now();
   const { store, backend } = deps;
   let source: VerifySource | undefined;

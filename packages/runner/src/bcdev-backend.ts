@@ -37,6 +37,7 @@ import type {
   TestVerdict,
 } from "./backend";
 import { BcAnswerUnreadError, BcRedirectRefusedError, bcFetch, withDeadline } from "./bc-fetch";
+import { monoNow } from "./clock";
 import { decidePublishOutcome } from "./deployment-verifier";
 import type { DeploymentVerifier } from "./deployment-verifier";
 import { describeThrown } from "./describe-error";
@@ -1391,8 +1392,8 @@ export class BcDevMcpBackend implements ExecutionBackend {
         : this.workDates.check(await this.runViaTransport(ref, opts));
     // R272: one call per test on both paths, so `durationMs` is this test's own wall clock. Not a
     // recovered reply (R236b), whose duration is the time until the reply was declared lost. Not a
-    // negative one: the hub path's `Date.now()` delta can go below 0 when the clock steps back (the
-    // transport is monotonic since R710).
+    // negative one: a wall-clock delta could go below 0 when the clock steps back (both paths are
+    // monotonic: the transport since R710, the hub path since PR-252).
     return v.outcome === "pass" && v.replyRecovered === undefined && v.durationMs >= 0
       ? { ...v, measuredDurationMs: v.durationMs }
       : v;
@@ -1833,7 +1834,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
   }
 
   private async runOnHub(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    const started = Date.now();
+    const started = monoNow();
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     // Phase 1 — connect. A failure here provably never dispatched a test run.
@@ -1844,7 +1845,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: String(err),
         operation: "pre-dispatch-rejected",
       };
@@ -1876,7 +1877,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         return {
           ref,
           outcome: "deadline-exceeded",
-          durationMs: Date.now() - started,
+          durationMs: monoNow() - started,
           operation: "in-flight-unknown",
         };
       }
@@ -1888,7 +1889,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         return {
           ref,
           outcome: "error",
-          durationMs: Date.now() - started,
+          durationMs: monoNow() - started,
           failureMessage: firstText(res),
         };
       }
@@ -1900,7 +1901,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         return {
           ref,
           outcome: "error",
-          durationMs: Date.now() - started,
+          durationMs: monoNow() - started,
           failureMessage: NO_RESULT_FOR_METHOD,
         };
       }
@@ -1921,7 +1922,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
         // abandoned timeout leaves a test run in flight server-side, so the next
         // call fails with "A test run is already running". Same bug and same fix as
         // AlRunnerBackend.run().
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         ...(outcome === "fail" && r.output ? { failureMessage: r.output } : {}),
         ...(coverage !== undefined ? { coverage } : {}),
       };
@@ -1931,7 +1932,7 @@ export class BcDevMcpBackend implements ExecutionBackend {
       return {
         ref,
         outcome: "error",
-        durationMs: Date.now() - started,
+        durationMs: monoNow() - started,
         failureMessage: String(err),
         operation: "in-flight-unknown",
       };

@@ -214,6 +214,7 @@ import {
   otherFilesDrift,
   scanTestDir,
 } from "./baseline-snapshot";
+import { monoNow } from "./clock";
 import { assertManifestObjectsDeclared, readManifestObjectKeys } from "./line-map";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 import { assertResourceSelectorRuntime, installResourceSelector } from "./resource-selector";
@@ -3257,7 +3258,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     /** R635: the serve daemon's spawn (serve-entries only). */
     private readonly serverSpawn: ServerSpawnFn = defaultServerSpawn,
     /** R651: the clock of the phase timers only (a test's fake clock). */
-    private readonly now: () => number = Date.now,
+    private readonly now: () => number = monoNow,
   ) {
     // R938: a backend built directly cannot run with an unknown environment either.
     if ((cfg.environmentChoice as V3EnvironmentChoice | undefined)?.value === undefined) {
@@ -4668,9 +4669,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     coverage: boolean,
   ): Promise<BaselineAnswer | undefined> {
     const daemon = await this.baselineDaemonFor(lane, mode, stopSeconds);
-    const started = Date.now();
+    const started = monoNow();
     const out = await this.plain(lane, daemon, mode, call, coverage, stopSeconds);
-    const wallMs = Date.now() - started;
+    const wallMs = monoNow() - started;
     if (daemon.dirty) {
       await this.closeLaneIn(
         "baseline",
@@ -4713,13 +4714,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane.inFlight = "baseline";
     try {
       const totalTests = group.reduce((n, id) => n + (this.testsPerCodeunit.get(id) ?? 1), 0);
-      const timedAt = Date.now();
+      const timedAt = monoNow();
       const emit = (extra: { readonly failed?: true; readonly timings?: V3Timings }): void => {
         if (!this.inBaseline) return;
         this.requestTimedSink?.({
           kind: "baseline",
           lane: lane.index,
-          wallMs: Date.now() - timedAt,
+          wallMs: monoNow() - timedAt,
           entries: group.length,
           tests: totalTests,
           ...extra,
@@ -4736,7 +4737,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         await this.closeLane(lane, "request-failed");
         throw missingDependencyOr(err);
       }
-      const wallMs = Date.now() - timedAt;
+      const wallMs = monoNow() - timedAt;
       const timings = pickV3Timings(answer.summary.timings);
       emit(timings !== undefined ? { timings } : {});
       await this.refuseDaemonDependencySkip(lane, daemon); // R590, R885: throws as today
@@ -5963,7 +5964,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       timedOut = true;
       controller.abort();
     }, deadlineMs);
-    const started = Date.now();
+    const started = monoNow();
     this.spawnCount += 1;
     this.transportFrozen = true; // R761
     try {
@@ -5974,11 +5975,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ...this.cacheEnv(),
       });
       this.watchTestDataOff(res.stdout, res.stderr); // R885
-      return { res, wallMs: Date.now() - started, timedOut, deadlineMs };
+      return { res, wallMs: monoNow() - started, timedOut, deadlineMs };
     } catch (err) {
       return {
         spawnError: err instanceof Error ? err.message : String(err),
-        wallMs: Date.now() - started,
+        wallMs: monoNow() - started,
       };
     } finally {
       clearTimeout(timer);
@@ -8004,7 +8005,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.transportFrozen = true; // R761
     const [cu] = smallest;
     const mode = this.modeOfCall(cu);
-    const started = Date.now();
+    const started = monoNow();
     // Timed as a warm-up (review r1), so its seconds show where the warm-up count does.
     await lane.timed("warmupMs", async () => {
       try {
@@ -8026,7 +8027,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           const why = err.message.slice(err.code.length + 2).replace(/ \(R635 plan §3, §6\)$/, "");
           throw new AlRunnerV3EntriesRefusedError(
             err.code,
-            `${why}; found before the baseline by the probe of codeunit ${cu} (${Date.now() - started} ms, R927)`,
+            `${why}; found before the baseline by the probe of codeunit ${cu} (${monoNow() - started} ms, R927)`,
           );
         }
         // Anything else is not this probe's to judge: the warm-up after the baseline judges it.
@@ -8427,7 +8428,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // PR-100: one `serve-request-timed` per send, after the answer or the throw and before any decode
     // check. A warm-up's cause is read (and used up) here.
-    const timedAt = Date.now();
+    const timedAt = monoNow();
     const emitTimed = (extra: {
       readonly cut?: true;
       readonly failed?: true;
@@ -8442,7 +8443,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.requestTimedSink?.({
         kind,
         lane: lane.index,
-        wallMs: Date.now() - timedAt,
+        wallMs: monoNow() - timedAt,
         entries: sent.length,
         tests,
         ...(selectedOnly.flag ? { selectedOnly: true as const } : {}),
@@ -8657,7 +8658,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     const sampler = setInterval(sampleRss, RSS_SAMPLE_MS);
-    const started = Date.now();
+    const started = monoNow();
     // PR-56 (review L1): what `send` counts for this request, kept so a drift re-run counts it once.
     // PR-99: the LANE's counters that sent the request: another lane's are never read or written here.
     const before = { ...lane.stats };
@@ -8813,7 +8814,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ? { proveGrowth: proveInfo.proveGrowth }
         : {}),
     });
-    const wallMs = Date.now() - started;
+    const wallMs = monoNow() - started;
     const s = this.serveStopSeconds() ?? 1;
     let cut = sent.length;
     for (const [i, e] of sent.entries()) {
@@ -9769,7 +9770,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const cu = this.callId(ref);
     this.union.add(cu);
-    const started = Date.now();
+    const started = monoNow();
     let out: Awaited<ReturnType<AlRunnerV3Backend["request"]>>;
     try {
       out = await this.request(
@@ -9787,7 +9788,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         err instanceof AlRunnerServerRequestError
       ) {
         // As `liveCall` maps the same throw (a refusal latches).
-        const noneVerdict = this.liveFailure(lane, ref, err, Date.now() - started);
+        const noneVerdict = this.liveFailure(lane, ref, err, monoNow() - started);
         lane.pair = { mutantId, ref, noneVerdict, next: "null" };
         return;
       }
@@ -9825,7 +9826,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     ref: TestMethodRef,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
-    const started = Date.now();
+    const started = monoNow();
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
@@ -9842,7 +9843,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           verdict: refusalVerdict(
             ref,
             `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
-            Date.now() - started,
+            monoNow() - started,
           ),
         };
       }
@@ -9850,7 +9851,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       lane.rowsByCodeunit.set(id, call);
       return { call };
     } catch (err) {
-      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
+      return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
     }
   }
 
@@ -9863,7 +9864,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     lane: Lane,
     ref: TestMethodRef,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
-    const started = Date.now();
+    const started = monoNow();
     if (this.entriesRefused !== undefined) {
       return { verdict: transportFailure(ref, this.entriesRefused, 0) };
     }
@@ -9886,13 +9887,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           verdict: refusalVerdict(
             ref,
             `entries-echo-mismatch: ${m}'s echo did not run, so nothing of its group is trusted (${out.cutWhy ?? "no reason"}); never scored (R635 §6)`,
-            Date.now() - started,
+            monoNow() - started,
           ),
         };
       }
       return { call };
     } catch (err) {
-      return { verdict: this.liveFailure(lane, ref, err, Date.now() - started) };
+      return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
     }
   }
 
@@ -9933,7 +9934,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     const m = lane.lastActivated ?? SELECTOR_RESOURCE_NONE;
     const echoId = this.requireEchoId();
-    const started = Date.now();
+    const started = monoNow();
     let next: CallRows;
     let checked = false;
     try {
@@ -10018,7 +10019,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         lane.timers.windowMs += this.now() - windowT0;
       }
     } catch (err) {
-      const v = this.liveFailure(lane, ref, err, Date.now() - started);
+      const v = this.liveFailure(lane, ref, err, monoNow() - started);
       return {
         verdict:
           checked && v.failureMessage !== undefined
@@ -10094,7 +10095,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
     // PR-113: a plain request made while the baseline runs is timed as `baseline`; the mutant phase's
     // coverage and echo windows (also plain requests) keep no event.
-    const timedAt = Date.now();
+    const timedAt = monoNow();
     const timedTests = one !== undefined ? 1 : (this.testsPerCodeunit.get(cu) ?? 1);
     const emitBaseline = (extra: {
       readonly failed?: true;
@@ -10104,7 +10105,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.requestTimedSink?.({
         kind: "baseline",
         lane: lane.index,
-        wallMs: Date.now() - timedAt,
+        wallMs: monoNow() - timedAt,
         entries: 1,
         tests: timedTests,
         ...extra,
