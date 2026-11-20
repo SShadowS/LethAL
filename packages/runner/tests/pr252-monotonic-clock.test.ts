@@ -14,7 +14,7 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { readTargetSource } from "../src/baseline-snapshot";
-import { SUSPEND_THRESHOLD_MS, clock, monoNow } from "../src/clock";
+import { SUSPEND_THRESHOLD_MS, clock, createSuspendWatch, monoNow, readBootMs } from "../src/clock";
 import type { RunEvent } from "../src/events";
 import { runSession } from "../src/orchestrator";
 import { watchProjectInputs } from "../src/source-drift";
@@ -255,9 +255,18 @@ describe("PR-252: phase elapsedMs and the session total ignore a wall-clock step
   }
 });
 
-describe("PR-252: suspend detection", () => {
-  const suspendedWarnings = (events: RunEvent[]) =>
-    events.flatMap((e) => (e.type === "warning" && e.code === "run-suspended" ? [e.message] : []));
+const suspendedWarnings = (events: RunEvent[]) =>
+  events.flatMap((e) => (e.type === "warning" && e.code === "run-suspended" ? [e.message] : []));
+const realBoot = clock.boot;
+
+describe("PR-252: suspend detection (the wall fallback: no boot clock)", () => {
+  // Amendment 2: these steps move only the wall clock, so they test the fallback (`clock.boot` missing).
+  beforeEach(() => {
+    clock.boot = () => undefined;
+  });
+  afterEach(() => {
+    clock.boot = realBoot;
+  });
 
   test("the threshold is 30 s", () => {
     expect(SUSPEND_THRESHOLD_MS).toBe(30_000);
@@ -303,6 +312,114 @@ describe("PR-252: suspend detection", () => {
     b.stepOnRun = -60_000;
     b.onlyCall = 2;
     await inSession(b, ({ events }) => expect(suspendedWarnings(events)).toEqual([]));
+  });
+});
+
+describe("PR-252 amendment 2: the boot clock (CLOCK_BOOTTIME) is the suspend signal", () => {
+  afterEach(() => {
+    clock.boot = realBoot;
+  });
+
+  test("a +60 s WALL step (an NTP step) with the boot clock still emits NONE", async () => {
+    clock.boot = () => realNow(); // a readable boot clock the wall step does not move
+    const b = new Backend();
+    b.stepOnRun = 60_000;
+    b.onlyCall = 2;
+    await inSession(b, ({ events }) => expect(suspendedWarnings(events)).toEqual([]));
+  });
+
+  test("a +60 s suspend (boot and wall move, monotonic still) emits exactly one, N = 60", async () => {
+    clock.boot = () => Date.now(); // follows the stepped wall clock, as boot time does over a suspend
+    const b = new Backend();
+    b.stepOnRun = 60_000;
+    b.onlyCall = 2;
+    await inSession(b, ({ events }) => {
+      const w = suspendedWarnings(events);
+      expect(w).toHaveLength(1);
+      expect(w[0]).toMatch(/suspended \(or its clock stepped\) for 6[01] s at /);
+    });
+  });
+
+  // The watch alone, every clock a seam (ms).
+  const watchOf = (boot: () => number | undefined, wall: () => number) => {
+    let mono = 1_000;
+    const tick = (ms: number): void => {
+      mono += ms;
+    };
+    return { w: createSuspendWatch(boot, () => mono, wall), tick };
+  };
+
+  test("boot +60 s with the wall clock unchanged: one sample of 60,000 ms, at the wall time", () => {
+    let boot = 5_000_000;
+    const { w } = watchOf(
+      () => boot,
+      () => 7_000,
+    );
+    boot += 60_000;
+    expect(w.sample()).toEqual({ ms: 60_000, atWallMs: 7_000 });
+    expect(w.sample()).toBeUndefined();
+  });
+
+  test("boot +10 s (under the threshold) gives nothing", () => {
+    let boot = 5_000_000;
+    const { w } = watchOf(
+      () => boot,
+      () => 7_000,
+    );
+    boot += 10_000;
+    expect(w.sample()).toBeUndefined();
+  });
+
+  test("a boot read that fails after creation skips samples, never throws, and keeps the baseline", () => {
+    let boot: number | undefined = 5_000_000;
+    const { w, tick } = watchOf(
+      () => boot,
+      () => 7_000,
+    );
+    boot = undefined;
+    expect(w.sample()).toBeUndefined();
+    boot = 5_000_000 + 1_000;
+    tick(1_000);
+    expect(w.sample()).toBeUndefined();
+    // Review: a suspend WHILE the reads fail is reported on recovery, measured from the kept baseline.
+    boot = undefined;
+    expect(w.sample()).toBeUndefined();
+    boot = 5_000_000 + 1_000 + 60_000;
+    expect(w.sample()).toEqual({ ms: 60_000, atWallMs: 7_000 });
+  });
+
+  test("the boot clock read through readBootMs (a fake /proc/uptime): +60 s is one sample of 60,000 ms", () => {
+    let uptime = 1_000.5;
+    const { w } = watchOf(
+      () => readBootMs(() => `${uptime.toFixed(2)} 99.00\n`),
+      () => 7_000,
+    );
+    uptime += 60;
+    expect(w.sample()).toEqual({ ms: 60_000, atWallMs: 7_000 });
+  });
+
+  test("the default source is the boot clock when it can be read, else the wall clock", async () => {
+    clock.boot = () => realNow();
+    const b = new Backend();
+    b.stepOnRun = 60_000;
+    b.onlyCall = 2;
+    await inSession(b, ({ events }) => expect(suspendedWarnings(events)).toEqual([]));
+    clock.boot = () => undefined;
+    const c = new Backend();
+    c.stepOnRun = 60_000;
+    c.onlyCall = 2;
+    await inSession(c, ({ events }) => expect(suspendedWarnings(events)).toHaveLength(1));
+  });
+
+  test("readBootMs: /proc/uptime's first field in ms; undefined when unreadable or garbage", () => {
+    expect(readBootMs(() => "1432596.36 15674070.20\n")).toBe(1_432_596_360);
+    expect(readBootMs(() => "garbage")).toBeUndefined();
+    expect(readBootMs(() => "")).toBeUndefined();
+    expect(
+      readBootMs(() => {
+        throw new Error("ENOENT");
+      }),
+    ).toBeUndefined();
   });
 });
 
