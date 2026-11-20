@@ -343,7 +343,10 @@ describe("PR-252 amendment 2: the boot clock (CLOCK_BOOTTIME) is the suspend sig
   // The watch alone, every clock a seam (ms).
   const watchOf = (boot: () => number | undefined, wall: () => number) => {
     let mono = 1_000;
-    return { w: createSuspendWatch(boot, () => mono, wall), tick: (ms: number) => (mono += ms) };
+    const tick = (ms: number): void => {
+      mono += ms;
+    };
+    return { w: createSuspendWatch(boot, () => mono, wall), tick };
   };
 
   test("boot +60 s with the wall clock unchanged: one sample of 60,000 ms, at the wall time", () => {
