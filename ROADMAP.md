@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**52 of 1116 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**53 of 1117 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1161,6 +1161,7 @@ that ordering is the priority.
 - **R1150** · The update gate's default pass path accepts a receipt whose applied pin this checkout does not know: no digest check, no ledger row, and `current` can still move to a build every v3 session then refuses · [R1150.md](docs/roadmap/R1150.md) · done (9177f68a8)
 - **R1151** · Merge the kill-pair batches of one packed prefetch call into one batch (PR-242's L2'): PR-241 packs units into one prefetchMutants call, but batchKillPairs still runs per unit, so each unit's few kills pay their own live request · [R1151.md](docs/roadmap/R1151.md) · open
 - **R1152** · Leg C's serve-keep-reasons checks only some keep-list entries: a reworded refusal text (the Company-table one, upstream since edge-4ebfe7913) passed every gate and turned into a DO restart storm (PERF-10, 2026-11-19) · [R1152.md](docs/roadmap/R1152.md) · open — add a serve-keep-reasons case per keep entry that can be produced without the .NET helper, starting…
+- **R1154** · Per-lane sums of serve-request walls double-count overlapping requests: PERF-10's '~7,000 unexplained lane-s' was ~5,900 lane-s of overlap; clip overlaps in every timing sum, and find why one request per lane stays open ~33 min on a second daemon · [R1154.md](docs/roadmap/R1154.md) · open
 
 ---
 
