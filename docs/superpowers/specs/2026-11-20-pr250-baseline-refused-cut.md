@@ -56,3 +56,23 @@ mutant was scored for 72 minutes.
 - Cut: an unkept baseline refusal cuts; a baseline fail, a pass, a timeout or a kept refusal does not. A covering test after the
   cut makes the mutant error (never survived). A kill before the cut stands.
 - Guard: 9 closes do not trip, the 10th does; one scored mutant resets the count; baseline closes do not count.
+
+## Amendment 1 (2026-11-20, after the build review, before any gate result is read)
+1. **The cut goes out only in a request sent with `runSelectedOnly`** (PR-102's rule for kill-pair cuts). Without the flag,
+   `excludeTests` only hides rows: v3 still runs the refused test, and a hidden unkept refusal would never close the daemon. So an
+   unflagged request is sent with master's exclusions (R998's tail and the L4 cut), the refused row is seen, and the daemon closes as
+   on master. The coverage window (never flagged) never carries the cut. The VERDICT rule does not depend on the flag: a covering
+   test at or after the cut is a `baseline-refused-cut` error, never read. Measured share of flagged requests: y3 6,670 of 7,744
+   prefetch+live requests (86%). So PR-250 removes most of the churn, not all of it, and the guard catches the rest. The
+   `refusedCutEntries` count counts entries SENT with the cut.
+2. **No cut for a codeunit that runs one test at a time** (`isolation: auto` switched it to method). Its baseline rows are the
+   whole-codeunit ones and do not describe how it runs.
+3. **The count is not a `SessionReport` field.** It goes in the serve-entries summary line and the lane trace. Adding a report field
+   ripples through every committed sample report, and nothing reads the count from the report. If one is needed, it gets its own item.
+4. **Prediction 3's y2/y3 replay is a script run, not a unit test** (tests never read /coord). Result on the real events: y2's
+   highest per-lane count is 5 and y3's is 6, so no trip. PERF-10b would trip on lane 1 at minute 42. The unit tests cover 9, 10,
+   reset, baseline and per lane.
+5. **A churn stop exits with the time-budget code**, as a budget stop does. "Fatal" in Prediction 4 means the session stops. A real
+   signal and a churn trip are kept apart: neither hides the other.
+6. **Prediction 1 holds for PERF-10's flagged requests.** For a mutant whose request went out unflagged, the verdict is the same,
+   because the rule does not depend on the flag. Only the cost differs: that request closes as on master.
