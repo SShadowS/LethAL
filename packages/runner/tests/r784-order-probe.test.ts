@@ -226,6 +226,7 @@ describe("R771 addendum 2: a pinned login WorkDate (O1's CDO set on edge-a157b2d
     "edge-2c63a382e",
     "alpha.12-d4bc8d3a5", // R807
     "edge-d72d3197d", // R-815
+    "main-9835579c6", // PR-255: the root's readings plus o1.partnerLoginRefusal
   ];
   const atLogin = (l: O1Request["lines"][number]) =>
     l.name.endsWith(".ReadWorkDate") ? { ...l, message: `WORKDATE=${LOGIN}` } : l;
@@ -646,9 +647,9 @@ describe("PR-233: the partner-login row-insert refusal in O1's CDO set", () => {
     expect(o1PartnerLogin("own", pin)).toBeUndefined();
     expect(o1PartnerLogin("own", undefined)).toBeUndefined();
   });
-  test("no pin carries the field since PR-217's perf-combined test pin was removed (pins are per exact binary, pre-committed per build)", () => {
+  test("only PR-255's main 9835579c6 pin carries the field (pins are per exact binary, pre-committed per build)", () => {
     expect(
       V3_BUILD_PINS.filter((p) => p.o1?.partnerLoginRefusal !== undefined).map((p) => p.id),
-    ).toEqual([]);
+    ).toEqual(["main-9835579c6"]);
   });
 });
