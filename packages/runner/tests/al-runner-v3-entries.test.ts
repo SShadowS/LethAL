@@ -2615,6 +2615,41 @@ describe("13: §5, the coverage window for a pass under a mutant when the Sleep 
     expect(cov?.body.excludeTests).toEqual([`Codeunit${CU}.B`]);
   });
 
+  // PR-250 (review MED-2): the entry went out with the cut before B (flagged), but a coverage window is never
+  // sent with runSelectedOnly, so it leaves out what the entry would without that cut; the rows of the tests
+  // the cut left out of the entry are not compared, so the pass still reads.
+  test("PR-250: the coverage request never carries the refused-test cut, and the pass is scored", async () => {
+    const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
+    const bMid: RowsFn = (m, cu, d, n) =>
+      (cu === CU
+        ? ["A", "B", "C"].map((method) => ({ method, status: "pass" as const }))
+        : allPass(m, cu, d, n)
+      ).map((x) =>
+        x.method === "B"
+          ? {
+              ...x,
+              status: "error" as const,
+              notRun: true,
+              message: "NotRun: out-of-scope: InStream method on an unassigned Variant",
+            }
+          : x,
+      );
+    const { r, n0 } = await windowOf({
+      suite: SUITE_ABC,
+      serve: { rows: bMid },
+      oneShotRows: bMid,
+    });
+    const entry = r.serve.requests
+      .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
+      .find((e) => String(e.id).startsWith("M0001|") && String(e.test) === `Codeunit${CU}.`);
+    expect(entry?.excludeTests).toEqual([`Codeunit${CU}.B`, `Codeunit${CU}.C`]);
+    await r.b.activate("M0001");
+    expect((await r.b.run(ref("A"), OPTS)).outcome).toBe("pass");
+    const cov = since(r, n0).find((q) => q.body.coverage === true);
+    expect(cov).toBeDefined();
+    expect(cov?.body.excludeTests).toBeUndefined();
+  });
+
   test("the coverage request's rows disagree with the entry's -> error entries-coverage-disagreement", async () => {
     const plainFails: RowsFn = (m, cu, d, n) =>
       allPass(m, cu, d, n).map((x) =>
@@ -5361,9 +5396,10 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
     expect(v.outcome).toBe("pass");
   });
 
-  // R998 (review 2-3): a refused test with a test after it stays in the mutant entries, so the test
-  // after it starts from the baseline's state; the warm-up (which only compares) still leaves it out.
-  test("R998: a refused test in the middle of its codeunit stays in the mutant entries (only a trailing run is left out)", async () => {
+  // R998 (review 2-3) left a refused test with a test after it IN the mutant entries; PR-250 (option 2) cuts
+  // the mutant entries before it instead: it and every later test are left out, so no test after it runs from
+  // other state. The warm-up (which only compares) still leaves out B alone.
+  test("R998, PR-250: a refused test in the middle of its codeunit is cut from the mutant entries with every test after it", async () => {
     const SUITE_ABC = [ref("A"), ref("B"), ref("C")];
     const bMid: RowsFn = (m, cu, d, n) =>
       (cu === CU
@@ -5381,7 +5417,9 @@ describe("R1004: the warm-up leaves out the tests the baseline refused by name",
       .flatMap((q) => (q.body.entries as Record<string, unknown>[] | undefined) ?? [])
       .filter((e) => String(e.test) === `Codeunit${CU}.`);
     expect(mutantEntries.length).toBeGreaterThan(0);
-    expect(mutantEntries.every((e) => e.excludeTests === undefined)).toBe(true);
+    expect(mutantEntries.map((e) => e.excludeTests)).toEqual(
+      mutantEntries.map(() => [`Codeunit${CU}.B`, `Codeunit${CU}.C`]),
+    );
   });
 
   // PR-24 (L2): a restarted daemon's lazy warm-up leaves out what the whole-union warm-up does
