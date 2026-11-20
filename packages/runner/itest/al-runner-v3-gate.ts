@@ -303,10 +303,11 @@ function differenceKey(d: string, keys: ReadonlySet<string>): string | undefined
  */
 
 /**
- * Leg T's committed own baseline, unpinned: 298 / 54 / 66 over 418 (R975 moved 6 Data Main rows to
- * no-coverage; 298 / 60 / 60 before). A build pin replaces it with its own counts.
+ * Leg T's committed own baseline, unpinned: 318 / 64 / 68 over 450 (PR-209 added 32 rows, their BC twins' 20 / 10 / 2;
+ * 298 / 54 / 66 over 418 before, after R975 moved 6 Data Main rows to no-coverage). A build pin replaces it with its own
+ * counts.
  */
-export const LEG_T_OWN_COUNTS = { killed: 298, survived: 54, noCoverage: 66, total: 418 } as const;
+export const LEG_T_OWN_COUNTS = { killed: 318, survived: 64, noCoverage: 68, total: 450 } as const;
 type LegTJudgement = {
   readonly outcome: "pass" | "held" | "gate-fail";
   readonly lines: readonly string[];

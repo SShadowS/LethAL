@@ -3535,7 +3535,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(firstReport.quarantined).toBeDefined();
     const inMember = (r: typeof firstReport) =>
       r.mutants.filter((m) => m.line >= 3 && m.line <= 16);
-    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(14).fill("no-coverage")); // R855: was 10; four delete-additive sites
+    expect(inMember(firstReport).map((m) => m.verdict)).toEqual(Array(15).fill("no-coverage")); // R855: was 10; four delete-additive sites. PR-209: was 14; one condition-true
 
     const second = new R318Backend("post");
     const report = await runSession({
@@ -3550,7 +3550,7 @@ describe("R318: a resume across R318 re-scores a renamed member instead of keepi
     expect(second.baselineRuns).toBeGreaterThan(0);
     // Guard 1 and 2 together: every member mutant was scored now, exact, never carried.
     const member = inMember(report);
-    expect(member).toHaveLength(14);
+    expect(member).toHaveLength(15);
     for (const m of member) {
       expect([m.line, m.verdict]).toEqual([m.line, "killed"]);
       expect(m.coverageAttribution).toBe("exact");
@@ -3659,6 +3659,7 @@ describe("R318: the scheme bump retires verdicts attributed the old way", () => 
       coverageMode: "procedure",
       preprocessorSymbols: ["R318A"],
       // R403: no `testBuildSymbols`: no test file here holds a directive line, so runSession omits it.
+      defaultOperators: 2, // PR-209: what a default run computes now
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,

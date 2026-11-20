@@ -20,24 +20,27 @@ kills reach ordered position 5. The control leg has no limit. The chunked leg ru
   "noBaseline": "The gate compares its two legs with each other and with the figures below; it records no per-mutant baseline file.",
   "constants": {
     "CHUNKED_FIGURES.control.killed": 17,
-    "CHUNKED_FIGURES.control.survived": 9,
+    "CHUNKED_FIGURES.control.survived": 11,
     "CHUNKED_FIGURES.control.noCoverage": 2,
     "CHUNKED_FIGURES.control.warmKills": 9,
-    "CHUNKED_FIGURES.control.groupedCalls": 44,
+    "CHUNKED_FIGURES.control.groupedCalls": 46,
     "CHUNKED_FIGURES.control.positions": { "1": 8, "2": 3, "3": 3, "4": 2, "5": 1 },
     "CHUNKED_FIGURES.chunked.warmKills": 5,
-    "CHUNKED_FIGURES.chunked.groupedCalls": 70
+    "CHUNKED_FIGURES.chunked.groupedCalls": 78
   }
 }
 ```
 
-- Both legs score 17 / 9 / 2, with every verdict and every `killingTest` identical. Chunking
+- PR-209 (observed on bc3, 2026-11-19): the slice gained two `condition-true` survivors, so both legs score
+  17 / 11 / 2; survived moved 9 to 11; control `groupedCalls` is 46 (was 44), chunked 78 (was 70). The `positions`
+  histogram was not printed (the gate stopped at the survived assertion) and stays: the same 17 killers.
+- Both legs score 17 / 11 / 2, with every verdict and every `killingTest` identical. Chunking
   changes cost only, never a result. R855 added two survivors to the slice
   (`DataMain.Table.al` lines 24 and 63): survived 7 to 9, as pre-committed.
-- The control leg has 9 warm kills and 44 group calls: 17 + 9 scored, 9 replays and 9 re-runs.
+- The control leg has 9 warm kills and 46 group calls: 17 + 11 scored, 9 replays and 9 re-runs.
   Its 17 kills sit at positions 1 to 5 as the histogram shows.
-- The chunked leg has 5 warm kills and 70 group calls: 60 covering chunk calls, 5 replays and
-  5 re-runs, measured on bc3, 2026-11-07. Four named kills go from warm to cold. Five replay exactly the two methods of their
+- The chunked leg has 5 warm kills and 78 group calls: 68 covering chunk calls, 5 replays and
+  5 re-runs, measured on bc3, 2026-11-19 (60 and 70 on 2026-11-07). Four named kills go from warm to cold. Five replay exactly the two methods of their
   chunk.
 - Since R582 every kill is re-run once under the mutant after its confirm passed (R577's rule).
   A warm kill's re-run is one more group call over the same chunk prefix as its replay. The gate
@@ -48,6 +51,9 @@ kills reach ordered position 5. The control leg has no limit. The chunked leg ru
   before the chunked leg first ran.
 
 ## History
+
+PR-209: observed on bc3, 2026-11-19: both legs 17 / 11 / 2 (two added `condition-true` survivors), control `groupedCalls` 44 to 46,
+chunked 70 to 78, warm kills unchanged (9 and 5), the same 17 killers in both legs.
 
 Red-checked: taking `groupPosition` and `chunkPrefix` from the ordered list instead of the chunk
 fails only this gate (warmKills 9, groupedCalls 61), while the verdict comparison stays green.

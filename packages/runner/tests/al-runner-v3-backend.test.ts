@@ -10,6 +10,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   stat,
   symlink,
@@ -1026,6 +1027,9 @@ describe("T3, T4, T23", () => {
 describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
   async function deployed() {
     const l = await layout();
+    // PR-259 (review S1): a file that sorts FIRST in each tree, so a change to Logic/Tests is not the first file read.
+    await writeFile(join(l.batch, "AAFirst.Codeunit.al"), "codeunit 79101 AAFirst { }");
+    await writeFile(join(l.testDir, "AAFirst.Codeunit.al"), "codeunit 79102 AAFirstTest { }");
     const v3 = fakeV3(allPass, { coverage: plainCoverage });
     const b = backendOf(l, v3.spawn, fakeAlc().io);
     await b.deploy(l.batch);
@@ -1034,6 +1038,14 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
   }
   const active = (l: Layout) => join(l.scratch, "active");
   const run = (b: AlRunnerV3Backend) => b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+  /** PR-259: the middle letter of the file swapped for another, so the size stays and only one byte moves. */
+  const flipOneByte = async (p: string) => {
+    const text = await readFile(p, "utf8");
+    const letters = [...text.matchAll(/[A-Za-z]/g)];
+    const at = letters[Math.floor(letters.length / 2)]?.index;
+    if (at === undefined) throw new Error(`no letter in ${p}`);
+    await writeFile(p, text.slice(0, at) + (text[at] === "X" ? "Y" : "X") + text.slice(at + 1));
+  };
 
   test("an unchanged folder runs (the other direction)", async () => {
     const { b, v3 } = await deployed();
@@ -1109,6 +1121,23 @@ describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
     [
       "R767: a test .al added to the test dir",
       (l) => writeFile(join(l.testDir, "Extra.Codeunit.al"), "codeunit 79152 Extra { }"),
+    ],
+    // PR-259 (R1156): the bound print catches one byte changed in place, in either tree, and a rename.
+    [
+      "PR-259: one byte changed in place in a target .al",
+      (l) => flipOneByte(join(active(l), "Logic.Codeunit.al")),
+    ],
+    [
+      "PR-259: one byte changed in place in a test .al",
+      (l) => flipOneByte(join(l.testDir, "Tests.Codeunit.al")),
+    ],
+    [
+      "PR-259: a target .al renamed, its bytes unchanged",
+      (l) => rename(join(active(l), "Logic.Codeunit.al"), join(active(l), "Logic2.Codeunit.al")),
+    ],
+    [
+      "PR-259: a test .al renamed, its bytes unchanged",
+      (l) => rename(join(l.testDir, "Tests.Codeunit.al"), join(l.testDir, "Tests2.Codeunit.al")),
     ],
     [
       // R631 review L1: drift, never ProjectSymlinkRefusedError (asserted by the class below).
@@ -1565,6 +1594,18 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(v({ downloadDemoData: false }).downloadDemoData).toBe(false);
     expect(v({ downloadDemoData: true }).downloadDemoData).toBe(true);
     expect(() => v({ downloadDemoData: "no" })).toThrow("downloadDemoData");
+  });
+
+  test("PR-237 the config key serveTimings: off by default, boolean only, passed on by the CLI only when on", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v({}).serveTimings).toBe(false);
+    expect(v({ serveTimings: true }).serveTimings).toBe(true);
+    expect(v({ serveTimings: false }).serveTimings).toBe(false);
+    expect(() => v({ serveTimings: "yes" })).toThrow("serveTimings");
+    expect(v3SectionPassThrough(v({ serveTimings: true })).serveTimings).toBe(true);
+    expect("serveTimings" in v3SectionPassThrough(v({}))).toBe(false);
+    expect("serveTimings" in v3SectionPassThrough(v({ serveTimings: false }))).toBe(false);
   });
 
   test("PR-227 the config key daemonStderrDir: absent by default, resolved to absolute, empty or non-string refused", () => {

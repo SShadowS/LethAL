@@ -31,10 +31,15 @@ One line changed, the scheme, and the confirm run passed. No figure below moved.
 {
   "gate": "itest:harden",
   "baselines": {
-    "harden.baseline.json": { "killed": 16, "survived": 5 }
+    "harden.baseline.json": { "killed": 18, "survived": 5 }
   }
 }
 ```
 
-Leg A scores 16 killed and 5 survived. The pre-commitment is
+Leg A scores 18 killed and 5 survived over 23 mutants. PR-209 added two `condition-true` rows, both killed:
+`HardenLogic.Codeunit.al` line 23 (`FirstAmount`) by `FirstAmountReadsARow`, and line 41 (`BonusFor`) by
+`BonusForPaysOnlyAboveTen`. `harden.baseline.json` is not re-recorded in this commit.
+
+2026-11-19 (PR-209): recorded on bc3, 2026-11-19 (`/coord/handoff/PR-209-bc/bc3-harden-record/`): leg A 18 killed / 5 survived
+over 23; the two added rows above. The pre-commitment is
 `docs/superpowers/specs/2026-09-25-c02-03-harden-precommitment.md`.

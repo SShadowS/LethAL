@@ -168,7 +168,7 @@ operators the warning lists, with one `--exclude-operator` each, or narrow the r
 MUTANTS run and cannot change a verdict. `--tests-only` (whole test files) and `--exclude-test <Codeunit.Method>`
 (single test methods; repeatable; bcdev only; a name that matches no test is refused) select which TESTS run
 and CAN: leave out a killing test and its mutant is reported survived or no-coverage. `--only` and `--exclude` give the `narrowed`
-caveat, `--operator` and `--exclude-operator` give `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
+caveat, `--operator`, `--exclude-operator` and `--profile slim` (the default set from before PR-209: it leaves out `condition-true` and `blank-argument`) give `operator-narrowed`, `--lines` and `--changed-since` give `line-narrowed`,
 and `--tests-only` and `--exclude-test` give `tests-narrowed`. `--exclude-test` also lists each test it left out in
 `excludedTests` (reason `exclude-test`) and prints a `TESTS EXCLUDED` banner line.
 
@@ -242,6 +242,9 @@ nothing else. Separately, the `serve-request-timed` events keep every `summary.t
 `timings.extra` (scalars, or one flat object of scalars, such as `setupParts` and `workspaceCache`), so a new al-runner field
 is recorded without a LethAL change. `extra` is capped at 4 KB of JSON per event; fields past the cap are counted in
 `extra.lethalTruncatedFields`.
+`"serveTimings"` (default `false`, PR-237) turns on al-runner's own timings switch for every serve daemon. Its stderr then also carries the
+compile-cache lines (with the workspace layer's miss reasons) and the slowest codeunits; with `daemonStderrDir` they are kept.
+It is for measurement runs and changes no verdict (measured on and off over the same scope).
 `"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
 rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck of withheld-kill rows after the main
 pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an
@@ -301,6 +304,7 @@ has the complete set.
 | `--exclude-test` | `run` |
 | `--operator` | `run` |
 | `--exclude-operator` | `run` |
+| `--profile` | `run` |
 | `--artifact` | `verify` |
 | `--survivors` | `verify` |
 | `--max-new-tests` | `verify` |
@@ -1232,7 +1236,7 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   a call the loop's progress needs, and a deleted operand holding such a call (R855). They do not
   follow a callee: a condition inside `Done()`, read by `until Done()`, is claimed. That is the shape
   of R837, and `negate-conditional` has the same exposure.
-- The opt-in `condition-true` (`if C then T` to `if true then T`, an `if` without `else` only) refuses a site
+- `condition-true` (a default operator since PR-209; `--profile slim` leaves it out) (`if C then T` to `if true then T`, an `if` without `else` only) refuses a site
   whose then-arm holds a `while` or `repeat` that does not step a cursor, writes a name an enclosing loop's exit
   reads (`I -= 1`, `A := 0`, a requeue, a helper reset), restarts or steps back the exit's cursor
   (`R.FindFirst()`, `R.Next(-1)`), or calls back into its own procedure (recursion, also through a chain of
@@ -1244,7 +1248,7 @@ What remains is small and named, so a stranded run is diagnosable rather than my
   that calls back, `Codeunit.Run` of its own codeunit from `OnRun` through another object, and a write that a
   LATER loop reads (`Step := 1; if Backwards then Step := -1; while I < N do I += Step;`), the same exposure the
   default operators have.
-- The opt-in `blank-argument` (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
+- `blank-argument` (a default operator since PR-209; `--profile slim` leaves it out) (a variable argument to its blank) refuses a callee parameter that a `for`, a `while`
   or a `repeat` reads. The one loop it skips is a `for` with a local control variable (a `var` of the procedure
   that holds the loop: not a parameter, not a global, since a helper can write a global) that is neither assigned
   (`I := ...`, `I -= 1`) nor passed to a call (it could be a `var` parameter): its bound is read once. Every `while` and

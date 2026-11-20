@@ -43,6 +43,7 @@ import {
   canCarryMutationSelectorVar,
   clipMutationText,
   coarseIdentityTupleOf,
+  compareCodeUnits,
   dedupeSpecs,
   describeObjectKinds,
   flatNamesFor,
@@ -120,6 +121,7 @@ import {
   isolateBreakingMutants,
   parseAlcErrors,
 } from "./bisect";
+import { createSuspendWatch, monoNow, suspendMessage } from "./clock";
 import {
   type ClosedWorldResult,
   PENDING_SUFFIX,
@@ -218,6 +220,8 @@ import {
 } from "./line-map";
 import {
   type CostModel,
+  DaemonChurnGuard,
+  type DaemonChurnStop,
   ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
@@ -294,7 +298,7 @@ import {
   wasStranded,
   withoutRefusedTests,
 } from "./resume";
-import type { CarriedVerdict, ResumeIndex } from "./resume";
+import type { CarriedVerdict, ResumeIndex, SessionFingerprintInput } from "./resume";
 import { CONTROL_DRAIN_MS } from "./run-mutant-transport";
 import { describeRunnerDisagreement, isHubCoverageMode } from "./runner-disagreement";
 import {
@@ -501,6 +505,34 @@ const allOperators: readonly MutationOperator[] = [...tier1Operators, ...tier2Op
 const optInOperatorNames: ReadonlySet<string> = new Set(
   allOperators.filter((op) => op.optIn === true).map((op) => op.name),
 );
+
+/**
+ * PR-209: the two operators `--profile slim` leaves out (they became default operators, and slim is
+ * the old default set). Under slim they are NOT WALKED, so their specs never enter `dedupeSpecs`
+ * and the slim set is the old default set by construction.
+ */
+export const SLIM_LEFT_OUT: readonly string[] = ["lethal.condition-true", "lethal.blank-argument"];
+
+/** What `--profile slim` hands `generateMutationSet`: the two names left out, and the profile that stops the walk. */
+export const SLIM_OPTIONS = {
+  excludeOperators: SLIM_LEFT_OUT,
+  profile: "slim" as const,
+} as const;
+
+/** Profile names `--profile` knows. */
+export const PROFILES: readonly string[] = ["slim"];
+
+/** `--exclude-operator` names beyond slim's own two, with the optional `lethal.` prefix normalised. */
+function exclusionsBeyondSlim(names: readonly string[] | undefined): string[] {
+  return (names ?? []).filter(
+    (n) => !SLIM_LEFT_OUT.includes(n.startsWith("lethal.") ? n : `lethal.${n}`),
+  );
+}
+
+/** The operator names a slim run admits: every registered one but the two, and the opt-in ones. */
+function slimOperatorNames(registered: readonly string[]): readonly string[] {
+  return registered.filter((n) => !SLIM_LEFT_OUT.includes(n) && !optInOperatorNames.has(n)).sort();
+}
 
 /** R856: the one operator whose hang rule is read at the dispatch (see `clockSwapHangs`). */
 const CLOCK_SWAP = "lethal.swap-workdate-today";
@@ -728,6 +760,8 @@ export interface MutationSetOptions {
   readonly operators?: readonly string[];
   /** R832: operators that contribute NO mutants (`--exclude-operator`). Refused beside `operators`. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`. The CLI also puts the two operators in `excludeOperators`; this one makes the walk skip them. */
+  readonly profile?: "slim";
   /**
    * Issue #19: line ranges a mutant must touch (`--lines`, `--changed-since`). Absent means no line
    * filter. Applied after per-file dedup and after `operators`, for the same reason `operators` is:
@@ -913,10 +947,17 @@ export function admittedOperatorNames(
   options: {
     readonly operators?: readonly string[];
     readonly excludeOperators?: readonly string[];
+    readonly profile?: "slim";
   },
   registered: readonly string[],
 ): ReadonlySet<string> | undefined {
-  const { operators = [], excludeOperators = [] } = options;
+  const { operators = [] } = options;
+  // PR-209: slim's exclusion is derived here from the profile, so no caller can get the walk
+  // without the warning and the slim fingerprint. Adding the two again is harmless (a set).
+  const excludeOperators = [
+    ...(options.excludeOperators ?? []),
+    ...(options.profile === "slim" ? SLIM_LEFT_OUT : []),
+  ];
   if (operators.length > 0 && excludeOperators.length > 0) {
     throw new Error(
       "--operator and --exclude-operator cannot be combined. Name the operators to run, or the ones to leave out.",
@@ -1118,10 +1159,23 @@ export async function generateMutationSet(
   // R127: resolved before any file is read too, so an unregistered operator name fails as
   // immediately as a typo'd `--only` pattern does. `undefined` means "every operator".
   const admittedOperators = admittedOperatorNames(options, [...operatorTiers.keys()]);
-  const excludingOperators = (options.excludeOperators?.length ?? 0) > 0;
+  const excludingOperators =
+    (options.excludeOperators?.length ?? 0) > 0 || options.profile === "slim";
+  const beyondSlim = exclusionsBeyondSlim(options.excludeOperators);
+  // PR-209: `--profile slim` alone admits exactly what its walk produces, so its specs need no
+  // narrowing pass and stay as the older default run left them (raw, deduped later per file).
+  const slimAlone =
+    options.profile === "slim" &&
+    admittedOperators !== undefined &&
+    JSON.stringify([...admittedOperators].sort()) ===
+      JSON.stringify(slimOperatorNames([...operatorTiers.keys()]));
+  const narrowsSpecs = admittedOperators !== undefined && !slimAlone;
   // R856: the operators this run WALKS. Opt-in ones only when `--operator` named them.
+  // PR-209: under `--profile slim` the two default operators it leaves out are not walked either.
   const walkedOperators = allOperators.filter(
-    (op) => op.optIn !== true || admittedOperators?.has(op.name) === true,
+    (op) =>
+      (op.optIn !== true || admittedOperators?.has(op.name) === true) &&
+      !(options.profile === "slim" && SLIM_LEFT_OUT.includes(op.name)),
   );
   // Issue #19: a range naming no project `.al` file is refused before any file is read, like a
   // typo'd `--only` pattern: it would otherwise silently select nothing in that file.
@@ -1373,7 +1427,7 @@ export async function generateMutationSet(
     // a full run deletes. `dedupeSpecs` returns the surviving spec OBJECTS, so reference identity
     // is the join (the same technique `cli.ts`'s dry-run summary already uses).
     let fileSpecs = specs;
-    if (admittedOperators !== undefined) {
+    if (admittedOperators !== undefined && narrowsSpecs) {
       const survivedDedup = new Set(dedupeSpecs(specs, tierOf));
       const selected: MutationSpec[] = [];
       for (const spec of specs) {
@@ -1386,8 +1440,7 @@ export async function generateMutationSet(
     // Issue #19: after dedup and after the operator filter, so both stay strict subsets. Dedup is
     // re-run only when the operator filter has not already reduced to dedup survivors.
     if (lineRanges !== undefined) {
-      const survivedDedup =
-        admittedOperators !== undefined ? undefined : new Set(dedupeSpecs(fileSpecs, tierOf));
+      const survivedDedup = narrowsSpecs ? undefined : new Set(dedupeSpecs(fileSpecs, tierOf));
       const selected: MutationSpec[] = [];
       for (const spec of fileSpecs) {
         if (survivedDedup !== undefined && !survivedDedup.has(spec)) continue;
@@ -1501,7 +1554,14 @@ export async function generateMutationSet(
   // R832: `--exclude-operator` admits every other operator, so one with no site here is normal.
   // Only a run left with nothing at all is refused. Leaving out an operator with no site loses
   // nothing, so unlike `--exclude` that is not refused.
-  if (excludingOperators && producedInstrumentable.size === 0) {
+  // PR-209: not under `--profile slim`, which IS the older default run, and that run never refused
+  // an empty set here (the run itself refuses one later, as it always did). Exclusions beyond
+  // slim's own still refuse an empty set.
+  if (
+    excludingOperators &&
+    (options.profile !== "slim" || beyondSlim.length > 0) &&
+    producedInstrumentable.size === 0
+  ) {
     throw new Error(
       `no deployable mutation site is left in this scope with --exclude-operator ${options.excludeOperators?.join(", ")}.`,
     );
@@ -1657,9 +1717,11 @@ export async function generateMutationSet(
   if (admittedOperators !== undefined) {
     warn(
       "operator-narrowed-run",
-      excludingOperators
-        ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
-        : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
+      options.profile === "slim"
+        ? `[lethal] --profile slim left out ${SLIM_LEFT_OUT.join(", ")} (default operators since PR-209; not walked at all${beyondSlim.length > 0 ? `, and --exclude-operator left out more: ${excludedByOperator} mutation site(s) excluded` : ""}). The score below does not cover them — it is not a full-default score.`
+        : excludingOperators
+          ? `[lethal] --exclude-operator left out ${options.excludeOperators?.join(", ")}: ${excludedByOperator} mutation site(s) were excluded. The score below does not cover them — it is not a project score.`
+          : `[lethal] --operator narrowed this run to ${[...admittedOperators].sort().join(", ")}; ${excludedByOperator} mutation site(s) from other operators were excluded. The score below covers those operators ONLY — it is not a project score.`,
     );
   }
   // R565: read once every lookup this generation made is done.
@@ -1729,6 +1791,8 @@ export interface SessionConfig {
   readonly exclude?: readonly string[];
   /** R832: `--exclude-operator`. See `MutationSetOptions.excludeOperators`. */
   readonly excludeOperators?: readonly string[];
+  /** PR-209: `--profile slim`. See `MutationSetOptions.profile`. */
+  readonly profile?: "slim";
   /**
    * R127: operator names allowed to contribute mutants (`--operator`). Absent means every
    * registered operator. See `MutationSetOptions.operators`.
@@ -1818,7 +1882,7 @@ export interface SessionConfig {
    * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
    */
   readonly registerStopSignal?: (stop: () => void) => () => void;
-  /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to `Date.now`. */
+  /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to the monotonic `monoNow` (PR-252). */
   readonly clockMs?: () => number;
   /**
    * R53 (`--stop-hung-sessions`), OPT-IN, default off.
@@ -4701,6 +4765,11 @@ function assertSameBuildSymbols(
   );
 }
 
+/** PR-209 (M6): why a default run will not resume a store an older default run wrote, and the way to. */
+function olderDefaultResumeMessage(subject: string): string {
+  return `${subject} was recorded by a default run made BEFORE PR-209, whose default set did not hold lethal.condition-true and lethal.blank-argument. This run's default set does, so it measures more mutants and cannot carry that run's verdicts. Resume it with --profile slim (the older default set), or drop the resume flag to run from scratch.`;
+}
+
 function resolveResume(
   cfg: SessionConfig,
   backendName: string,
@@ -4723,6 +4792,8 @@ function resolveResume(
   pending: PendingResumeCheck = { resourceKey: undefined, openWorldWhy: undefined },
   /** R886: the v3 settings of this session; a resumed run must have recorded the same. */
   resumeInputs?: ResumeInputs,
+  /** PR-209: the digest an OLDER default run recorded for this same configuration; set only on a run with no operator narrowing. */
+  olderDefaultFingerprint?: string,
 ):
   | {
       runId: number;
@@ -4787,6 +4858,21 @@ function resolveResume(
         : {}),
     });
     if (found === null) {
+      // PR-209 (M6): an unfinished run of the OLDER default set has another digest, so the search
+      // above cannot find it. Name it rather than claim there is none.
+      if (olderDefaultFingerprint !== undefined) {
+        const older = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: olderDefaultFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (older !== null)
+          throw new Error(olderDefaultResumeMessage(`--resume found run ${older}`));
+      }
       // R325: an unfinished run keyed under another identity scheme has a different fingerprint,
       // so the search above cannot find it. Name it rather than claim there is none.
       const other = cfg.store.unfinishedRunUnderOtherScheme({
@@ -4930,6 +5016,12 @@ function resolveResume(
       // anyway, as "scoped differently"). NULL is unknown and matches no build.
       assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
       assertSameResumeInputs(row, `--resume-run ${id}`, resumeInputs); // R886
+      if (
+        olderDefaultFingerprint !== undefined &&
+        row.configFingerprint === olderDefaultFingerprint
+      ) {
+        throw new Error(olderDefaultResumeMessage(`--resume-run ${id}`));
+      }
       if (row.configFingerprint !== configFingerprint) {
         throw new Error(
           `--resume-run ${id} was scoped differently from this session (--only/--tests-only/--exclude-test/--skip-known-survivors/selector ids/preprocessor symbols). Carrying its verdicts would report one scope's measurements as another's${
@@ -5100,6 +5192,17 @@ function handBuildSymbols(backend: ExecutionBackend, symbols: readonly string[])
 }
 
 /**
+ * PR-247: per qualified test, the mutant-phase rows the store recorded against a mutant this session:
+ * how many, their summed own time, and the part under mutants scored `survived`, per batch. Filled where
+ * the rows are written (`commitRecord`), so every path (lanes, chunked groups) is counted; only rows that
+ * carry a mutant code (never baseline rows, never the unmutated confirmation rows).
+ */
+type TestCostsAcc = Map<
+  string,
+  { batchIndex: number; test: string; runs: number; ownMs: number; msUnderSurvivors: number }
+>;
+
+/**
  * C02-04: the session-level values `scoreBatch` needs. Built once per session by `runSession`,
  * after the lease is open, and shared by every batch.
  */
@@ -5122,6 +5225,8 @@ interface BatchScope {
   readonly emit: RunEmitter;
   readonly outcomes: SessionOutcome[];
   readonly killLedger: KillLedger;
+  /** PR-247: this session's mutant-phase test costs; see `TestCostsAcc`. */
+  readonly testCosts: TestCostsAcc;
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
@@ -5469,7 +5574,7 @@ async function closeLeaseScope(a: {
   // failure here must not mask/replace whatever real error is already
   // propagating.
   a.emit({ type: "phase-entered", phase: "teardown" });
-  const teardownStartedMs = Date.now();
+  const teardownStartedMs = monoNow();
   // After an unsafe latch, NO work-plane call — not even the deactivating ClearActive, which is
   // itself a mutating op on the stranded tier (spec §8). Only local teardown runs.
   if (!a.safety.isUnsafe) {
@@ -5489,7 +5594,7 @@ async function closeLeaseScope(a: {
   await (
     a.backend as { drainControlRequests?: (ms: number) => Promise<void> }
   ).drainControlRequests?.(CONTROL_DRAIN_MS);
-  a.emit({ type: "phase-left", phase: "teardown", elapsedMs: Date.now() - teardownStartedMs });
+  a.emit({ type: "phase-left", phase: "teardown", elapsedMs: monoNow() - teardownStartedMs });
   // R-496: a redirect to an unfiltered extensions query that arrived after the last call returned
   // has no next call to throw it. R507: so has one a lease call met (taken after `finish()`, so a
   // refusal on its own calls is included). Handed back AFTER the cleanup above, for the caller to
@@ -5982,6 +6087,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     emit,
     outcomes,
     killLedger,
+    testCosts,
     sessionReuse,
     groupRuns,
   } = scope;
@@ -5994,7 +6100,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     testCount: tests.length,
     batchIndex: batchIdx,
   });
-  const baselineStartedMs = Date.now();
+  const baselineStartedMs = monoNow();
   const baseline: Array<{ ref: TestMethodRef; verdict: TestVerdict }> = [];
   // R192 (second half): on `--resume`, a prior run's COMPLETED baseline for this exact
   // instrumented source against this exact test app stands in for re-running it. Both hashes
@@ -6248,7 +6354,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // emit, so a baseline that aborted used to report 0 ms and silently
   // reattribute its whole cost to "overhead". Measured on a run quarantined mid-baseline:
   // baseline 0.0s, overhead 70.1s, when essentially all of it was baseline.
-  const baselineElapsedMs = Date.now() - baselineStartedMs;
+  const baselineElapsedMs = monoNow() - baselineStartedMs;
   emit({ type: "phase-left", phase: "baseline", elapsedMs: baselineElapsedMs });
   if (safety.isUnsafe) return "unsafe"; // the caller stops the session: no mutant scheduling, no next batch
   // R192 (second half): a baseline that ran EVERY test to a verdict is recorded under its two
@@ -6527,7 +6633,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     phase: "mutants",
     detail: `estimate: ${estimate.covered} covered mutant(s), about ${formatEstimate(estimate.ms)} of their covering tests' baseline time (${ESTIMATE_NOT_A_BOUND})${longNote}`,
   });
-  const mutantsStartedMs = Date.now();
+  const mutantsStartedMs = monoNow();
   const baselineReused: ReusedBaseline | undefined =
     reused !== undefined ? { runId: reused.runId, batchIndex: reused.batchIndex } : undefined;
   const mutantLoopArgs = {
@@ -6550,6 +6656,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     attestation,
     emit,
     killLedger,
+    testCosts,
     memberCountsByTest: memberCounts,
     groupRuns,
     sessionReuse,
@@ -6562,7 +6669,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   } else {
     await runMutantsOnBackend({ ...mutantLoopArgs, backend });
   }
-  emit({ type: "phase-left", phase: "mutants", elapsedMs: Date.now() - mutantsStartedMs });
+  emit({ type: "phase-left", phase: "mutants", elapsedMs: monoNow() - mutantsStartedMs });
   // Layer 5C-A Task 8, Task 10 (design §G): per-artifact fail-closed attestation gate. A
   // batch "contributed verdicts" if any mutant it scheduled had >=1 covering test (a batch
   // with nothing but no-coverage/unsupported mutants has nothing a wrong binary could fake).
@@ -6675,7 +6782,29 @@ async function runSessionBody(
   // This is the ONLY fan-out — R104 deleted `cli.ts`'s `fanOutEmit`, which existed only to squeeze
   // several subscribers through a single-subscriber `cfg.emit` that this line then unwrapped again.
   const collectedEvents: RunEvent[] = [];
-  const emit: RunEmitter = createEmitter([(e) => collectedEvents.push(e), ...(cfg.emit ?? [])]);
+  // PR-250: the daemon-churn guard reads the stream LAST, so its warning follows the close that tripped it
+  // in every subscriber; it stops through the budget (`timeBudget`, made below, before any daemon starts).
+  const churn = new DaemonChurnGuard();
+  const suspendWatch = createSuspendWatch();
+  const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
+  const emit: RunEmitter = createEmitter([
+    (e) => collectedEvents.push(e),
+    ...(cfg.emit ?? []),
+    (e) => {
+      const s = churn.see(e);
+      if (s !== undefined) onChurn.stop?.(s);
+    },
+    // PR-252: a suspend is seen at the next event (ponytail: no timer; events are frequent in a run).
+    () => {
+      const s = suspendWatch.sample();
+      if (s !== undefined)
+        emit({
+          type: "warning",
+          code: "run-suspended",
+          message: suspendMessage(Math.round(s.ms / 1000), new Date(s.atWallMs).toISOString()),
+        });
+    },
+  ]);
   // R631: a tripwire. LethAL-built trees hold no links (the roots refused above), so this never
   // fires unless something LethAL builds starts carrying one; then the report says so.
   cleanups.push(
@@ -6701,6 +6830,11 @@ async function runSessionBody(
   // report treat it as the same scope as naming them all.
   const admittedForRun = admittedOperatorNames(cfg, [...operatorTiers.keys()]);
   const resolvedOperators = admittedForRun === undefined ? undefined : [...admittedForRun].sort();
+  const slimIsOlderDefault =
+    cfg.profile === "slim" &&
+    resolvedOperators !== undefined &&
+    JSON.stringify(resolvedOperators) ===
+      JSON.stringify(slimOperatorNames([...operatorTiers.keys()]));
   // PR-171: every refusal that needs only the flags and the v3 file, before the run is announced.
   const confirmPlan =
     cfg.confirm === undefined
@@ -7196,7 +7330,7 @@ async function runSessionBody(
   // R47: computed for EVERY run, not just a resuming one — a run that does not record its own
   // fingerprint cannot be resumed later, and the run worth resuming is precisely the one nobody
   // knew would abort.
-  const configFingerprint = sessionFingerprint({
+  const fingerprintBase: SessionFingerprintInput = {
     projectDir: cfg.projectDir,
     testDir: cfg.testDir,
     backend: backendName,
@@ -7222,7 +7356,11 @@ async function runSessionBody(
     // R127: part of the fingerprint for the same reason `only` is — two runs that deployed
     // different mutant sets are not resumable into one another, and a resume that carried
     // verdicts across an operator-scope change would report them as this run's own measurement.
-    ...(resolvedOperators !== undefined ? { operators: resolvedOperators } : {}),
+    // PR-209 (M6): `--profile slim` with no other exclusion IS the older default set, so it keeps
+    // the older digest (no key) and resumes, and compares with, every older store.
+    ...(resolvedOperators !== undefined && !slimIsOlderDefault
+      ? { operators: resolvedOperators }
+      : {}),
     // Issue #19: a different line scope deployed a different mutant set.
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.testsOnly !== undefined ? { testsOnly: cfg.testsOnly } : {}),
@@ -7252,7 +7390,15 @@ async function runSessionBody(
       discovery.treeOnlyTests.length > 0,
       discovery.splitTests.length > 0,
     ),
+  };
+  // PR-209 (M6): a run with no operator narrowing carries the marker; the same input WITHOUT it is
+  // the digest an older default run recorded, so `resolveResume` can name that store.
+  const configFingerprint = sessionFingerprint({
+    ...fingerprintBase,
+    ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
   });
+  const olderDefaultFingerprint =
+    resolvedOperators === undefined ? sessionFingerprint(fingerprintBase) : undefined;
   const resolvedResume = resolveResume(
     cfg,
     backendName,
@@ -7271,6 +7417,7 @@ async function runSessionBody(
       ...(sessionDatabaseId !== undefined ? { databaseId: sessionDatabaseId } : {}),
     },
     resumeInputs,
+    olderDefaultFingerprint,
   );
 
   const runId = cfg.store.createRun({
@@ -7347,9 +7494,9 @@ async function runSessionBody(
   // that field's doc comment) are folded from the `phase-left` events emitted below, not tracked in
   // local accumulators any more (event-stream refactor, spec 2026-08-05 §A) — only the session
   // total needs a local clock, since `totalMs` never rides an event of its own.
-  const sessionStartedMs = Date.now();
+  const sessionStartedMs = monoNow();
   // R912: the `--time-budget` clock starts with the session, and is shared by every batch.
-  const clockMs = cfg.clockMs ?? Date.now;
+  const clockMs = cfg.clockMs ?? monoNow;
   // R955: always one: with no `--time-budget` it is unlimited until a SIGTERM or SIGINT spends it,
   // and then the run stops through the same checks and writes its report (time-budget-reached).
   const timeBudget = new TimeBudget(
@@ -7358,8 +7505,16 @@ async function runSessionBody(
     clockMs,
   );
   cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
+  onChurn.stop = (s) => {
+    emit({
+      type: "warning",
+      code: "al-runner-v3-daemon-churn",
+      message: `[lethal] al-runner-v3-daemon-churn: lane ${s.lane}'s serve daemon closed ${s.closes} times in a row with no mutant scored anywhere in the session, so the budget is spent: no mutant or batch starts after the ones in flight. Read its serve-daemon-closed events for the refusal that keeps closing it (PR-250)`,
+    });
+    timeBudget.stopForChurn(s);
+  };
   emit({ type: "phase-entered", phase: "generate" });
-  const generateStartedMs = Date.now();
+  const generateStartedMs = monoNow();
   const {
     files: generatedFiles,
     duplicateObjects,
@@ -7386,6 +7541,7 @@ async function runSessionBody(
       : resolvedOperators !== undefined
         ? { operators: resolvedOperators }
         : {}),
+    ...(cfg.profile !== undefined ? { profile: cfg.profile } : {}),
     ...(cfg.lines !== undefined ? { lines: cfg.lines } : {}),
     ...(cfg.exactSites !== undefined ? { exactSites: cfg.exactSites } : {}),
     ...(sourceSnapshot !== undefined ? { source: sourceSnapshot } : {}),
@@ -7472,7 +7628,7 @@ async function runSessionBody(
   if (!sameBuildSymbols(generatedSymbols, buildSymbols)) {
     throw new BuildSymbolsDivergedError(buildSymbols, generatedSymbols);
   }
-  const generateMutationSetMs = Date.now() - generateStartedMs;
+  const generateMutationSetMs = monoNow() - generateStartedMs;
   // R307 section 3 (fail closed, I3), R442: the coarse tuples of every site this run numbered no
   // ordinal for. A mutant matching one is not skipped by history, not carried by resume and takes
   // no equivalence mark this run (`isCarryDisabled`); its key is still written. Undefined when
@@ -7646,6 +7802,8 @@ async function runSessionBody(
   // memory guard stops the session through the budget (R955's path).
   cfg.backend.useStopHandle?.({
     spent: () => timeBudget.exhausted,
+    // PR-250: the churn guard's stop is a spent budget, never `signalled` (it kills nothing); a real signal,
+    // before or after it, still is one.
     signalled: () => timeBudget.signalled,
     stopForMemory: (info) => timeBudget.stopForMemory(info),
   });
@@ -7658,6 +7816,7 @@ async function runSessionBody(
   });
 
   const outcomes: SessionOutcome[] = []; // store durability + Task 3 bookkeeping — see `record()`
+  const testCosts: TestCostsAcc = new Map(); // PR-247: emitted as `test-costs` before `session-finished`
   // A scan-refused test does not pass, even when every batch carries and no baseline runs (R-236c
   // run 002, review r1 #3); the report fold reads the same fact from `tests-testpage-refused`.
   let baselineGreenOverall = testPageRefusedNames.length === 0;
@@ -8037,6 +8196,7 @@ async function runSessionBody(
       emit,
       outcomes,
       killLedger,
+      testCosts,
       sessionReuse,
       groupRuns,
       minMutantBudgetMs,
@@ -8429,7 +8589,7 @@ async function runSessionBody(
           cfg.backend,
           cfg.testDir,
           dependentsTarget,
-          Date.now,
+          monoNow,
         );
         if (dependents !== null && Array.isArray(dependents.read)) {
           dependentNames = [...dependents.read, ...dependents.transitive].map(
@@ -8471,7 +8631,7 @@ async function runSessionBody(
             targetDependencies: dependenciesOf(projectManifest),
             transitive: dependents.transitive,
             startedMs: dependents.startedMs,
-            now: Date.now,
+            now: monoNow,
             // R847: the keyed read of what is new, for an installed app that is not a dependent.
             ...(cfg.backend.installedVersions !== undefined &&
             cfg.backend.objectOwners !== undefined &&
@@ -8503,7 +8663,7 @@ async function runSessionBody(
         }
       }
       let compiled: CompiledArtifact | null = null;
-      const deployStartedMs = Date.now();
+      const deployStartedMs = monoNow();
       /**
        * Deploys `batchDir` once, with every guard the first deploy had (R709, the version-conflict
        * retry, R90's outcome record). Returns alc's rejection, or the compiled artifact; any other
@@ -8750,7 +8910,7 @@ async function runSessionBody(
               undefined,
               removed.get(m) ?? restNote,
             );
-          emit({ type: "phase-left", phase: "deploy", elapsedMs: Date.now() - deployStartedMs });
+          emit({ type: "phase-left", phase: "deploy", elapsedMs: monoNow() - deployStartedMs });
           continue; // batch aborted, next batch still attempted
         }
         for (const m of failedExecute) {
@@ -8813,7 +8973,7 @@ async function runSessionBody(
       // continue after it — not from the acquire grant's now-stale `lastCompletedOpSeq`.
       if (leaseSession !== undefined) leaseSession.rebindBackend(cfg.backend);
       {
-        const deployElapsedMs = Date.now() - deployStartedMs;
+        const deployElapsedMs = monoNow() - deployStartedMs;
         emit({
           type: "batch-published",
           batchIndex: batchIdx,
@@ -9499,6 +9659,7 @@ async function runSessionBody(
         ? { stoppedBySignal: true as const }
         : {}),
       ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
       unscheduledCount: timeBudget.reached.unscheduledCount,
       batchesNotStarted: Math.max(0, artifacts.length - timeBudget.reached.firstUnstartedBatch),
       ...(timeBudget.reached.baselineStopped !== undefined
@@ -9629,7 +9790,22 @@ async function runSessionBody(
       backend: cfg.backend,
     });
   }
-  const totalMs = Date.now() - sessionStartedMs;
+  // PR-247: the mutant phase's test costs, once, sorted by test (code units); nothing when no mutant test ran.
+  if (testCosts.size > 0) {
+    emit({
+      type: "test-costs",
+      tests: [...testCosts.values()]
+        .sort((a, b) => a.batchIndex - b.batchIndex || compareCodeUnits(a.test, b.test))
+        .map((c) => ({
+          test: c.test,
+          batchIndex: c.batchIndex,
+          runs: c.runs,
+          ownMs: c.ownMs,
+          msUnderSurvivors: c.msUnderSurvivors,
+        })),
+    });
+  }
+  const totalMs = monoNow() - sessionStartedMs;
   emit({ type: "session-finished", elapsedMs: totalMs });
   // buildReport(statics, events) (spec 2026-08-05 §A): the closed statics set this run was GIVEN —
   // the SAME `cfg` fields the `run-configured` event above (~line 1933) was built from, one source,
@@ -10001,6 +10177,8 @@ async function runNamedMutantsBody(
   // The section G gate and a lost lease only EMIT `batch-invalidated`; runSession applies them in
   // the fold. Here they are collected and applied to the returned outcomes before returning.
   const invalidations: Array<{ batchIndex: number; reason: string }> = [];
+  // PR-252: suspend detection is deliberately not wired on this attach path (a few named mutants;
+  // durations are monotonic anyway).
   const emit: RunEmitter = createEmitter([
     (e) => {
       if (e.type === "batch-invalidated") {
@@ -10096,6 +10274,7 @@ async function runNamedMutantsBody(
       emit,
       outcomes,
       killLedger: newKillLedger(),
+      testCosts: new Map(),
       sessionReuse: { warned: false },
       groupRuns,
       minMutantBudgetMs,
@@ -10372,6 +10551,7 @@ async function runProbes(
       ...scope,
       outcomes,
       killLedger: newKillLedger(),
+      testCosts: new Map(),
       emit: probeEmit,
     };
     const plan = selectNamed(baseline, named, probeScope, batchIndex, strict);
@@ -10398,6 +10578,7 @@ async function runProbes(
         attestation,
         emit: probeEmit,
         killLedger: probeScope.killLedger,
+        testCosts: probeScope.testCosts,
         memberCountsByTest: plan.memberCountsByTest,
         groupRuns: scope.groupRuns,
         sessionReuse: scope.sessionReuse,
@@ -11664,6 +11845,7 @@ async function confirmWarm(p: {
     failureMessage: string | undefined;
     opKind?: "single" | "many";
     sessionId?: number;
+    callId?: string;
   }>;
   /** PR-51 (F1): `reproduceKill` runs the (single, position 1) killer alone. Unused by the warm replay. */
   readonly alone?: true;
@@ -11999,6 +12181,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
       failureMessage: v.failureMessage,
       opKind,
       ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+      ...(v.callId !== undefined ? { callId: v.callId } : {}),
     });
     feedAttestation(args.attestation, v.attestation);
   };
@@ -12516,6 +12699,8 @@ interface RunMutantsArgs {
   readonly emit: RunEmitter;
   /** R197: kills seen so far this session, shared across batches and shards. */
   readonly killLedger: KillLedger;
+  /** PR-247: see `TestCostsAcc`. */
+  readonly testCosts: TestCostsAcc;
   /** R197: members covered per test at THIS batch's baseline; empty under coverage "none". */
   readonly memberCountsByTest: ReadonlyMap<string, number>;
   /** R198: group-run settings, or `undefined` for the sequential loop. */
@@ -12784,6 +12969,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       failureMessage: string | undefined;
       opKind?: "single" | "many";
       sessionId?: number;
+      /** PR-247: the call the row came from; `ownTimeCharge` charges a row with no own time its call's wall once. */
+      callId?: string;
     }> = [];
     let transportErrorRef: TestMethodRef | undefined;
     // R688: the test codeunits whose discovery this mutant blanked, confirmed with no mutant active
@@ -12841,11 +13028,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // reached. Every capped walk is noted on its `failureNote` and warned by name below.
     let hangs = 0; // non-replay timeouts met so far
     let capRef: TestMethodRef | undefined; // the 3rd hang's ref: set only on a capped walk
-    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop) ran out between two covering
-    // steps. The mutant is dropped unrecorded; see the exit right after the `for await`.
+    // PR-108 (R1014): the CLOCK budget (or a signal, never a memory stop, nor PR-250's churn stop unless a
+    // signal came too) ran out between two covering steps. The mutant is dropped unrecorded; see the exit
+    // right after the `for await`.
     let budgetCut = false;
     const clockSpent = (): boolean =>
-      args.timeBudget?.exhausted === true && args.timeBudget.memory === undefined;
+      args.timeBudget?.exhausted === true &&
+      args.timeBudget.memory === undefined &&
+      (args.timeBudget.churn === undefined || args.timeBudget.signalled);
     // PR-81 (R1066): the mutant-level fields now; one copy per step start and one per held error.
     type WalkSnap = HeldTimeout["snap"];
     const snapNow = (): WalkSnap => ({
@@ -12956,6 +13146,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             failureMessage: v.failureMessage,
             opKind: step.opKind,
             ...(v.sessionId !== undefined ? { sessionId: v.sessionId } : {}),
+            ...(v.callId !== undefined ? { callId: v.callId } : {}),
           });
           if (v.outcome === "pass" || v.outcome === "fail") {
             attempted.add(testKeyOf(ref));
@@ -13826,6 +14017,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         reproduction,
         stopEvidence,
       );
+      const costWalls = new Set<string>(); // PR-247: per mutant, the calls already charged
       for (const t of testResultBuffer) {
         args.store.recordTestResult(
           args.runId,
@@ -13839,6 +14031,31 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           t.sessionId,
           t.ownDurationMs,
         );
+        // PR-247: the rows written against a mutant, counted where they are written. Only rows that
+        // carry a mutant code: the unmutated confirmation rows are not mutation time under a mutant.
+        if (t.mutantCode === null) continue;
+        const test = qualifiedTestName(t.ref);
+        const key = `${args.batchIndex}\0${test}`;
+        const acc = args.testCosts.get(key) ?? {
+          batchIndex: args.batchIndex,
+          test,
+          runs: 0,
+          ownMs: 0,
+          msUnderSurvivors: 0,
+        };
+        // R963: own time when present, else the call's wall once per call, else `durationMs`.
+        const own = ownTimeCharge(
+          {
+            durationMs: t.durationMs,
+            ...(t.ownDurationMs !== undefined ? { measuredDurationMs: t.ownDurationMs } : {}),
+            ...(t.callId !== undefined ? { callId: t.callId } : {}),
+          },
+          costWalls,
+        );
+        acc.runs += 1;
+        acc.ownMs += own;
+        if (verdict === "survived") acc.msUnderSurvivors += own;
+        args.testCosts.set(key, acc);
       }
     };
     // R688 (S10): a discovery confirm that did not pass stops the session, after the record above.
@@ -13856,7 +14073,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // mutant whose calls ended while it arrived may hold a killed al-runner's answer, not a result.
     // It is never recorded: it and the rest are left out, as the baseline drops such a call. Not for
     // the memory guard's stop (it also sets `signalled`, R948): it kills nothing, and the group in
-    // flight keeps its verdicts.
+    // flight keeps its verdicts. PR-250's churn stop does not set `signalled`, so a real signal after it
+    // still drops the mutant here.
     if (args.timeBudget?.signalled === true && args.timeBudget.memory === undefined) {
       if (args.sink === undefined) budgetSpent(at);
       else args.sink.memoryStop(m.mutantId, "a stop signal arrived while this mutant ran");
@@ -13927,7 +14145,10 @@ export function measuredDurationOf(
  * row with none and a call id is charged its call's wall once per call id (never once per row, never
  * 0 for the whole call); a row with neither (a backend that sets no call id) its own `durationMs`.
  */
-export function ownTimeCharge(v: TestVerdict, chargedCalls: Set<string>): number {
+export function ownTimeCharge(
+  v: Pick<TestVerdict, "measuredDurationMs" | "callId" | "durationMs">,
+  chargedCalls: Set<string>,
+): number {
   if (v.measuredDurationMs !== undefined) return v.measuredDurationMs;
   if (v.callId === undefined) return v.durationMs;
   if (chargedCalls.has(v.callId)) return 0;
@@ -13985,6 +14206,12 @@ async function runMutantsParallel(
       noteLanes?: (message: string) => void;
       /** PR-151: test seam, called under the split with the size of each window `cutWindows` made. */
       noteWindows?: (sizes: readonly number[]) => void;
+      /** PR-241: the pack cap in entries (`LETHAL_V3_PACK_ENTRIES`), or undefined = off. */
+      packEntryCap?: () => number | undefined;
+      /** PR-241: the entries a unit's plans would send. */
+      prefetchEntryCount?: (
+        plans: { mutantId: string; refs: readonly TestMethodRef[] }[],
+      ) => number;
       /**
        * PR-99 (the split prefetch): the batch setup, once per batch. An owner with it splits the prefetch
        * across the lanes (each lane prefetches the unit it takes); one without keeps the owner's window prefetch.
@@ -14024,6 +14251,11 @@ async function runMutantsParallel(
   // The latch is shared by every lane: the owner's is the one to read.
   const probe: Latch = () => owner.latched?.();
   const asked = lanes.length;
+  // PR-241: off under a time budget: R912 clamps each prefetch request's deadline to the time left, so a
+  // stop must lose at most one window's request, never a packed one.
+  const budgeted = args.timeBudget !== undefined && Number.isFinite(args.timeBudget.seconds);
+  const packCap = split && !budgeted ? owner.packEntryCap?.() : undefined;
+  const packOn = packCap !== undefined && owner.prefetchEntryCount !== undefined;
   const cap = owner.affordableLanes?.(asked) ?? asked;
   const { laneWarmupMs, needsLiveCall } = owner;
   // PR-99 (§10.7): under the split R785's pacing is off; the barrier callback is the only launcher.
@@ -14120,6 +14352,40 @@ async function runMutantsParallel(
             },
           }
         : {}),
+      // PR-241: off unless the owner has a cap; then a lane packs consecutive units up to that many entries.
+      ...(packOn && packCap !== undefined
+        ? {
+            pack: {
+              fits: (batch: readonly (readonly MutantManifestEntry[])[]) =>
+                batch.length === 1 ||
+                batch.reduce(
+                  (n, u) =>
+                    n + (owner.prefetchEntryCount?.(prefetchPlans({ ...args, mutants: u })) ?? 0),
+                  0,
+                ) <= packCap,
+              prefetch: async (
+                k: number,
+                batch: readonly (readonly MutantManifestEntry[])[],
+                sink: LaneSink,
+              ) => {
+                const backend = lanes[k];
+                if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
+                if (backend.prefetchMutants === undefined || sink.closed || args.safety.isUnsafe)
+                  return;
+                const per = batch.map((u) => prefetchPlans({ ...args, mutants: u }));
+                try {
+                  await backend.prefetchMutants(per.flat(), {
+                    ...prefetchOpts,
+                    unitSizes: per.map((p) => p.length),
+                  });
+                } catch (err) {
+                  commit.fail(batch[0]?.[0]?.mutantId, err);
+                  throw err;
+                }
+              },
+            },
+          }
+        : {}),
       mayStart: (k) => owner.laneMayStart?.(k) ?? true,
       commit,
       isUnsafe: () => args.safety.isUnsafe,
@@ -14128,6 +14394,7 @@ async function runMutantsParallel(
         if (backend === undefined) throw new Error(`runMutantsParallel: no lane ${k}`);
         if (
           split &&
+          !packOn &&
           backend.prefetchMutants !== undefined &&
           !sink.closed &&
           !args.safety.isUnsafe

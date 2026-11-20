@@ -8,6 +8,8 @@
  *   bun scripts/al-runner-v3-update.ts --edge        (the edge track only, `edgeOnce`)
  *   bun scripts/al-runner-v3-update.ts --edge-rejudge <edge sha>   (R639: a KEPT edge binary,
  *                                                     re-gated at `.gated`'s commit, `edgeRejudge`)
+ *   bun scripts/al-runner-v3-update.ts --main <binary>   (PR-255: a LOCAL build of an upstream main commit,
+ *                                                     `+main.YYYYMMDD (<commit>)`, gated as edge, `mainOnce`)
  *   bun scripts/al-runner-v3-update.ts --refresh-rows <id>[,<id>...]   (R859: in a BRANCH's
  *                                                     checkout, `refreshRows`; see its comment)
  *   scripts/heavy-slot.sh --peak gate bun scripts/al-runner-v3-update.ts --root <dir> --local-candidate <build>
@@ -94,8 +96,11 @@ import {
   warnFactReadings,
 } from "../packages/runner/src/al-runner-v3-pin";
 import {
+  FROZEN_V3_PINS,
   type GatedBuildEntry,
+  type V3BuildPin,
   V3_BUILD_PINS,
+  allHandPinIds,
   alphaOfEntry,
   findV3Pin,
   gatedBuilds,
@@ -147,6 +152,8 @@ export type CommitOrder = "ahead" | "behind" | "identical" | "diverged";
 /** Everything with a side effect, injected so the test drives every branch (T19). */
 export interface UpdateDeps {
   readonly root: string;
+  /** PR-236: the hand pin with this id, for every pin `gateOne` and `readReceipt` look up (a test seam). Absent: `handV3Pin`. */
+  readonly handPin?: (id: string) => V3BuildPin | undefined;
   /** PR-226: the checkout `runGate` and the lock's orphan check use. Absent: `GATE_WORKTREE`. */
   readonly gateWorktree?: string;
   /** Release tags, newest first (`gh release list`). */
@@ -386,7 +393,12 @@ export async function readReceipt(
   nonce: string,
   sha: string,
   commit: string,
-  expect: { readonly candidate?: boolean; readonly pinFrom?: string } = {},
+  expect: {
+    readonly candidate?: boolean;
+    readonly pinFrom?: string;
+    /** PR-236: the pin lookup (`UpdateDeps.handPin`). Absent: `handV3Pin`. */
+    readonly pinOf?: (id: string) => V3BuildPin | undefined;
+  } = {},
 ): Promise<{ outcome: Outcome; why: string; pinApplied?: string }> {
   let raw: unknown;
   try {
@@ -453,7 +465,14 @@ export async function readReceipt(
       why: `a pass that applied no pin, asked to judge by ${expect.pinFrom}`,
     };
   // The gate ran at `.gated`'s commit: a hand pin edited since then is not what it judged by.
-  const hand = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+  const hand = pinApplied !== undefined ? (expect.pinOf ?? handV3Pin)(pinApplied) : undefined;
+  // R1150 (PR-238): a pass judged by a pin this checkout lacks could not be checked here, and every reader of the
+  // `.gated` it would write refuses that pin (`adoptV3Pin`); so it stops now, before any copy, ledger or `current` move.
+  if (r.outcome === "pass" && pinApplied !== undefined && hand === undefined)
+    return {
+      outcome: "infra-fail",
+      why: `the gate applied pin ${pinApplied}, which this checkout does not have: run from a checkout that has it, or re-gate current at this checkout`,
+    };
   if (
     r.outcome === "pass" &&
     expect.candidate === true &&
@@ -658,6 +677,12 @@ export interface GateOneOpts {
   /** R814: a numbered release: its pass joins the manifest and never moves `current`. */
   readonly release?: boolean;
   /**
+   * PR-255 `--main`: the local `binary` of an upstream main commit, gated as an edge candidate (moves `current` only
+   * forward; behind or diverged gates nothing; `inUse` defers). `tag` is `main-<commit>`: its folder, `failed/`,
+   * `held/` and infra count; its ledger row is that id on `track: "main"`.
+   */
+  readonly main?: true;
+  /**
    * R859 `--refresh-rows`: gate the kept `binary` as a candidate by `gated.readingsFrom`, at
    * `gated.lethalCommit`, and on a pass return at once: no `failed/`, `held/`, build folder, ledger
    * row, `.gated` or `current` is written. The caller writes the manifest row.
@@ -690,6 +715,52 @@ function commitOfVersion(version: string): string {
 /** R814: the hand pin behind a build, its own or its readings' (undefined: no pin at all). */
 export function pinRootOf(g: GatedBuild): string | undefined {
   return g.readingsFrom ?? findV3Pin(g.version, g.binarySha256)?.id;
+}
+
+/** PR-236: a pin's readings (`id`, `version`, `binarySha256` left out, as `v3ReadingsDigest`) as JSON with sorted keys. */
+function canonicalReadings(pin: V3BuildPin): string {
+  const { id: _id, version: _version, binarySha256: _sha, ...readings } = pin;
+  const norm = (v: unknown): unknown => {
+    if (v instanceof RegExp || typeof v === "function") return String(v);
+    if (Array.isArray(v)) return v.map(norm);
+    if (v !== null && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      return Object.fromEntries(
+        Object.keys(o)
+          .sort()
+          .map((k) => [k, norm(o[k])]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(norm(readings));
+}
+
+/**
+ * PR-236 (pre-commitment master 50a76d17b): why a PRIVATE gate's pass that applied `appliedId`, not
+ * `pinRootOf(gated)`, stays infra-fail; `undefined` when it is accepted. Accepted only when the applied pin is a hand
+ * pin for the candidate's exact bytes (`version`, `sha`), carries `o1.partnerLoginRefusal`, and, less that one field,
+ * reads exactly as the root pin (keys sorted, so only order may differ).
+ */
+export function privatePinRefusal(
+  appliedId: string | undefined,
+  applied: V3BuildPin | undefined,
+  root: V3BuildPin | undefined,
+  version: string,
+  sha: string,
+): string | undefined {
+  if (appliedId === undefined) return "no pin applied";
+  if (applied === undefined) return `no hand pin ${appliedId} in this checkout`;
+  if (applied.version !== version || applied.binarySha256 !== sha)
+    return `pin ${appliedId} is for ${applied.version} ${applied.binarySha256.slice(0, 12)}, not the candidate's ${version} ${sha.slice(0, 12)}`;
+  const o1 = applied.o1;
+  if (o1?.partnerLoginRefusal === undefined)
+    return `pin ${appliedId} carries no o1.partnerLoginRefusal`;
+  if (root === undefined) return "no root pin to compare with";
+  const { partnerLoginRefusal: _refusal, ...o1Rest } = o1;
+  if (canonicalReadings({ ...applied, o1: o1Rest }) !== canonicalReadings(root))
+    return `pin ${appliedId}'s readings, less o1.partnerLoginRefusal, differ from ${root.id}'s`;
+  return undefined;
 }
 
 const ledgerPath = (root: string) => join(root, "gated-builds.jsonl");
@@ -744,6 +815,8 @@ export async function gateOne(
   opts: GateOneOpts = {},
 ): Promise<Outcome | "not-ahead"> {
   const { root } = deps;
+  // PR-236: every hand-pin lookup below goes through this one seam.
+  const pinOf = deps.handPin ?? handV3Pin;
   const work = await mkdtemp(join(root, ".work-"));
   try {
     let binary: string;
@@ -813,7 +886,7 @@ export async function gateOne(
         await deps.log(
           `${deps.now()} ${tag}: ${order} current (${gated.version}): current never moves backwards; a person decides`,
         );
-        if (opts.binary === undefined) return "not-ahead";
+        if (opts.binary === undefined || opts.main === true) return "not-ahead";
         movesCurrent = false; // A rejudge still measures the kept build.
       }
     }
@@ -860,6 +933,7 @@ export async function gateOne(
     const { outcome, why, pinApplied } = await readReceipt(receipt, nonce, sha, commit, {
       candidate,
       ...(pinFrom !== undefined ? { pinFrom } : {}),
+      pinOf,
     });
     const lines = await receiptLines(receipt);
     await deps.log(
@@ -899,7 +973,7 @@ export async function gateOne(
     };
     if (opts.regateAt !== undefined) await keep(join(root, "regate"), `${commit}.`);
     // R639 §6 step 8: a rejudge's evidence, whatever the outcome; nothing old is moved or rewritten.
-    const rejudge = opts.binary !== undefined && !refresh;
+    const rejudge = opts.binary !== undefined && !refresh && opts.main !== true;
     if (rejudge) await keep(join(root, "rejudge", `${name}@${commit}`));
     if (priv) {
       // One folder per run: an old pass receipt can never sit beside a new result.
@@ -957,11 +1031,27 @@ export async function gateOne(
       // PR-226: the same check for a private gate, against the pin it was asked to judge by (`pinRootOf`).
       const want = pinRootOf(gated);
       if (pinApplied !== want) {
+        // PR-236: a private gate may pass on a hand pin for the candidate's own bytes that is the root pin plus
+        // o1.partnerLoginRefusal; every other difference, and every non-private one, stays infra-fail.
+        const refusal = priv
+          ? privatePinRefusal(
+              pinApplied,
+              pinApplied !== undefined ? pinOf(pinApplied) : undefined,
+              want !== undefined ? pinOf(want) : undefined,
+              version,
+              sha,
+            )
+          : "";
+        if (refusal !== undefined) {
+          await deps.log(
+            `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${want ?? "(none)"}${refusal !== "" ? ` (PR-236: ${refusal})` : ""}`,
+          );
+          await retire();
+          return infra(deps, name);
+        }
         await deps.log(
-          `${deps.now()} ${tag}: infra-fail: a pass that applied pin ${pinApplied ?? "(none)"}, not ${want ?? "(none)"}`,
+          `${deps.now()} ${tag}: PR-236: the pass applied ${pinApplied}, the candidate's own hand pin, which reads as ${want} plus o1.partnerLoginRefusal`,
         );
-        await retire();
-        return infra(deps, name);
       }
       const w = await receiptWarnFacts(receipt);
       const bf = await receiptBatchFacts(receipt);
@@ -1019,7 +1109,9 @@ export async function gateOne(
     const dirName =
       opts.regateAt !== undefined
         ? undefined
-        : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
+        : opts.main === true
+          ? tag
+          : `${tag.replace(/^v/, "")}-${/\(([0-9a-f]+)\)/.exec(version)?.[1] ?? "unknown"}`;
     const dest =
       dirName === undefined ? await readlink(join(root, "current")) : join(root, dirName);
     if (dirName !== undefined) {
@@ -1071,20 +1163,20 @@ export async function gateOne(
     };
     await writeFile(join(dest, ".gated"), `${JSON.stringify(next, null, 2)}\n`);
     // PR-117: on every pass, whether the record just written lets a session batch.
-    const pinForSleep = pinApplied !== undefined ? handV3Pin(pinApplied) : findV3Pin(version, sha);
+    const pinForSleep = pinApplied !== undefined ? pinOf(pinApplied) : findV3Pin(version, sha);
     await deps.log(
       `${deps.now()} ${tag}: ${batchingRecordLine(batchFacts, pinForSleep?.legC["sleep-is-noop"]?.verdict === "gone", await receiptBatchReading(receipt))}`,
     );
     if (dirName !== undefined) {
       // R814: the row goes to the ledger before `current` moves; `publishPending` commits it.
-      const handPin = pinApplied !== undefined ? handV3Pin(pinApplied) : undefined;
+      const handPin = pinApplied !== undefined ? pinOf(pinApplied) : undefined;
       if (handPin !== undefined) {
         const row: GatedBuildEntry = {
           id:
             opts.release === true
               ? `${tag.replace(/^v3\.0\.0-/, "")}-${commitOfVersion(version)}`
-              : `edge-${commitOfVersion(version)}`,
-          track: opts.release === true ? "release" : "edge",
+              : `${opts.main === true ? "main" : "edge"}-${commitOfVersion(version)}`,
+          track: opts.release === true ? "release" : opts.main === true ? "main" : "edge",
           ...(opts.release === true ? { tag } : {}),
           version,
           binarySha256: sha,
@@ -1499,6 +1591,54 @@ export async function takeGateLock(
   return { release };
 }
 
+/** PR-255: the version line of a local upstream main build; group 1 is its commit. */
+const MAIN_VERSION = /\+main\.\d{8} \(([0-9a-f]{7,40})\)$/;
+
+/**
+ * PR-255 `--main <binary>` (pre-commitment 2026-11-20-pr255-main-build-as-current): gate ONE local build of an upstream
+ * main commit as an edge candidate, under the gate lock. Its version must read `+main.YYYYMMDD (<hex>)`, or it is
+ * refused by name (a throw) before anything is written. Its sha256 is taken once and checked at the gate. Never
+ * downloads; never reads or writes `edge.last-seen`.
+ */
+export async function mainOnce(
+  deps: UpdateDeps,
+  binary: string,
+): Promise<Outcome | "skipped" | "not-ahead"> {
+  const refuse = (why: string): never => {
+    throw new Error(`al-runner-v3-main-refused: ${why}`);
+  };
+  if (!existsSync(binary)) refuse(`${binary} does not exist`);
+  const version = (await deps.versionOf(binary)).trim();
+  const commit = MAIN_VERSION.exec(version)?.[1];
+  if (commit === undefined)
+    return refuse(
+      `${binary} reports "${version}": not an upstream main build (+main.YYYYMMDD (<commit>))`,
+    );
+  // Review MED: a passed main build has its folder (a held or failed one does not). Gating the same commit again would copy a
+  // binary over that folder in place, `current`'s own when it is current, before any in-use check: refused by name.
+  if (existsSync(join(deps.root, `main-${commit}`)))
+    return refuse(
+      `${join(deps.root, `main-${commit}`)} exists: main ${commit} has passed already; a second gate of the same commit is never run (a person decides)`,
+    );
+  const sha = await sha256OfFile(binary);
+  if (await skippedForTheDay(deps, "main")) return "skipped";
+  const lock = await takeGateLock(deps, "main");
+  if (lock === undefined) return "skipped";
+  try {
+    const current = await gatedWithAllLegs(deps, "main");
+    if (current === undefined) return "skipped";
+    const outcome = await gateOne(deps, `main-${commit}`, current, {
+      binary,
+      binarySha256: sha,
+      main: true,
+    });
+    await publishPending(deps); // As a rejudge: a pass can move `current`, so its row goes out now.
+    return outcome;
+  } finally {
+    await lock.release();
+  }
+}
+
 /** The kept folders of `tag`: `failed/<tag>@*` and `held/<tag>`, each with a binary and a receipt. */
 async function keptFolders(root: string, tag: string): Promise<string[]> {
   const failed = join(root, "failed");
@@ -1625,8 +1765,13 @@ export async function refreshRows(
   for (const id of ids) {
     const row = rows.find((r) => r.id === id);
     if (row === undefined) return refuse(`${id} is not a row of ${deps.manifestPath}`);
-    if (handV3Pin(row.readingsFrom) === undefined)
+    const rowPin = handV3Pin(row.readingsFrom);
+    if (rowPin === undefined)
       refuse(`${id}: its pin "${row.readingsFrom}" is no hand pin in this checkout`);
+    if (rowPin?.frozen !== undefined)
+      refuse(
+        `${id}: its pin "${row.readingsFrom}" is frozen (PR-209 amendment 10); a frozen row moves to live readings only by a deliberate edit of readingsFrom with a pass, never by a refresh`,
+      );
     const suffix = `-${commitOfVersion(row.version)}`;
     const dirs = (await readdir(root))
       .filter((n) => n.endsWith(suffix) && existsSync(join(root, n, "al-runner")))
@@ -1716,7 +1861,7 @@ export async function refreshRows(
           ...(g.batchFacts !== undefined ? { batchFacts: g.batchFacts } : {}),
         };
       });
-      parseGatedBuilds(next, new Set(V3_BUILD_PINS.map((p) => p.id)));
+      parseGatedBuilds(next, new Set(allHandPinIds()));
       // The receipt goes first, so a crash cannot leave a row with no receipt.
       await mkdir(dir, { recursive: true });
       await writeFile(
@@ -2135,7 +2280,9 @@ const V3_PIN_FROM_ENV_NAME = `export const V3_PIN_FROM_ENV = "${V3_PIN_FROM_ENV}
 
 /** Every hand pin's readings digest, for `masterPinDigests`. */
 export function pinDigests(): Record<string, string> {
-  return Object.fromEntries(V3_BUILD_PINS.map((p) => [p.id, v3ReadingsDigest(p)]));
+  return Object.fromEntries(
+    [...V3_BUILD_PINS, ...FROZEN_V3_PINS].map((p) => [p.id, v3ReadingsDigest(p)]),
+  );
 }
 
 /** The digests master's own code computes, in the pin worktree (its script, its pins). */
@@ -2449,6 +2596,7 @@ export type UpdateMode =
   | { readonly mode: "refresh-rows"; readonly ids: readonly string[] }
   | { readonly mode: "edge-rejudge"; readonly sha: string }
   | { readonly mode: "regate"; readonly commit: string }
+  | { readonly mode: "main"; readonly binary: string }
   | { readonly mode: "private"; readonly root: string; readonly candidate: string };
 
 /** A bad command line. A class of its own, extending `Error` directly. */
@@ -2466,7 +2614,14 @@ export class UpdateArgsError extends Error {
  */
 export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
   const BARE = ["--pin-digests", "--edge"];
-  const VALUE = ["--refresh-rows", "--edge-rejudge", "--regate", "--root", "--local-candidate"];
+  const VALUE = [
+    "--refresh-rows",
+    "--edge-rejudge",
+    "--regate",
+    "--main",
+    "--root",
+    "--local-candidate",
+  ];
   const seen = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? "";
@@ -2482,7 +2637,7 @@ export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
       i++;
     } else throw new UpdateArgsError(`unknown argument ${JSON.stringify(a)}`);
   }
-  const modes = [...BARE, "--refresh-rows", "--edge-rejudge", "--regate"].filter((f) =>
+  const modes = [...BARE, "--refresh-rows", "--edge-rejudge", "--regate", "--main"].filter((f) =>
     seen.has(f),
   );
   const [root, candidate] = [seen.get("--root"), seen.get("--local-candidate")];
@@ -2510,6 +2665,8 @@ export function parseUpdateArgs(argv: readonly string[]): UpdateMode {
       return { mode: "refresh-rows", ids: v.split(",").filter((s) => s !== "") };
     case "--edge-rejudge":
       return { mode: "edge-rejudge", sha: v };
+    case "--main":
+      return { mode: "main", binary: v };
     default:
       if (!FULL_SHA.test(v))
         throw new UpdateArgsError("--regate needs a full 40-character LethAL commit sha (F6)");
@@ -2523,6 +2680,7 @@ export interface UpdateHandlers {
   refreshRows(ids: readonly string[]): Promise<void>;
   edge(): Promise<void>;
   edgeRejudge(sha: string): Promise<void>;
+  main(binary: string): Promise<void>;
   regate(commit: string): Promise<void>;
   daily(): Promise<void>;
   privateGate(root: string, candidate: string): Promise<void>;
@@ -2540,6 +2698,8 @@ export async function dispatchUpdate(argv: readonly string[], h: UpdateHandlers)
       return h.edge();
     case "edge-rejudge":
       return h.edgeRejudge(m.sha);
+    case "main":
+      return h.main(m.binary);
     case "regate":
       return h.regate(m.commit);
     case "private":
@@ -2577,6 +2737,11 @@ if (import.meta.main) {
       const out = await edgeRejudge(realEdgeDeps(), sha);
       console.log(`al-runner-v3-update --edge-rejudge: ${out}`);
       process.exitCode = updateExitCode(true, [out]);
+    },
+    main: async (binary) => {
+      const out = await mainOnce(realDeps(), resolve(binary));
+      console.log(`al-runner-v3-update --main: ${out}`);
+      process.exitCode = out === "pass" ? 0 : 2;
     },
     regate: async (regateAt) => {
       const out = await updateOnce(realDeps(), { regateAt });

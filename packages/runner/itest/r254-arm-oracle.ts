@@ -37,12 +37,17 @@ export const R254_ARM_ORACLE: readonly ArmOracleRow[] = [
   { line: 20, operator: "remove-assignment", verdict: "survived" },
   kill(20, "shift-integer", "BandReportSumsBands", 3, "band total should be 6, got 7"),
   kill(24, "empty-block", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
+  // PR-209 (RECORDED on bc2, tables record: the arm's printed line): condition-true is default-on.
+  kill(25, "condition-true", "BandClassifiesDirectly", 1, "Band(2) should be 1, got 2"),
   kill(25, "conditional-boundary", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 1"),
   kill(26, "return-value", "BandClassifiesDirectly", 1, "Band(3) should be 2, got 0"),
   kill(27, "return-value", "BandClassifiesDirectly", 1, "Band(2) should be 1, got 0"),
   kill(31, "empty-block", "BandReportSumsBands", 1, SUM0),
   kill(32, "return-value", "BandReportSumsBands", 1, SUM0),
   { line: 36, operator: "empty-block", verdict: "no-coverage" },
+  // PR-209 (RECORDED on bc2, tables record): condition-true is default-on; line 37's guard, like its neighbours, is
+  // reached by no test.
+  { line: 37, operator: "condition-true", verdict: "no-coverage" },
   { line: 37, operator: "conditional-boundary", verdict: "no-coverage" },
   { line: 38, operator: "return-value", verdict: "no-coverage" },
   // R855 (PREDICTED, docs/superpowers/specs/2026-11-07-r855-predictions.md): `Unreached`'s `N + 1`

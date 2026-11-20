@@ -505,8 +505,8 @@ export const isUnread = (r: PublishedPackageRead): r is PackageUnread =>
 /**
  * PR-88: what the request-sized sink gets (`ExecutionBackend.setRequestSizedSink`), per serve request that
  * gave a reading; also the body of the `serve-request-sized` event. Bytes throughout. `g` is the peak less
- * the floor. `calls` lists each call with its test entries in the request and its highest cost per entry
- * after the reading.
+ * the floor. `calls` lists each call with its test entries in the request and its recent price per entry
+ * (max of the last K readings; PR-246) after the reading.
  */
 export type V3RequestSized = {
   /** PR-99: the lane (0 = the owner's) whose daemon served the request. */
@@ -1059,6 +1059,11 @@ export interface ExecutionBackend {
      */
     opts?: {
       readonly remainingMs?: () => number;
+      /**
+       * PR-241: `plans` packs several split-prefetch units: how many plans each holds, in order (sums to
+       * `plans.length`). Absent: one unit. A request never mixes units whose flags or guards differ.
+       */
+      readonly unitSizes?: readonly number[];
       /**
        * R912: every covered mutant of the call, passed with the first window only. The backend warms
        * up for all of them, as a whole-batch prefetch did, so a window cannot change what is warm.

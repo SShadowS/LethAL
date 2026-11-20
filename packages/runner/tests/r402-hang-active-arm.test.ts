@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
-import { generateMutationSet } from "../src/orchestrator";
+import { SLIM_OPTIONS, generateMutationSet } from "../src/orchestrator";
 
 /**
  * R402 (plan `docs/superpowers/plans/2026-10-02-R-402-hang-tag-active-arm-operands.md`, r3):
@@ -139,7 +139,9 @@ async function run(shape: Shape, build: Build): Promise<Result> {
   try {
     await Bun.write(join(dir, "app.json"), JSON.stringify({ name: "p" }));
     await Bun.write(join(dir, "src", "Shape.Codeunit.al"), wrap(SHAPES[shape]));
+    // PR-209: the pinned site counts are the OLD default set's (`--profile slim`).
     const set = await generateMutationSet(dir, {
+      ...SLIM_OPTIONS,
       preprocessorSymbols: BUILDS[build],
       emit: () => {},
     });

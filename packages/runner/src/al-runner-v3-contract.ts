@@ -41,6 +41,7 @@ import { baseAppJson, probeV3PredefinedSymbols } from "./al-runner-v3-probe";
 import { v3ChildEnv } from "./al-runner-v3-seed";
 import { BC_HTTP_HUB_TEXT } from "./al-runner-v3-texts";
 import { AlcCompileError, ArtifactCompiler, type ArtifactIo, defaultArtifactIo } from "./artifact";
+import { monoNow } from "./clock";
 import { type SpawnFn, absToolPath, defaultSpawn } from "./publisher";
 
 /**
@@ -2199,7 +2200,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
         o.app ?? app,
         o.tests ?? tests,
       ];
-      const t0 = Date.now();
+      const t0 = monoNow();
       const signal = o.guardMs !== undefined ? AbortSignal.timeout(o.guardMs) : undefined;
       const res = await spawn(argv, {
         ...(cacheDir !== undefined ? { env: { ALRUNNER_CACHE: cacheDir } } : {}),
@@ -2211,7 +2212,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
           stderr: String(e),
         }),
       );
-      const wallMs = res.wallMs ?? Date.now() - t0;
+      const wallMs = res.wallMs ?? monoNow() - t0;
       const decoded = o.codeunit !== undefined ? decodeV3Rows(res.stdout, o.codeunit) : undefined;
       let coverage: unknown;
       if (o.coverage === true) {

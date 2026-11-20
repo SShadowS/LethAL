@@ -1389,6 +1389,40 @@ export interface ExecutionContext {
   readonly license?: { readonly path: string; readonly sha256: string };
 }
 
+/** PR-247: one row of `SessionReport.costlyTests.top`. */
+export interface CostlyTestRow {
+  readonly test: string;
+  /** Mutants (final outcome, carried ones not counted) whose `coveringTests` name this test. */
+  readonly coveredMutants: number;
+  /** Test rows recorded under a mutant. The unmutated confirmation rows (the NONE confirm, the warm-kill replay, `confirmFoundNone`) are left out. */
+  readonly runs: number;
+  /** Their own time, charged as R963 does (own time, else the call's wall once per call, else `durationMs`). */
+  readonly ownMs: number;
+  /** `ownMs / totalOwnMs` (0 when `totalOwnMs` is 0). */
+  readonly share: number;
+  /** `ownMs / runs`. */
+  readonly meanMs: number;
+  readonly baselineMs?: number;
+  /** Kills (final outcome) credited to this test: exactly ONE of the mutant's covering tests matches `.endsWith("." + killingTest)`. */
+  readonly kills: number;
+  /** `kills / coveredMutants`, 0 when no mutant is covered. */
+  readonly killRate: number;
+  readonly msUnderSurvivors: number;
+}
+
+/** PR-247: see `SessionReport.costlyTests`. */
+export interface CostlyTests {
+  /** `this-session`: `carriedMutants` carried mutants' earlier sessions are not in the stream, so their tests are not counted. */
+  readonly scope: "whole-run" | "this-session";
+  readonly carriedMutants: number;
+  /** Summed over EVERY test, not just `top`. */
+  readonly totalOwnMs: number;
+  /** Kills whose `killingTest` matched more than one covering test (two codeunits sharing a method name): credited to nobody. */
+  readonly ambiguousKills: number;
+  /** The 20 tests with the most `ownMs`; ties by `test` (code units). */
+  readonly top: readonly CostlyTestRow[];
+}
+
 /** R272: one discovered test method — see `SessionReport.testMethods`. */
 export interface TestMethodRecord {
   /** Qualified `Codeunit.method`, the name `coveringTests` and `reachedBy` use. */
@@ -1469,6 +1503,12 @@ export interface SessionReport {
    * before R272. `lethal explain` lists a gap's covering tests from it (`gaps[].coveringTests`).
    */
   readonly testMethods?: readonly TestMethodRecord[];
+  /**
+   * PR-247: which tests take the mutation test time, from the session's `test-costs` event(s). Absent
+   * when the stream has none (an older stream, or a session that ran no mutant test). A rarely-killing
+   * test can be a mutant's only killer: this is a cost list, never a list of tests to remove.
+   */
+  readonly costlyTests?: CostlyTests;
   readonly backend: string;
   readonly authoritative: boolean;
   /**
@@ -2198,6 +2238,8 @@ export interface SessionReport {
       readonly boundBytes: number;
       readonly source: string;
     };
+    /** PR-250: the daemon-churn guard stopped the run: the lane whose al-runner-v3 serve daemon closed, and how many times in a row with no mutant scored. */
+    readonly stoppedByDaemonChurn?: { readonly lane: number; readonly closes: number };
   };
   /**
    * R939: al-runner-v3 serve daemons closed before the session's end, by reason (`refusal`,
@@ -3731,6 +3773,7 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     survivorsByProcedure,
     testFiles,
     ...(input.testMethods !== undefined ? { testMethods: input.testMethods } : {}),
+    ...(input.costlyTests !== undefined ? { costlyTests: input.costlyTests } : {}),
     // R586 (C1) and R553: the backend's own declared kind, never derived from `authoritative`.
     // `kind` is required on `BackendCapabilities` (R586), so no inference is needed here.
     backend: input.caps.kind,
@@ -4293,6 +4336,22 @@ export function renderConsole(r: SessionReport): string {
       }`,
     );
   }
+  // PR-247: one line. It never says "remove": a rarely-killing test can be a mutant's only killer.
+  if (r.costlyTests !== undefined) {
+    const c = r.costlyTests;
+    const pct = (x: number) => Math.round(x * 100);
+    const top10 = c.top.slice(0, 10).reduce((s, t) => s + t.share, 0);
+    const [first] = c.top;
+    if (first !== undefined) {
+      lines.push(
+        `costly tests: the top ${Math.min(10, c.top.length)} take ${pct(top10)}% of the mutation test time; the top one, ${first.test}, ${pct(first.share)}%, killed ${pct(first.killRate)}% of the ${first.coveredMutants} mutants it covers${
+          c.scope === "this-session"
+            ? ` (this session only: ${c.carriedMutants} carried mutants' tests not counted)`
+            : ""
+        }${c.ambiguousKills > 0 ? ` (${c.ambiguousKills} kills could not be credited to one test)` : ""}`,
+      );
+    }
+  }
   // R60, scoped by R69 Phase 2 Task 5 to FENCED verdicts only — printed on EVERY run that measured
   // or carried at least one, including a `full` one, because this limit does not depend on scope,
   // baseline health, or anything else the SCOPE line below is gated on. A reader comparing a
@@ -4451,7 +4510,18 @@ export function renderConsole(r: SessionReport): string {
   if (r.timeBudget !== undefined) {
     const bs = r.timeBudget.baselineStopped;
     const mem = r.timeBudget.stoppedByMemory;
-    if (mem !== undefined) {
+    const churn = r.timeBudget.stoppedByDaemonChurn;
+    if (churn !== undefined) {
+      // PR-250: the churn guard happens in the mutant phase only, so no baseline was stopped.
+      lines.push(
+        `STOPPED BY THE DAEMON-CHURN GUARD: lane ${churn.lane}'s al-runner-v3 serve daemon closed ${churn.closes} times in a row with no mutant scored anywhere in the session (al-runner-v3-daemon-churn, PR-250); the --time-budget did not run out. Read the serve-daemon-closed events for the refusal that keeps closing it, then continue with --resume.`,
+        `${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score.`,
+      );
+      if (r.timeBudget.stoppedBySignal === true)
+        lines.push(
+          "A STOP SIGNAL (SIGTERM or SIGINT) also arrived; a mutant whose calls it ended was left out (R955).",
+        );
+    } else if (mem !== undefined) {
       // R948: no --time-budget was spent; say memory, never "--time-budget 0 s".
       const gib = (n: number) => (n / 2 ** 30).toFixed(1);
       lines.push(
@@ -4487,7 +4557,7 @@ export function renderConsole(r: SessionReport): string {
         `TIME BUDGET REACHED IN THE BASELINE: --time-budget ${r.timeBudget.budgetSeconds} s ran out after ${bs.testsRun} of ${bs.testsTotal} baseline test(s). No mutant of that batch was scored, and none is in the score. Raise --time-budget or narrow the run (--tests-only).`,
       );
     }
-    if (mem === undefined && r.timeBudget.stoppedBySignal !== true) {
+    if (mem === undefined && churn === undefined && r.timeBudget.stoppedBySignal !== true) {
       lines.push(
         `TIME BUDGET REACHED: --time-budget ${r.timeBudget.budgetSeconds} s ran out. ${r.timeBudget.unscheduledCount} mutant(s) of the batch it stopped in were left out of this report, and ${r.timeBudget.batchesNotStarted} later batch(es) never started (their mutants are not counted): none of them are survivors, and none are in the score. Run with --resume to continue.`,
       );

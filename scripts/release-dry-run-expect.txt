@@ -1,2 +1,2 @@
-dry run: 30 file(s), 440 mutant site(s), 418 deployed mutant(s), 1 batch(es)
-batch 0 (440 mutant site(s), 418 deployed):
+dry run: 30 file(s), 472 mutant site(s), 450 deployed mutant(s), 1 batch(es)
+batch 0 (472 mutant site(s), 450 deployed):

@@ -13,23 +13,23 @@ import {
   isIdentifierLike,
 } from "./loop-hazard";
 import { synthesizeAfter } from "./mutate-helpers";
-import { calleeLoopUsesParam, calleeRecurses } from "./optin-hang";
+import { calleeLoopUsesParam, calleeRecurses, siteInExitTestHelper } from "./optin-hang";
 
 const NAME = "lethal.blank-argument";
 const VERSION = "1.0.0";
 
 /**
- * `BlankArgument` (R868, GitHub #34), OPT-IN: a call argument that is a variable or a field of a
+ * `BlankArgument` (R868, GitHub #34): a call argument that is a variable or a field of a
  * scalar type is replaced by that type's blank constant, to find a computed value nobody checks was
  * passed on.
  *
- * WHAT A SURVIVOR MEANS: the callee's tests do not tell a real value from a blank one. Name it
- * (`--operator blank-argument`); it is not in a default run (about +3% mutants on DO, +5% on DC,
- * and the R-862 reading was 6 real of 12, the rest mostly attribute-by-attribute export lines and
- * event arguments).
+ * WHAT A SURVIVOR MEANS: the callee's tests do not tell a real value from a blank one. In a default
+ * run since PR-209 (`--profile slim` leaves it out; about +3% mutants on DO, +5% on DC, and the
+ * R-862 reading was 6 real of 12, the rest mostly attribute-by-attribute export lines and event
+ * arguments).
  *
- * Hang rules: see `calleeLoopUsesParam` and `calleeRecurses` in `optin-hang.ts`, and the three
- * loop rules below.
+ * Hang rules: see `calleeLoopUsesParam`, `calleeRecurses` and `siteInExitTestHelper` (R1136) in
+ * `optin-hang.ts`, and the three loop rules below.
  *
  * The callee must be KNOWN not to take that argument by `var` (a literal in a `var` slot does not
  * compile, AL0133 family). Known means a project procedure the object declares exactly once: a bare
@@ -108,6 +108,7 @@ function blankFor(node: ALSyntaxNode, ctx: SemanticContext): BlankPlan | null {
 
 const hangs = (node: ALSyntaxNode, ctx: SemanticContext, loopParam: boolean): boolean =>
   loopParam ||
+  siteInExitTestHelper(node, ctx) ||
   inLoopExitParts(node, ctx) ||
   hangCapableForMutatedNode(node, ctx) !== null ||
   deletedOperandHangs(node, node, ctx);
@@ -116,7 +117,6 @@ export const blankArgument: MutationOperator = {
   name: NAME,
   version: VERSION,
   tier: 1,
-  optIn: true,
   targetNodeKinds: [ALNodeKind.identifier, ALNodeKind.field_access],
   producesNodeKinds: [ALNodeKind.identifier, ALNodeKind.field_access],
   requiresSemantic: ["type-info", "symbol-table"],

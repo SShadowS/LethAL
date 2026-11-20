@@ -68,6 +68,7 @@ import { dirname } from "node:path";
 import { V3_TIMEOUT_MESSAGE, isV3RefusalText } from "./al-runner-rows";
 import type { EntriesAnswer } from "./al-runner-v3-entries";
 import { checkRunSeed, mergeChildEnv } from "./al-runner-v3-seed";
+import { monoNow } from "./clock";
 
 /** One `compilationErrors` entry, from the one-shot envelope or the `--server` summary. Moved
  *  here from `al-runner-transport.ts` by R654 S1, because the daemon (which v3 keeps) decodes it. */
@@ -236,7 +237,7 @@ export class LineReader {
    */
   /** `capMs` is the timer cap; only a test lowers it, to reach "capped timer fired early". */
   async next(deadlineMs: number, capMs: number = MAX_TIMER_MS): Promise<ReadLineOutcome> {
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     for (;;) {
       const nl = this.buf.indexOf("\n");
       if (nl >= 0) {
@@ -253,7 +254,7 @@ export class LineReader {
         this.buf = "";
       }
       if (this.done) return { kind: "eof" };
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       if (remaining <= 0) return { kind: "timeout" };
       let timer: ReturnType<typeof setTimeout> | undefined;
       // The read stays pending across a capped timer, so no chunk is ever dropped.
@@ -485,9 +486,9 @@ export class AlRunnerServer {
     );
 
     const tests: ServerTestLine[] = [];
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     for (;;) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       if (remaining <= 0) {
         throw new Error(
           `al-runner --server: no summary line within ${deadlineMs} ms (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
@@ -570,14 +571,14 @@ export class AlRunnerServer {
     proc.write(`${JSON.stringify(body)}\n`);
     const tests: Record<string, unknown>[] = [];
     const entrySummaries: Record<string, unknown>[] = [];
-    const deadline = Date.now() + deadlineMs;
+    const deadline = monoNow() + deadlineMs;
     const fail = (kind: AlRunnerServerRequestError["kind"], why: string) =>
       new AlRunnerServerRequestError(
         kind,
         `${why} (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
       );
     for (;;) {
-      const remaining = deadline - Date.now();
+      const remaining = deadline - monoNow();
       const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
       if (next.kind === "timeout")
         throw fail("deadline", `no summary line within ${deadlineMs} ms`);
@@ -890,6 +891,13 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "company-table-read",
     "%COMPANYM% on the Company table: the database may hold companies this runtime does not know (ADR-046 decision 4a)",
   ], // PR-54 class "* on the Company table"
+  [
+    // PR-217 (pre-commitment master f24ed4448): the SAME class as upstream words it after edge-4ebfe7913 (records.rs:751 at
+    // 0e6397742 and c5861dcd9), exact; kept by the kept-vs-fresh DO check on perf-combined (/coord/handoff/PR-217/keepcheck/,
+    // 2026-11-19 22:06Z: the new text in all 28 requests, 156 rows, one kept daemon; 28 of 28 equal to fresh; self-test caught).
+    "company-table-read-named",
+    "%COMPANYM% on the Company table: the database may hold companies this runtime does not know; name them with --companies NAME[,NAME...] (serve: the `companies` field); `all` needs test data (ADR-046 decision 4a)",
+  ],
   [
     "license-permission",
     "License Permission: only a count that names one object by type and number, or one object type with a license loaded, is served",
@@ -1271,8 +1279,9 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
    * (Module scope, isolation "test", coverage off); the basis is R-937's finding that nothing crosses
    * requests under any isolation. The cascade's test name, a name with no comma, is its only variable part.
    */
+  // PR-217: also upstream's wording after edge-4ebfe7913, exactly (the clause is optional and literal, nothing looser).
   "company-findset":
-    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know \(ADR-046 decision 4a\)$/,
+    /^NotRun: out-of-scope: FindSet on the Company table: the database may hold companies this runtime does not know(?:; name them with --companies NAME\[,NAME\.\.\.\] \(serve: the `companies` field\); `all` needs test data)? \(ADR-046 decision 4a\)$/,
   /**
    * R1000 (coord R-989): edge-847b1fa5a split the text by kind and names the object: "changed number
    * sequence '<name>' ... (only a new NumberSequence.Insert is)" and "changed isolated storage key
@@ -1402,6 +1411,85 @@ export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   "caption-no-source-table":
     /^NotRun: out-of-scope: the caption of a page with DataCaptionExpression and no source table \(not pinned\)$/,
 };
+
+/** PR-244: lowercase words of 3+ letters or digits, not all digits. */
+function nearMissWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3 && !/^\d+$/.test(w)),
+  );
+}
+
+/**
+ * PR-244: the literal words of each keep entry's regex, derived once, on first use. Both branches of an alternation
+ * count, so an entry such as `http`, `commit` or `dotnet-exception` has more words than any one text of it holds: a
+ * reworded text of one branch may stay under 0.8 and is then left to the restart-storm backstop.
+ */
+let keepEntryWords: [string, Set<string>][] | undefined;
+function keepWords(): [string, Set<string>][] {
+  keepEntryWords ??= Object.entries(V3_SERVE_SAFE_REFUSALS).map(([name, re]) => {
+    const literal = re.source
+      .replace(
+        /\\[sSdDwW]|\\(.)|\[[^\]]*\]|\(\?:|\{\d+(?:,\d*)?\}|[()|?*+^$]/g,
+        (_m, esc: string | undefined) => (esc !== undefined ? esc : " "),
+      )
+      .replace("NotRun: out-of-scope: ", "");
+    return [name, nearMissWords(literal)];
+  });
+  return keepEntryWords;
+}
+
+/**
+ * PR-244: for a refusal text that no keep entry matches, the keep entry whose literal words it holds
+ * at least 80% of (entries of 8+ words only): a reworded kept refusal. `undefined` for a kept text
+ * or when no entry is close. Warning only: it never changes a keep decision.
+ */
+export function keepNearMiss(
+  text: string,
+): { readonly entry: string; readonly found: number; readonly size: number } | undefined {
+  if (Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(text))) return undefined;
+  const have = nearMissWords(text.replace(/^NotRun: out-of-scope: /, ""));
+  let best: { entry: string; found: number; size: number } | undefined;
+  for (const [entry, words] of keepWords()) {
+    // PR-244 amendment 2: entries of at least 7 literal words (`yaml-list-indent` has 7).
+    if (words.size < 7) continue;
+    let found = 0;
+    for (const w of words) if (have.has(w)) found += 1;
+    if (
+      found / words.size >= 0.8 &&
+      (best === undefined || found / words.size > best.found / best.size)
+    )
+      best = { entry, found, size: words.size };
+  }
+  return best;
+}
+
+/** PR-244 (pre-committed): unmeasured variants of kept classes, shown once as known, never as the warning. */
+export const KNOWN_NEAR_MISS_VARIANTS: readonly {
+  readonly entry: string;
+  readonly contains: string;
+  readonly why: string;
+}[] = [
+  {
+    entry: "report-parameters-no-xml-declaration",
+    contains: "given to Report.RunRequestPage",
+    why: "an unmeasured report method of a kept class",
+  },
+  {
+    entry: "cascade-manual-binding",
+    contains: "An error was expected inside an ASSERTERROR",
+    why: "an unmeasured cascade tail of a kept class",
+  },
+];
+
+export function knownNearMissVariant(
+  entry: string,
+  text: string,
+): (typeof KNOWN_NEAR_MISS_VARIANTS)[number] | undefined {
+  return KNOWN_NEAR_MISS_VARIANTS.find((v) => v.entry === entry && text.includes(v.contains));
+}
 
 /** R612: which close rule a `--server`/`serve` daemon follows. Chosen by the backend that owns
  *  the daemon, never from the rows. */

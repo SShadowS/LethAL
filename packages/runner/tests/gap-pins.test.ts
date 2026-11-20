@@ -33,7 +33,8 @@ test("itest:verify's pinned gap ids and members match sandbox-app's emitted mani
   const fixtureDir = join(import.meta.dir, "../../../fixtures/sandbox-app");
   const targetDir = await mkdtemp(join(tmpdir(), "lethal-gap-pins-"));
   dirs.push(targetDir);
-  const set = await generateMutationSet(fixtureDir);
+  // PR-209 amendment 8: `PINNED_GAPS` is the default set's (condition-true and blank-argument included).
+  const set = await generateMutationSet(fixtureDir, {});
   await writeInstrumentedProject({
     targetDir,
     files: set.files,

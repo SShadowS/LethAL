@@ -253,9 +253,17 @@ class ParView implements ExecutionBackend {
   readonly killsMustReproduce = true;
   readonly inRunStopIsBudget = false;
   /** PR-99: set by `splitOwner` only; the owner decides by its own shape whether a lane prefetches. */
-  prefetchHook: ((plans: readonly { readonly mutantId: string }[]) => Promise<void>) | undefined;
-  async prefetchMutants(plans: readonly { readonly mutantId: string }[]): Promise<void> {
-    await this.prefetchHook?.(plans);
+  prefetchHook:
+    | ((
+        plans: readonly { readonly mutantId: string }[],
+        opts?: { readonly unitSizes?: readonly number[] },
+      ) => Promise<void>)
+    | undefined;
+  async prefetchMutants(
+    plans: readonly { readonly mutantId: string }[],
+    opts?: { readonly unitSizes?: readonly number[] },
+  ): Promise<void> {
+    await this.prefetchHook?.(plans, opts);
   }
   private active: string | null = null;
   constructor(
@@ -814,9 +822,19 @@ describe("R1014: a stop signal is honoured inside a window, and the mutant it cu
  */
 function splitOwner(
   stub: ParStub,
-  o: { barrierAfter?: number; throwOn?: (lane: number, ids: string[]) => Error | undefined },
+  o: {
+    barrierAfter?: number;
+    throwOn?: (lane: number, ids: string[]) => Error | undefined;
+    /** PR-241: the owner's pack cap, in entries (a mutant counts as one entry here). Absent: packing off. */
+    packEntries?: number;
+  },
 ) {
-  const calls: { lane: number; ids: string[]; activationsBefore: number }[] = [];
+  const calls: {
+    lane: number;
+    ids: string[];
+    activationsBefore: number;
+    unitSizes: readonly number[] | undefined;
+  }[] = [];
   const prepared: string[][] = [];
   const launched: number[] = [];
   const ended: number[] = [];
@@ -839,14 +857,25 @@ function splitOwner(
     },
     launchLane: (k: number) => void launched.push(k),
     releaseLane: (k: number) => void ended.push(k),
+    ...(o.packEntries !== undefined
+      ? {
+          packEntryCap: () => o.packEntries,
+          prefetchEntryCount: (plans: readonly unknown[]) => plans.length,
+        }
+      : {}),
   });
   const base = stub.lanes.bind(stub);
   stub.lanes = (n: number) => {
     const views = base(n) as ParView[];
     for (const v of views) {
-      v.prefetchHook = async (plans) => {
+      v.prefetchHook = async (plans, opts) => {
         const ids = plans.map((p) => p.mutantId);
-        calls.push({ lane: v.laneIndex, ids, activationsBefore: stub.activations.length });
+        calls.push({
+          lane: v.laneIndex,
+          ids,
+          activationsBefore: stub.activations.length,
+          unitSizes: opts?.unitSizes,
+        });
         const err = o.throwOn?.(v.laneIndex, ids);
         if (err !== undefined) throw err;
         if (v.laneIndex === 0 && !passed && o.barrierAfter !== undefined) {
@@ -1018,5 +1047,59 @@ describe("PR-99: the split prefetch, through a session", () => {
     expect(t?.units.every((u) => u.scoringMs >= 0 && u.entries > 0)).toBe(true);
     expect(t?.windows.length).toBeGreaterThanOrEqual(1);
     expect(t?.windows.every((w) => w.prefetchMs >= 0 && w.entries > 0)).toBe(true);
+  });
+});
+
+describe("PR-241: packing consecutive units, through a session on 2 lanes", () => {
+  const sorted = (xs: readonly string[]) => [...xs].sort();
+  const run = async (
+    root: string,
+    procOf: Map<string, string>,
+    packEntries?: number,
+    extra: Partial<SessionConfig> = {},
+  ) => {
+    const stub = new ParStub({ procOf, delay: () => 2 });
+    const split = splitOwner(stub, {
+      barrierAfter: 1,
+      ...(packEntries !== undefined ? { packEntries } : {}),
+    });
+    const report = await session(root, stub, { workers: 2, ...extra });
+    return { stub, split, report };
+  };
+
+  test("R912: under a time budget nothing is packed (a stop loses at most one unit's request)", async () => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    const on = await run(root, procOf, 1000, { timeBudgetSeconds: 3600 });
+    expect(on.split.calls).toHaveLength(3);
+    expect(on.split.calls.every((c) => c.unitSizes === undefined)).toBe(true);
+  });
+
+  test("(a) verdicts, killing tests and failure text equal packed and unpacked; (b) fewer requests, none mixing lanes; (c) off is one request per unit", async () => {
+    const root = await project();
+    const { procOf, report: one } = await learn(root);
+    const size = (p: string) => [...procOf.values()].filter((v) => v === p).length;
+    const off = await run(root, procOf);
+    // two units fit a request, three do not: lane 0 packs P1+P2 and lane 1 takes P3
+    const on = await run(root, procOf, size("P1") + size("P2"));
+    // (a)
+    expect(table(on.report)).toEqual(table(off.report));
+    expect(table(off.report)).toEqual(table(one));
+    // (c) off: one call per procedure scope, no pack sizes
+    expect(off.split.calls).toHaveLength(3);
+    expect(off.split.calls.every((c) => c.unitSizes === undefined)).toBe(true);
+    for (const c of off.split.calls)
+      expect(new Set(c.ids.map((id) => procOf.get(id))).size).toBe(1);
+    // (b) fewer requests; together every mutant once; each call is scored only on its own lane
+    expect(on.split.calls.length).toBeLessThan(off.split.calls.length);
+    expect(sorted(on.split.calls.flatMap((c) => c.ids))).toEqual(
+      sorted(one.mutants.map((m) => m.mutantCode)),
+    );
+    expect(on.split.calls.some((c) => (c.unitSizes?.length ?? 0) > 1)).toBe(true);
+    for (const c of on.split.calls) {
+      expect(c.unitSizes?.reduce((a, b) => a + b, 0)).toBe(c.ids.length);
+      const lanes = on.stub.activations.filter((a) => c.ids.includes(a.mutant)).map((a) => a.lane);
+      expect(new Set(lanes)).toEqual(new Set([c.lane]));
+    }
   });
 });

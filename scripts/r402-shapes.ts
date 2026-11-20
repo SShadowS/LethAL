@@ -51,8 +51,23 @@ export interface R402SetResult {
 
 export type R402Generate = (
   projectDir: string,
-  opts: { preprocessorSymbols: readonly string[]; emit: () => void },
+  opts: {
+    preprocessorSymbols: readonly string[];
+    emit: () => void;
+    excludeOperators: readonly string[];
+    profile: "slim";
+  },
 ) => Promise<R402SetResult>;
+
+/**
+ * PR-209: expected.json pins spec counts of the OLD default set, which is `--profile slim`
+ * (`condition-true` and `blank-argument` became default operators). The sweep is about which
+ * `#if` shapes the parser admits, which no operator changes, so it keeps the old set.
+ */
+const SLIM = {
+  excludeOperators: ["lethal.condition-true", "lethal.blank-argument"],
+  profile: "slim" as const,
+};
 
 /**
  * Writes one shape as a project at `dir` (the given app.json, the shape as its only source file)
@@ -79,7 +94,7 @@ export async function runShape(
   dir: string,
   build: readonly string[],
 ): Promise<{ res: R402SetResult; specs: R402Spec[]; undecided: string[] }> {
-  const res = await generate(dir, { preprocessorSymbols: build, emit: () => {} });
+  const res = await generate(dir, { preprocessorSymbols: build, emit: () => {}, ...SLIM });
   const specs = res.files.flatMap((x) => [...x.specs]);
   const undecided = res.preprocExcluded
     .filter((e) => e.reason === "preproc-undecided")

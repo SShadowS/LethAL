@@ -16,6 +16,7 @@
  * code alone. Kept out of `al-runner.itest.ts` because that script runs its gate at import (R186).
  */
 import { join } from "node:path";
+import { SLIM_OPTIONS } from "../src/orchestrator";
 
 const FIXTURES = join(import.meta.dir, "..", "..", "..", "fixtures");
 export const LAYOUT_PROJECT_DIR = join(FIXTURES, "sandbox-layout");
@@ -27,6 +28,16 @@ export const LAYOUT_SELECTOR_IDS = { selectorId: 79749, controlId: 79748, tableI
  * exactly two batches, and Beta alone is over the budget (the oversized-batch warning, expected).
  */
 export const LAYOUT_MAX_GUARDS = 7;
+/**
+ * PR-209 (amendment 3, ruling 2): L1 runs under `--profile slim`. The default set's `condition-true`
+ * guard on Grow stretches it past the verbatim file, which breaks R353's stale-layout premise; slim
+ * keeps the table below as it was.
+ */
+export const LAYOUT_SESSION_OPTIONS = {
+  selectorIds: LAYOUT_SELECTOR_IDS,
+  maxGuardsPerBatch: LAYOUT_MAX_GUARDS,
+  ...SLIM_OPTIONS,
+};
 
 const SPEC = "docs/superpowers/specs/2026-09-30-r353-stale-layout-precommitment.md";
 const ALPHA = "src/LayoutAlpha.Codeunit.al";

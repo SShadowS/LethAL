@@ -102,9 +102,13 @@ const CLOSED_WORLD = "|closed-world:public";
 const LEND_CODE = /^(history-|resume-|snapshot-|carry-refused-renumbered$)/;
 
 const CODES = Object.keys(LEND_MUTANTS) as LendCode[];
-const keyOfCode = (c: LendCode): string => LEND_MUTANTS[c].key;
-const keySet = (codes: readonly string[]): Set<string> =>
-  new Set(codes.map((c) => keyOfCode(c as LendCode)));
+const ALL_BY_CODE: Readonly<Record<string, { readonly key: string }>> = LEND_MUTANTS;
+const keyOfCode = (c: string): string => {
+  const m = ALL_BY_CODE[c];
+  if (m === undefined) throw new Error(`lend: no mutant ${c}`);
+  return m.key;
+};
+const keySet = (codes: readonly string[]): Set<string> => new Set(codes.map((c) => keyOfCode(c)));
 const ALL = keySet(CODES);
 const KEPT = keySet(LEND_FIGURES.kept);
 /**
@@ -272,6 +276,8 @@ function lendCodes(events: readonly RunEvent[]): string[] {
 }
 
 function assertCodes(leg: string, events: readonly RunEvent[], want: readonly string[]): void {
+  // PR-209: print the observed list BEFORE asserting, so a record or observe run shows it. Print only.
+  console.log(`  ${leg}: lent codes ${JSON.stringify(lendCodes(events))}`);
   assert.deepEqual(
     lendCodes(events),
     [...want].sort(),
@@ -282,7 +288,10 @@ function assertCodes(leg: string, events: readonly RunEvent[], want: readonly st
 /** The one message of `code` (assertCodes has already pinned there is one). */
 function message(events: readonly RunEvent[], code: string): string {
   const hit = events.find((e) => e.type === "warning" && e.code === code);
-  return hit?.type === "warning" ? hit.message : "";
+  const text = hit?.type === "warning" ? hit.message : "";
+  // PR-209: print every message a check reads, BEFORE the check, so a record or observe run shows it. Print only.
+  console.log(`  message ${code}: ${text === "" ? "(none)" : text}`);
+  return text;
 }
 
 /** R272: how many baseline tests ran in THIS session (a reused snapshot has no durations). */
@@ -341,6 +350,10 @@ function assertCounts(
   want: { killed: number; survived: number; noCoverage: number; groupedCalls: number },
   knownSurvivors = 0,
 ): void {
+  // PR-209: print the observed counts BEFORE asserting, so a record or observe run shows every leg's figures. Print only.
+  console.log(
+    `  ${leg}: counts ${JSON.stringify({ killed: r.counts.killed, survived: r.counts.survived, noCoverage: r.counts.noCoverage, knownSurvivors: r.counts.knownSurvivors, groupedCalls: r.groupedCalls, mutants: r.mutants.length })}`,
+  );
   assert.deepEqual(
     {
       killed: r.counts.killed,
@@ -576,7 +589,7 @@ async function main(): Promise<void> {
     assert.deepEqual(
       carriedKeys(r3.report),
       carriedInPartBatch(new Set([...ALL].filter((k) => !keySet(LEND_FIGURES.r3Rerun).has(k)))),
-      "R3: all but M0022 and the no-coverage rows carried, by key (partly carried batch)",
+      "R3: all but M0026 and the no-coverage rows carried, by key (partly carried batch)",
     );
     assertFrozen("R3", baseline, r3.report);
     assert.equal(

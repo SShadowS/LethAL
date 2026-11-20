@@ -49,7 +49,7 @@ import { ARMS_REFUSAL } from "../itest/wrapped-fixture";
 
 describe("R602 build review B1: WR pins its three state notes exactly", () => {
   test("the constant is the measured set: three, all BandYRun kills (R975 dropped M0090, M0096; R976 M0089)", () => {
-    expect(V3_WR_STATE_NOTES).toEqual(["0/M0075", "0/M0076", "0/M0082"]);
+    expect(V3_WR_STATE_NOTES).toEqual(["0/M0087", "0/M0088", "0/M0094"]);
   });
   test("the measured notes pass; none, an extra and a missing note are each named", () => {
     expect(judgeStateNotes([...V3_WR_STATE_NOTES].reverse(), V3_WR_STATE_NOTES)).toEqual([]);
@@ -140,9 +140,10 @@ describe("judgeKillers: each constant killer must be killed by the same test", (
   });
 });
 
-describe("judgeWrArms: the by-name refusal is exactly the three WrappedArms rows", () => {
+// PR-209 amendment 6 item 1: four rows since condition-true is default-on (three before).
+describe("judgeWrArms: the by-name refusal is exactly the four WrappedArms rows", () => {
   const arms = (n: number): V3RowFacts[] =>
-    [1, 2, 3].slice(0, n).map((i) => ({
+    [1, 2, 3, 4, 5].slice(0, n).map((i) => ({
       mutantCode: `M000${i}`,
       file: ARMS_FILE,
       line: 6 + i,
@@ -151,23 +152,24 @@ describe("judgeWrArms: the by-name refusal is exactly the three WrappedArms rows
       failureNote: ARMS_REFUSAL,
     }));
   const other: V3RowFacts = {
-    mutantCode: "M0004",
+    mutantCode: "M0009",
     file: "src/WrappedPairA.Codeunit.al",
     line: 10,
     operatorName: "lethal.x",
     verdict: "killed",
   };
 
-  test("three refused WrappedArms rows and a clean neighbour pass", () => {
-    expect(judgeWrArms([...arms(3), other], ARMS_REFUSAL)).toEqual([]);
+  test("four refused WrappedArms rows and a clean neighbour pass", () => {
+    expect(judgeWrArms([...arms(4), other], ARMS_REFUSAL)).toEqual([]);
   });
 
-  test("a WrappedArms row that is not refused, or a refusal on another file, or only two rows, is named", () => {
-    const loose = arms(3).map((r, i) => (i === 0 ? { ...r, verdict: "killed" } : r));
+  test("a WrappedArms row that is not refused, or a refusal on another file, or three or five rows, is named", () => {
+    const loose = arms(4).map((r, i) => (i === 0 ? { ...r, verdict: "killed" } : r));
     expect(judgeWrArms([...loose, other], ARMS_REFUSAL)).toHaveLength(1);
     const leaked = { ...other, failureNote: ARMS_REFUSAL };
-    expect(judgeWrArms([...arms(3), leaked], ARMS_REFUSAL)).toHaveLength(1);
-    expect(judgeWrArms([...arms(2), other], ARMS_REFUSAL)).toHaveLength(1);
+    expect(judgeWrArms([...arms(4), leaked], ARMS_REFUSAL)).toHaveLength(1);
+    expect(judgeWrArms([...arms(3), other], ARMS_REFUSAL)).toHaveLength(1);
+    expect(judgeWrArms([...arms(5), other], ARMS_REFUSAL)).toHaveLength(1);
   });
 
   test("the refusal sentence is the one the code emits today", () => {

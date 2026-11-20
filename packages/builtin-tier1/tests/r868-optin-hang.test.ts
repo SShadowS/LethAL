@@ -84,11 +84,11 @@ describe("R868 #36 condition-true: the then-arm hang rules", () => {
     await initParser();
   });
 
-  it("is opt-in, tier 1, 1.0.0", () => {
-    expect(conditionTrue.optIn).toBe(true);
+  it("is a default operator since PR-209 (no optIn), tier 1, 1.0.0", () => {
+    expect(conditionTrue.optIn).toBeUndefined();
     expect(conditionTrue.tier).toBe(1);
     expect(conditionTrue.version).toBe("1.0.0");
-    expect(blankArgument.optIn).toBe(true);
+    expect(blankArgument.optIn).toBeUndefined();
     expect(blankArgument.version).toBe("1.0.0");
   });
 

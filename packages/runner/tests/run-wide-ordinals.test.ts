@@ -346,6 +346,7 @@ describe("R374: the scheme bump retires per-batch keys", () => {
       selectorIds,
       identityScheme: scheme,
       coverageMode: "procedure",
+      defaultOperators: 2, // PR-209: what a default run computes now
     });
     store.db.run("UPDATE runs SET identity_scheme = ?, config_fingerprint = ? WHERE id = ?", [
       scheme,

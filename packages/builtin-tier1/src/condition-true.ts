@@ -14,14 +14,14 @@ const NAME = "lethal.condition-true";
 const VERSION = "1.0.0";
 
 /**
- * `ConditionTrue` (R868, GitHub #36, condition-to-true form), OPT-IN: `if C then A;` becomes
+ * `ConditionTrue` (R868, GitHub #36, condition-to-true form): `if C then A;` becomes
  * `if true then A;`, so the guarded statements run whatever the guard says. A happy-path suite kills
  * `negate-*` but not this one.
  *
  * WHAT A SURVIVOR MEANS: no test drives the guard to false, or none checks what the then-arm does
- * when it should not run. Name it (`--operator condition-true`); it is not in a default run, because
- * it adds 6% (DO) to 8% (DC) mutants and about a third of its survivors are not a test gap (R-862
- * reading: 6 real, 5 questionable, 1 equivalent of 12).
+ * when it should not run. In a default run since PR-209 (`--profile slim` leaves it out): it adds 6%
+ * (DO) to 8% (DC) mutants and about a third of its survivors are not a test gap (R-862 reading: 6
+ * real, 5 questionable, 1 equivalent of 12).
  *
  * Hang rules beyond `inLoopExitParts` and `deletedOperandHangs`: see `thenArmHangs` in
  * `optin-hang.ts` (a then-arm that moves the exit's cursor or a name the exit reads, holds a
@@ -77,7 +77,6 @@ export const conditionTrue: MutationOperator = {
   name: NAME,
   version: VERSION,
   tier: 1,
-  optIn: true,
   targetNodeKinds: [ALNodeKind.if_statement],
   producesNodeKinds: [ALNodeKind.boolean_literal],
   requiresSemantic: ["symbol-table"],

@@ -450,6 +450,20 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
     readonly windowOf: (unit: readonly M[]) => number;
     readonly budgetSpent: () => boolean;
   };
+  /**
+   * PR-241 (A/B knob, off when absent): after taking a unit a lane also takes the CONSECUTIVE units that
+   * come next while `fits(batch + next)` holds and the look-ahead bound (and the budget, the commit, the
+   * unsafe flag) would hand them out now. `prefetch` runs once for the batch, then `runUnit` runs each unit
+   * in order. Never crosses lanes, never reorders; each unit ends (look-ahead, waiters) as it finishes.
+   */
+  readonly pack?: {
+    readonly fits: (batch: readonly (readonly M[])[]) => boolean;
+    readonly prefetch: (
+      lane: number,
+      batch: readonly (readonly M[])[],
+      sink: LaneSink,
+    ) => Promise<void>;
+  };
   readonly split?: {
     readonly barrierPassed: () => boolean;
     readonly measured: () => boolean;
@@ -560,16 +574,46 @@ export async function runScopeQueue<M extends { readonly mutantId: string }>(o: 
           const t0 = pace?.now() ?? 0;
           const w = pace?.weight(unit) ?? 0;
           const epoch0 = pace?.epoch?.();
+          const endUnit = (i: number): void => {
+            // A unit that ended by a throw counts as ended: it must not hold the bound or a waiter.
+            ended[i] = true;
+            while (ended[oldest] === true) oldest += 1;
+            wake();
+          };
+          const batch: (readonly M[])[] = [unit];
+          const pack = o.pack;
           try {
-            await o.runUnit(k, unit, sink);
+            // PR-241: only a unit `take` would hand out now (same bound, budget and stop rules). Inside the
+            // `try`: a throw in `fits` fails the session and ends the units taken, never hangs the lane.
+            while (
+              pack !== undefined &&
+              !o.commit.closed &&
+              !o.isUnsafe() &&
+              nextUnit < o.units.length &&
+              look?.budgetSpent() !== true &&
+              inBound()
+            ) {
+              const next = o.units[nextUnit];
+              if (next === undefined || !pack.fits([...batch, next])) break;
+              queuedW -= weights[nextUnit] ?? 0;
+              batch.push(next);
+              nextUnit += 1;
+            }
+            if (pack !== undefined) await pack.prefetch(k, batch, sink);
+            for (const [j, u] of batch.entries()) {
+              try {
+                await o.runUnit(k, u, sink);
+              } finally {
+                endUnit(idx + j);
+              }
+              // As after a unit sent alone: a lane waiting on the bound may now start.
+              if (j < batch.length - 1) tryLaunch();
+            }
           } catch (err) {
             o.commit.fail(current() ?? unit[0]?.mutantId, err);
             throw err;
           } finally {
-            // A unit that ended by a throw counts as ended: it must not hold the bound or a waiter.
-            ended[idx] = true;
-            while (ended[oldest] === true) oldest += 1;
-            wake();
+            for (let j = 0; j < batch.length; j++) if (ended[idx + j] !== true) endUnit(idx + j);
           }
           // A unit that restarted lane 0's daemon carries a warm-up: it does not measure the work.
           if (pace !== undefined && k === 0 && w > 0 && pace.epoch?.() === epoch0) {
