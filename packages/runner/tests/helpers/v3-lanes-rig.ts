@@ -116,6 +116,8 @@ export interface Req {
   readonly selectedOnly: boolean;
   /** PR-250: each entry's `excludeTests`, by entry id (absent: none). */
   readonly excludes: Record<string, readonly string[]>;
+  /** PR-250 (`honorExcludes`): excluded tests that RAN with their rows hidden (an unflagged request, R1094). */
+  readonly hiddenRan: string[];
 }
 
 export interface ServeCtl {
@@ -126,7 +128,10 @@ export interface ServeCtl {
   echo?: (m: string, daemon: number, n: number) => FakeRow;
   /** PR-98: the fake child's pid for daemon `d`; absent (as in a real fake) unless a test asks. */
   pid?: (daemon: number) => number;
-  /** PR-250: leave out the rows of an entry's `excludeTests`, by prefix as v3 does (default: rows as `rows` gives). */
+  /**
+   * PR-250: leave out the rows of an entry's `excludeTests`, by prefix as v3 does (default: rows as `rows`
+   * gives). With `runSelectedOnly` they do not run; without it they run hidden (`Req.hiddenRan`).
+   */
   honorExcludes?: boolean;
 }
 
@@ -174,6 +179,7 @@ function fakeServe(ctl: ServeCtl) {
                 .filter((e) => Array.isArray(e.excludeTests))
                 .map((e) => [String(e.id), (e.excludeTests as string[]).map(String)]),
             ),
+            hiddenRan: [],
           };
           requests.push(req);
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
@@ -213,15 +219,17 @@ function fakeServe(ctl: ServeCtl) {
                       message: `LETHAL-ECHO:${m}:true`,
                     },
                   ]
-                : ctl
-                    .rows(m, cu, daemon, n)
-                    .filter(
-                      (r) =>
-                        ctl.honorExcludes !== true ||
-                        !(req.excludes[String(e.id)] ?? []).some((x) =>
-                          `Codeunit${cu}.${r.method}`.toLowerCase().startsWith(x.toLowerCase()),
-                        ),
-                    );
+                : ctl.rows(m, cu, daemon, n).filter((r) => {
+                    const name = `Codeunit${cu}.${r.method}`;
+                    const out =
+                      ctl.honorExcludes === true &&
+                      (req.excludes[String(e.id)] ?? []).some((x) =>
+                        name.toLowerCase().startsWith(x.toLowerCase()),
+                      );
+                    // R1094: unflagged, v3 still RUNS an excluded test and only hides its row
+                    if (out && !req.selectedOnly) req.hiddenRan.push(name);
+                    return !out;
+                  });
             for (const r of rs) lines.push(testLine(cu, r, String(e.id)));
             per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
           }

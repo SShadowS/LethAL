@@ -8,6 +8,7 @@ import {
   type FakeRow,
   type LanesRig,
   OPTS,
+  type Req,
   type RowsFn,
   TIMEOUT_1S,
   cleanRigs,
@@ -77,6 +78,15 @@ async function prefetchExcludes(
   mutant: string,
   refs: readonly ReturnType<typeof ref>[],
 ): Promise<readonly string[] | undefined> {
+  return (await prefetchReq(r, mutant, refs)).excludes;
+}
+
+/** `prefetchExcludes`, with the first request that held `mutant`. */
+async function prefetchReq(
+  r: LanesRig,
+  mutant: string,
+  refs: readonly ReturnType<typeof ref>[],
+): Promise<{ readonly excludes: readonly string[] | undefined; readonly req: Req }> {
   const before = r.serve.requests.length;
   await r.b.prefetchMutants([{ mutantId: mutant, refs }], {
     batchPlans: MUTANTS.map((mutantId) => ({ mutantId, refs })),
@@ -87,29 +97,62 @@ async function prefetchExcludes(
   if (q === undefined) throw new Error("no request");
   const ids = q.ids.filter((i) => !i.endsWith("|echo"));
   expect(ids).toHaveLength(1); // one group, one codeunit entry
-  return q.excludes[ids[0] ?? ""];
+  return { excludes: q.excludes[ids[0] ?? ""], req: q };
 }
 
+/** The backend's private reads these tests make. */
+const priv = (r: LanesRig) =>
+  r.b as unknown as {
+    mutantLeftOutNames(cu: number): unknown;
+    refusedCut(cu: number): unknown;
+    neverFlag: Set<number>;
+    chosen: Map<number, "test" | "method">;
+  };
+
+/** Tests a MUTANT request ran with their rows hidden (the warm-up leaves B out unflagged, as before: R1004). */
+const mutantHiddenRan = (r: LanesRig) =>
+  r.serve.requests.filter((q) => q.mutants.some((m) => m !== "NONE")).flatMap((q) => q.hiddenRan);
 const stats = (r: LanesRig) => r.b.entriesStats() as unknown as Record<string, number>;
 const cutNotices = (r: LanesRig) =>
   r.notices.filter((n) => n.startsWith("al-runner-v3-baseline-refused-cut:"));
 const outcome = (v: TestVerdict) => [v.outcome, v.runnerRow ?? ""];
 
 describe("PR-250: the cut before a baseline refusal the daemon does not keep", () => {
-  test("an unkept baseline refusal on B leaves out B and every later test of the codeunit, with today's cut (union)", async () => {
+  test("an unkept baseline refusal on B leaves out B and every later test of the codeunit, with today's cut (union), in a request sent with runSelectedOnly", async () => {
     const r = await cutRig("unkept");
     // covering A and D: today's L4 cut leaves nothing out; the PR-250 cut leaves out B, C, D
-    expect(await prefetchExcludes(r, "M0001", [A, D])).toEqual([
-      `Codeunit${CU}.B`,
-      `Codeunit${CU}.C`,
-      `Codeunit${CU}.D`,
-    ]);
+    const { excludes, req } = await prefetchReq(r, "M0001", [A, D]);
+    expect(excludes).toEqual([`Codeunit${CU}.B`, `Codeunit${CU}.C`, `Codeunit${CU}.D`]);
+    expect(req.selectedOnly).toBe(true);
     expect(stats(r).refusedCutEntries).toBe(1);
     expect(cutNotices(r)).toHaveLength(1);
     expect(cutNotices(r)[0]).toContain(`Codeunit${CU}.B`);
     expect(cutNotices(r)[0]).toContain(UNLISTED);
-    // the refused test never reached the daemon under a mutant, so no refusal closed it
+    // the refused test never ran under a mutant (not even hidden), so no refusal closed the daemon
+    expect(mutantHiddenRan(r)).toEqual([]);
     expect(r.b.daemonCloses().byReason.get("refusal") ?? 0).toBe(0);
+  });
+
+  test("a request that cannot be flagged (its codeunit is never flagged) goes out WITHOUT the cut: B runs, its refusal shows and closes the daemon as before; the verdict rule still holds", async () => {
+    const r = await cutRig("unkept");
+    priv(r).neverFlag.add(CU);
+    const { excludes, req } = await prefetchReq(r, "M0001", [A, D]);
+    expect(req.selectedOnly).toBe(false);
+    expect(excludes).toBeUndefined();
+    expect(mutantHiddenRan(r)).toEqual([]);
+    expect(r.b.daemonCloses().byReason.get("refusal") ?? 0).toBeGreaterThan(0);
+    expect(stats(r).refusedCutEntries).toBe(0);
+    expect(cutNotices(r)).toEqual([]);
+    await r.b.activate("M0001");
+    expect(outcome(await r.b.run(C, OPTS))).toEqual(["error", "runner-refused"]);
+  });
+
+  test("a codeunit that isolation auto switched to per test (method) is not cut: its whole-codeunit baseline rows are stale", async () => {
+    const r = await cutRig("unkept");
+    expect(priv(r).refusedCut(CU)).toBeDefined();
+    priv(r).chosen.set(CU, "method");
+    expect(priv(r).refusedCut(CU)).toBeUndefined();
+    expect(priv(r).mutantLeftOutNames(CU)).toBeUndefined();
   });
 
   for (const kind of ["fail", "pass", "kept"] as const) {

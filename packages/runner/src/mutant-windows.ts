@@ -231,19 +231,15 @@ export class TimeBudget {
   }
   /**
    * PR-250: set by the daemon-churn guard: one lane's serve daemon closed `closes` times in a row with no
-   * mutant scored. Spent like the memory guard's stop (it kills nothing); the report names the churn.
+   * mutant scored. It spends the budget (it kills nothing, the group in flight keeps its verdicts) but is
+   * NOT a signal: `signalled` stays a SIGTERM's or SIGINT's (or the memory guard's) alone, in either order.
    */
   churn: DaemonChurnStop | undefined;
   stopForChurn(info: DaemonChurnStop): void {
     this.churn ??= info;
-    this.stop();
-  }
-  /** A guard (memory, churn) spent the budget, not a signal: nothing in flight was killed. */
-  get byGuard(): boolean {
-    return this.memory !== undefined || this.churn !== undefined;
   }
   remainingMs(): number {
-    if (this.signalled) return 0;
+    if (this.signalled || this.churn !== undefined) return 0;
     return this.startMs + this.seconds * 1000 - this.now();
   }
   get exhausted(): boolean {

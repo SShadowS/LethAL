@@ -88,7 +88,17 @@ class Backend implements ExecutionBackend {
   setDaemonCloseSink(sink?: (c: V3DaemonClose) => void): void {
     this.sink = sink;
   }
-  useStopHandle(): void {}
+  handle: Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0] | undefined;
+  useStopHandle(h: Parameters<NonNullable<ExecutionBackend["useStopHandle"]>>[0]): void {
+    this.handle = h;
+  }
+  /** The session's SIGTERM handler (`registerStopSignal`), and the call number it fires on. */
+  sigterm: (() => void) | undefined;
+  sigtermOn: number | undefined;
+  /** The SIGTERM fires before that call's closes (default: after them). */
+  sigtermFirst = false;
+  /** `handle.signalled()` as the backend reads it after the call it ran in. */
+  signalledAfter = new Map<number, boolean>();
   capabilities(): BackendCapabilities {
     return {
       kind: "al-runner-v3",
@@ -111,6 +121,7 @@ class Backend implements ExecutionBackend {
   }
   async run(ref: TestMethodRef): Promise<TestVerdict> {
     this.calls += 1;
+    if (this.sigtermFirst && this.sigtermOn === this.calls) this.sigterm?.();
     const n = this.closesOn.get(this.calls) ?? 0;
     for (let i = 0; i < n; i++)
       this.sink?.({
@@ -119,6 +130,8 @@ class Backend implements ExecutionBackend {
         family: "x",
         phase: this.calls <= BASELINE_CALLS ? "baseline" : "live",
       });
+    if (!this.sigtermFirst && this.sigtermOn === this.calls) this.sigterm?.();
+    this.signalledAfter.set(this.calls, this.handle?.signalled() === true);
     return {
       ref,
       outcome: "pass",
@@ -143,7 +156,10 @@ async function session(root: string, b: Backend) {
     selectorIds: { selectorId: 50147, controlId: 50148, tableId: 50149 },
     emit: [(e: RunEvent) => events.push(e)],
     clockMs: b.now,
-    registerStopSignal: () => () => {},
+    registerStopSignal: (stop) => {
+      b.sigterm = stop;
+      return () => {};
+    },
   });
   const churnWarnings = events.filter(
     (e) => e.type === "warning" && e.code === "al-runner-v3-daemon-churn",
@@ -190,7 +206,50 @@ describe("PR-250: the daemon-churn guard", () => {
       const text = renderConsole(report);
       expect(text).toContain("STOPPED BY THE DAEMON-CHURN GUARD");
       expect(text).not.toContain("STOPPED BY SIGNAL");
+      expect(text).not.toContain("STOP SIGNAL");
       expect(text).not.toContain("TIME BUDGET REACHED");
+      // the backend reads no signal: the churn stop kills nothing
+      expect(b.signalledAfter.get(firstMutantCall + 1)).toBe(false);
+    });
+  });
+
+  test("a SIGTERM AFTER a churn trip is still a signal: the backend reads it, the mutant it ended is dropped, and the report keeps both", async () => {
+    await inProject(async (root) => {
+      const b = new Backend();
+      b.closesOn.set(firstMutantCall, 10); // the trip
+      b.sigtermOn = firstMutantCall + 1;
+      const { report } = await session(root, b);
+      expect(b.signalledAfter.get(firstMutantCall)).toBe(false);
+      expect(b.signalledAfter.get(firstMutantCall + 1)).toBe(true);
+      expect(report.timeBudget?.stoppedByDaemonChurn).toEqual({ lane: 0, closes: 10 });
+      expect(report.timeBudget?.stoppedBySignal).toBe(true);
+      expect(report.mutants).toEqual([]); // R1014: a mutant a signal ended is never recorded
+      expect(renderConsole(report)).toContain("A STOP SIGNAL (SIGTERM or SIGINT) also arrived");
+    });
+  });
+
+  test("a churn trip AFTER a SIGTERM does not erase the signal", async () => {
+    await inProject(async (root) => {
+      const b = new Backend();
+      b.sigtermOn = firstMutantCall;
+      b.sigtermFirst = true;
+      b.closesOn.set(firstMutantCall, 10);
+      const { report } = await session(root, b);
+      expect(b.signalledAfter.get(firstMutantCall)).toBe(true);
+      expect(report.timeBudget?.stoppedBySignal).toBe(true);
+      expect(report.mutants).toEqual([]);
+    });
+  });
+
+  test("the warning does not claim the run stops: it says no mutant or batch starts after the ones in flight", async () => {
+    await inProject(async (root) => {
+      const b = new Backend();
+      b.closesOn.set(firstMutantCall, 10);
+      const { churnWarnings } = await session(root, b);
+      const w = churnWarnings[0];
+      if (w?.type !== "warning") throw new Error("no warning");
+      expect(w.message).toContain("no mutant or batch starts after the ones in flight");
+      expect(w.message).not.toContain("the run stops");
     });
   });
 
