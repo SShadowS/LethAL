@@ -75,7 +75,7 @@ page 51702 "Args Sheet Named"
     var
         L: Record "Args Line";
     begin
-        if L.Get(1, 'A', 10) then
+        if L.Get(2, 'B', 10) then
             exit(L."Text");
         exit('X ');
     end;
@@ -101,13 +101,13 @@ codeunit 51703 "Args Tests"
     end;
 
     [Test]
-    procedure OpenPageWithOtherName() // control: the same page shape, procedure named MakeCaption, a 3-value Get (BC: passes)
+    procedure OpenPageWithOtherName() // control: the same page shape, procedure named MakeCaption, a 3-value Get; its OWN key (2,'B',10), so it does not depend on whether the first test inserted (1,'A',10) under codeunit isolation
     var
         L: Record "Args Line";
         P: TestPage "Args Sheet Named";
     begin
-        L."Kind" := 1;
-        L."No." := 'A';
+        L."Kind" := 2;
+        L."No." := 'B';
         L."Line No." := 10;
         L.Insert();
         P.OpenView();
