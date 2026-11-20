@@ -266,6 +266,19 @@ describe("PR-241 backend: one packed prefetch call", () => {
     expect(a).toEqual(b);
     expect(packed.r.b.entriesStats().pairBatchRequests).toBe(1);
     expect(oneByOne.r.b.entriesStats().pairBatchRequests).toBe(3); // one per unit with a kill
+    // Review SF1: every merged pair is SERVED to its own kill (seq after the kill's prefetch), with no send;
+    // a mutant that was not killed has no pair.
+    const v = packed.r.views[1];
+    if (v === undefined) throw new Error("no lane 1");
+    for (const m of [...killed].sort()) {
+      await v.activate(m);
+      expect((await v.run(A, OPTS)).outcome).toBe("fail");
+      const sent = packed.r.serve.requests.length;
+      await v.sendKillPair(m, A);
+      expect(packed.r.serve.requests.length).toBe(sent);
+    }
+    expect(packed.r.b.entriesStats()).toMatchObject({ pairBatchServed: 4, pairBatchRefused: 0 });
+    expect(a.has(`${[...a.keys()][0]?.split("|")[0]}|M0002`)).toBe(false);
   });
 
   test("R1151: the byte budget still splits a merged batch, whole kills only", async () => {
@@ -273,7 +286,7 @@ describe("PR-241 backend: one packed prefetch call", () => {
       pairBatch: true,
       rows: killing(new Set(["M0001", "M0002"])),
     });
-    priv(r).costByCall.set(CU, [3 * 2 ** 30]); // one 3 GiB group fits the 4 GiB budget: one kill per request
+    priv(r).costByCall.set(CU, [3 * 2 ** 30]); // a kill's two 3 GiB groups exceed the 4 GiB budget, so each kill goes alone
     await prefetch([unitPlans(0, 1), unitPlans(1, 1)].flat(), { unitSizes: [1, 1] });
     const s = r.b.entriesStats();
     expect(s.pairBatchStored).toBe(2);
