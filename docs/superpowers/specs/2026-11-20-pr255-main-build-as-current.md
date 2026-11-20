@@ -62,3 +62,31 @@ The move writes `<root>/main-<commit>/` and swaps the `current` link atomically.
 7. Report.
 
 Any difference the amendment did not pre-commit is a BLOCK, and `current` does not move.
+
+## Amendment 1 (2026-11-20 ~10:05Z): the expected leg changes, from the private gate; before the real gate
+- **The private gate:** `--root /coord/handoff/PR-255/root --local-candidate`, binary sha256
+  b91d49d7b6af8ea9ed7bd429f14312cde19025c0676a1278822f37dfaca03d24, judged at master 4eca73661. Receipts:
+  /coord/handoff/PR-255/root/private/local-b91d49d7b6af@4eca73661...-bf82e0a9-.../.
+- **The outcome was HELD on O1 alone. Every other leg passed:** C, S1, S1E, DB, DBI, DBM, S3, N1, N1E, N1S, ISO, X, L1, Y-A, Y-B,
+  MO, WR, MOE, WRE, RC, K, D1, D1c, T.
+- **O1:** "held for PR-233's O1 pin: 16 row-insert tests refused after the partner login (al-runner f9116dc96, a known coverage
+  loss on #8239)". This is exactly PR-233's predicted shape, as with perf-combined.
+- **Leg C (passed), one note:** `al-runner-v3-serve-keep-reason-moved: serve-keep-reasons: diverged (measured
+  setfilter-boolean-language-words: MOVED pass)`. The probe that a keep-list entry stood for now PASSES: upstream runs it, so the
+  entry matches nothing. That is a move toward running, not a verdict. It is recorded, and leg C still passes.
+- **The hand pin this exact binary gets:** `main-9835579c6`, version `al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)`, that
+  sha256.
+  - Its readings are the live root edge-d72d3197d's (`READINGS_8078BCF49`, `O1_8078BCF49` with `cdoApps: 18`), plus ONLY
+    `o1.partnerLoginRefusal` with PR-233's text. This is the same shape as the removed perf-combined pin.
+  - It is labelled "upstream main, gated as current (owner, q-20261120T084258-a6351212)". Unlike perf-combined, it is meant to
+    become `current`.
+- **Prediction for the real `--main` gate:** a PASS with `pinApplied` `main-9835579c6`. Every leg is as in the private run, and O1
+  passes on the pin. Any other difference is a BLOCK.
+- **The by-value SetFilter refusal** shows in no gate leg. On DO it is handled by PR-250's cut and the PR-217 set-aside rule
+  (owner: rule-3-correct on main).
+- **Timing of the move:** current's `.gated` (lethalCommit c7c66255f) predates this branch's change to `al-runner-v3-pins.ts`, a
+  gate-leg file. So `--main` first re-gates `current`, which WRITES `edge-4ebfe7913-4ebfe7913/.gated`, the folder code's PR-235 run
+  uses. The real `--main` therefore runs only after PR-235 has ended (orchestrator's rule). Until then: review, VERIFY, CI and
+  the merge.
+- **After `current` moves:** the daily update's edge track sees edge 4ebfe7913 as behind and does nothing. R1146's DO re-measure
+  (and R1098, R1092 and R1048, per the PR-240 sweep note) becomes due on the new `current`.
