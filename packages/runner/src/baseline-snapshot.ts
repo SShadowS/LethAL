@@ -125,7 +125,7 @@ async function hashWalked(
  */
 export async function scanTestDir(
   dir: string,
-): Promise<{ hash: string; hasExtensionObject: boolean }> {
+): Promise<{ hash: string; hasExtensionObject: boolean; print: string }> {
   const walk = walkFilesSync(dir, { links: "refuse" });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   return hashAlFiles(dir, walk.files, false, true);
@@ -191,29 +191,85 @@ export async function otherFilesDrift(
   return undefined;
 }
 
+/** The `.al` files a tree hash reads: forward slashes, sorted, the root control files left out if asked. */
+function alEntries(all: readonly string[], skipRootControl: boolean): string[] {
+  return all
+    .map((f) => f.replaceAll("\\", "/"))
+    .filter((f) => f.toLowerCase().endsWith(".al"))
+    .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
+    .sort();
+}
+
+/*
+ * PR-259 (R1156): al-runner v3's per-send bound check compares a BOUND PRINT, not the SHA-256: `Bun.hash`
+ * (wyhash) chained over each file's path, then its bytes, in sorted order. Every byte is still read on
+ * every send; only the comparison hash is cheaper (DO's 69 MB: about 36 ms against 68 ms). It guards
+ * against accidental drift after the proof, not an attacker (the orchestrator's ruling), and it is kept
+ * in memory only: no stored hash uses it.
+ */
+const PRINT_SEED = 0x1156n;
+
+function printStep(h: bigint, rel: string, bytes: Uint8Array): bigint {
+  return BigInt(Bun.hash(bytes, BigInt(Bun.hash(rel, h))));
+}
+
+/** PR-259: the bound print of `[path, bytes]` pairs, in the order given (the callers sort). */
+export function boundPrint(files: Iterable<readonly [string, Uint8Array]>): string {
+  let h = PRINT_SEED;
+  for (const [rel, bytes] of files) h = printStep(h, rel, bytes);
+  return h.toString(16);
+}
+
 async function hashAlFiles(
   dir: string,
   all: readonly string[],
   skipRootControl: boolean,
   detectExtension = false,
-): Promise<{ hash: string; hasExtensionObject: boolean }> {
-  const entries = all
-    .map((f) => f.replaceAll("\\", "/"))
-    .filter((f) => f.toLowerCase().endsWith(".al"))
-    .filter((f) => !(skipRootControl && CONTROL_FILES.has(f)))
-    .sort();
+): Promise<{ hash: string; hasExtensionObject: boolean; print: string }> {
   const h = createHash("sha256");
+  let p = PRINT_SEED;
   let hasExtensionObject = false;
-  for (const rel of entries) {
+  for (const rel of alEntries(all, skipRootControl)) {
     const bytes = readFileSync(join(dir, rel));
     h.update(`${rel}\n`);
     h.update(bytes);
     h.update("\n");
+    p = printStep(p, rel, bytes);
     if (detectExtension && !hasExtensionObject) {
       hasExtensionObject = EXTENSION_OBJECT.test(bytes.toString("utf8"));
     }
   }
-  return { hash: h.digest("hex"), hasExtensionObject };
+  return { hash: h.digest("hex"), hasExtensionObject, print: p.toString(16) };
+}
+
+/** PR-259: the bound print alone, under `hashWalked`'s walk and link refusal (no SHA-256). */
+function printWalked(dir: string, links: LinkPolicy, skipRootControl: boolean): string {
+  const walk = walkFilesSync(dir, { links });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  // One file in memory at a time, as `hashAlFiles` reads (DO's tree is 69 MB, per send, per lane).
+  let h = PRINT_SEED;
+  for (const rel of alEntries(walk.files, skipRootControl)) {
+    h = printStep(h, rel, readFileSync(join(dir, rel)));
+  }
+  return h.toString(16);
+}
+
+/** PR-259: `hashAlTree`'s hash and bound print from ONE read of the files (the proof records both). */
+export async function scanAlTree(dir: string): Promise<{ hash: string; print: string }> {
+  const walk = walkFilesSync(dir, { links: "refuse" });
+  assertNoUnexcusedLinks(dir, walk.skippedLinks);
+  const { hash, print } = await hashAlFiles(dir, walk.files, true);
+  return { hash, print };
+}
+
+/** PR-259: the bound print of `hashAlTree`'s files (al-runner v3's per-send check). */
+export async function printAlTree(dir: string): Promise<string> {
+  return printWalked(dir, "refuse", true);
+}
+
+/** PR-259: the bound print of `hashTestDir`'s files (al-runner v3's per-send check). */
+export async function printTestDir(dir: string): Promise<string> {
+  return printWalked(dir, "refuse", false);
 }
 
 /**

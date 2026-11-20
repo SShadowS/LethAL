@@ -209,9 +209,11 @@ import type {
 import {
   type OtherFile,
   hashAlTree,
-  hashTestDir,
   listOtherFiles,
   otherFilesDrift,
+  printAlTree,
+  printTestDir,
+  scanAlTree,
   scanTestDir,
 } from "./baseline-snapshot";
 import { monoNow } from "./clock";
@@ -309,7 +311,7 @@ export class AlRunnerV3UnprovenBatchError extends Error {
 }
 
 /** R631/R655: a link under a bound root (`ProjectSymlinkRefusedError`) is unproven drift, by path. */
-async function linkIsUnproven(hash: Promise<string>, where: string): Promise<string> {
+async function linkIsUnproven<T>(hash: Promise<T>, where: string): Promise<T> {
   return hash.catch((err: unknown) => {
     if (err instanceof ProjectSymlinkRefusedError) {
       throw new AlRunnerV3UnprovenBatchError(`a link is in ${where} (${err.linkPath})`);
@@ -1455,6 +1457,10 @@ interface DepsEntry {
 /** §3 (I7, F3, F4): what alc proved, bound to what v3 reads. */
 interface BatchProof {
   readonly activeHashExceptSelector: string;
+  /** PR-259 (R1156): the bound print of the same read of `active/`, compared before every send. */
+  readonly activePrint: string;
+  /** PR-259: the bound print of the test dir's `.al` files, from the read `testDirHash` came from. */
+  readonly testDirPrint: string;
   readonly activeAppJsonSha256: string;
   readonly testDirHash: string;
   /** R608: the non-.al files of `active/` and of the test dir (`.alpackages` included). */
@@ -2170,7 +2176,11 @@ async function writeAlcWrites(
 
 /** R780: one read of the test dir: the .al hash, the non-.al files, and the app.json (bytes + text). */
 interface TestDirRead {
-  readonly testScan: { readonly hash: string; readonly hasExtensionObject: boolean };
+  readonly testScan: {
+    readonly hash: string;
+    readonly hasExtensionObject: boolean;
+    readonly print: string;
+  };
   readonly testOther: ReadonlyMap<string, OtherFile>;
   /** sha256 of the app.json BYTES (what `assertBound` checks per run), not of decoded text. */
   readonly testAppJsonSha256: string;
@@ -4209,10 +4219,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       }
       const { testScan, testOther, testAppJsonSha256 } = post;
+      // R655: active/ is LethAL's copy and holds no link; one refuses here, by path. PR-259: the hash and
+      // the bound print come from ONE read.
+      const activeScan = await linkIsUnproven(scanAlTree(active), "the staged batch");
       // Step 3: the proof, every <deps> file hashed now (m-2), and the per-run checks' baseline.
       this.proof = {
-        // R655: active/ is LethAL's copy and holds no link; one refuses here, by path.
-        activeHashExceptSelector: await linkIsUnproven(hashAlTree(active), "the staged batch"),
+        activeHashExceptSelector: activeScan.hash,
+        activePrint: activeScan.print,
+        testDirPrint: testScan.print,
         activeAppJsonSha256: await fileSha256(join(active, "app.json")),
         testDirHash: testScan.hash,
         activeOther: await listOtherFiles(active, OTHER_FILES_UNBOUND, true),
@@ -5990,7 +6004,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /**
    * R766 (b): lanes 1..N-1 read their own copy `active.<k>/` of the proved tree (timestamps kept, so
    * the "other files" proof sees the same mtimes). Each copy is checked once against the proof, by
-   * `assertBound(lane)` (the .al hash, the other files, `app.json`, the selector, the resource file):
+   * `assertBound(lane)` (the .al bound print, the other files, `app.json`, the selector, the resource file):
    * a copy that differs refuses by name. Every lane also gets its own cwd `daemon-<k>/`.
    */
   private async copyLanes(active: string): Promise<void> {
@@ -6631,8 +6645,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       throw new AlRunnerV3UnprovenBatchError("no batch was deployed and proved");
     }
     // R655: a link that appears in active/ mid-run is drift, as in the test dir (R631).
-    const activeHashNow = await linkIsUnproven(hashAlTree(dir), `${dir} after the alc proof`);
-    if (activeHashNow !== proof.activeHashExceptSelector) {
+    // PR-259 (R1156): every .al byte is read, compared by its bound print (not a SHA-256).
+    const activePrintNow = await linkIsUnproven(printAlTree(dir), `${dir} after the alc proof`);
+    if (activePrintNow !== proof.activePrint) {
       throw new AlRunnerV3UnprovenBatchError(`an .al file in ${dir} changed after the alc proof`);
     }
     const activeOtherDrift = await linkIsUnproven(
@@ -6677,11 +6692,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     // R631: a link that appears in the test dir mid-run is drift like any other change.
-    const testDirHashNow = await linkIsUnproven(
-      hashTestDir(this.cfg.testDir),
+    const testDirPrintNow = await linkIsUnproven(
+      printTestDir(this.cfg.testDir),
       "the test dir after the alc proof",
     );
-    if (testDirHashNow !== proof.testDirHash) {
+    if (testDirPrintNow !== proof.testDirPrint) {
       throw new AlRunnerV3UnprovenBatchError(
         "an .al file in the test dir changed after the alc proof",
       );
