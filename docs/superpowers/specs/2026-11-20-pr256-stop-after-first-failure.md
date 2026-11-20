@@ -34,6 +34,26 @@ build (lethal-bugs, PR-255: 9835579c66, which contains #8484); LethAL builds its
 - Follow-up when a `stopGroup` build exists (alrunner is drafting it): prefetch per mutant through the same acceptance rule,
   measured as PR-223 did.
 
+## 0b. Amendment 2 (2026-11-20, the builder, before any code): BLOCKED — LethAL's echo always fails, so the stop fires on it
+- **The premise of §2.3 and §0a ("echo pass") is false.** LethAL's echo entry fails ON PURPOSE: `emitSelectorEcho`
+  (al-runner-v3-entries.ts) ends `Error('LETHAL-ECHO:%1:%2', t, r)`, and `echoMismatch` treats a passing echo as a defect.
+  Every entries request opens with its echo (`assertEntriesWellFormed`).
+- **Upstream 9835579c6 gives the echo no exemption:** `corpus.rs` `pass_stopped` stops at the first `Outcome::Fail` among
+  earlier entries. So under `stopAfterFirstFailure` every request stops AT THE ECHO: the mutant's codeunit never runs, its
+  rows read `NotRun: out-of-scope: the test Codeunit<ECHO>.Echo failed before it, and stopAfterFirstFailure ...` (the
+  `NotRun: out-of-scope:` prefix, which today's code also reads as a refusal and would close the daemon on).
+- **So (a) is useless as specified:** §0a's acceptance rule rejects every stopped answer (the named failure is the echo, not
+  a covering test), and each is re-sent: the stop only adds cost.
+- **Held** (pending the orchestrator): no build until upstream offers a stop the echo cannot trigger, which is part of the
+  (c) ask relayed to alrunner — per-entry stop groups where an entry WITHOUT a group (LethAL's echo) neither triggers a stop
+  nor is stopped. Then §0a's acceptance rule and the per-mutant use (prefetch included, where the saving is) build on it,
+  measured as PR-223 did. Not chosen: an echo that passes and reports another way (rewrites R635's echo contract and every
+  fake), or the echo in a separate request (loses same-request vouching).
+- What the builder verified for that build (kept): the capability sits beside `learnSkipAfterTimeout`'s `test --help`
+  read; live single-mutant sends are `liveCall`/`aloneCall` (the NONE confirm via `lastActivated === null` needs its own
+  exclusion); the walk order is `lane.plan.budgets`; stop rows must be skipped by `firstKeptRefusal`, `unkeptRowReason`,
+  `serveDaemonReusable` and `batchRefusalReason`.
+
 ## 1. The contract (upstream 9835579c6, `docs/manual/tool-protocol.md`; PR #8484, f7b156fb4)
 - `runTests` field `stopAfterFirstFailure` (true/false), per request; also a serve start option and a CLI flag.
 - Once a test fails, the later tests of ITS codeunit are not run, and in serve neither are the LATER ENTRIES of the request:
