@@ -320,6 +320,12 @@ export class AlRunnerServer {
   /** R807: refuse a summary that reports a seed other than the pinned one. O1's sensitivity daemon
    *  (variable absent) turns this off; nothing else does. */
   enforceRunSeed = true;
+  /**
+   * PR-228 (`alRunnerV3.keepAfterTimeout`): a cut (R895) does not kill the process. It keeps running the
+   * rest of the cut request; the next `runEntries` reads that to its end (`cutPending`) before it sends.
+   */
+  keepOnCut = false;
+  private cutPending = false;
   /** R807: the seed and its source the last summary reported; absent when it reported none. */
   lastRunSeed: { readonly seed: unknown; readonly seedSource: unknown } | undefined;
 
@@ -557,7 +563,7 @@ export class AlRunnerServer {
     deadlineMs: number,
     /**
      * R895: stop at the first streamed timeout row (notRun, error, `Test exceeded Ns timeout.`).
-     * The daemon is killed (never reused) and the answer is PARTIAL: the test lines seen, no entry
+     * The daemon is killed (never reused; PR-228: unless `keepOnCut`) and the answer is PARTIAL: the test lines seen, no entry
      * summaries and no summary (they come only at the end), and `cut` naming where it was cut.
      * Absent or false, a timeout row is read like any other.
      */
@@ -568,7 +574,6 @@ export class AlRunnerServer {
     if (proc === undefined || stdout === undefined) {
       throw new Error("al-runner serve: runEntries called before start()");
     }
-    proc.write(`${JSON.stringify(body)}\n`);
     const tests: Record<string, unknown>[] = [];
     const entrySummaries: Record<string, unknown>[] = [];
     const deadline = monoNow() + deadlineMs;
@@ -577,6 +582,25 @@ export class AlRunnerServer {
         kind,
         `${why} (${tests.length} test line(s) seen). stderr tail: ${this.stderrTail(600)}`,
       );
+    // PR-228: a kept cut's request is read to its end (its summary or error line) first, inside this
+    // request's deadline; a daemon that does not get there (a hang the cut did not end, a dead one) throws.
+    while (this.cutPending) {
+      const remaining = deadline - monoNow();
+      const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
+      if (next.kind === "timeout")
+        throw fail("deadline", `the kept cut request did not end within ${deadlineMs} ms (PR-228)`);
+      if (next.kind === "eof")
+        throw fail("eof", "stdout ended before the kept cut request did (PR-228)");
+      let msg: Record<string, unknown>;
+      try {
+        msg = JSON.parse(next.line) as Record<string, unknown>;
+      } catch {
+        throw fail("protocol", `unparseable stdout line: ${next.line.slice(0, 200)}`);
+      }
+      if (msg.type === "summary" || (msg.type === undefined && "error" in msg))
+        this.cutPending = false;
+    }
+    proc.write(`${JSON.stringify(body)}\n`);
     for (;;) {
       const remaining = deadline - monoNow();
       const next = remaining <= 0 ? ({ kind: "timeout" } as const) : await stdout.next(remaining);
@@ -604,7 +628,8 @@ export class AlRunnerServer {
           typeof msg.message === "string" &&
           V3_TIMEOUT_MESSAGE.test(msg.message)
         ) {
-          await this.terminate();
+          if (this.keepOnCut) this.cutPending = true;
+          else await this.terminate();
           return {
             tests,
             entrySummaries: [],

@@ -70,6 +70,7 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
   let selectedOnly = 0;
   let restartTotal = 0;
   let cuts = 0;
+  let cutsKept = 0;
   /** The LAST verdict per mutant (a `batch-invalidated` batch scores its mutants again). */
   const verdicts = new Map<string, string>();
   /** PR-108: the last verdict of each mutant whose walk the 3rd-hang cap ended. */
@@ -107,6 +108,7 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           break;
         case "warning":
           if (e.code === "al-runner-v3-lane-memory-hold") memoryHolds += 1;
+          if (e.code === "al-runner-v3-timeout-cut-kept") cutsKept += 1; // PR-228
           if (e.code === "run-suspended") {
             suspends += 1;
             suspendedS += Number(SUSPEND_SECONDS.exec(e.message)?.[1] ?? 0);
@@ -229,7 +231,7 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
       const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
       if (timeoutKilled > 0 || cuts > 0)
         lines.push(
-          `  timeouts: ${plural(timeoutKilled, "mutant")} timeout-killed, ${plural(cuts, "answer")} cut at a timeout row`,
+          `  timeouts: ${plural(timeoutKilled, "mutant")} timeout-killed, ${plural(cuts, "answer")} cut at a timeout row${cutsKept > 0 ? ` (timeout cuts kept ${cutsKept}, PR-228)` : ""}`,
         );
 
       if (capped.size > 0) {

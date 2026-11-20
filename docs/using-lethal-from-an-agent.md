@@ -245,6 +245,10 @@ is recorded without a LethAL change. `extra` is capped at 4 KB of JSON per event
 `"serveTimings"` (default `false`, PR-237) turns on al-runner's own timings switch for every serve daemon. Its stderr then also carries the
 compile-cache lines (with the workspace layer's miss reasons) and the slowest codeunits; with `daemonStderrDir` they are kept.
 It is for measurement runs and changes no verdict (measured on and off over the same scope).
+`"keepAfterTimeout"` (default `false`, PR-228) keeps a serve daemon after a request was cut at a test-timeout row,
+instead of closing it and paying a fresh warm-up. The daemon first finishes the cut request (a daemon that does not is
+closed), and the next request on it runs the kept-refusal drift check: a drift closes it and re-runs the request on a fresh
+daemon. TIMING counts the kept cuts. Off until a full run confirms it.
 `"recheckWithheldKills"` (default `true` since PR-182; `false` opts out and saves about 10% of a run with many withheld
 rows) and `"recheckBudgetSeconds"` (default 3600) control and bound the recheck of withheld-kill rows after the main
 pass (PR-144; README, al-runner-v3 config list). Kills it recovers are not measured against BC and may be false where an

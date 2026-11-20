@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initParser } from "@lethal/engine";
 import type { ServerProcessHandle, ServerSpawnFn } from "../../src/al-runner-server";
-import { AlRunnerV3Backend, type V3LaneView } from "../../src/al-runner-v3-backend";
+import {
+  AlRunnerV3Backend,
+  type AlRunnerV3Config,
+  type V3LaneView,
+} from "../../src/al-runner-v3-backend";
 import type { ArtifactIo } from "../../src/artifact";
 import type { RunOpts, TestMethodRef } from "../../src/backend";
 import type { SpawnFn } from "../../src/publisher";
@@ -133,12 +137,16 @@ export interface ServeCtl {
    * gives). With `runSelectedOnly` they do not run; without it they run hidden (`Req.hiddenRan`).
    */
   honorExcludes?: boolean;
+  /** PR-228: the request whose stream ends right after its first timeout row (the daemon dies after the cut). */
+  deadAfterTimeout?: (n: number, req: Req) => boolean;
 }
 
 function fakeServe(ctl: ServeCtl) {
   const daemons: string[][] = [];
   const requests: Req[] = [];
   const closes: number[] = [];
+  /** PR-228: the daemon number of every `kill()` (a cut's, or a close's fallback). */
+  const kills: number[] = [];
   const cwds: (string | undefined)[] = [];
   const spawn: ServerSpawnFn = (argv, opts) => {
     const daemon = daemons.length;
@@ -152,7 +160,10 @@ function fakeServe(ctl: ServeCtl) {
       ...(ctl.pid !== undefined ? { pid: ctl.pid(daemon) } : {}),
       stdout: out,
       stderr: err,
-      kill: () => out.end(),
+      kill: () => {
+        kills.push(daemon);
+        out.end();
+      },
       write: (line) => {
         void (async () => {
           const body = JSON.parse(line) as Record<string, unknown>;
@@ -241,13 +252,19 @@ function fakeServe(ctl: ServeCtl) {
             out.end();
             return;
           }
+          if (ctl.deadAfterTimeout?.(n, req) === true) {
+            const at = lines.findIndex((l) => l.notRun === true && l.status === "error");
+            for (const l of lines.slice(0, at + 1)) out.push(JSON.stringify(l));
+            out.end();
+            return;
+          }
           for (const l of lines) out.push(JSON.stringify(l));
         })();
       },
     };
     return handle;
   };
-  return { spawn, daemons, requests, closes, cwds };
+  return { spawn, daemons, requests, closes, cwds, kills };
 }
 
 function fakeOneShot(rows: RowsFn) {
@@ -324,6 +341,8 @@ export async function lanesRig(
     packEntries?: number;
     /** PR-250: the test codeunit's methods, in order (default A and B). */
     methods?: readonly string[];
+    /** PR-228: more backend config (e.g. `keepAfterTimeout`). */
+    extra?: Partial<AlRunnerV3Config>;
   } = {},
 ): Promise<LanesRig> {
   const suite = o.methods === undefined ? SUITE : o.methods.map(ref);
@@ -382,6 +401,7 @@ export async function lanesRig(
       coverage: "none",
       transport: "serve-entries",
       ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
+      ...o.extra,
     },
     one.spawn,
     fakeAlc(),

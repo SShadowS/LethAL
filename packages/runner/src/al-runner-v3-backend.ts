@@ -936,6 +936,8 @@ export interface AlRunnerV3Config {
   readonly daemonStderrDir?: string;
   /** PR-237: `alRunnerV3.serveTimings`: `--timings` on every serve daemon. Absent or false: not passed. */
   readonly serveTimings?: boolean;
+  /** PR-228: `alRunnerV3.keepAfterTimeout`: a `--test-timeout` cut keeps its daemon, armed like a kept refusal. Absent or false: closed. */
+  readonly keepAfterTimeout?: boolean;
 }
 
 /** R866: how many one-test processes an `--isolate-tests` baseline runs at a time, unless `--workers` says. */
@@ -1768,6 +1770,8 @@ export interface V3EntriesStats {
   daemons: number;
   /** R895: requests stopped at a streamed timeout row (the daemon killed; the rest re-sent or run alone). */
   timeoutCuts: number;
+  /** PR-228 (`keepAfterTimeout`): cuts whose daemon was kept, armed for the drift check. */
+  timeoutCutsKept: number;
   cachedFalse: number;
   warmups: number;
   prefetchRequests: number;
@@ -1883,6 +1887,7 @@ function newLaneStats(): Omit<V3EntriesStats, V3PhaseTimer> {
   return {
     daemons: 0,
     timeoutCuts: 0,
+    timeoutCutsKept: 0,
     cachedFalse: 0,
     warmups: 0,
     prefetchRequests: 0,
@@ -7956,6 +7961,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       "serve",
       daemonStderrFileFor(this.cfg.daemonStderrDir, lane.index),
     );
+    server.keepOnCut = this.cfg.keepAfterTimeout === true; // PR-228
     await server.start(SERVE_READY_MS, [resolve(this.cfg.packagesDir)], stopSeconds, [
       "--bc-version",
       this.cfg.bcVersion,
@@ -8823,14 +8829,36 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         break;
       }
     }
-    // R895: a cut answer's daemon is already killed; `closeDaemon` clears the lane's reference to it.
+    // R895: a cut answer's daemon is already killed (PR-228: unless kept, below); `closeDaemon` clears
+    // the lane's reference to it.
     // R939: the reason is the first unkept row's (a refusal's family, a timeout); `dirty` alone is
     // set only by a §6 coverage window whose rows were not kept, with its own `dirtyWhy`.
     const unkept =
       cut < sent.length
         ? unkeptRowReason(serveLines(rows.get(sent[cut]?.id ?? "") ?? []))
         : daemon.dirtyWhy;
-    if (cut < sent.length || daemon.dirty) {
+    const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
+      (r) => !serveDaemonReusable(serveLines([r]), "v3"),
+    );
+    // PR-228: with `keepAfterTimeout`, a cut whose first unkept row is its own timeout row (the cut
+    // entry's last row) keeps the daemon, armed like a kept refusal: the next request on it runs
+    // PR-56's drift check. Any earlier unkept row, or a dirty daemon, closes it as before.
+    const keepCut =
+      this.cfg.keepAfterTimeout === true &&
+      partial !== undefined &&
+      !daemon.dirty &&
+      unkept?.reason === "timeout" &&
+      sent[cut]?.id === partial.entry &&
+      cutRow !== undefined &&
+      cutRow === rows.get(partial.entry)?.at(-1);
+    if (keepCut && partial !== undefined) {
+      lane.stats.timeoutCutsKept += 1;
+      daemon.keptRefusal = { text: "timeout cut", test: partial.test };
+      this.notify(
+        "al-runner-v3-timeout-cut-kept",
+        `[lethal] al-runner-v3-timeout-cut-kept: the request was cut at the timeout of ${partial.test}; its daemon is kept and the next request on it is checked for drift (PR-228)`,
+      );
+    } else if (cut < sent.length || daemon.dirty) {
       // PR-100: this close ends the request that just ran (`send` has restored the lane's kind).
       await this.closeLaneIn(
         phase === "prefetchMs" ? "prefetch" : "live",
@@ -8901,9 +8929,6 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         };
       } else resend.push({ mutantId: e.mutantId, ...keyed(e), codeunits: [callOf(e)] });
     }
-    const cutRow = (rows.get(sent[cut]?.id ?? "") ?? []).find(
-      (r) => !serveDaemonReusable(serveLines([r]), "v3"),
-    );
     const r672 = r672Unkept(cutRow);
     return {
       results,
@@ -10166,7 +10191,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}${this.cfg.keepAfterTimeout === true ? `; timeout cuts ${s.timeoutCuts}, kept (PR-228) ${s.timeoutCutsKept}` : ""}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.
