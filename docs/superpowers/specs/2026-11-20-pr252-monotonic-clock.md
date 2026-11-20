@@ -10,8 +10,9 @@ lethal-preproc, 2026-11-20 (coord PR-252). Offline. No code; build only after th
   count suspended time, so the monotonic helper EXCLUDES a sleep from durations and deadlines: the right behaviour.
 - **Added (orchestrator): suspend detection.** The run samples `wall − monotonic`; when that gap grows by more than a
   threshold (pre-committed: 30 s) between two samples, a suspend of that length is recorded with its wall time.
-  - **Reported through a new WARNING code** `run-suspended` (`[lethal] the machine was suspended for N s at <ISO wall
-    time>; durations and deadlines exclude it (monotonic clock)`), one per suspend, plus the total in the pre-run/stats
+  - **Reported through a new WARNING code** `run-suspended` (`[lethal] the machine was suspended (or its clock stepped)
+    for N s at <ISO wall time>; durations and deadlines exclude it (monotonic clock)`; the "(or its clock stepped)" was
+    added after the Opus build review: a forward time-sync step above 30 s fires it too), one per suspend, plus the total in the pre-run/stats
     lines. A warning lands in the report's existing warnings, so NO SessionReport field and no schema ripple (CLAUDE.md's
     field ripple would regenerate every committed sample report live).
   - Gates never suspend, so no gate's warning set moves (`GATE_WARNINGS` unchanged); a gate that did see one would fail by
