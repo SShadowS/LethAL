@@ -20,6 +20,33 @@ lethal-preproc, 2026-11-20 (coord PR-252). Offline. No code; build only after th
   - **Red tests:** a stepped wall clock (+60 s between two samples with the monotonic clock still) emits exactly one
     `run-suspended` with N ≈ 60 and its wall time; a +10 s step (under the threshold) emits none; a backward step emits none.
 
+## 0b. Amendment 2 (2026-11-20, the orchestrator relaying kraken; before any code): a boot-clock suspend signal
+- **Change:** the suspend watch samples `boot − monotonic` instead of `wall − monotonic`, where `boot` is the kernel's
+  CLOCK_BOOTTIME read from `/proc/uptime`'s first field (seconds since boot, counting suspend).
+  - That gap grows by exactly the time slept. An NTP step of the wall clock does not move it, so a time-sync step no
+    longer reads as a suspend.
+  - Where `/proc/uptime` is missing or unreadable when the watch is created (not Linux), it falls back to
+    `wall − monotonic`, today's behaviour. The source is chosen ONCE per watch and never mixed mid-run.
+  - A read that fails mid-run skips that sample: no warning, and the baseline is kept.
+  - The warning's wall time stays `Date.now()`.
+- **Unchanged:** the warning text, including "(or its clock stepped)", which is still true on the fallback. The code
+  `run-suspended`, the 30 s threshold, the TIMING total, `GATE_WARNINGS` and the report shape. No new event field.
+- **Seam:** `clock.boot` beside `clock.mono` (replaceable in tests, restored after).
+  - PR-252's existing suspend tests pin `clock.boot` to "missing", so they keep testing the wall fallback.
+- **Pre-committed tests:**
+  - boot source: the boot clock +60 s between two samples with the monotonic clock still emits exactly one warning,
+    N ≈ 60;
+  - the wall clock +60 s (an NTP step) with the boot clock still emits NONE;
+  - +10 s on the boot clock emits none;
+  - fallback: with `clock.boot` missing, PR-252's +60 s wall step still warns once (the existing tests);
+  - a boot read that fails after the watch was created emits nothing and does not throw;
+  - `readBootMs` parses a real `/proc/uptime` line and returns undefined for an unreadable or garbage one.
+- **Red checks, both directions:**
+  - the default source forced back to wall turns the NTP-step test red;
+  - the fallback broken (no wall when boot is missing) turns the existing +60 s test red;
+  - a boot reader returning seconds, not ms, turns the boot +60 s test red (N would be about 0.06).
+- **Gates:** whatever `selectLegs` names for the diff, on the final head.
+
 ## 1. What the "wait" is (measured)
 - PR-251 saw one prefetch request per lane whose untimed part was the same 1,967.19 s. It is not a wait:
   - each request's `serve-request-timed` is followed by its own `serve-request-sized`, and lane 1's request 798 was
