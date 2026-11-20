@@ -247,7 +247,9 @@ function printWalked(dir: string, links: LinkPolicy, skipRootControl: boolean): 
   const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   return boundPrint(
-    alEntries(walk.files, skipRootControl).map((rel) => [rel, readFileSync(join(dir, rel))] as const),
+    alEntries(walk.files, skipRootControl).map(
+      (rel) => [rel, readFileSync(join(dir, rel))] as const,
+    ),
   );
 }
 

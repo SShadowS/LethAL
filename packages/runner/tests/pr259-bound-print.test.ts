@@ -4,7 +4,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boundPrint, hashAlTree, printAlTree, scanAlTree, scanTestDir } from "../src/baseline-snapshot";
+import {
+  boundPrint,
+  hashAlTree,
+  printAlTree,
+  scanAlTree,
+  scanTestDir,
+} from "../src/baseline-snapshot";
 
 const b = (s: string) => new TextEncoder().encode(s);
 const two = (a: string, x: string, c: string, y: string) =>
@@ -17,19 +23,29 @@ describe("PR-259: boundPrint", () => {
   const base = two("A.Codeunit.al", "codeunit 1 A { }", "B.Codeunit.al", "codeunit 2 B { }");
 
   test("the same paths and bytes give the same print", () => {
-    expect(two("A.Codeunit.al", "codeunit 1 A { }", "B.Codeunit.al", "codeunit 2 B { }")).toBe(base);
+    expect(two("A.Codeunit.al", "codeunit 1 A { }", "B.Codeunit.al", "codeunit 2 B { }")).toBe(
+      base,
+    );
   });
   test("one byte changed in the SECOND file moves it", () => {
-    expect(two("A.Codeunit.al", "codeunit 1 A { }", "B.Codeunit.al", "codeunit 2 C { }")).not.toBe(base);
+    expect(two("A.Codeunit.al", "codeunit 1 A { }", "B.Codeunit.al", "codeunit 2 C { }")).not.toBe(
+      base,
+    );
   });
   test("a renamed path with the same bytes moves it", () => {
-    expect(two("A.Codeunit.al", "codeunit 1 A { }", "C.Codeunit.al", "codeunit 2 B { }")).not.toBe(base);
+    expect(two("A.Codeunit.al", "codeunit 1 A { }", "C.Codeunit.al", "codeunit 2 B { }")).not.toBe(
+      base,
+    );
   });
   test("the same two files in the other order move it", () => {
-    expect(two("B.Codeunit.al", "codeunit 2 B { }", "A.Codeunit.al", "codeunit 1 A { }")).not.toBe(base);
+    expect(two("B.Codeunit.al", "codeunit 2 B { }", "A.Codeunit.al", "codeunit 1 A { }")).not.toBe(
+      base,
+    );
   });
   test("a byte moved across the boundary between two files moves it", () => {
-    expect(two("A.Codeunit.al", "codeunit 1 A {", "B.Codeunit.al", " }codeunit 2 B { }")).not.toBe(base);
+    expect(two("A.Codeunit.al", "codeunit 1 A {", "B.Codeunit.al", " }codeunit 2 B { }")).not.toBe(
+      base,
+    );
   });
 });
 
