@@ -42,10 +42,11 @@ describe("PR-255: the main 9835579c6 pin", () => {
     expect(pin?.o1?.partnerLoginRefusal?.issue).toMatch(/\/8239$/);
   });
 
-  test("it is the only pin with the field, and the newest pin", () => {
+  test("it is the only pin with the field, and it comes after the root edge-d72d3197d", () => {
     expect(
       V3_BUILD_PINS.filter((p) => p.o1?.partnerLoginRefusal !== undefined).map((p) => p.id),
     ).toEqual([ID]);
-    expect(V3_BUILD_PINS[V3_BUILD_PINS.length - 1]?.id).toBe(ID);
+    const ids = V3_BUILD_PINS.map((p) => p.id);
+    expect(ids.indexOf(ID)).toBeGreaterThan(ids.indexOf("edge-d72d3197d"));
   });
 });

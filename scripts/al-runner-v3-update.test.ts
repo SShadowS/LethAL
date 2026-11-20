@@ -2339,6 +2339,39 @@ linuxOnly("PR-255: --main", () => {
     expect(existsSync(join(root, "rejudge"))).toBe(false);
   });
 
+  test("review HIGH, the real shape: a pass on the build's OWN hand pin (root plus o1.partnerLoginRefusal) writes that pin into .gated and the ledger row, with that pin's digest", async () => {
+    const bin = await setupEdge();
+    const candPin = pr236CandidatePin(ROOT_PIN, MAIN_V, sha("mainbin"), { id: "main-cand" });
+    const m = mainFake({ pinApplied: candPin.id, pinDigest: v3ReadingsDigest(candPin) });
+    const deps = { ...m.deps, handPin: pinLookup(candPin) };
+    expect(await mainOnce(deps, bin)).toBe("pass");
+    const g = JSON.parse(await readFile(join(root, MAIN_DIR, ".gated"), "utf8"));
+    expect(g.readingsFrom).toBe("main-cand");
+    const [r, ...more] = await ledger();
+    expect(more).toEqual([]);
+    expect(r).toMatchObject({
+      id: MAIN_DIR,
+      track: "main",
+      readingsFrom: "main-cand",
+      readingsDigest: v3ReadingsDigest(candPin),
+    });
+    expect(r.readingsDigest).not.toBe(digestOfPin(ROOT_PIN));
+    expect(await current()).toBe(join(root, MAIN_DIR));
+  });
+
+  test("review MED: a second --main of a commit that has passed (its folder exists) is refused by name; nothing written, no gate", async () => {
+    const bin = await setupEdge();
+    await mkdir(join(root, MAIN_DIR));
+    await writeFile(join(root, MAIN_DIR, "al-runner"), "mainbin");
+    const before = await tree();
+    const { deps, seen } = mainFake();
+    await expect(mainOnce(deps, bin)).rejects.toThrow(
+      /al-runner-v3-main-refused: .*main-9835579c6 exists: main 9835579c6 has passed already/,
+    );
+    expect(seen.gates).toEqual([]);
+    expect(await tree()).toEqual(before);
+  });
+
   test("behind or diverged: no gate, no folder, no row, current stays", async () => {
     for (const order of ["behind", "diverged"] as const) {
       const bin = await setupEdge();

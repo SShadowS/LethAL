@@ -1614,6 +1614,12 @@ export async function mainOnce(
     return refuse(
       `${binary} reports "${version}": not an upstream main build (+main.YYYYMMDD (<commit>))`,
     );
+  // Review MED: a passed main build has its folder (a held or failed one does not). Gating the same commit again would copy a
+  // binary over that folder in place, `current`'s own when it is current, before any in-use check: refused by name.
+  if (existsSync(join(deps.root, `main-${commit}`)))
+    return refuse(
+      `${join(deps.root, `main-${commit}`)} exists: main ${commit} has passed already; a second gate of the same commit is never run (a person decides)`,
+    );
   const sha = await sha256OfFile(binary);
   if (await skippedForTheDay(deps, "main")) return "skipped";
   const lock = await takeGateLock(deps, "main");
