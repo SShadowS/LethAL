@@ -246,11 +246,12 @@ async function hashAlFiles(
 function printWalked(dir: string, links: LinkPolicy, skipRootControl: boolean): string {
   const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
-  return boundPrint(
-    alEntries(walk.files, skipRootControl).map(
-      (rel) => [rel, readFileSync(join(dir, rel))] as const,
-    ),
-  );
+  // One file in memory at a time, as `hashAlFiles` reads (DO's tree is 69 MB, per send, per lane).
+  let h = PRINT_SEED;
+  for (const rel of alEntries(walk.files, skipRootControl)) {
+    h = printStep(h, rel, readFileSync(join(dir, rel)));
+  }
+  return h.toString(16);
 }
 
 /** PR-259: `hashAlTree`'s hash and bound print from ONE read of the files (the proof records both). */

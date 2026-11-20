@@ -1,7 +1,7 @@
 // PR-259 (R1156): the bound print al-runner v3 compares before every send. Pure, and it moves with
 // every byte, every path, the file order and the boundary between two files.
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -64,5 +64,6 @@ describe("PR-259: the proof's read and the per-send read agree", () => {
     expect(await printAlTree(dir)).toBe(scan.print);
     const t = await scanTestDir(dir);
     expect(t.print).not.toBe(scan.print);
+    await rm(dir, { recursive: true, force: true });
   });
 });

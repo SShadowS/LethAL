@@ -6004,7 +6004,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /**
    * R766 (b): lanes 1..N-1 read their own copy `active.<k>/` of the proved tree (timestamps kept, so
    * the "other files" proof sees the same mtimes). Each copy is checked once against the proof, by
-   * `assertBound(lane)` (the .al hash, the other files, `app.json`, the selector, the resource file):
+   * `assertBound(lane)` (the .al bound print, the other files, `app.json`, the selector, the resource file):
    * a copy that differs refuses by name. Every lane also gets its own cwd `daemon-<k>/`.
    */
   private async copyLanes(active: string): Promise<void> {

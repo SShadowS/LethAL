@@ -1027,6 +1027,9 @@ describe("T3, T4, T23", () => {
 describe("T22: the proof is bound to the bytes v3 reads (c1-c5)", () => {
   async function deployed() {
     const l = await layout();
+    // PR-259 (review S1): a file that sorts FIRST in each tree, so a change to Logic/Tests is not the first file read.
+    await writeFile(join(l.batch, "AAFirst.Codeunit.al"), "codeunit 79101 AAFirst { }");
+    await writeFile(join(l.testDir, "AAFirst.Codeunit.al"), "codeunit 79102 AAFirstTest { }");
     const v3 = fakeV3(allPass, { coverage: plainCoverage });
     const b = backendOf(l, v3.spawn, fakeAlc().io);
     await b.deploy(l.batch);
