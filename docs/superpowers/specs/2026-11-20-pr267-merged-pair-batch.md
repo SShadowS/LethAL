@@ -65,3 +65,26 @@ lethal-preproc, 2026-11-20. Pre-committed before any code. Background: PR-242's 
 
 ## 5. Gates
 Every leg `selectLegs` names, on the final head.
+
+## 6. Amendment 1 (2026-11-20, the Opus build review and a reading of PR-241's arms; before the live A/B)
+- **§1's "PR-102's cut ... unchanged" is not strictly true (review SF2).**
+  - The cut goes out only in a request sent with `runSelectedOnly` (PR-102), and that flag is decided PER REQUEST.
+    One entry can turn it off for all, for example a per-test call id under `--isolate-tests`, a codeunit in
+    `neverFlag`, a baseline/discovered mismatch, or a gapped exclusion.
+  - A merged pair chunk mixes kills from several units, so one unit's kill can now drop another's cut. Per-unit
+    batches already mixed kills within a unit; this widens the scope, it is not a new kind.
+  - It is verdict-safe: with no cut the pair's rows cover the whole codeunit, and `takeStoredPair` without `through`
+    passes the cut check. It can move the A/B's per-reason counts (fewer `through`, so fewer `cutBeforeKiller`), and a
+    pair may run more tests.
+  - Not cut at flag changes the way `packCut` does: the review judged rewording enough, and the A/B reads the counts.
+- **§4's "refusal counters 0 in both" was wrong for today's code.**
+  - PR-241's arms (19 November) both read `stored 346, served 316, refused 30`: some refusals are by design (a pair
+    stored for a kill that scoring then reaches live, R778).
+  - **The BLOCK becomes:** `pairBatchStored` equal between P and M. `pairBatchServed` and `pairBatchRefused` equal, OR
+    any difference lies only in `cutBeforeKiller` and is named mutant by mutant from the flag-mixing above. Every
+    mutant's verdict and killing test equal (unchanged, the first BLOCK). `pairBatchRequests` in M below P.
+  - The per-reason counts (`notAfterKill`, `cutBeforeKiller`, `otherCodeunit`, `notPrefetched`) are reported for both
+    arms.
+- **§3's serving assertion was missing from the first build (review SF1).** It is added: after the packed prefetch the 4
+  killed mutants are scored and each pair is served with no send (`pairBatchServed` 4, `pairBatchRefused` 0), and a
+  mutant that was not killed has no pair. It is red-checked: pairs stamped with an old `seq` turn it red.

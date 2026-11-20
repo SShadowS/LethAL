@@ -1,21 +1,30 @@
-// PR-255: the hand pin of upstream main 9835579c6 (pre-commitment docs/superpowers/specs/2026-11-20-pr255-main-build-as-current.md,
-// amendment 1): the live root edge-d72d3197d's readings plus ONLY o1.partnerLoginRefusal, so any change to the root moves it
-// too, and nothing else can ride on it.
+// PR-255: the hand pin of upstream main ccd0f823d (pre-commitment docs/superpowers/specs/2026-11-20-pr255-main-build-as-current.md,
+// amendment 2; it replaces the superseded main-9835579c6): the live root edge-d72d3197d's readings plus ONLY
+// o1.partnerLoginRefusal, so any change to the root moves it too, and nothing else can ride on it.
 import { describe, expect, test } from "bun:test";
 import { O1_PARTNER_LOGIN_TEXT } from "../itest/alrunner-v3-legs";
-import { V3_BUILD_PINS, handV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
+import { V3_BUILD_PINS, findV3Pin, handV3Pin, v3ReadingsDigest } from "../src/al-runner-v3-pins";
 
-const ID = "main-9835579c6";
+const ID = "main-ccd0f823d";
 
-describe("PR-255: the main 9835579c6 pin", () => {
+describe("PR-255: the main ccd0f823d pin", () => {
   const pin = handV3Pin(ID);
   const root = handV3Pin("edge-d72d3197d");
 
   test("names the exact binary", () => {
-    expect(pin?.version).toBe("al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)");
+    expect(pin?.version).toBe("al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)");
     expect(pin?.binarySha256).toBe(
-      "b91d49d7b6af8ea9ed7bd429f14312cde19025c0676a1278822f37dfaca03d24",
+      "bc3595c4e2ff9c2ae63c7c02e1133155005414464f59ecd22dca9d4ab281ad7c",
     );
+  });
+  test("the itest's lookup (findV3Pin by version AND sha) picks it; a flipped sha does not", () => {
+    const V = "al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)";
+    const SHA = "bc3595c4e2ff9c2ae63c7c02e1133155005414464f59ecd22dca9d4ab281ad7c";
+    expect(findV3Pin(V, SHA)?.id).toBe(ID);
+    expect(findV3Pin(V, `${SHA.slice(0, -1)}d`)?.id).not.toBe(ID);
+  });
+  test("the superseded main-9835579c6 pin is gone (amendment 2: never `current`)", () => {
+    expect(handV3Pin("main-9835579c6")).toBeUndefined();
   });
 
   test("is the root's readings plus ONLY o1.partnerLoginRefusal (by digest of the pin without that field)", () => {

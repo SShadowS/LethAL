@@ -794,13 +794,14 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
     o1: { ...O1_8078BCF49, cdoApps: 18 },
   },
   {
-    // PR-255 (pre-commitment master a5ae23d6a, amendment 1 f7588531a): upstream MAIN 9835579c6, built here with upstream's
-    // recipe and gated as `current` (owner, q-20261120T084258-a6351212). The live root edge-d72d3197d's readings (the same
-    // constants, so it moves with them) plus ONLY O1's partner-login refusal (PR-233, #8239: a known coverage loss, not BC's
-    // behaviour). The private gate held on O1 alone.
-    id: "main-9835579c6",
-    version: "al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)",
-    binarySha256: "b91d49d7b6af8ea9ed7bd429f14312cde19025c0676a1278822f37dfaca03d24",
+    // PR-255 (pre-commitment master a5ae23d6a, amendments 1 f7588531a and 2 f3e075564): upstream MAIN ccd0f823d (carries
+    // #8365, kept sources), built here with upstream's recipe and gated as `current` (owner, q-20261120T084258-a6351212). It
+    // replaces the superseded main-9835579c6 pin. The live root edge-d72d3197d's readings (the same constants, so it moves with
+    // them) plus ONLY O1's partner-login refusal (PR-233, #8239: a known coverage loss, not BC's behaviour). The private gate
+    // held on O1 alone.
+    id: "main-ccd0f823d",
+    version: "al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)",
+    binarySha256: "bc3595c4e2ff9c2ae63c7c02e1133155005414464f59ecd22dca9d4ab281ad7c",
     ...READINGS_8078BCF49,
     o1: {
       ...O1_8078BCF49,
