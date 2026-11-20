@@ -5,6 +5,36 @@ perf10c's lanes were bound by `--workers 3`, while memory would allow about 6-11
 ranks more lanes as the cheapest lever. Evidence directory: `/coord/handoff/PR-274/`. A spec-adversary review (Opus) of the
 first draft found eight problems; the fixes are in place below, and the review is in `spec-review.md` there.
 
+## Amendment 1 (2026-11-20, about 23:10Z, before W3a's wall was read): a shared box, with interleaved and repeated arms
+This supersedes the parts of the sections below that it names.
+- **Why:** the owner refused a quiet window (q-20261120T225206-bd185356): measure on the box as it is, and label the background
+  load.
+  - During W3a the host load reached about 45, with CPU pressure avg10 about 50-57%, from outside this container.
+  - Only W3a's own daemons were busy inside. The extra 62% of a core from kraken's reporter was a kraken bug, now fixed.
+- **Dropped:**
+  - N's host-load part ("load above 22 voids an arm");
+  - the pre-arm gate "load < 22".
+- **Kept:**
+  - heavy-slot admission;
+  - the pre-arm memory gate: other heavy-slot holders' declared peaks total ≤ 8 GiB, on two checks 60 s apart;
+  - N's heavy-slot part as a void rule;
+  - COMPLETE and V as written.
+- **W3a counts as the first 3-lane arm.** It started at 22:02:36Z and was still running when this was written; only its
+  per-window request profile had been read, not its wall.
+- **The arms after W3a, in this order:** W6a, W3b, W6b, W8a, W4a. That is two 3-lane and two 6-lane arms, interleaved, then 8
+  and 4 once each. A second W8 and W4 follow only if the owner asks for more precision; the proposal does not need them.
+- **Recorded per arm throughout, every 5 s:**
+  - `/proc/loadavg` and `/proc/pressure/cpu`. With no docker here, outside load shows only as host load.
+  - Our own container's CPU: cgroup `cpu.stat` `usage_usec`, as cores.
+  - cgroup memory.
+- **D is replaced by the spread of the pairs:**
+  - W3a against W3b, and W6a against W6b, with each arm's mean host load and CPU pressure next to it.
+  - If a pair differs by more than 15%, the scaling figure is flagged load-dominated and given as a range.
+- **S is judged on the pair means, and also load-normalised.**
+  - The normalised view is `testsMs` per test per arm, as a ratio to the 3-lane mean.
+  - Contention from our own lanes shows as `testsMs` per test rising beyond what the host load explains.
+- **The proposal rule is unchanged.** Every figure carries the background load it was measured under.
+
 ## The arms
 - **A discarded warm-up first, then five timed runs in this order:** W3a, W6, W4, W8, W3b. They are interleaved; W3b repeats
   W3a as the drift control.
