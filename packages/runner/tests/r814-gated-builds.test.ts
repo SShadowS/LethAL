@@ -97,9 +97,9 @@ describe("R814: an entry cannot carry a reading", () => {
   });
   test("PR-255: track main parses (no tag needed); any other new track, nightly, still refuses", () => {
     const main = row({
-      id: "main-9835579c6",
+      id: "main-ccd0f823d",
       track: "main",
-      version: "al-runner 3.0.0-alpha.14+main.20261120 (9835579c6)",
+      version: "al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)",
     });
     expect(parseGatedBuilds([main], HAND)).toEqual([main] as unknown as GatedBuildEntry[]);
     expect(() => parseGatedBuilds([row({ track: "nightly" })], HAND)).toThrow(
@@ -121,11 +121,12 @@ describe("R814: the committed file", () => {
   // PR-209 amendment 10: live rows read the new readings, frozen rows keep the old ones.
   const OLD_DIGEST = "e8ce7f407331a81d7f1abe10748d6eaf0094de9379af90ec34c66739c1dae3ac";
   const NEW_DIGEST = "df57baf0e46da269f6f9e685be0f473a80092eea1c972dd77b8ca6877d13bb15";
-  // PR-255: a row gated on (or judged against) the main-9835579c6 pin: the root's readings plus o1.partnerLoginRefusal. Its
-  // own digest, pinned here, so an edit of that pin (or a row naming it with another digest) fails like any other.
-  const MAIN_PIN = "main-9835579c6";
+  // PR-255: a row gated on (or judged against) the main-ccd0f823d pin (amendment 2; it replaced main-9835579c6 with the same
+  // readings, so the same digest): the root's readings plus o1.partnerLoginRefusal. Its own digest, pinned here, so an edit
+  // of that pin (or a row naming it with another digest) fails like any other.
+  const MAIN_PIN = "main-ccd0f823d";
   const MAIN_DIGEST = "d60c889b7afb23a3077b667b7f6b512aca95923b6f3b4ae2266d1a0c5d045521";
-  test("PR-255: the main-9835579c6 pin's digest is the pinned one", () => {
+  test("PR-255: the main-ccd0f823d pin's digest is the pinned one", () => {
     const p = handV3Pin(MAIN_PIN);
     if (p === undefined) throw new Error("no main pin");
     expect(v3ReadingsDigest(p)).toBe(MAIN_DIGEST);
@@ -138,10 +139,10 @@ describe("R814: the committed file", () => {
         return p === undefined || v3ReadingsDigest(p) !== e.readingsDigest;
       })
       .map((e) => e.id);
-  /** PR-255: the digest a live row must carry: its pin's own if it reads from main-9835579c6, else the new one. */
+  /** PR-255: the digest a live row must carry: its pin's own if it reads from main-ccd0f823d, else the new one. */
   const liveDigest = (e: GatedBuildEntry) =>
     e.readingsFrom === MAIN_PIN ? MAIN_DIGEST : NEW_DIGEST;
-  test("PR-209 amendment 10: live rows sit at the new digest (PR-255: main-9835579c6's rows at its own), frozen rows at the old one", () => {
+  test("PR-209 amendment 10: live rows sit at the new digest (PR-255: main-ccd0f823d's rows at its own), frozen rows at the old one", () => {
     const rows = gatedBuilds();
     const frozen = rows.filter((e) => handV3Pin(e.readingsFrom)?.frozen !== undefined);
     expect(frozen.length).toBe(11);
@@ -150,19 +151,19 @@ describe("R814: the committed file", () => {
       expect([e.id, e.readingsDigest]).toEqual([e.id, liveDigest(e)]);
     expect(badRows(rows)).toEqual([]);
   });
-  test("PR-255: a row reading from main-9835579c6 passes at its own digest and fails at the new one; a row reading from the root fails at main's", () => {
+  test("PR-255: a row reading from main-ccd0f823d passes at its own digest and fails at the new one; a row reading from the root fails at main's", () => {
     const base = gatedBuilds().find((e) => handV3Pin(e.readingsFrom)?.frozen === undefined);
     if (base === undefined) throw new Error("need a live row");
     const mainRow = {
       ...base,
-      id: "main-9835579c6",
+      id: "main-ccd0f823d",
       track: "main" as const,
       readingsFrom: MAIN_PIN,
       readingsDigest: MAIN_DIGEST,
     };
     expect(liveDigest(mainRow)).toBe(MAIN_DIGEST);
     expect(badRows([mainRow])).toEqual([]);
-    expect(badRows([{ ...mainRow, readingsDigest: NEW_DIGEST }])).toEqual(["main-9835579c6"]);
+    expect(badRows([{ ...mainRow, readingsDigest: NEW_DIGEST }])).toEqual(["main-ccd0f823d"]);
     expect(badRows([{ ...base, readingsDigest: MAIN_DIGEST }])).toEqual([base.id]);
   });
   test("PR-209 amendment 10: a frozen row with the new digest fails, and a live row with the old digest fails", () => {
