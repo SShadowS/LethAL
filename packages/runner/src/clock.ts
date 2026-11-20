@@ -3,6 +3,8 @@
  * so a wall-clock step (NTP, VM resume) cannot lengthen, shorten or negate a measured interval or
  * fire a deadline early. Whole milliseconds, like the older `transportClock` (run-mutant-transport.ts).
  * It also excludes time the machine spent suspended (Linux CLOCK_MONOTONIC): the right behaviour.
+ * Measured on Bun 1.4.4 (PR-264 review): `performance.now()` reads CLOCK_MONOTONIC, never CLOCK_BOOTTIME.
+ * If a Bun upgrade moved it to BOOTTIME, the suspend watch below would go silent (no false warnings).
  * On Windows `performance.now()` may count sleep, so no suspend is detected there and durations
  * include it (harmless; al-runner v3 refuses Windows anyway).
  * One monotonic clock: `transportClock` (run-mutant-transport.ts) reads `clock.mono` too.
@@ -26,7 +28,7 @@ export function readBootMs(
 ): number | undefined {
   try {
     const s = Number(read().split(/\s+/)[0]);
-    return Number.isFinite(s) && s > 0 ? Math.floor(s * 1000) : undefined;
+    return Number.isFinite(s) && s > 0 ? Math.round(s * 1000) : undefined;
   } catch {
     return undefined;
   }

@@ -381,6 +381,21 @@ describe("PR-252 amendment 2: the boot clock (CLOCK_BOOTTIME) is the suspend sig
     boot = 5_000_000 + 1_000;
     tick(1_000);
     expect(w.sample()).toBeUndefined();
+    // Review: a suspend WHILE the reads fail is reported on recovery, measured from the kept baseline.
+    boot = undefined;
+    expect(w.sample()).toBeUndefined();
+    boot = 5_000_000 + 1_000 + 60_000;
+    expect(w.sample()).toEqual({ ms: 60_000, atWallMs: 7_000 });
+  });
+
+  test("the boot clock read through readBootMs (a fake /proc/uptime): +60 s is one sample of 60,000 ms", () => {
+    let uptime = 1_000.5;
+    const { w } = watchOf(
+      () => readBootMs(() => `${uptime.toFixed(2)} 99.00\n`),
+      () => 7_000,
+    );
+    uptime += 60;
+    expect(w.sample()).toEqual({ ms: 60_000, atWallMs: 7_000 });
   });
 
   test("the default source is the boot clock when it can be read, else the wall clock", async () => {
