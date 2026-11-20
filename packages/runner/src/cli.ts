@@ -144,6 +144,7 @@ import {
   NoMutableLinesError,
   PROFILES,
   REQUEST_CEILING_MS,
+  SIGNAL_STOP_EXIT_CODE,
   SLIM_LEFT_OUT,
   defaultQuarantineDir,
   generateMutationSet,
@@ -3457,11 +3458,20 @@ export function v3RecheckOf(a: {
     }));
     const exactSites = new Set(req.targets.map((t) => recheckSiteKey(t.mutant)));
     const backend = await a.build(methodConfig, join(a.scratchRoot, "recheck"));
+    // PR-277 (R1158): a signal during the recheck closes the nested daemons at once; the main session abandons the run.
+    const closeOnSignal = () => {
+      backend.close?.().catch(() => {});
+    };
+    if (req.signal?.aborted === true) closeOnSignal();
+    else req.signal?.addEventListener("abort", closeOnSignal, { once: true });
     const store = a.newStore();
     const events: RunEvent[] = [];
     try {
       const report = await a.runSession({
         ...base,
+        // PR-277: the main session owns the signals; the nested one never registers its own (R1158: it took a
+        // second SIGTERM as its own first, so the process did not end).
+        registerStopSignal: () => () => {},
         backend,
         store,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
@@ -5222,7 +5232,7 @@ export const NOTHING_SCORED_EXIT_CODE = 4;
  * out, not survived), so a CI script branching on 0 would read a partial score as a pass. Not 5 or 6,
  * which `lethal verify` uses. Quarantine and nothing-scored both win over it.
  */
-export const TIME_BUDGET_EXIT_CODE = 7;
+export const TIME_BUDGET_EXIT_CODE = SIGNAL_STOP_EXIT_CODE;
 
 /**
  * R1079. A line filter (`--lines`, `--changed-since`) kept no deployable mutation site, so the run

@@ -65,6 +65,8 @@ export interface RecheckRequest {
   /** The targets' covering tests, `Codeunit.Method`, each once. The nested baseline is exactly these. */
   readonly tests: readonly string[];
   readonly budgetSeconds: number;
+  /** PR-277: aborted when a SIGTERM or SIGINT arrives during the recheck; the runner closes its daemons. */
+  readonly signal?: AbortSignal;
 }
 
 /** Runs the nested session: method isolation, fresh serve daemons, the pinned config. */
@@ -304,6 +306,10 @@ export interface RecheckDeps {
   readonly main: RecheckIdentity;
   readonly budgetSeconds: number;
   readonly runner: RecheckRunner;
+  /** PR-277: what stopped the session (`stopNameOf`), when something did: the recheck then does not start. */
+  readonly stopped?: string;
+  /** PR-277: aborted by a SIGTERM or SIGINT during the recheck: it is abandoned at once and its rows stay error. */
+  readonly abort?: AbortSignal;
   /** The backend's own facts, read after `decideTransport`. */
   readonly backend: {
     readonly methodIsolation?: boolean;
@@ -332,6 +338,22 @@ export function shouldRunRecheck(a: {
 /** The word the skip warning carries. */
 export const RECHECK_SKIPPED_CODE = "withheld-recheck-skipped";
 export const RECHECK_FAILED_CODE = "withheld-recheck-failed";
+/** PR-277 (R1158): the session stopped, so the recheck did not start. */
+export const RECHECK_SKIPPED_STOPPED_CODE = "al-runner-v3-recheck-skipped-stopped";
+
+/** PR-277: what stopped a session, for the skip warning; `undefined` when nothing did. */
+export function stopNameOf(b: {
+  readonly reached?: unknown;
+  readonly signalled: boolean;
+  readonly memory?: unknown;
+  readonly churn?: unknown;
+}): string | undefined {
+  if (b.memory !== undefined) return "the memory guard (R948)";
+  if (b.signalled) return "a SIGTERM or SIGINT (R955)";
+  if (b.churn !== undefined) return "the daemon-churn guard (PR-250)";
+  if (b.reached !== undefined) return "the --time-budget (R912)";
+  return undefined;
+}
 
 /**
  * Runs the recheck once, as its own step. Emits `recheck-baseline-finished` and one `mutant-rechecked` per
@@ -341,6 +363,16 @@ export const RECHECK_FAILED_CODE = "withheld-recheck-failed";
 export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary> {
   const targets = recheckTargetsOf(d.events);
   if (targets.length === 0) return { targets: 0, recovered: 0 };
+  // PR-277 (R1158): a stopped session ends at once. The recheck cannot fill in what the stop left out, and the user
+  // (or a guard) asked the run to end; its withheld kills stay error, as with the recheck off.
+  if (d.stopped !== undefined) {
+    d.emit({
+      type: "warning",
+      code: RECHECK_SKIPPED_STOPPED_CODE,
+      message: `[lethal] ${RECHECK_SKIPPED_STOPPED_CODE}: the session was stopped by ${d.stopped}, so the withheld-kill recheck did not start; ${targets.length} withheld kill(s) stay error (PR-277).`,
+    });
+    return { targets: targets.length, recovered: 0, skipped: `stopped by ${d.stopped}` };
+  }
   const skip = (why: string): RecheckSummary => {
     d.emit({
       type: "warning",
@@ -364,7 +396,25 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
     await d.backend.closeDaemons?.();
-    result = await d.runner({ targets, tests, budgetSeconds: d.budgetSeconds });
+    const abort = d.abort;
+    const run = d.runner({
+      targets,
+      tests,
+      budgetSeconds: d.budgetSeconds,
+      ...(abort !== undefined ? { signal: abort } : {}),
+    });
+    // PR-277: a signal abandons the nested run at once (the runner closes its daemons); never wait on it.
+    result =
+      abort === undefined
+        ? await run
+        : await Promise.race([
+            run,
+            new Promise<never>((_, reject) => {
+              const stop = () => reject(new Error("a SIGTERM or SIGINT arrived during it"));
+              if (abort.aborted) stop();
+              else abort.addEventListener("abort", stop, { once: true });
+            }),
+          ]);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     d.emit({

@@ -873,6 +873,8 @@ describe("v3RecheckOf (cli wiring)", () => {
   function wire(
     alRunnerV3: Record<string, unknown>,
     kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
+    /** PR-277: the nested session waits on this before it returns. */
+    gate?: Promise<void>,
   ) {
     const built: { config: unknown; dir: string }[] = [];
     const ran: SessionConfig[] = [];
@@ -892,6 +894,7 @@ describe("v3RecheckOf (cli wiring)", () => {
       },
       runSession: async (cfg) => {
         ran.push(cfg);
+        await gate;
         return {
           mutants: [],
           sourceSha256: "s",
@@ -956,5 +959,37 @@ describe("v3RecheckOf (cli wiring)", () => {
       dependencySourceSha256: "d",
     });
     expect([w.closed(), w.storeClosed()]).toEqual([1, 1]);
+  });
+
+  test("PR-277: the nested session registers no signal handler, and an abort closes its backend at once", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const w = wire({ ...section, recheckWithheldKills: true }, "al-runner-v3", gate);
+    const ac = new AbortController();
+    const pending = w.recheck?.runner({
+      targets: [target("M1")],
+      tests: ["T Codeunit.T1"],
+      budgetSeconds: 1,
+      signal: ac.signal,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.ran).toHaveLength(1); // the nested session is running, blocked
+    expect(w.closed()).toBe(0);
+    ac.abort();
+    // Closed by the abort, while the nested session still runs.
+    expect(w.closed()).toBe(1);
+    // Its registration is a no-op: it puts no listener on the process.
+    const before = process.listenerCount("SIGTERM");
+    const off = w.ran[0]?.registerStopSignal?.(
+      () => {},
+      () => {},
+    );
+    expect(off).toBeDefined();
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+    off?.();
+    release();
+    await pending;
   });
 });

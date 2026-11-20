@@ -384,6 +384,7 @@ import {
   recheckSiteKey,
   runWithheldRecheck,
   shouldRunRecheck,
+  stopNameOf,
 } from "./withheld-recheck";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
@@ -1880,8 +1881,9 @@ export interface SessionConfig {
   /**
    * R955, test seam: registers the handler that spends the time budget on SIGTERM or SIGINT and
    * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
+   * PR-277: `again` is the second signal's action (abandon the recheck, close the daemons).
    */
-  readonly registerStopSignal?: (stop: () => void) => () => void;
+  readonly registerStopSignal?: (stop: () => void, again: () => void) => () => void;
   /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to the monotonic `monoNow` (PR-252). */
   readonly clockMs?: () => number;
   /**
@@ -6717,20 +6719,37 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   return "scored";
 }
 
+/** R912/R955: the exit code of a run its time budget or a stop signal ended (the CLI's `TIME_BUDGET_EXIT_CODE`). */
+export const SIGNAL_STOP_EXIT_CODE = 7;
+/** PR-277: how long a second signal waits for the report before it ends the process. */
+export const SECOND_SIGNAL_GRACE_MS = 10_000;
+
 /**
  * R955: the default `SessionConfig.registerStopSignal`. The FIRST SIGTERM or SIGINT spends the time
- * budget (the run stops at its next check and writes its report); the handlers are `once`, so a
- * second signal takes the default action and ends the process at once. The returned remover runs
- * when the session ends.
+ * budget (the run stops at its next check and writes its report). PR-277 (R1158): the SECOND calls `again`
+ * (abandon the recheck, close the daemons, so the report can still be written) and ends the process with the
+ * signal stop's exit code after `graceMs` if it has not ended by then; a third ends it at once. The returned
+ * remover runs when the session ends; a signal after that takes the default action.
  */
-export function registerProcessStopSignal(stop: () => void): () => void {
+export function registerProcessStopSignal(
+  stop: () => void,
+  again: () => void,
+  opts: { readonly exit?: (code: number) => void; readonly graceMs?: number } = {},
+): () => void {
   const signals = ["SIGTERM", "SIGINT"] as const;
+  const exit = opts.exit ?? ((code: number) => process.exit(code));
+  let seen = 0;
   const handler = (): void => {
-    // No listener is left, so a second signal takes the default action and ends the process.
-    for (const s of signals) process.off(s, handler);
-    stop();
+    seen += 1;
+    if (seen === 1) stop();
+    else if (seen > 2) exit(SIGNAL_STOP_EXIT_CODE);
+    else {
+      again();
+      // Unref'd: a session that writes its report within the grace exits with the report's own code.
+      setTimeout(() => exit(SIGNAL_STOP_EXIT_CODE), opts.graceMs ?? SECOND_SIGNAL_GRACE_MS).unref();
+    }
   };
-  for (const s of signals) process.once(s, handler);
+  for (const s of signals) process.on(s, handler);
   return () => {
     for (const s of signals) process.off(s, handler);
   };
@@ -7502,7 +7521,21 @@ async function runSessionBody(
     clockMs(),
     clockMs,
   );
-  cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
+  // PR-277 (R1158): any signal abandons a recheck in progress (it cannot start after one, see below); the second also
+  // closes the daemons, so nothing the report waits on can hang.
+  const recheckAbort = new AbortController();
+  cleanups.push(
+    (cfg.registerStopSignal ?? registerProcessStopSignal)(
+      () => {
+        timeBudget.stop();
+        recheckAbort.abort();
+      },
+      () => {
+        recheckAbort.abort();
+        cfg.backend.closeDaemons?.().catch(() => {});
+      },
+    ),
+  );
   onChurn.stop = (s) => {
     emit({
       type: "warning",
@@ -9770,7 +9803,11 @@ async function runSessionBody(
     cfg.recheck !== undefined &&
     shouldRunRecheck({ recheck: cfg.recheck, unsafe: safety.isUnsafe })
   ) {
+    // PR-277: a stopped session (signal, budget, memory or churn guard) skips it; `stopped` read here, at the start.
+    const stopped = stopNameOf(timeBudget);
     await runWithheldRecheck({
+      ...(stopped !== undefined ? { stopped } : {}),
+      abort: recheckAbort.signal,
       events: [...collectedEvents],
       // PR-225: each target's candidate killers, from this run's own stored test results.
       notPassOf: (t) => cfg.store.notPassTestsOf(runId, t.mutant.mutantId, t.batchIndex),
