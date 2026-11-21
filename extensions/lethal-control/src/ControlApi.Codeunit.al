@@ -1053,7 +1053,7 @@ codeunit 91003 "LC Control API"
         TestRunsBefore := State.TestMethodRunsSoFar();
 
         // PHASE 1 — identical to RunMutant's (PR-309: the run bound is the call's ceiling + stop grace).
-        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, RequestCeilingMs + StopGraceMs, Claimed, ClaimReason);
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, State.ClampRunBoundMs(RequestCeilingMs) + State.ClampRunBoundMs(StopGraceMs), Claimed, ClaimReason);
         if not Claimed then begin
             if ClaimReason = 'op-in-flight' then
                 ClaimStatus := 'lease-invalid'

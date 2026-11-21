@@ -437,6 +437,17 @@ codeunit 91002 "LC Control State"
         exit(600000);
     end;
 
+    /// <summary>PR-309: one wire value (a ceiling or a grace) clamped to 0..MaxRunBoundMs(), so two of
+    /// them can be added without overflowing an Integer.</summary>
+    procedure ClampRunBoundMs(Ms: Integer): Integer
+    begin
+        if Ms < 0 then
+            exit(0);
+        if Ms > MaxRunBoundMs() then
+            exit(MaxRunBoundMs());
+        exit(Ms);
+    end;
+
     /// <summary>PR-309: the bound a single RunMutant / RunMutantWithCoverage call claims (its budget is
     /// not on the wire, so the server takes the cap).</summary>
     procedure SingleRunBoundMs(): Integer
