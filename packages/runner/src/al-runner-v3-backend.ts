@@ -4110,8 +4110,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           ? "the time budget is spent"
           : this.stopHandle?.signalled() === true
             ? "a stop signal came"
-            : undefined;
-      if (skipped !== undefined) {
+            : !this.sleepRuleRetiredForParallel()
+              ? "this build does not retire the §6 Sleep rule, which no alone tail call may reach"
+              : undefined;
+      // N-e: nothing to say when no codeunit has a PR-250 cut
+      const hasCut = [...this.baselineRows.keys()].some((cu) => this.refusedCut(cu) !== undefined);
+      if (!hasCut) {
+        // no cut, no tail, no pass
+      } else if (skipped !== undefined) {
         this.notify(
           "al-runner-v3-refused-cut-tail",
           `[lethal] al-runner-v3-refused-cut-tail: the stability pass was not run (${skipped}), so no tail test is measured alone and each keeps PR-250's error (PR-297)`,
@@ -4155,6 +4161,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ref.method,
         this.discovered.filter((t) => t.codeunitId === ref.codeunitId).map((t) => t.method),
       );
+      // N-a: this runs at the end-of-baseline stop (on batch 1 longer than the mutant stop); the alone kill's
+      // NONE confirm runs at the kill's own stop.
+      // N-b: a fresh daemon here, a warm one for later alone calls: the same selection, not the same history.
+      // N-c: no echo row is checked here, on purpose: the activation is NONE.
       this.tailAloneCalls.stability += 1;
       await this.spawnDaemon(lane, mode, s);
       try {
@@ -4206,6 +4216,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         const ref = this.discovered.find(
           (t) => t.codeunitId === cu && t.method.toLowerCase() === row.method.toLowerCase(),
         );
+        // S-a: the stop is checked before EACH run; once it fires no daemon is spawned and the rest are unstable
+        if (this.stopHandle?.spent() === true || this.stopHandle?.signalled() === true) {
+          firstError.text ??= "the stop fired before this test ran";
+          unstable.push(row.method);
+          continue;
+        }
         // not a discovered test: never stable
         if (ref !== undefined && (await this.tailStabilityRun(lane, ref, firstError)))
           stable.add(row.method.toLowerCase());

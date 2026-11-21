@@ -39,7 +39,14 @@ type State = { phase: "baseline" | "stability" | "mutants"; cBaseline: "pass" | 
  * In the stability run C answers `stab`.
  */
 async function tailRig(
-  o: { flag: boolean; stab?: Stab; cBaseline?: "pass" | "fail"; methods?: string[] } = {
+  o: {
+    flag: boolean;
+    stab?: Stab;
+    cBaseline?: "pass" | "fail";
+    methods?: string[];
+    /** More green tail tests after C (they always pass). */
+    extraTails?: string[];
+  } = {
     flag: true,
   },
 ): Promise<{ r: LanesRig; state: State }> {
@@ -73,7 +80,7 @@ async function tailRig(
   const held: { rig?: LanesRig } = {};
   const r = await lanesRig({
     lanes: 0,
-    methods: o.methods ?? ["A", "B", "R", "C"],
+    methods: o.methods ?? ["A", "B", "R", "C", ...(o.extraTails ?? [])],
     refusedCutTail: o.flag,
     serve: {
       honorExcludes: true,
@@ -91,6 +98,7 @@ async function tailRig(
         { method: "R", status: "error", notRun: true, message: UNLISTED },
       ];
       if (c !== undefined) rows.push(c);
+      for (const t of o.extraTails ?? []) rows.push({ method: t, status: "pass" });
       return rows;
     },
   });
@@ -419,6 +427,77 @@ describe("PR-297 review fixes", () => {
     }
     await r.b.run(C, OPTS);
     expect(tailNotices(r).filter((n) => n.includes("Sleep rule"))).toHaveLength(1);
+  });
+});
+
+const aloneNone = (r: LanesRig) =>
+  r.serve.requests.filter((q) => q.mutants[0] === "NONE" && !q.tests[0]?.endsWith("."));
+
+describe("PR-297 delta review fixes", () => {
+  test("S-a: the stop is checked before EACH stability run: once it fires, no more daemons, the rest unstable", async () => {
+    const x = await tailRig({ flag: true, extraTails: ["D", "E"] });
+    // the stop fires as soon as the first stability request was sent
+    x.r.b.useStopHandle({
+      spent: () => aloneNone(x.r).length >= 1,
+      signalled: () => false,
+      stopForMemory() {},
+    });
+    await baseline(x.r, x.state);
+    expect(aloneNone(x.r)).toHaveLength(1);
+    expect(x.r.b.refusedCutTailStats().stability).toBe(1);
+    expect(tailNotices(x.r)[0]).toContain("stable: C;"); // C ran first and passed
+    expect(tailNotices(x.r)[0]).toContain("unstable: D, E");
+  });
+
+  test("S-b: an error that escapes the pass is caught by the outer guard: notice, all tail tests unstable, no rethrow", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    for (const t of r.suite) await r.b.run(t, OPTS);
+    state.phase = "stability";
+    const stub = spyOn(
+      r.b as unknown as { measureTailStability: () => Promise<void> },
+      "measureTailStability",
+    ).mockRejectedValue(new Error("boom measure"));
+    try {
+      await r.b.baselinePhase(false, true); // resolves: never rethrown
+    } finally {
+      stub.mockRestore();
+      state.phase = "mutants";
+    }
+    const said = tailNotices(r).filter((n) => n.includes("stability pass failed"));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("boom measure");
+    await prefetch(r, "M0001", [A, C]);
+    await r.b.activate("M0001");
+    await r.b.run(A, OPTS);
+    expect(outcome(await r.b.run(C, OPTS))).toEqual(["error", "runner-refused"]);
+    expect(aloneC(r, "M0001")).toEqual([]);
+  });
+
+  test("N-d: with the Sleep rule in force the pass is skipped: no daemon, no stability count, said once", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    r.b.seams.sleepRuleRetired = false;
+    await baseline(r, state);
+    expect(aloneNone(r)).toEqual([]);
+    expect(r.b.refusedCutTailStats().stability).toBe(0);
+    expect(tailNotices(r).filter((n) => n.includes("Sleep rule"))).toHaveLength(1);
+  });
+
+  test("N-e: the 'not run' notice is printed only when a codeunit has a PR-250 cut", async () => {
+    const cut = await tailRig({ flag: true });
+    cut.r.b.baselinePhase(true);
+    await cut.r.b.activate(null);
+    for (const t of cut.r.suite) await cut.r.b.run(t, OPTS);
+    await cut.r.b.baselinePhase(false, false);
+    expect(tailNotices(cut.r).filter((n) => n.includes("not run"))).toHaveLength(1);
+
+    const none = await lanesRig({ lanes: 0, refusedCutTail: true });
+    none.b.baselinePhase(true);
+    await none.b.activate(null);
+    for (const t of none.suite) await none.b.run(t, OPTS);
+    await none.b.baselinePhase(false, false);
+    expect(tailNotices(none)).toEqual([]);
   });
 });
 
