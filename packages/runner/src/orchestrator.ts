@@ -14293,7 +14293,7 @@ async function runMutantsParallel(
       noteWindows?: (sizes: readonly number[]) => void;
       /** PR-241: the pack cap in entries (`LETHAL_V3_PACK_ENTRIES`), or undefined = off. */
       packEntryCap?: () => number | undefined;
-      /** PR-281: `manifest` (`LETHAL_V3_UNIT_ORDER=manifest`) keeps the manifest order; absent or `costliest` orders units costliest first under the split. */
+      /** PR-281: `costliest` (`LETHAL_V3_UNIT_ORDER=costliest`, opt-in) orders units costliest first under the split; absent or `manifest` keeps the manifest order. */
       unitOrder?: () => "costliest" | "manifest";
       /** PR-241: the entries a unit's plans would send. */
       prefetchEntryCount?: (
@@ -14403,7 +14403,7 @@ async function runMutantsParallel(
     // PR-281: under the split, the costliest scope first inside each window (the idle tail of the last
     // scopes). Whole units only: no scope's internal order moves, so no verdict does. `manifest` keeps today's.
     let queued = [...units.values()];
-    if (split && owner.unitOrder?.() !== "manifest") {
+    if (split && owner.unitOrder?.() === "costliest") {
       const model = costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs);
       const totals = codeunitTotals(model.baselineDuration);
       queued = orderUnitsCostliestFirst(

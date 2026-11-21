@@ -84,11 +84,12 @@ describe("PR-281: orderUnitsCostliestFirst (pure)", () => {
 });
 
 describe("PR-281: the knob", () => {
-  test("unset or empty is costliest; manifest is manifest; anything else is refused by name", () => {
-    expect(readUnitOrder(undefined)).toBe("costliest");
-    expect(readUnitOrder("")).toBe("costliest");
+  test("unset or empty is manifest; costliest is costliest; manifest is manifest; anything else is refused by name", () => {
+    expect(readUnitOrder(undefined)).toBe("manifest");
+    expect(readUnitOrder("")).toBe("manifest");
+    expect(readUnitOrder("costliest")).toBe("costliest");
     expect(readUnitOrder("manifest")).toBe("manifest");
-    for (const bad of ["costliest", "Manifest", " manifest", "1", "banana"])
+    for (const bad of ["Costliest", "Manifest", " manifest", "1", "banana"])
       expect(() => readUnitOrder(bad)).toThrow(/^lethal-v3-unit-order-refused: /);
   });
 
@@ -399,6 +400,7 @@ describe("PR-281: the split queue hands out the costliest scope first, through a
     const root = await project();
     const { procOf, manifest, total } = await learn(root);
     const stub = new ParStub({ procOf });
+    stub.unitOrderValue = "costliest";
     const split = splitOwner(stub);
     const events: RunEvent[] = [];
     const par = await session(root, stub, { workers: 2 }, events);
@@ -414,11 +416,23 @@ describe("PR-281: the split queue hands out the costliest scope first, through a
     const root = await project();
     const { procOf, manifest } = await learn(root);
     const stub = new ParStub({ procOf, slowT1OnP2: true });
+    stub.unitOrderValue = "costliest";
     const split = splitOwner(stub);
     const events: RunEvent[] = [];
     await session(root, stub, { workers: 2 }, events);
     // P2: fewer mutants than P3, not manifest-first, but 500 ms tests against 5 ms. Count would pick P3, manifest P1.
     expect(new Set(split.calls[0]?.ids.map((id) => procOf.get(id)))).toEqual(new Set(["P2"]));
+    expect(scoredOrder(events)).toEqual(manifest);
+  });
+
+  test("the default (the owner says nothing, as unset does): the first runUnit is the manifest-first scope, the records are the same", async () => {
+    const root = await project();
+    const { procOf, manifest } = await learn(root);
+    const stub = new ParStub({ procOf }); // unitOrderValue unset: the stub has no `unitOrder`
+    const split = splitOwner(stub);
+    const events: RunEvent[] = [];
+    await session(root, stub, { workers: 2 }, events);
+    expect(new Set(split.calls[0]?.ids.map((id) => procOf.get(id)))).toEqual(new Set(["P1"]));
     expect(scoredOrder(events)).toEqual(manifest);
   });
 
@@ -446,6 +460,7 @@ describe("PR-281: the churn guard counts from a lane's last FINISHED mutant", ()
       closesPerMutant: 4,
       delay: (code) => (procOf.get(code) === "P1" ? 60 : 2),
     });
+    stub.unitOrderValue = "costliest";
     splitOwner(stub);
     const events: RunEvent[] = [];
     const report = await session(root, stub, { workers: 2 }, events);

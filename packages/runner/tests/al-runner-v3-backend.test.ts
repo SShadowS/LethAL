@@ -906,9 +906,9 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
       }
     });
 
-  // PR-281: the details line names the unit-order knob only when the order is `manifest`.
-  for (const unitOrder of ["manifest", undefined] as const)
-    test(`PR-281: status() details ${unitOrder === "manifest" ? "name" : "do not name"} the unit-order knob (unitOrder ${unitOrder ?? "unset"})`, async () => {
+  // PR-281: the details line names the unit-order knob only when the order is `costliest` (opt-in).
+  for (const unitOrder of ["costliest", "manifest", undefined] as const)
+    test(`PR-281: status() details ${unitOrder === "costliest" ? "name" : "do not name"} the unit-order knob (unitOrder ${unitOrder ?? "unset"})`, async () => {
       const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
       const versionOnly: SpawnFn = async () => ({
         exitCode: 0,
@@ -942,9 +942,9 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
       try {
         const s = await b.status();
         expect(s.ok).toBe(true);
-        if (unitOrder === "manifest")
+        if (unitOrder === "costliest")
           expect(s.details).toContain(
-            "procedure scopes in manifest order by LETHAL_V3_UNIT_ORDER=manifest (PR-281)",
+            "procedure scopes handed out costliest first by LETHAL_V3_UNIT_ORDER=costliest (PR-281)",
           );
         else expect(s.details).not.toContain("LETHAL_V3_UNIT_ORDER");
       } finally {

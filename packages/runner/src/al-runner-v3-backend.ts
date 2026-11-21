@@ -1093,24 +1093,24 @@ export function readPackEntries(
   return Number(raw);
 }
 
-/** PR-281: `LETHAL_V3_UNIT_ORDER=manifest` keeps the manifest order of procedure scopes (A/B knob); unset or empty: costliest first. */
+/** PR-281: `LETHAL_V3_UNIT_ORDER=costliest` hands out procedure scopes costliest first (opt-in A/B knob); unset, empty or `manifest`: manifest order. */
 export const UNIT_ORDER_ENV = "LETHAL_V3_UNIT_ORDER";
 
 export class AlRunnerV3UnitOrderRefusedError extends Error {
   constructor(value: string) {
     super(
-      `lethal-v3-unit-order-refused: ${UNIT_ORDER_ENV} is "${value}"; use manifest to keep the manifest order, or leave it unset`,
+      `lethal-v3-unit-order-refused: ${UNIT_ORDER_ENV} is "${value}"; use costliest to hand out the costliest scope first, manifest for the manifest order, or leave it unset (manifest)`,
     );
     this.name = "AlRunnerV3UnitOrderRefusedError";
   }
 }
 
-/** Unset or empty: "costliest". `manifest`: "manifest". Anything else throws. */
+/** Unset or empty: "manifest" (the default). `costliest` or `manifest`: as named. Anything else throws. */
 export function readUnitOrder(
   raw: string | undefined = process.env[UNIT_ORDER_ENV],
 ): "costliest" | "manifest" {
-  if (raw === undefined || raw === "") return "costliest";
-  if (raw === "manifest") return "manifest";
+  if (raw === undefined || raw === "") return "manifest";
+  if (raw === "manifest" || raw === "costliest") return raw;
   throw new AlRunnerV3UnitOrderRefusedError(raw);
 }
 
@@ -3618,7 +3618,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.baselineBatchingKnobOff ? `; baseline batching turned off by ${BASELINE_BATCHING_ENV}=off (PR-235)` : ""}${this.unitOrderKnob === "manifest" ? `; procedure scopes in manifest order by ${UNIT_ORDER_ENV}=manifest (PR-281)` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.baselineBatchingKnobOff ? `; baseline batching turned off by ${BASELINE_BATCHING_ENV}=off (PR-235)` : ""}${this.unitOrderKnob === "costliest" ? `; procedure scopes handed out costliest first by ${UNIT_ORDER_ENV}=costliest (PR-281)` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
