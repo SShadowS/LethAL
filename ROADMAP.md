@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 1130 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1132 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -396,8 +396,10 @@ that ordering is the priority.
 - **R1139** · No gate compares the two default-on operators (condition-true, blank-argument) with BC on real code: the CDO slice's R594 oracle predates them, so D1 and D1c run slim; re-measure the slice on BC with the default set and extend the oracle · [R1139.md](docs/roadmap/R1139.md) · done (a00e686e7)
 - **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
 - **R1153** · 12 PR-56 keep entries have never matched: al-runner ends their texts with " (not pinned)", the census normalised it away, and the anchored regex needs it (keeps that passed for the wrong reason) · [R1153.md](docs/roadmap/R1153.md) · open — (a) widen each of the 12 only with its own kept-vs-fresh DO proof, later; (b) test every keep entry…
-- **R1166** · DO's verdicts rest on the session kind: al-runner v3 scores the GUI branch (GuiAllowed true) and bcdev the non-GUI one; on DO, 60 of 422 BC-measured tests change with it, and --no-client cannot be used on DO today (every test refused, upstream #8273) · [R1166.md](docs/roadmap/R1166.md) · open — UNCONFIRMED: the owner's first answer (headless CI, q-20261121T194603-e01cc807) is withdrawn as not…
+- **R1166** · DO's verdicts rest on the session kind: DO's CI runs WITH a client (GuiAllowed true), so al-runner v3's default matches it and LethAL's headless bcdev harness differs; on DO, 60 of 422 BC-measured tests change with it · [R1166.md](docs/roadmap/R1166.md) · open — CONFIRMED (owner via kraken, q-20261121T203539-a7741f50): DO's CI uses a client session; al-runner's…
 - **R1167** · A mutant killed through the isolated recheck (PR-144) reports the recheck's RUN set as `coveringTests` (whole test codeunits, non-green tests included) while keeping `coverageAttribution: exact`, which promises tests that executed the procedure · [R1167.md](docs/roadmap/R1167.md) · open — report accuracy only (no verdict moves): pick one, either rechecked rows keep the baseline covering…
+- **R1168** · bcdev runs tests headless (an ODataV4 session, GuiAllowed false), while a project's own CI often runs a client session (DO's Azure DevOps CI: GuiAllowed true): on DO 60 of 422 tests change outcome by session kind, so the authoritative backend measures a different code path than the project's CI for session-dependent tests · [R1168.md](docs/roadmap/R1168.md) · open — ruled…
+- **R1169** · The session-kind label (R1168, PR-307) reads only the test app's source (HandlerFunctions; TestPage on v3), so a test whose outcome changes with the session kind through APP code (an unhandled Confirm that headless BC answers by default, or a GuiAllowed branch) is not labelled: 5 of PR-299's 60 DO differences · [R1169.md](docs/roadmap/R1169.md) · open — needs a coverage join…
 
 ## Product gaps a real project hits
 
@@ -1172,7 +1174,7 @@ that ordering is the priority.
 - **R1160** · On v3, one test codeunit's BASELINE refusals make 301 DO mutants `error` through PR-250's cut (89% of the error test time, ~11,600 lane-s, ~28% of all mutant test time in perf10c); a covering test after the cut is never measured, so the mutant gets no verdict · [R1160.md](docs/roadmap/R1160.md) · open — flag built (coord PR-297, `alRunnerV3.refusedCutTail`, option 2: a stable tail test runs alone)…
 - **R1161** · Retire LethAL's O1 known-loss rule (partner OnAfterLogin memos, upstream #8239) when al-runner's runtime fix is on edge, and re-measure the 16 O1 rows and the set-aside DO mutants · [R1161.md](docs/roadmap/R1161.md) · blocked — on edge: upstream #8239's runtime fix…
 - **R1162** · Keep the serve daemon after ANY notRun refusal once al-runner's #8180 promise is on edge (one rule for every refusal kind, proved on DO kept-vs-fresh); revisit PR-244's declined option 4 · [R1162.md](docs/roadmap/R1162.md) · blocked — on edge: upstream #8180's documented promise…
-- **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; three shapes measured on BC and posted upstream (#8267, #8219, #7908) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the three shapes below (re-score the DO tests behind them)
+- **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; four shapes measured on BC and posted upstream (#8267, #8219, #7908, #8652) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the four shapes below (re-score the DO tests behind them)
 - **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · open
 - **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · open
 

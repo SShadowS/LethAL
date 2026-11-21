@@ -1019,7 +1019,8 @@ describe("R424: runSession", () => {
     const root = await project({ "HelperOpens.Codeunit.al": HELPER_OPENS });
     const store = new ResultsStore(":memory:");
     const backend = new StubBackend(false);
-    await session(root, store, backend);
+    // PR-307: a test that opens a TestPage is session-kind-sensitive on v3, so a run needs the setting.
+    await session(root, store, backend, { ciSessionKind: "headless" });
     expect([...new Set(backend.baselineMethods)].sort()).toEqual([
       "OpensThroughHelper",
       "PlainTest",
