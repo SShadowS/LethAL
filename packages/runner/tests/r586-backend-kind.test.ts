@@ -4,6 +4,7 @@
 // backend read as the .NET al-runner. A new read of `.authoritative`, or a compare / argument /
 // default / case arm on the backend name "al-runner", fails here until it is classified below.
 import { beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -472,6 +473,28 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("PR-282: companies go in the lending build, the fingerprint and the report; absent, none moves", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withCompanies = (companies: string) =>
+        Object.assign(withProbe(new V3KindStub([]), []), { companies });
+      const h8 = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 8);
+      const none = await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const a = await v3Session(root, store, withCompanies("CRONUS"));
+      await v3Session(root, store, withCompanies("CRONUS,Other"));
+      const [r1, r2, r3] = [store.getRun(1), store.getRun(2), store.getRun(3)];
+      expect(r1?.runnerBuild).not.toContain("companies-");
+      expect(r2?.runnerBuild).toBe(`${r1?.runnerBuild} companies-${h8("CRONUS")}`);
+      expect(r3?.runnerBuild).toBe(`${r1?.runnerBuild} companies-${h8("CRONUS,Other")}`);
+      expect(r2?.runnerBuild).not.toBe(r3?.runnerBuild);
+      expect(
+        new Set([r1?.configFingerprint, r2?.configFingerprint, r3?.configFingerprint]).size,
+      ).toBe(3);
+      expect(none.validity.executionContexts[0]).not.toHaveProperty("companies");
+      expect(a.validity.executionContexts[0]?.companies).toBe("CRONUS");
+    });
+  });
+
   test("R938: the environment goes in the build, the fingerprint and the report; a resume under another one is refused", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
@@ -575,6 +598,28 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       const unrelated = await v3Session(root, store, otherLicense, { resume: "last" }).catch(
         (e: unknown) => e,
       );
+      expect(String(unrelated)).not.toContain("recorded under environment");
+    });
+  });
+
+  test("PR-282: the other-environment refusal still names the environment with a companies tag; another list does not", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const withEnv = (value: "saas" | "onprem", companies: string) =>
+        Object.assign(withProbe(new V3KindStub([]), []), {
+          environmentChoice: { value, source: "config" as const },
+          companies,
+        });
+      await v3Session(root, store, withEnv("onprem", "A"));
+      expect(store.getRun(1)?.runnerBuild).toContain(" environment-onprem companies-");
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const other = await v3Session(root, store, withEnv("saas", "A"), {
+        resume: "last",
+      }).catch((e: unknown) => e);
+      expect(String(other)).toContain("recorded under environment onprem");
+      const unrelated = await v3Session(root, store, withEnv("saas", "B"), {
+        resume: "last",
+      }).catch((e: unknown) => e);
       expect(String(unrelated)).not.toContain("recorded under environment");
     });
   });

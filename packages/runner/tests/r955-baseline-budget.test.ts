@@ -230,9 +230,12 @@ describe("R955: a SIGTERM or SIGINT spends the same budget", () => {
       process.listenerCount("SIGINT"),
     ];
     let stopped = 0;
-    const off = registerProcessStopSignal(() => {
-      stopped += 1;
-    });
+    const off = registerProcessStopSignal(
+      () => {
+        stopped += 1;
+      },
+      () => {},
+    );
     expect([process.listenerCount("SIGTERM"), process.listenerCount("SIGINT")]).toEqual([
       before[0] + 1,
       before[1] + 1,

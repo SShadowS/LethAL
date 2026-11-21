@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -384,6 +385,7 @@ import {
   recheckSiteKey,
   runWithheldRecheck,
   shouldRunRecheck,
+  stopNameOf,
 } from "./withheld-recheck";
 
 // C02-04b: named-mutants.ts is not part of the package's `export *` barrel (index.ts), so its
@@ -1880,8 +1882,9 @@ export interface SessionConfig {
   /**
    * R955, test seam: registers the handler that spends the time budget on SIGTERM or SIGINT and
    * returns its remover (called when the session ends). Defaults to `registerProcessStopSignal`.
+   * PR-277: `again` is the second signal's action (abandon the recheck, close the daemons).
    */
-  readonly registerStopSignal?: (stop: () => void) => () => void;
+  readonly registerStopSignal?: (stop: () => void, again: () => void) => () => void;
   /** R912, test seam: the clock `timeBudgetSeconds` reads. Defaults to the monotonic `monoNow` (PR-252). */
   readonly clockMs?: () => number;
   /**
@@ -6719,22 +6722,50 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   return "scored";
 }
 
+/** R912/R955: the exit code of a run its time budget or a stop signal ended (the CLI's `TIME_BUDGET_EXIT_CODE`). */
+export const SIGNAL_STOP_EXIT_CODE = 7;
+/** PR-277: how long a second signal waits for the report before it ends the process. */
+export const SECOND_SIGNAL_GRACE_MS = 10_000;
+
 /**
  * R955: the default `SessionConfig.registerStopSignal`. The FIRST SIGTERM or SIGINT spends the time
- * budget (the run stops at its next check and writes its report); the handlers are `once`, so a
- * second signal takes the default action and ends the process at once. The returned remover runs
- * when the session ends.
+ * budget (the run stops at its next check and writes its report). PR-277 (R1158): the SECOND calls `again`
+ * (abandon the recheck, close the daemons, so the report can still be written) and ends the process with the
+ * signal stop's exit code after `graceMs` if it has not ended by then; a third ends it at once. The returned
+ * remover runs when the session ends: it also clears a pending grace timer, so the CLI writing the report is
+ * never cut off; a signal after that takes the default action.
  */
-export function registerProcessStopSignal(stop: () => void): () => void {
+export function registerProcessStopSignal(
+  stop: () => void,
+  again: () => void,
+  opts: {
+    readonly exit?: (code: number) => void;
+    readonly graceMs?: number;
+    /** Test seam: the grace timer. */
+    readonly timer?: { set: (fn: () => void, ms: number) => unknown; clear: (h: unknown) => void };
+  } = {},
+): () => void {
   const signals = ["SIGTERM", "SIGINT"] as const;
-  const handler = (): void => {
-    // No listener is left, so a second signal takes the default action and ends the process.
-    for (const s of signals) process.off(s, handler);
-    stop();
+  const exit = opts.exit ?? ((code: number) => process.exit(code));
+  const timer = opts.timer ?? {
+    set: (fn: () => void, ms: number) => setTimeout(fn, ms).unref(),
+    clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>),
   };
-  for (const s of signals) process.once(s, handler);
+  let seen = 0;
+  let grace: unknown;
+  const handler = (): void => {
+    seen += 1;
+    if (seen === 1) stop();
+    else if (seen > 2) exit(SIGNAL_STOP_EXIT_CODE);
+    else {
+      again();
+      grace = timer.set(() => exit(SIGNAL_STOP_EXIT_CODE), opts.graceMs ?? SECOND_SIGNAL_GRACE_MS);
+    }
+  };
+  for (const s of signals) process.on(s, handler);
   return () => {
     for (const s of signals) process.off(s, handler);
+    if (grace !== undefined) timer.clear(grace);
   };
 }
 
@@ -7348,6 +7379,7 @@ async function runSessionBody(
       ? { v3Environment: cfg.backend.environmentChoice.value }
       : {}), // R938
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
+    ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -7504,7 +7536,22 @@ async function runSessionBody(
     clockMs(),
     clockMs,
   );
-  cleanups.push((cfg.registerStopSignal ?? registerProcessStopSignal)(() => timeBudget.stop()));
+  // PR-277 (R1158, amendment 1): the first signal spends the budget and stops a recheck in progress gracefully (its
+  // nested budget); the second aborts it and closes the daemons, so nothing the report waits on can hang.
+  const recheckStop = new AbortController();
+  const recheckAbort = new AbortController();
+  cleanups.push(
+    (cfg.registerStopSignal ?? registerProcessStopSignal)(
+      () => {
+        timeBudget.stop();
+        recheckStop.abort();
+      },
+      () => {
+        recheckAbort.abort();
+        cfg.backend.closeDaemons?.().catch(() => {});
+      },
+    ),
+  );
   onChurn.stop = (s) => {
     emit({
       type: "warning",
@@ -9773,7 +9820,12 @@ async function runSessionBody(
     cfg.recheck !== undefined &&
     shouldRunRecheck({ recheck: cfg.recheck, unsafe: safety.isUnsafe })
   ) {
+    // PR-277: a stopped session (signal, budget, memory or churn guard) skips it; `stopped` read here, at the start.
+    const stopped = stopNameOf(timeBudget);
     await runWithheldRecheck({
+      ...(stopped !== undefined ? { stopped } : {}),
+      abort: recheckAbort.signal,
+      stopSignal: recheckStop.signal,
       events: [...collectedEvents],
       // PR-225: each target's candidate killers, from this run's own stored test results.
       notPassOf: (t) => cfg.store.notPassTestsOf(runId, t.mutant.mutantId, t.batchIndex),
@@ -9788,6 +9840,28 @@ async function runSessionBody(
       budgetSeconds: cfg.recheck.budgetSeconds,
       runner: cfg.recheck.runner,
       backend: cfg.backend,
+    });
+  }
+  // PR-277: a signal that came after the main pass's last check (during the recheck, or just before it) still makes
+  // the report a signal stop, so the CLI exits with the stop's code. Nothing was left unscheduled.
+  // The churn guard too, when it tripped on the last mutant (no check came after it).
+  if (
+    (timeBudget.signalled || timeBudget.churn !== undefined) &&
+    timeBudget.reached === undefined
+  ) {
+    emit({
+      type: "time-budget-reached",
+      budgetSeconds: Number.isFinite(timeBudget.seconds) ? timeBudget.seconds : 0,
+      // The same stop fields as the main path above.
+      ...(timeBudget.signalled && timeBudget.memory === undefined
+        ? { stoppedBySignal: true as const }
+        : {}),
+      ...(timeBudget.memory !== undefined ? { stoppedByMemory: timeBudget.memory } : {}),
+      ...(timeBudget.churn !== undefined ? { stoppedByDaemonChurn: timeBudget.churn } : {}),
+      unscheduledCount: 0,
+      batchesNotStarted: 0,
+      // The run is stored finished (above): the banner and caveat say there is nothing to resume.
+      afterMainPass: true,
     });
   }
   // PR-247: the mutant phase's test costs, once, sorted by test (code units); nothing when no mutant test ran.
@@ -9876,6 +9950,8 @@ async function runSessionBody(
               : {}),
             // R956: the license file by path and sha256, never its contents.
             ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
+            // PR-282: the company list passed as --companies.
+            ...(cfg.backend.companies !== undefined ? { companies: cfg.backend.companies } : {}),
           },
         }
       : {}),
@@ -14484,14 +14560,14 @@ function assertSameResumeInputs(
 
 /**
  * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
- * strips the end-anchored ` environment-X[ license-H][ isolation-auto]`, and ` isolation-auto` must be
+ * strips the end-anchored ` environment-X[ license-H][ companies-H][ isolation-auto]`, and ` isolation-auto` must be
  * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
 export function lendingRunnerBuild(
   backend: ExecutionBackend,
   v3Build: { readonly version: string; readonly binarySha256: string },
 ): string {
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**

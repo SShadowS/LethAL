@@ -1412,6 +1412,15 @@ describe("R885: demo data, on the serve path", () => {
     );
   });
 
+  test("PR-282: the daemon argv carries --companies <value> only when it is set", async () => {
+    const on = (await readyRig({ mutants: ["M0001"], extra: { companies: "CRONUS,Other" } })).serve
+      .daemons[0];
+    expect(on?.[(on?.indexOf("--companies") ?? -2) + 1]).toBe("CRONUS,Other");
+    expect((await readyRig({ mutants: ["M0001"] })).serve.daemons[0] ?? []).not.toContain(
+      "--companies",
+    );
+  });
+
   test("R938: the daemon argv carries --environment <value> (the stated one)", async () => {
     const on = (
       await readyRig({

@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**57 of 1123 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**58 of 1126 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1152,7 +1152,7 @@ that ordering is the priority.
 - **R1132** · Shell writes into source (`cat >> file <<EOF`) still pass: no-shell-edits blocks only `sed -i`, and the advisory hook (PR-122) only warns; a PR-179 builder appended test code by heredoc. Proposal: block such writes into the repo, for the owner to rule at the advisory's week review (2026-11-24) · [R1132.md](docs/roadmap/R1132.md) · open — a proposal (hook changes need the owner's word); filed by lethal-preproc from coord PR-179, 2026-11-18
 - **R1142** · The withheld-kill recheck's own baseline costs about 2,088 s per DO run against 46.5 s of target rows: can it be smaller or reused? · [R1142.md](docs/roadmap/R1142.md) · done (651bf616) — option A (PR-225): the recheck baseline runs only the candidate killers' codeunits…
 - **R1140** · DO's y3 `error` mutants, mined (757 in the main pass, 61 classes, identical to y2; 348 after the withheld-kill recheck, which recovered only by-design cascades): three al-runner refusals met only under mutation filed as upstream #8486, and four narrower shapes of filed refusals reported on #7760, #8036 and #7764; the rest is by design or already filed · [R1140.md](docs/roadmap/R1140.md) · open
-- **R1143** · Reuse an earlier run's withheld-kill recheck baseline when the build, sources and test app are the same (R1142's option B); filed, not built · [R1143.md](docs/roadmap/R1143.md) · open
+- **R1143** · Reuse an earlier run's withheld-kill recheck baseline when the build, sources and test app are the same (R1142's option B); filed, not built · [R1143.md](docs/roadmap/R1143.md) · closed 2026-11-21 — orchestrator's ruling (PR-291): not built. About 895 s per repeat DO run is not worth…
 - **R1145** · An al-runner launcher prefix (alRunnerV3.launcher), so performance runs can wrap the daemons (perf, stderr capture) while LethAL still hashes and gates the real binary · [R1145.md](docs/roadmap/R1145.md) · open
 - **R1146** · Adopt al-runner's stopAfterFirstFailure (upstream #8484) for mutant requests: the fork's version cut DO test time 20-23% with 0 moved verdicts (PR-223); re-measure upstream's before use · [R1146.md](docs/roadmap/R1146.md) · open — trigger: the first gated `current` that contains upstream #8484
 - **R1147** · Keep the serve daemon after a timeout cut? DO restarts after every one (y3: 23, 1,107.6 s of warm-up, about 4.6% of the mutant phase); PERF-15 found the kept daemon answers as a fresh one · [R1147.md](docs/roadmap/R1147.md) · open — parked (orchestrator, 2026-11-20, coord PR-228): measured and built, the ON path is unsafe as…
@@ -1165,9 +1165,12 @@ that ordering is the priority.
 - **R1155** · y2/y3 verdicts on edge-4ebfe7913 that ran through a by-value record copy are suspect (that build guessed the copy keeps the caller's filters); 2,204 private-corpus mutants are labelled, and they clear once `current` is a build that measures the shape · [R1155.md](docs/roadmap/R1155.md) · open — trigger: `current` moves to a build that runs or refuses these shapes as BC does…
 - **R1156** · al-runner v3's per-send bound check costs 237 ms per send on DO (69 MB of instrumented .al): 2,381 lane-s, 90% of perf10c's lane idle · [R1156.md](docs/roadmap/R1156.md) · open
 - **R1157** · VERIFY's longer per-test timeout reads only io pressure: under CPU contention, R917 and other near-limit tests time out at 5 s · [R1157.md](docs/roadmap/R1157.md) · done (8c09923f4)
-- **R1158** · A SIGTERM-stopped v3 run still runs the withheld-kill recheck (a second SIGTERM is ignored; SIGKILL needed), and a recheck baseline of 0 tests took 547 s · [R1158.md](docs/roadmap/R1158.md) · open
+- **R1158** · A SIGTERM-stopped v3 run still runs the withheld-kill recheck (a second SIGTERM is ignored; SIGKILL needed), and a recheck baseline of 0 tests took 547 s · [R1158.md](docs/roadmap/R1158.md) · done (db7eb59a5)
 - **R1159** · Three findings from moving `current` to upstream main ccd0f823d: a new RelationFieldNo refusal (the largest DO coverage loss; BC measured 0, edge-4ebfe7913 answered 1), the repro gate's .NET repros refused for BC build 53758, and a repro control that was never measured · [R1159.md](docs/roadmap/R1159.md) · open — trigger: al-runner pins the RelationFieldNo cell (asked, q-20261120T172525-254a31af); then re-measure…
 - **R1160** · On v3, one test codeunit's BASELINE refusals make 301 DO mutants `error` through PR-250's cut (89% of the error test time, ~11,600 lane-s, ~28% of all mutant test time in perf10c); a covering test after the cut is never measured, so the mutant gets no verdict · [R1160.md](docs/roadmap/R1160.md) · open — decide the policy (owner): keep `error`, measure the tests after the cut in their own entry, or score…
+- **R1161** · Retire LethAL's O1 known-loss rule (partner OnAfterLogin memos, upstream #8239) when al-runner's runtime fix is on edge, and re-measure the 16 O1 rows and the set-aside DO mutants · [R1161.md](docs/roadmap/R1161.md) · blocked — on edge: upstream #8239's runtime fix…
+- **R1162** · Keep the serve daemon after ANY notRun refusal once al-runner's #8180 promise is on edge (one rule for every refusal kind, proved on DO kept-vs-fresh); revisit PR-244's declined option 4 · [R1162.md](docs/roadmap/R1162.md) · blocked — on edge: upstream #8180's documented promise…
+- **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; three shapes measured on BC and posted upstream (#8267, #8219, #7908) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the three shapes below (re-score the DO tests behind them)
 
 ---
 
