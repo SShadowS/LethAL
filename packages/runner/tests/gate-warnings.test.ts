@@ -119,6 +119,18 @@ describe("assertGateWarnings", () => {
     ).toThrow(/Extra: \["x"\]\. Missing: \[\]/);
   });
 
+  test("PR-294: al-runner-v3-pinned-not-current is logged only, never compared", () => {
+    const real = console.log;
+    console.log = () => {};
+    try {
+      expect(() =>
+        assertGateWarnings("g", "l", ["a", "al-runner-v3-pinned-not-current"], ["a"]),
+      ).not.toThrow();
+    } finally {
+      console.log = real;
+    }
+  });
+
   test("PR-264: a missing expected code still fails with run-suspended present", () => {
     expect(() => assertGateWarnings("g", "l", ["run-suspended"], ["a"])).toThrow(
       /Extra: \[\]\. Missing: \["a"\]/,

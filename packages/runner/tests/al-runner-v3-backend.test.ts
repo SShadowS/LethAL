@@ -62,7 +62,7 @@ import {
   V3_CAPABILITY_FACTS,
 } from "../src/al-runner-v3-contract";
 import { serveRow } from "../src/al-runner-v3-entries";
-import { sha256OfFile } from "../src/al-runner-v3-pin";
+import { currentV3Build, sha256OfFile } from "../src/al-runner-v3-pin";
 import * as pinsNs from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
 import { TestAppProofStore, testAppCacheKey } from "../src/al-runner-v3-testapp-cache";
@@ -504,7 +504,12 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
       },
     ],
   };
-  async function statusOf(candidate: boolean, contract: V3ContractResult = UNLIKE) {
+  async function statusOf(
+    candidate: boolean,
+    contract: V3ContractResult = UNLIKE,
+    extra: (bin: string) => Partial<AlRunnerV3Config> = () => ({}),
+    onNotify?: (code: string, message: string) => void,
+  ) {
     const l = await layout();
     const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
     await writeFile(
@@ -528,9 +533,11 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
     const b = backendOf(l, versionOnly, fakeAlc().io, {
       alRunnerPath: bin,
       ...(candidate ? { candidate: true } : {}),
+      ...extra(bin),
     });
     // The probe itself is tested in al-runner-v3-contract.test.ts; seed its result, test the wiring.
     (b as unknown as { contract: V3ContractResult }).contract = contract;
+    if (onNotify !== undefined) b.setNotify(onNotify);
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
@@ -551,6 +558,92 @@ describe("R639 r9 §2: status() passes candidate into the unlike-bc refusals and
   test("R834: status() says which binary and version this session runs", async () => {
     const { warned } = await statusOf(true);
     expect(warned).toMatch(/\[lethal\] al-runner: \S*al-runner \(al-runner 3\.0\.0-alpha\.4\+edge/);
+  });
+  const PNC = "al-runner-v3-pinned-not-current";
+  test("PR-294: the path equals the resolved current: no notice", async () => {
+    const { warned } = await statusOf(false, UNLIKE, (bin) => ({ currentBuildPath: () => bin }));
+    expect(warned).not.toContain(PNC);
+  });
+  test("PR-294: another build than current: one notice naming both paths", async () => {
+    const seen: Array<[string, string]> = [];
+    await statusOf(
+      false,
+      UNLIKE,
+      () => ({ currentBuildPath: () => "/builds/main-current/al-runner" }),
+      (c, m) => seen.push([c, m]),
+    );
+    const w = seen.filter(([c]) => c === PNC);
+    expect(w).toHaveLength(1);
+    const m = w[0]?.[1] ?? "";
+    expect(m).toMatch(
+      /^\[lethal\] al-runner-v3-pinned-not-current: this session runs \S*al-runner \(/,
+    );
+    expect(m).toContain("/builds/main-current/al-runner");
+    expect(m).toContain("alRunnerV3.path");
+  });
+  test("PR-294: once per session: two status() calls give one notice, a fresh notifier one more", async () => {
+    const l = await layout();
+    const NS = 'xmlns="http://schemas.microsoft.com/navx/2015/manifest"';
+    await writeFile(
+      join(l.deps, "Microsoft_System Application.app"),
+      buildFakeAppWithEntries({
+        "NavxManifest.xml": `<?xml version="1.0"?><Package ${NS}><App Id="1" Name="System Application" Publisher="Microsoft" Version="28.0.46665.47126" /></Package>`,
+      }),
+    );
+    const bin = join(l.root, "al-runner");
+    await writeFile(bin, "binary");
+    await writeFile(
+      join(l.root, ".gated"),
+      JSON.stringify({
+        version: VERSION,
+        binarySha256: await sha256OfFile(bin),
+        lethalCommit: "a".repeat(40),
+      }),
+    );
+    const b = backendOf(l, versionOnly, fakeAlc().io, {
+      alRunnerPath: bin,
+      currentBuildPath: () => "/builds/main-current/al-runner",
+    });
+    (b as unknown as { contract: V3ContractResult }).contract = UNLIKE;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const first: string[] = [];
+      b.setNotify((c) => first.push(c));
+      await b.status();
+      await b.status();
+      expect(first.filter((c) => c === PNC)).toHaveLength(1);
+      const second: string[] = [];
+      b.setNotify((c) => second.push(c));
+      await b.status();
+      expect(second.filter((c) => c === PNC)).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+  test("PR-294: the default current lookup: a link resolves to its target, none gives undefined", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pr294-"));
+    try {
+      const target = join(root, "build-1");
+      await mkdir(target);
+      await writeFile(join(target, "al-runner"), "binary");
+      await symlink(target, join(root, "current"));
+      expect(currentV3Build(join(root, "current", "al-runner"))).toBe(
+        await realpath(join(target, "al-runner")),
+      );
+      expect(currentV3Build(join(root, "none", "al-runner"))).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  test("PR-294: candidate mode with another build: no notice", async () => {
+    const { warned } = await statusOf(true, UNLIKE, () => ({
+      currentBuildPath: () => "/builds/main-current/al-runner",
+    }));
+    expect(warned).not.toContain(PNC);
+  });
+  test("PR-294: no current link: no notice", async () => {
+    const { warned } = await statusOf(false, UNLIKE, () => ({ currentBuildPath: () => undefined }));
+    expect(warned).not.toContain(PNC);
   });
   test("R834: a refused binary is not announced", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
