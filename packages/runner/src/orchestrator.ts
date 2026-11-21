@@ -6131,6 +6131,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
   // when a reused snapshot leaves the loop over []). The only null activation inside it.
   backend.baselinePhase?.(true);
+  // PR-297: true only when the baseline loop ran to its end (every test has a verdict); a throw or a stop leaves it false.
+  let baselineCompleted = false;
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
@@ -6353,8 +6355,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         input.mutantCount ?? 0,
       );
     }
+    baselineCompleted = baseline.length === tests.length;
   } finally {
-    await backend.baselinePhase?.(false); // R948: closes the baseline's own daemon
+    await backend.baselinePhase?.(false, baselineCompleted); // R948: closes the baseline's own daemon
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined

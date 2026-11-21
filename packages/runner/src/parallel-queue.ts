@@ -84,7 +84,7 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     compileCheck: (dir) => owner.compileCheck(dir),
     activate: (id) => lane0.activate(id),
     run: (ref, opts) => lane0.run(ref, opts),
-    baselinePhase: (on) => owner.baselinePhase?.(on),
+    baselinePhase: (on, completed) => owner.baselinePhase?.(on, completed),
     mayStartGroup: () => lane0.mayStartGroup?.() ?? Promise.resolve(true), // R948
     noteReusedBaseline: (baseline) => owner.noteReusedBaseline?.(baseline),
     // R896: the choice is the owner's (every lane reads it); absent on an owner without auto.

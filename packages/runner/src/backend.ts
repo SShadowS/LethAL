@@ -996,7 +996,7 @@ export interface ExecutionBackend {
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
-  baselinePhase?(on: boolean): void | Promise<void>;
+  baselinePhase?(on: boolean, completed?: boolean): void | Promise<void>;
 
   /**
    * R1131, OPTIONAL (bcdev outside hub mode): the start WorkDate the current batch's baseline ran under (its

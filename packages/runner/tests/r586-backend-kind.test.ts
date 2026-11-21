@@ -621,6 +621,32 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("PR-297: the other-environment refusal still names the environment with a refused-cut-tail tag (before isolation-auto); the flag off or on is another build", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const mk = (value: "saas" | "onprem", tail: boolean) =>
+        Object.assign(withProbe(new V3KindStub([]), []), {
+          environmentChoice: { value, source: "config" as const },
+          companies: "A",
+          isolationAuto: true,
+          ...(tail ? { refusedCutTail: true } : {}),
+        });
+      await v3Session(root, store, mk("onprem", true));
+      expect(store.getRun(1)?.runnerBuild).toMatch(
+        / environment-onprem companies-[0-9a-f]{8} refused-cut-tail isolation-auto$/,
+      );
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const other = await v3Session(root, store, mk("saas", true), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(other)).toContain("recorded under environment onprem");
+      const unrelated = await v3Session(root, store, mk("saas", false), {
+        resume: "last",
+      }).catch((e: unknown) => e);
+      expect(String(unrelated)).not.toContain("recorded under environment");
+    });
+  });
+
   test("PR-282: the other-environment refusal still names the environment with a companies tag; another list does not", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

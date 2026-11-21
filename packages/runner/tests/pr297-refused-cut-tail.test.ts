@@ -2,7 +2,7 @@
 // A green test after a baseline-refusal cut is run ALONE under the mutant (R895's alone path) instead of scored
 // `error`, if it passed alone once at the end of the baseline phase. The lane rig (a scripted serve daemon that
 // leaves out an entry's `excludeTests`, as v3 does); call counters on the requests only, never time.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { validateAlRunnerV3Config } from "../src/al-runner-v3-config";
 import type { TestVerdict } from "../src/backend";
 import { lendingRunnerBuild } from "../src/orchestrator";
@@ -65,6 +65,7 @@ async function tailRig(
       return state.cBaseline === "pass"
         ? { method: "C", status: "pass" }
         : { method: "C", status: "fail", message: "baseline fail" };
+    if (m === "M0004") return { method: "C", status: "error", message: TIMEOUT_1S };
     return m === "M0001" || m === "M0003"
       ? { method: "C", status: "fail", message: "killed by C" }
       : { method: "C", status: "pass" };
@@ -78,7 +79,7 @@ async function tailRig(
       honorExcludes: true,
       eofAt: (_n, req) => stab === "eof" && isStabilityRun(req.mutants[0] ?? "", req),
     },
-    mutants: ["M0001", "M0002", "M0003"],
+    mutants: ["M0001", "M0002", "M0003", "M0004"],
     rows: (m, _cu, _daemon, n) => {
       const c = cRow(m, held.rig?.serve.requests[n]);
       const rows: FakeRow[] = [
@@ -105,7 +106,7 @@ async function baseline(r: LanesRig, state: State): Promise<void> {
     for (const t of r.suite) await r.b.run(t, OPTS);
     state.phase = "stability";
   } finally {
-    await r.b.baselinePhase(false);
+    await r.b.baselinePhase(false, true); // a completed baseline
     state.phase = "mutants";
   }
 }
@@ -118,7 +119,7 @@ const aloneC = (r: LanesRig, mutant: string): Req[] =>
   );
 const prefetch = (r: LanesRig, mutant: string, refs: readonly ReturnType<typeof ref>[]) =>
   r.b.prefetchMutants([{ mutantId: mutant, refs }], {
-    batchPlans: ["M0001", "M0002", "M0003"].map((mutantId) => ({ mutantId, refs })),
+    batchPlans: ["M0001", "M0002", "M0003", "M0004"].map((mutantId) => ({ mutantId, refs })),
   });
 const outcome = (v: TestVerdict) => [v.outcome, v.runnerRow ?? ""];
 
@@ -276,6 +277,148 @@ describe("PR-297: a green test after a baseline-refusal cut, run alone", () => {
     expect(a.selection).toBeUndefined();
     expect(aloneC(r, "M0003")).toEqual([]);
     void B;
+  });
+});
+
+const tailNotices = (r: LanesRig) =>
+  r.notices.filter((n) => n.startsWith("al-runner-v3-refused-cut-tail:"));
+const isStabilityReq = (q: Req) =>
+  q.tests.length === 1 && q.tests[0] === `Codeunit${CU}.C` && q.mutants[0] === "NONE";
+const sig = (q: Req) => JSON.stringify([q.mutants, q.tests, q.selectedOnly, q.excludes]);
+
+describe("PR-297 review fixes", () => {
+  test("B1: the stability pass leaves no trace on the daemon, warm-up or barrier state: the first mutant request warms the union as with the flag off", async () => {
+    const off = await tailRig({ flag: false });
+    await baseline(off.r, off.state);
+    const offBaselineWarmups = off.r.b.entriesStats().warmups;
+    await prefetch(off.r, "M0001", [A]);
+    const on = await tailRig({ flag: true });
+    await baseline(on.r, on.state);
+    // no daemon is open, no warm-up was counted, and the barrier has not passed
+    expect(on.r.b.barrierPassed()).toBe(false);
+    expect(on.r.b.entriesStats().warmups).toBe(offBaselineWarmups);
+    await prefetch(on.r, "M0001", [A]);
+    // exactly ONE stability request; every other request is the flag-off run's
+    expect(on.r.serve.requests.filter(isStabilityReq)).toHaveLength(1);
+    expect(on.r.serve.requests.filter((q) => !isStabilityReq(q)).map(sig)).toEqual(
+      off.r.serve.requests.map(sig),
+    );
+    // the union was warmed and judged at the first mutant request (the barrier opens only then)
+    expect(on.r.b.entriesStats().warmups).toBe(off.r.b.entriesStats().warmups);
+  });
+
+  test("S1: a baseline that did not complete, a spent budget or a signal sends no stability request, and a baseline error is kept", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    for (const t of r.suite) await r.b.run(t, OPTS);
+    state.phase = "stability";
+    await expect(
+      (async () => {
+        try {
+          throw new Error("baseline boom");
+        } finally {
+          await r.b.baselinePhase(false, false);
+        }
+      })(),
+    ).rejects.toThrow("baseline boom");
+    expect(aloneC(r, "NONE")).toEqual([]);
+    for (const [spent, signalled] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      const x = await tailRig({ flag: true });
+      x.r.b.useStopHandle({ spent: () => spent, signalled: () => signalled, stopForMemory() {} });
+      await baseline(x.r, x.state);
+      expect(aloneC(x.r, "NONE")).toEqual([]);
+      // nothing was measured: C is unstable, today's error
+      await prefetch(x.r, "M0001", [A, C]);
+      await x.r.b.activate("M0001");
+      await x.r.b.run(A, OPTS);
+      expect(outcome(await x.r.b.run(C, OPTS))).toEqual(["error", "runner-refused"]);
+    }
+  });
+
+  test("S1: any error inside the pass marks the tests unstable, is said once, and is never rethrown", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    r.b.baselinePhase(true);
+    await r.b.activate(null);
+    for (const t of r.suite) await r.b.run(t, OPTS);
+    state.phase = "stability";
+    const stub = spyOn(r.b as unknown as { send: () => Promise<never> }, "send").mockRejectedValue(
+      new TypeError("boom send"),
+    );
+    try {
+      await r.b.baselinePhase(false, true);
+    } finally {
+      stub.mockRestore(); // only the pass is stubbed
+      state.phase = "mutants";
+    }
+    expect(tailNotices(r).join("\n")).toContain("boom send");
+    await prefetch(r, "M0001", [A, C]);
+    await r.b.activate("M0001");
+    await r.b.run(A, OPTS);
+    expect(outcome(await r.b.run(C, OPTS))).toEqual(["error", "runner-refused"]);
+  });
+
+  test("S2: a tail test that times out alone under a mutant is `timeout` and carries the note, its timeout wording intact", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    await baseline(r, state);
+    await prefetch(r, "M0004", [A, C]);
+    await r.b.activate("M0004");
+    await r.b.run(A, OPTS);
+    const v = await r.b.run(C, OPTS);
+    expect(v.outcome).toBe("timeout");
+    expect(v.selection).toBe("alone");
+    expect(v.failureMessage?.startsWith(TIMEOUT_1S)).toBe(true);
+    expect(v.failureMessage).toContain(NOTE);
+    expect(v.timeoutWordingUnknown).toBeUndefined();
+    expect(v.reportedStopMs).toBe(1000);
+  });
+
+  test("S3: after the pass one line per codeunit names the stable and the unstable tail tests; at the end the alone-call counts; none with the flag off", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    await baseline(r, state);
+    expect(tailNotices(r)).toHaveLength(1);
+    expect(tailNotices(r)[0]).toContain(`codeunit ${CU}`);
+    expect(tailNotices(r)[0]).toContain("stable: C");
+    expect(tailNotices(r)[0]).toContain("unstable: none");
+    await prefetch(r, "M0001", [A, C]);
+    await r.b.activate("M0001");
+    await r.b.run(A, OPTS);
+    await r.b.run(C, OPTS);
+    await r.b.close();
+    const end = tailNotices(r).filter((n) => n.includes("alone calls"));
+    expect(end).toHaveLength(1);
+    expect(end[0]).toContain("stability 1");
+    expect(end[0]).toContain("under a mutant 1");
+
+    const bad = await tailRig({ flag: true, stab: "fail" });
+    await baseline(bad.r, bad.state);
+    expect(tailNotices(bad.r)[0]).toContain("stable: none");
+    expect(tailNotices(bad.r)[0]).toContain("unstable: C");
+
+    const off = await tailRig({ flag: false });
+    await baseline(off.r, off.state);
+    await off.r.b.close();
+    expect(tailNotices(off.r)).toEqual([]);
+  });
+
+  test("S4: with the §6 Sleep rule not retired a stable tail test is NOT routed alone: PR-250's error, and the reason is said once", async () => {
+    const { r, state } = await tailRig({ flag: true });
+    await baseline(r, state);
+    await prefetch(r, "M0001", [A, C]);
+    await r.b.activate("M0001");
+    await r.b.run(A, OPTS);
+    r.b.seams.sleepRuleRetired = false;
+    for (const m of ["M0001"]) {
+      const c = await r.b.run(C, OPTS);
+      expect(outcome(c)).toEqual(["error", "runner-refused"]);
+      expect(c.failureMessage).toContain("baseline-refused-cut");
+      expect(aloneC(r, m)).toEqual([]);
+    }
+    await r.b.run(C, OPTS);
+    expect(tailNotices(r).filter((n) => n.includes("Sleep rule"))).toHaveLength(1);
   });
 });
 
