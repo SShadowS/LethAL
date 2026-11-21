@@ -452,7 +452,7 @@ code.
 Each surface below is versioned separately and has a published JSON Schema in [`../schemas/`](../schemas/):
 
 - the report: [../schemas/report-v3.schema.json](../schemas/report-v3.schema.json)
-- `lethal explain`: [../schemas/explain-v33.schema.json](../schemas/explain-v33.schema.json)
+- `lethal explain`: [../schemas/explain-v34.schema.json](../schemas/explain-v34.schema.json)
 - the event stream: [../schemas/stream-v1.schema.json](../schemas/stream-v1.schema.json)
 - `lethal doctor --json`: [../schemas/doctor-v1.schema.json](../schemas/doctor-v1.schema.json),
   as the `data` of [../schemas/cli-envelope-v1.schema.json](../schemas/cli-envelope-v1.schema.json)
@@ -500,7 +500,7 @@ some mutants at all, and they read `no-coverage` rather than `survived`.
 
 ### `lethal explain report.json`: what it MEANS (checked)
 
-`explainSchemaVersion: 33`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
+`explainSchemaVersion: 34`. The top level carries `contract`, `score`, `survivors`, `notMeasured`,
 `survivorSelection` and `markIdentityScheme`. Each `survivors` row carries `executionProven`,
 `reach` and `markKey`. The top level can also carry `markKeysStale`. Each `survivors` row can
 also carry `mark`. Explain writes it for a report that records its numbering facts.
@@ -1200,6 +1200,14 @@ Stated so a consumer does not read an absence as a finding.
   assumption (any assumption, not only this one). Fewer tests run: al-runner refuses calls it has not
   measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
   handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
+- `"ciSessionKind": "client" | "headless"` (top level, no default; R1168, PR-307) names the session kind your own CI runs
+  tests in.
+  - **When it is required:** a run whose final test list holds a session-kind-sensitive test refuses without it, by name
+    (`SessionKindUnsetError`). A test is sensitive when it binds `HandlerFunctions`, or, on al-runner-v3, when it may
+    open a TestPage or the scan cannot read it.
+  - **What the report shows:** it lists those tests in `sessionKindSensitiveTests`, and adds the `session-kind-mismatch`
+    caveat when the backend's kind differs from yours. bcdev is headless; v3 is client unless `noClient`.
+  - **The limit:** a test that changes only through APP code (an unhandled Confirm) is not seen (R1169).
 - One-shot calls ask al-runner to skip after a timeout when the build supports it (R897): after a test
   is stopped at the limit, the rest of its codeunit is not run, so a hung mutant costs one limit.
 - A test that opens a `TestPage` cannot be scored, and on the default path one such test can hang

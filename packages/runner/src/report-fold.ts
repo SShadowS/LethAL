@@ -199,6 +199,16 @@ export interface FoldedReport {
     readonly tier: "firm" | "uncertain-write" | "uncertain-read";
     readonly firstAccess: string;
   }>;
+  /** PR-307 (R1168): the `tests-session-kind-sensitive` event; see `SessionReport.sessionKindSensitiveTests`. */
+  readonly sessionKindSensitive?: {
+    readonly tests: ReadonlyArray<{
+      readonly test: string;
+      readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+      readonly scanError?: string;
+    }>;
+    readonly backendSessionKind: "client" | "headless";
+    readonly ciSessionKind: "client" | "headless";
+  };
   /** R658: baseline verdicts classified `baseline-test-stopped`; see `SessionReport.baselineStopped`. */
   readonly baselineStopped?: { readonly tests: readonly string[]; readonly budgetMs: number };
   readonly runnerDisagreementTests?: readonly string[];
@@ -401,6 +411,8 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
     string,
     { test: string; tier: "firm" | "uncertain-write" | "uncertain-read"; firstAccess: string }
   >();
+  // PR-307: the event is emitted once per session; the last one wins
+  let sessionKindSensitive: FoldedReport["sessionKindSensitive"];
   const baselineStoppedTests = new Set<string>();
   let stoppedBudgetMs: number | undefined;
   // R1131: the first batch's baseline start WorkDate (ponytail: a later batch on another date, after midnight,
@@ -627,6 +639,14 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
       case "tests-restrictive-default-at-risk":
         // PR-36 (R1048): a label only. The baseline and every verdict stay as al-runner gave them.
         for (const t of e.tests) restrictiveDefaultTests.set(t.test, { ...t });
+        break;
+      case "tests-session-kind-sensitive":
+        // PR-307 (R1168): a label only; no verdict reads it.
+        sessionKindSensitive = {
+          tests: e.tests.map((t) => ({ ...t })),
+          backendSessionKind: e.backendSessionKind,
+          ciSessionKind: e.ciSessionKind,
+        };
         break;
       case "tests-discovered":
         discoveredTests = e.tests;
@@ -1016,6 +1036,7 @@ export function foldEvents(statics: FoldStatics, events: readonly RunEvent[]): F
           ),
         }
       : {}),
+    ...(sessionKindSensitive !== undefined ? { sessionKindSensitive } : {}),
     ...(baselineStoppedTests.size > 0
       ? {
           baselineStopped: {
