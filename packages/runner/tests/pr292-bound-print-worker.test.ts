@@ -4,6 +4,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ownTimeout } from "@lethal/engine/own-timeout";
 import { printAlTree, printTestDir, printWalkedSync } from "../src/baseline-snapshot";
 import { ProjectSymlinkRefusedError } from "../src/walk";
 
@@ -90,22 +91,28 @@ describe("PR-292: the bound print in a worker", () => {
     expect(new Set(got).size).toBe(6);
   });
 
-  test("6: a process that prints once exits by itself (the pool never holds it open)", async () => {
-    const dir = await tree({ "Logic.Codeunit.al": "codeunit 50100 Logic { }" });
-    const script = join(dir, "..", `pr292-exit-${process.pid}.ts`);
-    await writeFile(
-      script,
-      `import { printAlTree } from ${JSON.stringify(join(import.meta.dir, "../src/baseline-snapshot"))};\n` +
-        `console.log(await printAlTree(${JSON.stringify(dir)}));\n`,
-    );
-    roots.push(script);
-    const t0 = performance.now();
-    const p = Bun.spawn([process.execPath, script], { stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => p.kill(), 10_000);
-    const code = await p.exited;
-    clearTimeout(timer);
-    expect(code).toBe(0);
-    expect(performance.now() - t0).toBeLessThan(10_000);
-    expect((await new Response(p.stdout).text()).trim()).toBe(printWalkedSync(dir, "refuse", true));
-  }, 20_000);
+  test(
+    "6: a process that prints once exits by itself (the pool never holds it open)",
+    async () => {
+      const dir = await tree({ "Logic.Codeunit.al": "codeunit 50100 Logic { }" });
+      const script = join(dir, "..", `pr292-exit-${process.pid}.ts`);
+      await writeFile(
+        script,
+        `import { printAlTree } from ${JSON.stringify(join(import.meta.dir, "../src/baseline-snapshot"))};\n` +
+          `console.log(await printAlTree(${JSON.stringify(dir)}));\n`,
+      );
+      roots.push(script);
+      const t0 = performance.now();
+      const p = Bun.spawn([process.execPath, script], { stdout: "pipe", stderr: "pipe" });
+      const timer = setTimeout(() => p.kill(), 10_000);
+      const code = await p.exited;
+      clearTimeout(timer);
+      expect(code).toBe(0);
+      expect(performance.now() - t0).toBeLessThan(10_000);
+      expect((await new Response(p.stdout).text()).trim()).toBe(
+        printWalkedSync(dir, "refuse", true),
+      );
+    },
+    ownTimeout(20_000),
+  );
 });
