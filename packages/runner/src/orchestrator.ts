@@ -6370,6 +6370,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baseline.length === tests.length &&
     // R857: nothing can reuse it, and as the newest match it would hide a default run's own.
     backend.isolatesTests !== true &&
+    // PR-235: the key does not say whether the baseline was batched; a knob-off run records none.
+    backend.baselineBatchingKnobOff !== true &&
     // R896 (review 1): nor under auto, whose rows depend on the session's choice.
     scope.isolationAuto === undefined &&
     // R658 (D5): the key does not include --baseline-timeout-ms, so a snapshot holding a stopped
@@ -9536,6 +9538,7 @@ async function runSessionBody(
           allowReuse:
             resumeState !== undefined &&
             cfg.backend.isolatesTests !== true &&
+            cfg.backend.baselineBatchingKnobOff !== true && // PR-235: a stored baseline may be batched
             cfg.backend.isolationAuto !== true && // R896 (review 1)
             // R1008: serve-entries' warm-up needs its baseline rows, as R857; PR-21 (L5): unless the
             // backend takes them back from the snapshot after a re-check (`recheckReusedBaseline`)

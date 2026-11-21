@@ -401,3 +401,30 @@ describe("R926: only a complete set of passing baseline coverages decides", () =
     expect(reachFromBaseline(noLine, [a], evidence, () => "test")).toBeUndefined();
   });
 });
+
+// PR-235 T-e: the negative control for the unbatched baseline (LETHAL_V3_BASELINE_BATCHING=off). Its rows carry
+// each test's OWN coverage, so a site gets exactly the tests that hit its line: no union, no line shift.
+describe("PR-235 attribution control (not the knob): per-test rows give exact reach, with no union attribution and no line shift", () => {
+  const a = ref("ATest");
+  const b = ref("BTest");
+  const modes = { isolationOf: () => "test" as const };
+  const rows = [
+    { ref: a, verdict: verdict(a, "pass", [5]) }, // A reaches line 5 only
+    { ref: b, verdict: verdict(b, "pass", [6]) }, // B reaches the NEXT line only
+  ];
+  const evidence = baselineReachOf(rows, new Set([a, b]), modes);
+
+  test("a statement-grain site on line 5 is reached by exactly [A]", () => {
+    expect(reachFromBaseline(site, [a, b], evidence, () => "test")).toEqual({
+      guardReached: true,
+      reachedBy: ["Sandbox Tests.ATest"],
+    });
+  });
+
+  test("a statement-grain site on the next line (6) is reached by exactly [B]", () => {
+    expect(reachFromBaseline({ ...site, reachLine: 6 }, [a, b], evidence, () => "test")).toEqual({
+      guardReached: true,
+      reachedBy: ["Sandbox Tests.BTest"],
+    });
+  });
+});
