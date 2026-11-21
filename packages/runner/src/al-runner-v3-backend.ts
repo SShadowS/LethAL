@@ -922,6 +922,8 @@ export interface AlRunnerV3Config {
   readonly speculateBaseline?: boolean;
   /** PR-241: pack consecutive prefetch units into requests of up to this many entries. Internal. Unset: `LETHAL_V3_PACK_ENTRIES`. */
   readonly packEntries?: number;
+  /** PR-281: the order of procedure scopes under lanes. Internal. Unset: `LETHAL_V3_UNIT_ORDER`. */
+  readonly unitOrder?: "costliest" | "manifest";
   /**
    * R948: under serve-entries, run the baseline through ONE serve daemon (a `plain()` request per
    * codeunit, with coverage) instead of one al-runner process per codeunit, cross-checked against
@@ -1089,6 +1091,27 @@ export function readPackEntries(
   if (raw === undefined || raw === "") return undefined;
   if (!/^[1-9][0-9]{0,8}$/.test(raw)) throw new AlRunnerV3PackEntriesRefusedError(raw);
   return Number(raw);
+}
+
+/** PR-281: `LETHAL_V3_UNIT_ORDER=manifest` keeps the manifest order of procedure scopes (A/B knob); unset or empty: costliest first. */
+export const UNIT_ORDER_ENV = "LETHAL_V3_UNIT_ORDER";
+
+export class AlRunnerV3UnitOrderRefusedError extends Error {
+  constructor(value: string) {
+    super(
+      `lethal-v3-unit-order-refused: ${UNIT_ORDER_ENV} is "${value}"; use manifest to keep the manifest order, or leave it unset`,
+    );
+    this.name = "AlRunnerV3UnitOrderRefusedError";
+  }
+}
+
+/** Unset or empty: "costliest". `manifest`: "manifest". Anything else throws. */
+export function readUnitOrder(
+  raw: string | undefined = process.env[UNIT_ORDER_ENV],
+): "costliest" | "manifest" {
+  if (raw === undefined || raw === "") return "costliest";
+  if (raw === "manifest") return "manifest";
+  throw new AlRunnerV3UnitOrderRefusedError(raw);
 }
 
 /** PR-235: `LETHAL_V3_BASELINE_BATCHING=off` turns the baseline's batching off for the session (measure-only). */
@@ -3021,6 +3044,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly sequentialSamplesEnv: boolean;
   /** PR-241: the pack cap in entries (option or `LETHAL_V3_PACK_ENTRIES`, read at construction); undefined = off. */
   private readonly packEntries: number | undefined;
+  /** PR-281: `LETHAL_V3_UNIT_ORDER` (option or env, read at construction). */
+  private readonly unitOrderKnob: "costliest" | "manifest";
+  /** PR-281: the manifest-first covered mutant of the batch (from `prepareBatch`); the session-first warm-up's mode comes from it. */
+  private batchFirstPlan:
+    | { readonly mutantId: string; readonly refs: readonly TestMethodRef[] }
+    | undefined;
   /** PR-235: `LETHAL_V3_BASELINE_BATCHING=off`, read at construction; batching never runs when true. */
   readonly baselineBatchingKnobOff: boolean;
   private memoryHoldNoticed = false;
@@ -3323,6 +3352,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.speculateOn = cfg.speculateBaseline ?? readSpeculateBaseline();
     this.sequentialSamplesEnv = readSequentialSamples();
     this.packEntries = cfg.packEntries ?? readPackEntries(); // refuses a bad value here, at startup
+    this.unitOrderKnob = cfg.unitOrder ?? readUnitOrder(); // refuses a bad value here, at startup
     this.baselineBatchingKnobOff = readBaselineBatchingOff();
     if (this.baselineBatchingKnobOff) {
       console.warn(
@@ -3588,7 +3618,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (refusals.length > 0) return { ok: false, details: refusals.join("\n") };
     return {
       ok: true,
-      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.baselineBatchingKnobOff ? `; baseline batching turned off by ${BASELINE_BATCHING_ENV}=off (PR-235)` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
+      details: `${reported}; ${v3ContractSummary(this.contract)}${probeNote !== "" ? `; ${probeNote}` : ""}; §6 Sleep rule ${this.sleepRuleRetired ? "retired" : "applies"} (R779); baseline batching: ${this.baselineBatchingWhyOff === undefined ? "allowed" : `off (${this.baselineBatchingWhyOff})`} (PR-114a)${this.baselineBatchingKnobOff ? `; baseline batching turned off by ${BASELINE_BATCHING_ENV}=off (PR-235)` : ""}${this.unitOrderKnob === "manifest" ? `; procedure scopes in manifest order by ${UNIT_ORDER_ENV}=manifest (PR-281)` : ""}${this.entries ? `; transport serve-entries (R635), secondEcho ${this.cfg.secondEcho !== false}` : ""}${this.cfg.serveFallbackWarmup !== undefined ? `; transport one-shot (the serve-entries default fell back at the warm-up: ${this.cfg.serveFallbackWarmup}; R786)` : ""}`,
     };
   }
 
@@ -8269,7 +8299,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const ids = new Set<number>();
     for (const p of plans) for (const r of this.serveRefs(p.refs)) ids.add(this.callId(r));
     for (const id of ids) this.union.add(id); // as `prefetchWindow` does, before its first request
-    const first = [...(ids.size > 0 ? ids : this.union)].sort(
+    // PR-281: the warm-up's mode is the batch's manifest-first covered mutant's, whatever unit lane 0
+    // took first (the queue may hand out the costliest scope first). No batch record: lane 0's unit, as before.
+    const modeIds = this.batchFirstPlan
+      ? new Set(this.serveRefs(this.batchFirstPlan.refs).map((r) => this.callId(r)))
+      : ids;
+    const first = [...(modeIds.size > 0 ? modeIds : this.union)].sort(
       (a, b) => Math.abs(a) - Math.abs(b),
     )[0];
     if (first === undefined) {
@@ -9385,6 +9420,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     if (batchPlans !== undefined) {
       this.prefetchBatch = { groups: batchPlans.length, size: 0, ran: false };
+      this.batchFirstPlan = batchPlans[0];
     }
   }
 
@@ -9428,6 +9464,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** PR-241: the pack cap in entries, or undefined (off). */
   packEntryCap(): number | undefined {
     return this.packEntries;
+  }
+
+  /** PR-281: the order the split queue hands out procedure scopes in. */
+  unitOrder(): "costliest" | "manifest" {
+    return this.unitOrderKnob;
   }
 
   /** PR-241: the entries `plans` would send, counted as `groupsThatFit` counts them (a group is its codeunits plus its echo). */

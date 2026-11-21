@@ -225,9 +225,11 @@ import {
   ESTIMATE_NOT_A_BOUND,
   ESTIMATE_WARN_MS,
   TimeBudget,
+  codeunitTotals,
   cutWindows,
   estimateCovered,
   formatEstimate,
+  mutantCost,
   splitWindowCaps,
 } from "./mutant-windows";
 import { nestedProjectWarning } from "./nested-project";
@@ -241,6 +243,7 @@ import {
   ParallelStopError,
   asParallelOwner,
   lanesNotice,
+  orderUnitsCostliestFirst,
   runScopeQueue,
   splitBackend,
 } from "./parallel-queue";
@@ -5214,6 +5217,8 @@ interface BatchScope {
   readonly parallel?: {
     readonly owner: ExecutionBackend;
     readonly lanes: readonly ExecutionBackend[];
+    /** PR-281: a lane finished a mutant (the daemon-churn guard counts from there). */
+    readonly onMutantFinished?: () => void;
   };
   readonly caps: BackendCapabilities;
   readonly safety: SessionSafety;
@@ -7554,7 +7559,7 @@ async function runSessionBody(
     emit({
       type: "warning",
       code: "al-runner-v3-daemon-churn",
-      message: `[lethal] al-runner-v3-daemon-churn: lane ${s.lane}'s serve daemon closed ${s.closes} times in a row with no mutant scored anywhere in the session, so the budget is spent: no mutant or batch starts after the ones in flight. Read its serve-daemon-closed events for the refusal that keeps closing it (PR-250)`,
+      message: `[lethal] al-runner-v3-daemon-churn: lane ${s.lane}'s serve daemon closed ${s.closes} times in a row with no mutant finished anywhere in the session, so the budget is spent: no mutant or batch starts after the ones in flight. Read its serve-daemon-closed events for the refusal that keeps closing it (PR-250)`,
     });
     timeBudget.stopForChurn(s);
   };
@@ -8228,7 +8233,15 @@ async function runSessionBody(
     const scope: BatchScope = {
       // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
       backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
-      ...(v3Lanes !== undefined ? { parallel: { owner: cfg.backend, lanes: v3Lanes } } : {}),
+      ...(v3Lanes !== undefined
+        ? {
+            parallel: {
+              owner: cfg.backend,
+              lanes: v3Lanes,
+              onMutantFinished: () => churn.finished(), // PR-281
+            },
+          }
+        : {}),
       caps,
       safety,
       leaseSession,
@@ -14280,6 +14293,8 @@ async function runMutantsParallel(
       noteWindows?: (sizes: readonly number[]) => void;
       /** PR-241: the pack cap in entries (`LETHAL_V3_PACK_ENTRIES`), or undefined = off. */
       packEntryCap?: () => number | undefined;
+      /** PR-281: `manifest` (`LETHAL_V3_UNIT_ORDER=manifest`) keeps the manifest order; absent or `costliest` orders units costliest first under the split. */
+      unitOrder?: () => "costliest" | "manifest";
       /** PR-241: the entries a unit's plans would send. */
       prefetchEntryCount?: (
         plans: { mutantId: string; refs: readonly TestMethodRef[] }[],
@@ -14296,9 +14311,11 @@ async function runMutantsParallel(
       releaseLane?: (k: number) => void;
     };
     readonly lanes: readonly ExecutionBackend[];
+    /** PR-281: a lane finished a mutant (the daemon-churn guard counts from there). */
+    readonly onMutantFinished?: () => void;
   },
 ): Promise<void> {
-  const { owner, lanes, ...rest } = args;
+  const { owner, lanes, onMutantFinished, ...rest } = args;
   // PR-99: N > 1 splits the prefetch: no owner-wide window prefetch; each lane prefetches exactly the unit it
   // takes, on its own daemon, then scores it (the batch setup is the owner's, once, below).
   const { prepareBatch, barrierPassed, laneGateMeasured, watchLaneGate } = owner;
@@ -14370,6 +14387,7 @@ async function runMutantsParallel(
       window.map((m) => m.mutantId),
       probe,
       lanes.length,
+      onMutantFinished,
     );
     const units = new Map<string, MutantManifestEntry[]>();
     for (const m of window) {
@@ -14382,8 +14400,26 @@ async function runMutantsParallel(
       unit.push(m);
       units.set(scope, unit);
     }
+    // PR-281: under the split, the costliest scope first inside each window (the idle tail of the last
+    // scopes). Whole units only: no scope's internal order moves, so no verdict does. `manifest` keeps today's.
+    let queued = [...units.values()];
+    if (split && owner.unitOrder?.() !== "manifest") {
+      const model = costModelOf(owner, args.measuredDuration, args.fallbackTimeoutMs);
+      const totals = codeunitTotals(model.baselineDuration);
+      queued = orderUnitsCostliestFirst(
+        queued,
+        (u) => windowOfMutant.get(u[0]?.mutantId ?? "") ?? 0,
+        (u) =>
+          u.reduce((sum, m) => {
+            const refs = args.perMutantTests.get(m.mutantId);
+            return refs === undefined || refs.length === 0
+              ? sum
+              : sum + mutantCost(refs, model, totals).ms;
+          }, 0),
+      );
+    }
     const ran = await runScopeQueue({
-      units: [...units.values()],
+      units: queued,
       lanes: cap,
       // R785: `--workers N` is an upper bound; an owner that cannot say its warm-up starts all lanes.
       ...(paced
