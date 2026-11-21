@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 1130 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 1131 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -398,6 +398,7 @@ that ordering is the priority.
 - **R1153** · 12 PR-56 keep entries have never matched: al-runner ends their texts with " (not pinned)", the census normalised it away, and the anchored regex needs it (keeps that passed for the wrong reason) · [R1153.md](docs/roadmap/R1153.md) · open — (a) widen each of the 12 only with its own kept-vs-fresh DO proof, later; (b) test every keep entry…
 - **R1166** · DO's verdicts rest on the session kind: al-runner v3 scores the GUI branch (GuiAllowed true) and bcdev the non-GUI one; on DO, 60 of 422 BC-measured tests change with it, and --no-client cannot be used on DO today (every test refused, upstream #8273) · [R1166.md](docs/roadmap/R1166.md) · open — UNCONFIRMED: the owner's first answer (headless CI, q-20261121T194603-e01cc807) is withdrawn as not…
 - **R1167** · A mutant killed through the isolated recheck (PR-144) reports the recheck's RUN set as `coveringTests` (whole test codeunits, non-green tests included) while keeping `coverageAttribution: exact`, which promises tests that executed the procedure · [R1167.md](docs/roadmap/R1167.md) · open — report accuracy only (no verdict moves): pick one, either rechecked rows keep the baseline covering…
+- **R1168** · bcdev runs tests headless (an ODataV4 session, GuiAllowed false), while a project's own CI often runs a client session (DO's Azure DevOps CI: GuiAllowed true): on DO 60 of 422 tests change outcome by session kind, so the authoritative backend measures a different code path than the project's CI for session-dependent tests · [R1168.md](docs/roadmap/R1168.md) · open — design: options and costs to the owner in docs/superpowers/specs/2026-11-21-pr304-session-kind.md…
 
 ## Product gaps a real project hits
 
