@@ -456,6 +456,8 @@ export interface SessionFingerprintInput {
   readonly v3Environment?: "saas" | "onprem";
   /** R956: sha256 of `alRunnerV3.license`'s file: another license can give another verdict. Only when set, so no other digest moves. */
   readonly v3License?: string;
+  /** PR-282: `alRunnerV3.companies`: another company list can give another verdict. Only when set, so no other digest moves. */
+  readonly v3Companies?: string;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -545,6 +547,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.isolationAuto === true ? { isolation: "auto" } : {}),
     ...(input.v3Environment !== undefined ? { v3Environment: input.v3Environment } : {}),
     ...(input.v3License !== undefined ? { v3License: input.v3License } : {}),
+    ...(input.v3Companies !== undefined ? { v3Companies: input.v3Companies } : {}), // PR-282
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,

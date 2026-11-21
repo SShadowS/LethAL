@@ -1722,6 +1722,21 @@ describe("R885: demo data, on the one-shot path", () => {
     expect(await run({})).not.toContain("--license");
   });
 
+  test("PR-282 a one-shot call carries --companies <value> exactly when it is set", async () => {
+    const run = async (extra: Partial<AlRunnerV3Config>) => {
+      const l = await layout();
+      const v3 = fakeV3(allPass);
+      const b = backendOf(l, v3.spawn, fakeAlc().io, extra);
+      await b.deploy(l.batch);
+      await b.activate("M0002");
+      await b.run(ref("A"), { coverage: "none", timeoutMs: 1000 });
+      return v3.calls[0] ?? [];
+    };
+    const on = await run({ companies: "CRONUS,Other" });
+    expect(on[on.indexOf("--companies") + 1]).toBe("CRONUS,Other");
+    expect(await run({})).not.toContain("--companies");
+  });
+
   test("R938 a one-shot call carries --environment <value> exactly when the choice is stated", async () => {
     const run = async (extra: Partial<AlRunnerV3Config>) => {
       const l = await layout();
@@ -2455,6 +2470,16 @@ describe("§5 the row decoder", () => {
     expect(lic.runnerRow).toBe("runner-refused");
     expect(lic.failureMessage).toContain("set alRunnerV3.license to a .bclicense file (R956)");
     expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.license");
+  });
+  test("PR-282: a Company-table refusal names alRunnerV3.companies; another refusal does not", () => {
+    const refuse = (message: string) =>
+      v3RowVerdict(r, row({ status: "error", notRun: true, message }), 3, 10, undefined);
+    const c = refuse("NotRun: out-of-scope: FindSet on the Company table: the database may hold");
+    expect(c.runnerRow).toBe("runner-refused");
+    expect(c.failureMessage).toContain(
+      "set alRunnerV3.companies to the database's companies (PR-282)",
+    );
+    expect(refuse("NotRun: something else").failureMessage).not.toContain("alRunnerV3.companies");
   });
   // R963: a row with no durationMs of its own has an UNKNOWN test time; the call's wall (here 777)
   // is never stored as the test's. With one, it is passed through. Each branch its own test.

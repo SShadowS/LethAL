@@ -1390,6 +1390,8 @@ export interface ExecutionContext {
    * bytes, never its contents. Only on directly measured al-runner-v3 entries, and only when set.
    */
   readonly license?: { readonly path: string; readonly sha256: string };
+  /** PR-282: the `alRunnerV3.companies` this run passed as `--companies`. Only on directly measured al-runner-v3 entries, and only when set. */
+  readonly companies?: string;
 }
 
 /** PR-247: one row of `SessionReport.costlyTests.top`. */
@@ -2897,6 +2899,7 @@ function buildExecutionContexts(
     readonly noClient?: true;
     readonly environment?: ExecutionContext["environment"];
     readonly license?: ExecutionContext["license"];
+    readonly companies?: string;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2926,6 +2929,7 @@ function buildExecutionContexts(
             ? { environment: runnerBuild.environment }
             : {}),
           ...(runnerBuild.license !== undefined ? { license: runnerBuild.license } : {}),
+          ...(runnerBuild.companies !== undefined ? { companies: runnerBuild.companies } : {}), // PR-282
         }
       : {}),
   };
