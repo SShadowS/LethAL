@@ -495,6 +495,25 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("PR-297: refusedCutTail goes in the lending build, the fingerprint and the report; off, none moves", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const none = await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const on = await v3Session(
+        root,
+        store,
+        Object.assign(withProbe(new V3KindStub([]), []), { refusedCutTail: true }),
+      );
+      const [r1, r2] = [store.getRun(1), store.getRun(2)];
+      expect(r1?.runnerBuild).not.toContain("refused-cut-tail");
+      expect(r2?.runnerBuild).toBe(`${r1?.runnerBuild} refused-cut-tail`);
+      // another fingerprint: a resume under the other value is refused
+      expect(r1?.configFingerprint).not.toBe(r2?.configFingerprint);
+      expect(none.validity.executionContexts[0]).not.toHaveProperty("refusedCutTail");
+      expect(on.validity.executionContexts[0]?.refusedCutTail).toBe(true);
+    });
+  });
+
   test("R938: the environment goes in the build, the fingerprint and the report; a resume under another one is refused", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");

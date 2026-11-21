@@ -663,6 +663,8 @@ export interface ExecutionBackend {
   readonly license?: { readonly path: string; readonly sha256: string } | undefined;
   /** PR-282, al-runner-v3 only: `alRunnerV3.companies`, passed as `--companies` on every call that runs tests. In the fingerprint and the report. */
   readonly companies?: string | undefined;
+  /** PR-297, al-runner-v3 only: `alRunnerV3.refusedCutTail` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
+  readonly refusedCutTail?: boolean | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */

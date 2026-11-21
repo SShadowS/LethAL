@@ -19,6 +19,7 @@
  *     "daemonMaxRequests": 0,                                 // R952 (R948); a serve daemon is replaced after this many requests. 0 (default) = off
  *     "license": "<optional .bclicense file>",             // R956; passed as --license on every al-runner call that runs tests; its sha256 is in the fingerprint and the report
  *     "companies": "<optional>",                              // PR-282; passed as --companies on every al-runner call that runs tests (one-shot and serve), in al-runner's syntax: names, comma separated, the session company first, or `all` (needs test data). No default: absent passes nothing, and al-runner refuses "FindSet on the Company table" because it does not know the database's companies. In the fingerprint and the report.
+ *     "refusedCutTail": false,                                // PR-297, OFF by default; true runs each green test after a baseline-refusal cut (PR-250) alone under a mutant, if it passed alone once at the end of the baseline, instead of scoring it error. Every such kill carries a note. In the fingerprint, the report and the lending build.
  *     "dotnetSidecar": "<optional AlDotNetSidecar.dll>"      // R886; passed as --dotnet-sidecar. Absent: the pinned build's own sidecar, when its .gated names one; false: none (gates)
  *     "recheckWithheldKills": true,                          // PR-144, ON by default (PR-182); false opts out and saves about 10% of a run with many withheld rows (nothing when there are none). After the main pass, re-run the withheld-kill rows under method isolation. A row the recheck does not recover stays `error`: unmeasured, never a kill. Evidence (PR-170): 42 of 58 recovered kills confirmed on BC, 0 false, 16 unmeasurable (9 TestPage-only killers, 7 killers red at BC's baseline). Warning: kills recovered this way are not measured against BC; they may be false where an earlier test that al-runner refused would have set state on BC.
  *     "recheckBudgetSeconds": 3600,                          // PR-144; the recheck's own time budget (the main pass's --time-budget does not cover it)
@@ -73,6 +74,8 @@ export interface AlRunnerV3ConfigSection {
   readonly license?: string;
   /** PR-282: `--companies <value>` on every al-runner call that runs tests. Absent: not passed (no default). */
   readonly companies?: string;
+  /** PR-297: run a stable green test after a baseline-refusal cut alone under a mutant. Absent: off. */
+  readonly refusedCutTail?: boolean;
   /**
    * PR-227: a folder (a relative one is resolved against the working directory, as `license` is) that
    * receives every serve daemon's full stderr, one file per daemon. One-shot and `--isolate-tests`
@@ -169,6 +172,7 @@ const KEYS = [
   "daemonMaxRequests",
   "license",
   "companies",
+  "refusedCutTail",
   "environment",
   "isolation",
   "downloadDemoData",
@@ -320,6 +324,11 @@ export function validateAlRunnerV3Config(
       `al-runner-v3-config-refused: "alRunnerV3.companies" must be a non-empty string (the database's company names, comma separated, or "all"), got ${JSON.stringify(r.companies)} (PR-282).`,
     );
   }
+  if (r.refusedCutTail !== undefined && typeof r.refusedCutTail !== "boolean") {
+    throw new Error(
+      `al-runner-v3-config-refused: "alRunnerV3.refusedCutTail" must be true or false, got ${JSON.stringify(r.refusedCutTail)} (PR-297).`,
+    );
+  }
   for (const k of ["path", "alcPath", "cacheDir", "daemonStderrDir"]) {
     if (r[k] !== undefined && (typeof r[k] !== "string" || r[k] === "")) {
       throw new Error(`"alRunnerV3.${k}" must be a non-empty string`);
@@ -417,6 +426,7 @@ export function validateAlRunnerV3Config(
     ...(r.environment !== undefined ? { environment: r.environment as "saas" | "onprem" } : {}),
     ...(typeof r.license === "string" ? { license: resolve(r.license) } : {}),
     ...(typeof r.companies === "string" ? { companies: r.companies } : {}), // PR-282
+    ...(typeof r.refusedCutTail === "boolean" ? { refusedCutTail: r.refusedCutTail } : {}), // PR-297
     ...(typeof r.daemonStderrDir === "string"
       ? { daemonStderrDir: resolve(r.daemonStderrDir) }
       : {}),
