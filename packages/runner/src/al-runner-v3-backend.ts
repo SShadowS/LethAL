@@ -871,6 +871,8 @@ export interface AlRunnerV3Config {
   readonly license?: { readonly path: string; readonly sha256: string };
   /** PR-282: `alRunnerV3.companies`: `--companies <value>` on every al-runner call that runs tests, one-shot and serve. */
   readonly companies?: string;
+  /** PR-297: `alRunnerV3.refusedCutTail`: a stable green test after a baseline-refusal cut (PR-250) runs alone under a mutant. Absent: off. */
+  readonly refusedCutTail?: boolean;
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -2639,6 +2641,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get companies(): string | undefined {
     return this.cfg.companies;
   }
+  /** PR-297: see `ExecutionBackend.refusedCutTail`. */
+  get refusedCutTail(): boolean {
+    return this.cfg.refusedCutTail === true;
+  }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
     return this.skipAfterTimeoutLearned && !this.entries;
@@ -2992,6 +2998,15 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private readonly refusedCutSaid = new Set<number>();
   /** PR-250: the (mutant, codeunit) entries `countRefusedCuts` has counted (sent with the cut). */
   private refusedCutCounted = new Set<string>();
+  /**
+   * PR-297: per codeunit, the lower-case methods of its green tail tests (after the PR-250 cut) that passed
+   * ALONE once at the end of the baseline phase. One result per session, shared by all lanes; a test not in
+   * the set is unstable (a refusal, fail, timeout, missing row or a failed request: fail closed, never retried).
+   */
+  private tailStable = new Map<number, Set<string>>();
+  /** PR-297: how many alone tail requests the stability pass sent, and how many a mutant run sent. */
+  private tailAloneCalls = { stability: 0, mutant: 0 };
+  private tailSleepSaid = false;
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
   /** R778 (A2): the backend-wide count of `request()` calls (every lane); see `CallRows.prefetchSeq`. */
@@ -4071,13 +4086,166 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** R635 §4: the orchestrator's bracket around its baseline step. The ONLY source of `inBaseline`. */
-  baselinePhase(on: boolean): void | Promise<void> {
+  baselinePhase(on: boolean, completed?: boolean): void | Promise<void> {
     this.dropPair();
     this.clearPairStores();
+    // PR-297: the end of the baseline phase measures the stable tail tests, still inside the bracket (NONE).
+    if (!on && this.inBaseline && this.cfg.refusedCutTail === true && this.entries)
+      return this.endBaselineAfterTailStability(completed === true);
     this.inBaseline = on;
     // R948: the baseline's own daemon is closed before the mutant phase starts its own (its stop
     // differs, and it holds 2-3 GB).
     if (!on && this.laneList.some((l) => l.hasBaselineDaemon())) return this.closeBaselineDaemons();
+  }
+
+  private async endBaselineAfterTailStability(completed: boolean): Promise<void> {
+    this.tailStable = new Map();
+    try {
+      // The baseline's own daemon closes first, as at every end of a baseline: the pass below runs on a
+      // throwaway daemon and must not replace it.
+      if (this.laneList.some((l) => l.hasBaselineDaemon())) await this.closeBaselineDaemons();
+      const skipped = !completed
+        ? "the baseline did not run to its end"
+        : this.stopHandle?.spent() === true
+          ? "the time budget is spent"
+          : this.stopHandle?.signalled() === true
+            ? "a stop signal came"
+            : !this.sleepRuleRetiredForParallel()
+              ? "this build does not retire the §6 Sleep rule, which no alone tail call may reach"
+              : undefined;
+      // N-e: nothing to say when no codeunit has a PR-250 cut
+      const hasCut = [...this.baselineRows.keys()].some((cu) => this.refusedCut(cu) !== undefined);
+      if (!hasCut) {
+        // no cut, no tail, no pass
+      } else if (skipped !== undefined) {
+        this.notify(
+          "al-runner-v3-refused-cut-tail",
+          `[lethal] al-runner-v3-refused-cut-tail: the stability pass was not run (${skipped}), so no tail test is measured alone and each keeps PR-250's error (PR-297)`,
+        );
+      } else {
+        try {
+          await this.measureTailStability(this.lane);
+        } catch (err) {
+          // Never rethrown: a failure here must not replace the baseline's own outcome. Fail closed.
+          this.tailStable = new Map();
+          this.notify(
+            "al-runner-v3-refused-cut-tail",
+            `[lethal] al-runner-v3-refused-cut-tail: the stability pass failed (${err instanceof Error ? err.message : String(err)}), so no tail test is measured alone and each keeps PR-250's error (PR-297)`,
+          );
+        }
+      }
+    } finally {
+      this.inBaseline = false;
+    }
+  }
+
+  /**
+   * PR-297: one stability run: `ref` alone, NONE active, on a THROWAWAY daemon closed right after (as R927's
+   * probe). It leaves no trace on the session's daemon, warm-up, barrier or proof state: it does not touch
+   * `union`, `unionWarmed` or the warm-up counters, and the daemon is gone before the mutant phase starts its
+   * own. Stable only if its one row is a pass. Any error (a request error, a refusal, a closed daemon) is
+   * unstable; `firstError` keeps the first one's text for the one notice.
+   */
+  private async tailStabilityRun(
+    lane: Lane,
+    ref: TestMethodRef,
+    firstError: { text?: string },
+  ): Promise<boolean> {
+    try {
+      const s = this.serveStopSeconds();
+      if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+      const id = this.callId(ref);
+      const mode = this.modeOfCall(id);
+      const selection = isolatedSelection(
+        ref.codeunitId,
+        ref.method,
+        this.discovered.filter((t) => t.codeunitId === ref.codeunitId).map((t) => t.method),
+      );
+      // N-a: this runs at the end-of-baseline stop (on batch 1 longer than the mutant stop); the alone kill's
+      // NONE confirm runs at the kill's own stop.
+      // N-b: a fresh daemon here, a warm one for later alone calls: the same selection, not the same history.
+      // N-c: no echo row is checked here, on purpose: the activation is NONE.
+      this.tailAloneCalls.stability += 1;
+      await this.spawnDaemon(lane, mode, s);
+      try {
+        const { sent, rows, cut } = await this.send(
+          lane,
+          [{ mutantId: SELECTOR_RESOURCE_NONE, codeunits: [id] }],
+          "live",
+          mode,
+          1,
+          { call: id, selection },
+        );
+        if (cut !== undefined) return false;
+        const entry = sent.find((e) => !e.echo && e.call === id);
+        if (entry === undefined) return false;
+        const mine = (rows.get(entry.id) ?? []).filter(
+          (r) =>
+            r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
+        );
+        const only = mine[0];
+        return mine.length === 1 && only !== undefined && only.status === "pass" && !only.notRun;
+      } finally {
+        await this.closeLane(lane, "probe");
+      }
+    } catch (err) {
+      firstError.text ??= err instanceof Error ? err.message : String(err);
+      return false;
+    }
+  }
+
+  /**
+   * PR-297 (spec section 5): for each codeunit with a PR-250 cut, each green test of the cut (its BASELINE row is a
+   * pass) runs ONCE alone with no mutant active (`aloneCall`, activation NONE). Stable only if its row is a
+   * pass. A refusal, fail, timeout, missing row, a thrown request error or a closed daemon is unstable (fail
+   * closed). Never retried. One result per session, held here for every lane.
+   */
+  private async measureTailStability(lane: Lane): Promise<void> {
+    this.tailStable = new Map();
+    for (const cu of [...this.baselineRows.keys()].sort((a, b) => a - b)) {
+      const cut = this.refusedCut(cu);
+      if (cut === undefined) continue;
+      const green = (this.baselineRows.get(cu) ?? []).filter(
+        (r) => cut.methods.has(r.method.toLowerCase()) && r.status === "pass" && !r.notRun,
+      );
+      const stable = new Set<string>();
+      this.tailStable.set(cu, stable);
+      const unstable: string[] = [];
+      const firstError: { text?: string } = {};
+      for (const row of green) {
+        const ref = this.discovered.find(
+          (t) => t.codeunitId === cu && t.method.toLowerCase() === row.method.toLowerCase(),
+        );
+        // S-a: the stop is checked before EACH run; once it fires no daemon is spawned and the rest are unstable
+        if (this.stopHandle?.spent() === true || this.stopHandle?.signalled() === true) {
+          firstError.text ??= "the stop fired before this test ran";
+          unstable.push(row.method);
+          continue;
+        }
+        // not a discovered test: never stable
+        if (ref !== undefined && (await this.tailStabilityRun(lane, ref, firstError)))
+          stable.add(row.method.toLowerCase());
+        else unstable.push(row.method);
+      }
+      const list = (xs: readonly string[]) => (xs.length === 0 ? "none" : xs.join(", "));
+      this.notify(
+        "al-runner-v3-refused-cut-tail",
+        `[lethal] al-runner-v3-refused-cut-tail: codeunit ${cu}: tail tests measured alone at the end of the baseline (${green.length} green of ${cut.names.length} cut): stable: ${list(green.filter((r) => stable.has(r.method.toLowerCase())).map((r) => r.method))}; unstable: ${list(unstable)}${firstError.text !== undefined ? ` (first error: ${firstError.text.slice(0, 200)})` : ""} (PR-297)`,
+      );
+    }
+  }
+
+  /** PR-297: whether `ref` is a stable green test of a PR-250 cut (flag on): the alone routing's condition. */
+  private isStableTail(ref: TestMethodRef): boolean {
+    return (
+      this.cfg.refusedCutTail === true &&
+      this.tailStable.get(ref.codeunitId)?.has(ref.method.toLowerCase()) === true
+    );
+  }
+
+  /** PR-297: the alone tail requests sent so far: the stability pass, and under a mutant. */
+  refusedCutTailStats(): Readonly<{ stability: number; mutant: number }> {
+    return { ...this.tailAloneCalls };
   }
 
   private async closeBaselineDaemons(): Promise<void> {
@@ -4210,6 +4378,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.coveringOf = new Map(); // PR-20: a new layout plans its mutants again
     this.l4Counted = new Set();
     this.refusedCutCounted = new Set();
+    this.tailStable = new Map(); // PR-297
     this.baselineRows = new Map();
     this.uniformWatch = new UniformRefusalWatch();
     this.union = new Set();
@@ -6856,16 +7025,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `selection: "alone"`, so the orchestrator confirms and reproduces such a kill alone too.
    */
   private async runOn(lane: Lane, ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
-    const seen = { alone: false };
+    const seen = { alone: false, tail: false };
     const v = await this.runRow(lane, ref, opts, seen);
-    return seen.alone ? { ...v, selection: "alone" } : v;
+    // PR-297: a kill of a tail test measured alone says so (the verdict's text is what the report keeps).
+    const noted =
+      seen.tail && seen.alone && (v.outcome === "fail" || v.outcome === "timeout")
+        ? {
+            ...v,
+            failureMessage: `${v.failureMessage ?? ""} [refused-cut tail: ${ref.codeunitName}.${ref.method} measured alone, after a baseline refusal cut (PR-297)]`,
+          }
+        : v;
+    return seen.alone ? { ...noted, selection: "alone" } : noted;
   }
 
   private async runRow(
     lane: Lane,
     ref: TestMethodRef,
     opts: RunOpts,
-    seen: { alone: boolean },
+    seen: { alone: boolean; tail?: boolean },
   ): Promise<TestVerdict> {
     // R652: no bound check here; each send checks (`checkBound`).
     if (this.proof === undefined || lane.deployedDir === undefined) {
@@ -6890,7 +7067,25 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       !this.oneShotCodeunits.has(ref.codeunitId)
         ? this.refusedCut(ref.codeunitId)
         : undefined;
-    if (refusedCut?.methods.has(ref.method.toLowerCase()) === true) {
+    // PR-297: with `refusedCutTail` on, a STABLE green test of the cut (it passed alone at the end of the baseline)
+    // is not scored `error`: it runs ALONE under this mutant below (R895's `aloneCall`), so the orchestrator
+    // confirms a kill NONE alone and reproduces it alone.
+    let tailAlone =
+      refusedCut?.methods.has(ref.method.toLowerCase()) === true && this.isStableTail(ref);
+    // S4: with the §6 Sleep rule in force an alone call reaching the coverage window is a bug (it throws):
+    // the tail test keeps PR-250's error, said once.
+    if (tailAlone && !this.sleepRuleRetiredForParallel()) {
+      tailAlone = false;
+      if (!this.tailSleepSaid) {
+        this.tailSleepSaid = true;
+        this.notify(
+          "al-runner-v3-refused-cut-tail",
+          "[lethal] al-runner-v3-refused-cut-tail: this build does not retire the §6 Sleep rule, so no tail test is measured alone and each keeps PR-250's error (PR-297)",
+        );
+      }
+    }
+    if (tailAlone) seen.tail = true;
+    if (refusedCut?.methods.has(ref.method.toLowerCase()) === true && !tailAlone) {
       return {
         ref,
         outcome: "error",
@@ -6902,7 +7097,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     }
     // PR-51 (F1): an explicit alone request ignores every stored call and every routing state.
     const forced = opts.alone === true;
-    let call = forced ? undefined : lane.rowsByCodeunit.get(this.callId(ref));
+    let call = forced || tailAlone ? undefined : lane.rowsByCodeunit.get(this.callId(ref));
     if (call?.noCoverage === true && opts.coverage !== "none") call = undefined;
     let alone = false;
     if (call === undefined) {
@@ -6920,7 +7115,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         [...(lane.prefetch.timedOutMutants.get(lane.lastActivated) ?? [])].some(
           (t) => t.startsWith(`codeunit${ref.codeunitId}.`) && t !== self,
         );
-      const toAlone = live && (forced || cutElsewhere);
+      const toAlone = live && (forced || cutElsewhere || tailAlone);
+      if (tailAlone && toAlone) this.tailAloneCalls.mutant += 1;
       const made = toAlone
         ? await this.aloneCall(lane, ref)
         : forced
@@ -10311,6 +10507,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       console.warn(
         `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
+      // PR-297: the tail alone-call counts (spec section 4(b)); only with the flag on, so no other output moves.
+      if (this.cfg.refusedCutTail === true)
+        this.notify(
+          "al-runner-v3-refused-cut-tail",
+          `[lethal] al-runner-v3-refused-cut-tail: tail alone calls: stability ${this.tailAloneCalls.stability}, under a mutant ${this.tailAloneCalls.mutant}; cut entries (PR-250) ${s.refusedCutEntries} (PR-297)`,
+        );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.
       const unitTimesOut = process.env.LETHAL_UNIT_TIMES_OUT;

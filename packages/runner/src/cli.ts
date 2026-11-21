@@ -3485,6 +3485,8 @@ export function v3RecheckOf(a: {
         },
         backend,
         store,
+        // PR-298: the nested session never traces: it would truncate the main run's LETHAL_REACH_TRACE file.
+        reachTrace: null,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
         emit: [(e) => events.push(e)],
         lines,
@@ -3829,6 +3831,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
     ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
     ...(c.companies !== undefined ? { companies: c.companies } : {}), // PR-282
+    ...(c.refusedCutTail === true ? { refusedCutTail: true } : {}), // PR-297
   };
 }
 
