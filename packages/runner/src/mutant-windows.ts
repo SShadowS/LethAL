@@ -50,7 +50,7 @@ export interface CostModel {
 }
 
 /** Each codeunit's whole-suite baseline time: the sum of its tests' durations. */
-function codeunitTotals(baselineDuration: ReadonlyMap<string, number>): Map<number, number> {
+export function codeunitTotals(baselineDuration: ReadonlyMap<string, number>): Map<number, number> {
   const out = new Map<number, number>();
   for (const [key, ms] of baselineDuration) {
     const cu = Number(key.slice(0, key.indexOf("::")));
@@ -156,7 +156,7 @@ export interface MemoryStop {
   readonly source: string;
 }
 
-/** PR-250: the lane whose daemon churned, and its closes in a row with no mutant scored. */
+/** PR-250: the lane whose daemon churned, and its closes in a row with no mutant finished. */
 export interface DaemonChurnStop {
   readonly lane: number;
   readonly closes: number;
@@ -164,8 +164,10 @@ export interface DaemonChurnStop {
 
 /**
  * PR-250 (the owner): this many serve-daemon closes in a row on one lane, in the mutant phase, with no
- * mutant scored anywhere in the session in between, stop the session (`al-runner-v3-daemon-churn`).
+ * mutant finished anywhere in the session in between, stop the session (`al-runner-v3-daemon-churn`).
  * From the events: y2 and y3 reached at most 6 per lane, PERF-10b's churn 10 at minute 42 (the spec).
+ * PR-281: "finished" is a lane ending a mutant (`finished()`), not a record committing: under parallel
+ * lanes a record waits for every earlier mutant, so `mutant-scored` can lag a whole scope behind.
  */
 export const V3_DAEMON_CHURN_CLOSES = 10;
 
@@ -179,6 +181,10 @@ export class DaemonChurnGuard {
   private readonly runs = new Map<number, number>();
   private inMutants = false;
   private tripped = false;
+  /** PR-281: a lane finished a mutant (parallel lanes). N = 1 resets through `mutant-scored`. */
+  finished(): void {
+    this.runs.clear();
+  }
   see(e: RunEvent): DaemonChurnStop | undefined {
     if (e.type === "phase-entered") this.inMutants = e.phase === "mutants";
     else if (e.type === "mutant-scored") this.runs.clear();
