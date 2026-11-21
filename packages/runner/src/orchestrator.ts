@@ -277,6 +277,8 @@ import {
   readAppIdentity,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
+import { ReachTrace, ReachTraceError, reachSiteKey } from "./reach-trace";
+import type { ReachNullCause } from "./reach-trace";
 import { buildReport } from "./report";
 import type {
   Caveat,
@@ -2092,6 +2094,12 @@ export interface SessionConfig {
    * are real construct-and-stamp call sites and stay `RunEmitter`.
    */
   readonly emit?: readonly EventSubscriber[];
+  /**
+   * PR-298: the raw-reach trace. Default: `LETHAL_REACH_TRACE=<file>` from the environment, else none.
+   * Refused with `resume`. `null`: never trace and ignore the environment (the withheld-kill recheck's
+   * nested session, which must not truncate the main run's file). Production otherwise leaves it unset.
+   */
+  readonly reachTrace?: ReachTrace | null;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -5247,6 +5255,8 @@ interface BatchScope {
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
    */
   readonly testPageRefused?: ReadonlyMap<string, string>;
+  /** PR-298: the session's raw-reach trace, when asked for. */
+  readonly reachTrace?: ReachTrace;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -6673,6 +6683,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     sessionReuse,
     baselineReused,
     baselineReach,
+    ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
   };
   if (scope.parallel !== undefined) {
@@ -6800,6 +6811,15 @@ async function runSessionBody(
   // already-stranded tier refuses even a readiness probe; the `finally` teardown at the bottom of
   // this function is latch-gated so no mutating ClearActive ever runs once unsafe.
   const safety = new SessionSafety();
+  // PR-298: carried rows have no reach, so a resumed session cannot trace; refused before any run.
+  const reachTrace =
+    cfg.reachTrace === null ? undefined : (cfg.reachTrace ?? ReachTrace.fromEnv(process.env));
+  if (reachTrace !== undefined && cfg.resume !== undefined) {
+    throw new ReachTraceError(
+      "reach-trace-resume-refused: LETHAL_REACH_TRACE cannot be used with --resume: a carried verdict has no reach to trace (PR-298)",
+    );
+  }
+  reachTrace?.start();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
@@ -6828,6 +6848,30 @@ async function runSessionBody(
   const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
   const emit: RunEmitter = createEmitter([
     (e) => collectedEvents.push(e),
+    // PR-298: one trace row per scored mutant: the loop's full row, or a bare one for a mutant that
+    // never reached the loop (no coverage, an error row). Not a mutant a probe scored: its events
+    // are never emitted here.
+    (e) => {
+      if (reachTrace === undefined || e.type !== "mutant-scored") return;
+      reachTrace.append(
+        reachTrace.takeStaged(e.mutant.mutantId) ?? {
+          file: e.mutant.file,
+          startLine: e.mutant.startLine,
+          operatorName: e.mutant.operatorName,
+          startIndex: e.mutant.startIndex,
+          endIndex: e.mutant.endIndex,
+          verdict: e.verdict,
+          reachGrain: e.mutant.reachGrain ?? null,
+          reachLine: e.mutant.reachLine ?? null,
+          killingTest: e.killingTest ?? null,
+          reachOverCovering: null,
+          reachOverRan: null,
+          killerBaselineHit: null,
+          nullCause: "other",
+          reachFinal: e.guardReached ?? null,
+        },
+      );
+    },
     ...(cfg.emit ?? []),
     (e) => {
       const s = churn.see(e);
@@ -8266,6 +8310,7 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
@@ -9975,6 +10020,15 @@ async function runSessionBody(
         }
       : {}),
   };
+  if (reachTrace !== undefined) {
+    const scored = new Map<string, number>();
+    for (const e of collectedEvents) {
+      if (e.type !== "mutant-scored") continue;
+      const key = reachSiteKey(e.mutant);
+      scored.set(key, (scored.get(key) ?? 0) + 1);
+    }
+    reachTrace.verify(scored);
+  }
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
   // `resolveResume` throws when it finds no target, and `resumedFrom` is keyed on the request
@@ -10863,19 +10917,50 @@ export function reachFromBaseline(
   evidence: BaselineReach | undefined,
   modeNow: (codeunitId: number) => "test" | "method",
 ): { guardReached: boolean; reachedBy: string[] } | undefined {
-  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
-    return undefined;
+  return reachWhy(m, ran, evidence, modeNow).reach;
+}
+
+/** PR-298: `reachFromBaseline`, and when it cannot decide, why. Used by `reachFromBaseline` itself. */
+export function reachWhy(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ran: readonly TestMethodRef[],
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+):
+  | { reach: { guardReached: boolean; reachedBy: string[] }; cause?: undefined }
+  | { reach: undefined; cause: ReachNullCause } {
+  if (m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return { reach: undefined, cause: "non-statement-grain" };
   }
-  if (ran.length === 0) return undefined;
+  if (evidence === undefined) return { reach: undefined, cause: "no-line-evidence" };
+  if (ran.length === 0) return { reach: undefined, cause: "empty-set" };
   const site = `${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`;
   const reachedBy: string[] = [];
   for (const ref of ran) {
     const lines = evidence.hits.get(testKeyOf(ref));
-    if (lines === undefined) return undefined;
-    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return undefined;
+    if (lines === undefined) return { reach: undefined, cause: "no-line-evidence" };
+    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) {
+      return { reach: undefined, cause: "mode-moved" };
+    }
     if (lines.has(site)) reachedBy.push(qualifiedTestName(ref));
   }
-  return { guardReached: reachedBy.length > 0, reachedBy };
+  return { reach: { guardReached: reachedBy.length > 0, reachedBy } };
+}
+
+/** PR-298: whether `ref`'s own baseline hit the mutant's reach line; `null` when that is unknown. */
+export function baselineHitOf(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ref: TestMethodRef,
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+): boolean | null {
+  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return null;
+  }
+  const lines = evidence.hits.get(testKeyOf(ref));
+  if (lines === undefined) return null;
+  if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return null;
+  return lines.has(`${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`);
 }
 
 /** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is.
@@ -12812,6 +12897,8 @@ interface RunMutantsArgs {
   readonly baselineReused: ReusedBaseline | undefined;
   /** R926: baseline line coverage for deciding reach where the backend attests none. */
   readonly baselineReach?: BaselineReach;
+  /** PR-298: stages each mutant's raw-reach trace row; absent: nothing is traced. */
+  readonly reachTrace?: ReachTrace;
 }
 
 /**
@@ -14080,6 +14167,39 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           ? fromBaseline
           : undefined;
     const commitRecord = (): void => {
+      if (args.reachTrace !== undefined) {
+        // PR-298: staged here, written by the `mutant-scored` event `record` emits next.
+        const modeNow = (cu: number) => args.backend.isolationOf?.(cu) ?? "test";
+        const overCovering = reachWhy(m, covering, args.baselineReach, modeNow);
+        const overRan = reachWhy(m, ranRefs, args.baselineReach, modeNow);
+        // R926: an all-green mutant ran BECAUSE coverage saw nothing of its object, so that coverage
+        // cannot claim "not hit": its covering reach is undecided whatever the lines say.
+        const allGreen = args.coverageAttribution.get(m.mutantId) === "all-green";
+        const nullCause: ReachNullCause | null = allGreen
+          ? "all-green"
+          : overCovering.reach !== undefined
+            ? null
+            : overCovering.cause;
+        args.reachTrace.stage(m.mutantId, {
+          file: m.file,
+          startLine: m.startLine,
+          operatorName: m.operatorName,
+          startIndex: m.startIndex,
+          endIndex: m.endIndex,
+          verdict,
+          reachGrain: m.reachGrain ?? null,
+          reachLine: m.reachLine ?? null,
+          killingTest: killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : null,
+          reachOverCovering: allGreen ? null : (overCovering.reach?.guardReached ?? null),
+          reachOverRan: overRan.reach?.guardReached ?? null,
+          killerBaselineHit:
+            killingTestRef !== undefined
+              ? baselineHitOf(m, killingTestRef, args.baselineReach, modeNow)
+              : null,
+          nullCause,
+          reachFinal: reachFinal?.guardReached ?? null,
+        });
+      }
       const mutantRowId = record(
         args.store,
         args.runId,

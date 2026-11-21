@@ -376,6 +376,18 @@
       "sha256": "c77d9f7138ebb73958ca87d891170f8661e643db7f661e226d5d5fcb3e9db27f",
       "mutants": 7
     },
+    "fixtures/sandbox-reach-tests/src/ReachTests.al": {
+      "sha256": "bda01b18b06124677f577a1de5f8cc76aa0ca0bc57dbfcad9b77e5531f8c6229",
+      "mutants": 37
+    },
+    "fixtures/sandbox-reach/src/ReachLogic.al": {
+      "sha256": "4d4f4499054e9df3fb7e920fe1e4c0a92c9f4021b46ce1ea9bcdd4b4664438cb",
+      "mutants": 89
+    },
+    "fixtures/sandbox-reach/src/ReachState.al": {
+      "sha256": "f6325098b90b69576500f27754d0ed921939ea8fca1dc02738f588531e77476f",
+      "mutants": 5
+    },
     "fixtures/sandbox-recheck-tests/src/RecheckTests.Codeunit.al": {
       "sha256": "961ccbb6ec1a6d66ad7212908352ed95dedfcb919a1eafbe5d23083e024e1d2b",
       "mutants": 36

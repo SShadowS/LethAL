@@ -3485,6 +3485,8 @@ export function v3RecheckOf(a: {
         },
         backend,
         store,
+        // PR-298: the nested session never traces: it would truncate the main run's LETHAL_REACH_TRACE file.
+        reachTrace: null,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
         emit: [(e) => events.push(e)],
         lines,

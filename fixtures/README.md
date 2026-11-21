@@ -31,6 +31,8 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 | `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
 | `Order Dep Row` / `Order Dep State` | 77000 / 77001 | `sandbox-order` | R784 (leg O1 of `itest:alrunner-v3`): the dependency app of the serve order probe, a table and a SingleInstance codeunit. Nothing to mutate. |
+| `Reach Logic` / `Reach State` | 75000 / 75001 | `sandbox-reach` | PR-298: planted unreached (U), reached (R) and state-reached (S) sites. `Reach State` is a SingleInstance flag. No gate uses it. See "sandbox-reach (PR-298)" below. |
+| `Reach Tests` | 75050 | `sandbox-reach-tests` | PR-298: seven tests declared in run order; `T05ArmState` sets the flag that `T06` and `T07` need. Asserts via `Error()`. |
 | `Order Reader` / `Order Writer` | 77051 / 77052 | `sandbox-order-tests` | R784: the Writer sets seven kinds of state, the Reader reports each as an `Error()` message (also table 77050 and SingleInstance codeunit 77053). Only `Order Commit Writer` (77054, R804) commits, one test per kind. Run by leg O1 only; no mutation run uses them. |
 | `Dates Logic` | 77100 | `sandbox-dates`, tests in `sandbox-dates-tests` | R856: the sites of the opt-in `lethal.swap-workdate-today`. No gate uses it. The two killing tests each set their own date and assert only values from it; the survivor test sets none and asserts only `<> 0D`. No verdict depends on the day. **It is not in the symbol tar (R670), so its compile runs only where its symbols exist: `compile:fixtures` skips it in CI and in a fresh worktree, and CI does not catch a broken fixture here.** |
 | `Optin Logic` / `Optin Row` | 77200 / 77201 | `sandbox-optin`, tests in `sandbox-optin-tests` (77250-77253) | R868: the sites of `lethal.condition-true` and `lethal.blank-argument` (opt-in when written, default operators since PR-209; `--profile slim` leaves them out), and `--operator condition-true,blank-argument` runs only them. The v3 gate's leg DBM (PR-114a) runs it with the default operators, 126 mutants, and checks that none outside the called procedures runs; no other gate uses it. Four claimed sites (two killed, two surviving, one of each per operator) and, beside them, every shape the two operators refuse because a mutant could loop for ever or recurse (12 `if` and 9 arguments); the refused procedures are never called by a test, and a refused site makes no mutant, so none reaches a server (R164). The header of `OptinLogic.Codeunit.al` lists each. One test codeunit per verdict, asserting via `Error()`. **Not in the symbol tar (R670): its compile runs only where its symbols exist, `compile:fixtures` skips it in CI and in a fresh worktree, and CI does not catch a broken fixture here.** |
@@ -2211,3 +2213,20 @@ against a stale published build for days.
 R31's stale-test-app detector cannot see this shape: it fires when the server has no result for a
 discovered test, and here the server had an OLDER, WORKING build of every test. Nothing diverged
 that R31 measures. See ROADMAP R56.
+
+## sandbox-reach (PR-298)
+
+A target, `Reach Logic` (75000) with the SingleInstance flag `Reach State` (75001), and one test codeunit,
+`Reach Tests` (75050), with methods declared in run order. Every site is a single-line statement inside a
+public procedure body, never on an `if` line. Three kinds:
+
+- **U (8), unreached:** inside a branch no test takes (`Mode = 2`, `Mode = 3`, `Kind = 2`, `N < 0`, the
+  `else` arms), in procedures the tests do call.
+- **R (8), reached:** the same kind of statement on the taken branch, each asserted, so a wrong result fails a
+  test. U and R lines are interleaved in both orders (U then R in `Score` and `Tally`, R then U in `Score`,
+  `Big` and `Tally`).
+- **S (4), state-reached:** in `Late` and `LateMix`, behind `Reach State.IsArmed()`. `T05ArmState` sets the flag
+  before `T06` and `T07` run, in the same test codeunit.
+
+No gate uses it. `.alpackages` is gitignored: stage `Microsoft_System_*.app` into both projects, and `alc` the
+target into `sandbox-reach-tests/.alpackages` before compiling the tests.
