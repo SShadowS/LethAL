@@ -98,3 +98,68 @@ RelationFieldNo change can move it), warm-ups by cause, lane busy shares and the
 - `journalctl` suspend lines (if readable).
 
 Numbers and names only leave /coord.
+
+## Amendment 1 (2026-11-21, before c2 starts): c1 ran the wrong build; the real run is c2 on main-ccd0f823d
+- **What happened to c1.** It ran on edge-4ebfe7913 through the reused config's `alRunnerV3.path` pin, not on `current`.
+  The script checked `current`. Write-up: `docs/measurements/2026-11-21-combined-do-c1-edge.md`.
+  - Verdicts against y3: 10 moves, all perf10c's explained ones.
+  - Speed: −16.8% against y3 at 5 lanes, with per-test time +47-59%.
+- **c2's script** (`/coord/handoff/combined-do/run2.sh`, config `v3.main-ccd0f823d.json`):
+  - the config's `path` is main-ccd0f823d. The script refuses unless that binary's sha256 is `bc3595c4...` and its
+    `--version` is `al-runner 3.0.0-alpha.14+main.20261120 (ccd0f823d)`;
+  - after start, the run's own `[lethal] al-runner: <path> (<version>)` line must name it, or the run is SIGTERMed;
+  - it has its own cache directory (cold first request);
+  - host load, CPU and memory pressure and cgroup memory are sampled every 30 s (`c2.box.tsv`).
+- **Lanes, measured rather than assumed:** `--workers 8 --peak 22`, watchdog tree 24 GiB.
+  - LethAL's lane gate charges each lane its MEASURED high-water mark and starts as many lanes as fit 22 GiB (with
+    LethAL's 4): 8 lanes at up to 2.25 GiB per lane, 7 at up to 2.57, 6 at up to 3.0.
+  - c1 measured 3.1 GiB per lane on edge without kept baselines. Main keeps and peaked at 2.06 GiB per daemon on
+    PR-274's slice. **Predicted: 6 or 7 lanes, 6 central** (the orchestrator's safe default).
+- **LethAL head:** master 19b863275 plus this amendment. It contains PR-246, PR-259, PR-252, PR-264 and PR-282
+  (157b85e09, `alRunnerV3.companies`), all checked by the script.
+  - PR-281 has NOT merged, so it gets no share. PR-292's bound-print worker is not merged either.
+  - `companies` is set to `"CRONUS International Ltd."` from PR-283's measurement (see Verdicts).
+- **Beside c2 (the orchestrator's order):** c2 starts after lethal-code's PR-281 A/B (ended 15:27Z) and lethal-bugs'
+  PR-287 v3 hang check (ended 15:47Z).
+  - Running BESIDE it: lethal-bugs' PR-287 BC arms on bc4 (one LethAL client process, no al-runner daemon), lethal-bugs'
+    PR-296 builds (2 × 3 GiB cargo, CPUs 12-21, minutes), and lethal-code's PR-294 v3 gate (2 GiB, about 15 min, CPUs
+    12-21). c2 is pinned to 0-11.
+  - lethal-bugs' timed rounds (PR-296, PR-284) wait for c2's end.
+
+### Verdicts (§3, ccd0f823d's baseline, plus PR-283's Company mutants)
+- perf10c's verdicts, except two named sets that do not overlap:
+  - **The 1,332 RelationFieldNo mutants** named in `/coord/handoff/combined-do/relationfield-mutants.tsv`, predicted by
+    PR-250's cut.
+  - **PR-283's 174 Company-refusal mutants, predicted per mutant from PR-283's measured verdicts on ccd0f823d with
+    `companies` = `CRONUS International Ltd.`: 156 killed, 18 error** (`c2-companies-mutants.tsv`, `companies174.py`).
+    - PR-283 measured CRONUS, CRONUS + My Company and `all` as identical (156 killed, 18 error, 0 Company refusals); the
+      run uses the narrowest. Unset, 80 of the 174 hit the refusal.
+    - In perf10c's REPORT they read killed 116 (PR-144 recovered kills) and error 58.
+    - PR-283 scores more simply than LethAL (killed = any row fails; error = any notRun). So a c2 difference that
+      LethAL's own rules explain (the R197 kill ledger, PR-250's cut, the withheld-kill recheck) is named per mutant,
+      not a BLOCK. A difference those rules cannot explain is a BLOCK. The BC check follows later (lethal-bugs).
+- **Expected totals:** surv 9,095 / killed 6,413 / error 1,167 / t-killed 7, plus no-coverage 26,829.
+- Any other move is a BLOCK until named.
+
+### Speed (replacing §4's 3-lane table; built from main's own readings, not perf10c's fork)
+- **Tests sent:** about 2.37M, as in y3, perf10c and c1 (prefetch about 1.94M, live about 0.41M).
+- **Per-test time on main through LethAL:** PR-274's arms read 20.8-38.3 ms depending on box load, 27.6 at 8 lanes.
+  Central 28 ms (21-38).
+- **Busy lane-s:**
+  - tests about 66,400 (49,800-90,000);
+  - per-request fixed cost about 490 (about 3,770 requests × 0.13 s, kept baselines; c1 on edge paid 7,900);
+  - warm-ups about 5,900 (c1's; main has no #8446 either);
+  - the bound check about 1,400 (c1);
+  - **about 74,200 lane-s (57,000-98,000).**
+- **Wall at N lanes, 97% busy as in c1:**
+  - **6 lanes: about 12,750 s (9,800-16,800);**
+  - 7 lanes: about 10,900 s;
+  - 8 lanes: about 9,550 s.
+  - Central (6 lanes): 0.76 s per covered mutant, −47% against y3 and −36% against c1.
+- **Hard claims (BLOCK):**
+  1. 0 unexplained verdict moves;
+  2. kept baselines: at least 90% of serve requests report `baselineSource` `kept` or `cache` (c1: 0%);
+  3. prefetch requests under 4,000;
+  4. total `boundMs` under 2,381 s;
+  5. mutant phase under 17,000 s (wide: the shared box's load moved PR-274's 3-lane pair by 35%).
+- **Reported:** per-test ms against the box samples, the lanes the gate started and why, and lane busy shares.
