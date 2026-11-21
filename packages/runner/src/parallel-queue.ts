@@ -109,6 +109,22 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
   };
 }
 
+/**
+ * PR-281: the units, costliest first inside each window. A stable sort by window (ascending), then estimated
+ * cost (descending), then original index. Windows stay non-decreasing (the look-ahead bound needs it); a unit's
+ * mutants are never touched, so no scope's internal order (the R197 ledger's) changes. Returns a new array.
+ */
+export function orderUnitsCostliestFirst<U>(
+  units: readonly U[],
+  windowOf: (unit: U) => number,
+  costOf: (unit: U) => number,
+): U[] {
+  return units
+    .map((unit, i) => ({ unit, i, w: windowOf(unit), c: costOf(unit) }))
+    .sort((a, b) => a.w - b.w || b.c - a.c || a.i - b.i)
+    .map((x) => x.unit);
+}
+
 /** The first latch of the batch and the mutant behind it, or `undefined`. */
 export type Latch = () => { readonly mutantId: string; readonly why: string } | undefined;
 
@@ -190,6 +206,8 @@ export class OrderedCommit {
     codes: readonly string[],
     private readonly latch: Latch,
     private readonly workers: number,
+    /** PR-281: called each time a lane finishes a mutant, before the record waits for its turn. */
+    private readonly onFinish?: () => void,
   ) {
     this.codes = codes;
     for (const [i, c] of codes.entries()) this.index.set(c, i);
@@ -270,6 +288,7 @@ export class OrderedCommit {
 
   private finish(code: string, commit: () => void, stop: Error | undefined): void {
     const i = this.idx(code);
+    this.onFinish?.();
     // R962: after the memory guard's stop a lane's in-flight mutant still finishes; its result is
     // complete, so it waits with the others and `conclude()` records it, by the latch rule then.
     if (this.stoppedByGuard) {
