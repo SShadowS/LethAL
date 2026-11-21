@@ -292,8 +292,11 @@ import { refuseRetiredV2Report } from "./v2-retired";
  *
  * 33: PR-212 (R1113) added the cause value `left-out-test-reach` to `$.notMeasured[].cause`. A new value, so it
  * bumps (R233); v32 is frozen.
+ *
+ * 34: PR-307 (R1168) added the caveat value `session-kind-mismatch` to `$.caveats[].caveat`. A new value, so it
+ * bumps (R233); v33 is frozen.
  */
-export const EXPLAIN_SCHEMA_VERSION = 33;
+export const EXPLAIN_SCHEMA_VERSION = 34;
 
 /**
  * Thrown when the input is not an explainable `SessionReport` — a caller-contract violation, not a

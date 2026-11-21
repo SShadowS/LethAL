@@ -323,6 +323,12 @@ import type {
   FacedTests,
   RecordedCarrySide,
 } from "./selection";
+import {
+  SessionKindUnsetError,
+  backendSessionKind,
+  sessionKindSensitiveTests,
+} from "./session-kind";
+import type { SessionKind } from "./session-kind";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
   StaleDependencyMemberError,
@@ -1833,6 +1839,13 @@ export interface SessionConfig {
    * `survived` or `no-coverage`; the report says so (`tests-narrowed`, `excludedTests`).
    */
   readonly excludeTests?: readonly string[];
+  /**
+   * PR-307 (R1168): the session kind the user's CI runs (`lethal.config.json`'s `ciSessionKind`, validated at load). NO
+   * DEFAULT: unset, a run whose FINAL test list holds a session-kind-sensitive test is refused (`SessionKindUnsetError`).
+   * Set, such tests are labelled in the report (`sessionKindSensitiveTests`) and `session-kind-mismatch` marks a backend of
+   * the other kind. Labels only.
+   */
+  readonly ciSessionKind?: SessionKind;
   /**
    * PR-212 (R1113): run the test methods that write the Company table. By default a bcdev run (envtool too) LEAVES
    * THEM OUT by name (`excludedTests`, reason `company-write`; `tests-narrowed`), and a no-coverage mutant in an
@@ -7312,6 +7325,24 @@ async function runSessionBody(
       });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
+  // PR-307 (R1168): the tests of the FINAL list (after --tests-only, the #if arm filter, --exclude-test and the
+  // company-write leave-out) that can change with the session kind. Unset `ciSessionKind` with one of them is refused here,
+  // before the TestPage scan, the lease work and every baseline or mutant run. The bcdev scan is H only: its TestPage tests
+  // are refused and labelled already.
+  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcdev(caps.kind));
+  if (sessionKindSensitive.length > 0) {
+    if (cfg.ciSessionKind === undefined)
+      throw new SessionKindUnsetError(sessionKindSensitive, cfg.configPath);
+    emit({
+      type: "tests-session-kind-sensitive",
+      tests: sessionKindSensitive,
+      backendSessionKind: backendSessionKind({
+        bcdev: isBcdev(caps.kind),
+        noClient: cfg.backend.noClient === true,
+      }),
+      ciSessionKind: cfg.ciSessionKind,
+    });
+  }
   // R-236c: before the run row and before any test is sent (status and quarantine checks run
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
   // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when

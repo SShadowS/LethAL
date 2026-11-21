@@ -502,7 +502,8 @@ describe("R403 phase B: bcdev's compiled-membership check (plan §3(b))", () => 
       ],
     };
     const backend = new PkgBackend(compiledPkg([...BUILT_NONE, handled]));
-    await session(root, new ResultsStore(":memory:"), backend);
+    // PR-307: a handler-bound test is session-kind-sensitive, so a run needs the setting.
+    await session(root, new ResultsStore(":memory:"), backend, { ciSessionKind: "headless" });
     expect([...new Set(backend.baselineMethods)].sort()).toEqual(["Decorated", "PlainDoubles"]);
   });
 

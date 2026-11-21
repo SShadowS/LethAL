@@ -2866,6 +2866,9 @@ async function legT(
     projectDir: fixture("sandbox-data"),
     testDir: fixture("sandbox-data-tests"),
     selectorIds: { selectorId: 79399, controlId: 79398, tableId: 79397 },
+    // PR-307: `Data Tests.PageActionComputesNonZero` is session-kind-sensitive on v3 (the TestPage scan), so the field is
+    // needed; this fixture's gates pin the headless behaviour.
+    ciSessionKind: "headless",
   });
   const bc = (await readGateBaseline(join(HERE, "tables.baseline.json"))).entries;
   const now = normalizeForComparison(r);
