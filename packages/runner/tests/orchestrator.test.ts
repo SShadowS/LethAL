@@ -9656,6 +9656,27 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     expect(reason).toContain("raise the floor with --mutant-timeout-ms");
   });
 
+  // PR-301 (GitHub #52): an overrun may be a hang, which only the hung-session stop can score. The note
+  // named the budget and never the stop, so a user whose mutant looped had no way to learn of it.
+  test("PR-301: a budget overrun names --stop-hung-sessions and its config field (revert: the hint)", async () => {
+    const reason = await strandReason({
+      outcome: "deadline-exceeded",
+      durationMs: 999_999_999,
+      failureMessage: "RunMutant failed: HTTP 408",
+    });
+    expect(reason).toContain("--stop-hung-sessions");
+    expect(reason).toContain("bcdev.stopHungSessions");
+  });
+
+  test("PR-301: a fast failure inside the budget does not name the stop (not a hang)", async () => {
+    const reason = await strandReason({
+      outcome: "error",
+      durationMs: 40,
+      failureMessage: "RunMutant failed: HTTP 500",
+    });
+    expect(reason).not.toContain("--stop-hung-sessions");
+  });
+
   test("a plain deadline-exceeded (no in-flight-unknown operation) stays an ordinary error — no quarantine, session continues", async () => {
     const dir = freshTmpDir();
     let activeMutant: string | null = null;
