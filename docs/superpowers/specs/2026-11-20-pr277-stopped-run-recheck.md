@@ -47,3 +47,19 @@ So the 547 s is the cost of starting a recheck daemon for nothing, not something
 
 ## Order
 Code and red-going tests now. VERIFY, the v3 gate and CI wait until code's PR-274 timed series ends (the orchestrator's quiet box).
+
+## Amendment 1 (2026-11-20, from the build, before any gate): the R1158 cause was misread
+- **What actually happened:** arm P's 0-test recheck baseline was NOT "a recheck whose targets selected 0 tests". The nested
+  recheck session registered its OWN process signal handlers (`registerProcessStopSignal`). So the operator's SECOND SIGTERM became
+  the nested session's FIRST: it spent the nested budget, and the nested baseline broke out with 0 tests run. The 547 s was a
+  daemon start plus a baseline cut short by that signal. The second signal never reached the outer session, which is why only
+  SIGKILL ended the run. Evidence: the events, stderr and run.log end at 16:55, which is the second SIGTERM.
+- **So part 3 needs no new code.** A target set with no tests already skips before any daemon (PR-225's
+  `withheld-recheck-skipped`), and a name that matches no test is refused (`keepOnlyTests`). Part 3 gets tests both ways, not a
+  second warning code.
+- **The fix for the cause:** the nested recheck session registers no signal handler, and the outer session's handler owns every
+  signal:
+  - the first spends the budget;
+  - the second aborts the recheck (closing its backend) and closes the daemons, and the process exits with the signal stop's code
+    7 after a 10 s grace;
+  - a third exits at once.
