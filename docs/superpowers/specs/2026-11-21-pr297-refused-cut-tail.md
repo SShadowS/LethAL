@@ -117,3 +117,29 @@ the tests after the cut in their own entry; measure first whether verdicts move,
   kill is added. That is not in this PR; it is a named follow-up.
 - **Wording fix (review NIT):** v3 serve runs `testIsolation: "test"`, which resets tables per test. The state channel
   alone removes is the codeunit's GLOBALS (and the refused test's partial work), not table state.
+
+## 6. Amendment 2 (2026-11-21, the Opus build review and its delta review; recorded after the build, before any gate)
+How the built code departs from §5, each change reviewed and red-checked:
+- **The stability pass runs on a THROWAWAY daemon** per green tail test, spawned and closed with reason `probe` (R927's
+  pattern). It never goes through `ensureDaemon`.
+  - Why (build review B1): run on the session's daemon, it could start a lane's first mutant daemon warmed only on the tail
+    codeunits, skipping the R635 warm-up comparison for every later codeunit.
+  - It leaves `union`, the warm-up and barrier state, proofs and latches untouched. A test pins that the requests and
+    warm-ups with the flag on equal those with it off, apart from the stability call.
+  - Cost: one daemon start per green tail test per run; on DO, one.
+- **It runs only after a COMPLETED baseline,** and only while the budget is not spent and no signal came, checked before
+  EACH tail test.
+  - `ExecutionBackend.baselinePhase` gained an optional second argument, `completed`.
+  - An error inside the pass marks the tests unstable, is notified once, and is never rethrown.
+- **It is skipped while the §6 Sleep rule is not retired:** the tail is then never routed alone, and the test keeps the
+  PR-250 error.
+- **The note** goes on every tail kill, a `fail` or a `timeout`, appended to `failureMessage`. Nothing parses that text for
+  timeouts (checked).
+- **The §4 readings are printed** (flag on only): one `al-runner-v3-refused-cut-tail` notice per cut codeunit naming the
+  stable and the unstable tail tests, and at session end the counts of tail alone calls (stability and under a mutant).
+  No "not run" notice fires when no codeunit has a cut.
+- **Wording, not behaviour:**
+  - On batch 1 the stability pass runs at the end-of-baseline stop, which is longer than the mutant stop. The alone kill's
+    NONE confirm runs at the kill's own stop.
+  - The pass runs on a fresh daemon and later alone calls on a warm one: the same selection, not the same history.
+  - The echo row is not checked in the pass, deliberately: the activation is NONE.
