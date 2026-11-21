@@ -55,3 +55,30 @@ lethal-preproc, 2026-11-21, pre-committed before any code. Ruled by the orchestr
 - Every leg `selectLegs` names, on the final head. They run after the combined re-run (c2), which keeps priority.
 - **Live claim (R1156, read on the next DO run after merge):** per-check `boundMs/boundChecks` at 6+ lanes under 130 ms,
   where c1 read 365.
+
+## 6. Amendment 1 (2026-11-21, the Opus build review and a hang VERIFY found; before any gate)
+- **Review B1 (BLOCK): release binaries.**
+  - `scripts/build-binary.ts` compiled `cli.ts` alone, and a compiled binary contains a worker only as an entry point.
+    So every release binary would have refused every v3 send.
+  - Fixed: `COMPILE_ENTRIES` lists the CLI and the worker.
+  - A guard test in `build-binary.test.ts` scans `packages/runner/src` for `new Worker(new URL("./x", import.meta.url))`
+    and requires each worker in `COMPILE_ENTRIES`. Red-checked: the worker removed turns it red.
+- **A real hang, found by VERIFY** (`al-runner-v3-entries.test.ts` ran past the 180 s watchdog): R653 P7 hung.
+  - A refused check's continuation, run inside the previous answer's MESSAGE DISPATCH, posted the next request to the
+    same worker. Its answer was posted by the worker but never delivered (Bun 1.4.4): no `message`, `messageerror` or
+    `close` event, with the main thread idle in `ep_poll`. A standalone probe did not reproduce it.
+  - Fixed: an answer is settled with `setImmediate`, outside the dispatch. Red-checked: settled inline, P7 hangs again.
+    P7 is the regression test.
+- **The pool's lifecycle changed from §2's "unref'd":**
+  - Workers stay REFERENCED, so a pending print keeps the process alive.
+  - A worker idle for 2 s is terminated by an unref'd timer, armed at CREATION too, so an unused worker cannot hold the
+    process open. Red-checked: without the arm at creation, test 6 turns red.
+  - The ref/unref toggle was tried and dropped: it was not the hang's cause, and the timer is simpler.
+- **Review S1:** a worker that closes while idle now always leaves the pool, or the next print sent to it would never
+  settle.
+- **Review N2:** a send that throws holds nothing.
+- **Review N1:** test 1's threshold is 5 ticks, as pre-committed (the first build had 2).
+- **Red check 3 as run differs from §4's wording:** the worker passed the wrong root-control flag, rather than leaving the
+  paths out of the print. Test 2 turned red either way.
+- **Review S2, noted:** each check still walks both trees on the main thread in `otherFilesDrift` (about 8 ms warm,
+  41 ms cold on DO). If the live claim misses at 6+ lanes, that walk moves into the worker next.

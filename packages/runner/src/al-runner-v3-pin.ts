@@ -20,6 +20,11 @@ export const AL_RUNNER_V3_DEFAULT_PATH = `${AL_RUNNER_V3_ROOT}/current/al-runner
 /** R814: the hand pin a candidate is judged by; read only in candidate mode. */
 export const V3_PIN_FROM_ENV = "LETHAL_V3_PIN_FROM";
 
+/** PR-294: the resolved target of the `current` link, or `undefined` when no link resolves. */
+export function currentV3Build(linkPath: string = AL_RUNNER_V3_DEFAULT_PATH): string | undefined {
+  return existsSync(linkPath) ? resolveV3Binary(linkPath) : undefined;
+}
+
 /**
  * R814: `current` moves daily, so a session resolves it once, at its start: the binary measured is
  * the binary run, and the report names the right build. A path that does not resolve stays as it is.

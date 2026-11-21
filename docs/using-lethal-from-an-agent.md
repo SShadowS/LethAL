@@ -218,6 +218,8 @@ same commit as your binary (the sidecar is not in the release files), run from a
 `doctor` prints the sidecar in the `al-runner-v3` check; a missing one is a `WARNING`, not a failure. A run records the
 sidecar it used (the dll's sha256, or `none`) and `downloadDemoData`; `--resume` and `--resume-run` refuse a run
 whose record differs, or is missing (a v3 run from before R886), and say which setting changed from what to what. The project's own gates set `dotnetSidecar: false`.
+**Which build runs (PR-294).** If a session runs a gated al-runner build that is not the `current` one, LethAL warns once with `al-runner-v3-pinned-not-current`, naming both paths. It is not a refusal: older gated builds are allowed. If you meant `current`, check `alRunnerV3.path` in the config.
+
 **The baseline daemon and the memory guard (R948).** On the serve transport the baseline runs through one serve daemon
 (one request per test codeunit, with coverage), not one al-runner process per codeunit. A few codeunits (the first, the
 last and every 25th, at most eight) are also run as fresh processes and compared test by test (status, fail text, exact
