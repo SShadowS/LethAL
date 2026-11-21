@@ -14,6 +14,7 @@ import type {
 import {
   type RunCliConfig,
   dryRunFromCli,
+  parseCliConfig,
   runAndReport,
   runFromCli,
   v3RecheckOf,
@@ -738,6 +739,47 @@ describe("PR-307: every path reads the setting from the one config load", () => 
     expect(ok.runs).toBeGreaterThan(0);
     expect(report.sessionKindSensitiveTests?.[0]?.test).toBe("Page Tests.OpensCard");
     expect(report.validity.caveats).toContain("session-kind-mismatch");
+  });
+
+  test("PR-307b: --ci-session-kind alone (config without the field) runs, and the flag beats the config both ways", async () => {
+    // the flag alone: a config the caller cannot edit holds no field
+    const flagOnly = await cliProject({});
+    const ran = new PassingV3();
+    const r1 = await runFromCli({ ...flagOnly.parsed, ciSessionKind: "client" }, deps(ran));
+    expect(ran.runs).toBeGreaterThan(0);
+    expect(r1.validity.caveats).not.toContain("session-kind-mismatch"); // v3 is client: matches the flag
+    // the flag overrides the config: config headless (mismatch on v3), flag client (match)
+    const cfgHeadless = await cliProject({ ciSessionKind: "headless" });
+    const r2 = await runFromCli(
+      { ...cfgHeadless.parsed, ciSessionKind: "client" },
+      deps(new PassingV3()),
+    );
+    expect(r2.validity.caveats).not.toContain("session-kind-mismatch");
+    // and the other way: config client (match), flag headless (mismatch)
+    const cfgClient = await cliProject({ ciSessionKind: "client" });
+    const r3 = await runFromCli(
+      { ...cfgClient.parsed, ciSessionKind: "headless" },
+      deps(new PassingV3()),
+    );
+    expect(r3.validity.caveats).toContain("session-kind-mismatch");
+  });
+
+  test("PR-307b: the refusal names the flag too", async () => {
+    const unset = await cliProject({});
+    await expect(runFromCli(unset.parsed, deps(new PassingV3()))).rejects.toThrow(
+      /--ci-session-kind client \(or headless\), which overrides the config/,
+    );
+  });
+
+  test("PR-307b: parseCliConfig reads --ci-session-kind and refuses a bad value by name", () => {
+    const base = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner-v3"];
+    const ok = parseCliConfig([...base, "--ci-session-kind", "headless"]);
+    expect(ok.mode === "run" ? ok.ciSessionKind : "not run").toBe("headless");
+    const none = parseCliConfig(base);
+    expect(none.mode === "run" ? none.ciSessionKind : "not run").toBeUndefined();
+    expect(() => parseCliConfig([...base, "--ci-session-kind", "gui"])).toThrow(
+      /invalid-ci-session-kind: --ci-session-kind/,
+    );
   });
 
   test("--resume: the resumed session reads the same setting, and refuses without it", async () => {
