@@ -63,3 +63,57 @@ the tests after the cut in their own entry; measure first whether verdicts move,
   - (c) a tail survivor that BC kills is reported per mutant: the evidence is weaker than a full survivor, and it goes to
     the owner if more than about 5% of them.
 - #8596 stays the upstream fix: once al-runner keeps that refusal, the cut and this tail retire.
+
+## 5. Amendment 1 (2026-11-21, the spec-adversary, before any code): ALONE routing replaces §2's second entry
+- **Why the second entry is dropped (two BLOCKs):**
+  - **Request layer:** `selectedOnlyDecision` refuses `runSelectedOnly` for a gapped entry, and a tail entry is gapped by
+    construction. A second entry for the same codeunit collides on its entry id (`${key}|${cu}`), and its rows would
+    overwrite the head's (results and `rowsByCodeunit` are keyed per codeunit). Loosening the gap guard generally is a
+    false-kill door: #8059 prefix gaps change state (R1094).
+  - **Confirm context:** a tail kill's kill pair leaves T out (`cutAfterKiller` builds on `mutantLeftOutNames`), and the
+    live NONE confirm runs T in the FULL codeunit order: a different context from the kill. The kill -> NONE -> M order
+    (R653) would no longer hold.
+  - **Packing:** a tail riding the flagged request would make the verdict depend on packing (PR-250 sends the cut only
+    in flagged requests), and chunking must never be semantic.
+- **The design now:** at `runRow`'s PR-250 early return (`baseline-refused-cut`), the one place prefetch, live, pairs and
+  R612 re-sends all reach, a STABLE tail test, with the flag on, is run through `aloneCall`, R895's one-test-alone path,
+  instead of scored `error`.
+  - The verdict carries `selection: "alone"`, so the orchestrator's existing `aloneKill` confirms NONE alone and
+    reproduces alone, after the kill, in the kill's own context.
+  - Only T runs, so the refused tests never run under a mutant. The cost is one live alone request per cut mutant and
+    stable T.
+- **Stability, now per test and run alone:** at the end of the baseline phase (activation NONE), each green tail test T of
+  a cut codeunit runs ONCE alone. Stable means its row is a pass.
+  - A refused, failed, timed-out or missing row, or a closed daemon, marks T UNSTABLE. Unstable T keeps the PR-250 error;
+    it is never retried and never treated as stable.
+  - One result per session, held by the backend, shared by all lanes (the baseline runs before the lanes start).
+  - This is the context every later alone call of T runs in. It also covers §3 test 3: there is no "reduced set" context.
+- **H1 is NOT closed** (review SF1): a head test's setup can mask a mutant that T alone exposes. BC survives, T alone kills:
+  a FALSE KILL. So:
+  - every alone tail kill carries a note: `refused-cut tail: <T> measured alone, after a baseline refusal cut (PR-297)`;
+  - §4(b) checks ALL error -> killed moves on BC, not a sample. "Reproduces" means BC kills the mutant AND T itself fails
+    there. One that does not is a BLOCK.
+- **§4's bound, completed (review SF4):**
+  - (a) list every `killingTest` move too, not only verdicts (a tail test earlier in ledger order than today's killer);
+  - (b) the measurement counts only if the cut FIRED in both arms (`refusedCutEntries > 0` and the
+    `al-runner-v3-baseline-refused-cut` line), and with the flag on, tail alone calls > 0. Otherwise it is
+    empty-vs-empty and void;
+  - (c) the exact build is named (main-ccd0f823d, whose baseline refuses 68874's test).
+- **Tests (replacing §3's 2-5; 1 and 6 stay):**
+  - 2. On, stable T: `[A, B, R (refused), C (pass)]`. A mutant killed only by C scores `killed` by C with
+    `selection: "alone"` and the note; one surviving every test scores `survived`. The stability run is sent once per
+    session.
+  - 3. On, unstable T (C fails alone in the stability run): C keeps the PR-250 error under every mutant, and a mutant
+    covered by C is never `survived`.
+  - 4. A tail with no green test: no stability run, today's behaviour.
+  - 5. A stability run that is refused, cut, or lacks T's row marks T unstable (fail closed).
+  - 7. The kill confirm of a tail kill runs NONE alone (the request carries T alone with no mutant), after the kill.
+- **Red checks:**
+  - the stability verdict ignored (every T used) turns test 3 red;
+  - a stability failure read as stable turns test 5 red;
+  - routing T to the live whole-codeunit call instead of `aloneCall` turns test 7 red;
+  - the flag ignored turns test 1 red.
+- **A gate (review SF6):** before the default flips, an offline v3 fixture leg with an unkept baseline refusal and a tail
+  kill is added. That is not in this PR; it is a named follow-up.
+- **Wording fix (review NIT):** v3 serve runs `testIsolation: "test"`, which resets tables per test. The state channel
+  alone removes is the codeunit's GLOBALS (and the refused test's partial work), not table state.
