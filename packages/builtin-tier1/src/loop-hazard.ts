@@ -1699,6 +1699,18 @@ function chainCallsOut(start: string, obj: ALSyntaxNode, ctx: SemanticContext): 
   return false;
 }
 
+/** PR-301: built-ins a loop condition may call without that call itself ending the loop. */
+const PR301_PURE_CALLS: ReadonlySet<string> = new Set([
+  "strlen",
+  "maxstrlen",
+  "copystr",
+  "delstr",
+  "strpos",
+  "lowercase",
+  "uppercase",
+  "abs",
+]);
+
 /** PR-301: measurement and test seam. `on` false turns `stepStalls` off; `anyOtherWrite` drops its condition 3. */
 export const pr301Seam = { on: true, anyOtherWrite: false };
 
@@ -1727,11 +1739,30 @@ function stepStalls(
 ): boolean {
   const body = loop.childForFieldName("body");
   if (body === null) return false;
-  if (namesCursorMethod(loopConditionParts(loop), ctx)) return false;
+  const cond = loopConditionParts(loop);
+  if (namesCursorMethod(cond, ctx)) return false;
+  // A call in the condition may itself end the loop (a budget counter) unless it is a pure built-in.
+  let condCallsStrLen = false;
+  let impureCall = false;
+  for (const p of cond)
+    visitAll(p, (n) => {
+      if (n.rawKind !== "call_expression") return;
+      const f = n.childForFieldName("function");
+      const fn = f !== null && isIdentifierLike(f) ? normalizeAlName(f.text) : "";
+      if (fn === "strlen") condCallsStrLen = true;
+      if (!PR301_PURE_CALLS.has(fn)) impureCall = true;
+    });
+  if (impureCall) return false;
+  // The exit's names, without the names of called functions (`CopyStr`, `StrLen`): those are not
+  // values, and as "globals" they made every outside call look like a writer.
   const exitNames = new Set<string>();
   for (const p of loopExitParts(loop, ctx))
     visitAll(p, (n) => {
-      if (isIdentifierLike(n)) exitNames.add(normalizeAlName(n.text));
+      if (!isIdentifierLike(n)) return;
+      const up = n.parent;
+      if (up?.rawKind === "call_expression" && samePos(up.childForFieldName("function") ?? up, n))
+        return;
+      exitNames.add(normalizeAlName(n.text));
     });
   const isName = (n: ALSyntaxNode | null | undefined, name: string): boolean =>
     n !== null && n !== undefined && isIdentifierLike(n) && normalizeAlName(n.text) === name;
@@ -1770,8 +1801,13 @@ function stepStalls(
     if (f === null || !isIdentifierLike(f)) return false;
     const args = argumentList(r);
     const fn = normalizeAlName(f.text);
+    // with a length, the first pass may cut T to it, which can itself meet an exit that measures T
     if (fn === "copystr")
-      return (args.length === 2 || args.length === 3) && isName(args[0], t) && isXPlusOne(args[1]);
+      return (
+        (args.length === 2 || (args.length === 3 && !condCallsStrLen)) &&
+        isName(args[0], t) &&
+        isXPlusOne(args[1])
+      );
     return (
       fn === "delstr" &&
       args.length === 3 &&
@@ -1780,13 +1816,32 @@ function stepStalls(
       isX(args[2])
     );
   };
-  // an `if` between `n` and the loop whose condition reads both T and an X name
+  // an `if` between `n` and the loop whose condition is exactly #52's `StrLen(T) > X` (or
+  // `X < StrLen(T)`): at X = 0 it is true for every T <> '', so its else never runs in the loop.
+  // Any other guard (`(X = 0) or ...`, `X > 0`) may run the other write at X = 0: unknown.
+  const isStrLenOfT = (n: ALSyntaxNode | null, t: string): boolean => {
+    if (n === null || n.rawKind !== "call_expression") return false;
+    const f = n.childForFieldName("function");
+    const a = argumentList(n);
+    return (
+      f !== null &&
+      isIdentifierLike(f) &&
+      normalizeAlName(f.text) === "strlen" &&
+      a.length === 1 &&
+      isName(a[0], t)
+    );
+  };
   const underTxGuard = (n: ALSyntaxNode, t: string): boolean => {
     for (let a = n.parent; a !== null && !samePos(a, loop); a = a.parent) {
       if (a.rawKind !== "if_statement") continue;
-      const parts = guardPartsOf(a);
-      if (parts.some((g) => reads(g, t)) && parts.some((g) => [...xs].some((x) => reads(g, x))))
-        return true;
+      const c0 = a.childForFieldName("condition");
+      const c = c0 === null ? null : r572Unparen(c0);
+      if (c === null || c.rawKind !== "comparison_expression") continue;
+      const op = c.childForFieldName("operator")?.text.trim();
+      const l = c.childForFieldName("left");
+      const r = c.childForFieldName("right");
+      if (op === ">" && isStrLenOfT(l, t) && isX(r)) return true;
+      if (op === "<" && isX(l) && isStrLenOfT(r, t)) return true;
     }
     return false;
   };
@@ -2038,9 +2093,20 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
   };
   // PR-301: or X is the amount of a step the exit depends on, which stalls at X = 0. A call may
   // write name `e` by the same rules `canWrite` uses for X.
+  // Memoised per name and per node: `stepStalls` asks once per body node per exit name.
+  const globalOf = new Map<string, boolean>();
+  const calleeAt = new Map<ALSyntaxNode, string | null>();
   const callWrites = (n: ALSyntaxNode, e: string): boolean => {
-    const global = !r531Declares(proc, e, true);
-    const callee = calleeOf(n, names, ctx);
+    let global = globalOf.get(e);
+    if (global === undefined) {
+      global = !r531Declares(proc, e, true);
+      globalOf.set(e, global);
+    }
+    let callee = calleeAt.get(n);
+    if (callee === undefined) {
+      callee = calleeOf(n, names, ctx);
+      calleeAt.set(n, callee);
+    }
     if (callee !== null)
       return (
         chainEffect(callee, obj, ctx).writes.has(e) ||
@@ -2048,8 +2114,15 @@ function removedBoundHangs(node: ALSyntaxNode, ctx: SemanticContext, op: string 
       );
     return global && callsOut(n, ctx);
   };
-  const stalls = (l: ALSyntaxNode): boolean =>
-    pr301Seam.on && dflt === 0 && stepStalls(l, xs, ctx, callWrites);
+  const stallsOf = new Map<ALSyntaxNode, boolean>();
+  const stalls = (l: ALSyntaxNode): boolean => {
+    let v = stallsOf.get(l);
+    if (v === undefined) {
+      v = pr301Seam.on && dflt === 0 && stepStalls(l, xs, ctx, callWrites);
+      stallsOf.set(l, v);
+    }
+    return v;
+  };
   if (!candidates.some((l) => check(l) || stalls(l))) return false;
   // PR-50 W (R1063): an earlier literal in this block that nothing overwrites is what stays when
   // the assignment goes. Given back only if every candidate loop surely ends at that value.

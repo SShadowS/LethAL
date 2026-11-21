@@ -11924,6 +11924,8 @@ async function confirmWarm(p: {
     /** R514: see `runMutantsOnBackend`'s field; it decides the over-half timeout grain's CAUSE
      *  (`reused-budget-stale` on a reused batch), not the margin, which is 2x on every batch (R516). */
     readonly baselineReused: ReusedBaseline | undefined;
+    /** PR-301: see `RunMutantsArgs.stopHungSessions`. */
+    readonly stopHungSessions?: boolean;
   };
   readonly m: MutantManifestEntry;
   readonly step: CoveringStep;
@@ -12059,6 +12061,7 @@ async function confirmWarm(p: {
       resourceKey: args.resourceKey,
       nowIso: args.nowIso,
       what,
+      ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
     });
     if (nonVerdict !== null) {
       return error(
@@ -12287,6 +12290,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
     resourceKey: args.resourceKey,
     nowIso: args.nowIso,
     what,
+    ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
   };
   const reusedNote = (v: TestVerdict) =>
     `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the reproduction started, so it did not run in the kill's context; the kill is unconfirmed (R577)`;
@@ -12483,6 +12487,7 @@ async function confirmFoundNone(p: Parameters<typeof confirmWarm>[0]): Promise<F
     resourceKey: args.resourceKey,
     nowIso: args.nowIso,
     what,
+    ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
   });
   const note = nv?.failureNote ?? `${what}: the confirm answered ${v.outcome}`;
   return {
@@ -12684,7 +12689,7 @@ async function classifyNonVerdictStep(
     // on, or unknown (a caller that does not pass it), the note says nothing about it.
     const stopHint =
       overran && ctx.stopHungSessions === false
-        ? "; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (config bcdev.stopHungSessions: true) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on"
+        ? "; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on"
         : "";
     await quarantineInFlight({
       safety: ctx.safety,

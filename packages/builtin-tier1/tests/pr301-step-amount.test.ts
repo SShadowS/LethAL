@@ -298,3 +298,81 @@ describe("PR-301 review: narrowing and two more forms", () => {
     expect(refused(loop("3"), "Step := 2")).toBe(false);
   });
 });
+
+/** The Opus build review's cases. */
+describe("PR-301 build review", () => {
+  const L = "Lines: List of [Text]; Cust: Record Customer; Len: Integer; GoOn: Boolean;";
+  const issueWith = (call: string) =>
+    unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while Remaining <> '' do begin",
+        "            Piece := CopyStr(Remaining, 1, 80);",
+        `            ${call}`,
+        "            if StrLen(Remaining) > Chunk then",
+        "                Remaining := CopyStr(Remaining, Chunk + 1)",
+        "            else",
+        "                Remaining := '';",
+        "        end;",
+      ].join("\n"),
+      L,
+    );
+
+  it("refuses #52's shape with an ordinary call in the body: a List Add and a record Insert(true) (revert: callee names out of exitNames)", () => {
+    expect(refused(issueWith("Lines.Add(Piece);"), "Chunk := 80")).toBe(true);
+    expect(refused(issueWith("Cust.Insert(true);"), "Chunk := 80")).toBe(true);
+  });
+
+  it("control: a defensive zero guard ends the loop at X = 0: `if (Chunk = 0) or (StrLen(Remaining) <= Chunk) then Remaining := ''` (revert: the exact #52 guard)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while Remaining <> '' do",
+        "            if (Chunk = 0) or (StrLen(Remaining) <= Chunk) then",
+        "                Remaining := ''",
+        "            else",
+        "                Remaining := CopyStr(Remaining, Chunk + 1);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(false);
+  });
+
+  it("control: a call in the condition may end the loop itself: `while (I < N) and Budget() do` (revert: the pure-call check)", () => {
+    const src = `codeunit 50133 "Step Budget"
+{
+    procedure Run()
+    var
+        I: Integer;
+        N: Integer;
+        Step: Integer;
+    begin
+        N := 10;
+        Step := 2;
+        while (I < N) and Budget() do
+            I += Step;
+    end;
+
+    local procedure Budget(): Boolean
+    begin
+        exit(false);
+    end;
+}`;
+    expect(refused(src, "Step := 2")).toBe(false);
+  });
+
+  it("control: a three-argument CopyStr whose cut meets an exit that measures T: `while StrLen(Remaining) > 80` (revert: the StrLen exclusion)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while StrLen(Remaining) > 80 do",
+        "            Remaining := CopyStr(Remaining, Chunk + 1, 80);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(false);
+  });
+});
