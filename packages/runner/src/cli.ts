@@ -174,6 +174,7 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-selector";
 import { RunMutantTransport } from "./run-mutant-transport";
+import { validateCiSessionKind } from "./session-kind";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
 import { buildTestAppModel, readTestAppSources } from "./testpage-scan";
@@ -2800,6 +2801,12 @@ export interface LethalConfigFile {
    */
   readonly preprocessorSymbols?: readonly string[];
   /**
+   * PR-307 (R1168): the session kind the user's own CI runs its tests in, `"client"` (GuiAllowed true) or `"headless"`
+   * (GuiAllowed false). NO DEFAULT: a run with a test that can change with the session kind is refused while it is unset
+   * (`SessionKindUnsetError`). Validated once, in `loadLethalConfigFile`.
+   */
+  readonly ciSessionKind?: "client" | "headless";
+  /**
    * R900 — the folders alc searches for .NET assemblies (`/assemblyprobingpaths:`), relative to the
    * project. TOP-LEVEL for the reason `preprocessorSymbols` is: every backend compiles with alc.
    * Absent: the project's `.vscode/settings.json` `al.assemblyProbingPaths`, else `./.netpackages`
@@ -3051,6 +3058,8 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   refuseRetiredV2ConfigSection(parsed, path);
   refuseRetiredBcHost(parsed.bcdev);
   refuseCredentialsEnvWithEnvTool(parsed);
+  // PR-307: the ONE validation of `ciSessionKind`; every path that reads a config file comes through here.
+  validateCiSessionKind(parsed.ciSessionKind, path);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
@@ -5076,6 +5085,10 @@ export async function runFromCliWithAccept(
               // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
               // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
               preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
+              // PR-307: validated at load; the nested recheck's `base` spreads this config, so it carries the same value.
+              ...(effectiveConfig.ciSessionKind !== undefined
+                ? { ciSessionKind: effectiveConfig.ciSessionKind }
+                : {}),
               // R900: the list `buildBackend` gave alc, for the resume fingerprint.
               assemblyProbingPaths: probing.paths,
               ...afterLeaseAcquiredFor(envSession),

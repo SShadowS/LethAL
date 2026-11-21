@@ -960,6 +960,72 @@
       "additionalProperties": false,
       "required": [
         "type",
+        "tests",
+        "backendSessionKind",
+        "ciSessionKind",
+        "seq"
+      ],
+      "properties": {
+        "type": {
+          "const": "tests-session-kind-sensitive"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "test",
+              "reasons"
+            ],
+            "properties": {
+              "test": {
+                "type": "string"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "handlers",
+                    "testpage",
+                    "unreadable"
+                  ]
+                }
+              },
+              "scanError": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "backendSessionKind": {
+          "type": "string",
+          "enum": [
+            "client",
+            "headless"
+          ]
+        },
+        "ciSessionKind": {
+          "type": "string",
+          "enum": [
+            "client",
+            "headless"
+          ]
+        },
+        "seq": {
+          "type": "number"
+        },
+        "atMs": {
+          "type": "number"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
         "batchIndex",
         "guardCount",
         "elapsedMs",
