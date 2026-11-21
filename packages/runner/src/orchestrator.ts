@@ -277,6 +277,8 @@ import {
   readAppIdentity,
 } from "./published-test-app";
 import { QuarantineStore } from "./quarantine-store";
+import { ReachTrace, ReachTraceError, reachSiteKey } from "./reach-trace";
+import type { ReachNullCause } from "./reach-trace";
 import { buildReport } from "./report";
 import type {
   Caveat,
@@ -321,6 +323,12 @@ import type {
   FacedTests,
   RecordedCarrySide,
 } from "./selection";
+import {
+  SessionKindUnsetError,
+  backendSessionKind,
+  sessionKindSensitiveTests,
+} from "./session-kind";
+import type { SessionKind } from "./session-kind";
 import { SessionSafety, SessionUnsafeError } from "./session-safety";
 import {
   StaleDependencyMemberError,
@@ -1826,6 +1834,13 @@ export interface SessionConfig {
    */
   readonly excludeTests?: readonly string[];
   /**
+   * PR-307 (R1168): the session kind the user's CI runs (`lethal.config.json`'s `ciSessionKind`, validated at load). NO
+   * DEFAULT: unset, a run whose FINAL test list holds a session-kind-sensitive test is refused (`SessionKindUnsetError`).
+   * Set, such tests are labelled in the report (`sessionKindSensitiveTests`) and `session-kind-mismatch` marks a backend of
+   * the other kind. Labels only.
+   */
+  readonly ciSessionKind?: SessionKind;
+  /**
    * PR-212 (R1113): run the test methods that write the Company table. By default a bcdev run (envtool too) LEAVES
    * THEM OUT by name (`excludedTests`, reason `company-write`; `tests-narrowed`), and a no-coverage mutant in an
    * object they name is `error` / `left-out-test-reach`. al-runner-v3 never leaves them out.
@@ -2092,6 +2107,12 @@ export interface SessionConfig {
    * are real construct-and-stamp call sites and stay `RunEmitter`.
    */
   readonly emit?: readonly EventSubscriber[];
+  /**
+   * PR-298: the raw-reach trace. Default: `LETHAL_REACH_TRACE=<file>` from the environment, else none.
+   * Refused with `resume`. `null`: never trace and ignore the environment (the withheld-kill recheck's
+   * nested session, which must not truncate the main run's file). Production otherwise leaves it unset.
+   */
+  readonly reachTrace?: ReachTrace | null;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -5250,6 +5271,8 @@ interface BatchScope {
    * TestPage. `dispatchUnmutated` never sends one. Absent or empty: nothing refused.
    */
   readonly testPageRefused?: ReadonlyMap<string, string>;
+  /** PR-298: the session's raw-reach trace, when asked for. */
+  readonly reachTrace?: ReachTrace;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -6134,6 +6157,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
   // when a reused snapshot leaves the loop over []). The only null activation inside it.
   backend.baselinePhase?.(true);
+  // PR-297: true only when the baseline loop ran to its end (every test has a verdict); a throw or a stop leaves it false.
+  let baselineCompleted = false;
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
@@ -6356,8 +6381,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         input.mutantCount ?? 0,
       );
     }
+    baselineCompleted = baseline.length === tests.length;
   } finally {
-    await backend.baselinePhase?.(false); // R948: closes the baseline's own daemon
+    await backend.baselinePhase?.(false, baselineCompleted); // R948: closes the baseline's own daemon
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -6674,6 +6700,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     ...(scope.stopHungSessions !== undefined ? { stopHungSessions: scope.stopHungSessions } : {}),
     baselineReused,
     baselineReach,
+    ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
   };
   if (scope.parallel !== undefined) {
@@ -6801,6 +6828,15 @@ async function runSessionBody(
   // already-stranded tier refuses even a readiness probe; the `finally` teardown at the bottom of
   // this function is latch-gated so no mutating ClearActive ever runs once unsafe.
   const safety = new SessionSafety();
+  // PR-298: carried rows have no reach, so a resumed session cannot trace; refused before any run.
+  const reachTrace =
+    cfg.reachTrace === null ? undefined : (cfg.reachTrace ?? ReachTrace.fromEnv(process.env));
+  if (reachTrace !== undefined && cfg.resume !== undefined) {
+    throw new ReachTraceError(
+      "reach-trace-resume-refused: LETHAL_REACH_TRACE cannot be used with --resume: a carried verdict has no reach to trace (PR-298)",
+    );
+  }
+  reachTrace?.start();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
   if (
@@ -6829,6 +6865,30 @@ async function runSessionBody(
   const onChurn: { stop?: (s: DaemonChurnStop) => void } = {};
   const emit: RunEmitter = createEmitter([
     (e) => collectedEvents.push(e),
+    // PR-298: one trace row per scored mutant: the loop's full row, or a bare one for a mutant that
+    // never reached the loop (no coverage, an error row). Not a mutant a probe scored: its events
+    // are never emitted here.
+    (e) => {
+      if (reachTrace === undefined || e.type !== "mutant-scored") return;
+      reachTrace.append(
+        reachTrace.takeStaged(e.mutant.mutantId) ?? {
+          file: e.mutant.file,
+          startLine: e.mutant.startLine,
+          operatorName: e.mutant.operatorName,
+          startIndex: e.mutant.startIndex,
+          endIndex: e.mutant.endIndex,
+          verdict: e.verdict,
+          reachGrain: e.mutant.reachGrain ?? null,
+          reachLine: e.mutant.reachLine ?? null,
+          killingTest: e.killingTest ?? null,
+          reachOverCovering: null,
+          reachOverRan: null,
+          killerBaselineHit: null,
+          nullCause: "other",
+          reachFinal: e.guardReached ?? null,
+        },
+      );
+    },
     ...(cfg.emit ?? []),
     (e) => {
       const s = churn.see(e);
@@ -7200,6 +7260,24 @@ async function runSessionBody(
       });
   }
   if (tests.length === 0) throw new Error("no tests discovered");
+  // PR-307 (R1168): the tests of the FINAL list (after --tests-only, the #if arm filter, --exclude-test and the
+  // company-write leave-out) that can change with the session kind. Unset `ciSessionKind` with one of them is refused here,
+  // before the TestPage scan, the lease work and every baseline or mutant run. The bcdev scan is H only: its TestPage tests
+  // are refused and labelled already.
+  const sessionKindSensitive = sessionKindSensitiveTests(testModel, tests, !isBcdev(caps.kind));
+  if (sessionKindSensitive.length > 0) {
+    if (cfg.ciSessionKind === undefined)
+      throw new SessionKindUnsetError(sessionKindSensitive, cfg.configPath);
+    emit({
+      type: "tests-session-kind-sensitive",
+      tests: sessionKindSensitive,
+      backendSessionKind: backendSessionKind({
+        bcdev: isBcdev(caps.kind),
+        noClient: cfg.backend.noClient === true,
+      }),
+      ciSessionKind: cfg.ciSessionKind,
+    });
+  }
   // R-236c: before the run row and before any test is sent (status and quarantine checks run
   // earlier). In every bcdev coverage mode, since a hub-mode baseline would make the test green and
   // send it FENCED in the covering loop, and on a resume as well. Throws TestPageScanError when
@@ -7389,6 +7467,7 @@ async function runSessionBody(
       : {}), // R938
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
+    ...(cfg.backend.refusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -8267,6 +8346,7 @@ async function runSessionBody(
       minMutantBudgetMs,
       baselineTimeoutMs,
       testPageRefused,
+      ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
@@ -9970,10 +10050,21 @@ async function runSessionBody(
             ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
             // PR-282: the company list passed as --companies.
             ...(cfg.backend.companies !== undefined ? { companies: cfg.backend.companies } : {}),
+            // PR-297: the refused-cut tail was ON.
+            ...(cfg.backend.refusedCutTail === true ? { refusedCutTail: true } : {}),
           },
         }
       : {}),
   };
+  if (reachTrace !== undefined) {
+    const scored = new Map<string, number>();
+    for (const e of collectedEvents) {
+      if (e.type !== "mutant-scored") continue;
+      const key = reachSiteKey(e.mutant);
+      scored.set(key, (scored.get(key) ?? 0) + 1);
+    }
+    reachTrace.verify(scored);
+  }
   const report = buildReport(statics, collectedEvents);
   // R89: a run ASKED to resume must SAY it resumed. This is the invariant the code already claims —
   // `resolveResume` throws when it finds no target, and `resumedFrom` is keyed on the request
@@ -10862,19 +10953,50 @@ export function reachFromBaseline(
   evidence: BaselineReach | undefined,
   modeNow: (codeunitId: number) => "test" | "method",
 ): { guardReached: boolean; reachedBy: string[] } | undefined {
-  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
-    return undefined;
+  return reachWhy(m, ran, evidence, modeNow).reach;
+}
+
+/** PR-298: `reachFromBaseline`, and when it cannot decide, why. Used by `reachFromBaseline` itself. */
+export function reachWhy(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ran: readonly TestMethodRef[],
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+):
+  | { reach: { guardReached: boolean; reachedBy: string[] }; cause?: undefined }
+  | { reach: undefined; cause: ReachNullCause } {
+  if (m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return { reach: undefined, cause: "non-statement-grain" };
   }
-  if (ran.length === 0) return undefined;
+  if (evidence === undefined) return { reach: undefined, cause: "no-line-evidence" };
+  if (ran.length === 0) return { reach: undefined, cause: "empty-set" };
   const site = `${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`;
   const reachedBy: string[] = [];
   for (const ref of ran) {
     const lines = evidence.hits.get(testKeyOf(ref));
-    if (lines === undefined) return undefined;
-    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return undefined;
+    if (lines === undefined) return { reach: undefined, cause: "no-line-evidence" };
+    if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) {
+      return { reach: undefined, cause: "mode-moved" };
+    }
     if (lines.has(site)) reachedBy.push(qualifiedTestName(ref));
   }
-  return { guardReached: reachedBy.length > 0, reachedBy };
+  return { reach: { guardReached: reachedBy.length > 0, reachedBy } };
+}
+
+/** PR-298: whether `ref`'s own baseline hit the mutant's reach line; `null` when that is unknown. */
+export function baselineHitOf(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  ref: TestMethodRef,
+  evidence: BaselineReach | undefined,
+  modeNow: (codeunitId: number) => "test" | "method",
+): boolean | null {
+  if (evidence === undefined || m.reachGrain !== "statement" || m.reachLine === undefined) {
+    return null;
+  }
+  const lines = evidence.hits.get(testKeyOf(ref));
+  if (lines === undefined) return null;
+  if (evidence.modes.get(ref.codeunitId) !== modeNow(ref.codeunitId)) return null;
+  return lines.has(`${objectKeyOf(m.objectType, m.codeunitId, "reach site")}:${m.reachLine}`);
 }
 
 /** C02-06 decision 13: why a baseline run is not a valid green one, or `undefined` when it is.
@@ -12827,6 +12949,8 @@ interface RunMutantsArgs {
   readonly baselineReused: ReusedBaseline | undefined;
   /** R926: baseline line coverage for deciding reach where the backend attests none. */
   readonly baselineReach?: BaselineReach;
+  /** PR-298: stages each mutant's raw-reach trace row; absent: nothing is traced. */
+  readonly reachTrace?: ReachTrace;
 }
 
 /**
@@ -14098,6 +14222,39 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           ? fromBaseline
           : undefined;
     const commitRecord = (): void => {
+      if (args.reachTrace !== undefined) {
+        // PR-298: staged here, written by the `mutant-scored` event `record` emits next.
+        const modeNow = (cu: number) => args.backend.isolationOf?.(cu) ?? "test";
+        const overCovering = reachWhy(m, covering, args.baselineReach, modeNow);
+        const overRan = reachWhy(m, ranRefs, args.baselineReach, modeNow);
+        // R926: an all-green mutant ran BECAUSE coverage saw nothing of its object, so that coverage
+        // cannot claim "not hit": its covering reach is undecided whatever the lines say.
+        const allGreen = args.coverageAttribution.get(m.mutantId) === "all-green";
+        const nullCause: ReachNullCause | null = allGreen
+          ? "all-green"
+          : overCovering.reach !== undefined
+            ? null
+            : overCovering.cause;
+        args.reachTrace.stage(m.mutantId, {
+          file: m.file,
+          startLine: m.startLine,
+          operatorName: m.operatorName,
+          startIndex: m.startIndex,
+          endIndex: m.endIndex,
+          verdict,
+          reachGrain: m.reachGrain ?? null,
+          reachLine: m.reachLine ?? null,
+          killingTest: killingTestRef !== undefined ? qualifiedTestName(killingTestRef) : null,
+          reachOverCovering: allGreen ? null : (overCovering.reach?.guardReached ?? null),
+          reachOverRan: overRan.reach?.guardReached ?? null,
+          killerBaselineHit:
+            killingTestRef !== undefined
+              ? baselineHitOf(m, killingTestRef, args.baselineReach, modeNow)
+              : null,
+          nullCause,
+          reachFinal: reachFinal?.guardReached ?? null,
+        });
+      }
       const mutantRowId = record(
         args.store,
         args.runId,
@@ -14620,14 +14777,14 @@ function assertSameResumeInputs(
 
 /**
  * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
- * strips the end-anchored ` environment-X[ license-H][ companies-H][ isolation-auto]`, and ` isolation-auto` must be
+ * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ isolation-auto]`, and ` isolation-auto` must be
  * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
 export function lendingRunnerBuild(
   backend: ExecutionBackend,
   v3Build: { readonly version: string; readonly binarySha256: string },
 ): string {
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.refusedCutTail === true ? " refused-cut-tail" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**

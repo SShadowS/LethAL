@@ -26,6 +26,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import {
   CONTROL_REGISTER_FILENAME,
@@ -242,8 +243,11 @@ async function hashAlFiles(
   return { hash: h.digest("hex"), hasExtensionObject, print: p.toString(16) };
 }
 
-/** PR-259: the bound print alone, under `hashWalked`'s walk and link refusal (no SHA-256). */
-function printWalked(dir: string, links: LinkPolicy, skipRootControl: boolean): string {
+/**
+ * PR-259: the bound print alone, under `hashWalked`'s walk and link refusal (no SHA-256). Synchronous: PR-292 runs it in
+ * a worker thread (`bound-print-worker.ts`) for the per-send checks, and it is exported for that worker and the tests.
+ */
+export function printWalkedSync(dir: string, links: LinkPolicy, skipRootControl: boolean): string {
   const walk = walkFilesSync(dir, { links });
   assertNoUnexcusedLinks(dir, walk.skippedLinks);
   // One file in memory at a time, as `hashAlFiles` reads (DO's tree is 69 MB, per send, per lane).
@@ -262,14 +266,124 @@ export async function scanAlTree(dir: string): Promise<{ hash: string; print: st
   return { hash, print };
 }
 
-/** PR-259: the bound print of `hashAlTree`'s files (al-runner v3's per-send check). */
+/** PR-259: the bound print of `hashAlTree`'s files (al-runner v3's per-send check). PR-292: in a worker thread. */
 export async function printAlTree(dir: string): Promise<string> {
-  return printWalked(dir, "refuse", true);
+  return printInWorker(dir, "refuse", true);
 }
 
-/** PR-259: the bound print of `hashTestDir`'s files (al-runner v3's per-send check). */
+/** PR-259: the bound print of `hashTestDir`'s files (al-runner v3's per-send check). PR-292: in a worker thread. */
 export async function printTestDir(dir: string): Promise<string> {
-  return printWalked(dir, "refuse", false);
+  return printInWorker(dir, "refuse", false);
+}
+
+/*
+ * PR-292 (R1156 follow-up): the per-send prints run in a small pool of worker threads, so N lanes' checks no longer
+ * queue on LethAL's one JS thread (c1: 365 ms per check at 5 lanes, against about 50 ms of print). Each worker runs
+ * `printWalkedSync` itself, so the print is the same computation. Workers stay referenced for their whole life, and a
+ * worker idle for IDLE_MS is terminated by an unref'd timer, so a pending print keeps the process alive and an idle pool
+ * never does. Answers are settled outside the message dispatch (see `onmessage`). Errors cross the
+ * thread explicitly: a link refusal becomes a real `ProjectSymlinkRefusedError`; anything else rejects with its message;
+ * a worker that errs or closes (idle or not) leaves the pool and rejects all it held. There is no inline fallback.
+ */
+export type PrintRequest = {
+  readonly id: number;
+  readonly dir: string;
+  readonly links: LinkPolicy;
+  readonly skipRootControl: boolean;
+};
+export type PrintAnswer =
+  | { readonly id: number; readonly print: string }
+  | {
+      readonly id: number;
+      readonly link: { readonly linkPath: string; readonly root: string; readonly message: string };
+    }
+  | { readonly id: number; readonly error: string };
+
+type Held = { resolve: (print: string) => void; reject: (err: Error) => void };
+type Slot = {
+  worker: Worker;
+  held: Map<number, Held>;
+  idle: ReturnType<typeof setTimeout> | undefined;
+};
+const pool: Slot[] = [];
+let nextPrintId = 0;
+/** PR-292: an idle worker is terminated after this long (lanes send every few seconds, so a busy run keeps its pool). */
+const IDLE_MS = 2_000;
+
+const poolSize = (): number => Math.max(1, Math.min(4, availableParallelism()));
+
+function answerToResult(a: PrintAnswer, h: Held): void {
+  if ("print" in a) h.resolve(a.print);
+  else if ("link" in a) {
+    const e = new ProjectSymlinkRefusedError(a.link.linkPath, a.link.root);
+    e.message = a.link.message;
+    h.reject(e);
+  } else h.reject(new Error(a.error));
+}
+
+function newSlot(): Slot {
+  const worker = new Worker(new URL("./bound-print-worker.ts", import.meta.url));
+  const slot: Slot = { worker, held: new Map(), idle: undefined };
+  // Leaves the pool, rejects what it held, ends the thread. Safe to call twice (an error is followed by a close).
+  const fail = (why: string) => {
+    if (slot.idle !== undefined) clearTimeout(slot.idle);
+    slot.idle = undefined;
+    const at = pool.indexOf(slot);
+    if (at >= 0) pool.splice(at, 1);
+    const err = new Error(`al-runner-v3 bound print: the worker thread ${why}`);
+    for (const h of slot.held.values()) h.reject(err);
+    slot.held.clear();
+    worker.terminate();
+  };
+  // An idle worker ends after IDLE_MS, from its creation on too: a worker the pool made but never used must not keep the
+  // process alive (test 6).
+  const armIdle = () => {
+    slot.idle = setTimeout(() => {
+      if (slot.held.size === 0) fail("was idle");
+    }, IDLE_MS);
+    slot.idle.unref();
+  };
+  armIdle();
+  worker.onmessage = (ev: MessageEvent<PrintAnswer>) => {
+    const h = slot.held.get(ev.data.id);
+    if (h === undefined) return;
+    slot.held.delete(ev.data.id);
+    if (slot.held.size === 0) armIdle();
+    // Settled OUTSIDE this message's dispatch. Settled inside it, the caller's continuation (a refused check, then the
+    // next send) posted the next request to this same port mid-dispatch, and in Bun 1.4.4 that request's answer was never
+    // delivered: R653 P7 (al-runner-v3-entries.test.ts) hung with the answer posted by the worker. P7 pins this.
+    const answer = ev.data;
+    setImmediate(() => answerToResult(answer, h));
+  };
+  worker.onerror = (ev: ErrorEvent) => fail(`failed: ${ev.message}`);
+  // Review S1: a worker that closes while idle leaves the pool too, or the next print sent to it would never settle.
+  worker.addEventListener("close", () => fail("closed"));
+  return slot;
+}
+
+function printInWorker(dir: string, links: LinkPolicy, skipRootControl: boolean): Promise<string> {
+  while (pool.length < poolSize()) pool.push(newSlot());
+  // The least busy worker; ties go to the first.
+  let slot: Slot | undefined;
+  for (const s of pool) if (slot === undefined || s.held.size < slot.held.size) slot = s;
+  if (slot === undefined)
+    return Promise.reject(new Error("al-runner-v3 bound print: no worker thread"));
+  const chosen = slot;
+  nextPrintId += 1;
+  const id = nextPrintId;
+  if (chosen.idle !== undefined) clearTimeout(chosen.idle);
+  chosen.idle = undefined;
+  return new Promise<string>((resolve, reject) => {
+    chosen.held.set(id, { resolve, reject });
+    const req: PrintRequest = { id, dir, links, skipRootControl };
+    try {
+      chosen.worker.postMessage(req);
+    } catch (err) {
+      // Review N2: a send that throws holds nothing.
+      chosen.held.delete(id);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
 }
 
 /**

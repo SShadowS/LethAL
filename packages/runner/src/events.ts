@@ -293,6 +293,22 @@ export type RunEventInput =
       }>;
     }
   | {
+      /**
+       * PR-307 (R1168): the tests of this run's FINAL list that can change with the session kind (a client session or a headless
+       * one), emitted once, before anything is sent, only when there is at least one and `ciSessionKind` is set (unset, the
+       * session was refused). `backendSessionKind` is what this run's backend is; `ciSessionKind` is what the config says the
+       * user's CI runs. A label only; no verdict reads it. See `session-kind.ts`.
+       */
+      readonly type: "tests-session-kind-sensitive";
+      readonly tests: ReadonlyArray<{
+        readonly test: string;
+        readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+        readonly scanError?: string;
+      }>;
+      readonly backendSessionKind: "client" | "headless";
+      readonly ciSessionKind: "client" | "headless";
+    }
+  | {
       readonly type: "batch-published";
       readonly batchIndex: number;
       readonly guardCount: number;

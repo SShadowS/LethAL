@@ -174,6 +174,7 @@ import type { SessionReport } from "./report";
 import { quarantineResourceKey } from "./resource-key";
 import { assertResourceSelectorRuntime, runtimeBelow14 } from "./resource-selector";
 import { RunMutantTransport } from "./run-mutant-transport";
+import { validateCiSessionKind } from "./session-kind";
 import { ResultsStore } from "./store";
 import type { PublishOutcomeRow } from "./store";
 import { buildTestAppModel, readTestAppSources } from "./testpage-scan";
@@ -470,6 +471,8 @@ export const DRY_RUN_REFUSED = [
   "confirm-from",
   "confirm-sample",
   "confirm-seed",
+  // PR-311: a dry run runs no test, so the session kind would do nothing.
+  "ci-session-kind",
 ] as const;
 
 export interface DryRunCliConfig {
@@ -606,6 +609,8 @@ export interface RunCliConfig {
   readonly excludeTests?: readonly string[];
   /** PR-212 (R1113): `--keep-company-tests` runs the test methods that write the Company table; by default a BC run leaves them out. */
   readonly keepCompanyTests?: boolean;
+  /** PR-307b: `--ci-session-kind`. It OVERRIDES the config's `ciSessionKind` (precedence: flag, then config, then unset). */
+  readonly ciSessionKind?: "client" | "headless";
   /**
    * R44: `--max-guards-per-batch <n>` bounds how many injected guards go into one published
    * artifact. Absent means no limit.
@@ -1198,6 +1203,9 @@ RUN — scope. These bound cost. --tests-only can change a verdict; the others c
                              names them: on BC 29 they broke the server's tier (R1113). A write two
                              calls away is not seen. Use it on a server you can restart. Also read
                              by --dry-run. al-runner-v3 never leaves them out
+  --ci-session-kind <kind>   client | headless: the session kind your CI runs tests in. OVERRIDES the
+                             config's "ciSessionKind" (flag, then config, then unset); needed when a
+                             test can change with the session kind (PR-307)
   --skip-known-survivors    skip mutants a prior finished run recorded as survivors
   --confirm-from <v3.json>   deploy only the mutants an al-runner-v3 report selects: its survivors
                              noted '[v3-refused-test-nearby]', its no-coverage rows noted by R609,
@@ -1553,6 +1561,8 @@ export const RUN_FLAGS = {
   "exclude-test": { type: "string", multiple: true },
   // PR-212: see `RunCliConfig.keepCompanyTests`.
   "keep-company-tests": { type: "boolean", default: false },
+  // PR-307b: see `RunCliConfig.ciSessionKind`.
+  "ci-session-kind": { type: "string" },
   // R44: see `RunCliConfig.maxGuardsPerBatch`.
   "max-guards-per-batch": { type: "string" },
   // R47: see `RunCliConfig.mutantTimeoutMs` / `resume`.
@@ -1649,6 +1659,7 @@ const RUN_ONLY_FLAGS = [
   "retry-stranded",
   "stop-hung-sessions",
   "keep-company-tests",
+  "ci-session-kind",
   "allow-large-run",
   "fresh-probe",
   "isolate-tests",
@@ -2532,6 +2543,9 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
   const selectorIdFlag = parseObjectIdFlag(values["selector-id"], "selector-id");
   const controlIdFlag = parseObjectIdFlag(values["control-id"], "control-id");
   const tableIdFlag = parseObjectIdFlag(values["table-id"], "table-id");
+  // PR-311: `--ci-session-kind` overrides the config's `ciSessionKind`; refused by name like the config's own value.
+  // Read after the dry-run branch, which refuses the flag by name (a dry run runs no test).
+  const ciSessionKindFlag = validateCiSessionKind(values["ci-session-kind"], "--ci-session-kind");
   const selectorIdOverrides: Partial<SelectorConfig> = {
     ...(selectorIdFlag !== undefined ? { selectorId: selectorIdFlag } : {}),
     ...(controlIdFlag !== undefined ? { controlId: controlIdFlag } : {}),
@@ -2657,6 +2671,7 @@ export function parseCliConfig(argv: readonly string[]): CliConfig {
     ...(values["retry-stranded"] === true ? { retryStranded: true } : {}),
     ...(values["stop-hung-sessions"] === true ? { stopHungSessions: true } : {}),
     ...(values["keep-company-tests"] === true ? { keepCompanyTests: true } : {}),
+    ...(ciSessionKindFlag !== undefined ? { ciSessionKind: ciSessionKindFlag } : {}),
     ...(values["fresh-probe"] === true ? { freshProbe: true } : {}),
     ...(values["isolate-tests"] === true ? { isolateTests: true } : {}),
     ...(values["fail-on-survivors"] === true ? { failOnSurvivors: true as const } : {}),
@@ -2799,6 +2814,12 @@ export interface LethalConfigFile {
    * nothing says so.
    */
   readonly preprocessorSymbols?: readonly string[];
+  /**
+   * PR-307 (R1168): the session kind the user's own CI runs its tests in, `"client"` (GuiAllowed true) or `"headless"`
+   * (GuiAllowed false). NO DEFAULT: a run with a test that can change with the session kind is refused while it is unset
+   * (`SessionKindUnsetError`). Validated once, in `loadLethalConfigFile`.
+   */
+  readonly ciSessionKind?: "client" | "headless";
   /**
    * R900 — the folders alc searches for .NET assemblies (`/assemblyprobingpaths:`), relative to the
    * project. TOP-LEVEL for the reason `preprocessorSymbols` is: every backend compiles with alc.
@@ -3051,6 +3072,8 @@ async function loadLethalConfigFile(path: string): Promise<LethalConfigFile> {
   refuseRetiredV2ConfigSection(parsed, path);
   refuseRetiredBcHost(parsed.bcdev);
   refuseCredentialsEnvWithEnvTool(parsed);
+  // PR-307: the ONE validation of `ciSessionKind`; every path that reads a config file comes through here.
+  validateCiSessionKind(parsed.ciSessionKind, path);
   setPackageCacheDirs(configuredPackageCaches(parsed));
   return parsed;
 }
@@ -3485,6 +3508,8 @@ export function v3RecheckOf(a: {
         },
         backend,
         store,
+        // PR-298: the nested session never traces: it would truncate the main run's LETHAL_REACH_TRACE file.
+        reachTrace: null,
         instrumentedDir: join(a.scratchRoot, "recheck-instrumented"),
         emit: [(e) => events.push(e)],
         lines,
@@ -3829,6 +3854,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     ...(c.daemonStderrDir !== undefined ? { daemonStderrDir: c.daemonStderrDir } : {}), // PR-227
     ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
     ...(c.companies !== undefined ? { companies: c.companies } : {}), // PR-282
+    ...(c.refusedCutTail === true ? { refusedCutTail: true } : {}), // PR-297
   };
 }
 
@@ -5073,6 +5099,11 @@ export async function runFromCliWithAccept(
               // C02-06: the symbols the target compiler was built with (see `buildBackend`), so the
               // recorded source hash covers them. Also what `SessionReport.preprocessorSymbols` reports.
               preprocessorSymbols: validatePreprocessorSymbols(effectiveConfig.preprocessorSymbols),
+              // PR-307: validated at load; the nested recheck's `base` spreads this config, so it carries the same value.
+              // PR-307b: `--ci-session-kind` overrides the config file's value.
+              ...((parsed.ciSessionKind ?? effectiveConfig.ciSessionKind) !== undefined
+                ? { ciSessionKind: parsed.ciSessionKind ?? effectiveConfig.ciSessionKind }
+                : {}),
               // R900: the list `buildBackend` gave alc, for the resume fingerprint.
               assemblyProbingPaths: probing.paths,
               ...afterLeaseAcquiredFor(envSession),

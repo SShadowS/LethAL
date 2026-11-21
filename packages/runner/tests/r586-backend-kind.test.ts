@@ -495,6 +495,25 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
     });
   });
 
+  test("PR-297: refusedCutTail goes in the lending build, the fingerprint and the report; off, none moves", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const none = await v3Session(root, store, withProbe(new V3KindStub([]), []));
+      const on = await v3Session(
+        root,
+        store,
+        Object.assign(withProbe(new V3KindStub([]), []), { refusedCutTail: true }),
+      );
+      const [r1, r2] = [store.getRun(1), store.getRun(2)];
+      expect(r1?.runnerBuild).not.toContain("refused-cut-tail");
+      expect(r2?.runnerBuild).toBe(`${r1?.runnerBuild} refused-cut-tail`);
+      // another fingerprint: a resume under the other value is refused
+      expect(r1?.configFingerprint).not.toBe(r2?.configFingerprint);
+      expect(none.validity.executionContexts[0]).not.toHaveProperty("refusedCutTail");
+      expect(on.validity.executionContexts[0]?.refusedCutTail).toBe(true);
+    });
+  });
+
   test("R938: the environment goes in the build, the fingerprint and the report; a resume under another one is refused", async () => {
     await inProject(async (root) => {
       const store = new ResultsStore(":memory:");
@@ -598,6 +617,32 @@ describe("R586 C1: runSession keys on kind, not on authoritative", () => {
       const unrelated = await v3Session(root, store, otherLicense, { resume: "last" }).catch(
         (e: unknown) => e,
       );
+      expect(String(unrelated)).not.toContain("recorded under environment");
+    });
+  });
+
+  test("PR-297: the other-environment refusal still names the environment with a refused-cut-tail tag (before isolation-auto); the flag off or on is another build", async () => {
+    await inProject(async (root) => {
+      const store = new ResultsStore(":memory:");
+      const mk = (value: "saas" | "onprem", tail: boolean) =>
+        Object.assign(withProbe(new V3KindStub([]), []), {
+          environmentChoice: { value, source: "config" as const },
+          companies: "A",
+          isolationAuto: true,
+          ...(tail ? { refusedCutTail: true } : {}),
+        });
+      await v3Session(root, store, mk("onprem", true));
+      expect(store.getRun(1)?.runnerBuild).toMatch(
+        / environment-onprem companies-[0-9a-f]{8} refused-cut-tail isolation-auto$/,
+      );
+      store.db.run("UPDATE runs SET finished_at = NULL WHERE id = 1");
+      const other = await v3Session(root, store, mk("saas", true), { resume: "last" }).catch(
+        (e: unknown) => e,
+      );
+      expect(String(other)).toContain("recorded under environment onprem");
+      const unrelated = await v3Session(root, store, mk("saas", false), {
+        resume: "last",
+      }).catch((e: unknown) => e);
       expect(String(unrelated)).not.toContain("recorded under environment");
     });
   });

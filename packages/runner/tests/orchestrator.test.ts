@@ -810,6 +810,8 @@ describe("runSession", () => {
       store,
       ...dirs,
       selectorIds,
+      // PR-307: the unparsable test file is session-kind-unreadable on v3, so a run needs the setting.
+      ciSessionKind: "headless",
       emit: [createEmitter([(e) => events.push(e)])],
     });
     expect(report.counts.killed).toBeGreaterThan(0);
@@ -4169,7 +4171,8 @@ describe("R-236c: a test with a reachable call that may open a TestPage is refus
     const dirs = await makeProject(testAl);
     await Bun.write(join(dirs.projectDir, "SandboxLogic.Codeunit.al"), TWO_PROC_AL);
     await Bun.write(join(dirs.testDir, "app.json"), testAppJson());
-    return dirs;
+    // PR-307: a TestPage test is session-kind-sensitive on an al-runner-v3 stub, so a run needs the setting.
+    return { ...dirs, ciSessionKind: "headless" as const };
   }
   const FENCED = { ...CAPS_NST, coverage: "fenced" as const };
 

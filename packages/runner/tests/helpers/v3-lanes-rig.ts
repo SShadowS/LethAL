@@ -116,6 +116,8 @@ export interface Req {
   readonly selectedOnly: boolean;
   /** PR-250: each entry's `excludeTests`, by entry id (absent: none). */
   readonly excludes: Record<string, readonly string[]>;
+  /** PR-297: each non-echo entry's `test` (`Codeunit<n>.` whole, `Codeunit<n>.<Method>` one test alone). */
+  readonly tests: string[];
   /** PR-250 (`honorExcludes`): excluded tests that RAN with their rows hidden (an unflagged request, R1094). */
   readonly hiddenRan: string[];
 }
@@ -179,10 +181,15 @@ function fakeServe(ctl: ServeCtl) {
                 .filter((e) => Array.isArray(e.excludeTests))
                 .map((e) => [String(e.id), (e.excludeTests as string[]).map(String)]),
             ),
+            tests: entries
+              .filter((e) => !String(e.id).endsWith("|echo"))
+              .map((e) => String(e.test)),
             hiddenRan: [],
           };
           requests.push(req);
-          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\.$/.exec(String(t))?.[1]);
+          const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
+          // PR-297: `Codeunit<n>.<Method>` selects that one test (an alone request); `Codeunit<n>.` the whole codeunit
+          const methodOf = (t: unknown) => /^Codeunit\d+\.(.+)$/.exec(String(t))?.[1];
           const lines: Record<string, unknown>[] = [];
           const sums = { passed: 0, failed: 0, errors: 0, notRun: 0, total: 0 };
           const count = (rs: FakeRow[]) => {
@@ -220,6 +227,9 @@ function fakeServe(ctl: ServeCtl) {
                     },
                   ]
                 : ctl.rows(m, cu, daemon, n).filter((r) => {
+                    const only = methodOf(e.test);
+                    if (only !== undefined && r.method.toLowerCase() !== only.toLowerCase())
+                      return false;
                     const name = `Codeunit${cu}.${r.method}`;
                     const out =
                       ctl.honorExcludes === true &&
@@ -324,6 +334,8 @@ export async function lanesRig(
     packEntries?: number;
     /** PR-250: the test codeunit's methods, in order (default A and B). */
     methods?: readonly string[];
+    /** PR-297: `alRunnerV3.refusedCutTail`. */
+    refusedCutTail?: boolean;
   } = {},
 ): Promise<LanesRig> {
   const suite = o.methods === undefined ? SUITE : o.methods.map(ref);
@@ -382,6 +394,7 @@ export async function lanesRig(
       coverage: "none",
       transport: "serve-entries",
       ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
+      ...(o.refusedCutTail === true ? { refusedCutTail: true } : {}),
     },
     one.spawn,
     fakeAlc(),

@@ -69,6 +69,7 @@
               "tests-testpage-unsupported",
               "tests-testpage-refused",
               "tests-restrictive-default-at-risk",
+              "session-kind-mismatch",
               "runner-disagreement",
               "stop-hung-sessions",
               "stop-answer-400",
@@ -221,6 +222,9 @@
               },
               "companies": {
                 "type": "string"
+              },
+              "refusedCutTail": {
+                "const": true
               }
             }
           }
@@ -1192,6 +1196,36 @@
         },
         "diagnosis": {
           "type": "string"
+        }
+      }
+    },
+    "sessionKindSensitiveTests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "test",
+          "reasons"
+        ],
+        "properties": {
+          "test": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "handlers",
+                "testpage",
+                "unreadable"
+              ]
+            }
+          },
+          "scanError": {
+            "type": "string"
+          }
         }
       }
     },

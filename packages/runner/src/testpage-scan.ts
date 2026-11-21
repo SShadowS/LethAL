@@ -118,6 +118,8 @@ export class TestPageScanError extends Error {
 export interface TestPageAnalysis {
   readonly refused: ReadonlyMap<string, string>;
   readonly errors: readonly string[];
+  /** PR-307: the same errors by test key (`testKeyOf`); a test with none has no entry. Read only to label. */
+  readonly errorsByTest: ReadonlyMap<string, readonly string[]>;
 }
 
 interface ErrorSite {
@@ -3006,10 +3008,16 @@ export function analyzeTestPageModel(
   const scanner = new Scanner(model);
   const refused = new Map<string, string>();
   const errors: string[] = [];
+  const byTest = new Map<string, Set<string>>();
   for (const t of tests) {
     const label = `${t.codeunitName}.${t.method}`;
+    const key = testKeyOf(t);
+    const err = (m: string): void => {
+      errors.push(m);
+      byTest.set(key, (byTest.get(key) ?? new Set<string>()).add(m));
+    };
     if (t.file === undefined) {
-      errors.push(`${label} has no file`);
+      err(`${label} has no file`);
       continue;
     }
     // EVERY codeunit with the test's id and EVERY parameterless procedure of its name: a codeunit
@@ -3020,7 +3028,7 @@ export function analyzeTestPageModel(
         u.procs.filter((p) => p.name === normalizeAlName(t.method) && p.params === 0),
       );
     if (decls.length === 0) {
-      errors.push(
+      err(
         `${label} (codeunit ${t.codeunitId}) was discovered but the parser found it ${decls.length} time(s) as a parameterless procedure`,
       );
       continue;
@@ -3034,19 +3042,22 @@ export function analyzeTestPageModel(
     };
     for (const decl of decls) scanner.walk(decl, [], st);
     for (const u of st.reached) {
-      if (u.damaged)
-        errors.push(`${label} reaches ${u.display} (${u.file}), which does not parse cleanly`);
-      for (const p of u.problems) errors.push(`${label}: ${p}`);
+      if (u.damaged) err(`${label} reaches ${u.display} (${u.file}), which does not parse cleanly`);
+      for (const p of u.problems) err(`${label}: ${p}`);
     }
-    for (const p of st.problems) errors.push(`${label}: ${p}`);
+    for (const p of st.problems) err(`${label}: ${p}`);
     if (st.unresolvedTargets.size > 0 && suspect.length > 0) {
-      errors.push(
+      err(
         `${label} calls ${[...st.unresolvedTargets].join(", ")}, not found in the test app, while the test app has parse errors that could hide it (${suspect.join(", ")})`,
       );
     }
     if (st.reason !== undefined) refused.set(testKeyOf(t), st.reason);
   }
-  return { refused, errors: [...new Set(errors)] };
+  return {
+    refused,
+    errors: [...new Set(errors)],
+    errorsByTest: new Map([...byTest].map(([k, v]) => [k, [...v]])),
+  };
 }
 
 export function scanTestPageSources(
