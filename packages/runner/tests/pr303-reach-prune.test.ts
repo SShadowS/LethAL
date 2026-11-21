@@ -174,10 +174,9 @@ describe("PR-303: the flag", () => {
       /reach-prune-backend-refused/,
     );
   });
-  test("a baseline that is not unbatched is refused by name", () => {
-    expect(() => readReachPrune({ [REACH_PRUNE_ENV]: "on" }, fake("al-runner-v3", false))).toThrow(
-      /reach-prune-baseline-refused/,
-    );
+  test("amendment 1 (M1): a batched baseline is allowed, as an unbatched one is", () => {
+    expect(readReachPrune({ [REACH_PRUNE_ENV]: "on" }, fake("al-runner-v3", false))).toBe(true);
+    expect(readReachPrune({ [REACH_PRUNE_ENV]: "on" }, fake("al-runner-v3", true))).toBe(true);
   });
 });
 
@@ -501,10 +500,12 @@ describe("PR-303: the session refusals", () => {
     await expect(run(backend, "on")).rejects.toThrow(/reach-prune-backend-refused/);
     expect(backend.activations).toEqual([]);
   });
-  test("a baseline that is not unbatched is refused before any run", async () => {
+  test("amendment 1 (M1): under a batched baseline the session prunes as under an unbatched one", async () => {
     const backend = new StubBackend(allPass, onlyA1, { knobOff: false });
-    await expect(run(backend, "on")).rejects.toThrow(/reach-prune-baseline-refused/);
-    expect(backend.activations).toEqual([]);
+    const report = await run(backend, "on");
+    expect(report.mutants.length).toBeGreaterThan(0);
+    expect(backend.mutatedRuns.some((t) => t.startsWith("Sandbox Tests B."))).toBe(false);
+    expect(backend.mutatedRuns).toContain("Sandbox Tests A.A1");
   });
 
   test("--resume across a flag change is refused by name, both ways, by id and as last", async () => {

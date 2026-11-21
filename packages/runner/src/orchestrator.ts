@@ -11058,10 +11058,14 @@ export class ReachPruneError extends Error {
   }
 }
 
-/** PR-303: `LETHAL_V3_REACH_PRUNE` (unset or empty: off; `on`: on; else refused), with the backend checks. */
+/**
+ * PR-303: `LETHAL_V3_REACH_PRUNE` (unset or empty: off; `on`: on; else refused), with the backend check. Amendment 1's
+ * M1 (`/coord/handoff/PR-303/m1/`) measured the batched baseline's kill side: 0 of PR-235's 342 undecided DO kills read
+ * unreached, so rule 5 allows either baseline mode (batched, the default, or unbatched).
+ */
 export function readReachPrune(
   env: Record<string, string | undefined>,
-  backend: Pick<ExecutionBackend, "baselineBatchingKnobOff"> & { capabilities(): { kind: string } },
+  backend: { capabilities(): { kind: string } },
 ): boolean {
   const v = env[REACH_PRUNE_ENV];
   if (v === undefined || v === "") return false;
@@ -11073,11 +11077,6 @@ export function readReachPrune(
   if (backend.capabilities().kind !== "al-runner-v3") {
     throw new ReachPruneError(
       `reach-prune-backend-refused: ${REACH_PRUNE_ENV}=on applies to the al-runner-v3 backend only, not ${backend.capabilities().kind} (PR-303)`,
-    );
-  }
-  if (backend.baselineBatchingKnobOff !== true) {
-    throw new ReachPruneError(
-      `reach-prune-baseline-refused: ${REACH_PRUNE_ENV}=on needs an unbatched baseline (set LETHAL_V3_BASELINE_BATCHING=off); a batched baseline's reach is not gate-proven for pruning (PR-303)`,
     );
   }
   return true;
