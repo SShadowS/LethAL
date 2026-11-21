@@ -1,9 +1,27 @@
 // R834: build:binary refuses a target whose native parser addon is missing.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NativeAddonMissingError, requireNativeAddon } from "./build-binary";
+import { COMPILE_ENTRIES, NativeAddonMissingError, requireNativeAddon } from "./build-binary";
+
+describe("PR-292: every worker thread is a compile entry point", () => {
+  test('each `new Worker(new URL("./x", import.meta.url))` in the runner\'s sources is in COMPILE_ENTRIES', () => {
+    const src = join(import.meta.dir, "..", "packages", "runner", "src");
+    const workers: string[] = [];
+    for (const f of readdirSync(src)) {
+      if (!f.endsWith(".ts")) continue;
+      const text = readFileSync(join(src, f), "utf8");
+      for (const m of text.matchAll(
+        /new Worker\(\s*new URL\(\s*"\.\/([^"]+)"\s*,\s*import\.meta\.url\s*\)/g,
+      )) {
+        if (m[1] !== undefined) workers.push(join(src, m[1]));
+      }
+    }
+    expect(workers.length).toBeGreaterThan(0); // the scan finds the bound-print worker, so it is not passing empty
+    for (const w of workers) expect(COMPILE_ENTRIES).toContain(w);
+  });
+});
 
 describe("requireNativeAddon", () => {
   test("a missing addon throws the typed error, naming the install and the build command", () => {

@@ -37,7 +37,7 @@ describe("PR-292: the bound print in a worker", () => {
     } finally {
       clearInterval(timer);
     }
-    expect(ticks).toBeGreaterThanOrEqual(2);
+    expect(ticks).toBeGreaterThanOrEqual(5); // spec §3 test 1; the synchronous print ticked 0
   }, 60_000);
 
   test("2: the worker's prints equal the inline computation, the root control file left out of the tree print only", async () => {
