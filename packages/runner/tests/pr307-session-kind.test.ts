@@ -772,7 +772,8 @@ describe("PR-307: every path reads the setting from the one config load", () => 
   });
 
   test("PR-307b: parseCliConfig reads --ci-session-kind and refuses a bad value by name", () => {
-    const base = ["run", "--project", "p", "--tests", "t", "--backend", "al-runner-v3"];
+    // bcdev: CI's Windows job refuses --backend al-runner-v3 at parse time (R586 v1), and the flag is backend-neutral.
+    const base = ["run", "--project", "p", "--tests", "t", "--backend", "bcdev"];
     const ok = parseCliConfig([...base, "--ci-session-kind", "headless"]);
     expect(ok.mode === "run" ? ok.ciSessionKind : "not run").toBe("headless");
     const none = parseCliConfig(base);
