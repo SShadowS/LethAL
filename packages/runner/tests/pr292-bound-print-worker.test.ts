@@ -73,11 +73,18 @@ describe("PR-292: the bound print in a worker", () => {
   });
 
   test("5: concurrent prints each get their own tree's answer (none swapped)", async () => {
-    const dirs = await Promise.all(
-      [0, 1, 2, 3, 4, 5].map((i) =>
-        tree({ [`C${i}.Codeunit.al`]: `codeunit ${50200 + i} C${i} { }` }),
-      ),
-    );
+    // The FIRST request gets a large tree, so it finishes last: answers matched by arrival order would swap.
+    const big = "codeunit 50300 Big { }\n".repeat(50_000);
+    const bigFiles: Record<string, string> = {};
+    for (let i = 0; i < 20; i++) bigFiles[`B${i}.Codeunit.al`] = big;
+    const dirs = [
+      await tree(bigFiles),
+      ...(await Promise.all(
+        [1, 2, 3, 4, 5].map((i) =>
+          tree({ [`C${i}.Codeunit.al`]: `codeunit ${50200 + i} C${i} { }` }),
+        ),
+      )),
+    ];
     const got = await Promise.all(dirs.map((d) => printAlTree(d)));
     expect(got).toEqual(dirs.map((d) => printWalkedSync(d, "refuse", true)));
     expect(new Set(got).size).toBe(6);
