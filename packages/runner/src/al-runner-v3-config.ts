@@ -315,7 +315,7 @@ export function validateAlRunnerV3Config(
       );
     }
   }
-  if (r.companies !== undefined && (typeof r.companies !== "string" || r.companies === "")) {
+  if (r.companies !== undefined && (typeof r.companies !== "string" || r.companies.trim() === "")) {
     throw new Error(
       `al-runner-v3-config-refused: "alRunnerV3.companies" must be a non-empty string (the database's company names, comma separated, or "all"), got ${JSON.stringify(r.companies)} (PR-282).`,
     );

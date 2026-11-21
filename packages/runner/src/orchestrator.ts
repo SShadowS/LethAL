@@ -9952,7 +9952,6 @@ async function runSessionBody(
             ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
             // PR-282: the company list passed as --companies.
             ...(cfg.backend.companies !== undefined ? { companies: cfg.backend.companies } : {}),
-            // PR-282: the company list passed as --companies.
           },
         }
       : {}),

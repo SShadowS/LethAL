@@ -17,7 +17,7 @@ describe("PR-282: the config key", () => {
     );
   });
   test("an empty string and a non-string are refused by name", () => {
-    for (const bad of ["", 3, true, ["A"]])
+    for (const bad of ["", "   ", " \t", 3, true, ["A"]])
       expect(() => validateAlRunnerV3Config({ ...base, companies: bad })).toThrow(
         '"alRunnerV3.companies" must be a non-empty string',
       );
@@ -53,7 +53,19 @@ describe("PR-282: argv, fingerprint, pointer", () => {
     const one = sessionFingerprint({ ...f, v3Companies: "A" });
     const two = sessionFingerprint({ ...f, v3Companies: "A,B" });
     expect(new Set([none, one, two]).size).toBe(3);
-    expect(sessionFingerprint({ ...f })).toBe(none);
+    // The digest of these inputs before PR-282 (the field added no key): a key added unconditionally moves it.
+    expect(none).toBe("9349b4c9edc905ff2627fabf927415d531d474d105727b56247fe761be5d5154");
+    // Built separately: an explicit undefined must add no key, so today's digest does not move.
+    expect(sessionFingerprint({ ...f, v3Companies: undefined } as unknown as typeof f)).toBe(
+      sessionFingerprint({
+        projectDir: "/p",
+        testDir: "/t",
+        backend: "al-runner-v3",
+        skipKnownSurvivors: false,
+        identityScheme: 1,
+        selectorIds: { selectorId: 1, controlId: 2, tableId: 3 },
+      }),
+    );
   });
   test("the pointer is added for the Company-table refusal and for no other text", () => {
     expect(

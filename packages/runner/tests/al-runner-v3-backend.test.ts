@@ -1608,6 +1608,13 @@ describe("R885: demo data, on the one-shot path", () => {
     expect("serveTimings" in v3SectionPassThrough(v({ serveTimings: false }))).toBe(false);
   });
 
+  test("PR-282 the CLI passes companies on to the backend's config only when set", () => {
+    const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
+    const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
+    expect(v3SectionPassThrough(v({ companies: "CRONUS,Other" })).companies).toBe("CRONUS,Other");
+    expect("companies" in v3SectionPassThrough(v({}))).toBe(false);
+  });
+
   test("PR-227 the config key daemonStderrDir: absent by default, resolved to absolute, empty or non-string refused", () => {
     const base = { packagesDir: "/p", bcVersion: "28.0.1.2", path: "/x" };
     const v = (extra: object) => validateAlRunnerV3Config({ ...base, ...extra }, () => true);
