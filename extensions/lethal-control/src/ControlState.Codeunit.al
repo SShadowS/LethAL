@@ -431,17 +431,48 @@ codeunit 91002 "LC Control State"
         exit(GraceMs() + RenewPeriodMs());
     end;
 
+    /// <summary>PR-309: the largest call bound a run claim's runway adds (600 s).</summary>
+    local procedure MaxRunBoundMs(): Integer
+    begin
+        exit(600000);
+    end;
+
+    /// <summary>PR-309: the bound a single RunMutant / RunMutantWithCoverage call claims (its budget is
+    /// not on the wire, so the server takes the cap).</summary>
+    procedure SingleRunBoundMs(): Integer
+    begin
+        exit(MaxRunBoundMs());
+    end;
+
+    /// <summary>PR-309: when a run marker clears, bring the long run runway back to the ordinary one,
+    /// so a client that dies right after leaves the idle lease held no longer than today's claim runway.
+    /// Called inside the caller's locked transaction, before its Modify.</summary>
+    local procedure TrimRunClaim(var Lease: Record "LC Lease")
+    var
+        Trimmed: DateTime;
+    begin
+        Trimmed := CurrentDateTime + RunClaimRunwayMs();
+        if Lease."Expires At" > Trimmed then
+            Lease."Expires At" := Trimmed;
+    end;
+
     /// <summary>Pushes "Expires At" out to at least RunClaimRunwayMs() from now, never inwards. Called
     /// only from the ONE branch of TryBeginRun that actually claims (the fresh-claim branch) — the
     /// same-active branch that used to also claim was hardened to refuse outright, touching nothing, so
     /// it no longer calls this — inside the locked transaction, so the "honored even if momentarily past
     /// Expires At" rule (design §5 sol#6, same as TryRenew) cannot leave a live run sitting on an
     /// already-lapsed deadline for a competing acquire to classify as orphaned.</summary>
-    local procedure ExtendRunClaim(var Lease: Record "LC Lease")
+    local procedure ExtendRunClaim(var Lease: Record "LC Lease"; RunBoundMs: Integer)
     var
         Runway: DateTime;
     begin
-        Runway := CurrentDateTime + RunClaimRunwayMs();
+        // PR-309: the runway also covers the call's own bound (capped), so TryRenew can answer a
+        // run's heartbeat from a read instead of a lock.
+        if RunBoundMs < 0 then
+            RunBoundMs := 0;
+        if RunBoundMs > MaxRunBoundMs() then
+            RunBoundMs := MaxRunBoundMs();
+        Runway := CurrentDateTime + RunClaimRunwayMs() + RunBoundMs;
         if Lease."Expires At" < Runway then
             Lease."Expires At" := Runway;
     end;
@@ -558,16 +589,36 @@ codeunit 91002 "LC Control State"
     procedure TryRenew(Epoch: Integer; Token: Text; Generation: Text; TtlSeconds: Integer; var Renewed: Boolean; var ExpiresAt: DateTime)
     var
         Lease: Record "LC Lease";
+        Peek: Record "LC Lease";
+        NewExpiry: DateTime;
     begin
         Renewed := false;
         ExpiresAt := 0DT;
+
+        // PR-309 fast path: during a run whose claim already reaches at least ttl ahead, a write would
+        // not move "Expires At" out, so answer from an unlocked read (no LockTable, no Modify, no
+        // Commit). A SEPARATE record variable: an explicit ReadIsolation on an instance overrides the
+        // table lock state for that instance, so the locked path below keeps its own variable.
+        Peek.ReadIsolation := IsolationLevel::ReadUncommitted;
+        if not Peek.Get('') then
+            Error(LeaseRowMissingErr());
+        if (Peek.Epoch = Epoch) and (Peek.Token = Token) and (Peek."Server Generation" = Generation) and
+           (Peek."Op Kind" = Peek."Op Kind"::run) and (Peek."Expires At" >= CurrentDateTime + (TtlSeconds * 1000)) then begin
+            Renewed := true;
+            ExpiresAt := Peek."Expires At";
+            exit;
+        end;
 
         Lease.LockTable();
         if not Lease.Get('') then
             Error(LeaseRowMissingErr());
 
         if (Lease.Epoch = Epoch) and (Lease.Token = Token) and (Lease."Server Generation" = Generation) then begin
-            Lease."Expires At" := CurrentDateTime + (TtlSeconds * 1000);
+            NewExpiry := CurrentDateTime + (TtlSeconds * 1000);
+            // During a run never pull the claim's runway inwards.
+            if (Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Expires At" > NewExpiry) then
+                NewExpiry := Lease."Expires At";
+            Lease."Expires At" := NewExpiry;
             Lease.Modify();
             Commit();
             Renewed := true;
@@ -942,7 +993,7 @@ codeunit 91002 "LC Control State"
     /// 6. OpSeq = "Last Completed Op Seq" + 1 AND "Op Kind" = none -&gt; fresh claim.
     /// 7. else (a different attempt claiming the active seq, a publish in flight, any other non-match)
     ///    -&gt; refuse 'lease-invalid'.</summary>
-    procedure TryBeginRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; var Claimed: Boolean; var Reason: Text)
+    procedure TryBeginRun(Epoch: Integer; Token: Text; Generation: Text; AttemptId: Text; OpSeq: BigInteger; TargetAppId: Text; ArtifactId: Text; MutantId: Text; RunBoundMs: Integer; var Claimed: Boolean; var Reason: Text)
     var
         Lease: Record "LC Lease";
     begin
@@ -1002,7 +1053,7 @@ codeunit 91002 "LC Control State"
             // NOT record one: that duplicate claim arrives on a DIFFERENT session while the original
             // is still busy, and recording its id would point a watchdog at the wrong, idle session.
             Lease."Op Session Id" := SessionId();
-            ExtendRunClaim(Lease);
+            ExtendRunClaim(Lease, RunBoundMs);
             Lease.Modify();
             WriteActive(TargetAppId, ArtifactId, MutantId);
             Commit();
@@ -1062,6 +1113,7 @@ codeunit 91002 "LC Control State"
             // recorded it, and the session it names gets REUSED by the OData pool.
             Lease."Op Session Id" := 0;
             Lease."Last Completed Op Seq" := OpSeq;
+            TrimRunClaim(Lease);
             Lease.Modify();
             MarkProgressDone(AttemptId, OpSeq);
             Commit();
@@ -1137,6 +1189,7 @@ codeunit 91002 "LC Control State"
             Lease."Op Kind" := Lease."Op Kind"::none;
             Lease."Op Session Id" := 0;  // R53 — see TryFinishRun.
             Lease."Last Completed Op Seq" := OpSeq;
+            TrimRunClaim(Lease);
             Lease.Modify();
             Commit();
             Recovered := true;
@@ -1223,6 +1276,7 @@ codeunit 91002 "LC Control State"
         Lease."Op Session Id" := 0;
         Lease."Last Completed Op Seq" := OpSeq;
         RecordStoppedOp(Lease, AttemptId, OpSeq);
+        TrimRunClaim(Lease);
         Lease.Modify();
         Commit();
         Stopped := true;
@@ -1294,6 +1348,7 @@ codeunit 91002 "LC Control State"
         Lease."Op Session Id" := 0;
         Lease."Last Completed Op Seq" := OpSeq;
         RecordStoppedOp(Lease, AttemptId, OpSeq);
+        TrimRunClaim(Lease);
         Lease.Modify();
         Commit();
         Stopped := true;

@@ -95,7 +95,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.28";
+export const MIN_CONTROL_VERSION = "1.0.0.29";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is
