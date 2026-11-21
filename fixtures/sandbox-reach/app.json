@@ -1,0 +1,28 @@
+{
+  "id": "7a1c4e52-8b3d-4f60-9a21-0c5e7d1b4a01",
+  "name": "LethAL Sandbox Reach",
+  "publisher": "LethAL",
+  "version": "1.0.0.0",
+  "brief": "LethAL PR-298 fixture: planted unreached (U), reached (R) and state-reached (S) mutation sites.",
+  "description": "Two codeunits with single-line statements on branches the tests never take (U), on branches they take (R), and behind a SingleInstance flag an earlier test sets (S). Used by no gate. Not for production use, see fixtures/README.md.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "idRanges": [
+    {
+      "from": 75000,
+      "to": 75049
+    }
+  ],
+  "resourceExposurePolicy": {
+    "allowDebugging": true,
+    "allowDownloadingSource": true,
+    "includeSourceInSymbolFile": true
+  },
+  "runtime": "17.0",
+  "features": []
+}
