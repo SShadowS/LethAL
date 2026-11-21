@@ -873,6 +873,8 @@ describe("v3RecheckOf (cli wiring)", () => {
   function wire(
     alRunnerV3: Record<string, unknown>,
     kind: "al-runner-v3" | "bcdev" = "al-runner-v3",
+    /** PR-277: the nested session waits on this before it returns. */
+    gate?: Promise<void>,
   ) {
     const built: { config: unknown; dir: string }[] = [];
     const ran: SessionConfig[] = [];
@@ -892,6 +894,7 @@ describe("v3RecheckOf (cli wiring)", () => {
       },
       runSession: async (cfg) => {
         ran.push(cfg);
+        await gate;
         return {
           mutants: [],
           sourceSha256: "s",
@@ -956,5 +959,45 @@ describe("v3RecheckOf (cli wiring)", () => {
       dependencySourceSha256: "d",
     });
     expect([w.closed(), w.storeClosed()]).toEqual([1, 1]);
+  });
+
+  test("PR-277: the nested session registers no signal handler, and an abort closes its backend at once", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const w = wire({ ...section, recheckWithheldKills: true }, "al-runner-v3", gate);
+    const ac = new AbortController();
+    const first = new AbortController();
+    const pending = w.recheck?.runner({
+      targets: [target("M1")],
+      tests: ["T Codeunit.T1"],
+      budgetSeconds: 1,
+      signal: ac.signal,
+      stop: first.signal,
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.ran).toHaveLength(1); // the nested session is running, blocked
+    expect(w.closed()).toBe(0);
+    // The nested registration puts no listener on the process; it listens to the main session's two signals.
+    const before = process.listenerCount("SIGTERM");
+    let nestedStops = 0;
+    const off = w.ran[0]?.registerStopSignal?.(
+      () => {
+        nestedStops += 1;
+      },
+      () => {},
+    );
+    expect(off).toBeDefined();
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+    // The first signal spends the nested budget (a graceful stop) and closes nothing.
+    first.abort();
+    expect([nestedStops, w.closed()]).toEqual([1, 0]);
+    // The second also spends it and closes the backend at once, while the nested session still runs.
+    ac.abort();
+    expect([nestedStops, w.closed()]).toEqual([2, 1]);
+    off?.();
+    release();
+    await pending;
   });
 });

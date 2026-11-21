@@ -1836,6 +1836,9 @@
               "type": "number"
             }
           }
+        },
+        "afterMainPass": {
+          "const": true
         }
       }
     },
