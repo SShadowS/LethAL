@@ -9598,11 +9598,14 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
   });
 
   // R692: "raise the floor with --mutant-timeout-ms" is advice for a budget overrun only.
-  const strandReason = async (v: {
-    outcome: "error" | "deadline-exceeded";
-    durationMs: number;
-    failureMessage: string;
-  }): Promise<string> => {
+  const strandReason = async (
+    v: {
+      outcome: "error" | "deadline-exceeded";
+      durationMs: number;
+      failureMessage: string;
+    },
+    stopHungSessions = false,
+  ): Promise<string> => {
     let activeMutant: string | null = null;
     const backend = fakeBackend({
       capabilities: () => ({
@@ -9623,6 +9626,7 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     const report = await runSessionForTest(backend, {
       quarantineDir: freshTmpDir(),
       nowIso: () => "2026-07-20T12:00:00.000Z",
+      ...(stopHungSessions ? { stopHungSessions: true } : {}),
     });
     return report.quarantined?.reason ?? "";
   };
@@ -9666,6 +9670,15 @@ describe("runSession — Task 12 quarantine on in-flight-unknown deadline", () =
     });
     expect(reason).toContain("--stop-hung-sessions");
     expect(reason).toContain("bcdev.stopHungSessions");
+  });
+
+  test("PR-301: with --stop-hung-sessions ON, an overrun does not tell the user to turn it on (revert: the setting check)", async () => {
+    const reason = await strandReason(
+      { outcome: "deadline-exceeded", durationMs: 999_999_999, failureMessage: "RunMutant failed: HTTP 408" },
+      true,
+    );
+    expect(reason).toContain("raise the floor with --mutant-timeout-ms");
+    expect(reason).not.toContain("--stop-hung-sessions");
   });
 
   test("PR-301: a fast failure inside the budget does not name the stop (not a hang)", async () => {

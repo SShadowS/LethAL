@@ -163,3 +163,138 @@ describe("PR-301: a removed step amount set before the loop", () => {
     expect(refused(src, "Chunk := 80")).toBe(false);
   });
 });
+
+/** The spec-adversary's cases: unknown keeps the mutant (R1061), and two more hang forms. */
+describe("PR-301 review: narrowing and two more forms", () => {
+  const L = "Done: Boolean; Len: Integer; Cust: Record Customer;";
+
+  it("control: another exit name that still moves ends the loop: `while (I < N) and (Remaining <> '')` (revert: condition 4)", () => {
+    const src = unit(
+      [
+        "        N := 10;",
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while (I < N) and (Remaining <> '') do begin",
+        "            Remaining := CopyStr(Remaining, Chunk + 1);",
+        "            I += 1;",
+        "        end;",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(false);
+  });
+
+  it("control: a cursor in the condition ends the loop: `until (Cust.Next() = 0) or (I > N)` (revert: the cursor check)", () => {
+    const src = unit(
+      [
+        "        N := 10;",
+        "        Step := 2;",
+        "        repeat",
+        "            I += Step;",
+        "        until (Cust.Next() = 0) or (I > N);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Step := 2")).toBe(false);
+  });
+
+  it("control: an else that moves at X = 0 under a guard that reads X only (revert: the guard must read T too)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while Remaining <> '' do",
+        "            if Chunk > 0 then",
+        "                Remaining := CopyStr(Remaining, Chunk + 1)",
+        "            else",
+        "                Remaining := CopyStr(Remaining, 2);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(false);
+  });
+
+  it("control: a same-object callee that writes T keeps the site (revert: callWrites for T)", () => {
+    const src = `codeunit 50132 "Step Callee"
+{
+    var
+        Remaining: Text;
+
+    procedure Run(Source: Text)
+    var
+        Chunk: Integer;
+    begin
+        Remaining := Source;
+        Chunk := 80;
+        while Remaining <> '' do begin
+            Remaining := CopyStr(Remaining, Chunk + 1);
+            Advance();
+        end;
+    end;
+
+    local procedure Advance()
+    begin
+        Remaining := '';
+    end;
+}`;
+    expect(refused(src, "Chunk := 80")).toBe(false);
+  });
+
+  it("refuses the three-argument form `CopyStr(Remaining, Chunk + 1, 80)` (revert: the length form)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while Remaining <> '' do",
+        "            Remaining := CopyStr(Remaining, Chunk + 1, 80);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(true);
+  });
+
+  it("refuses through a local copy: `Len := Chunk` then a step by Len (revert: xs instead of x)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        Len := Chunk;",
+        "        while Remaining <> '' do",
+        "            Remaining := CopyStr(Remaining, Len + 1);",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(true);
+  });
+
+  it("refuses a flag fed by T: `Done := Remaining = ''` (condition 4 lets a write that reads T through)", () => {
+    const src = unit(
+      [
+        "        Remaining := Source;",
+        "        Chunk := 80;",
+        "        while not Done do begin",
+        "            Remaining := CopyStr(Remaining, Chunk + 1);",
+        "            Done := Remaining = '';",
+        "        end;",
+      ].join("\n"),
+      L,
+    );
+    expect(refused(src, "Chunk := 80")).toBe(true);
+  });
+
+  it("given back only for a positive earlier amount: -1 stays refused, 3 is given back (revert: lit > 0)", () => {
+    const loop = (earlier: string) =>
+      unit(
+        [
+          "        N := 10;",
+          `        Step := ${earlier};`,
+          "        Step := 2;",
+          "        while I < N do",
+          "            I += Step;",
+        ].join("\n"),
+        L,
+      );
+    expect(refused(loop("-1"), "Step := 2")).toBe(true);
+    expect(refused(loop("3"), "Step := 2")).toBe(false);
+  });
+});
