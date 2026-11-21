@@ -663,6 +663,8 @@ export interface ExecutionBackend {
   readonly license?: { readonly path: string; readonly sha256: string } | undefined;
   /** PR-282, al-runner-v3 only: `alRunnerV3.companies`, passed as `--companies` on every call that runs tests. In the fingerprint and the report. */
   readonly companies?: string | undefined;
+  /** PR-297, al-runner-v3 only: `alRunnerV3.refusedCutTail` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
+  readonly refusedCutTail?: boolean | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */
@@ -994,7 +996,7 @@ export interface ExecutionBackend {
    * baseline (one-shot, coverage, baseline refusals) from this bracket ONLY, never from "no mutant
    * active", so the kill confirm and Decision 11's rerun are not baseline calls.
    */
-  baselinePhase?(on: boolean): void | Promise<void>;
+  baselinePhase?(on: boolean, completed?: boolean): void | Promise<void>;
 
   /**
    * R1131, OPTIONAL (bcdev outside hub mode): the start WorkDate the current batch's baseline ran under (its

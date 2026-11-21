@@ -6131,6 +6131,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // R635 §4 (Q1): the baseline bracket, from the null activation through the baseline loop (also
   // when a reused snapshot leaves the loop over []). The only null activation inside it.
   backend.baselinePhase?.(true);
+  // PR-297: true only when the baseline loop ran to its end (every test has a verdict); a throw or a stop leaves it false.
+  let baselineCompleted = false;
   try {
     await activateOnce(backend, safety, null);
     if (input.snapshot !== undefined) {
@@ -6353,8 +6355,9 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         input.mutantCount ?? 0,
       );
     }
+    baselineCompleted = baseline.length === tests.length;
   } finally {
-    await backend.baselinePhase?.(false); // R948: closes the baseline's own daemon
+    await backend.baselinePhase?.(false, baselineCompleted); // R948: closes the baseline's own daemon
   }
   // Computed and emitted BEFORE the early exits below, for the same reason the deploy clock
   // is: both the quarantine path (`return "unsafe"` below) and `select` returning undefined
@@ -7385,6 +7388,7 @@ async function runSessionBody(
       : {}), // R938
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
+    ...(cfg.backend.refusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -9965,6 +9969,8 @@ async function runSessionBody(
             ...(cfg.backend.license !== undefined ? { license: cfg.backend.license } : {}),
             // PR-282: the company list passed as --companies.
             ...(cfg.backend.companies !== undefined ? { companies: cfg.backend.companies } : {}),
+            // PR-297: the refused-cut tail was ON.
+            ...(cfg.backend.refusedCutTail === true ? { refusedCutTail: true } : {}),
           },
         }
       : {}),
@@ -14596,14 +14602,14 @@ function assertSameResumeInputs(
 
 /**
  * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
- * strips the end-anchored ` environment-X[ license-H][ companies-H][ isolation-auto]`, and ` isolation-auto` must be
+ * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ isolation-auto]`, and ` isolation-auto` must be
  * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
 export function lendingRunnerBuild(
   backend: ExecutionBackend,
   v3Build: { readonly version: string; readonly binarySha256: string },
 ): string {
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.refusedCutTail === true ? " refused-cut-tail" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**

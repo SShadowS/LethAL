@@ -1392,6 +1392,8 @@ export interface ExecutionContext {
   readonly license?: { readonly path: string; readonly sha256: string };
   /** PR-282: the `alRunnerV3.companies` this run passed as `--companies`. Only on directly measured al-runner-v3 entries, and only when set. */
   readonly companies?: string;
+  /** PR-297: `alRunnerV3.refusedCutTail` was ON: a green test after a baseline-refusal cut was measured alone. Only when on. */
+  readonly refusedCutTail?: true;
 }
 
 /** PR-247: one row of `SessionReport.costlyTests.top`. */
@@ -2900,6 +2902,7 @@ function buildExecutionContexts(
     readonly environment?: ExecutionContext["environment"];
     readonly license?: ExecutionContext["license"];
     readonly companies?: string;
+    readonly refusedCutTail?: true;
   },
 ): ExecutionContext[] {
   const groups = new Map<string, { runner: RunnerKind; carried: boolean; verdictCount: number }>();
@@ -2930,6 +2933,7 @@ function buildExecutionContexts(
             : {}),
           ...(runnerBuild.license !== undefined ? { license: runnerBuild.license } : {}),
           ...(runnerBuild.companies !== undefined ? { companies: runnerBuild.companies } : {}), // PR-282
+          ...(runnerBuild.refusedCutTail === true ? { refusedCutTail: true as const } : {}), // PR-297
         }
       : {}),
   };

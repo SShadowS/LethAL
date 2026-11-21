@@ -458,6 +458,8 @@ export interface SessionFingerprintInput {
   readonly v3License?: string;
   /** PR-282: `alRunnerV3.companies`: another company list can give another verdict. Only when set, so no other digest moves. */
   readonly v3Companies?: string;
+  /** PR-297: `alRunnerV3.refusedCutTail` is on: a green test after a baseline-refusal cut can be measured alone. Only when on, so no other digest moves. */
+  readonly v3RefusedCutTail?: true;
   readonly selectorIds: {
     readonly selectorId: number;
     readonly controlId: number;
@@ -548,6 +550,7 @@ export function sessionFingerprint(input: SessionFingerprintInput): string {
     ...(input.v3Environment !== undefined ? { v3Environment: input.v3Environment } : {}),
     ...(input.v3License !== undefined ? { v3License: input.v3License } : {}),
     ...(input.v3Companies !== undefined ? { v3Companies: input.v3Companies } : {}), // PR-282
+    ...(input.v3RefusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
     selectorIds: [
       input.selectorIds.selectorId,
       input.selectorIds.controlId,
