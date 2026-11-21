@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**58 of 1126 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**59 of 1127 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1171,6 +1171,7 @@ that ordering is the priority.
 - **R1161** · Retire LethAL's O1 known-loss rule (partner OnAfterLogin memos, upstream #8239) when al-runner's runtime fix is on edge, and re-measure the 16 O1 rows and the set-aside DO mutants · [R1161.md](docs/roadmap/R1161.md) · blocked — on edge: upstream #8239's runtime fix…
 - **R1162** · Keep the serve daemon after ANY notRun refusal once al-runner's #8180 promise is on edge (one rule for every refusal kind, proved on DO kept-vs-fresh); revisit PR-244's declined option 4 · [R1162.md](docs/roadmap/R1162.md) · blocked — on edge: upstream #8180's documented promise…
 - **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; three shapes measured on BC and posted upstream (#8267, #8219, #7908) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the three shapes below (re-score the DO tests behind them)
+- **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · open
 
 ---
 

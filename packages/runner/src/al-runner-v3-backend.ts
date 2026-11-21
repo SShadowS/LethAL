@@ -142,6 +142,7 @@ import {
   type GatedBuild,
   V3_NO_SERVE_ENTRIES,
   checkGated,
+  currentV3Build,
   pinnedSidecar,
   resolveV3Binary,
   sha256OfFile,
@@ -839,6 +840,11 @@ export interface AlRunnerV3Config {
   readonly alRunnerPath: string;
   /** §12: the update gate's run of an ungated CANDIDATE build; only the `.gated` check is relaxed. */
   readonly candidate?: boolean;
+  /**
+   * PR-294: the resolved path of the `current` build, or `undefined` when no `current` link
+   * resolves. A test seam; production reads the real link.
+   */
+  readonly currentBuildPath?: () => string | undefined;
   /** LethAL-owned scratch; `active/`, `alc-out/` and `cov/` go under it. */
   readonly instrumentedDir: string;
   readonly testDir: string;
@@ -3295,6 +3301,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.notify = notify ?? ((_code, message) => console.warn(message));
     if (notify !== undefined) {
       this.dotnetHelperWarned = false;
+      this.pinnedNotCurrentWarned = false;
       this.testPathsWarned = false;
       this.testDataOffWarned = false;
       // R904: and the note itself, so a session after the cache was filled is not stopped on the
@@ -3485,6 +3492,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (!this.announced) {
         this.announced = true;
         console.warn(`[lethal] al-runner: ${this.cfg.alRunnerPath} (${reported})`);
+      }
+      // PR-294: a session on a gated build that is not `current` says so, once per session.
+      if (!this.pinnedNotCurrentWarned && this.cfg.candidate !== true) {
+        this.pinnedNotCurrentWarned = true;
+        const current = (this.cfg.currentBuildPath ?? currentV3Build)();
+        if (current !== undefined && current !== this.cfg.alRunnerPath) {
+          this.notify(
+            "al-runner-v3-pinned-not-current",
+            `[lethal] al-runner-v3-pinned-not-current: this session runs ${this.cfg.alRunnerPath} (${reported}), not the \`current\` build ${current}. This is not a refusal. If \`current\` was meant, check the config's alRunnerV3.path.`,
+          );
+        }
       }
       binarySha256 = gated.binarySha256;
       gatedWarnFacts = gated.warnFacts;
@@ -3705,6 +3723,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
 
   private build: { readonly version: string; readonly binarySha256: string } | undefined;
   private announced = false;
+  private pinnedNotCurrentWarned = false;
   /**
    * R897, R-907: whether the running build's `test --help` lists `--skip-after-timeout`, so every
    * ONE-SHOT call passes it (after a stop, the rest of that codeunit is reported not run). Older
