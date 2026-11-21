@@ -35,6 +35,22 @@ This supersedes the parts of the sections below that it names.
   - Contention from our own lanes shows as `testsMs` per test rising beyond what the host load explains.
 - **The proposal rule is unchanged.** Every figure carries the background load it was measured under.
 
+## Amendment 2 (2026-11-21, about 03:10Z, before any 8-lane arm ran): W8a's declared peak comes from the measured daemon peak
+- **Why:** at P = 26, W8a can never be admitted on this box.
+  - Heavy-slot needs used + 26 + 4 ≤ 32 GiB.
+  - This container uses 2.54 GiB at rest (the lane sessions), which leaves 25.46 GiB.
+  - So it would be dropped after 30 minutes every time. That is itself a result: the original peak rule (4 + 3 × n) does not
+    fit 8 lanes here.
+- **The measured need:** in the four complete arms (W3a, W6a, W3b, W6b), no al-runner daemon passed 2.06 GiB. W6a's and W6b's
+  trees peaked at 13.4-13.5 GiB.
+  - The lane gate starts lane k while k × (the session's highest daemon peak) + 4 GiB fits under P.
+  - So 8 lanes need 8 × 2.06 + 4 = 20.5 GiB.
+- **The change:** W8a runs at P = 22. It starts 8 lanes while every daemon stays under 2.25 GiB.
+  - The lanes it actually realises are recorded as before. An arm short of 8 lanes for more than 10% of its mutant phase is
+    reported as "memory-bound at 8", not used for S.
+  - The watchdog is unchanged (P + 2).
+- **Next:** W4a follows as planned, at P = 16. The proposal's `--peak` uses the measured daemon peak, as the rule already says.
+
 ## The arms
 - **A discarded warm-up first, then five timed runs in this order:** W3a, W6, W4, W8, W3b. They are interleaved; W3b repeats
   W3a as the drift control.
