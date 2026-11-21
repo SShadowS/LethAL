@@ -218,6 +218,9 @@
                     "type": "string"
                   }
                 }
+              },
+              "companies": {
+                "type": "string"
               }
             }
           }
