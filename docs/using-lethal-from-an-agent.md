@@ -393,7 +393,7 @@ run fingerprint, so `--resume` will not mix them. Use only a license you are all
 **Companies for al-runner (PR-282).** A mutant that loops over the Company table is refused ("FindSet on the
 Company table"), because al-runner does not know which companies the database holds. Set
 `alRunnerV3.companies` to al-runner's own list: company names, comma separated, the session company first, or `all`
-(which needs test data). LethAL passes it as `--companies` on every al-runner call that runs tests (one-shot and
+(which needs test data). LethAL passes it as al-runner's companies switch on every al-runner call that runs tests (one-shot and
 serve). There is no default: absent, nothing is passed and the refusal stays, since a guessed list would give wrong
 verdicts. The report names the value in `executionContexts[].companies`, and a different list is a different run
 fingerprint, so `--resume` will not mix them.
