@@ -30,9 +30,14 @@ and names only.
   - 226 carry the PR-297 note. The other 3 (M12658, M12661, M12671) are killed by a test of ANOTHER codeunit (c2's class-A named
     set), not through the tail.
   - 228 are reproduced. The 229th is the timeout kill (M13125), noted, and confirmed the timeout way.
-- **Outside the 1,590: 3 moves, all `killed -> error`** (M2519, M2548, M2549). They come FROM THE FLAG, through R197's kill
-  ledger: filed as R1178.
-  - By the pre-commitment that is a move not named from the list of master commits. It is named here, and it blocks the default.
+- **Outside the 1,590: 3 moves, all `killed -> error`** (M2519, M2548, M2549). Filed as R1178. They are NOT a flag effect.
+  - **CORRECTED 2026-11-22:** this note first said they came from the flag through R197's ledger. That was wrong.
+  - **In c2,** the walk scored them `error` too, and PR-144's withheld-kill recheck made them `killed`.
+  - **In t1,** the first leg was stopped by my watchdog, so its recheck did not run. The resume re-walked them with an empty
+    ledger (carried kills), read a plain refusal first, and that note is not recheck-eligible.
+  - **The defect** is that recheck eligibility depends on walk order, flag on or off. Its fix is coord PR-341.
+  - **By the pre-commitment** this is a move not named from the master-commit list, caused by the stop and the resume. It
+    is named here, and it does not touch the flag.
 
 ## BC check (lethal-bugs, pending)
 100 of the 228 `error -> killed` moves, seed 302 (68874: 3, 68906: 6, 68975: 53, 68984: 38). 35 are marked session-dependent.
@@ -50,8 +55,8 @@ Any contradiction escalates to checking all 228.
 
 ## So
 - The flag wins back 984 verdicts (error 1,793 -> 812) on DO.
-- It stays OFF until two things land (orchestrator):
-  - the BC sample comes back clean;
-  - R1178 (the ledger interaction) is fixed.
-- Its bound-check cost is the next thing to weigh. A tail alone call could share its bound check with its request's other
-  sends.
+- It stays OFF until the default-on proposal is decided (orchestrator, after the correction: R1178 no longer blocks it). The
+  proposal weighs:
+  - the BC sample's result;
+  - the bound-check cost (about 8,700 s more, R1156) against the 984 recovered verdicts.
+  - A tail alone call could share its bound check with its request's other sends (PR-341's design part).
