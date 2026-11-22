@@ -39,9 +39,22 @@ and names only.
   - **By the pre-commitment** this is a move not named from the master-commit list, caused by the stop and the resume. It
     is named here, and it does not touch the flag.
 
-## BC check (lethal-bugs, pending)
-100 of the 228 `error -> killed` moves, seed 302 (68874: 3, 68906: 6, 68975: 53, 68984: 38). 35 are marked session-dependent.
-Any contradiction escalates to checking all 228.
+## BC check (lethal-bugs, bcdev on bc4, BC 29: done, all 228)
+The sample was 100 of the 228 `error -> killed` moves, seed 302 (68874: 3, 68906: 6, 68975: 53, 68984: 38), 35 marked
+session-dependent. It found 1 contradiction, so the check escalated to all 228.
+
+| part | rows | kill confirmed | contradiction | killed on BC by another test | named test not run on BC, survived | not judgeable |
+|---|---|---|---|---|---|---|
+| unmarked | 142 | 136 | **1** | 5 | 0 | 0 |
+| not listed in the sample (counted with unmarked) | 8 | 4 | 0 | 0 | 4 | 0 |
+| marked session-dependent (PR-299) | 78 | 0 | 0 | 0 | 2 | 76 (no coverage on headless BC) |
+
+- **The 1 contradiction is an al-runner false kill, not a flag effect** (upstream #8721). The killing test passes on BC. It
+  needed the flag only to run at all: in c2 its codeunit is cut, so the test never ran under that mutant. An invented repro
+  (one row copied twice in one test, then a Modify with no Find) gives al-runner's "not up-to-date" error in a plain test,
+  where BC accepts it.
+- **4 kills are not confirmed and not contradicted.** BC's coverage says the named test does not reach these mutants, so BC never
+  ran it under them. One test's name suggests a session effect that PR-299 does not list. Open.
 
 ## Cost and R1156
 - **Bound checks:** the resume made 34,619 checks, 282 ms each (t1's first leg: 270 checks, 269 ms), for 9,777 s in total.
@@ -55,8 +68,8 @@ Any contradiction escalates to checking all 228.
 
 ## So
 - The flag wins back 984 verdicts (error 1,793 -> 812) on DO.
-- It stays OFF until the default-on proposal is decided (orchestrator, after the correction: R1178 no longer blocks it). The
-  proposal weighs:
-  - the BC sample's result;
-  - the bound-check cost (about 8,700 s more, R1156) against the 984 recovered verdicts.
-  - A tail alone call could share its bound check with its request's other sends (PR-341's design part).
+- On BC, 140 of the 150 unmarked and unlisted kills are confirmed (136 plus 4), 5 more are killed by another test, and 1 is
+  an al-runner false kill (#8721). The other 78 cannot be judged on headless BC.
+- **The ruling (orchestrator, 2026-11-22):** `refusedCutTail` becomes the default together with PR-344's packing, not before.
+  Without packing, the flag costs about 9,777 s of bound checks per DO run. PR-344 packs a mutant's tail alone calls into one
+  send (spec `docs/superpowers/specs/2026-11-22-pr344-pack-tail-alone.md`). Its submit flips the default and closes R1160.
