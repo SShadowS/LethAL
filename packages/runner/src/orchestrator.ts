@@ -5256,6 +5256,9 @@ interface BatchScope {
   readonly killLedger: KillLedger;
   /** PR-247: this session's mutant-phase test costs; see `TestCostsAcc`. */
   readonly testCosts: TestCostsAcc;
+  /** PR-301: `--stop-hung-sessions` for this session, so an overrun's quarantine note can name it when
+   *  off. Absent where the caller has no such setting (named mutants): unknown, and the note is silent. */
+  readonly stopHungSessions?: boolean;
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
   readonly groupRuns: GroupRunSettings | undefined;
   readonly minMutantBudgetMs: number;
@@ -6694,6 +6697,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     memberCountsByTest: memberCounts,
     groupRuns,
     sessionReuse,
+    ...(scope.stopHungSessions !== undefined ? { stopHungSessions: scope.stopHungSessions } : {}),
     baselineReused,
     baselineReach,
     ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
@@ -8312,6 +8316,7 @@ async function runSessionBody(
     // C02-04: the session-level values every batch's `scoreBatch` call shares.
     const lane0 = v3Lanes?.[0];
     const scope: BatchScope = {
+      stopHungSessions: cfg.stopHungSessions === true,
       // R766 (b): under lanes the baseline runs on lane 0 (its N = 1 baseline), the rest on the owner.
       backend: lane0 !== undefined ? splitBackend(cfg.backend, lane0) : cfg.backend,
       ...(v3Lanes !== undefined
@@ -12041,6 +12046,8 @@ async function confirmWarm(p: {
     /** R514: see `runMutantsOnBackend`'s field; it decides the over-half timeout grain's CAUSE
      *  (`reused-budget-stale` on a reused batch), not the margin, which is 2x on every batch (R516). */
     readonly baselineReused: ReusedBaseline | undefined;
+    /** PR-301: see `RunMutantsArgs.stopHungSessions`. */
+    readonly stopHungSessions?: boolean;
   };
   readonly m: MutantManifestEntry;
   readonly step: CoveringStep;
@@ -12176,6 +12183,7 @@ async function confirmWarm(p: {
       resourceKey: args.resourceKey,
       nowIso: args.nowIso,
       what,
+      ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
     });
     if (nonVerdict !== null) {
       return error(
@@ -12404,6 +12412,7 @@ async function reproduceKill(p: Parameters<typeof confirmWarm>[0]): Promise<Repr
     resourceKey: args.resourceKey,
     nowIso: args.nowIso,
     what,
+    ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
   };
   const reusedNote = (v: TestVerdict) =>
     `session-reused ${what}: the server reported ${v.testRunsBefore} test method(s) had already run in session ${v.sessionId ?? "?"} before the reproduction started, so it did not run in the kill's context; the kill is unconfirmed (R577)`;
@@ -12600,6 +12609,7 @@ async function confirmFoundNone(p: Parameters<typeof confirmWarm>[0]): Promise<F
     resourceKey: args.resourceKey,
     nowIso: args.nowIso,
     what,
+    ...(args.stopHungSessions !== undefined ? { stopHungSessions: args.stopHungSessions } : {}),
   });
   const note = nv?.failureNote ?? `${what}: the confirm answered ${v.outcome}`;
   return {
@@ -12637,6 +12647,8 @@ async function classifyNonVerdictStep(
     readonly resourceKey: string | undefined;
     readonly nowIso: () => string;
     readonly what?: string;
+    /** PR-301: the session's `--stop-hung-sessions`; an overrun names the stop only when this is `false`. */
+    readonly stopHungSessions?: boolean;
   },
 ): Promise<NonVerdictDecision | null> {
   const {
@@ -12794,6 +12806,13 @@ async function classifyNonVerdictStep(
     const overran = v.outcome === "deadline-exceeded" || v.durationMs >= budget;
     const status = /\bHTTP (\d{3})\b/.exec(v.failureMessage ?? "")?.[1];
     const early = `${status !== undefined ? `HTTP ${status}` : "an error"} after ${v.durationMs} ms, inside its ${budget} ms budget`;
+    // PR-301 (GitHub #52): an overrun may be a mutant that never ends, which only the hung-session
+    // stop scores (timeout-killed). Named only when the session is known to run with it OFF; with it
+    // on, or unknown (a caller that does not pass it), the note says nothing about it.
+    const stopHint =
+      overran && ctx.stopHungSessions === false
+        ? "; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on"
+        : "";
     await quarantineInFlight({
       safety: ctx.safety,
       quarantineStore: ctx.quarantineStore,
@@ -12802,12 +12821,12 @@ async function classifyNonVerdictStep(
       // Carry the transport's own failure message into the record. Without it the operator
       // is told to recycle a tier and clear a quarantine with no statement of what actually
       // went wrong — and this record outlives the process that wrote it.
-      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [${overran ? `budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume` : `${early}; continue with --resume`}]`,
+      detail: `test in-flight-unknown ${what} (mutant ${ctx.m.mutantId})${retried ? " — a first, proven-complete attempt had already been retried once" : ""}${v.failureMessage !== undefined ? `: ${v.failureMessage}` : ""} [${overran ? `budget was ${budget} ms; raise the floor with --mutant-timeout-ms and continue with --resume${stopHint}` : `${early}; continue with --resume`}]`,
     });
     // R47: the two things the operator needs are the budget this run used and the fact that
     // the verdicts already measured are NOT lost. Both went unsaid until a real project hit
     // this at mutant 13 of 138 and discarded the first twelve.
-    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. ${overran ? `Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts` : `It failed with ${early}, so a longer budget will not help; re-run with --resume to keep this session's verdicts`}`;
+    note = `${STRANDED_NOTE_PREFIX}${ref.method} returned no readable result and its operation could not be confirmed complete — container may be stranded. ${overran ? `Its budget was ${budget} ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts${stopHint}` : `It failed with ${early}, so a longer budget will not help; re-run with --resume to keep this session's verdicts`}`;
     // R114: the machine value that goes with the prose above. Without it this outcome shipped
     // `cause: undefined`, so `lethal explain`'s R91 prescription — keyed on `cause`, which is
     // the right thing to key on — could never fire for the very case R91 measured. Deliberately
@@ -12920,6 +12939,8 @@ interface RunMutantsArgs {
    *  R517 (M-a): `stopWarned`, the same for a reported stop that is not the configured one.
    *  R534 (D1b): `wordingWarned`, the same for a proven al-runner timeout in unknown wording. */
   readonly sessionReuse: { warned: boolean; stopWarned?: boolean; wordingWarned?: boolean };
+  /** PR-301: see `BatchScope.stopHungSessions`. Absent: unknown, and the note does not name the stop. */
+  readonly stopHungSessions?: boolean;
   /** R514: this batch's baseline came from a stored snapshot (R192), so its durations, and every
    *  budget derived from them, are from another day. Since R516 every position-1 `timeout` is
    *  confirmed unmutated with R53's 2x margin on every batch; this field only names the cause of
@@ -13458,6 +13479,9 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           quarantineStore: args.quarantineStore,
           resourceKey: args.resourceKey,
           nowIso: args.nowIso,
+          ...(args.stopHungSessions !== undefined
+            ? { stopHungSessions: args.stopHungSessions }
+            : {}),
         });
         if (nonVerdict !== null) {
           // R688: BC's suite discovery listed no methods for this test under the mutant. Confirm it
