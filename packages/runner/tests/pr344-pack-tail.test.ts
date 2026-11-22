@@ -27,7 +27,18 @@ const [A, B, C, D, E] = ["A", "B", "C", "D", "E"].map(ref) as [
   ReturnType<typeof ref>,
   ReturnType<typeof ref>,
 ];
-const MUTANTS = ["M0001", "M0002", "M0003", "M0004", "M0005", "M0006", "M0007", "M0008", "M0009"];
+const MUTANTS = [
+  "M0001",
+  "M0002",
+  "M0003",
+  "M0004",
+  "M0005",
+  "M0006",
+  "M0007",
+  "M0008",
+  "M0009",
+  "M0010",
+];
 // a refusal the daemon KEEPS (V3_SERVE_SAFE_REFUSALS, `http`)
 const KEPT =
   "NotRun: out-of-scope: an outbound HTTP request with no [HttpClientHandler] bound to the test: the runtime never opens a connection (ADR-027)";
@@ -71,6 +82,8 @@ async function packRig(o: {
         if (m === "M0006" && method === "D")
           return { method, status: "error", notRun: true, message: UNLISTED };
         if (m === "M0007" && method === "D") return undefined;
+        if (m === "M0010" && method === "C")
+          return { method, status: "error", notRun: true, message: KEPT };
         if (m === "M0009" && method === "D")
           return { method, status: "error", notRun: true, message: KEPT };
         return { method, status: "pass" };
@@ -107,7 +120,7 @@ const prefetch = (r: LanesRig, mutant: string, refs: readonly ReturnType<typeof 
   });
 
 /** What a walk reads of a verdict (never wall time). */
-const IGNORED = ["durationMs", "measuredDurationMs", "callId", "reportedStopMs"];
+const IGNORED = ["durationMs", "measuredDurationMs", "callId"]; // reportedStopMs decides R517's confirm: compared
 const sum = (v: TestVerdict) => [
   v.ref.method,
   v.outcome,
@@ -332,23 +345,30 @@ describe("PR-344 amendment 1", () => {
 
   test("B-1: an entries refusal in the pack latches; T gets liveFailure's verdict; no fallback send", async () => {
     const { AlRunnerV3EntriesRefusedError } = await import("../src/al-runner-v3-entries");
-    const r = await packRig({ flag: true });
-    await baseline(r);
-    await start(r, "M0002", [A, C, D, E]);
-    const p = priv(r);
-    const real = p.request.bind(r.b);
-    let packs = 0;
-    p.request = async (...a: unknown[]) => {
-      const alone = a[3] as { calls: Map<number, unknown> } | undefined;
-      if ((alone?.calls.size ?? 0) > 1) {
-        packs += 1;
-        throw new AlRunnerV3EntriesRefusedError("al-runner-v3-entries-batch-refused", "refused");
-      }
-      return real(...a);
+    // the same refusal on the FIRST alone-style request of the walk, with the pack and without it
+    const refuseFirst = async (noPack: boolean) => {
+      const r = await packRig({ flag: true, noPack });
+      await baseline(r);
+      await start(r, "M0002", [A, C, D, E]);
+      const p = priv(r);
+      const real = p.request.bind(r.b);
+      let thrown = 0;
+      p.request = async (...a: unknown[]) => {
+        if (a[3] !== undefined && thrown === 0) {
+          thrown += 1;
+          throw new AlRunnerV3EntriesRefusedError("al-runner-v3-entries-batch-refused", "refused");
+        }
+        return real(...a);
+      };
+      const before = r.serve.requests.length;
+      const v = await r.b.run(C, OPTS);
+      expect(thrown).toBe(1);
+      return { r, v, before };
     };
-    const before = r.serve.requests.length;
-    const v = await r.b.run(C, OPTS);
-    expect(packs).toBe(1);
+    const plain = await refuseFirst(true);
+    const { r, v, before } = await refuseFirst(false);
+    const p = priv(r);
+    expect(sum(v)).toEqual(sum(plain.v)); // T's verdict is the unpacked walk's
     expect(v.outcome).toBe("error");
     expect(v.failureMessage).toContain("transport failure");
     expect(p.entriesRefused).toBeDefined(); // the session latched
@@ -367,9 +387,55 @@ describe("PR-344 amendment 1", () => {
     });
     const daemons = r.serve.daemons.length;
     const v = await r.b.run(C, OPTS);
-    expect(v.outcome).not.toBe("pass");
+    expect(v.outcome).toBe("error");
+    expect(v.failureMessage).toContain("al-runner-v3 transport failure");
     expect(tails(r, "M0005")).toEqual([["C", "D", "E"]]);
     expect(r.serve.daemons.length).toBe(daemons);
+  });
+
+  test("S-1 (memory): the memory guard's stop is NOT a stop signal: the failed pack falls back to T alone", async () => {
+    const r = await packRig({ flag: true });
+    await baseline(r);
+    await start(r, "M0005", [A, C, D, E]);
+    let used = 1;
+    let stopped = false;
+    const GIB = 2 ** 30;
+    const inner = r.b as unknown as {
+      cfg: { memoryHeadroomGb?: number };
+      memoryGuard?: unknown;
+    };
+    inner.cfg.memoryHeadroomGb = 4;
+    inner.memoryGuard = undefined; // the baseline already decided "off" (no headroom); decide again
+    Object.assign(r.b.seams, {
+      memoryReader: () => ({ usedBytes: used * GIB, maxBytes: 32 * GIB, source: "test" }),
+      memorySleep: async () => {},
+      memoryWaitPolls: 1,
+    });
+    r.b.useStopHandle({
+      spent: () => false,
+      signalled: () => stopped,
+      stopForMemory() {
+        stopped = true; // as the budget's handle does (R955's path)
+      },
+    });
+    expect(await r.b.mayStartGroup()).toBe(true);
+    used = 30;
+    expect(await r.b.mayStartGroup()).toBe(false); // the REAL memory stop: memoryStopped, signalled
+    expect(stopped).toBe(true);
+    const v = await r.b.run(C, OPTS);
+    expect(v.outcome).toBe("pass"); // T's alone call, as today
+    expect(tails(r, "M0005")).toEqual([["C", "D", "E"], ["C"]]);
+  });
+
+  test("entry 0 is a kept refusal: no mate is stored, the daemon is not closed", async () => {
+    const { on, off } = await both("M0010", [A, C, D, E]);
+    expect(tails(on, "M0010")).toEqual([["C", "D", "E"], ["D"], ["E"]]);
+    expect(tails(off, "M0010")).toEqual([["C"], ["D"], ["E"]]);
+    const pack = on.serve.requests.find((q) => q.mutants[0] === "M0010" && q.tests.length > 1);
+    const next = on.serve.requests.find(
+      (q) => q.mutants[0] === "M0010" && q.tests.length === 1 && !whole(q),
+    );
+    expect(next?.daemon).toBe(pack?.daemon);
   });
 
   test("S-3: a kept refusal at a mate is not stored and the daemon is closed", async () => {

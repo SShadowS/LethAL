@@ -10969,7 +10969,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const out: TestMethodRef[] = [];
     for (const t of this.discovered) {
       if (out.length >= ENTRIES_UNMEASURED_CAP - 1) break; // S-4: T plus at most 15
-      if (t.codeunitId !== ref.codeunitId) continue; // S-2: the shape PR-343 measured // S-2: the shape PR-343 measured
+      if (t.codeunitId !== ref.codeunitId) continue; // S-2: the shape PR-343 measured
       const k = refKey(t);
       if (seen.has(k) || held?.packed.has(k) === true) continue;
       seen.add(k);
@@ -11022,8 +11022,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const entries = err instanceof AlRunnerV3EntriesRefusedError;
       if (entries || err instanceof AlRunnerServerRequestError) {
         this.tailPacks.failed += 1;
-        // B-1: an entries refusal is today's latch, no fallback send. S-1: a stop signal ends it, no new daemon.
-        if (entries || this.stopHandle?.signalled() === true)
+        // B-1: an entries refusal is today's latch, no fallback send. S-1: a real stop signal ends it, no new
+        // daemon (the request watch's own condition: the memory guard's stop keeps today's alone call).
+        if (entries || (this.stopHandle?.signalled() === true && !this.memoryStopped))
           return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
         return undefined;
       }
@@ -11035,6 +11036,17 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.tailPacks.failed += 1;
       return undefined;
     }
+    const keptOf = (c: CallRows) =>
+      c.rows.find(
+        (x) =>
+          x.notRun &&
+          x.status === "error" &&
+          x.message !== undefined &&
+          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(x.message ?? "")),
+      );
+    // T's own row is a kept safe refusal: the daemon is armed exactly as T's alone call arms it, and the mates ran
+    // right after it (PR-56's drift check would have judged the next request): store none, close nothing.
+    if (keptOf(head) !== undefined) return { call: head };
     let keptAt: { readonly text: string; readonly test: string } | undefined;
     for (let i = 1; i < refs.length; i++) {
       const r = refs[i];
@@ -11042,13 +11054,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (r === undefined || c === undefined) break; // the answer was cut before this entry
       if (c.cutAtTimeout !== undefined || !serveDaemonReusable(serveLines(c.rows), "v3")) break;
       // S-3: a kept safe refusal at a mate counts as a cut, and the daemon it armed is closed below.
-      const kept = c.rows.find(
-        (x) =>
-          x.notRun &&
-          x.status === "error" &&
-          x.message !== undefined &&
-          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(x.message ?? "")),
-      );
+      const kept = keptOf(c);
       if (kept !== undefined) {
         keptAt = { text: kept.message ?? "", test: kept.name };
         break;
