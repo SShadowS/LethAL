@@ -25,11 +25,15 @@ import {
   BURN_TRIES,
   MESSAGE_PREFIX_REASON,
   SERVE_TESTS_AL,
+  STOP_GROUPS_FACT,
+  STOP_GROUPS_REQUESTS,
+  type StopAnswer,
   type V3ContractResult,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
   burnerArgv,
   classifySleep,
+  judgeStopGroups,
   leastBusyCore,
   parseAllowedCores,
   runV3ContractProbe,
@@ -527,6 +531,10 @@ const folderName = (p: string): string => p.split(/[\\/]/).pop() ?? "";
 const isCapabilityRequest = (q: Record<string, unknown>): boolean =>
   Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])).startsWith("batch-");
 
+/** PR-342: is this serve request the stop-groups fact's? */
+const isStopGroupsRequest = (q: Record<string, unknown>): boolean =>
+  Array.isArray(q.sourcePaths) && folderName(String(q.sourcePaths[0])) === "stop-groups";
+
 const capRow = (id: number, method: string, status = "pass", message?: string) => ({
   name: `Codeunit${id}.${method}`,
   status,
@@ -580,6 +588,60 @@ function capabilityAnswer(fact: string, req: Record<string, unknown>): CapAnswer
   return { tests, summary };
 }
 
+/** PR-342: the stop-groups folder's codeunits, `[method, status, notRun, message]` each, as unstopped. */
+const STOP_APP: Record<number, readonly (readonly [string, string, boolean, string?])[]> = {
+  50781: [
+    ["First", "fail", false, "first fails"],
+    ["Second", "pass", false],
+  ],
+  50782: [["Other", "pass", false]],
+  50783: [["Passes", "pass", false]],
+  50784: [
+    ["Spins", "error", true, "Test exceeded 3s timeout."],
+    ["After", "pass", false],
+  ],
+  50785: [
+    ["Refuses", "error", true, "NotRun: out-of-scope: FieldRef.Class on a FieldRef never assigned"],
+    ["After", "pass", false],
+  ],
+};
+
+/** PR-342: upstream #8564's skip text (PR-257), naming the group's first failed test. */
+const skipText = (test: string, group: string): string =>
+  `NotRun: out-of-scope: the test ${test} failed before it, and stopAfterFirstFailure (--stop-after-first-failure) runs no test of its codeunit or of a later entry of its stopGroup \`${group}\` after a failure`;
+
+/**
+ * PR-342: what a #8564 build answers a stop-groups request: entries in order, and with the stop, every row after the
+ * first PLAIN fail of a group (a timeout or a refusal row is notRun, never a fail) is skipped with `skipText`.
+ */
+function stopGroupsAnswer(req: Record<string, unknown>): CapAnswer {
+  const stop = req.stopAfterFirstFailure === true;
+  const failedIn = new Map<string, string>();
+  const tests: Record<string, unknown>[] = [];
+  for (const e of (req.entries ?? []) as { id: string; test: string; stopGroup?: string }[]) {
+    const id = Number(e.test.slice("Codeunit".length, -1));
+    for (const [m, status, notRun, message] of STOP_APP[id] ?? []) {
+      const name = `Codeunit${id}.${m}`;
+      const g = e.stopGroup;
+      const by = stop && g !== undefined ? failedIn.get(g) : undefined;
+      if (by !== undefined && g !== undefined) {
+        tests.push({ name, entry: e.id, status: "error", notRun: true, message: skipText(by, g) });
+        continue;
+      }
+      tests.push({
+        name,
+        entry: e.id,
+        status,
+        notRun,
+        ...(message !== undefined ? { message } : {}),
+      });
+      if (stop && g !== undefined && status === "fail" && !notRun && !failedIn.has(g))
+        failedIn.set(g, name);
+    }
+  }
+  return { tests, summary: {} };
+}
+
 /** A fake `alrunner serve`: answers every runTests with `rows`; records each argv and request. */
 function fakeServe(
   rows: Record<string, { status: string; notRun?: boolean; message?: string }> = SERVE_ROWS,
@@ -610,9 +672,13 @@ function fakeServe(
         const capFact = Array.isArray(req.sourcePaths)
           ? folderName(String(req.sourcePaths[0] ?? ""))
           : undefined;
-        if (req.command === "runTests" && capFact?.startsWith("batch-") === true) {
-          // PR-114a: a capability fact's request (its own scratch folder is named for it).
-          const def = capabilityAnswer(capFact, req);
+        if (
+          req.command === "runTests" &&
+          (capFact?.startsWith("batch-") === true || capFact === "stop-groups")
+        ) {
+          // PR-114a: a capability fact's request (its own scratch folder is named for it). PR-342: and stop-groups'.
+          const def =
+            capFact === "stop-groups" ? stopGroupsAnswer(req) : capabilityAnswer(capFact, req);
           const ans = o.cap?.(capFact, req, def) ?? def;
           const send = (a: CapAnswer): void => {
             if ("hang" in a) late = a.hang;
@@ -687,8 +753,8 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
       expect(c.cwd).toBeDefined();
       expect(c.cwd).not.toBe(process.cwd());
     }
-    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own.
-    expect(serveCwds).toHaveLength(3);
+    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own; PR-342: and stop-groups'.
+    expect(serveCwds).toHaveLength(4);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -785,10 +851,12 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
-    // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own.
+    // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own; PR-342: a fourth, stop-groups'.
     const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
-    expect(s.argvs).toEqual([serveArgv, serveArgv, serveArgv]);
-    const run = s.requests.filter((q) => q.command === "runTests" && !isCapabilityRequest(q));
+    expect(s.argvs).toEqual([serveArgv, serveArgv, serveArgv, serveArgv]);
+    const run = s.requests.filter(
+      (q) => q.command === "runTests" && !isCapabilityRequest(q) && !isStopGroupsRequest(q),
+    );
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS)).toEqual({
@@ -1237,6 +1305,8 @@ describe("§8 the contract probe", () => {
         "batch-onrun-included-duplicates",
         "batch-lane-hint-only",
         "batch-lane-strict-reruns",
+        // PR-342
+        "stop-groups",
       ].sort(),
     );
   });
@@ -1272,6 +1342,7 @@ describe("PR-114a: the eight capability facts", () => {
     expect(r.facts.filter((x) => x.kind === "capability").map((x) => x.fact)).toEqual([
       ...V3_CAPABILITY_FACTS,
       V3_CARRY_FACT,
+      STOP_GROUPS_FACT,
     ]);
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
@@ -1429,9 +1500,9 @@ describe("PR-114a: the eight capability facts", () => {
       return { ...h, write: (l: string) => h.write(l.replaceAll("/", "\\\\")) };
     };
     const r = await probe({}, win);
-    for (const n of V3_CAPABILITY_FACTS)
+    for (const n of [...V3_CAPABILITY_FACTS, V3_CARRY_FACT, STOP_GROUPS_FACT])
       expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
-    expect(r.facts.length).toBe(37);
+    expect(r.facts.length).toBe(38);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1447,7 +1518,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(4); // serve-keep-reasons, the capability daemon, its replacement, the carry fact's daemon
+    expect(serve.argvs.length).toBe(5); // serve-keep-reasons, the capability daemon, its replacement, the carry fact's daemon, stop-groups'
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -1567,14 +1638,21 @@ describe("PR-114a: the eight capability facts", () => {
 
   test("the invented AL: ids in 50700-50789, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
     const seen = new Map<string, string>();
+    let stopAl: string | undefined;
     const { r } = await readOf((name, q, def) => {
       const dir = (q.sourcePaths as string[])[0] ?? "";
-      if (!seen.has(name))
+      if (name === "stop-groups" && stopAl === undefined)
+        stopAl = readFileSync(join(dir, "src", "Stop.Codeunit.al"), "utf8");
+      else if (!seen.has(name))
         seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
-    expect(r.facts.length).toBe(37);
+    expect(r.facts.length).toBe(38);
     expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort());
+    // PR-342: stop-groups' own AL, ids 50781-50785 (its own scratch folder, so the carry fact's 50780s do not meet it).
+    const stopIds = [...(stopAl ?? "").matchAll(/^codeunit (\d+) /gm)].map((m) => Number(m[1]));
+    expect(stopIds).toEqual([50781, 50782, 50783, 50784, 50785]);
+    expect(stopAl).not.toMatch(/DotNet/);
     for (const [name, al] of seen) {
       const ids = [...al.matchAll(/^(?:table|codeunit) (\d+) /gm)].map((m) => Number(m[1]));
       expect(ids.length, name).toBeGreaterThan(2);
@@ -2142,7 +2220,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(37);
+    expect(r.facts.length).toBe(38);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -2453,7 +2531,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13; PR-114a; PR-340): 37 facts, 9 defect, 18 contract, 1 warn, 9 capability-kind (8 + the carry fact); the old count of 28 is gate-fail", async () => {
+  test("P10 (R590, r13; PR-114a; PR-340; PR-342): 38 facts, 9 defect, 18 contract, 1 warn, 10 capability-kind (8 + the carry fact + stop-groups); the old counts 37, 36 and 28 are gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([
@@ -2462,8 +2540,10 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
       kinds("contract"),
       kinds("warn"),
       kinds("capability"),
-    ]).toEqual([37, 9, 18, 1, 9]);
-    expect(V3_LEG_C_FACTS).toBe(37);
+    ]).toEqual([38, 9, 18, 1, 10]);
+    expect(V3_LEG_C_FACTS).toBe(38);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 37).outcome).toBe("gate-fail");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 36).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 28).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
@@ -3015,6 +3095,20 @@ describe("T18: the .gated pin", () => {
       "batchFacts" in parseGated(JSON.stringify({ ...base, batchFacts: { b: "pass" } }), "x"),
     ).toBe(false);
   });
+
+  test("PR-342: a record's batchFacts keep stop-groups' reading, matches or diverged, beside the eight", () => {
+    const base = { version: "v", binarySha256: "a".repeat(64), lethalCommit: COMMIT };
+    for (const v of ["matches", "diverged"])
+      expect(
+        parseGated(
+          JSON.stringify({
+            ...base,
+            batchFacts: { "batch-no-cross-row": "matches", [STOP_GROUPS_FACT]: v },
+          }),
+          "x",
+        ).batchFacts,
+      ).toEqual({ "batch-no-cross-row": "matches", "stop-groups": v });
+  });
 });
 
 describe("PR-340: the carry fact batch-sequential-carry", () => {
@@ -3041,11 +3135,12 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
         const { spawn, envs } = spawnsWithEnv();
         const r = await probe({}, spawn);
         expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
-        expect(envs).toHaveLength(3);
+        // serve-keep-reasons, the eight facts', the carry fact's, then (PR-342) stop-groups'.
+        expect(envs).toHaveLength(4);
         expect(
           envs.map((e) => mergeChildEnv(e ?? {}).AL_STRICT_SEQUENTIAL),
           `ambient ${ambient}`,
-        ).toEqual([undefined, undefined, "1"]);
+        ).toEqual([undefined, undefined, "1", undefined]);
       }
     } finally {
       if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
@@ -3109,5 +3204,234 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
     expect(
       baselineBatchingOffReason(r, "v", "b".repeat(64), { batchFacts: eight, lethalCommit }) ?? "",
     ).not.toContain(V3_CARRY_FACT);
+  });
+});
+
+describe("PR-342: the stop-groups capability fact (PR-256's alRunnerV3.stopGroups)", () => {
+  type R = { name: string; status: string; notRun?: boolean; message?: string };
+  const rows = (rs: R[]): StopAnswer => ({
+    rows: rs.map((r) => ({
+      name: r.name,
+      status: r.status,
+      notRun: r.notRun === true,
+      message: r.message,
+    })),
+  });
+  /** What a #8564 build answers (PR-257's text), straight from the fake daemon's model. */
+  const asBuilt = (): { stop: StopAnswer; follow: StopAnswer; guard: StopAnswer } => {
+    const of = (q: Record<string, unknown>) =>
+      rows(
+        (stopGroupsAnswer(q) as { tests: Record<string, unknown>[] }).tests.map((t) => ({
+          name: String(t.name),
+          status: String(t.status),
+          notRun: t.notRun === true,
+          ...(typeof t.message === "string" ? { message: t.message } : {}),
+        })),
+      );
+    return {
+      stop: of(STOP_GROUPS_REQUESTS.stop),
+      follow: of(STOP_GROUPS_REQUESTS.follow),
+      guard: of(STOP_GROUPS_REQUESTS.guard),
+    };
+  };
+  const replace = (a: StopAnswer, name: string, r: Omit<R, "name">): StopAnswer =>
+    rows(
+      ("rows" in a ? a.rows : []).map((x) =>
+        x.name === name
+          ? { name, ...r }
+          : {
+              name: x.name,
+              status: x.status,
+              notRun: x.notRun,
+              ...(x.message !== undefined ? { message: x.message } : {}),
+            },
+      ),
+    );
+  const SKIP_FIRST = skipText("Codeunit50781.First", "a");
+
+  test("case 1, 4, 5 as #8564 gives them: matches; the guard readings are recorded as ran", () => {
+    const j = judgeStopGroups(asBuilt());
+    expect(j.verdict).toBe("matches");
+    expect(j.measured).toContain("after a timeout: ran; after a refusal: ran");
+  });
+
+  test("a build without #8564 refuses the request by name: diverged (fails closed), the refusal recorded", () => {
+    const refused: StopAnswer = {
+      refused:
+        'al-runner serve: the request was refused: "unknown field `stopGroup` in an entry of `entries`"',
+    };
+    const j = judgeStopGroups({ ...asBuilt(), stop: refused });
+    expect(j.verdict).toBe("diverged");
+    expect(j.measured).toContain("unknown field `stopGroup`");
+  });
+
+  test("case 1: a build that runs the second test (no skip) is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(
+      replace(a.stop, "Codeunit50781.Second", { status: "pass" }),
+      "Codeunit50782.Other",
+      { status: "pass" },
+    );
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("review nit: a doubled skip row (two rows of one name) is diverged, never matched on its first copy", () => {
+    const a = asBuilt();
+    const rs = "rows" in a.stop ? a.stop.rows : [];
+    const second = rs.find((x) => x.name === "Codeunit50781.Second");
+    expect(second).toBeDefined();
+    if (second === undefined) return;
+    const stop: StopAnswer = { rows: [...rs, second] };
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: a skip of the SECOND ENTRY missing (only the codeunit's own rest) is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50782.Other", { status: "pass" });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: the skip text naming another test, or reworded, is diverged", () => {
+    const a = asBuilt();
+    for (const message of [
+      skipText("Codeunit50783.Passes", "a"),
+      SKIP_FIRST.replace("NotRun: out-of-scope: ", "NotRun: "),
+    ]) {
+      const stop = replace(a.stop, "Codeunit50781.Second", {
+        status: "error",
+        notRun: true,
+        message,
+      });
+      expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+    }
+  });
+
+  test("case 1: the skip text on a row that is not notRun/error is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50781.Second", { status: "fail", message: SKIP_FIRST });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 1: a first test that is not a plain fail is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50781.First", {
+      status: "fail",
+      notRun: true,
+      message: "first fails",
+    });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 5: group a's failure skipping group b's test is diverged", () => {
+    const a = asBuilt();
+    const stop = replace(a.stop, "Codeunit50783.Passes", {
+      status: "error",
+      notRun: true,
+      message: SKIP_FIRST,
+    });
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
+  test("case 4: the follow-up request not answered normally: diverged on a row, unmeasurable on no answer", () => {
+    const a = asBuilt();
+    expect(
+      judgeStopGroups({
+        ...a,
+        follow: replace(a.follow, "Codeunit50783.Passes", { status: "fail" }),
+      }).verdict,
+    ).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: rows([]) }).verdict).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: { refused: "busy" } }).verdict).toBe("diverged");
+    expect(judgeStopGroups({ ...a, follow: { failed: "deadline" } }).verdict).toBe("unmeasurable");
+    expect(judgeStopGroups({ ...a, stop: { failed: "eof" } }).verdict).toBe("unmeasurable");
+  });
+
+  test("cases 2 and 3: a skip after a timeout or a refusal row is RECORDED, and never changes the verdict", () => {
+    const a = asBuilt();
+    const guard = replace(
+      replace(a.guard, "Codeunit50784.After", {
+        status: "error",
+        notRun: true,
+        message: skipText("Codeunit50784.Spins", "t"),
+      }),
+      "Codeunit50785.After",
+      { status: "error", notRun: true, message: skipText("Codeunit50785.Refuses", "r") },
+    );
+    const j = judgeStopGroups({ ...a, guard });
+    expect(j.verdict).toBe("matches");
+    expect(j.measured).toContain("after a timeout: SKIPPED; after a refusal: SKIPPED");
+    // a guard first row that is not what it claims to test is named, too
+    const notTimeout = replace(a.guard, "Codeunit50784.Spins", { status: "pass" });
+    expect(judgeStopGroups({ ...a, guard: notTimeout }).measured).toContain(
+      "after a timeout (first row not a timeout): ran",
+    );
+    expect(judgeStopGroups({ ...a, guard: { failed: "deadline" } }).verdict).toBe("matches");
+  });
+
+  test("the probe sends the three requests to ONE daemon, in order, with the pinned shapes, and reads matches", async () => {
+    const serve = fakeServe();
+    const r = await probe({}, serve.spawn);
+    const f = r.facts.find((x) => x.fact === STOP_GROUPS_FACT);
+    expect(f).toMatchObject({ kind: "capability", verdict: "matches" });
+    const sent = serve.requests.filter(isStopGroupsRequest);
+    expect(sent.map(({ sourcePaths: _, ...q }) => q)).toEqual([
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.stop },
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.follow },
+      { command: "runTests", testIsolation: "test", ...STOP_GROUPS_REQUESTS.guard },
+    ]);
+    expect(STOP_GROUPS_REQUESTS.stop.entries.every((e) => e.stopGroup !== undefined)).toBe(true);
+    expect("stopAfterFirstFailure" in STOP_GROUPS_REQUESTS.follow).toBe(false);
+  });
+
+  test("the probe on a build that refuses `stopGroup` reads diverged, and leg C still passes with the off line", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === "stop-groups"
+          ? { error: "unknown field `stopGroup` in an entry of `entries`" }
+          : def,
+    });
+    const r = await probe({}, serve.spawn);
+    expect(r.facts.find((x) => x.fact === STOP_GROUPS_FACT)?.verdict).toBe("diverged");
+    const c = classifyLegC(
+      r.facts,
+      V3_DEFECT_FACTS,
+      V3_LEG_C_FACTS,
+      V3_WARN_FACTS,
+      undefined,
+      V3_CAPABILITY_FACTS,
+    );
+    expect(c.outcome).toBe("pass");
+    expect(
+      c.lines.some((l) => l.startsWith("al-runner-v3-stop-groups-off: stop-groups: diverged")),
+    ).toBe(true);
+  });
+
+  test("leg C: stop-groups matches passes with no line; unmeasurable is infra-fail; another fact's diverged still fails", () => {
+    const one = (fact: string, verdict: string) => [{ fact, verdict, measured: "m" }];
+    expect(classifyLegC(one("stop-groups", "matches"), [], 1)).toEqual({
+      outcome: "pass",
+      lines: [],
+    });
+    expect(classifyLegC(one("stop-groups", "unmeasurable"), [], 1).outcome).toBe("infra-fail");
+    expect(classifyLegC(one("version", "diverged"), [], 1).outcome).toBe("gate-fail");
+  });
+
+  test("a session (gate-only) never measures stop-groups", async () => {
+    const s = fakeServe();
+    const r = await runV3ContractProbe({
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      gateOnlyTrusted: "the gated build's leg C at 5eb544ef",
+    });
+    expect(r.facts.some((x) => x.fact === STOP_GROUPS_FACT)).toBe(false);
+    expect(s.requests.some(isStopGroupsRequest)).toBe(false);
   });
 });

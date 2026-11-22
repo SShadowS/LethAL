@@ -28,6 +28,7 @@ import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
 import { ESTIMATE_NOT_A_BOUND, formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
+  isSeedableCarriedKill,
   resumeGuardMessage,
   runSession as runSessionRaw,
 } from "../src/orchestrator";
@@ -7315,5 +7316,192 @@ describe("R912: windows and --time-budget", () => {
         }),
       ).rejects.toThrow(/time-budget-invalid/);
     }
+  });
+});
+
+/**
+ * R1179 (PR-341 part 3): a carried kill seeds R197's kill ledger, so a resumed run orders a
+ * procedure's remaining mutants' tests as a fresh run does. Three tests cover `IsOverBudget` alike,
+ * so the cold order is by name (AOne, BTwo, CKill). Under M0001 and M0002 only CKill fails; under
+ * every later mutant AOne and CKill both fail, so its `killingTest` is CKill only when the ledger
+ * holds the earlier kills.
+ */
+describe("R1179: --resume seeds the kill ledger from carried kills", () => {
+  const LEDGER_TESTS_AL = `codeunit 79100 "Sandbox Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure AOne()
+    begin
+    end;
+
+    [Test]
+    procedure BTwo()
+    begin
+    end;
+
+    [Test]
+    procedure CKill()
+    begin
+    end;
+}
+`;
+  /** Test 2: a second codeunit with its own CKill, so a carried `CKill` names two covering tests. */
+  // "Zulu" sorts after "Sandbox", so the cold order still starts at Sandbox Tests.AOne.
+  const OTHER_TESTS_AL = `codeunit 79101 "Zulu Tests"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure CKill()
+    begin
+    end;
+}
+`;
+  type Rule = (mutant: string, ref: TestMethodRef) => boolean;
+  /** M0001, M0002: only CKill fails; later mutants: AOne and CKill fail. */
+  const ledgerRule: Rule = (mutant, ref) =>
+    mutant === "M0001" || mutant === "M0002"
+      ? ref.method === "CKill"
+      : ref.method === "AOne" || ref.method === "CKill";
+  /** Test 3: M0001 and M0002 survive; later mutants as above. */
+  const survivorRule: Rule = (mutant, ref) =>
+    mutant === "M0001" || mutant === "M0002"
+      ? false
+      : ref.method === "AOne" || ref.method === "CKill";
+
+  class LedgerBackend extends CountingBackend {
+    private current: string | null = null;
+    constructor(
+      private readonly fails: Rule,
+      /** The first run under this mutant answers in-flight-unknown: the session stops there. */
+      private readonly abortAt?: string,
+    ) {
+      super("pass");
+    }
+    override async activate(id: string | null): Promise<void> {
+      this.current = id;
+      await super.activate(id);
+    }
+    override async run(ref: TestMethodRef, opts: RunOpts): Promise<TestVerdict> {
+      const v = await super.run(ref, opts);
+      const m = this.current;
+      if (m === null) return v;
+      if (m === this.abortAt) {
+        return {
+          ref,
+          outcome: "error",
+          durationMs: 5,
+          operation: "in-flight-unknown",
+          failureMessage: "RunMutant timed out: AbortError",
+        };
+      }
+      return this.fails(m, ref) ? { ...v, outcome: "fail", failureMessage: "Assert failed" } : v;
+    }
+  }
+
+  async function ledgerProject(withOther: boolean) {
+    const root = scratch("lethal-r1179-");
+    const projectDir = join(root, "app");
+    const testDir = join(root, "tests");
+    const instrumentedDir = join(root, "instr");
+    await Bun.write(join(projectDir, "SandboxLogic.Codeunit.al"), TARGET_AL);
+    await Bun.write(join(projectDir, "app.json"), APP_JSON);
+    const sources: Record<string, string> = { "SandboxTests.Codeunit.al": LEDGER_TESTS_AL };
+    if (withOther) sources["ZuluTests.Codeunit.al"] = OTHER_TESTS_AL;
+    for (const [name, text] of Object.entries(sources)) await Bun.write(join(testDir, name), text);
+    await Bun.write(join(testDir, "app.json"), testAppJson());
+    return { dirs: { projectDir, testDir, instrumentedDir }, sources };
+  }
+
+  const tableOf = (r: SessionReport) =>
+    r.mutants.map((m) => [m.mutantCode, m.verdict, m.killingTest ?? null]);
+  /** The ONE resume-reusing-run line (itest:lend pins the exact code list, so never a second). */
+  const reusingLine = (events: readonly RunEvent[]): string => {
+    const lines = events.flatMap((e) =>
+      e.type === "warning" && e.code === "resume-reusing-run" ? [e.message] : [],
+    );
+    expect(lines).toHaveLength(1);
+    return lines[0] ?? "";
+  };
+
+  async function freshAndResumed(rule: Rule, withOther = false) {
+    const { dirs, sources } = await ledgerProject(withOther);
+    const backend = (abortAt?: string) => {
+      const b = new LedgerBackend(rule, abortAt);
+      b.served = testAppPackageWith("1.0.0.0", "", sources);
+      return b;
+    };
+    const freshStore = new ResultsStore(":memory:");
+    const fresh = await runSession({ backend: backend(), store: freshStore, ...dirs, selectorIds });
+    freshStore.close();
+    const store = new ResultsStore(":memory:");
+    // Stopped after the second mutant: M0003's first run is in flight when the session stops.
+    await runSession({ backend: backend("M0003"), store, ...dirs, selectorIds });
+    const events: RunEvent[] = [];
+    const resumed = await runSession({
+      backend: backend(),
+      store,
+      ...dirs,
+      selectorIds,
+      resume: "last",
+      // M0003 was in flight at the stop (stranded): walk it again, as a fresh run does.
+      retryStranded: true,
+      emit: [(e) => events.push(e)],
+    });
+    store.close();
+    return { fresh, resumed, events };
+  }
+
+  test("test 1: fresh against stopped-then-resumed on one lane: equal per mutant, verdict and killingTest", async () => {
+    const { fresh, resumed, events } = await freshAndResumed(ledgerRule);
+    // The fixture really is ledger-sensitive: the fresh run's third mutant is killed by CKill.
+    const freshTable = tableOf(fresh);
+    expect(freshTable.length).toBeGreaterThanOrEqual(3);
+    expect(freshTable[2]).toEqual(["M0003", "killed", "CKill"]);
+    // M0001 and M0002 were carried, the rest walked.
+    const carried = resumed.mutants.filter((m) => m.carried === true).map((m) => m.mutantCode);
+    expect(carried).toEqual(["M0001", "M0002"]);
+    expect(tableOf(resumed)).toEqual(freshTable);
+    const line = reusingLine(events);
+    expect(line).toContain(" 2 carried kill(s) may seed R197's kill ledger");
+    expect(line).not.toContain("will not seed");
+  });
+
+  test("test 2: a carried kill whose killer method names two covering tests seeds nothing, is counted, and nothing throws", async () => {
+    const { resumed, events } = await freshAndResumed(ledgerRule, true);
+    const carried = resumed.mutants.filter((m) => m.carried === true).map((m) => m.mutantCode);
+    expect(carried).toEqual(["M0001", "M0002"]);
+    const line = reusingLine(events);
+    expect(line).toContain(" 2 carried kill(s) will not seed it");
+    expect(line).not.toContain("may seed");
+    // Unseeded: M0003 is walked on a cold ledger, so AOne (first by name) kills it.
+    const m3 = resumed.mutants.find((m) => m.mutantCode === "M0003");
+    expect([m3?.verdict, m3?.killingTest]).toEqual(["killed", "AOne"]);
+  });
+
+  test("test 3: carried survivors seed nothing (a carried error cannot exist: an error is re-executed, never carried)", async () => {
+    const { fresh, resumed, events } = await freshAndResumed(survivorRule);
+    const carried = resumed.mutants.filter((m) => m.carried === true).map((m) => m.mutantCode);
+    expect(carried).toEqual(["M0001", "M0002"]);
+    expect(reusingLine(events)).not.toContain("R1179");
+    expect(tableOf(resumed)).toEqual(tableOf(fresh));
+    const m3 = resumed.mutants.find((m) => m.mutantCode === "M0003");
+    expect([m3?.verdict, m3?.killingTest]).toEqual(["killed", "AOne"]);
+  });
+
+  test("review S1: an R1174 re-walk kill (tagged [ledger-order-survived]) never seeds; a plain kill does", () => {
+    const note =
+      "[ledger-order-survived] survived in the kill ledger's order; killed in the no-ledger order (R1174)";
+    expect(isSeedableCarriedKill({ verdict: "killed", failureNote: note })).toBe(false);
+    expect(isSeedableCarriedKill({ verdict: "timeout-killed", failureNote: `x; ${note}` })).toBe(
+      false,
+    );
+    expect(isSeedableCarriedKill({ verdict: "killed" })).toBe(true);
+    expect(isSeedableCarriedKill({ verdict: "timeout-killed", failureNote: "other note" })).toBe(
+      true,
+    );
+    expect(isSeedableCarriedKill({ verdict: "survived" })).toBe(false);
   });
 });
