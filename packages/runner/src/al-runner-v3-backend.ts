@@ -119,6 +119,7 @@ import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
   ENTRIES_REQUEST_BUDGET_BYTES,
+  ENTRIES_UNMEASURED_CAP,
   type EntryGroup,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
@@ -2679,7 +2680,14 @@ class Lane {
    * PR-344: the tail pack sent under the mutant now active: its id, and the rows it stored (by `refKey`, each
    * read once). Set when a pack is sent (even a failed one, so a mutant packs once); cleared on every `activateOn`.
    */
-  tailPack: { readonly mutant: string; readonly rows: Map<string, CallRows> } | undefined;
+  tailPack:
+    | {
+        readonly mutant: string;
+        readonly rows: Map<string, CallRows>;
+        /** Every test sent in a pack this activation (stored or not): a packed test is never packed again. */
+        readonly packed: Set<string>;
+      }
+    | undefined;
   /**
    * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
    * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
@@ -10923,7 +10931,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * PR-344: a tail test the walk asks for, under a mutant (never a forced call). Its row is the one the pack stored
    * for it (read once), else the walk's first tail test sends the mutant's pack (this test first, then every other
    * test of the mutant's covering set that `tailRouting` routes alone) in ONE request, else it is sent alone as
-   * before. A mutant packs at most once per activation.
+   * before. A test packs at most once per activation; a pack holds at most 16 entries (S-4).
    */
   private async tailCall(
     lane: Lane,
@@ -10937,26 +10945,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.tailPacks.served += 1;
       return { call: stored };
     }
-    if (m !== null && held === undefined && this.seams.noTailPack !== true) {
-      const mates = this.entriesRefused === undefined ? this.tailPackMates(lane, ref, m) : [];
+    // S-4: a test that was in a pack but not stored is sent alone; one never packed this activation packs again.
+    if (m !== null && held?.packed.has(refKey(ref)) !== true && this.seams.noTailPack !== true) {
+      const mates = this.entriesRefused === undefined ? this.tailPackMates(lane, ref, m, held) : [];
       if (mates.length > 0) {
-        const head = await this.packTail(lane, ref, mates, m);
-        if (head !== undefined) return { call: head };
+        const made = await this.packTail(lane, ref, mates, m);
+        if (made !== undefined) return made;
       }
     }
     return this.aloneCall(lane, ref);
   }
 
   /** PR-344: the other tests of mutant `m`'s covering set that `runRow` would route alone now, in discovery order. */
-  private tailPackMates(lane: Lane, ref: TestMethodRef, m: string): TestMethodRef[] {
+  private tailPackMates(
+    lane: Lane,
+    ref: TestMethodRef,
+    m: string,
+    held?: { readonly packed: ReadonlySet<string> },
+  ): TestMethodRef[] {
     const covering = this.coveringOf.get(m);
     if (covering === undefined) return [];
-    const self = refKey(ref);
-    const seen = new Set<string>([self]);
+    const seen = new Set<string>([refKey(ref)]);
     const out: TestMethodRef[] = [];
     for (const t of this.discovered) {
+      if (out.length >= ENTRIES_UNMEASURED_CAP - 1) break; // S-4: T plus at most 15
+      if (t.codeunitId !== ref.codeunitId) continue; // S-2: the shape PR-343 measured // S-2: the shape PR-343 measured
       const k = refKey(t);
-      if (seen.has(k)) continue;
+      if (seen.has(k) || held?.packed.has(k) === true) continue;
       seen.add(k);
       if (covering.get(t.codeunitId)?.has(t.method.toLowerCase()) !== true) continue;
       if (this.tailRouting(lane, t).tail) out.push(t);
@@ -10975,10 +10990,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     ref: TestMethodRef,
     mates: readonly TestMethodRef[],
     m: string,
-  ): Promise<CallRows | undefined> {
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict } | undefined> {
     const refs = [ref, ...mates];
-    const rows = new Map<string, CallRows>();
-    lane.tailPack = { mutant: m, rows };
+    const prior = lane.tailPack?.mutant === m ? lane.tailPack : undefined;
+    const rows = prior?.rows ?? new Map<string, CallRows>();
+    const packed = prior?.packed ?? new Set<string>();
+    for (const r of refs) packed.add(refKey(r));
+    lane.tailPack = { mutant: m, rows, packed };
+    const started = monoNow();
     const calls = new Map<number, IsolatedSelection>();
     const ids = refs.map((r) => {
       const id = this.packId(r);
@@ -11000,11 +11019,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     try {
       out = await this.request(lane, [{ mutantId: m, codeunits: ids }], "liveMs", { calls, first });
     } catch (err) {
-      if (
-        err instanceof AlRunnerV3EntriesRefusedError ||
-        err instanceof AlRunnerServerRequestError
-      ) {
+      const entries = err instanceof AlRunnerV3EntriesRefusedError;
+      if (entries || err instanceof AlRunnerServerRequestError) {
         this.tailPacks.failed += 1;
+        // B-1: an entries refusal is today's latch, no fallback send. S-1: a stop signal ends it, no new daemon.
+        if (entries || this.stopHandle?.signalled() === true)
+          return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
         return undefined;
       }
       throw err;
@@ -11015,11 +11035,24 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       this.tailPacks.failed += 1;
       return undefined;
     }
-    for (const [i, r] of refs.entries()) {
-      const c = i === 0 ? undefined : mine?.get(ids[i] ?? first);
-      if (i === 0) continue;
-      if (c === undefined) break; // the answer was cut before this entry
+    let keptAt: { readonly text: string; readonly test: string } | undefined;
+    for (let i = 1; i < refs.length; i++) {
+      const r = refs[i];
+      const c = mine?.get(ids[i] ?? first);
+      if (r === undefined || c === undefined) break; // the answer was cut before this entry
       if (c.cutAtTimeout !== undefined || !serveDaemonReusable(serveLines(c.rows), "v3")) break;
+      // S-3: a kept safe refusal at a mate counts as a cut, and the daemon it armed is closed below.
+      const kept = c.rows.find(
+        (x) =>
+          x.notRun &&
+          x.status === "error" &&
+          x.message !== undefined &&
+          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(x.message ?? "")),
+      );
+      if (kept !== undefined) {
+        keptAt = { text: kept.message ?? "", test: kept.name };
+        break;
+      }
       const own = c.rows.filter(
         (x) => x.codeunit === r.codeunitId && x.method.toLowerCase() === r.method.toLowerCase(),
       );
@@ -11031,7 +11064,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       )
         rows.set(refKey(r), c);
     }
-    return head;
+    if (keptAt !== undefined)
+      await this.closeLaneIn("live", lane, "kept-refusal-drift", undefined, keptAt);
+    return { call: head };
   }
 
   /**
