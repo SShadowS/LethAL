@@ -63,4 +63,49 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
   - the daemon is reusable after a skip (adversary S4).
 - **DO measurement (later, its own pre-commitment):** flag on against off, per mutant. Verdicts and `killingTest` must be
   equal (rule 5 keeps the walk). The saving: R1098's ~10.7% of serve test time after a kill is an upper bound; per-entry
-  groups and alone re-runs make it smaller.
+  groups and alone re-runs make it smaller. (Superseded for `killingTest` by amendment 1, change 3.)
+
+## Amendment 1 (2026-11-22, the Opus build review of 2a4763b3b: 1 BLOCK, 2 SHOULD-FIXes; before any build gets the fact)
+1. **The stop needs the §6 Sleep rule retired** (review B1). A mutant request carries the stop only when
+   `sleepRuleRetiredForParallel()` holds, as R895's cut and PR-297's tail do. Otherwise the flag is refused in `status()` by
+   name. On a build with the fact but the rule in force, the coverage window would read the skipped tests as missing rows
+   (a wrong `error`), and an alone re-run would reach the cut guard and throw.
+   - Test: the fact present, the rule not retired: refused, and no stop sent.
+2. **An unrecognised skip is never a refusal** (review S1; this replaces rule 3's "otherwise it stays a refusal").
+   - Every row with the pinned skip text, on a request that carried the stop and an entry that carried a group, is
+     "skipped": no refusal, no daemon close, no cut, and nothing credited from it. This applies whether or not F is this
+     mutant's covering, baseline-green, plain-fail test.
+   - F's own row is still scored as itself, as any row is.
+   - Rule 5 is unchanged: any skipped ref the walk needs is re-run alone without the stop.
+   - So rule 3's strict conditions now decide only whether the skip is COUNTED as a saving (`stopSkipped`), never whether
+     the row is a refusal.
+   - A pinned skip text on a request WITHOUT the stop, or an entry without a group, or naming no earlier failed row of its
+     entry, is still a refusal (a contract violation, fail closed).
+   - **Tests red at baseline are left out of stop-grouped entries** (as R998's are), so they cannot fire the stop at all.
+   - Tests: a baseline-red test before a covering one under the flag: no refusal, no close, and the covering test measured
+     as with the flag off; a non-covering state-dependent failure (test 2b's shape) likewise.
+3. **`killingTest` may differ, verdicts may not** (review S2). The walk reads covering tests in R197's order.
+   - With the flag off, a later test P failing after F is "not trusted" (R978), so F becomes the killer.
+   - With the flag on, P is skipped and re-run alone, where its fail is real, confirmed and reproduced alone, so P becomes
+     the killer.
+   - Both are real kills. The DO measurement's rule: verdicts equal per mutant; a `killingTest` difference is allowed only
+     when the flag-on killer is a covering test whose alone run failed and reproduced. Each is listed. Any other difference
+     is a BLOCK.
+4. **NITs:**
+   - `stopSkipped` must not count the same skips twice on a re-sent request (scan gap, drift, R612): pinned by a test;
+   - a comment where `dropStopSkips` reads `coveringOf`, saying a mutant never registered fails closed.
+
+## Amendment 2 (2026-11-22, the build's one departure from amendment 1, accepted)
+- **Amendment 1 item 2 said:** leave baseline-red tests OUT of stop-grouped entries, as R998's are.
+  - R998 leaves out only a run of tests at the END of a codeunit. A red test BEFORE a covering one is a gap, so the request
+    cannot carry `runSelectedOnly`.
+  - Without it, a left-out test still runs hidden (R1094). It could still fire the stop, and the skip would name a test with
+    no row.
+- **As built:** an entry that would run a baseline-red test gets no group. A request must be all grouped or none, so the whole
+  request goes WITHOUT the stop: exactly today's request.
+  - It costs saving, never a verdict. Such requests are counted (`heldForRed`) and shown with the flag on.
+- **For the DO measurement:** report `heldForRed` against the requests sent. If it turns the stop off for most of DO, true
+  exclusion needs a ruling on sending `runSelectedOnly` with gaps, which changes the state later tests start from.
+- Everything else in amendment 1 is built as written (B1's Sleep gate and `status()` refusal; skips never refusals; the N1
+  counts, pinned). Build: `lethal/pr-256` 2281acb4e.
+
