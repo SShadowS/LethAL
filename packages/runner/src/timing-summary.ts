@@ -8,6 +8,11 @@ import { createInterface } from "node:readline";
 import { SUSPEND_SECONDS } from "./clock";
 import type { RunEvent } from "./events";
 
+/** PR-303: the `reach-prune` warning text; the TIMING fold reads both counts back with `REACH_PRUNE_COUNTS`. */
+export const reachPruneMessage = (batch: number, entries: number, survived: number): string =>
+  `[lethal] reach pruning (PR-303), batch ${batch}: ${entries} mutant entries left out, ${survived} mutant(s) recorded pruned-survived without running`;
+const REACH_PRUNE_COUNTS = /: (\d+) mutant entries left out, (\d+) mutant\(s\) recorded/;
+
 const PHASE_ORDER = ["generate", "deploy", "baseline", "mutants", "teardown"] as const;
 const KINDS = [
   ["baseline", "baseline"],
@@ -59,6 +64,11 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
   let suspends = 0;
   let suspendedS = 0;
   let idleCloses = 0;
+  /** PR-303: `reach-prune` warnings: entries left out, and mutants recorded pruned-survived, summed over batches. */
+  let prunedEntries = 0;
+  let prunedSurvived = 0;
+  let prunedSeen = false;
+  const prunedKeys = new Set<string>();
   const timeOf = (e: RunEvent): number | undefined => e.atMs ?? opts.now?.();
   const kinds = new Map<string, { n: number; ms: number }>();
   const causes = new Map<string, { n: number; ms: number }>();
@@ -107,6 +117,12 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           break;
         case "warning":
           if (e.code === "al-runner-v3-lane-memory-hold") memoryHolds += 1;
+          if (e.code === "reach-prune") {
+            const c = REACH_PRUNE_COUNTS.exec(e.message);
+            prunedSeen = true;
+            prunedEntries += Number(c?.[1] ?? 0);
+            prunedSurvived += Number(c?.[2] ?? 0);
+          }
           if (e.code === "run-suspended") {
             suspends += 1;
             suspendedS += Number(SUSPEND_SECONDS.exec(e.message)?.[1] ?? 0);
@@ -117,6 +133,9 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
           break;
         case "mutant-scored":
           verdicts.set(`${e.batchIndex}/${e.mutant.mutantId}`, e.verdict);
+          // PR-303: a pruned survivor ran nothing, so it is not a covered mutant of the per-mutant figure.
+          if (e.failureNote?.startsWith("pruned:") === true)
+            prunedKeys.add(`${e.batchIndex}/${e.mutant.mutantId}`);
           // PR-108: a walk the 3rd-hang cap ended carries this note (the same text the orchestrator writes).
           if (e.failureNote?.includes("(PR-108, R1057's cap)") === true)
             capped.set(`${e.batchIndex}/${e.mutant.mutantId}`, e.verdict);
@@ -222,9 +241,9 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
 
       let timeoutKilled = 0;
       let covered = 0;
-      for (const v of verdicts.values()) {
+      for (const [key, v] of verdicts) {
         if (v === "timeout-killed") timeoutKilled += 1;
-        if (v !== "no-coverage" && v !== "known-survivor") covered += 1;
+        if (v !== "no-coverage" && v !== "known-survivor" && !prunedKeys.has(key)) covered += 1;
       }
       const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
       if (timeoutKilled > 0 || cuts > 0)
@@ -300,6 +319,11 @@ export function createTimingFold(opts: { readonly now?: () => number } = {}): Ti
       if (mutantsMs !== undefined && covered > 0)
         lines.push(
           `  per covered mutant: ${(mutantsMs / 1000 / covered).toFixed(2)} s (${covered} scored with coverage over the mutants phase)`,
+        );
+
+      if (prunedSeen)
+        lines.push(
+          `  reach pruning (PR-303): ${prunedEntries.toLocaleString("en-US")} mutant entries left out, ${prunedSurvived.toLocaleString("en-US")} mutant(s) recorded pruned-survived without running`,
         );
 
       if (suspends > 0 && lines.length > 0)

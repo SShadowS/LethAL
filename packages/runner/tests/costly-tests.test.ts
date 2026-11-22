@@ -349,6 +349,44 @@ describe("costlyTests: amendment 1 (final outcomes, ambiguous kills, invalidated
     expect(top?.[0]?.coveredMutants).toBe(1);
   });
 
+  // PR-322 (R1167): the recovery carries the mutant's own covering set (plus its killer), not the recheck's whole run
+  // set, so a test that only RAN in the recheck no longer counts as covering it. Named limit: a covering test of another
+  // codeunit with the killer's method name still makes the credit ambiguous (the test above; 0 of 349 on DO c2).
+  test("PR-322: a recovered row's covering list is the recovery's; a recheck-only test is not counted as covering", () => {
+    const m = mutant("M0001");
+    const events = seq([
+      ...head(["T1", "T3"]),
+      {
+        type: "mutant-scored",
+        mutant: m,
+        verdict: "error",
+        cause: "runner-refused",
+        batchIndex: 0,
+        durationMs: 5,
+        coveringTests: [`${CU}.T1`],
+        failureNote:
+          "NotRun: out-of-scope: a test before this one in the codeunit did not pass (X.Y): this failure is not trusted: boom",
+      },
+      {
+        type: "mutant-rechecked",
+        mutant: m,
+        batchIndex: 0,
+        durationMs: 3,
+        recovery: {
+          killingTest: "T1",
+          coveringTests: [`${CU}.T1`],
+          isolatedRecheck: { withheldFailure: "boom", killerGreenInMainBaseline: true },
+        },
+      },
+      costs([row(`${CU}.T1`, { ownMs: 5 }), row(`${CU}.T3`, { ownMs: 9 })]),
+      fin,
+    ]);
+    const folded = foldEvents(STATICS, events);
+    expect(folded.outcomes[0]?.coveringTests).toEqual([`${CU}.T1`]);
+    const t3 = folded.costlyTests?.top.find((r) => r.test === `${CU}.T3`);
+    expect(t3?.coveredMutants).toBe(0);
+  });
+
   test("an invalidated batch: its kill does not count; its time leaves msUnderSurvivors but stays in ownMs", () => {
     const scored = (id: string, verdict: "killed" | "survived", batchIndex: number) =>
       ({

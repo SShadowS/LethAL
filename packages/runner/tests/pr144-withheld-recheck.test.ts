@@ -436,6 +436,44 @@ describe("runWithheldRecheck: the driver", () => {
     expect(summary).toEqual({ targets: 2, recovered: 1 });
   });
 
+  // PR-322 (R1167): the recheck runs whole codeunits in method isolation, so its row lists every test it ran, green
+  // or not. A recovered row keeps the mutant's own covering tests (what `coverageAttribution: exact` promises),
+  // plus the killer when the covering set lacks it (its reproduced kill proves it reached the code).
+  test("PR-322: a recovery keeps the main-pass covering set, not the recheck's run set (revert: r.coveringTests)", async () => {
+    const runSet = ["T Codeunit.T1", "T Codeunit.T2", "T Codeunit.T3", "T Codeunit.T4"];
+    const fake = fakeRunner(() => ({
+      ...nestedFor(["M1"]),
+      rows: nestedFor(["M1"]).rows.map((r) => ({ ...r, coveringTests: runSet })),
+    }));
+    const { emitted } = await drive(
+      mainEvents([scored("M1", { coveringTests: ["T Codeunit.T2"] })]),
+      fake,
+    );
+    const rechecked = emitted.filter((e) => e.type === "mutant-rechecked");
+    expect(rechecked[0]).toMatchObject({
+      recovery: { killingTest: "T2", coveringTests: ["T Codeunit.T2"] },
+    });
+  });
+
+  test("PR-322: a killer outside the covering set is added, so its kill is still credited (revert: the killer add)", async () => {
+    // the recheck's run set differs from both the covering set and the expected result
+    const fake = fakeRunner(() => ({
+      ...nestedFor(["M1"]),
+      rows: nestedFor(["M1"]).rows.map((r) => ({
+        ...r,
+        coveringTests: ["T Codeunit.T2", "T Codeunit.T3"],
+      })),
+    }));
+    const { emitted } = await drive(
+      mainEvents([scored("M1", { coveringTests: ["T Codeunit.T1"] })]),
+      fake,
+    );
+    const rechecked = emitted.filter((e) => e.type === "mutant-rechecked");
+    expect(rechecked[0]).toMatchObject({
+      recovery: { killingTest: "T2", coveringTests: ["T Codeunit.T1", "T Codeunit.T2"] },
+    });
+  });
+
   test("a recheck survived keeps error", async () => {
     const fake = fakeRunner(() => ({
       ...nestedFor(["M1"]),
