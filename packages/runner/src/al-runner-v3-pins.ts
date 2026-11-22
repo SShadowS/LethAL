@@ -815,6 +815,17 @@ export const V3_BUILD_PINS: readonly V3BuildPin[] = [
       },
     },
   },
+  {
+    // R1161 (pre-commitment master 8277d49c4, docs/superpowers/specs/2026-11-22-r1161-main-ef9f6a222-pin.md): upstream MAIN
+    // ef9f6a222, built here with upstream's recipe. It carries #8239's fix (PR #8622): O1's 16 partner-login row inserts run, as
+    // on BC. So the pin is the live root edge-d72d3197d's readings EXACTLY, with NO o1.partnerLoginRefusal: O1 is judged
+    // against BC's tables again. The first gate (judged on main-ccd0f823d's pin) failed on O1 alone, by those 16 rows passing.
+    id: "main-ef9f6a222",
+    version: "al-runner 3.0.0-alpha.14+main.20261122 (ef9f6a222)",
+    binarySha256: "8d36889656d8152f5c84c17a47a2e22303744622390b717d5d646b04d0c53bfe",
+    ...READINGS_8078BCF49,
+    o1: { ...O1_8078BCF49, cdoApps: 18 },
+  },
 ];
 
 /** The readings before PR-209 moved leg T's counts: master's own, byte for byte (digest e8ce7f40...). */
