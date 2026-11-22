@@ -960,6 +960,14 @@ export interface ExecutionBackend {
     site?: { readonly objectType: string; readonly codeunitId: number },
   ): string | undefined;
 
+  /** PR-329 step 0, OPTIONAL, measurement only: the v3 SingleInstance lane dump (env-gated inside). */
+  laneDump?(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    codeunitOrder: readonly number[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<void>;
+
   /**
    * R885, OPTIONAL: one line for the "no green baseline tests" note when the backend saw why
    * (v3: its "test data is off" note), else `undefined`.

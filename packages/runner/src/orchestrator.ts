@@ -14485,6 +14485,13 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       // PR-303: over the FULL covering set; PR-327 (a): with the site, and appended (the survivor note first).
       const note = args.backend.survivorNote?.(fullCovering, m);
       if (note !== undefined) failureNote = appendNote(failureNote, note);
+      // PR-329 step 0 (measurement only; env-gated inside the backend): the no-ledger codeunit order.
+      if (args.backend.laneDump !== undefined) {
+        const order = orderCoveringTests(fullCovering, m, newKillLedger(), args.memberCountsByTest);
+        await args.backend
+          .laneDump(m.mutantId, fullCovering, [...new Set(order.map((r) => r.codeunitId))], m)
+          .catch(() => undefined);
+      }
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
     const reach =

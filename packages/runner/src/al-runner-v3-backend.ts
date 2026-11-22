@@ -35,6 +35,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import {
+  appendFile,
   cp,
   mkdir,
   readFile,
@@ -80,6 +81,7 @@ import {
   BASELINE_BATCH_SIZE,
   batchBody,
   decodeBatchAnswer,
+  exclusionOf,
   exclusionsFor,
   planBaselineBatches,
   scanTestCodeunits,
@@ -7479,6 +7481,106 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): string | undefined {
     this.soleLane("survivorNote");
     return this.survivorNoteShared(covering, site);
+  }
+
+  /**
+   * PR-329 step 0, MEASUREMENT ONLY. With `LETHAL_V3_LANE_DUMP=<file>` set, a survivor that
+   * `singleInstanceCarryNoteOf` tags gets two extra strictOrder requests (the mutant active, then no
+   * mutant) whose raw answers are appended to the file. Never throws, never moves a verdict.
+   * ponytail: one entry (`test: "Codeunit"`, the complement in `excludeTests`) carries the selector
+   * override, as batch-shaped as an entries request can be; no bound check; sole lane only (a lane view
+   * has no `laneDump`).
+   */
+  async laneDump(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    codeunitOrder: readonly number[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<void> {
+    const file = process.env.LETHAL_V3_LANE_DUMP;
+    if (file === undefined || file === "") return;
+    if (this.singleInstanceCarryNote(covering, site) === undefined) return;
+    const lane = this.soleLane("laneDump");
+    const mode: RequestMode = { testIsolation: SERVE_TEST_ISOLATION, runSelectedOnly: false };
+    for (const [kind, override, batch] of [
+      ["lane-mutant", mutantId, false],
+      ["lane-none", SELECTOR_RESOURCE_NONE, false],
+      ["lane-batch-mutant", mutantId, true],
+      ["lane-batch-none", SELECTOR_RESOURCE_NONE, true],
+    ] as const) {
+      const line: Record<string, unknown> = {
+        kind,
+        mutantId,
+        codeunitOrder: [...codeunitOrder],
+        activation: batch ? "resource-file" : "entry-resources",
+      };
+      // The file's content before a batch kind wrote it (undefined: it did not exist).
+      let prior: string | undefined;
+      let wrote = false;
+      try {
+        // The pair's own daemon: started like a mutant run's if the lane has none (it is closed below).
+        const daemon = await this.ensureDaemon(lane, mode, codeunitOrder);
+        const s = this.serveStopSeconds();
+        if (s === undefined) throw new Error("no serve stop seconds");
+        let body: Record<string, unknown>;
+        if (batch) {
+          // The contract's lane shape: no entries, the complement in a top-level excludeTests.
+          const keep = new Set<number>(codeunitOrder);
+          const complement = [...this.testsPerCodeunit.keys()]
+            .filter((id) => !keep.has(id))
+            .map(exclusionOf);
+          if (this.echoId !== undefined) complement.push(exclusionOf(this.echoId));
+          body = { ...batchBody(lane.requestBase(mode), complement, false), strictOrder: true };
+          prior = await readFile(lane.resourcePath(), "utf8").catch(() => undefined);
+          wrote = true;
+          await writeFile(lane.resourcePath(), override, "utf8");
+        } else {
+          body = {
+            ...lane.requestBase(mode),
+            strictOrder: true,
+            // One entry per covering codeunit, named `Codeunit<id>.` as every entries request names it, in order.
+            entries: codeunitOrder.map((cu) => ({
+              id: `${kind}|${cu}`,
+              resources: { [SELECTOR_RESOURCE_NAME]: override },
+              test: `Codeunit${cu}.`,
+            })),
+          };
+        }
+        daemon.requests += 1;
+        const answer = await daemon.server.runEntries(
+          body,
+          v3CallDeadlineMs(s, codeunitOrder.length),
+        );
+        if (answer.tests.length === 0) throw new Error("zero rows (silently empty)");
+        line.accepted = true;
+        line.rows = answer.tests.map((t) => ({
+          codeunit: t.codeunit,
+          method: t.method,
+          status: t.status,
+          message: t.message,
+        }));
+        line.summary = { orderHints: answer.summary.orderHints };
+      } catch (err) {
+        line.accepted = false;
+        line.error = err instanceof Error ? err.message : String(err);
+        line.rows = [];
+        line.summary = {};
+      } finally {
+        // Put the resource file back exactly as it was, even after a throw.
+        if (wrote) {
+          if (prior !== undefined)
+            await writeFile(lane.resourcePath(), prior, "utf8").catch(() => {});
+          else await rm(lane.resourcePath(), { force: true }).catch(() => {});
+        }
+      }
+      try {
+        await appendFile(file, `${JSON.stringify(line)}\n`, "utf8");
+      } catch {
+        // a dump that cannot be written is not worth a session
+      }
+    }
+    // Never leave a lane-run daemon behind for the next mutant (a routine close, no extra warm-up counted).
+    await this.closeLane(lane, "probe").catch(() => undefined);
   }
 
   private survivorNoteShared(
