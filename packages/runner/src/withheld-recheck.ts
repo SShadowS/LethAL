@@ -498,6 +498,15 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     }
     recovered += 1;
     const r = decision.row;
+    // PR-322 (R1167): the recheck row lists every test the whole-codeunit recheck RAN, green or not. The recovered row
+    // keeps the mutant's own covering set (what its `coverageAttribution` describes), plus the killer when that set
+    // lacks it: the reproduced kill proves the killer reached the code, and the kill credit looks it up there. Rule
+    // (c) names the killer on every recovered row.
+    const killer = qualifiedKillerOf(r);
+    const coveringTests =
+      killer !== undefined && !target.coveringTests.includes(killer)
+        ? [...target.coveringTests, killer]
+        : target.coveringTests;
     d.emit({
       type: "mutant-rechecked",
       mutant: target.mutant,
@@ -508,7 +517,7 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
         ...(r.killingTestFailure !== undefined ? { killingTestFailure: r.killingTestFailure } : {}),
         ...(r.killPosition !== undefined ? { killPosition: r.killPosition } : {}),
         ...(r.reproducedFailure !== undefined ? { reproducedFailure: r.reproducedFailure } : {}),
-        coveringTests: r.coveringTests,
+        coveringTests,
         isolatedRecheck: decision.isolatedRecheck,
       },
     });
