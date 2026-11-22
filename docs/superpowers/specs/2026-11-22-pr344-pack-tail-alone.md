@@ -93,3 +93,34 @@ time). Related: [[R1156]], R652, PR-297, PR-250.
   same build and config): equal verdict and `killingTest` per mutant; bound checks at least about 6,300 (from 34,619; a
   lower bound, see above); bound time about 1,800 s (from 9,777). Test time may rise (Limit 1); failed packs and late cuts
   are reported. Any verdict difference is a BLOCK until explained.
+
+## Amendment 1 (2026-11-22, the Opus build review of c5937830d, before any gate)
+- **Premise closed:** PR-346 (lethal-bugs, current bf3a3e863): Random, CreateGuid and a new row's SystemId are identical in a
+  test sent alone and in each entry of one request, also with a different `active-mutant.txt` per entry. Limit 2's
+  freshness premise now covers them.
+- **The default flip is NOT in PR-344** (orchestrator, 2026-11-22). A scan showed it reaches every directly built backend and
+  moves the RC leg (its recheck judge) and maybe T. It is PR-347: RC and T measured with the flag forced on, PR-297's fixture
+  leg, RC kept at an explicit `false`, then the flip, closing R1160. PR-344 keeps the flag OFF by default.
+- **Fixes (review B-1, S-1 to S-6), all keeping today's behaviour where the pack cannot be exact:**
+  1. **An entries refusal is today's latch (B-1).** If the pack throws `AlRunnerV3EntriesRefusedError` (a warm-up disagreement,
+     a dirty warm-up), T gets `liveFailure`'s verdict for it exactly as its alone call does today: the session latches. No
+     fallback send.
+  2. **A stop signal ends it (S-1).** If the stop handle is signalled when the pack fails, T gets `liveFailure`'s verdict; no
+     new daemon is started.
+  3. **Mates only from T's codeunit (S-2),** the shape PR-343 measured. A tail test of another codeunit is packed when the walk
+     first asks for it there.
+  4. **A kept refusal at a mate closes the daemon after the pack (S-3).** If any entry j > 0 returns a kept safe refusal, the
+     lane's daemon is closed once the pack's rows are stored, so no later request runs on a daemon armed by a row the walk
+     never asked for. (Cost only.)
+  5. **At most 16 entries per pack (S-4),** `ENTRIES_UNMEASURED_CAP`. When the walk asks for a tail test of M that was never in
+     a pack this activation, a further pack is sent (T first, then up to 15 unpacked mates). A test that was in a pack but
+     not stored (a cut, a refusal, a missing row) is sent alone, as before.
+  6. **Tests (S-5, S-6):** the equality test compares the whole verdict except `durationMs`, `measuredDurationMs`, `callId` and
+     `reportedStopMs`; new red-going tests for the latch guard (no pack after a latch), the entries-refusal branch, a stop
+     signal, a kept refusal at a mate (not stored, daemon closed), a daemon restart in front of a pack (the `baseCall`
+     mapping), the 16-entry cap with a second pack, two lanes, and `stopGroups` on.
+- **Named, not changed (NITs):** a head-less answer or a crash at entry 0 sends T a second time (equal when the cause
+  repeats); with stop groups on, a red mate holds the whole pack without the stop (stats only); flag-on cost and trace
+  warnings can differ from the unpacked walk. The flag is off in every gate, so none of these moves a gate figure.
+- **The predictions are unchanged.** The bound-check figure stays a lower bound (packs of at most 16 entries; about 19 tail
+  tests per mutant on t1 gives two packs for some mutants).

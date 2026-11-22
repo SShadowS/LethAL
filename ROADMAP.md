@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**62 of 1143 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**62 of 1144 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1186,8 +1186,9 @@ that ordering is the priority.
 - **R1170** · A client-session backend (R1168's end state: run a mutant's tests in the session kind CI uses) is feasible on a BC with a web server, but today's control app caches the active mutant for a whole session, so each mutant would need a fresh ~7 s client session; serving many mutants from one kept session needs a per-mutant activation reload · [R1170.md](docs/roadmap/R1170.md) · open — owner's review of the PR-325 spec answered (q-20261122T025012-942749cb): client-mode gates run on a…
 - **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · done (PR-323): ruled q-20261122T015708-0db73446 (kraken from the mantra); readCgroupMemory now reads used =…
 - **R1175** · On al-runner v3, 29 DO baseline tests fail on Continia Core's activation Confirm (the product is not activated in al-runner's sandbox), so they cover and kill nothing on v3; DO's client CI activates and passes them · [R1175.md](docs/roadmap/R1175.md) · closed 2026-11-22 — measured (PR-340 step 0, /coord/handoff/PR-340/do29/): on main-ef9f6a222 the 29 tests…
-- **R1176** · On full DO a v3 lane needs about 3.3 GiB (a 2.5 GiB floor after warm-up plus about 0.6 GiB a daemon retains over its first ~75 requests), so the lane gate starts 5 of 8 lanes at --peak 22; recycling daemons before the step and charging LethAL's own memory by phase would start 7 · [R1176.md](docs/roadmap/R1176.md) · open — next: pre-commit an A/B of daemon recycling plus a live LethAL charge on full DO…
+- **R1176** · On full DO a v3 lane needs about 3.3 GiB (a 2.5 GiB floor after warm-up plus about 0.6 GiB a daemon retains over its first ~75 requests), so the lane gate starts 5 of 8 lanes at --peak 22; no existing knob buys a sixth lane · [R1176.md](docs/roadmap/R1176.md) · closed 2026-11-22 — ruling (PR-348, /coord/handoff/PR-348/post-warmup.txt): recycling cannot buy a lane under…
 - **R1177** · An al-runner v3 serve daemon on full DO retains about 0.6 GiB over its first ~75 requests (2.6 to 3.2 GiB, mostly one step near request 60, then flat): ask alrunner what it keeps and whether it can be capped or released · [R1177.md](docs/roadmap/R1177.md) · closed 2026-11-22 — answered…
+- **R1181** · Design (not built): a sixth v3 lane on full DO needs the lane gate to charge each lane its OWN daemon's reading, not every lane the session's max, together with request recycling to keep daemons young and a guard that retires a lane when the real total passes the declared peak · [R1181.md](docs/roadmap/R1181.md) · open — a design for the orchestrator to decide (PR-348); no build and no run until then
 
 ---
 
