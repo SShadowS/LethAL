@@ -15,6 +15,7 @@
 import { writeFile } from "node:fs/promises";
 import { AlRunnerCoverageFrameError } from "../src/al-runner-coverage";
 import type { AlRunnerV3Config, V3EntriesStats } from "../src/al-runner-v3-backend";
+import { STOP_GROUPS_FACT } from "../src/al-runner-v3-contract";
 import { applyTPin, pinnedFactMatches } from "../src/al-runner-v3-pins";
 import type { V3BuildPin, XbPin } from "../src/al-runner-v3-pins";
 import { AlRunnerV3CoverageJoinError } from "../src/al-runner-v3-sleep";
@@ -639,12 +640,12 @@ export const V3_DEFECT_FACTS = [
 ] as const;
 
 /**
- * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: the eight
+ * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 9 capability (PR-114a: the eight
  * `batch-*` facts of `V3_CAPABILITY_FACTS`; a capability fact not reading `matches` is a gate-fail
- * here, never a session refusal). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
+ * here, never a session refusal; PR-342: `stop-groups`, whose `diverged` only keeps PR-256's flag off). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
  * (R667, `message-has-no-type-prefix`) had 27, r9 had 26.
  */
-export const V3_LEG_C_FACTS = 36;
+export const V3_LEG_C_FACTS = 37;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {
@@ -753,6 +754,10 @@ export function classifyLegC(
         infra = true;
         lines.push(`infra-fail: ${f.fact}: diverged and its alone reference ran nothing${m}`);
       }
+    } else if (f.fact === STOP_GROUPS_FACT && f.verdict === "diverged") {
+      // PR-342: a build without #8564 (or with a stop PR-256 cannot read) keeps `alRunnerV3.stopGroups` refused,
+      // through its record; the flag is off by default, so it costs the build nothing.
+      lines.push(`al-runner-v3-stop-groups-off: ${f.fact}: diverged${m}`);
     } else if (want === "defect-present" && f.verdict === "gone") {
       held = true;
       lines.push(`held: ${f.fact}: defect-present -> gone (an upstream fix; re-pre-commit)${m}`);

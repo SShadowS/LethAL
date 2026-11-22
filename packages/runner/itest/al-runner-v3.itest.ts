@@ -63,6 +63,7 @@ import {
 import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-v3-baseline-check";
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import {
+  STOP_GROUPS_FACT,
   V3_CAPABILITY_FACTS,
   runV3ContractProbe,
   v3DefectWarnings,
@@ -639,9 +640,14 @@ async function legC(scratch: string): Promise<readonly string[]> {
     r.facts.filter((f) => V3_WARN_FACTS.includes(f.fact)).map((f) => [f.fact, f.verdict]),
   );
   // PR-117: the capability readings, for DBM and the receipt (recorded only if DBM batches and passes).
+  // PR-342: and `stop-groups`, which PR-256's flag reads from the record (`batchFacts`).
   legCBatchFacts = Object.fromEntries(
     r.facts
-      .filter((f) => (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact))
+      .filter(
+        (f) =>
+          (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact) ||
+          f.fact === STOP_GROUPS_FACT,
+      )
       .map((f) => [f.fact, f.verdict]),
   );
   // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,

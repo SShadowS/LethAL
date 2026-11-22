@@ -190,7 +190,7 @@ describe("R586c pins: the table", () => {
 // Leg C
 // ---------------------------------------------------------------------------------------------
 
-/** The 36 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: all matches). */
+/** The 37 facts as alpha.5 read them: 9 defect, 18 contract, 1 warn, 9 capability (PR-114a, PR-342: all matches). */
 function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
   const facts: { fact: string; verdict: string; measured?: string }[] = [];
   for (const d of V3_DEFECT_FACTS) {
@@ -203,6 +203,7 @@ function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
     facts.push({ fact: `contract-${i}`, verdict: "matches", measured: "ok" });
   facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
   for (const c of V3_CAPABILITY_FACTS) facts.push({ fact: c, verdict: "matches", measured: "ok" });
+  facts.push({ fact: "stop-groups", verdict: "matches", measured: "ok" }); // PR-342
   return facts;
 }
 const withFact = (
@@ -220,7 +221,7 @@ const runC = (facts: ReturnType<typeof alpha5Facts>, withPin = true) =>
   );
 
 describe("R586c leg C: the pin", () => {
-  test("the 36 facts: 9 defect, 18 contract, 1 warn, 8 capability", () => {
+  test("the 37 facts: 9 defect, 18 contract, 1 warn, 9 capability", () => {
     expect(alpha5Facts().length).toBe(V3_LEG_C_FACTS);
   });
   test("C-pin-1: alpha.5's readings with the pin pass, with seven pinned lines and no held line", () => {
@@ -635,6 +636,7 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
     facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
     for (const c of V3_CAPABILITY_FACTS)
       facts.push({ fact: c, verdict: "matches", measured: "ok" });
+    facts.push({ fact: "stop-groups", verdict: "diverged", measured: "refused" }); // PR-342: no #8564
     return facts;
   };
   const runEdge = (withPin: boolean) =>
