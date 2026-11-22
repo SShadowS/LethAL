@@ -119,6 +119,7 @@ import {
   AlRunnerV3EntriesRefusedError,
   ENTRIES_CHUNK_CAP,
   ENTRIES_REQUEST_BUDGET_BYTES,
+  ENTRIES_UNMEASURED_CAP,
   type EntryGroup,
   type IsolatedSelection,
   SELECTOR_ECHO_FILENAME,
@@ -1730,8 +1731,13 @@ type ExcludedFn = (
  * ref the stop skipped, goes without the stop.
  */
 interface AloneSelection {
-  readonly call: number;
-  readonly selection: IsolatedSelection;
+  /**
+   * Each alone call id and the one test it selects. One id for an ordinary alone call; PR-344's tail pack has
+   * one per test (distinct ids, so entry ids and the results map never collide).
+   */
+  readonly calls: ReadonlyMap<number, IsolatedSelection>;
+  /** The first call id: entry 0, the test the caller asked for. Only its cut is the caller's own (PR-344 B1). */
+  readonly first: number;
   readonly noStop?: true;
 }
 
@@ -2671,6 +2677,18 @@ class Lane {
   /** R907: by `refKey`; a ref run alone after a stop cut its codeunit's call. Per mutant. */
   aloneAfterStop = new Map<string, CallRows>();
   /**
+   * PR-344: the tail pack sent under the mutant now active: its id, and the rows it stored (by `refKey`, each
+   * read once). Set when a pack is sent (even a failed one, so a mutant packs once); cleared on every `activateOn`.
+   */
+  tailPack:
+    | {
+        readonly mutant: string;
+        readonly rows: Map<string, CallRows>;
+        /** Every test sent in a pack this activation (stored or not): a packed test is never packed again. */
+        readonly packed: Set<string>;
+      }
+    | undefined;
+  /**
    * R653: a fail kill's answers from `sendKillPair`, for the next `activate(null)` (the confirm:
    * its rows `none`, or the verdict a server error maps to) and then `activate(mutantId)` (the
    * reproduction's rows `m`). No rows at all when the NONE entry did not stand. Every public method
@@ -3030,7 +3048,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const cost = Math.max(0, peakRss - startRss) / tests.length;
     const entriesPerCall = new Map<number, number>();
     for (const e of tests) {
-      const call = callOf(e);
+      const call = this.baseCall(callOf(e));
       entriesPerCall.set(call, (entriesPerCall.get(call) ?? 0) + 1);
     }
     // PR-88: one line per call whose cap falls below the chunk cap, once per call.
@@ -3085,7 +3103,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R896: the request mode of a call id (one test's id, or a codeunit's). */
   private modeOfCall(id: number): RequestMode {
     const one = this.isolatedRefs.get(id);
-    const cu = one?.codeunitId ?? id;
+    const cu = one?.codeunitId ?? this.baseCall(id);
     return {
       testIsolation: this.isolationOf(cu) === "method" ? "codeunit" : SERVE_TEST_ISOLATION,
       runSelectedOnly: one !== undefined,
@@ -3129,6 +3147,26 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** R857: `callId`'s table, both ways. Never reset: an id means one test for the whole session. */
   private readonly isolatedIds = new Map<string, number>();
   private readonly isolatedRefs = new Map<number, TestMethodRef>();
+  /**
+   * PR-344: a tail pack gives each of its tests a call id of its own. Far below `callId`'s ids, so the two never
+   * meet; never an isolated id (`isolatedRefs`): the entry runs on its codeunit's daemon, as the alone call does.
+   */
+  private readonly packIds = new Map<string, number>();
+  private readonly packRefs = new Map<number, TestMethodRef>();
+  private packId(ref: TestMethodRef): number {
+    const k = refKey(ref);
+    let id = this.packIds.get(k);
+    if (id === undefined) {
+      id = -(2 ** 30) - this.packIds.size;
+      this.packIds.set(k, id);
+      this.packRefs.set(id, ref);
+    }
+    return id;
+  }
+  /** PR-344: the id a call is proved, costed and read against: a pack id is its codeunit's. */
+  private baseCall(id: number): number {
+    return this.packRefs.get(id)?.codeunitId ?? id;
+  }
   /** R866: `fillIsolatedBaseline`'s answers by call id, each served once; reset by a deploy. */
   private isolatedBaseline = new Map<number, SpeculativeCall>();
   private isolatedFilled = false;
@@ -3281,6 +3319,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private tailStable = new Map<number, Set<string>>();
   /** PR-297: how many alone tail requests the stability pass sent, and how many a mutant run sent. */
   private tailAloneCalls = { stability: 0, mutant: 0 };
+  /** PR-344: tail packs sent, and those that failed (a thrown request error, or no row for entry 0). */
+  private tailPacks = { sent: 0, failed: 0, served: 0 };
   private tailSleepSaid = false;
   /** R778: false only in tests that measure today's per-kill pair on its own. */
   private pairBatch = true;
@@ -3304,6 +3344,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   readonly seams: {
     /** Forces `sleepRuleRetiredForParallel()`. */
     sleepRuleRetired?: boolean;
+    /** PR-344 (tests only): no tail pack, so each tail alone call is its own request, as before. */
+    noTailPack?: true;
     /** PR-256: forces the `stop-groups` build fact (unit tests that do not run `status()`). */
     stopGroupsFact?: boolean;
     /** PR-256 (tests only): bends an entries body after it is built and before the shape guard. */
@@ -4478,7 +4520,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           "live",
           mode,
           1,
-          { call: id, selection },
+          { calls: new Map([[id, selection]]), first: id },
         );
         if (cut !== undefined) return false;
         const entry = sent.find((e) => !e.echo && e.call === id);
@@ -4548,8 +4590,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** PR-297: the alone tail requests sent so far: the stability pass, and under a mutant. */
-  refusedCutTailStats(): Readonly<{ stability: number; mutant: number }> {
-    return { ...this.tailAloneCalls };
+  refusedCutTailStats(): Readonly<{
+    stability: number;
+    mutant: number;
+    packs: number;
+    failedPacks: number;
+    servedFromPack: number;
+  }> {
+    return {
+      ...this.tailAloneCalls,
+      packs: this.tailPacks.sent,
+      failedPacks: this.tailPacks.failed,
+      servedFromPack: this.tailPacks.served,
+    };
   }
 
   private async closeBaselineDaemons(): Promise<void> {
@@ -7154,6 +7207,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // C2: the rows describe the selector as it was; dropped BEFORE the write.
     lane.rowsByCodeunit = new Map();
     lane.aloneAfterStop = new Map();
+    lane.tailPack = undefined; // PR-344: the NONE confirm and every re-activation start empty
     // R653: the pair is taken out here; only the expected next activation puts anything back.
     const pair = lane.pair;
     lane.dropPair();
@@ -7341,6 +7395,33 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return seen.alone ? { ...noted, selection: "alone" } : noted;
   }
 
+  /**
+   * PR-297, PR-344: the ONE "would this test run alone as a refused-cut tail" predicate, for `runRow` and the pack.
+   * `cut`: the PR-250 cut, when the entry is live under a mutant. `tail`: the ref is a stable green test of it and
+   * the §6 Sleep rule is retired. `sleepBlocked`: it would be, but the Sleep rule is in force.
+   */
+  private tailRouting(
+    lane: Lane,
+    ref: TestMethodRef,
+  ): {
+    cut:
+      | { readonly test: string; readonly text: string; readonly methods: ReadonlySet<string> }
+      | undefined;
+    tail: boolean;
+    sleepBlocked: boolean;
+  } {
+    const cut =
+      this.entries &&
+      !this.inBaseline &&
+      lane.lastActivated !== null &&
+      !this.oneShotCodeunits.has(ref.codeunitId)
+        ? this.refusedCut(ref.codeunitId)
+        : undefined;
+    const stable = cut?.methods.has(ref.method.toLowerCase()) === true && this.isStableTail(ref);
+    const retired = this.sleepRuleRetiredForParallel();
+    return { cut, tail: stable && retired, sleepBlocked: stable && !retired };
+  }
+
   private async runRow(
     lane: Lane,
     ref: TestMethodRef,
@@ -7363,22 +7444,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // PR-250: a test a mutant entry leaves out before a baseline-refused test does not run under a mutant,
     // so it is not measured: an error that the walk holds (`runner-refused`, PR-81), so another test can
     // still kill the mutant; never a pass, never a kill.
-    const refusedCut =
-      this.entries &&
-      !this.inBaseline &&
-      lane.lastActivated !== null &&
-      !this.oneShotCodeunits.has(ref.codeunitId)
-        ? this.refusedCut(ref.codeunitId)
-        : undefined;
     // PR-297: with `refusedCutTail` on, a STABLE green test of the cut (it passed alone at the end of the baseline)
     // is not scored `error`: it runs ALONE under this mutant below (R895's `aloneCall`), so the orchestrator
-    // confirms a kill NONE alone and reproduces it alone.
-    let tailAlone =
-      refusedCut?.methods.has(ref.method.toLowerCase()) === true && this.isStableTail(ref);
+    // confirms a kill NONE alone and reproduces it alone. PR-344: the same predicate picks the pack's tests.
+    const { cut: refusedCut, tail: tailAlone, sleepBlocked } = this.tailRouting(lane, ref);
     // S4: with the §6 Sleep rule in force an alone call reaching the coverage window is a bug (it throws):
     // the tail test keeps PR-250's error, said once.
-    if (tailAlone && !this.sleepRuleRetiredForParallel()) {
-      tailAlone = false;
+    if (sleepBlocked) {
       if (!this.tailSleepSaid) {
         this.tailSleepSaid = true;
         this.notify(
@@ -7420,8 +7492,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         );
       const toAlone = live && (forced || cutElsewhere || tailAlone);
       if (tailAlone && toAlone) this.tailAloneCalls.mutant += 1;
+      // PR-344: a tail test the walk asks for packs the mutant's other tail tests into the same send; a forced
+      // call (a reproduction) never does.
       const made = toAlone
-        ? await this.aloneCall(lane, ref)
+        ? tailAlone && !forced
+          ? await this.tailCall(lane, ref)
+          : await this.aloneCall(lane, ref)
         : forced
           ? await this.callCodeunit(
               lane,
@@ -9204,7 +9280,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       encodeGroups(
         gs,
         this.requireEchoId(),
-        (id) => (alone !== undefined && id === alone.call ? alone.selection : this.isolated(id)),
+        (id) => alone?.calls.get(id) ?? this.isolated(id),
         excluded === undefined ? undefined : (cu, g) => excluded(cu, g, withRefusedCut),
       );
     // PR-94: a prefetch or live request whose entries are all whole or a prefix cut sends
@@ -9509,7 +9585,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const daemon = await this.ensureDaemon(
       lane,
       mode,
-      groups.flatMap((g) => g.codeunits),
+      groups.flatMap((g) => g.codeunits.map((c) => this.baseCall(c))),
       proveInfo,
     );
     // PR-103: the running totals leave out the first request's proofs (below the floor), and count a
@@ -9756,13 +9832,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       // R895: the entry the answer was cut in holds the rows it had; its other tests did not run.
       const cutHere = partial !== undefined && partial.entry === e.id;
-      if (cutHere && partial !== undefined && e.mutantId !== SELECTOR_RESOURCE_NONE) {
+      // PR-344 (B1): a tail pack's later entries never mark routing state; only the walk's own read of a row may.
+      if (
+        cutHere &&
+        partial !== undefined &&
+        e.mutantId !== SELECTOR_RESOURCE_NONE &&
+        (alone === undefined || callOf(e) === alone.first)
+      ) {
         const cuts = lane.prefetch.timedOutMutants.get(e.mutantId) ?? new Set<string>();
         cuts.add(partial.test.toLowerCase());
         lane.prefetch.timedOutMutants.set(e.mutantId, cuts);
       }
       const missing =
-        cutHere || (alone !== undefined && callOf(e) === alone.call)
+        cutHere || alone?.calls.has(callOf(e)) === true
           ? undefined
           : this.suiteMissing(
               lane,
@@ -9846,7 +9928,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     for (const e of answer.sent) {
       if (e.echo || e.mutantId === SELECTOR_RESOURCE_NONE) continue;
       const mine = answer.rows.get(e.id) ?? [];
-      const cu = callOf(e);
+      const cu = this.baseCall(callOf(e));
       const found = recognisedStopSkips({
         requestStop: true,
         entryGroup: answer.stop.groups.get(e.id),
@@ -9882,7 +9964,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const red = (r: V3Row) => r.status !== "pass" || r.notRun;
     for (const e of sent) {
       if (e.echo) continue;
-      const base = this.baselineRows.get(callOf(e)) ?? [];
+      const base = this.baselineRows.get(this.baseCall(callOf(e))) ?? [];
       if (e.call !== undefined) {
         const only = /^Codeunit\d+\.(.+)$/.exec(e.test)?.[1]?.toLowerCase();
         if (base.some((r) => r.method.toLowerCase() === only && red(r))) return true;
@@ -9931,11 +10013,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     sent: readonly SentEntry[],
     rows: ReadonlyMap<string, readonly V3Row[]>,
     /** A test run alone (R857/R896) starts from other state than the codeunit's run: not compared (review M1). */
-    alone?: { readonly call: number },
+    alone?: { readonly calls: ReadonlyMap<number, unknown> },
   ): { readonly test: string; readonly baselineRow: string; readonly row: string } | undefined {
     for (const e of sent) {
       if (e.echo) continue;
-      if (alone !== undefined && callOf(e) === alone.call) continue;
+      if (alone?.calls.has(callOf(e)) === true) continue;
       const cu = callOf(e);
       const order = this.baselineOrder(cu);
       let limit = order.length;
@@ -10846,6 +10928,154 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
+   * PR-344: a tail test the walk asks for, under a mutant (never a forced call). Its row is the one the pack stored
+   * for it (read once), else the walk's first tail test sends the mutant's pack (this test first, then every other
+   * test of the mutant's covering set that `tailRouting` routes alone) in ONE request, else it is sent alone as
+   * before. A test packs at most once per activation; a pack holds at most 16 entries (S-4).
+   */
+  private async tailCall(
+    lane: Lane,
+    ref: TestMethodRef,
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
+    const m = lane.lastActivated;
+    const held = m !== null && lane.tailPack?.mutant === m ? lane.tailPack : undefined;
+    const stored = held?.rows.get(refKey(ref));
+    if (held !== undefined && stored !== undefined) {
+      held.rows.delete(refKey(ref));
+      this.tailPacks.served += 1;
+      return { call: stored };
+    }
+    // S-4: a test that was in a pack but not stored is sent alone; one never packed this activation packs again.
+    if (m !== null && held?.packed.has(refKey(ref)) !== true && this.seams.noTailPack !== true) {
+      const mates = this.entriesRefused === undefined ? this.tailPackMates(lane, ref, m, held) : [];
+      if (mates.length > 0) {
+        const made = await this.packTail(lane, ref, mates, m);
+        if (made !== undefined) return made;
+      }
+    }
+    return this.aloneCall(lane, ref);
+  }
+
+  /** PR-344: the other tests of mutant `m`'s covering set that `runRow` would route alone now, in discovery order. */
+  private tailPackMates(
+    lane: Lane,
+    ref: TestMethodRef,
+    m: string,
+    held?: { readonly packed: ReadonlySet<string> },
+  ): TestMethodRef[] {
+    const covering = this.coveringOf.get(m);
+    if (covering === undefined) return [];
+    const seen = new Set<string>([refKey(ref)]);
+    const out: TestMethodRef[] = [];
+    for (const t of this.discovered) {
+      if (out.length >= ENTRIES_UNMEASURED_CAP - 1) break; // S-4: T plus at most 15
+      if (t.codeunitId !== ref.codeunitId) continue; // S-2: the shape PR-343 measured
+      const k = refKey(t);
+      if (seen.has(k) || held?.packed.has(k) === true) continue;
+      seen.add(k);
+      if (covering.get(t.codeunitId)?.has(t.method.toLowerCase()) !== true) continue;
+      if (this.tailRouting(lane, t).tail) out.push(t);
+    }
+    return out;
+  }
+
+  /**
+   * PR-344: sends `ref` (entry 0) and `mates` as one request. Returns entry 0's call, which is what its alone call
+   * would have got. Stores a mate's call only if it stands BEFORE any cut (a timeout, an R939/R612 refusal family)
+   * and carries no refusal and no missing row. Records nothing in `timedOutMutants` for a mate (`requestOne`). A
+   * thrown request error stores nothing and returns `undefined`: the caller sends `ref` alone, as today.
+   */
+  private async packTail(
+    lane: Lane,
+    ref: TestMethodRef,
+    mates: readonly TestMethodRef[],
+    m: string,
+  ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict } | undefined> {
+    const refs = [ref, ...mates];
+    const prior = lane.tailPack?.mutant === m ? lane.tailPack : undefined;
+    const rows = prior?.rows ?? new Map<string, CallRows>();
+    const packed = prior?.packed ?? new Set<string>();
+    for (const r of refs) packed.add(refKey(r));
+    lane.tailPack = { mutant: m, rows, packed };
+    const started = monoNow();
+    const calls = new Map<number, IsolatedSelection>();
+    const ids = refs.map((r) => {
+      const id = this.packId(r);
+      this.union.add(r.codeunitId);
+      calls.set(
+        id,
+        isolatedSelection(
+          r.codeunitId,
+          r.method,
+          this.discovered.filter((t) => t.codeunitId === r.codeunitId).map((t) => t.method),
+        ),
+      );
+      return id;
+    });
+    const first = ids[0];
+    if (first === undefined) throw new Error("al-runner-v3: tailPack() with no entries");
+    this.tailPacks.sent += 1;
+    let out: RequestOut;
+    try {
+      out = await this.request(lane, [{ mutantId: m, codeunits: ids }], "liveMs", { calls, first });
+    } catch (err) {
+      const entries = err instanceof AlRunnerV3EntriesRefusedError;
+      if (entries || err instanceof AlRunnerServerRequestError) {
+        this.tailPacks.failed += 1;
+        // B-1: an entries refusal is today's latch, no fallback send. S-1: a real stop signal ends it, no new
+        // daemon (the request watch's own condition: the memory guard's stop keeps today's alone call).
+        if (entries || (this.stopHandle?.signalled() === true && !this.memoryStopped))
+          return { verdict: this.liveFailure(lane, ref, err, monoNow() - started) };
+        return undefined;
+      }
+      throw err;
+    }
+    const mine = out.results.get(m);
+    const head = mine?.get(first);
+    if (head === undefined) {
+      this.tailPacks.failed += 1;
+      return undefined;
+    }
+    const keptOf = (c: CallRows) =>
+      c.rows.find(
+        (x) =>
+          x.notRun &&
+          x.status === "error" &&
+          x.message !== undefined &&
+          Object.values(V3_SERVE_SAFE_REFUSALS).some((re) => re.test(x.message ?? "")),
+      );
+    // T's own row is a kept safe refusal: the daemon is armed exactly as T's alone call arms it, and the mates ran
+    // right after it (PR-56's drift check would have judged the next request): store none, close nothing.
+    if (keptOf(head) !== undefined) return { call: head };
+    let keptAt: { readonly text: string; readonly test: string } | undefined;
+    for (let i = 1; i < refs.length; i++) {
+      const r = refs[i];
+      const c = mine?.get(ids[i] ?? first);
+      if (r === undefined || c === undefined) break; // the answer was cut before this entry
+      if (c.cutAtTimeout !== undefined || !serveDaemonReusable(serveLines(c.rows), "v3")) break;
+      // S-3: a kept safe refusal at a mate counts as a cut, and the daemon it armed is closed below.
+      const kept = keptOf(c);
+      if (kept !== undefined) {
+        keptAt = { text: kept.message ?? "", test: kept.name };
+        break;
+      }
+      const own = c.rows.filter(
+        (x) => x.codeunit === r.codeunitId && x.method.toLowerCase() === r.method.toLowerCase(),
+      );
+      if (
+        c.refusal === undefined &&
+        c.missing === undefined &&
+        c.rows.length === 1 &&
+        own.length === 1
+      )
+        rows.set(refKey(r), c);
+    }
+    if (keptAt !== undefined)
+      await this.closeLaneIn("live", lane, "kept-refusal-drift", undefined, keptAt);
+    return { call: head };
+  }
+
+  /**
    * R895: `ref` alone, under the active mutant (or NONE): one live request that selects exactly
    * this test (`isolatedSelection`, with `runSelectedOnly` for this request only). Its call is the
    * ref's answer; the caller never stores it as the codeunit's.
@@ -10870,8 +11100,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     );
     try {
       const out = await this.request(lane, [{ mutantId: m, codeunits: [id] }], "liveMs", {
-        call: id,
-        selection,
+        calls: new Map([[id, selection]]),
+        first: id,
         ...(noStop ? { noStop: true as const } : {}),
       });
       const call = out.results.get(m)?.get(id);
@@ -11168,7 +11398,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (this.cfg.refusedCutTail === true)
         this.notify(
           "al-runner-v3-refused-cut-tail",
-          `[lethal] al-runner-v3-refused-cut-tail: tail alone calls: stability ${this.tailAloneCalls.stability}, under a mutant ${this.tailAloneCalls.mutant}; cut entries (PR-250) ${s.refusedCutEntries} (PR-297)`,
+          `[lethal] al-runner-v3-refused-cut-tail: tail alone calls: stability ${this.tailAloneCalls.stability}, under a mutant ${this.tailAloneCalls.mutant}; cut entries (PR-250) ${s.refusedCutEntries} (PR-297); tail packs sent ${this.tailPacks.sent}, failed ${this.tailPacks.failed}, rows served from a pack ${this.tailPacks.served} (PR-344)`,
         );
       // PR-99: the scheduling bound's input, written only when a proof run asks for it, so an ordinary run's
       // output (which the v3 gate pins at N = 1) is unchanged.
