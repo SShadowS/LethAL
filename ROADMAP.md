@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**64 of 1147 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**63 of 1147 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1191,7 +1191,7 @@ that ordering is the priority.
 - **R1181** · Design (not built): a sixth v3 lane on full DO needs the lane gate to charge each lane its OWN daemon's reading, not every lane the session's max, together with request recycling to keep daemons young and a guard that retires a lane when the real total passes the declared peak · [R1181.md](docs/roadmap/R1181.md) · open — a design for the orchestrator to decide (PR-348); no build and no run until then
 - **R1182** · Adopt al-runner's login replay (ALRUNNER_LOGIN_REPLAY, PERF-01) when a gated current carries it: on DO's 30-request sequence it cut instructions 16.5% and client wall 20% with identical rows, and it removes most of the per-test-session company login that R1099 measured · [R1182.md](docs/roadmap/R1182.md) · open — trigger: the first gated current whose binary carries ALRUNNER_LOGIN_REPLAY (main-bf3a3e863 does not)…
 - **R1183** · On full DO, serve warm-ups are the largest cost outside the tests: c2 sent 521 warm-up requests whose compile alone took 5,971 s, 10.6% of the summed lane time; 146 of its 168 daemon closes were refusals, each followed by a warm-up · [R1183.md](docs/roadmap/R1183.md) · open — attributed (PR-350, /coord/handoff/PR-350/findings.md): the 521 are 165 daemon starts…
-- **R1184** · Keep the v3 serve daemon after ONE refusal family, an error in a report SaveAs with a layout: it caused 89 of c2's 146 refusal restarts (about 3,100 s of compile, 5.5% of lane time), but only after a direct kept-vs-fresh check on DO · [R1184.md](docs/roadmap/R1184.md) · open — next: the kept-vs-fresh daemon check on DO for this family, in the run's own isolation mode; then a…
+- **R1184** · Keep the v3 serve daemon after ONE refusal family, an error in a report SaveAs with a layout: it caused 89 of c2's 146 refusal restarts (about 3,100 s of compile, 5.5% of lane time), but only after a direct kept-vs-fresh check on DO · [R1184.md](docs/roadmap/R1184.md) · done (94b49e97a) — PR-354: two exact PR56_KEPT rows…
 
 ---
 
