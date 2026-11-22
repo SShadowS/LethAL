@@ -80,6 +80,7 @@ import {
   BASELINE_BATCH_SIZE,
   batchBody,
   decodeBatchAnswer,
+  exclusionOf,
   exclusionsFor,
   planBaselineBatches,
   scanTestCodeunits,
@@ -127,6 +128,7 @@ import {
   callOf,
   decodeEntriesAnswer,
   echoMismatch,
+  effectiveExclusion,
   emitSelectorEcho,
   encodeGroups,
   groupsThatFit,
@@ -149,11 +151,14 @@ import {
   v3InstallHint,
 } from "./al-runner-v3-pin";
 import {
+  STOP_GROUPS_FACT,
   baselineBatchingOffReason,
+  carryWalkOffReason,
   pinnedDefectCoverage,
   serveRowFieldsFor,
   sleepRuleLine,
   sleepRuleRetiredFor,
+  stopGroupsFor,
 } from "./al-runner-v3-pins";
 import {
   FRESH_PROBE_ENV,
@@ -166,7 +171,12 @@ import {
   uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
-import { AlRunnerV3SeedError, checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
+import {
+  AlRunnerV3SeedError,
+  checkRunSeed,
+  v3ChildEnv,
+  v3MutantDaemonEnv,
+} from "./al-runner-v3-seed";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -196,6 +206,7 @@ import {
 import type {
   BackendCapabilities,
   BackendStatus,
+  CarryWalkResult,
   CoverageMap,
   ExecutionBackend,
   RunOpts,
@@ -324,6 +335,98 @@ export function singleInstanceCarryNoteOf(
   if (new Set(covering.map((r) => r.codeunitId)).size < 2) return undefined;
   return V3_SINGLEINSTANCE_NOTE;
 }
+/**
+ * PR-340 §3, pure: judge a carry walk's three answers (the mutant, NONE, the mutant). Every answer must
+ * hold EXACTLY the baseline tests of the kept codeunits (`expected`: codeunit to lowercase method names)
+ * plus ONE echo row that reads the activation (mutant, `none`, mutant). Only then may a test that is
+ * `fail`, `pass`, `fail` kill; the first such test in the first answer's order is the killer. Anything
+ * unsound is a named `failed`, never a verdict.
+ */
+export function judgeCarryWalk(a: {
+  readonly mutantId: string;
+  readonly echoId: number;
+  readonly expected: ReadonlyMap<number, ReadonlySet<string>>;
+  readonly answers: readonly (readonly V3Row[])[];
+  /** The `--test-timeout` the daemon runs with: `v3RowVerdict` judges a timeout row against it. */
+  readonly stopSeconds: number;
+}): CarryWalkResult {
+  const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
+  if (a.answers.length !== 3) return failed(`${a.answers.length} answers, not 3`);
+  const wantKeys = new Set<string>();
+  for (const [cu, methods] of a.expected) for (const m of methods) wantKeys.add(`${cu}.${m}`);
+  const activation = [a.mutantId, SELECTOR_RESOURCE_NONE, a.mutantId];
+  const byKey: Map<string, V3Row>[] = [];
+  /** Each row's outcome after the ordinary path's classification (`v3RowVerdict`), never its raw status. */
+  const outcomes: Map<string, TestVerdict["outcome"]>[] = [];
+  for (const [i, rows] of a.answers.entries()) {
+    const n = i + 1;
+    if (rows.length === 0) return failed(`request ${n} gave zero rows`);
+    const echo = rows.filter((r) => r.codeunit === a.echoId);
+    const echoWhy = echoMismatch(echo, activation[i] ?? "");
+    if (echoWhy !== undefined) return failed(`request ${n}: ${echoWhy}`);
+    const map = new Map<string, V3Row>();
+    const extra: string[] = [];
+    for (const r of rows) {
+      if (r.codeunit === a.echoId) continue;
+      const k = `${r.codeunit}.${r.method.toLowerCase()}`;
+      if (!wantKeys.has(k) || map.has(k)) extra.push(k);
+      else map.set(k, r);
+    }
+    const missing = [...wantKeys].filter((k) => !map.has(k));
+    if (missing.length > 0 || extra.length > 0)
+      return failed(
+        `request ${n} is incomplete: ${missing.length} baseline test(s) missing (${missing.slice(0, 3).join(", ")}), ${extra.length} unexpected, repeated or not-run row(s) (${extra.slice(0, 3).join(", ")})`,
+      );
+    // B1: classify exactly as the ordinary path does. A refusal marker without notRun, a RUNNER_REFUSAL
+    // text, an OnRun or timeout row and a notRun row are never a pass or a fail: the walk is not sound.
+    const verdicts = new Map<string, TestVerdict["outcome"]>();
+    for (const [k, r] of map) {
+      const v = v3RowVerdict(
+        { codeunitId: r.codeunit, codeunitName: String(r.codeunit), method: r.method },
+        r,
+        a.stopSeconds,
+        0,
+        undefined,
+      );
+      if (v.outcome !== "pass" && v.outcome !== "fail")
+        return failed(
+          `request ${n}: ${r.name} reads ${v.outcome} (${(v.failureMessage ?? "no message").slice(0, 120)}), which is never a pass or a kill`,
+        );
+      // B1 leftover: a pass al-runner flagged (resting on an unprobed assumption), or one whose flag state
+      // the answer could not report, is no sound no-mutant pass (or any pass): the walk is not sound.
+      if (v.outcome === "pass" && (v.flagged === true || v.flaggedUnknown === true))
+        return failed(
+          `request ${n}: ${r.name} passed but ${v.flagged === true ? "al-runner flagged it" : "its flag state is unknown"}, so it is no sound pass`,
+        );
+      verdicts.set(k, v.outcome);
+    }
+    byKey.push(map);
+    outcomes.push(verdicts);
+  }
+  const [first, second, third] = byKey;
+  const [o1, o2, o3] = outcomes;
+  if (
+    first === undefined ||
+    second === undefined ||
+    third === undefined ||
+    o1 === undefined ||
+    o2 === undefined ||
+    o3 === undefined
+  )
+    return failed("a request gave no rows");
+  for (const [k, r1] of first) {
+    if (o1.get(k) === "fail" && o2.get(k) === "pass" && o3.get(k) === "fail")
+      return {
+        kind: "killed",
+        codeunitId: r1.codeunit,
+        method: r1.method,
+        failure: r1.message,
+        reproduced: third.get(k)?.message,
+      };
+  }
+  return { kind: "walked" };
+}
+
 /**
  * R652: a §5 window's 2-3 plain sends follow ONE bound check (the window's), so a tree change
  * after it can reach their rows. Those rows never make a kill, only an error; each such text says
@@ -893,6 +996,8 @@ export interface AlRunnerV3Config {
   readonly companies?: string;
   /** PR-297: `alRunnerV3.refusedCutTail`: a stable green test after a baseline-refusal cut (PR-250) runs alone under a mutant. Absent: off. */
   readonly refusedCutTail?: boolean;
+  /** PR-256: `alRunnerV3.stopGroups`: per-entry stop groups on mutant requests (needs the `stop-groups` fact). Absent: off. */
+  readonly stopGroups?: boolean;
   /**
    * R886: `--dotnet-sidecar <dll>` for every al-runner call, one-shot and serve. A path: that file
    * (refused by name when missing). Absent: the pinned build's own sidecar when its `.gated` names
@@ -1159,6 +1264,8 @@ export const BASELINE_BATCHING_ENV = "LETHAL_V3_BASELINE_BATCHING";
 
 /** PR-303: `LETHAL_V3_REACH_PRUNE=on` leaves out the test codeunits that cannot reach a mutant's site. The session reads and checks it. */
 export const REACH_PRUNE_ENV = "LETHAL_V3_REACH_PRUNE";
+/** PR-340: `LETHAL_V3_CARRY_WALK=off|on` (default on) turns the SingleInstance carry walk off or on. The session reads and checks it. */
+export const CARRY_WALK_ENV = "LETHAL_V3_CARRY_WALK";
 
 export class AlRunnerV3BaselineBatchingKnobRefusedError extends Error {
   constructor(value: string) {
@@ -1601,6 +1708,11 @@ interface CallRows {
    * prefetched rows carry it; a stored kill pair is used only for a kill served from such rows.
    */
   readonly prefetchSeq?: number;
+  /**
+   * PR-256 (rule 5): the entry's tests (lower-case) whose rows the stop skipped. They have no row here; a ref
+   * among them is re-run alone under the same mutant without the stop (`runRow`), never `rowMissing`.
+   */
+  readonly stopSkipped?: ReadonlySet<string>;
 }
 
 /**
@@ -1613,6 +1725,16 @@ type ExcludedFn = (
   withRefusedCut: boolean,
 ) => readonly string[] | undefined;
 
+/**
+ * R895: one test alone: call id `call` selects exactly `selection`. PR-256 (rule 5): `noStop`, the re-run of a
+ * ref the stop skipped, goes without the stop.
+ */
+interface AloneSelection {
+  readonly call: number;
+  readonly selection: IsolatedSelection;
+  readonly noStop?: true;
+}
+
 /** What `send` answers. */
 interface SendAnswer {
   readonly sent: readonly SentEntry[];
@@ -1623,6 +1745,104 @@ interface SendAnswer {
   readonly cut?: SentCut;
   /** PR-250: the request went out with the refused-test cut: each entry's `excludeTests` without it. */
   readonly noCutExcluded?: ReadonlyMap<string, readonly string[] | undefined>;
+  /** PR-256: the request carried `stopAfterFirstFailure`, and each entry's `stopGroup` by entry id. */
+  readonly stop?: { readonly groups: ReadonlyMap<string, string> };
+}
+
+/**
+ * PR-256: upstream's text for a row its stop skipped (PR-257, measured on #8564): the named test
+ * `Codeunit<n>.<Method>` failed earlier in the row's group. Matched from the start; any other text is not a skip.
+ */
+export const V3_STOP_SKIP_TEXT =
+  /^NotRun: out-of-scope: the test Codeunit(\d+)\.(.+?) failed before it, and stopAfterFirstFailure \(--stop-after-first-failure\) /;
+
+/**
+ * PR-256 (rule 6): a stop request of the wrong shape, refused by name BEFORE it is sent (`-shape`), or the
+ * flag on a build without the `stop-groups` fact (`-unsupported`). A caller-contract violation: never
+ * absorbed as a request error or a skipped pair.
+ */
+export class AlRunnerV3StopGroupsError extends Error {
+  constructor(
+    readonly code: "al-runner-v3-stop-groups-shape" | "al-runner-v3-stop-groups-unsupported",
+    why: string,
+  ) {
+    super(`${code}: ${why} (PR-256)`);
+    this.name = "AlRunnerV3StopGroupsError";
+  }
+}
+
+/** PR-256 (rule 7): the refusal of the flag on a build whose gate record lacks the fact. */
+const stopGroupsUnsupported = (lethalCommit: string | undefined): string =>
+  `al-runner-v3-stop-groups-unsupported: "alRunnerV3.stopGroups" is on, but this build's gate record (lethalCommit ${lethalCommit || "none"}) does not read the capability fact ${STOP_GROUPS_FACT} \`matches\` (upstream #8564); the run is refused rather than sent without the stop. Turn the flag off, or gate a build that carries it (PR-256)`;
+
+/**
+ * PR-256 (rule 6): the entries body's stop shape: every entry carries a `stopGroup` or none does, and the
+ * request carries `stopAfterFirstFailure: true` exactly when they do (upstream refuses both mixes).
+ */
+export function assertStopShape(body: {
+  readonly stopAfterFirstFailure?: unknown;
+  readonly entries?: readonly Readonly<Record<string, unknown>>[];
+}): void {
+  const entries = body.entries ?? [];
+  const grouped = entries.filter((e) => e.stopGroup !== undefined);
+  const stop = body.stopAfterFirstFailure === true;
+  if (grouped.length > 0 && grouped.length < entries.length)
+    throw new AlRunnerV3StopGroupsError(
+      "al-runner-v3-stop-groups-shape",
+      `${grouped.length} of ${entries.length} entries carry a stopGroup (grouped and ungrouped mixed)`,
+    );
+  if (grouped.length > 0 && !stop)
+    throw new AlRunnerV3StopGroupsError(
+      "al-runner-v3-stop-groups-shape",
+      "the entries carry a stopGroup but the request does not carry stopAfterFirstFailure",
+    );
+  if (stop && (entries.length === 0 || grouped.length === 0))
+    throw new AlRunnerV3StopGroupsError(
+      "al-runner-v3-stop-groups-shape",
+      "the request carries stopAfterFirstFailure but no entry carries a stopGroup",
+    );
+}
+
+/**
+ * PR-256 (rule 3, amendment 1 item 2): the positions in `rows` (ONE entry's rows, in order) of the rows
+ * upstream's stop skipped.
+ * - `skipped`: the request carried the stop, the entry a group, the row is notRun with the pinned text naming
+ *   test F of this codeunit, and F is an EARLIER row of this entry whose status is `fail`. Such a row is never
+ *   a refusal, whatever F is. Anything else with the pinned text is not a skip: it stays what it is today, a
+ *   refusal (a contract violation, fail closed).
+ * - `counted` (a subset): rule 3's strict conditions also hold, so the skip is a saving (`stopSkipped`): F is a
+ *   plain fail (not notRun, not a timeout, no refusal marker) and a covering test of the mutant that was green,
+ *   and not refused, at baseline.
+ */
+export function recognisedStopSkips(o: {
+  readonly requestStop: boolean;
+  readonly entryGroup: string | undefined;
+  readonly codeunit: number;
+  readonly rows: readonly V3Row[];
+  /** The mutant's covering tests of this codeunit, lower-case. */
+  readonly covering: ReadonlySet<string> | undefined;
+  /** This codeunit's baseline rows. */
+  readonly baseline: readonly V3Row[];
+}): { readonly skipped: Set<number>; readonly counted: Set<number> } {
+  const skipped = new Set<number>();
+  const counted = new Set<number>();
+  if (!o.requestStop || o.entryGroup === undefined) return { skipped, counted };
+  for (const [i, r] of o.rows.entries()) {
+    if (!r.notRun || r.status !== "error") continue;
+    const m = V3_STOP_SKIP_TEXT.exec(r.message ?? "");
+    const named = m?.[2]?.toLowerCase();
+    if (m === null || named === undefined || Number(m[1]) !== o.codeunit) continue;
+    const f = o.rows.slice(0, i).find((x) => x.method.toLowerCase() === named);
+    if (f === undefined || f.status !== "fail") continue;
+    skipped.add(i);
+    if (f.notRun || isV3RefusalText(f.message) || V3_TIMEOUT_MESSAGE.test(f.message ?? ""))
+      continue;
+    if (o.covering?.has(named) !== true) continue;
+    const b = o.baseline.find((x) => x.method.toLowerCase() === named);
+    if (b === undefined || b.status !== "pass" || b.notRun || isV3RefusalText(b.message)) continue;
+    counted.add(i);
+  }
+  return { skipped, counted };
 }
 
 /**
@@ -2050,6 +2270,12 @@ export interface V3LaneView extends ExecutionBackend {
     covering: readonly TestMethodRef[],
     site?: { readonly objectType: string; readonly codeunitId: number },
   ): string | undefined;
+  /** PR-340: required, so a lane view cannot forget it (a forgotten hook would walk on lane 0's daemon). */
+  carryWalk(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined>;
 }
 
 /** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
@@ -2671,6 +2897,29 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   get refusedCutTail(): boolean {
     return this.cfg.refusedCutTail === true;
   }
+  /** PR-256: see `ExecutionBackend.stopGroups`. */
+  get stopGroups(): boolean {
+    return this.cfg.stopGroups === true;
+  }
+  /** PR-256: the build fact `stop-groups`, read in `status()` from the build's gate record (`stopGroupsFor`). */
+  private stopGroupsFact = false;
+  /**
+   * PR-256: over every lane, counted only for an entry of an answer that stood: `skipped`, the skips that are
+   * a saving (rule 3's strict conditions); `uncounted`, the other skips (amendment 1 item 2: never refusals);
+   * `reruns`, the alone re-runs a walk asked for (rule 5); `heldForRed`, mutant requests sent WITHOUT the stop
+   * because an entry would run a test red at baseline (amendment 1 item 2). Not lane stats, so the
+   * serve-entries counters (and the committed lane trace) do not move with the flag off.
+   */
+  private readonly stopCounts = { skipped: 0, uncounted: 0, reruns: 0, heldForRed: 0 };
+  /** PR-256: see `stopCounts`. */
+  stopGroupsStats(): Readonly<{
+    skipped: number;
+    uncounted: number;
+    reruns: number;
+    heldForRed: number;
+  }> {
+    return { ...this.stopCounts };
+  }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
   get skipAfterTimeout(): boolean {
     return this.skipAfterTimeoutLearned && !this.entries;
@@ -3055,6 +3304,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   readonly seams: {
     /** Forces `sleepRuleRetiredForParallel()`. */
     sleepRuleRetired?: boolean;
+    /** PR-256: forces the `stop-groups` build fact (unit tests that do not run `status()`). */
+    stopGroupsFact?: boolean;
+    /** PR-256 (tests only): bends an entries body after it is built and before the shape guard. */
+    entriesBodyTamper?: (body: Record<string, unknown>) => void;
     /** PR-115: replaces `BASELINE_BATCH_SIZE` (leg DBM and the unit tests). */
     baselineBatchSize?: number;
     /** PR-115: forces the batching decision of the fill (unit tests that do not run `status()`). */
@@ -3676,6 +3929,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // about; the session prints one pin line instead, so a pinned build is never fully silent.
     this.sleepRuleRetired = sleepRuleRetiredFor(this.contract, reported, binarySha256);
     this.serveRowFields = serveRowFieldsFor(reported, binarySha256); // R782
+    // PR-256 (rule 7): the flag needs the build fact; no silent fallback.
+    this.stopGroupsFact = stopGroupsFor(gatedRecord);
+    if (this.cfg.stopGroups === true && !this.stopGroupsFact)
+      return { ok: false, details: stopGroupsUnsupported(gatedRecord?.lethalCommit) };
+    // Amendment 1 item 1: and the §6 Sleep rule retired (a skipped test would reach the coverage window).
+    if (this.cfg.stopGroups === true && !this.sleepRuleRetired)
+      return {
+        ok: false,
+        details: `al-runner-v3-stop-groups-unsupported: "alRunnerV3.stopGroups" is on and this build reads ${STOP_GROUPS_FACT} \`matches\`, but the §6 Sleep rule applies on it (${sleepRuleLine(false, this.contract, reported, binarySha256)}), so a test the stop skipped would reach the coverage window as a missing row. Turn the flag off (PR-256 amendment 1)`,
+      };
     // PR-114a: decided once, printed in the details; PR-115's baseline fill reads it to batch.
     this.baselineBatchingWhyOff = baselineBatchingOffReason(
       this.contract,
@@ -3683,6 +3946,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       binarySha256,
       gatedRecord,
     );
+    // PR-340 §4: the carry walk's own two-part rule (gate record AND this probe); never moves batching.
+    this.carryWalkWhyOff = carryWalkOffReason(this.contract, gatedRecord);
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
@@ -3753,6 +4018,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `undefined` means allowed. Before any `status()` it reads off. No pin allows it in 114a.
    */
   private baselineBatchingWhyOff: string | undefined = "status() has not run";
+
+  /** PR-340 §4: why the carry walk is off (`carryWalkOffReason`, as the last `status()` decided it); before any `status()`, off. */
+  private carryWalkWhyOff: string | undefined = "status() has not run";
+
+  /** PR-340 §4: why the carry walk is off, or `undefined` when allowed (the carry gate prints and checks it). */
+  carryWalkOffWhy(): string | undefined {
+    return this.carryWalkWhyOff;
+  }
+
+  /** Tests only: pretend `status()` found the build carry-proven (or not, with a reason). */
+  setCarryWalkWhyOffForTest(why: string | undefined): void {
+    this.carryWalkWhyOff = why;
+  }
 
   /** PR-114a: may the baseline batch its test codeunits (`baselineBatchingFor`, as the last `status()` read it)? */
   isBaselineBatching(): boolean {
@@ -4377,14 +4655,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * The environment of EVERY al-runner process this backend starts. R645: `ALRUNNER_CACHE`,
    * absolute, because v3 now runs in another cwd. R807: plus the pinned run seed, always.
    */
-  private cacheEnv(): { env: Record<string, string> } {
-    return {
-      env: v3ChildEnv(
-        this.cfg.cacheDir !== undefined
-          ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) }
-          : undefined,
-      ),
-    };
+  private cacheEnv(mutantRun = false): { env: Record<string, string> } {
+    const extra =
+      this.cfg.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } : undefined;
+    // PR-340 §1: a MUTANT-RUN serve daemon always carries AL_STRICT_SEQUENTIAL=1 (the walk needs it).
+    return { env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra) };
   }
 
   /** R807: the seed the build reported (already checked to be the pinned one); absent when none. */
@@ -6407,6 +6682,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       restoreCutState: (id, state) => b.restoreCutStateOn(lane, id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering, site) => b.survivorNoteShared(covering, site),
+      // PR-340: this lane's own daemon and resource file, never lane 0's.
+      carryWalk: (id, covering, site) => b.carryWalkOn(lane, id, covering, site),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
@@ -7166,6 +7443,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (call.noCoverage === true && opts.coverage !== "none") {
       throw new AlRunnerV3NoCoverageCallReusedError(ref);
     }
+    // PR-256 (rule 5): a ref the stop skipped (its entry failed an earlier test) has no row. The walk asks for
+    // it, so it is run ALONE under the same mutant WITHOUT the stop, once per (mutant, ref), as R897's
+    // `aloneAfterStop`; that answer stands for the ref. Never `rowMissing`, never an error.
+    if (
+      !alone &&
+      call.refusal === undefined &&
+      call.missing === undefined &&
+      call.stopSkipped?.has(ref.method.toLowerCase()) === true &&
+      !call.rows.some(
+        (r) => r.codeunit === ref.codeunitId && r.method.toLowerCase() === ref.method.toLowerCase(),
+      )
+    ) {
+      let cached = lane.aloneAfterStop.get(refKey(ref));
+      if (cached === undefined) {
+        this.stopCounts.reruns += 1;
+        const made = await this.aloneCall(lane, ref, true);
+        seen.alone = true;
+        if ("verdict" in made) return made.verdict;
+        cached = made.call;
+        lane.aloneAfterStop.set(refKey(ref), cached);
+      }
+      call = cached;
+      alone = true;
+      seen.alone = true;
+    }
     // R895: a call cut at a timeout row has rows only up to that test. A ref it has no row for is
     // run ALONE under the same mutant; its answer stands for the ref (it is not stored as the
     // codeunit's call). A ref it does have a row for reads that row, as ever.
@@ -7479,6 +7781,170 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   ): string | undefined {
     this.soleLane("survivorNote");
     return this.survivorNoteShared(covering, site);
+  }
+
+  /** PR-340: the sole-lane form (an N = 1 session); a lane view calls `carryWalkOn` with its own lane. */
+  carryWalk(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    return this.carryWalkOn(this.soleLane("carryWalk"), mutantId, covering, site);
+  }
+
+  /**
+   * PR-340 §2-§3: the carry walk, on `lane`'s OWN daemon and resource file (never another lane's).
+   * `undefined`: the survivor would not carry the PR-327 (a) label, so there is nothing to walk.
+   * Else three batch-shaped `strictOrder: true` requests (the mutant, NONE, the mutant) over the
+   * covering test codeunits plus the echo, everything else in `excludeTests`; `judgeCarryWalk` decides.
+   * Each request: the bound check and the manifest check BEFORE the resource file is written, a stop
+   * poll while it runs, and the file put back afterwards even after a throw. A request error, a
+   * timeout or a stop is a named `failed` (a timeout or a stop also replaces the daemon); a bound,
+   * proof or manifest breach throws, as every send does. Never scores anything.
+   */
+  private async carryWalkOn(
+    lane: Lane,
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    // S3: a walk that reaches the daemon is counted, with its wall time (one stderr line at close).
+    if (
+      this.singleInstanceCarryNote(covering, site) === undefined ||
+      this.carryWalkWhyOff !== undefined
+    )
+      return this.carryWalkSend(lane, mutantId, covering, site);
+    const t0 = monoNow();
+    this.carryWalkStats.walks += 1;
+    try {
+      return await this.carryWalkSend(lane, mutantId, covering, site);
+    } finally {
+      this.carryWalkStats.ms += monoNow() - t0;
+    }
+  }
+
+  /** PR-340 S1: called at the first send of each walk that really sends (the carry gate orders its events by it). */
+  private carryWalkSink: (() => void) | undefined;
+  setCarryWalkSink(sink?: () => void): void {
+    this.carryWalkSink = sink;
+  }
+
+  /** PR-340 S3: walks run and their summed wall time, printed once at close when any ran. */
+  private carryWalkStats = { walks: 0, ms: 0 };
+
+  /** PR-340: the walk's text, or `undefined` when none ran (so no existing line moves). */
+  carryWalkLine(): string | undefined {
+    const s = this.carryWalkStats;
+    return s.walks === 0
+      ? undefined
+      : `[lethal] al-runner-v3 carry walks (PR-340, R1173): ${s.walks} walk(s), ${Math.round(s.ms)} ms in all`;
+  }
+
+  private async carryWalkSend(
+    lane: Lane,
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    if (this.singleInstanceCarryNote(covering, site) === undefined) return undefined;
+    const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
+    if (this.carryWalkWhyOff !== undefined)
+      return failed(`build not carry-proven (${this.carryWalkWhyOff})`);
+    if (!this.entries) return failed("the walk needs the serve-entries transport");
+    const proof = this.proof;
+    if (proof === undefined || lane.deployedDir === undefined)
+      throw new Error("al-runner-v3: carryWalk() before a successful deploy()");
+    if (!proof.manifestIds.has(mutantId))
+      throw new Error(
+        `al-runner-v3: carryWalk(${mutantId}): not a mutant of the deployed batch's manifest`,
+      );
+    const echoId = this.requireEchoId();
+    const kept = [...new Set(covering.map((r) => r.codeunitId))].sort((a, b) => a - b);
+    const expected = new Map<number, ReadonlySet<string>>();
+    for (const cu of kept) {
+      const rows = this.baselineRows.get(cu) ?? [];
+      if (rows.length === 0) return failed(`codeunit ${cu} has no baseline rows to compare with`);
+      expected.set(cu, new Set(rows.map((r) => r.method.toLowerCase())));
+    }
+    const modes = new Set(kept.map((cu) => modeKey(this.modeOfCall(cu))));
+    const [firstCu] = kept;
+    if (firstCu === undefined || modes.size !== 1)
+      return failed("the covering codeunits do not share one isolation mode");
+    const mode = this.modeOfCall(firstCu);
+    const s = this.serveStopSeconds();
+    if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    const everyTest = new Set<number>([
+      ...this.testsPerCodeunit.keys(),
+      ...this.suitePerCodeunit.keys(),
+    ]);
+    const keep = new Set<number>(kept);
+    const complement = [...everyTest]
+      .filter((id) => !keep.has(id) && id !== echoId)
+      .sort((a, b) => a - b)
+      .map(exclusionOf);
+    // Step 0b's body: the batch shape plus `strictOrder`, NEVER `runSelectedOnly`.
+    const body = {
+      ...batchBody(lane.requestBase(mode), complement, false),
+      strictOrder: true,
+    };
+    const tests = kept.reduce((n, cu) => n + (this.testsPerCodeunit.get(cu) ?? 1), 1);
+    const answers: V3Row[][] = [];
+    for (const m of [mutantId, SELECTOR_RESOURCE_NONE, mutantId]) {
+      if (this.stopHandle?.signalled() === true) return failed("a stop signal ended the walk");
+      const daemon = await this.ensureDaemon(lane, mode, kept);
+      // Before the resource file is written: the artifact proof, then the walked id (as `assertBound`).
+      await this.assertBound(lane);
+      if (!proof.manifestIds.has(mutantId))
+        throw new AlRunnerV3UnprovenBatchError(`the walked id ${mutantId} is not in the manifest`);
+      const prior = await readFile(lane.resourcePath(), "utf8").catch(() => undefined);
+      let signalClosed = false;
+      const watch = setInterval(() => {
+        if (this.stopHandle?.signalled() !== true || this.memoryStopped || signalClosed) return;
+        signalClosed = true;
+        void this.closeLane(lane, "stop-signal");
+      }, STOP_SIGNAL_POLL_MS);
+      let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+      try {
+        await writeFile(lane.resourcePath(), m, "utf8");
+        // S1: the mark of a REAL walk, at its first send (never for a call that sends nothing).
+        if (answers.length === 0) this.carryWalkSink?.();
+        daemon.requests += 1;
+        answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
+      } catch (err) {
+        if (signalClosed) return failed("a stop signal ended the walk");
+        // A timeout (or any request error) leaves the daemon unknown: it is replaced, never scored.
+        await this.closeLane(lane, "request-failed");
+        if (err instanceof AlRunnerServerRequestError)
+          return failed(
+            err.kind === "deadline"
+              ? `a request timed out (${err.message})`
+              : `a request failed (${err.message})`,
+          );
+        throw err;
+      } finally {
+        clearInterval(watch);
+        // Put the resource file back exactly as it was, even after a throw.
+        if (prior !== undefined)
+          await writeFile(lane.resourcePath(), prior, "utf8").catch(() => undefined);
+        else await rm(lane.resourcePath(), { force: true }).catch(() => undefined);
+      }
+      await this.refuseDaemonDependencySkip(lane, daemon);
+      const rows: V3Row[] = [];
+      for (const t of answer.tests) {
+        const r = serveRow(t, this.serveRowFields);
+        if (typeof r === "string") {
+          await this.closeLane(lane, "answer-unreadable");
+          return failed(`an unreadable row (${r.slice(0, 120)})`);
+        }
+        rows.push(r);
+      }
+      answers.push(rows);
+    }
+    const out = judgeCarryWalk({ mutantId, echoId, expected, answers, stopSeconds: s });
+    // A row the daemon cannot keep (R612) leaves it dirty: replace it, as every other send does.
+    if (answers.some((rows) => !serveDaemonReusable(serveLines(rows), "v3")))
+      await this.closeLane(lane, "unkept-row");
+    return out;
   }
 
   private survivorNoteShared(
@@ -8196,7 +8662,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
-    const d = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
+    const d = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)), true);
     d.proven = new Set();
     return d;
   }
@@ -8326,10 +8792,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     stopSeconds: number,
     /** PR-100: the cause of a MUTANT daemon's first warm-up; absent on the baseline's and the probe's. */
     cause?: string,
+    /** PR-340 §1: a mutant-run daemon (not the baseline's or the probe's) gets `AL_STRICT_SEQUENTIAL=1`. */
+    mutantRun = false,
   ): Promise<Daemon> {
     const server = new AlRunnerServer(
       absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
+      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv(mutantRun) }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
       daemonStderrFileFor(this.cfg.daemonStderrDir, lane.index),
@@ -8449,7 +8917,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R998: mutant entries leave the same tests out (`leftOutNames`).
     const warm = union.filter((id) => this.warmable(id));
     const leftOut = (cu: number) => this.leftOutNames(cu);
-    const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
+    const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)), true);
     try {
       lane.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -8698,7 +9166,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     kind: "warmup" | "prefetch" | "live",
     mode: RequestMode,
     groupCount: number = groups.length,
-    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    alone?: AloneSelection,
     excluded?: ExcludedFn,
   ): Promise<SendAnswer> {
     // PR-100: the kind in flight on the lane, for `serve-daemon-closed`'s phase; closes inside the
@@ -8721,7 +9189,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groupCount: number = groups.length,
     /** R895: one test alone: call id `call` selects exactly `selection`, and `runSelectedOnly` is sent
      *  in this request's body (on the daemon of the call's own mode). */
-    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    alone?: AloneSelection,
     /** R1004: the tests each plain codeunit entry leaves out (PR-20: per group, for the L4 cut). */
     excluded?: ExcludedFn,
   ): Promise<SendAnswer> {
@@ -8785,16 +9253,58 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         n + (e.echo || e.call !== undefined ? 1 : (this.testsPerCodeunit.get(e.codeunit) ?? 1)),
       0,
     );
-    const body = {
+    // PR-256 (rules 1, 2): with the flag on, a MUTANT request (prefetch, live, an alone call under a mutant)
+    // carries the stop and one group per entry (the entry id: `<mutant>|<codeunit>`, the echo `<mutant>|echo`).
+    // Never the warm-up, the baseline phase, a request holding a NONE group (a NONE confirm, a kill pair, the
+    // pair batch) or the re-run of a skipped ref (`noStop`).
+    const mutantRequest =
+      this.cfg.stopGroups === true &&
+      kind !== "warmup" &&
+      !this.inBaseline &&
+      alone?.noStop !== true &&
+      groups.length > 0 &&
+      groups.every((g) => g.mutantId !== SELECTOR_RESOURCE_NONE);
+    // Rule 7 and amendment 1 item 1: the stop needs the build fact AND the §6 Sleep rule retired (as R895's
+    // cut and PR-297's tail); `status()` refuses either by name, and a send without them fails loudly.
+    if (mutantRequest && (this.seams.stopGroupsFact ?? this.stopGroupsFact) !== true)
+      throw new AlRunnerV3StopGroupsError(
+        "al-runner-v3-stop-groups-unsupported",
+        `"alRunnerV3.stopGroups" is on, but this session read no ${STOP_GROUPS_FACT} fact for its build`,
+      );
+    if (mutantRequest && !this.sleepRuleRetiredForParallel())
+      throw new AlRunnerV3StopGroupsError(
+        "al-runner-v3-stop-groups-unsupported",
+        `"alRunnerV3.stopGroups" is on, but the §6 Sleep rule applies on this build, so a skipped test would reach the coverage window`,
+      );
+    // Amendment 1 item 2: a test red at baseline must not fire the stop. An entry that would run one (its
+    // baseline row is not a clean pass, and the request does not leave it out) is not stop-grouped, and as
+    // a request is all grouped or none, the whole request goes WITHOUT the stop: today's request (a cost,
+    // never a verdict).
+    const heldForRed = mutantRequest && this.runsBaselineRed(sent, selectedOnly.flag);
+    if (heldForRed) this.stopCounts.heldForRed += 1;
+    const stop = mutantRequest && !heldForRed;
+    const body: Record<string, unknown> = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
       ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
+      ...(stop ? { stopAfterFirstFailure: true } : {}),
       entries: sent.map((e) => ({
         id: e.id,
         resources: e.resources,
         test: e.test,
         ...(e.excludeTests !== undefined ? { excludeTests: e.excludeTests } : {}),
+        ...(stop ? { stopGroup: e.id } : {}),
       })),
     };
+    this.seams.entriesBodyTamper?.(body);
+    // PR-256 (rule 6): refused by name before any byte leaves.
+    assertStopShape(body as Parameters<typeof assertStopShape>[0]);
+    const stopGroups = stop
+      ? new Map(
+          (body.entries as Record<string, unknown>[]).flatMap((e) =>
+            typeof e.stopGroup === "string" ? [[String(e.id), e.stopGroup] as const] : [],
+          ),
+        )
+      : undefined;
     await this.checkBound(lane);
     // R652 (review r1 #2): counted with the check, so `boundChecks = warmups + prefetchRequests +
     // liveRequests + coverageRequests` holds whatever fails (a daemon start, a request). Build
@@ -8928,6 +9438,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       selectedOnly: selectedOnly.flag,
       ...(decoded.cut !== undefined ? { cut: decoded.cut } : {}),
       ...(noCutExcluded !== undefined ? { noCutExcluded } : {}),
+      ...(stopGroups !== undefined ? { stop: { groups: stopGroups } } : {}),
     };
   }
 
@@ -8942,7 +9453,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     groups: readonly EntryGroup[],
     phase: "prefetchMs" | "liveMs",
     /** R895: one test alone (see `send`); its entry's rows are checked by the caller, not `suiteMissing`. */
-    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    alone?: AloneSelection,
   ): Promise<RequestOut> {
     // R896: a request holds one mode's entries. A group whose calls span two modes is split into
     // one group per mode (same mutant and key, each with its own echo), sent as one request per
@@ -8989,7 +9500,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     mode: RequestMode,
     /** Build review 4: how many groups the caller asked for, before the split by mode. */
     groupCount: number,
-    alone?: { readonly call: number; readonly selection: IsolatedSelection },
+    alone?: AloneSelection,
   ): Promise<RequestOut> {
     const seq = ++this.requestSeq;
     // PR-24 (L2): every entries request passes here (prefetch chunks, live calls, kill pairs, the
@@ -9090,7 +9601,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         }
       }
     }
-    const { sent, rows, cut: partial } = answer;
+    const { sent, cut: partial } = answer;
+    // PR-256 (rules 3, 4): the rows the stop skipped leave the answer HERE, before the keep rule, the cut, the
+    // kept-refusal and drift checks and every verdict: no refusal, no close, no cut. Each entry keeps the
+    // methods it skipped (`stopSkipped`), so they are not a missing row and a walk that asks re-runs them.
+    const skipped = new Map<string, Set<string>>();
+    const counted = new Map<string, number>();
+    const rows = this.dropStopSkips(answer, skipped, counted);
     // Review L1: a discarded send is not a request of the batch; the re-run counts in its place.
     const uncount = () => {
       for (const k of [
@@ -9120,12 +9637,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const gaps = new Map<number, string[]>();
       for (const e of sent) {
         if (e.echo) continue;
-        const miss = missingKeptTests(
-          e.codeunit,
-          this.baselineOrder(e.codeunit),
-          e.excludeTests,
-          (rows.get(e.id) ?? []).map((r) => r.method),
-        );
+        const miss = missingKeptTests(e.codeunit, this.baselineOrder(e.codeunit), e.excludeTests, [
+          ...(rows.get(e.id) ?? []).map((r) => r.method),
+          ...(skipped.get(e.id) ?? []),
+        ]);
         if (miss.length > 0) gaps.set(e.codeunit, [...(gaps.get(e.codeunit) ?? []), ...miss]);
       }
       if (gaps.size > 0) {
@@ -9249,7 +9764,14 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const missing =
         cutHere || (alone !== undefined && callOf(e) === alone.call)
           ? undefined
-          : this.suiteMissing(lane, callOf(e), mine, e.excludeTests, answer.selectedOnly);
+          : this.suiteMissing(
+              lane,
+              callOf(e),
+              mine,
+              e.excludeTests,
+              answer.selectedOnly,
+              skipped.get(e.id),
+            );
       const call: CallRows = {
         rows: mine,
         stopSeconds: s,
@@ -9267,7 +9789,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           : {}),
         ...(missing !== undefined ? { missing } : {}),
         ...(cutHere && partial !== undefined ? { cutAtTimeout: { test: partial.test } } : {}),
+        ...(skipped.has(e.id) ? { stopSkipped: skipped.get(e.id) ?? new Set<string>() } : {}),
       };
+      // PR-256 (N1): counted only here, for an entry that stood in an answer that was not discarded: a scan-gap
+      // or drift re-send returned above, and an entry after the R612 cut is counted by its own re-send.
+      this.stopCounts.skipped += counted.get(e.id) ?? 0;
+      this.stopCounts.uncounted += (skipped.get(e.id)?.size ?? 0) - (counted.get(e.id) ?? 0);
       const m = results.get(e.key) ?? new Map<number, CallRows>();
       m.set(callOf(e), call);
       results.set(e.key, m);
@@ -9300,6 +9827,74 @@ export class AlRunnerV3Backend implements ExecutionBackend {
           }
         : {}),
     };
+  }
+
+  /**
+   * PR-256 (rules 3, 4, amendment 1 item 2): `answer`'s rows without those the stop skipped
+   * (`recognisedStopSkips`, per mutant entry); `skipped` gets each entry's skipped methods, lower-case, and
+   * `counted` how many of them are a saving (rule 3's strict conditions). The caller counts an entry only once
+   * it stands (N1: a discarded or re-sent answer counts nothing). Echo entries are never read here: a skip in
+   * an echo stays what it is today. Without the stop the rows are unchanged.
+   */
+  private dropStopSkips(
+    answer: SendAnswer,
+    skipped: Map<string, Set<string>>,
+    counted: Map<string, number>,
+  ): ReadonlyMap<string, readonly V3Row[]> {
+    if (answer.stop === undefined) return answer.rows;
+    const out = new Map(answer.rows);
+    for (const e of answer.sent) {
+      if (e.echo || e.mutantId === SELECTOR_RESOURCE_NONE) continue;
+      const mine = answer.rows.get(e.id) ?? [];
+      const cu = callOf(e);
+      const found = recognisedStopSkips({
+        requestStop: true,
+        entryGroup: answer.stop.groups.get(e.id),
+        codeunit: e.codeunit,
+        rows: mine,
+        // N2: a mutant never registered (no plan) has no covering set: its skips are never counted (fail
+        // closed). They are still skips, never refusals (amendment 1 item 2).
+        covering: this.coveringOf.get(e.mutantId)?.get(cu),
+        baseline: this.baselineRows.get(cu) ?? [],
+      });
+      const at = found.skipped;
+      if (at.size === 0) continue;
+      counted.set(e.id, found.counted.size);
+      out.set(
+        e.id,
+        mine.filter((_, i) => !at.has(i)),
+      );
+      skipped.set(
+        e.id,
+        new Set(mine.filter((_, i) => at.has(i)).map((r) => r.method.toLowerCase())),
+      );
+    }
+    return out;
+  }
+
+  /**
+   * PR-256 (amendment 1 item 2): would a non-echo entry of `sent` run a test red at baseline (its baseline
+   * row is not a clean pass)? A one-test entry (`call`) runs only its test. A codeunit entry runs every test
+   * its `excludeTests` does not leave out, and, on a request NOT sent with `runSelectedOnly`, the left-out
+   * ones too (they run hidden, R1094).
+   */
+  private runsBaselineRed(sent: readonly SentEntry[], flagged: boolean): boolean {
+    const red = (r: V3Row) => r.status !== "pass" || r.notRun;
+    for (const e of sent) {
+      if (e.echo) continue;
+      const base = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) {
+        const only = /^Codeunit\d+\.(.+)$/.exec(e.test)?.[1]?.toLowerCase();
+        if (base.some((r) => r.method.toLowerCase() === only && red(r))) return true;
+        continue;
+      }
+      const order = base.map((r) => r.method.toLowerCase());
+      const gone = flagged
+        ? effectiveExclusion(e.codeunit, order, e.excludeTests)
+        : order.map(() => false);
+      if (base.some((r, i) => gone[i] !== true && red(r))) return true;
+    }
+    return false;
   }
 
   /** PR-56: the first row of this answer that `V3_SERVE_SAFE_REFUSALS` keeps, or `undefined`. */
@@ -9612,6 +10207,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     excluded: readonly string[] = [],
     /** PR-94: the request carried `runSelectedOnly`: the order check runs on this entry whatever it left out. */
     selectedOnly = false,
+    /** PR-256: the entry's tests the stop skipped (lower-case): each counts as its one row. */
+    stopSkipped?: ReadonlySet<string>,
   ): string | undefined {
     const one = this.isolatedRefs.get(cu);
     // R857: a second row means a test discovery did not see ran beside this one, so it was not alone.
@@ -9640,7 +10237,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
     }
     for (const t of one !== undefined ? [one] : (this.suitePerCodeunit.get(cu) ?? [])) {
-      const n = rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length;
+      const n =
+        rows.filter((r) => r.method.toLowerCase() === t.method.toLowerCase()).length +
+        (stopSkipped?.has(t.method.toLowerCase()) === true ? 1 : 0);
       if (n === 0 && out.has(t.method.toLowerCase())) continue;
       if (n !== 1)
         return `codeunit ${one?.codeunitId ?? cu}'s entry has ${n} row(s) for ${t.codeunitName}.${t.method}`;
@@ -10186,7 +10785,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         err instanceof AlRunnerV3DependencySkippedError ||
         err instanceof AlRunnerV3DependencyMissingError ||
         err instanceof AlRunnerV3SeedError ||
-        err instanceof AlRunnerV3ServeFallbackWarmupError
+        err instanceof AlRunnerV3ServeFallbackWarmupError ||
+        err instanceof AlRunnerV3StopGroupsError // PR-256 (rule 6): a shape error is never a skipped pair
       )
         throw err;
       this.notify(
@@ -10253,6 +10853,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   private async aloneCall(
     lane: Lane,
     ref: TestMethodRef,
+    /** PR-256 (rule 5): the re-run of a ref the stop skipped goes without the stop. */
+    noStop = false,
   ): Promise<{ readonly call: CallRows } | { readonly verdict: TestVerdict }> {
     const started = monoNow();
     if (this.entriesRefused !== undefined) {
@@ -10270,6 +10872,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       const out = await this.request(lane, [{ mutantId: m, codeunits: [id] }], "liveMs", {
         call: id,
         selection,
+        ...(noStop ? { noStop: true as const } : {}),
       });
       const call = out.results.get(m)?.get(id);
       if (call === undefined) {
@@ -10553,10 +11156,13 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async close(): Promise<void> {
     // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
     await this.closeAllDaemons("session-end");
+    // PR-340 S3: a NEW line, only when a walk ran, so no existing pinned line moves.
+    const walkLine = this.carryWalkLine();
+    if (walkLine !== undefined) console.warn(walkLine);
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}${this.cfg.stopGroups === true ? `; stop-skipped rows (PR-256) ${this.stopCounts.skipped} (not counted as a saving ${this.stopCounts.uncounted}), re-run alone ${this.stopCounts.reruns}, requests without the stop for a baseline-red test ${this.stopCounts.heldForRed}` : ""}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-297: the tail alone-call counts (spec section 4(b)); only with the flag on, so no other output moves.
       if (this.cfg.refusedCutTail === true)

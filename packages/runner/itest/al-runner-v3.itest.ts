@@ -64,6 +64,7 @@ import { MEMORY_HEADROOM_GB_DEFAULT, baselineSampleIds } from "../src/al-runner-
 import { AL_RUNNER_V3_NOT_AUTHORITATIVE } from "../src/al-runner-v3-config";
 import {
   V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
   runV3ContractProbe,
   v3DefectWarnings,
 } from "../src/al-runner-v3-contract";
@@ -641,11 +642,16 @@ async function legC(scratch: string): Promise<readonly string[]> {
   // PR-117: the capability readings, for DBM and the receipt (recorded only if DBM batches and passes).
   legCBatchFacts = Object.fromEntries(
     r.facts
-      .filter((f) => (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact))
+      // PR-340: the carry fact's reading rides beside the eight, and `.gated` records it from here.
+      .filter(
+        (f) =>
+          (V3_CAPABILITY_FACTS as readonly string[]).includes(f.fact) || f.fact === V3_CARRY_FACT,
+      )
       .map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,
-  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches); a warn fact (V3_WARN_FACTS) only adds its line, except
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 37 facts (r13,
+  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches; PR-340: the
+  // carry fact, which must read matches too); a warn fact (V3_WARN_FACTS) only adds its line, except
   // `unkept` (R1000), which is gate-fail.
   const c = classifyLegC(
     r.facts,

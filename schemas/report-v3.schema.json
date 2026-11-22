@@ -225,6 +225,9 @@
               },
               "refusedCutTail": {
                 "const": true
+              },
+              "stopGroups": {
+                "const": true
               }
             }
           }
