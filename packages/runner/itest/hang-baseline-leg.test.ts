@@ -125,6 +125,8 @@ function good(): BaselineLegInput {
     quarantineRecords: 0,
     warnings: [
       { code: "operator-narrowed-run", message: "narrowed" },
+      // PR-315: the leg runs with the stop off, so it warns
+      { code: "stop-hung-sessions-off", message: "--stop-hung-sessions is off" },
       {
         code: "tests-only-narrowed-baseline",
         message: "[lethal] --tests-only narrowed the baseline to 3 test(s) from 1 pattern(s).",
@@ -266,6 +268,7 @@ describe("R-658 baselineLegFailures", () => {
         ...i,
         warnings: [
           i.warnings[0] as BaselineLegInput["warnings"][number],
+          i.warnings[1] as BaselineLegInput["warnings"][number],
           { code: "tests-only-narrowed-baseline", message: "narrowed the baseline to 4 test(s)" },
         ],
       }),

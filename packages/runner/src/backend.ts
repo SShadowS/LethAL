@@ -375,6 +375,17 @@ export function isBcdev(kind: BackendKind): boolean {
   return kind === "bcdev";
 }
 
+/**
+ * PR-315 (GitHub #52, R1171): what the run warning and `lethal doctor` both say when the stop is
+ * off. The stop is off by default (R1064) because it ends a hung session on the user's server.
+ */
+export const STOP_HUNG_SESSIONS_OFF_TEXT =
+  "a mutant that never ends will quarantine this server's tier instead of scoring timeout-killed. " +
+  "On GitHub #52 this lost 12 of 17 mutants and needed `lethal clear-quarantine` and `lethal force-reset-lease` to recover. " +
+  'Fix: pass --stop-hung-sessions, or set "stopHungSessions": true in the config\'s bcdev section ' +
+  "(an envTool config ignores that field, so there only the flag works). " +
+  "It is off by default because it ends a hung session on the server, which is the server owner's call.";
+
 /** R586: a backend that publishes nothing and compiles the source it was given (v3, since R654). */
 export function isLocalRunner(kind: BackendKind): boolean {
   return kind === "al-runner-v3";
@@ -610,6 +621,11 @@ export interface ExecutionBackend {
    * nothing else: `close()` stays the one place that prints the stats line. Absent: nothing to close.
    */
   closeDaemons?(): Promise<void>;
+  /**
+   * PR-315: whether this backend was built with `--stop-hung-sessions` on. `runNamedMutants` (and so
+   * `lethal verify`) has no stop setting of its own, so it asks the backend. Absent: read as off.
+   */
+  stopsHungSessions?(): boolean;
   /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.

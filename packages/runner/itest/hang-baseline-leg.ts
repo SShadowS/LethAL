@@ -39,6 +39,8 @@ export const BASELINE_PROBE_OWNER = "hang-itest-baseline-probe";
 /** Check 11's allow-list. `GATE_WARNINGS["hang/baseline"]` must equal it (R736). */
 export const HANG_BASELINE_WARNING_CODES: readonly string[] = [
   "operator-narrowed-run",
+  // PR-315: the leg runs bcdev with the stop off (assertion 19 requires the field absent), so it warns.
+  "stop-hung-sessions-off",
   "tests-only-narrowed-baseline",
 ];
 
