@@ -501,7 +501,9 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
     // PR-322 (R1167): the recheck row lists every test the whole-codeunit recheck RAN, green or not. The recovered row
     // keeps the mutant's own covering set (what its `coverageAttribution` describes), plus the killer when that set
     // lacks it: the reproduced kill proves the killer reached the code, and the kill credit looks it up there. Rule
-    // (c) names the killer on every recovered row.
+    // (c) names the killer on every recovered row. Named limit: a covering test of ANOTHER codeunit with the killer's
+    // method name makes report-fold's bare-name credit ambiguous (counted in `ambiguousKills`, no verdict effect); on
+    // DO c2 that was 0 of 349 recoveries, as with the old list.
     const killer = qualifiedKillerOf(r);
     const coveringTests =
       killer !== undefined && !target.coveringTests.includes(killer)
