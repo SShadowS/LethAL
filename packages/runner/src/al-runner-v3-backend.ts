@@ -80,6 +80,7 @@ import {
   BASELINE_BATCH_SIZE,
   batchBody,
   decodeBatchAnswer,
+  exclusionOf,
   exclusionsFor,
   planBaselineBatches,
   scanTestCodeunits,
@@ -152,6 +153,7 @@ import {
 import {
   STOP_GROUPS_FACT,
   baselineBatchingOffReason,
+  carryWalkOffReason,
   pinnedDefectCoverage,
   serveRowFieldsFor,
   sleepRuleLine,
@@ -169,7 +171,12 @@ import {
   uncacheableReason,
   writeProbeCache,
 } from "./al-runner-v3-probe-cache";
-import { AlRunnerV3SeedError, checkRunSeed, v3ChildEnv } from "./al-runner-v3-seed";
+import {
+  AlRunnerV3SeedError,
+  checkRunSeed,
+  v3ChildEnv,
+  v3MutantDaemonEnv,
+} from "./al-runner-v3-seed";
 import {
   AlRunnerV3CoverageJoinError,
   type SleepIndex,
@@ -199,6 +206,7 @@ import {
 import type {
   BackendCapabilities,
   BackendStatus,
+  CarryWalkResult,
   CoverageMap,
   ExecutionBackend,
   RunOpts,
@@ -327,6 +335,98 @@ export function singleInstanceCarryNoteOf(
   if (new Set(covering.map((r) => r.codeunitId)).size < 2) return undefined;
   return V3_SINGLEINSTANCE_NOTE;
 }
+/**
+ * PR-340 §3, pure: judge a carry walk's three answers (the mutant, NONE, the mutant). Every answer must
+ * hold EXACTLY the baseline tests of the kept codeunits (`expected`: codeunit to lowercase method names)
+ * plus ONE echo row that reads the activation (mutant, `none`, mutant). Only then may a test that is
+ * `fail`, `pass`, `fail` kill; the first such test in the first answer's order is the killer. Anything
+ * unsound is a named `failed`, never a verdict.
+ */
+export function judgeCarryWalk(a: {
+  readonly mutantId: string;
+  readonly echoId: number;
+  readonly expected: ReadonlyMap<number, ReadonlySet<string>>;
+  readonly answers: readonly (readonly V3Row[])[];
+  /** The `--test-timeout` the daemon runs with: `v3RowVerdict` judges a timeout row against it. */
+  readonly stopSeconds: number;
+}): CarryWalkResult {
+  const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
+  if (a.answers.length !== 3) return failed(`${a.answers.length} answers, not 3`);
+  const wantKeys = new Set<string>();
+  for (const [cu, methods] of a.expected) for (const m of methods) wantKeys.add(`${cu}.${m}`);
+  const activation = [a.mutantId, SELECTOR_RESOURCE_NONE, a.mutantId];
+  const byKey: Map<string, V3Row>[] = [];
+  /** Each row's outcome after the ordinary path's classification (`v3RowVerdict`), never its raw status. */
+  const outcomes: Map<string, TestVerdict["outcome"]>[] = [];
+  for (const [i, rows] of a.answers.entries()) {
+    const n = i + 1;
+    if (rows.length === 0) return failed(`request ${n} gave zero rows`);
+    const echo = rows.filter((r) => r.codeunit === a.echoId);
+    const echoWhy = echoMismatch(echo, activation[i] ?? "");
+    if (echoWhy !== undefined) return failed(`request ${n}: ${echoWhy}`);
+    const map = new Map<string, V3Row>();
+    const extra: string[] = [];
+    for (const r of rows) {
+      if (r.codeunit === a.echoId) continue;
+      const k = `${r.codeunit}.${r.method.toLowerCase()}`;
+      if (!wantKeys.has(k) || map.has(k)) extra.push(k);
+      else map.set(k, r);
+    }
+    const missing = [...wantKeys].filter((k) => !map.has(k));
+    if (missing.length > 0 || extra.length > 0)
+      return failed(
+        `request ${n} is incomplete: ${missing.length} baseline test(s) missing (${missing.slice(0, 3).join(", ")}), ${extra.length} unexpected, repeated or not-run row(s) (${extra.slice(0, 3).join(", ")})`,
+      );
+    // B1: classify exactly as the ordinary path does. A refusal marker without notRun, a RUNNER_REFUSAL
+    // text, an OnRun or timeout row and a notRun row are never a pass or a fail: the walk is not sound.
+    const verdicts = new Map<string, TestVerdict["outcome"]>();
+    for (const [k, r] of map) {
+      const v = v3RowVerdict(
+        { codeunitId: r.codeunit, codeunitName: String(r.codeunit), method: r.method },
+        r,
+        a.stopSeconds,
+        0,
+        undefined,
+      );
+      if (v.outcome !== "pass" && v.outcome !== "fail")
+        return failed(
+          `request ${n}: ${r.name} reads ${v.outcome} (${(v.failureMessage ?? "no message").slice(0, 120)}), which is never a pass or a kill`,
+        );
+      // B1 leftover: a pass al-runner flagged (resting on an unprobed assumption), or one whose flag state
+      // the answer could not report, is no sound no-mutant pass (or any pass): the walk is not sound.
+      if (v.outcome === "pass" && (v.flagged === true || v.flaggedUnknown === true))
+        return failed(
+          `request ${n}: ${r.name} passed but ${v.flagged === true ? "al-runner flagged it" : "its flag state is unknown"}, so it is no sound pass`,
+        );
+      verdicts.set(k, v.outcome);
+    }
+    byKey.push(map);
+    outcomes.push(verdicts);
+  }
+  const [first, second, third] = byKey;
+  const [o1, o2, o3] = outcomes;
+  if (
+    first === undefined ||
+    second === undefined ||
+    third === undefined ||
+    o1 === undefined ||
+    o2 === undefined ||
+    o3 === undefined
+  )
+    return failed("a request gave no rows");
+  for (const [k, r1] of first) {
+    if (o1.get(k) === "fail" && o2.get(k) === "pass" && o3.get(k) === "fail")
+      return {
+        kind: "killed",
+        codeunitId: r1.codeunit,
+        method: r1.method,
+        failure: r1.message,
+        reproduced: third.get(k)?.message,
+      };
+  }
+  return { kind: "walked" };
+}
+
 /**
  * R652: a §5 window's 2-3 plain sends follow ONE bound check (the window's), so a tree change
  * after it can reach their rows. Those rows never make a kill, only an error; each such text says
@@ -1164,6 +1264,8 @@ export const BASELINE_BATCHING_ENV = "LETHAL_V3_BASELINE_BATCHING";
 
 /** PR-303: `LETHAL_V3_REACH_PRUNE=on` leaves out the test codeunits that cannot reach a mutant's site. The session reads and checks it. */
 export const REACH_PRUNE_ENV = "LETHAL_V3_REACH_PRUNE";
+/** PR-340: `LETHAL_V3_CARRY_WALK=off|on` (default on) turns the SingleInstance carry walk off or on. The session reads and checks it. */
+export const CARRY_WALK_ENV = "LETHAL_V3_CARRY_WALK";
 
 export class AlRunnerV3BaselineBatchingKnobRefusedError extends Error {
   constructor(value: string) {
@@ -2173,6 +2275,12 @@ export interface V3LaneView extends ExecutionBackend {
     covering: readonly TestMethodRef[],
     site?: { readonly objectType: string; readonly codeunitId: number },
   ): string | undefined;
+  /** PR-340: required, so a lane view cannot forget it (a forgotten hook would walk on lane 0's daemon). */
+  carryWalk(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined>;
 }
 
 /** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
@@ -3872,6 +3980,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       binarySha256,
       gatedRecord,
     );
+    // PR-340 §4: the carry walk's own two-part rule (gate record AND this probe); never moves batching.
+    this.carryWalkWhyOff = carryWalkOffReason(this.contract, gatedRecord);
     // R779: say which §6 behaviour this session runs, once, beside the probe line.
     console.warn(sleepRuleLine(this.sleepRuleRetired, this.contract, reported, binarySha256));
     const covered = pinnedDefectCoverage(this.contract, reported, binarySha256);
@@ -3942,6 +4052,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * `undefined` means allowed. Before any `status()` it reads off. No pin allows it in 114a.
    */
   private baselineBatchingWhyOff: string | undefined = "status() has not run";
+
+  /** PR-340 §4: why the carry walk is off (`carryWalkOffReason`, as the last `status()` decided it); before any `status()`, off. */
+  private carryWalkWhyOff: string | undefined = "status() has not run";
+
+  /** PR-340 §4: why the carry walk is off, or `undefined` when allowed (the carry gate prints and checks it). */
+  carryWalkOffWhy(): string | undefined {
+    return this.carryWalkWhyOff;
+  }
+
+  /** Tests only: pretend `status()` found the build carry-proven (or not, with a reason). */
+  setCarryWalkWhyOffForTest(why: string | undefined): void {
+    this.carryWalkWhyOff = why;
+  }
 
   /** PR-114a: may the baseline batch its test codeunits (`baselineBatchingFor`, as the last `status()` read it)? */
   isBaselineBatching(): boolean {
@@ -4577,14 +4700,11 @@ export class AlRunnerV3Backend implements ExecutionBackend {
    * The environment of EVERY al-runner process this backend starts. R645: `ALRUNNER_CACHE`,
    * absolute, because v3 now runs in another cwd. R807: plus the pinned run seed, always.
    */
-  private cacheEnv(): { env: Record<string, string> } {
-    return {
-      env: v3ChildEnv(
-        this.cfg.cacheDir !== undefined
-          ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) }
-          : undefined,
-      ),
-    };
+  private cacheEnv(mutantRun = false): { env: Record<string, string> } {
+    const extra =
+      this.cfg.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(this.cfg.cacheDir) } : undefined;
+    // PR-340 §1: a MUTANT-RUN serve daemon always carries AL_STRICT_SEQUENTIAL=1 (the walk needs it).
+    return { env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra) };
   }
 
   /** R807: the seed the build reported (already checked to be the pinned one); absent when none. */
@@ -6607,6 +6727,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       restoreCutState: (id, state) => b.restoreCutStateOn(lane, id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
       survivorNote: (covering, site) => b.survivorNoteShared(covering, site),
+      // PR-340: this lane's own daemon and resource file, never lane 0's.
+      carryWalk: (id, covering, site) => b.carryWalkOn(lane, id, covering, site),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
@@ -7729,6 +7851,170 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     return this.survivorNoteShared(covering, site);
   }
 
+  /** PR-340: the sole-lane form (an N = 1 session); a lane view calls `carryWalkOn` with its own lane. */
+  carryWalk(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    return this.carryWalkOn(this.soleLane("carryWalk"), mutantId, covering, site);
+  }
+
+  /**
+   * PR-340 §2-§3: the carry walk, on `lane`'s OWN daemon and resource file (never another lane's).
+   * `undefined`: the survivor would not carry the PR-327 (a) label, so there is nothing to walk.
+   * Else three batch-shaped `strictOrder: true` requests (the mutant, NONE, the mutant) over the
+   * covering test codeunits plus the echo, everything else in `excludeTests`; `judgeCarryWalk` decides.
+   * Each request: the bound check and the manifest check BEFORE the resource file is written, a stop
+   * poll while it runs, and the file put back afterwards even after a throw. A request error, a
+   * timeout or a stop is a named `failed` (a timeout or a stop also replaces the daemon); a bound,
+   * proof or manifest breach throws, as every send does. Never scores anything.
+   */
+  private async carryWalkOn(
+    lane: Lane,
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    // S3: a walk that reaches the daemon is counted, with its wall time (one stderr line at close).
+    if (
+      this.singleInstanceCarryNote(covering, site) === undefined ||
+      this.carryWalkWhyOff !== undefined
+    )
+      return this.carryWalkSend(lane, mutantId, covering, site);
+    const t0 = monoNow();
+    this.carryWalkStats.walks += 1;
+    try {
+      return await this.carryWalkSend(lane, mutantId, covering, site);
+    } finally {
+      this.carryWalkStats.ms += monoNow() - t0;
+    }
+  }
+
+  /** PR-340 S1: called at the first send of each walk that really sends (the carry gate orders its events by it). */
+  private carryWalkSink: (() => void) | undefined;
+  setCarryWalkSink(sink?: () => void): void {
+    this.carryWalkSink = sink;
+  }
+
+  /** PR-340 S3: walks run and their summed wall time, printed once at close when any ran. */
+  private carryWalkStats = { walks: 0, ms: 0 };
+
+  /** PR-340: the walk's text, or `undefined` when none ran (so no existing line moves). */
+  carryWalkLine(): string | undefined {
+    const s = this.carryWalkStats;
+    return s.walks === 0
+      ? undefined
+      : `[lethal] al-runner-v3 carry walks (PR-340, R1173): ${s.walks} walk(s), ${Math.round(s.ms)} ms in all`;
+  }
+
+  private async carryWalkSend(
+    lane: Lane,
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
+    if (this.singleInstanceCarryNote(covering, site) === undefined) return undefined;
+    const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
+    if (this.carryWalkWhyOff !== undefined)
+      return failed(`build not carry-proven (${this.carryWalkWhyOff})`);
+    if (!this.entries) return failed("the walk needs the serve-entries transport");
+    const proof = this.proof;
+    if (proof === undefined || lane.deployedDir === undefined)
+      throw new Error("al-runner-v3: carryWalk() before a successful deploy()");
+    if (!proof.manifestIds.has(mutantId))
+      throw new Error(
+        `al-runner-v3: carryWalk(${mutantId}): not a mutant of the deployed batch's manifest`,
+      );
+    const echoId = this.requireEchoId();
+    const kept = [...new Set(covering.map((r) => r.codeunitId))].sort((a, b) => a - b);
+    const expected = new Map<number, ReadonlySet<string>>();
+    for (const cu of kept) {
+      const rows = this.baselineRows.get(cu) ?? [];
+      if (rows.length === 0) return failed(`codeunit ${cu} has no baseline rows to compare with`);
+      expected.set(cu, new Set(rows.map((r) => r.method.toLowerCase())));
+    }
+    const modes = new Set(kept.map((cu) => modeKey(this.modeOfCall(cu))));
+    const [firstCu] = kept;
+    if (firstCu === undefined || modes.size !== 1)
+      return failed("the covering codeunits do not share one isolation mode");
+    const mode = this.modeOfCall(firstCu);
+    const s = this.serveStopSeconds();
+    if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
+    const everyTest = new Set<number>([
+      ...this.testsPerCodeunit.keys(),
+      ...this.suitePerCodeunit.keys(),
+    ]);
+    const keep = new Set<number>(kept);
+    const complement = [...everyTest]
+      .filter((id) => !keep.has(id) && id !== echoId)
+      .sort((a, b) => a - b)
+      .map(exclusionOf);
+    // Step 0b's body: the batch shape plus `strictOrder`, NEVER `runSelectedOnly`.
+    const body = {
+      ...batchBody(lane.requestBase(mode), complement, false),
+      strictOrder: true,
+    };
+    const tests = kept.reduce((n, cu) => n + (this.testsPerCodeunit.get(cu) ?? 1), 1);
+    const answers: V3Row[][] = [];
+    for (const m of [mutantId, SELECTOR_RESOURCE_NONE, mutantId]) {
+      if (this.stopHandle?.signalled() === true) return failed("a stop signal ended the walk");
+      const daemon = await this.ensureDaemon(lane, mode, kept);
+      // Before the resource file is written: the artifact proof, then the walked id (as `assertBound`).
+      await this.assertBound(lane);
+      if (!proof.manifestIds.has(mutantId))
+        throw new AlRunnerV3UnprovenBatchError(`the walked id ${mutantId} is not in the manifest`);
+      const prior = await readFile(lane.resourcePath(), "utf8").catch(() => undefined);
+      let signalClosed = false;
+      const watch = setInterval(() => {
+        if (this.stopHandle?.signalled() !== true || this.memoryStopped || signalClosed) return;
+        signalClosed = true;
+        void this.closeLane(lane, "stop-signal");
+      }, STOP_SIGNAL_POLL_MS);
+      let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
+      try {
+        await writeFile(lane.resourcePath(), m, "utf8");
+        // S1: the mark of a REAL walk, at its first send (never for a call that sends nothing).
+        if (answers.length === 0) this.carryWalkSink?.();
+        daemon.requests += 1;
+        answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
+      } catch (err) {
+        if (signalClosed) return failed("a stop signal ended the walk");
+        // A timeout (or any request error) leaves the daemon unknown: it is replaced, never scored.
+        await this.closeLane(lane, "request-failed");
+        if (err instanceof AlRunnerServerRequestError)
+          return failed(
+            err.kind === "deadline"
+              ? `a request timed out (${err.message})`
+              : `a request failed (${err.message})`,
+          );
+        throw err;
+      } finally {
+        clearInterval(watch);
+        // Put the resource file back exactly as it was, even after a throw.
+        if (prior !== undefined)
+          await writeFile(lane.resourcePath(), prior, "utf8").catch(() => undefined);
+        else await rm(lane.resourcePath(), { force: true }).catch(() => undefined);
+      }
+      await this.refuseDaemonDependencySkip(lane, daemon);
+      const rows: V3Row[] = [];
+      for (const t of answer.tests) {
+        const r = serveRow(t, this.serveRowFields);
+        if (typeof r === "string") {
+          await this.closeLane(lane, "answer-unreadable");
+          return failed(`an unreadable row (${r.slice(0, 120)})`);
+        }
+        rows.push(r);
+      }
+      answers.push(rows);
+    }
+    const out = judgeCarryWalk({ mutantId, echoId, expected, answers, stopSeconds: s });
+    // A row the daemon cannot keep (R612) leaves it dirty: replace it, as every other send does.
+    if (answers.some((rows) => !serveDaemonReusable(serveLines(rows), "v3")))
+      await this.closeLane(lane, "unkept-row");
+    return out;
+  }
+
   private survivorNoteShared(
     covering: readonly TestMethodRef[],
     site?: { readonly objectType: string; readonly codeunitId: number },
@@ -8444,7 +8730,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     const s = this.serveStopSeconds();
     if (s === undefined) throw new AlRunnerV3ServeStopUnsetError();
     this.transportFrozen = true; // R761
-    const d = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
+    const d = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)), true);
     d.proven = new Set();
     return d;
   }
@@ -8574,10 +8860,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     stopSeconds: number,
     /** PR-100: the cause of a MUTANT daemon's first warm-up; absent on the baseline's and the probe's. */
     cause?: string,
+    /** PR-340 §1: a mutant-run daemon (not the baseline's or the probe's) gets `AL_STRICT_SEQUENTIAL=1`. */
+    mutantRun = false,
   ): Promise<Daemon> {
     const server = new AlRunnerServer(
       absToolPath(this.cfg.alRunnerPath),
-      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv() }),
+      (argv) => this.serverSpawn(argv, { cwd: lane.scratchCwd(), ...this.cacheEnv(mutantRun) }),
       this.cfg.preprocessorSymbols ?? [],
       "serve",
       daemonStderrFileFor(this.cfg.daemonStderrDir, lane.index),
@@ -8697,7 +8985,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // R998: mutant entries leave the same tests out (`leftOutNames`).
     const warm = union.filter((id) => this.warmable(id));
     const leftOut = (cu: number) => this.leftOutNames(cu);
-    const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)));
+    const daemon = await this.spawnDaemon(lane, mode, s, lane.takeCause(modeKey(mode)), true);
     try {
       lane.stats.warmups += 1;
       const { sent, rows } = await this.send(
@@ -11057,6 +11345,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async close(): Promise<void> {
     // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
     await this.closeAllDaemons("session-end");
+    // PR-340 S3: a NEW line, only when a walk ran, so no existing pinned line moves.
+    const walkLine = this.carryWalkLine();
+    if (walkLine !== undefined) console.warn(walkLine);
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(

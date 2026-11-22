@@ -1138,3 +1138,24 @@ export function judgeLegK(f: LegKFacts): string[] {
     );
   return out;
 }
+
+/**
+ * PR-340 (S1): the carry gate's "the daemon is clean after a walk" pin only means something when an
+ * ORDINARY serve request goes to the lane's daemon AFTER the last walk. `order` is the run's events in
+ * time: "walk" at the first send of each walk that REALLY sent (a call that sends nothing leaves no mark),
+ * "close" for each `serve-daemon-closed`, and "req:<kind>" for each `serve-request-timed`. A prefetch that
+ * came before every walk does not count (every mutant's prefetch rows predate the walks), and a request
+ * that follows a daemon close does not either: it ran on a FRESH daemon, which proves nothing about the
+ * walked one. Returns the problem, or `undefined` when the order holds.
+ */
+export function judgeCarryOrder(order: readonly string[]): string | undefined {
+  const lastWalk = order.lastIndexOf("walk");
+  if (lastWalk < 0) return "no walk ran in the walk arm";
+  const after = order.slice(lastWalk + 1);
+  const firstReq = after.findIndex((e) => e === "req:live" || e === "req:prefetch");
+  if (firstReq < 0)
+    return "no ordinary serve request came after the last walk, so the after-walk pin would be empty";
+  return after.slice(0, firstReq).includes("close")
+    ? "the lane's daemon was closed between the last walk and the next ordinary request, which ran on a fresh daemon: the pin would prove nothing about the walked one"
+    : undefined;
+}
