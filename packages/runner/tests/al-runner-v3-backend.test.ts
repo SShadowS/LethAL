@@ -1055,6 +1055,8 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     batchFacts: Record<string, string> | undefined,
     extra: Partial<AlRunnerV3Config> = {},
     wantOk = true,
+    /** PR-256 amendment 1: this session's probe reading of sleep-is-noop (gone: the rule is retired). */
+    sleep: "gone" | "defect-present" = "gone",
   ) {
     const sleepPin = pinsNs.V3_BUILD_PINS.find((p) => p.legC["sleep-is-noop"]?.verdict === "gone");
     if (sleepPin === undefined) throw new Error("no pin records sleep-is-noop gone");
@@ -1092,7 +1094,7 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
         {
           fact: "sleep-is-noop",
           kind: "defect" as const,
-          verdict: "gone" as const,
+          verdict: sleep,
           expected: "x",
           measured: "m",
         },
@@ -1134,6 +1136,18 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     await batching({ ...eight, "stop-groups": "matches" }, { stopGroups: true }, true);
     await batching(eight, { stopGroups: false }, true);
     await batching(eight, {}, true);
+  });
+
+  test("PR-256 amendment 1 item 1: the fact present but the §6 Sleep rule in force (probe reads sleep-is-noop present): refused by name", async () => {
+    const withFact = {
+      ...Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"])),
+      "stop-groups": "matches",
+    };
+    await batching(withFact, { stopGroups: true }, false, "defect-present");
+    expect(lastStatus?.details).toContain("al-runner-v3-stop-groups-unsupported");
+    expect(lastStatus?.details).toContain("§6 Sleep rule applies");
+    // the flag off: the same build is no refusal of PR-256's
+    await batching(withFact, {}, true, "defect-present");
   });
 });
 

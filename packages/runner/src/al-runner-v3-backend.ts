@@ -127,6 +127,7 @@ import {
   callOf,
   decodeEntriesAnswer,
   echoMismatch,
+  effectiveExclusion,
   emitSelectorEcho,
   encodeGroups,
   groupsThatFit,
@@ -1701,11 +1702,15 @@ export function assertStopShape(body: {
 }
 
 /**
- * PR-256 (rule 3): the positions in `rows` (ONE entry's rows, in order) of the rows upstream's stop skipped.
- * Strict: a row is a skip only when the request carried the stop, the entry a group, the row is notRun with
- * the pinned text naming test F of this codeunit, F is an EARLIER row of this entry that is a plain `fail`
- * (not notRun, not a timeout, no refusal marker), and F is a covering test of the mutant that was green, and
- * not refused, at baseline. Anything else is not recognised: it stays what it is today (fail closed).
+ * PR-256 (rule 3, amendment 1 item 2): the positions in `rows` (ONE entry's rows, in order) of the rows
+ * upstream's stop skipped.
+ * - `skipped`: the request carried the stop, the entry a group, the row is notRun with the pinned text naming
+ *   test F of this codeunit, and F is an EARLIER row of this entry whose status is `fail`. Such a row is never
+ *   a refusal, whatever F is. Anything else with the pinned text is not a skip: it stays what it is today, a
+ *   refusal (a contract violation, fail closed).
+ * - `counted` (a subset): rule 3's strict conditions also hold, so the skip is a saving (`stopSkipped`): F is a
+ *   plain fail (not notRun, not a timeout, no refusal marker) and a covering test of the mutant that was green,
+ *   and not refused, at baseline.
  */
 export function recognisedStopSkips(o: {
   readonly requestStop: boolean;
@@ -1716,29 +1721,26 @@ export function recognisedStopSkips(o: {
   readonly covering: ReadonlySet<string> | undefined;
   /** This codeunit's baseline rows. */
   readonly baseline: readonly V3Row[];
-}): Set<number> {
-  const out = new Set<number>();
-  if (!o.requestStop || o.entryGroup === undefined) return out;
+}): { readonly skipped: Set<number>; readonly counted: Set<number> } {
+  const skipped = new Set<number>();
+  const counted = new Set<number>();
+  if (!o.requestStop || o.entryGroup === undefined) return { skipped, counted };
   for (const [i, r] of o.rows.entries()) {
     if (!r.notRun || r.status !== "error") continue;
     const m = V3_STOP_SKIP_TEXT.exec(r.message ?? "");
     const named = m?.[2]?.toLowerCase();
     if (m === null || named === undefined || Number(m[1]) !== o.codeunit) continue;
     const f = o.rows.slice(0, i).find((x) => x.method.toLowerCase() === named);
-    if (
-      f === undefined ||
-      f.status !== "fail" ||
-      f.notRun ||
-      isV3RefusalText(f.message) ||
-      V3_TIMEOUT_MESSAGE.test(f.message ?? "")
-    )
+    if (f === undefined || f.status !== "fail") continue;
+    skipped.add(i);
+    if (f.notRun || isV3RefusalText(f.message) || V3_TIMEOUT_MESSAGE.test(f.message ?? ""))
       continue;
     if (o.covering?.has(named) !== true) continue;
     const b = o.baseline.find((x) => x.method.toLowerCase() === named);
     if (b === undefined || b.status !== "pass" || b.notRun || isV3RefusalText(b.message)) continue;
-    out.add(i);
+    counted.add(i);
   }
-  return out;
+  return { skipped, counted };
 }
 
 /**
@@ -2794,13 +2796,20 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** PR-256: the build fact `stop-groups`, read in `status()` from the build's gate record (`stopGroupsFor`). */
   private stopGroupsFact = false;
   /**
-   * PR-256: over every lane, the mutant-entry rows recognised as skipped by the stop (rule 3; counted only
-   * for an answer that stood), and the alone re-runs a walk asked for (rule 5). Not lane stats, so the
+   * PR-256: over every lane, counted only for an entry of an answer that stood: `skipped`, the skips that are
+   * a saving (rule 3's strict conditions); `uncounted`, the other skips (amendment 1 item 2: never refusals);
+   * `reruns`, the alone re-runs a walk asked for (rule 5); `heldForRed`, mutant requests sent WITHOUT the stop
+   * because an entry would run a test red at baseline (amendment 1 item 2). Not lane stats, so the
    * serve-entries counters (and the committed lane trace) do not move with the flag off.
    */
-  private readonly stopCounts = { skipped: 0, reruns: 0 };
+  private readonly stopCounts = { skipped: 0, uncounted: 0, reruns: 0, heldForRed: 0 };
   /** PR-256: see `stopCounts`. */
-  stopGroupsStats(): Readonly<{ skipped: number; reruns: number }> {
+  stopGroupsStats(): Readonly<{
+    skipped: number;
+    uncounted: number;
+    reruns: number;
+    heldForRed: number;
+  }> {
     return { ...this.stopCounts };
   }
   /** R907: see `ExecutionBackend.skipAfterTimeout`. Serve (entries) never passes it. */
@@ -3816,6 +3825,12 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.stopGroupsFact = stopGroupsFor(gatedRecord);
     if (this.cfg.stopGroups === true && !this.stopGroupsFact)
       return { ok: false, details: stopGroupsUnsupported(gatedRecord?.lethalCommit) };
+    // Amendment 1 item 1: and the §6 Sleep rule retired (a skipped test would reach the coverage window).
+    if (this.cfg.stopGroups === true && !this.sleepRuleRetired)
+      return {
+        ok: false,
+        details: `al-runner-v3-stop-groups-unsupported: "alRunnerV3.stopGroups" is on and this build reads ${STOP_GROUPS_FACT} \`matches\`, but the §6 Sleep rule applies on it (${sleepRuleLine(false, this.contract, reported, binarySha256)}), so a test the stop skipped would reach the coverage window as a missing row. Turn the flag off (PR-256 amendment 1)`,
+      };
     // PR-114a: decided once, printed in the details; PR-115's baseline fill reads it to batch.
     this.baselineBatchingWhyOff = baselineBatchingOffReason(
       this.contract,
@@ -8954,18 +8969,32 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // carries the stop and one group per entry (the entry id: `<mutant>|<codeunit>`, the echo `<mutant>|echo`).
     // Never the warm-up, the baseline phase, a request holding a NONE group (a NONE confirm, a kill pair, the
     // pair batch) or the re-run of a skipped ref (`noStop`).
-    const stop =
+    const mutantRequest =
       this.cfg.stopGroups === true &&
       kind !== "warmup" &&
       !this.inBaseline &&
       alone?.noStop !== true &&
       groups.length > 0 &&
       groups.every((g) => g.mutantId !== SELECTOR_RESOURCE_NONE);
-    if (stop && (this.seams.stopGroupsFact ?? this.stopGroupsFact) !== true)
+    // Rule 7 and amendment 1 item 1: the stop needs the build fact AND the §6 Sleep rule retired (as R895's
+    // cut and PR-297's tail); `status()` refuses either by name, and a send without them fails loudly.
+    if (mutantRequest && (this.seams.stopGroupsFact ?? this.stopGroupsFact) !== true)
       throw new AlRunnerV3StopGroupsError(
         "al-runner-v3-stop-groups-unsupported",
-        `"alRunnerV3.stopGroups" is on, but this session read no ${STOP_GROUPS_FACT} fact for its build; a mutant request is never sent without the stop it asks for`,
+        `"alRunnerV3.stopGroups" is on, but this session read no ${STOP_GROUPS_FACT} fact for its build`,
       );
+    if (mutantRequest && !this.sleepRuleRetiredForParallel())
+      throw new AlRunnerV3StopGroupsError(
+        "al-runner-v3-stop-groups-unsupported",
+        `"alRunnerV3.stopGroups" is on, but the §6 Sleep rule applies on this build, so a skipped test would reach the coverage window`,
+      );
+    // Amendment 1 item 2: a test red at baseline must not fire the stop. An entry that would run one (its
+    // baseline row is not a clean pass, and the request does not leave it out) is not stop-grouped, and as
+    // a request is all grouped or none, the whole request goes WITHOUT the stop: today's request (a cost,
+    // never a verdict).
+    const heldForRed = mutantRequest && this.runsBaselineRed(sent, selectedOnly.flag);
+    if (heldForRed) this.stopCounts.heldForRed += 1;
+    const stop = mutantRequest && !heldForRed;
     const body: Record<string, unknown> = {
       ...lane.requestBase(alone !== undefined ? { ...mode, runSelectedOnly: true } : mode),
       ...(selectedOnly.flag ? { runSelectedOnly: true } : {}),
@@ -9289,7 +9318,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     // kept-refusal and drift checks and every verdict: no refusal, no close, no cut. Each entry keeps the
     // methods it skipped (`stopSkipped`), so they are not a missing row and a walk that asks re-runs them.
     const skipped = new Map<string, Set<string>>();
-    const rows = this.dropStopSkips(lane, answer, skipped);
+    const counted = new Map<string, number>();
+    const rows = this.dropStopSkips(answer, skipped, counted);
     // Review L1: a discarded send is not a request of the batch; the re-run counts in its place.
     const uncount = () => {
       for (const k of [
@@ -9473,7 +9503,10 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         ...(cutHere && partial !== undefined ? { cutAtTimeout: { test: partial.test } } : {}),
         ...(skipped.has(e.id) ? { stopSkipped: skipped.get(e.id) ?? new Set<string>() } : {}),
       };
-      this.stopCounts.skipped += skipped.get(e.id)?.size ?? 0; // PR-256: only an entry that stood
+      // PR-256 (N1): counted only here, for an entry that stood in an answer that was not discarded: a scan-gap
+      // or drift re-send returned above, and an entry after the R612 cut is counted by its own re-send.
+      this.stopCounts.skipped += counted.get(e.id) ?? 0;
+      this.stopCounts.uncounted += (skipped.get(e.id)?.size ?? 0) - (counted.get(e.id) ?? 0);
       const m = results.get(e.key) ?? new Map<number, CallRows>();
       m.set(callOf(e), call);
       results.set(e.key, m);
@@ -9509,14 +9542,16 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /**
-   * PR-256 (rules 3, 4): `answer`'s rows without those the stop skipped (`recognisedStopSkips`, per mutant
-   * entry); `skipped` gets each entry's skipped methods, lower-case, and the lane counts them. Echo entries
-   * are never read here: a skip in an echo stays what it is today. Without the stop the rows are unchanged.
+   * PR-256 (rules 3, 4, amendment 1 item 2): `answer`'s rows without those the stop skipped
+   * (`recognisedStopSkips`, per mutant entry); `skipped` gets each entry's skipped methods, lower-case, and
+   * `counted` how many of them are a saving (rule 3's strict conditions). The caller counts an entry only once
+   * it stands (N1: a discarded or re-sent answer counts nothing). Echo entries are never read here: a skip in
+   * an echo stays what it is today. Without the stop the rows are unchanged.
    */
   private dropStopSkips(
-    lane: Lane,
     answer: SendAnswer,
     skipped: Map<string, Set<string>>,
+    counted: Map<string, number>,
   ): ReadonlyMap<string, readonly V3Row[]> {
     if (answer.stop === undefined) return answer.rows;
     const out = new Map(answer.rows);
@@ -9524,15 +9559,19 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       if (e.echo || e.mutantId === SELECTOR_RESOURCE_NONE) continue;
       const mine = answer.rows.get(e.id) ?? [];
       const cu = callOf(e);
-      const at = recognisedStopSkips({
+      const found = recognisedStopSkips({
         requestStop: true,
         entryGroup: answer.stop.groups.get(e.id),
         codeunit: e.codeunit,
         rows: mine,
+        // N2: a mutant never registered (no plan) has no covering set: its skips are never counted (fail
+        // closed). They are still skips, never refusals (amendment 1 item 2).
         covering: this.coveringOf.get(e.mutantId)?.get(cu),
         baseline: this.baselineRows.get(cu) ?? [],
       });
+      const at = found.skipped;
       if (at.size === 0) continue;
+      counted.set(e.id, found.counted.size);
       out.set(
         e.id,
         mine.filter((_, i) => !at.has(i)),
@@ -9543,6 +9582,31 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       );
     }
     return out;
+  }
+
+  /**
+   * PR-256 (amendment 1 item 2): would a non-echo entry of `sent` run a test red at baseline (its baseline
+   * row is not a clean pass)? A one-test entry (`call`) runs only its test. A codeunit entry runs every test
+   * its `excludeTests` does not leave out, and, on a request NOT sent with `runSelectedOnly`, the left-out
+   * ones too (they run hidden, R1094).
+   */
+  private runsBaselineRed(sent: readonly SentEntry[], flagged: boolean): boolean {
+    const red = (r: V3Row) => r.status !== "pass" || r.notRun;
+    for (const e of sent) {
+      if (e.echo) continue;
+      const base = this.baselineRows.get(callOf(e)) ?? [];
+      if (e.call !== undefined) {
+        const only = /^Codeunit\d+\.(.+)$/.exec(e.test)?.[1]?.toLowerCase();
+        if (base.some((r) => r.method.toLowerCase() === only && red(r))) return true;
+        continue;
+      }
+      const order = base.map((r) => r.method.toLowerCase());
+      const gone = flagged
+        ? effectiveExclusion(e.codeunit, order, e.excludeTests)
+        : order.map(() => false);
+      if (base.some((r, i) => gone[i] !== true && red(r))) return true;
+    }
+    return false;
   }
 
   /** PR-56: the first row of this answer that `V3_SERVE_SAFE_REFUSALS` keeps, or `undefined`. */
@@ -10807,7 +10871,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(
-        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}${this.cfg.stopGroups === true ? `; stop-skipped rows (PR-256) ${this.stopCounts.skipped}, re-run alone ${this.stopCounts.reruns}` : ""}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
+        `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}${this.cfg.stopGroups === true ? `; stop-skipped rows (PR-256) ${this.stopCounts.skipped} (not counted as a saving ${this.stopCounts.uncounted}), re-run alone ${this.stopCounts.reruns}, requests without the stop for a baseline-red test ${this.stopCounts.heldForRed}` : ""}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-297: the tail alone-call counts (spec section 4(b)); only with the flag on, so no other output moves.
       if (this.cfg.refusedCutTail === true)

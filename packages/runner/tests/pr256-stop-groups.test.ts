@@ -129,29 +129,123 @@ describe("PR-256: per-entry stop groups on mutant requests", () => {
     expect(r.notices.filter((n) => /refus/i.test(n))).toEqual([]);
   });
 
-  test("2: a skip naming a test red at baseline is a refusal, as today", async () => {
-    const r = await rig({
-      stopGroups: true,
-      none: [fail("A", "red at baseline"), pass("B")],
-      under: () => [fail("A"), pass("B")],
+  // amendment 1 item 2: a baseline-red test before a covering one never fires the stop: the request holding
+  // it goes without the stop, so the covering test is measured as with the flag off
+  test("2: a test red at baseline before a covering one: no stop, no refusal, no close, the covering test as flag-off", async () => {
+    const run = async (on: boolean) => {
+      const r = await rig({
+        stopGroups: on,
+        none: [fail("A", "red at baseline"), pass("B")],
+        under: () => [fail("A"), pass("B")],
+      });
+      await baseline(r);
+      const before = r.serve.bodies.length;
+      await prefetch(r, [{ mutantId: "M0001", refs: [B] }]);
+      await r.b.activate("M0001");
+      const b = await r.b.run(B, OPTS);
+      return { r, b, sent: bodies(r).slice(before) };
+    };
+    const off = await run(false);
+    const on = await run(true);
+    expect(outcome(on.b)).toEqual(outcome(off.b));
+    expect(on.b.outcome).toBe("pass");
+    expect(on.b.selection).toBeUndefined();
+    expect(on.sent.some((x) => x.stopAfterFirstFailure === true)).toBe(false);
+    expect(on.sent.some((x) => x.entries?.some((e) => e.stopGroup !== undefined))).toBe(false);
+    expect(on.r.b.stopGroupsStats()).toEqual({
+      skipped: 0,
+      uncounted: 0,
+      reruns: 0,
+      heldForRed: 1,
     });
-    await baseline(r);
-    await prefetch(r, [{ mutantId: "M0001", refs: [A, B] }]);
-    await r.b.activate("M0001");
-    const b = await r.b.run(B, OPTS);
-    expect(b.outcome).toBe("error");
-    expect(r.b.stopGroupsStats().skipped).toBe(0);
-    expect(closes(r).map(([k]) => k)).toContain("refusal");
+    expect(closes(on.r)).toEqual([]);
   });
 
-  test("2b: a skip naming a test that is not a covering test of the mutant is a refusal", async () => {
-    const r = await rig({ stopGroups: true, under: () => [fail("A"), pass("B")] });
+  test("2b: a non-covering, state-dependent failure fires the stop: the skip is no refusal, not counted, and the covering test is re-run alone as flag-off", async () => {
+    const run = async (on: boolean) => {
+      const r = await rig({ stopGroups: on, under: () => [fail("A"), pass("B")] });
+      await baseline(r);
+      await prefetch(r, [{ mutantId: "M0001", refs: [B] }]);
+      await r.b.activate("M0001");
+      return { r, b: await r.b.run(B, OPTS) };
+    };
+    const off = await run(false);
+    const on = await run(true);
+    expect(outcome(on.b)).toEqual(outcome(off.b));
+    expect(on.b.outcome).toBe("pass");
+    expect(on.b.selection).toBe("alone");
+    expect(on.r.b.stopGroupsStats()).toEqual({
+      skipped: 0,
+      uncounted: 1,
+      reruns: 1,
+      heldForRed: 0,
+    });
+    expect(closes(on.r)).toEqual([]);
+    expect(on.r.notices.filter((n) => /refus/i.test(n))).toEqual([]);
+  });
+
+  test("N1: a scan-gap re-send counts its skips once", async () => {
+    let calls = 0;
+    const r = await rig({
+      stopGroups: true,
+      methods: ["A", "B", "C", "D"],
+      under: (m) => {
+        if (m !== "M0001") return [pass("A"), pass("B"), pass("C"), pass("D")];
+        calls += 1;
+        // the first answer leaves out B, a kept test: PR-94's scan gap discards it and re-sends unflagged
+        return calls === 1
+          ? [fail("A"), pass("C"), pass("D")]
+          : [fail("A"), pass("B"), pass("C"), pass("D")];
+      },
+    });
     await baseline(r);
-    await prefetch(r, [{ mutantId: "M0001", refs: [B] }]);
-    await r.b.activate("M0001");
-    expect((await r.b.run(B, OPTS)).outcome).toBe("error");
-    expect(r.b.stopGroupsStats().skipped).toBe(0);
+    await prefetch(r, [{ mutantId: "M0001", refs: [ref("A"), ref("C")] }]);
+    expect(r.notices.some((n) => n.startsWith("al-runner-v3-selected-only-scan-gap"))).toBe(true);
+    expect(calls).toBe(2);
+    // the re-send's B, C, D after A (a covering, green, plain fail) once; the discarded answer's C, D never
+    expect(r.b.stopGroupsStats()).toMatchObject({ skipped: 3, uncounted: 0 });
+  });
+
+  test("N1: entries after an R612 cut are counted once, by their re-send", async () => {
+    const r = await rig({
+      stopGroups: true,
+      under: (m) =>
+        m === "M0002"
+          ? [
+              pass("A"),
+              {
+                method: "B",
+                status: "error",
+                notRun: true,
+                message: "NotRun: out-of-scope: other",
+              },
+            ]
+          : [fail("A"), pass("B")],
+    });
+    await baseline(r);
+    await prefetch(
+      r,
+      MUTANTS.map((mutantId) => ({ mutantId, refs: [A, B] })),
+    );
     expect(closes(r).map(([k]) => k)).toContain("refusal");
+    // M0003 was after the cut: re-sent, and counted there only
+    expect(
+      bodies(r).filter((b) => mutantOf(b).includes("M0003") && b.stopAfterFirstFailure === true),
+    ).toHaveLength(2);
+    expect(r.b.stopGroupsStats().skipped).toBe(2);
+  });
+
+  test("amendment 1 item 1: the fact present but the §6 Sleep rule in force: refused by name, no stop sent", async () => {
+    const r = await rig({
+      stopGroups: true,
+      under: (m) => (m === "M0001" ? [fail("A"), pass("B")] : [pass("A"), pass("B")]),
+    });
+    await baseline(r);
+    r.b.seams.sleepRuleRetired = false;
+    await expect(prefetch(r, [{ mutantId: "M0001", refs: [A, B] }])).rejects.toThrow(
+      "al-runner-v3-stop-groups-unsupported",
+    );
+    expect(r.serve.bodies.some((b) => b.includes("stopAfterFirstFailure"))).toBe(false);
   });
 
   test("3: a skip naming a test of ANOTHER entry is a refusal", async () => {
@@ -375,55 +469,60 @@ describe("PR-256 rule 3: strict recognition (each condition alone)", () => {
     covering: new Set(["a", "b"]),
     baseline: green,
   };
-  const got = (o: { [K in keyof In]?: In[K] | undefined }) => [
-    ...recognisedStopSkips({ ...ok, ...o } as In),
-  ];
+  type Part = { [K in keyof In]?: In[K] | undefined };
+  /** [skipped, counted] positions. */
+  const got = (o: Part) => {
+    const r = recognisedStopSkips({ ...ok, ...o } as In);
+    return [[...r.skipped], [...r.counted]];
+  };
 
-  test("all hold: the skip row is recognised", () => {
-    expect(got({})).toEqual([1]);
+  test("all hold: the skip row is skipped and counted", () => {
+    expect(got({})).toEqual([[1], [1]]);
     expect(got({ rows: [row("A", "fail", "x"), skipRow("B", "A"), skipRow("C", "A")] })).toEqual([
-      1, 2,
+      [1, 2],
+      [1, 2],
     ]);
   });
-  test("4: the request without the stop: not recognised", () => {
-    expect(got({ requestStop: false })).toEqual([]);
+  // amendment 1 item 2: these stay refusals (a contract violation, fail closed): not skipped at all
+  test("4: the request without the stop: not a skip", () => {
+    expect(got({ requestStop: false })).toEqual([[], []]);
   });
-  test("4: an entry without a group: not recognised", () => {
-    expect(got({ entryGroup: undefined })).toEqual([]);
+  test("4: an entry without a group: not a skip", () => {
+    expect(got({ entryGroup: undefined })).toEqual([[], []]);
   });
-  test("5: a skip after a timeout row (not a plain fail): not recognised", () => {
-    expect(got({ rows: [row("A", "error", TIMEOUT_1S), skipRow("B", "A")] })).toEqual([]);
-    // nor after a refusal-marked fail (R639 K1(a)), a notRun fail, or a pass
-    expect(
-      got({
-        rows: [row("A", "fail", "NotRun: out-of-scope: something refused"), skipRow("B", "A")],
-      }),
-    ).toEqual([]);
-    expect(got({ rows: [row("A", "fail", "x", true), skipRow("B", "A")] })).toEqual([]);
-    expect(got({ rows: [row("A", "pass"), skipRow("B", "A")] })).toEqual([]);
+  test("naming no EARLIER failed row of the entry (or of another codeunit): not a skip", () => {
+    expect(got({ rows: [skipRow("B", "A"), row("A", "fail", "x")] })).toEqual([[], []]);
+    expect(got({ rows: [skipRow("B", "C")] })).toEqual([[], []]);
+    expect(got({ rows: [row("A", "fail", "x"), skipRow("B", "A", ECHO)] })).toEqual([[], []]);
+    expect(got({ rows: [row("A", "pass"), skipRow("B", "A")] })).toEqual([[], []]);
+    expect(got({ rows: [row("A", "error", TIMEOUT_1S), skipRow("B", "A")] })).toEqual([[], []]);
   });
-  test("F must be an EARLIER row of the entry, of its codeunit", () => {
-    expect(got({ rows: [skipRow("B", "A"), row("A", "fail", "x")] })).toEqual([]);
-    expect(got({ rows: [skipRow("B", "C")] })).toEqual([]);
-    expect(got({ rows: [row("A", "fail", "x"), skipRow("B", "A", ECHO)] })).toEqual([]);
-  });
-  test("2b: F not a covering test of the mutant: not recognised", () => {
-    expect(got({ covering: new Set(["b"]) })).toEqual([]);
-    expect(got({ covering: undefined })).toEqual([]);
-  });
-  test("2: F red, or refused, at baseline: not recognised", () => {
-    expect(got({ baseline: [row("A", "fail", "red"), row("B", "pass")] })).toEqual([]);
-    expect(
-      got({ baseline: [row("A", "error", "NotRun: out-of-scope: x", true), row("B", "pass")] }),
-    ).toEqual([]);
-    expect(got({ baseline: [row("B", "pass")] })).toEqual([]);
-  });
-  test("another text: not recognised", () => {
+  test("another text: not a skip", () => {
     expect(
       got({
         rows: [row("A", "fail", "x"), row("B", "error", "NotRun: out-of-scope: other", true)],
       }),
-    ).toEqual([]);
+    ).toEqual([[], []]);
+  });
+  // amendment 1 item 2: rule 3's strict conditions only decide the COUNT; the row is still a skip
+  test("5: F a refusal-marked or notRun fail: a skip, not counted", () => {
+    expect(
+      got({
+        rows: [row("A", "fail", "NotRun: out-of-scope: something refused"), skipRow("B", "A")],
+      }),
+    ).toEqual([[1], []]);
+    expect(got({ rows: [row("A", "fail", "x", true), skipRow("B", "A")] })).toEqual([[1], []]);
+  });
+  test("2b: F not a covering test of the mutant: a skip, not counted", () => {
+    expect(got({ covering: new Set(["b"]) })).toEqual([[1], []]);
+    expect(got({ covering: undefined })).toEqual([[1], []]);
+  });
+  test("2: F red, or refused, at baseline: a skip, not counted", () => {
+    expect(got({ baseline: [row("A", "fail", "red"), row("B", "pass")] })).toEqual([[1], []]);
+    expect(
+      got({ baseline: [row("A", "error", "NotRun: out-of-scope: x", true), row("B", "pass")] }),
+    ).toEqual([[1], []]);
+    expect(got({ baseline: [row("B", "pass")] })).toEqual([[1], []]);
   });
 });
 
