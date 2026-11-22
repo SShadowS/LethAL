@@ -30,10 +30,13 @@ export const DBM_FIGURES = {
   // operators meet there are refused by R868 (`hangRefused` 21: 12 condition-true, 9 blank-argument), not made.
   // RECORDED (amendment 4, §0e item 2, from /coord/handoff/PR-209/v3rec/record.log): 17 / 5 / 104 (was 15 / 3 / 104
   // over 122); the 4 added sites are 2 killed, 2 survived.
-  totalMutantSites: 126,
+  // PR-301 (GitHub #52, pre-commitment docs/superpowers/specs/2026-11-21-pr301-step-amount-hang.md): the
+  // `remove-assignment` of `Len := Step` in `SpinCopy` (no test calls it) is hang-refused, so 126 -> 125 and
+  // no-coverage 104 -> 103.
+  totalMutantSites: 125,
   killed: 17,
   survived: 5,
-  noCoverage: 104,
+  noCoverage: 103,
 } as const;
 
 export const ENVTOOL_FIGURES = {

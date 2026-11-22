@@ -265,6 +265,7 @@ export type Caveat =
   | "tests-testpage-unsupported"
   | "tests-testpage-refused"
   | "tests-restrictive-default-at-risk"
+  | "session-kind-mismatch"
   | "runner-disagreement"
   | "stop-hung-sessions"
   | "stop-answer-400"
@@ -458,6 +459,18 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
       "by parse: branches are not distinguished, and an access or a lowering inside another " +
       "codeunit is not seen, so a label can be wrong both ways and absence does not clear a run.",
     basis: "R1048",
+  },
+  "session-kind-mismatch": {
+    meaning:
+      "This run's backend runs its tests in a different session kind than the one `ciSessionKind` says your CI uses (a client " +
+      "session, GuiAllowed true, or a headless one, GuiAllowed false), and `sessionKindSensitiveTests` lists tests that can " +
+      "give a different result in the other kind: a test that binds HandlerFunctions, one the TestPage scan refuses " +
+      "(al-runner-v3 only), or one the scan could not read (al-runner-v3 only). bcdev runs headless; al-runner-v3 runs a " +
+      "client unless alRunnerV3.noClient is true.",
+    entailedNegative:
+      "Does NOT change a verdict, a count or `mutationScore`, and does not say a listed test differs: it says it can. A test " +
+      "that differs in a way the scan cannot see (an unhandled Confirm in app code) is not listed, so absence does not clear a run.",
+    basis: "R1168",
   },
   "runner-disagreement": {
     meaning:
@@ -1768,6 +1781,17 @@ export interface SessionReport {
     readonly survivors: readonly string[];
     readonly diagnosis: string;
   };
+  /**
+   * PR-307 (R1168): the tests of the run's final list that can change with the session kind (a client session or a headless
+   * one): `handlers` (binds HandlerFunctions), `testpage` (al-runner-v3: the TestPage scan refuses it), `unreadable`
+   * (al-runner-v3: the scan could not read it; `scanError` is its text). LABELS ONLY. Absent when no test is sensitive. The
+   * caveat `session-kind-mismatch` is present when this run's backend kind differs from the config's `ciSessionKind`.
+   */
+  readonly sessionKindSensitiveTests?: ReadonlyArray<{
+    readonly test: string;
+    readonly reasons: ReadonlyArray<"handlers" | "testpage" | "unreadable">;
+    readonly scanError?: string;
+  }>;
   /**
    * R658: baseline tests that ran past `--baseline-timeout-ms` (`budgetMs`) and that LethAL
    * stopped on the server (see `CAVEAT_INTERPRETATIONS["baseline-test-stopped"]`). They are
@@ -3623,6 +3647,10 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     };
   })();
   if (restrictiveDefault !== undefined) caveats.push("tests-restrictive-default-at-risk");
+  // PR-307 (R1168): the label, and the caveat when the backend's session kind differs from the CI's.
+  const sessionKind = input.sessionKindSensitive;
+  if (sessionKind !== undefined && sessionKind.backendSessionKind !== sessionKind.ciSessionKind)
+    caveats.push("session-kind-mismatch");
   const narrowed =
     input.only !== undefined ||
     // R221: an exclusion narrows the measured scope like any other filter, so `reliability` must
@@ -3768,6 +3796,9 @@ export function buildReport(statics: FoldStatics, events: readonly RunEvent[]): 
     ...(input.baselineStopped !== undefined ? { baselineStopped: input.baselineStopped } : {}),
     ...(platformArtifactKills !== undefined ? { platformArtifactKills } : {}),
     ...(restrictiveDefault !== undefined ? { restrictiveDefault } : {}),
+    ...(sessionKind !== undefined && sessionKind.tests.length > 0
+      ? { sessionKindSensitiveTests: sessionKind.tests.map((t) => ({ ...t })) }
+      : {}),
     ...(likelyEquivalentSurvivors !== undefined ? { likelyEquivalentSurvivors } : {}),
     ...(readerMarkedEquivalent !== undefined ? { readerMarkedEquivalent } : {}),
     ...(assertionScreen !== undefined ? { assertionScreen } : {}),
@@ -4223,6 +4254,15 @@ export function renderConsole(r: SessionReport): string {
     const firm = rd.tests.filter((t) => t.tier === "firm").length;
     lines.push(
       `RESTRICTIVE DEFAULT (${rd.issue}): ${rd.tests.length} test(s) pass here that BC would refuse (${firm} firm), and ${rd.kills.length} kill(s) and ${rd.survivors.length} survivor(s) rest on them; labelled, not changed (restrictiveDefault in the JSON report; fix: TestPermissions = Disabled, or lower permissions first).`,
+    );
+  }
+  // PR-307 (R1168): ONE line, only when the backend's session kind differs from the CI's.
+  if (
+    r.sessionKindSensitiveTests !== undefined &&
+    r.validity.caveats.includes("session-kind-mismatch")
+  ) {
+    lines.push(
+      `SESSION KIND: ${r.sessionKindSensitiveTests.length} test(s) can differ between a client and a headless session, and this run's backend is not your CI's kind (ciSessionKind); labelled, not changed (sessionKindSensitiveTests in the JSON report).`,
     );
   }
   // R658: a stopped baseline test reads as one more failing test otherwise.
