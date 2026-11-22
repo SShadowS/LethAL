@@ -937,7 +937,7 @@ codeunit 91003 "LC Control API"
         TestRunsBefore := State.TestMethodRunsSoFar();
 
         // PHASE 1 — claim under lock. Nothing is written, and nothing runs, unless this succeeds.
-        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, State.SingleRunBoundMs(), Claimed, ClaimReason);
         if not Claimed then begin
             // 'op-in-flight' (a duplicate claim on a still-active same-attempt marker, design §5) is
             // reported at the wire's existing 'lease-invalid' status, never as a new top-level status —
@@ -1052,8 +1052,8 @@ codeunit 91003 "LC Control API"
         // R206 §2.1: the session-freshness predicate, read ONCE at the very top (see RunMutant).
         TestRunsBefore := State.TestMethodRunsSoFar();
 
-        // PHASE 1 — identical to RunMutant's.
-        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, Claimed, ClaimReason);
+        // PHASE 1 — identical to RunMutant's (PR-309: the run bound is the call's ceiling + stop grace).
+        State.TryBeginRun(LeaseEpoch, LeaseToken, ServerGeneration, AttemptId, OpSeq, TargetAppId, ArtifactId, MutantId, State.ClampRunBoundMs(RequestCeilingMs) + State.ClampRunBoundMs(StopGraceMs), Claimed, ClaimReason);
         if not Claimed then begin
             if ClaimReason = 'op-in-flight' then
                 ClaimStatus := 'lease-invalid'

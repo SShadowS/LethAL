@@ -144,6 +144,9 @@ a client session gets at login (Base Application's `GetDefaultWorkDate`: in a de
 al-runner v3 does, not on the OData session's Today. From 1.0.0.28 (R1131) every answer that ran a method returns the start
 WorkDate it set, as `workDate` (RunMany: in each per-method object; RunMutant: in its answer), and the client refuses a start
 date that moved from the batch's baseline. `HarnessInfo` also returns `workDate`, read without running a test: each
-batch reuses a stored baseline snapshot only when that fresh date equals the snapshot's. 1.0.0.28 is the minimum: no client path
+batch reuses a stored baseline snapshot only when that fresh date equals the snapshot's. From 1.0.0.29 (R1138, PR-309) the lease renew answers from an unlocked read while a run's claim still
+reaches a full ttl ahead (no lock on the lease row during a run), the claim's runway grows by the call's own bound
+(capped at 600 s), and every procedure that clears a run marker trims it back. A dead client's run now reads
+`operation-busy` for up to that bound plus 35 s. 1.0.0.29 is the minimum: no client path
 falls back to an older control app any more, so a 404 from any of these actions, a `HarnessInfo`
 without `databaseId`, or an answer that ran a method without `workDate`, is a plain failure.

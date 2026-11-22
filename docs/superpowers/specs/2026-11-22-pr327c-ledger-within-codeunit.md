@@ -95,3 +95,27 @@ frozen hang rows' `killingTest` and breaks R-658 F1. The WIP is parked on `letha
   - a kill is never re-walked;
   - v3 never re-walks;
   - each red-checked.
+
+## Amendment 2 (2026-11-22, before any measurement run): the cost and flip slice is PR-287's safe arm on bc4
+- **Why not R-882's S3:** S3 (Microsoft's ServiceDeclaration) was measured on bc5, which is gone. Re-running it on a gate
+  server means publishing and removing a large third-party app there. And bc3 cannot run DO 30, which needs Continia
+  Core 30; bc3 has 28.5 (PR-283).
+- **The orchestrator's choice:** the DO server bc4 (BC 29, Continia 30, the owner's yes from PR-287).
+- **The slice:** PR-287's safe arm, exactly as `/coord/handoff/PR-287/run.sh safe` scopes it:
+  - PR-283's mutants, by `--only` and `--lines`;
+  - the 23 safe test codeunits, by `--tests-only`;
+  - PR-67's bc4 config; bcdev with `--stop-hung-sessions`.
+- **Changes from PR-287:**
+  - **WITHOUT `--keep-company-tests`:** company-write tests stay left out (the default), so no new owner ask is needed;
+  - `--ci-session-kind headless`, since PR-311 gives a config no `ciSessionKind`;
+  - a fresh store per arm.
+  - The static bound on PR-287's safe report: 31 of 54 survivors at risk.
+- **The arms, one after the other, under ONE bc4 lease, with doctor before, between and after:**
+  - **A** = master at the time of the run (no re-walk);
+  - **B** = `lethal/pr-327`'s final head (the re-walk).
+- **The rules:**
+  - **BLOCK:** any killed → survived, or any `killingTest` change on a mutant both arms kill.
+  - **Reported:** every survived → killed flip (each must carry `[ledger-order-survived]`; one without the note is a BLOCK),
+    the extra wall time (B − A, with each arm's per-test time), and the number of re-walks.
+  - **Prediction:** 0-10 flips; re-walks ≤ 31.
+- **The #53 probe** stays red then green on a leased bc1-3 server (M0010 and M0011 killed with the note), as above.
