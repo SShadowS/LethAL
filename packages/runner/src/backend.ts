@@ -681,6 +681,8 @@ export interface ExecutionBackend {
   readonly companies?: string | undefined;
   /** PR-297, al-runner-v3 only: `alRunnerV3.refusedCutTail` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
   readonly refusedCutTail?: boolean | undefined;
+  /** PR-256, al-runner-v3 only: `alRunnerV3.stopGroups` is ON. In the fingerprint, the lending build and the report. Absent counts as off. */
+  readonly stopGroups?: boolean | undefined;
   /**
    * R907: one-shot mutant calls pass `--skip-after-timeout` (the build lists it). Absent counts as false.
    */

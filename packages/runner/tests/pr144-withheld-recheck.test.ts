@@ -955,6 +955,20 @@ describe("v3RecheckOf (cli wiring)", () => {
     expect(wire(section).recheck?.budgetSeconds).toBe(3600);
   });
 
+  test("PR-256 (rule 2): the nested recheck never carries the stop; a config without the key is unchanged", async () => {
+    const t = target("M1");
+    const req = { targets: [t], tests: ["T Codeunit.T1"], budgetSeconds: 60 };
+    const on = wire({ ...section, stopGroups: true });
+    await on.recheck?.runner(req);
+    const nested = (on.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3;
+    expect(nested.stopGroups).toBe(false);
+    const absent = wire(section);
+    await absent.recheck?.runner(req);
+    expect(
+      (absent.built[0]?.config as { alRunnerV3: Record<string, unknown> }).alRunnerV3,
+    ).not.toHaveProperty("stopGroups");
+  });
+
   test("option off, or another backend: no recheck is built", () => {
     expect(wire({ ...section, recheckWithheldKills: false }).recheck).toBeUndefined();
     expect(wire({ ...section, recheckWithheldKills: true }, "bcdev").recheck).toBeUndefined();
