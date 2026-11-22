@@ -750,6 +750,11 @@ export class BcDevMcpBackend implements ExecutionBackend {
     return client;
   }
 
+  /** PR-315: the stop this backend was built with (see `ExecutionBackend.stopsHungSessions`). */
+  stopsHungSessions(): boolean {
+    return this.cfg.stopHungSessions === true;
+  }
+
   /**
    * Shut down the MCP client and the bc-dev server child process it spawned.
    *

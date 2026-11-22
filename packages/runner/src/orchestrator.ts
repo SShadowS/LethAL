@@ -10427,6 +10427,15 @@ async function runNamedMutantsBody(
     const ending = leaseSession;
     cleanups.push(() => ending.end());
   }
+  // PR-315 (GitHub #52): once per call (`lethal verify` reaches here once), before the first mutant.
+  // No stop setting here: the backend knows what it was built with.
+  if (isBcdev(caps.kind) && backend.stopsHungSessions?.() !== true) {
+    emit({
+      type: "warning",
+      code: "stop-hung-sessions-off",
+      message: `--stop-hung-sessions is off: ${STOP_HUNG_SESSIONS_OFF_TEXT}`,
+    });
+  }
   const outcomes: SessionOutcome[] = [];
   const strict = cfg.requireEveryMethodGreen === true;
   const baselineTests = baselineTestsOf(named);

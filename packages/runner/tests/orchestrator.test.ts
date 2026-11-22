@@ -25279,4 +25279,31 @@ describe("PR-315: stop-hung-sessions-off warning", () => {
     expect(events.some((e) => e.type === "mutation-set-generated")).toBe(true);
     expect(warnings.length).toBe(0);
   });
+
+  // runNamedMutants (and so `lethal verify`) has no stop setting: it asks the backend.
+  async function namedWarnings(stops: boolean | undefined): Promise<number> {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const base = fx.cfg.backend;
+    const backend = (
+      stops === undefined
+        ? base
+        : Object.assign(Object.create(base), { stopsHungSessions: () => stops })
+    ) as ExecutionBackend;
+    await runNamedMutants({ ...fx.cfg, backend, emit: [(e) => events.push(e)] });
+    return events.filter((e) => e.type === "warning" && e.code === "stop-hung-sessions-off")
+      .length;
+  }
+
+  test("runNamedMutants: emitted once on bcdev with the stop off", async () => {
+    expect(await namedWarnings(false)).toBe(1);
+  });
+
+  test("runNamedMutants: a backend that cannot say is read as off", async () => {
+    expect(await namedWarnings(undefined)).toBe(1);
+  });
+
+  test("runNamedMutants: not emitted when the backend's stop is on", async () => {
+    expect(await namedWarnings(true)).toBe(0);
+  });
 });

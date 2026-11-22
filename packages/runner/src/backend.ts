@@ -622,6 +622,11 @@ export interface ExecutionBackend {
    */
   closeDaemons?(): Promise<void>;
   /**
+   * PR-315: whether this backend was built with `--stop-hung-sessions` on. `runNamedMutants` (and so
+   * `lethal verify`) has no stop setting of its own, so it asks the backend. Absent: read as off.
+   */
+  stopsHungSessions?(): boolean;
+  /**
    * R516 I1: true when the run's own in-run stop is the budget it was sent (bcdev; al-runner
    * one-shot, static or resource selector), so a larger budget really lets the test run longer.
    * False on al-runner `--server` (and resource with `--server`): the daemon stops a test body at
