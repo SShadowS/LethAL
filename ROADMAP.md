@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**65 of 1138 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1138 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1179,7 +1179,7 @@ that ordering is the priority.
 - **R1162** · Keep the serve daemon after ANY notRun refusal once al-runner's #8180 promise is on edge (one rule for every refusal kind, proved on DO kept-vs-fresh); revisit PR-244's declined option 4 · [R1162.md](docs/roadmap/R1162.md) · blocked — on edge: upstream #8180's documented promise…
 - **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; five shapes measured on BC and posted upstream (#8267, #8219, #7908, #8652, #8668) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the five shapes below (re-score the DO tests behind them)
 - **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · done (ce018474d)
-- **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · open
+- **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · closed 2026-11-22 — ruling (PR-332, /coord/handoff/PR-332/premise-concurrency.txt): no gain shown and a…
 - **R1170** · A client-session backend (R1168's end state: run a mutant's tests in the session kind CI uses) is feasible on a BC with a web server, but today's control app caches the active mutant for a whole session, so each mutant would need a fresh ~7 s client session; serving many mutants from one kept session needs a per-mutant activation reload · [R1170.md](docs/roadmap/R1170.md) · open — resumed as a design…
 - **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · done (PR-323): ruled q-20261122T015708-0db73446 (kraken from the mantra); readCgroupMemory now reads used =…
 - **R1175** · On al-runner v3, 29 DO baseline tests fail on Continia Core's activation Confirm (the product is not activated in al-runner's sandbox), so they cover and kill nothing on v3; DO's client CI activates and passes them · [R1175.md](docs/roadmap/R1175.md) · open — the offline look (PR-331) points at R1173's shape: activation is a SingleInstance test mock that…
