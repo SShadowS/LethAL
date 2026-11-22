@@ -13,6 +13,7 @@ import type {
 import { runSession } from "../src/orchestrator";
 import type { SessionConfig } from "../src/orchestrator";
 import type { SessionReport } from "../src/report";
+import { withheldKillOf } from "../src/report";
 import { SessionSafety } from "../src/session-safety";
 import { ResultsStore } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
@@ -1091,5 +1092,54 @@ describe("PR-81: the lane view forwards dropPendingPair to its own lane (delta M
     v1.dropPendingPair("M0001"); // not lane 0's pair
     await v0.activate("M0001");
     expect(r.b.entriesStats().pairRequests).toBe(1);
+  });
+});
+
+// PR-341 (R1178): PR-144's recheck picks a mutant by its kept held error's note (`withheldKillOf`). When the first held error
+// is not a withheld kill and a later one of the same walk is, the later one is kept, so eligibility does not depend on walk
+// order. The verdict stays `error` / `runner-refused`.
+describe("PR-341: the first withheld-ELIGIBLE held error is kept", () => {
+  const WITHHELD =
+    "NotRun: out-of-scope: an earlier test of this codeunit was refused while it ran (Sandbox Tests.T0: Commit): this failure is not trusted: Expected 1 got 2";
+  /** `build` with `withheld` tests answering the eligible cascade form (a runner-refused row). */
+  const withWithheld = (roles: Record<string, "runner-refused">, withheld: readonly string[]) => {
+    const b = build(roles, HeldStub);
+    const prev = b.answer;
+    b.answer = (mutant, n, v) =>
+      mutant === "M0001" && withheld.includes(v.ref.method)
+        ? { ...refusedRow(v.ref), failureMessage: WITHHELD }
+        : prev?.(mutant, n, v);
+    return b;
+  };
+
+  test("a non-eligible held error, then an eligible one: the eligible note is kept (revert: first always kept)", async () => {
+    const e = m1(
+      await session(withWithheld({ T1: "runner-refused", T2: "runner-refused" }, ["T2"])),
+    );
+    expect(e?.verdict).toBe("error");
+    expect(e?.cause).toBe("runner-refused");
+    expect(withheldKillOf(e?.verdict ?? "", e?.cause, e?.failureNote)).not.toBeUndefined();
+    expect(e?.failureNote).toContain("this failure is not trusted: Expected 1 got 2");
+    // The note (review S1): the kept T2 is never named "after" itself; the later T3 is; the replaced T1 is named earlier.
+    expect(e?.failureNote ?? "").not.toContain(`after the error: ${NAME("T2")}`);
+    expect(e?.failureNote).toContain(`after the error: ${NAME("T3")}`);
+    expect(e?.failureNote).toContain(`an earlier held error (not a withheld kill): ${NAME("T1")}`);
+  });
+
+  test("eligible first, then non-eligible: unchanged, the first is kept", async () => {
+    const e = m1(
+      await session(withWithheld({ T1: "runner-refused", T2: "runner-refused" }, ["T1"])),
+    );
+    expect(e?.verdict).toBe("error");
+    expect(withheldKillOf(e?.verdict ?? "", e?.cause, e?.failureNote)).not.toBeUndefined();
+    expect(e?.failureNote).toContain(`after the error: ${NAME("T2")}`);
+  });
+
+  test("two non-eligible held errors: unchanged, the first is kept and not eligible", async () => {
+    const e = m1(await session(withWithheld({ T1: "runner-refused", T2: "runner-refused" }, [])));
+    expect(e?.verdict).toBe("error");
+    expect(e?.cause).toBe("runner-refused");
+    expect(e?.failureNote).toContain(REFUSED);
+    expect(withheldKillOf(e?.verdict ?? "", e?.cause, e?.failureNote)).toBeUndefined();
   });
 });

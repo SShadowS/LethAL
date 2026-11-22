@@ -623,7 +623,7 @@ export function knownDifferencesRefusal(
 
 /**
  * Leg C's defect facts: each must read `defect-present` (r6; `none-selected-exit` since r7, R632;
- * `refusal-row-shape` since r9, R639). Every other fact of the 36 is a contract or capability fact and
+ * `refusal-row-shape` since r9, R639). Every other fact of the 38 is a contract or capability fact and
  * must read `matches`, except the warn facts.
  */
 export const V3_DEFECT_FACTS = [
@@ -640,12 +640,16 @@ export const V3_DEFECT_FACTS = [
 ] as const;
 
 /**
- * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 9 capability (PR-114a: the eight
+ * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: the eight
  * `batch-*` facts of `V3_CAPABILITY_FACTS`; a capability fact not reading `matches` is a gate-fail
- * here, never a session refusal; PR-342: `stop-groups`, whose `diverged` only keeps PR-256's flag off). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
- * (R667, `message-has-no-type-prefix`) had 27, r9 had 26.
+ * here, never a session refusal). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
+ * (R667, `message-has-no-type-prefix`) had 27, r9 had 26. PR-340: 37, the ninth `batch-*` fact
+ * `batch-sequential-carry` (`V3_CARRY_FACT`, outside `V3_CAPABILITY_FACTS`; pre-committed `matches`).
+ * PR-342: 38, the fact `stop-groups` (`STOP_GROUPS_FACT`, also outside `V3_CAPABILITY_FACTS`; its
+ * `diverged` only keeps PR-256's flag off). So: 9 defect, 18 contract, 1 warn, 8 capability, the carry
+ * fact and stop-groups.
  */
-export const V3_LEG_C_FACTS = 37;
+export const V3_LEG_C_FACTS = 38;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {

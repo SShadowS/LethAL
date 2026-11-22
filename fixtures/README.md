@@ -30,6 +30,8 @@ manual smoke-testing, and the env-gated integration scripts in
 | `Wrapped Arms` | 78906 | `sandbox-wrapped` | R-300b refusal control: a two-arm wrapper. |
 | `Wrapped Tests` | 78950 | `sandbox-wrapped-tests` | One test per procedure, `Grow*`/`Twice*` per file and twin, `PairPick`, `ArmsPick`. Asserts via `Error()`. |
 | `Names Calc` | 78800 | `sandbox-names` | R557 target: twelve identical `exit(x + 1)` procedures, each reached and killed by exactly one test. See "sandbox-names (R557)" below. |
+| `SL Probe State` / `SL Probe Logic` | 71760 / 71761 | `sandbox-carry` | PR-340 (`itest:alrunner-v3-carry`): PR-327's invented SingleInstance probe: a flag whose reset a mutant can empty, and a procedure whose answer it changes. |
+| `SL Probe Tests A` / `B` / `Burner` | 71770 / 71771 / 71772 | `sandbox-carry-tests` | PR-340: A sets and resets the flag, B (`ComputeIsPlain`) fails when A's flag leaked in, the burner covers nothing and burns CPU (3,000,000 iterations) so a walk can show excluded codeunits are skipped. Asserts via `Error()`. **Not in the symbol tar (R670): `compile:fixtures` skips it where its symbols are absent.** |
 | `Order Dep Row` / `Order Dep State` | 77000 / 77001 | `sandbox-order` | R784 (leg O1 of `itest:alrunner-v3`): the dependency app of the serve order probe, a table and a SingleInstance codeunit. Nothing to mutate. |
 | `Reach Logic` / `Reach State` | 75000 / 75001 | `sandbox-reach` | PR-298: planted unreached (U), reached (R) and state-reached (S) sites. `Reach State` is a SingleInstance flag. No gate uses it. See "sandbox-reach (PR-298)" below. |
 | `Reach Tests` | 75050 | `sandbox-reach-tests` | PR-298: seven tests declared in run order; `T05ArmState` sets the flag that `T06` and `T07` need. Asserts via `Error()`. |

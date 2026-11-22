@@ -1512,6 +1512,16 @@ export const V3_CAPABILITY_FACTS = [
   "batch-lane-strict-reruns",
 ] as const;
 
+/**
+ * PR-340 §4: the carry fact. It is NOT in `V3_CAPABILITY_FACTS` on purpose: those eight gate baseline
+ * batching (`baselineBatchingOffReason`, the update script's record rule, DBM's seam), and a build with
+ * no record of this one must read "not carry-proven", never move batching or any other fact. It is a
+ * ninth batch-shaped probe fact, judged by leg C's default table (`matches`); its reading rides in the
+ * receipt's and `.gated`'s `batchFacts` map beside the eight, and `carryWalkOffReason` reads it.
+ * Its own server starts with `AL_STRICT_SEQUENTIAL=1`; the other facts' servers do not.
+ */
+export const V3_CARRY_FACT = "batch-sequential-carry";
+
 const batchSpareAl = (id: number): string => `codeunit ${id} "Batch Spare"
 {
     Subtype = Test;
@@ -1860,6 +1870,57 @@ codeunit ${b + 3} "Batch Lane Reader"
 
 ${batchSpareAl(b + 4)}`;
 
+/**
+ * PR-340: a SingleInstance store, a writer that leaves 5 in it and a reader that FAILS on any store
+ * not 0 (the leak detector the carry walk relies on). ids b+1 .. b+4 (the spare is b+4).
+ */
+const batchCarryAl = (b: number): string => `codeunit ${b + 1} "Carry Probe Store"
+{
+    SingleInstance = true;
+
+    var
+        Stored: Integer;
+
+    procedure SetValue(V: Integer)
+    begin
+        Stored := V;
+    end;
+
+    procedure GetValue(): Integer
+    begin
+        exit(Stored);
+    end;
+}
+
+codeunit ${b + 2} "Carry Probe Writer"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure LeavesFive()
+    var
+        S: Codeunit "Carry Probe Store";
+    begin
+        S.SetValue(5);
+    end;
+}
+
+codeunit ${b + 3} "Carry Probe Reader"
+{
+    Subtype = Test;
+
+    [Test]
+    procedure WantsZero()
+    var
+        S: Codeunit "Carry Probe Store";
+    begin
+        if S.GetValue() <> 0 then
+            Error('carried %1', S.GetValue());
+    end;
+}
+
+${batchSpareAl(b + 4)}`;
+
 interface BatchRow {
   readonly name: string;
   readonly status: string;
@@ -1874,7 +1935,9 @@ interface BatchAnswer {
 type BatchAsk = (extra: Record<string, unknown>) => Promise<BatchAnswer>;
 
 interface BatchFactSpec {
-  readonly fact: (typeof V3_CAPABILITY_FACTS)[number];
+  readonly fact: (typeof V3_CAPABILITY_FACTS)[number] | typeof V3_CARRY_FACT;
+  /** PR-340: extra environment for this fact's OWN server (the carry fact only); absent: the shared server. */
+  readonly serverEnv?: Readonly<Record<string, string>>;
   /** The first of the fact's ten ids. */
   readonly base: number;
   readonly al: string;
@@ -2056,16 +2119,63 @@ const BATCH_FACTS: readonly BatchFactSpec[] = [
       };
     },
   },
+  {
+    fact: V3_CARRY_FACT,
+    // Its own server, started with AL_STRICT_SEQUENTIAL=1; no other fact's server gets the variable.
+    serverEnv: { AL_STRICT_SEQUENTIAL: "1" },
+    base: 50780,
+    al: batchCarryAl(50780),
+    expected:
+      'with AL_STRICT_SEQUENTIAL=1 and strictOrder: true (LethAL\'s lane body: the spare in excludeTests) the writer (50782) passes and the reader (50783) runs after it ONCE and FAILS with the carried state: exactly `fail` "carried 5", two rows in all',
+    judge: async (ask) => {
+      const batch = await ask({ excludeTests: ["Codeunit50784."], strictOrder: true });
+      const w = rowsOf(batch, 50782);
+      const r = rowsOf(batch, 50783);
+      return {
+        ok:
+          batch.rows.length === 2 &&
+          w.length === 1 &&
+          w[0]?.status === "pass" &&
+          r.length === 1 &&
+          r[0]?.status === "fail" &&
+          r[0]?.message === "carried 5" &&
+          batch.rows[0]?.name === w[0]?.name,
+        measured: rowText(batch.rows),
+      };
+    },
+  },
 ];
 
 /**
- * PR-114a: the eight capability facts, one serve daemon, one scratch folder per fact. A request that
- * fails (or a daemon that will not start) reads `unmeasurable` for the facts it carried.
+ * PR-114a: the capability facts, one serve daemon, one scratch folder per fact. A request that
+ * fails (or a daemon that will not start) reads `unmeasurable` for the facts it carried. PR-340: the
+ * carry fact has its OWN daemon (`serverEnv`), so the others run exactly as before.
  */
 async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fact[]> {
+  const shared = await batchFactsOn(
+    env,
+    root,
+    BATCH_FACTS.filter((s) => s.serverEnv === undefined),
+    undefined,
+  );
+  const own: V3Fact[] = [];
+  for (const spec of BATCH_FACTS.filter((s) => s.serverEnv !== undefined))
+    own.push(...(await batchFactsOn(env, root, [spec], spec.serverEnv)));
+  return [...shared, ...own];
+}
+
+async function batchFactsOn(
+  env: V3ProbeEnv,
+  root: string,
+  specs: readonly BatchFactSpec[],
+  serverEnv: Readonly<Record<string, string>> | undefined,
+): Promise<V3Fact[]> {
   const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
   const spawn: ServerSpawnFn = (argv) =>
-    (env.serveSpawn ?? defaultServerSpawn)(argv, { cwd: root, env: v3ChildEnv(cache) });
+    (env.serveSpawn ?? defaultServerSpawn)(argv, {
+      cwd: root,
+      env: { ...v3ChildEnv(cache), ...serverEnv },
+    });
   const deadline = env.serveDeadlineMs ?? SERVE_DEADLINE_MS;
   const begin = async (): Promise<AlRunnerServer> => {
     const s = new AlRunnerServer(absToolPath(env.alRunnerPath), spawn, [], "serve");
@@ -2081,7 +2191,7 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
   const out: V3Fact[] = [];
   try {
     server = await begin();
-    for (const spec of BATCH_FACTS) {
+    for (const spec of specs) {
       const dir = join(root, spec.fact);
       await mkdir(join(dir, "src"), { recursive: true });
       await writeFile(
@@ -2140,11 +2250,11 @@ async function batchCapabilityFacts(env: V3ProbeEnv, root: string): Promise<V3Fa
         // gets a fresh one (if none starts, the outer catch marks the rest unmeasurable).
         await server?.close();
         server = undefined;
-        if (spec !== BATCH_FACTS[BATCH_FACTS.length - 1]) server = await begin();
+        if (spec !== specs[specs.length - 1]) server = await begin();
       }
     }
   } catch (err) {
-    for (const spec of BATCH_FACTS)
+    for (const spec of specs)
       if (!out.some((f) => f.fact === spec.fact))
         out.push(fact(spec.fact, "capability", "unmeasurable", spec.expected, String(err)));
   } finally {
