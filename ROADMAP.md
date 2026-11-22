@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 1135 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**68 of 1137 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -400,6 +400,8 @@ that ordering is the priority.
 - **R1167** · A mutant killed through the isolated recheck (PR-144) reports the recheck's RUN set as `coveringTests` (whole test codeunits, non-green tests included) while keeping `coverageAttribution: exact`, which promises tests that executed the procedure · [R1167.md](docs/roadmap/R1167.md) · open — report accuracy only (no verdict moves): pick one, either rechecked rows keep the baseline covering…
 - **R1168** · bcdev runs tests headless (an ODataV4 session, GuiAllowed false), while a project's own CI often runs a client session (DO's Azure DevOps CI: GuiAllowed true): on DO 60 of 422 tests change outcome by session kind, so the authoritative backend measures a different code path than the project's CI for session-dependent tests · [R1168.md](docs/roadmap/R1168.md) · open — ruled…
 - **R1169** · The session-kind label (R1168, PR-307) reads only the test app's source (HandlerFunctions; TestPage on v3), so a test whose outcome changes with the session kind through APP code (an unhandled Confirm that headless BC answers by default, or a GuiAllowed branch) is not labelled: 5 of PR-299's 60 DO differences · [R1169.md](docs/roadmap/R1169.md) · open — needs a coverage join…
+- **R1173** · al-runner v3 scores a cross-codeunit SingleInstance state-leak mutant SURVIVED (GitHub #53): each covering test codeunit is its own fresh entry, and LethAL's capability contract requires batch-no-cross-singleinstance, so state one test codeunit leaves can never reach the next; on c2, 90 of 8,536 survivors are exposed · [R1173.md](docs/roadmap/R1173.md) · open — PR-327: (a) a by-name label on such v3 survivors first; (b) the fix, the covering codeunits as one…
+- **R1174** · R197's kill ledger can change a bcdev VERDICT: it moves a scope's earlier killer FIRST, so when that kill rested on state an earlier test codeunit left (a SingleInstance flag), the moved killer runs before the setter and the next mutants of the scope SURVIVE (a false survivor on the authoritative backend) · [R1174.md](docs/roadmap/R1174.md) · open — PR-327 (c), right after R1173's label: the ledger must never move a killer ahead of a test codeunit…
 
 ## Product gaps a real project hits
 
