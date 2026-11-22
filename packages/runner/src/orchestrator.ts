@@ -62,7 +62,12 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import { AlRunnerV3ServeFallbackWarmupError, REACH_PRUNE_ENV } from "./al-runner-v3-backend";
+import {
+  AlRunnerV3ServeFallbackWarmupError,
+  CARRY_WALK_ENV,
+  REACH_PRUNE_ENV,
+  V3_SINGLEINSTANCE_NOTE,
+} from "./al-runner-v3-backend";
 import {
   type AppJsonPathChange,
   caseChangeText,
@@ -92,6 +97,7 @@ import {
 import type { CompiledArtifact } from "./artifact";
 import type {
   BackendCapabilities,
+  CarryWalkResult,
   CoverageMode,
   ExecutionBackend,
   PackageUnread,
@@ -4842,6 +4848,8 @@ function resolveResume(
   olderDefaultFingerprint?: string,
   /** PR-303: the digest with the prune flag the other way, and this session's flag state. */
   pruneFlag?: { readonly otherPruneFingerprint: string; readonly reachPrune: boolean },
+  /** PR-340: the digest with the carry-walk knob the other way, and this session's state of it. */
+  carryFlag?: { readonly otherCarryFingerprint: string; readonly carryWalk: boolean },
 ):
   | {
       runId: number;
@@ -4920,6 +4928,22 @@ function resolveResume(
         if (other !== null)
           throw new ReachPruneError(
             reachPruneResumeMessage(`--resume found run ${other}`, pruneFlag.reachPrune),
+          );
+      }
+      // PR-340: likewise for an unfinished run recorded with the carry-walk knob the other way.
+      if (carryFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: carryFlag.otherCarryFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new CarryWalkError(
+            carryWalkResumeMessage(`--resume found run ${other}`, carryFlag.carryWalk),
           );
       }
       // PR-209 (M6): an unfinished run of the OLDER default set has another digest, so the search
@@ -5084,6 +5108,9 @@ function resolveResume(
         throw new ReachPruneError(
           reachPruneResumeMessage(`--resume-run ${id}`, pruneFlag.reachPrune),
         );
+      }
+      if (carryFlag !== undefined && row.configFingerprint === carryFlag.otherCarryFingerprint) {
+        throw new CarryWalkError(carryWalkResumeMessage(`--resume-run ${id}`, carryFlag.carryWalk));
       }
       if (
         olderDefaultFingerprint !== undefined &&
@@ -5317,6 +5344,8 @@ interface BatchScope {
   readonly reachTrace?: ReachTrace;
   /** PR-303: `LETHAL_V3_REACH_PRUNE=on`, read and checked once per session. */
   readonly reachPrune?: true;
+  /** PR-340: the carry walk is allowed this session (al-runner-v3, `LETHAL_V3_CARRY_WALK` not `off`). */
+  readonly carryWalk?: true;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -6778,6 +6807,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     baselineReach,
     ...(scope.reachTrace !== undefined ? { reachTrace: scope.reachTrace } : {}),
     ...(scope.timeBudget !== undefined ? { timeBudget: scope.timeBudget } : {}),
+    ...(scope.carryWalk === true ? { carryWalk: true as const } : {}), // PR-340
   };
   if (scope.parallel !== undefined) {
     await runMutantsParallel({ ...mutantLoopArgs, ...scope.parallel });
@@ -6914,6 +6944,8 @@ async function runSessionBody(
   }
   // PR-303: read and checked before any run, and before the trace file is truncated.
   const reachPrune = cfg.reachPrune === false ? false : readReachPrune(process.env, cfg.backend);
+  // PR-340: `LETHAL_V3_CARRY_WALK=off|on` (default on), refused by name when it is anything else.
+  const carryWalk = readCarryWalk(process.env);
   reachTrace?.start();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
@@ -7593,19 +7625,25 @@ async function runSessionBody(
   // the digest an older default run recorded, so `resolveResume` can name that store.
   // PR-303: the prune flag is in the digest only when on, so a flag-off run keeps every digest. The same
   // digest with the flag the other way names the store of a run the flag change must refuse to resume.
-  const fingerprintWith = (prune: boolean) =>
+  // PR-340: the carry-walk knob is in the digest only when OFF on al-runner-v3 (default on), so a walk-on
+  // run keeps every digest; the same digest with the knob the other way names the store a change must refuse.
+  const carryApplies = isLocalRunner(caps.kind);
+  const fingerprintWith = (prune: boolean, carryOn: boolean = carryWalk) =>
     sessionFingerprint({
       ...fingerprintBase,
       ...(prune ? { v3ReachPrune: true as const } : {}),
+      ...(carryApplies && !carryOn ? { v3CarryWalkOff: true as const } : {}),
       ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
     });
   const configFingerprint = fingerprintWith(reachPrune);
   const otherPruneFingerprint = fingerprintWith(!reachPrune);
+  const otherCarryFingerprint = fingerprintWith(reachPrune, !carryWalk);
   const olderDefaultFingerprint =
     resolvedOperators === undefined
       ? sessionFingerprint({
           ...fingerprintBase,
           ...(reachPrune ? { v3ReachPrune: true as const } : {}),
+          ...(carryApplies && !carryWalk ? { v3CarryWalkOff: true as const } : {}),
         })
       : undefined;
   const resolvedResume = resolveResume(
@@ -7628,6 +7666,7 @@ async function runSessionBody(
     resumeInputs,
     olderDefaultFingerprint,
     { otherPruneFingerprint, reachPrune },
+    carryApplies ? { otherCarryFingerprint, carryWalk } : undefined,
   );
 
   const runId = cfg.store.createRun({
@@ -8446,6 +8485,7 @@ async function runSessionBody(
       testPageRefused,
       ...(reachTrace !== undefined ? { reachTrace } : {}),
       ...(reachPrune ? { reachPrune: true as const } : {}),
+      ...(carryWalk && carryApplies ? { carryWalk: true as const } : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
@@ -11162,6 +11202,29 @@ export function readReachPrune(
   return true;
 }
 
+/** PR-340: a refused `LETHAL_V3_CARRY_WALK` value, or a resume across a change of it. */
+export class CarryWalkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CarryWalkError";
+  }
+}
+
+/** PR-340: `LETHAL_V3_CARRY_WALK` (unset, empty or `on`: on; `off`: off; else refused). Returns whether the walk is on. */
+export function readCarryWalk(env: Record<string, string | undefined>): boolean {
+  const v = env[CARRY_WALK_ENV];
+  if (v === undefined || v === "" || v === "on") return true;
+  if (v === "off") return false;
+  throw new CarryWalkError(
+    `carry-walk-value-refused: ${CARRY_WALK_ENV} is "${v}"; use on or off, or leave it unset (PR-340)`,
+  );
+}
+
+/** PR-340: why a resume across a change of `LETHAL_V3_CARRY_WALK` is refused (same shape as PR-303's). */
+function carryWalkResumeMessage(subject: string, nowOn: boolean): string {
+  return `carry-walk-resume-refused: ${subject} was recorded with ${CARRY_WALK_ENV} ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A survivor scored with the carry walk must never be carried into a run without it as an ordinary one (PR-340). Set the knob as that run had it, or drop the resume flag to run from scratch.`;
+}
+
 /** PR-303 rule 6: why a resume across a flag change is refused. */
 function reachPruneResumeMessage(subject: string, nowOn: boolean): string {
   return `reach-prune-resume-refused: ${subject} was recorded with ${REACH_PRUNE_ENV} ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A pruned survivor must never be carried into a run without pruning as an ordinary one (PR-303). Set the flag as that run had it, or drop the resume flag to run from scratch.`;
@@ -13077,6 +13140,8 @@ interface RunMutantsArgs {
   readonly skipPrefetch?: boolean;
   /** R912: the session's `--time-budget` clock, when the flag is set. */
   readonly timeBudget?: TimeBudget | undefined;
+  /** PR-340: the carry walk is allowed (al-runner-v3 and `LETHAL_V3_CARRY_WALK` not `off`). */
+  readonly carryWalk?: true;
   readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
   /** What plans and runs. Under `LETHAL_V3_REACH_PRUNE=on` this is the PRUNED map (PR-303); else the full one. */
@@ -14480,11 +14545,62 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         "[ledger-order-survived] survived in the kill ledger's order; killed in the no-ledger order (R1174)",
       );
     }
+    // PR-340: a survivor that would get the PR-327 (a) label is first walked in al-runner's sequential
+    // lane, on the lane that scored it (`args.backend` IS that lane's view). v3 only; never with an
+    // unsafe session or a spent or signalled budget; never in a re-walk. A failed walk never moves a verdict.
+    let carry: CarryWalkResult | undefined;
+    if (
+      verdict === "survived" &&
+      rw.cur === undefined &&
+      args.carryWalk === true &&
+      args.backend.carryWalk !== undefined &&
+      isLocalRunner(args.backend.capabilities().kind) &&
+      !args.safety.isUnsafe &&
+      args.timeBudget?.exhausted !== true &&
+      args.timeBudget?.signalled !== true
+    ) {
+      carry = await args.backend.carryWalk(m.mutantId, fullCovering, m);
+      if (carry?.kind === "killed") {
+        const cu = carry.codeunitId;
+        const method = carry.method;
+        verdict = "killed";
+        killingTest = method;
+        killingTestRef = fullCovering.find(
+          (r) => r.codeunitId === cu && r.method.toLowerCase() === method.toLowerCase(),
+        ) ?? {
+          codeunitId: cu,
+          codeunitName: fullCovering.find((r) => r.codeunitId === cu)?.codeunitName ?? String(cu),
+          method,
+        };
+        // The failure under the mutant (request 1) and its reproduction (request 3). NO `recordKill`:
+        // a walk kill never feeds the kill ledger (R1174's rule), which keeps it clear of PR-302.
+        killingTestFailure = carry.failure;
+        if (carry.reproduced !== undefined) reproduction = { reproducedFailure: carry.reproduced };
+        failureNote = appendNote(
+          failureNote,
+          "[singleinstance-carry-killed] killed when the covering codeunits ran in one session, in order (al-runner's sequential lane, R1173)",
+        );
+      }
+    }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
       // PR-303: over the FULL covering set; PR-327 (a): with the site, and appended (the survivor note first).
-      const note = args.backend.survivorNote?.(fullCovering, m);
-      if (note !== undefined) failureNote = appendNote(failureNote, note);
+      let note = args.backend.survivorNote?.(fullCovering, m);
+      if (carry?.kind === "walked" && note !== undefined) {
+        // The walk answered the question the label raises: the label is replaced by its own note.
+        note = note.replace(V3_SINGLEINSTANCE_NOTE, "").trim();
+      }
+      if (note !== undefined && note !== "") failureNote = appendNote(failureNote, note);
+      if (carry?.kind === "walked")
+        failureNote = appendNote(
+          failureNote,
+          "[singleinstance-carry-walked] survived with the covering codeunits run in one session, in order (R1173)",
+        );
+      else if (carry?.kind === "failed")
+        failureNote = appendNote(
+          failureNote,
+          `[singleinstance-carry-walk-failed: ${carry.reason}]`,
+        );
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
     const reach =

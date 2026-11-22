@@ -24,6 +24,19 @@ export function v3ChildEnv(extra?: Readonly<Record<string, string>>): Record<str
   return { ...extra, [V3_SEED_ENV]: String(V3_RUN_SEED) };
 }
 
+/** PR-340: al-runner reads this variable's PRESENCE, so a mutant-run daemon always gets it, set to "1". */
+export const V3_STRICT_SEQUENTIAL_ENV = "AL_STRICT_SEQUENTIAL";
+
+/**
+ * PR-340 §1: `v3ChildEnv` plus `AL_STRICT_SEQUENTIAL=1`. Used ONLY where the backend starts a
+ * MUTANT-RUN serve daemon; never by leg C's ordinary fact servers (they use `v3ChildEnv`).
+ */
+export function v3MutantDaemonEnv(
+  extra?: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return { ...v3ChildEnv(extra), [V3_STRICT_SEQUENTIAL_ENV]: "1" };
+}
+
 /**
  * O1's sensitivity check ONLY (serve daemons): `extra` with the seed variable REMOVED from the child's
  * environment (value `undefined`), so an ambient value cannot leak in either.

@@ -27,6 +27,7 @@ import {
   SERVE_TESTS_AL,
   type V3ContractResult,
   V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
   burnerArgv,
   classifySleep,
   leastBusyCore,
@@ -42,6 +43,7 @@ import {
   parseGated,
   sha256OfFile,
 } from "../src/al-runner-v3-pin";
+import { baselineBatchingOffReason, carryWalkOffReason } from "../src/al-runner-v3-pins";
 import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
 import type { ArtifactIo } from "../src/artifact";
 import type { SpawnFn } from "../src/publisher";
@@ -509,6 +511,12 @@ const CAP_APPS: Record<string, readonly (readonly [number, readonly string[]])[]
     [50773, ["NeedsFive"]],
     [50774, ["Spare"]],
   ],
+  // PR-340: the carry fact (outside V3_CAPABILITY_FACTS).
+  "batch-sequential-carry": [
+    [50782, ["LeavesFive"]],
+    [50783, ["WantsZero"]],
+    [50784, ["Spare"]],
+  ],
 };
 
 /** The last part of a path, whether it uses `/` or `\` (the probe's scratch folders use the host's: backslashes on Windows). */
@@ -555,6 +563,18 @@ function capabilityAnswer(fact: string, req: Record<string, unknown>): CapAnswer
     // The OnRun writer's row reaches the later codeunits, which stream a second row (a carry).
     tests.push(capRow(50752, "ReaderSeesNoRow", "fail", "reader: carried row 7"));
     tests.push(capRow(50753, "OtherInsertsAndSeesOne", "fail", "other: count 2"));
+  }
+  if (fact === "batch-sequential-carry") {
+    // PR-340: with AL_STRICT_SEQUENTIAL=1 and strictOrder the writer runs first and the reader sees its store.
+    // (The fake cannot see the variable; the test that reads the spawn options checks it.)
+    return {
+      tests: cus.flatMap(([id, methods]) =>
+        methods.map((m) =>
+          m === "WantsZero" ? capRow(id, m, "fail", "carried 5") : capRow(id, m),
+        ),
+      ),
+      summary,
+    };
   }
   return { tests, summary };
 }
@@ -666,8 +686,8 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
       expect(c.cwd).toBeDefined();
       expect(c.cwd).not.toBe(process.cwd());
     }
-    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon.
-    expect(serveCwds).toHaveLength(2);
+    // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own.
+    expect(serveCwds).toHaveLength(3);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -764,9 +784,9 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(f?.measured).toContain("http: refusal");
     expect(f?.measured).toContain("cascade: refusal");
     expect(f?.measured).toContain("cascade-existing-state: refusal");
-    // PR-114a: a second daemon, with the same argv, measures the capability facts.
+    // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own.
     const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
-    expect(s.argvs).toEqual([serveArgv, serveArgv]);
+    expect(s.argvs).toEqual([serveArgv, serveArgv, serveArgv]);
     const run = s.requests.filter((q) => q.command === "runTests" && !isCapabilityRequest(q));
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
@@ -1143,8 +1163,8 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     for (const v of ["matches", "diverged"]) {
       const s = fakeServe();
       const r = await session(s, { "serve-keep-reasons": v });
-      // PR-114a: a session does start serve, for the capability facts alone.
-      expect(s.argvs.length).toBe(1);
+      // PR-114a: a session does start serve, for the capability facts alone (PR-340: and the carry fact's own daemon).
+      expect(s.argvs.length).toBe(2);
       expect(
         s.requests.filter((q) => q.command === "runTests").every((q) => isCapabilityRequest(q)),
       ).toBe(true);
@@ -1178,6 +1198,7 @@ describe("§8 the contract probe", () => {
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(r.facts.map((f) => f.fact).sort()).toEqual(
       [
+        "batch-sequential-carry",
         "version",
         "unknown-flag-rejected",
         "rows-shape",
@@ -1244,8 +1265,12 @@ describe("PR-114a: the eight capability facts", () => {
     const { r, f } = await readOf();
     for (const n of V3_CAPABILITY_FACTS)
       expect(f(n), n).toMatchObject({ kind: "capability", verdict: "matches" });
+    // PR-340: the carry fact is read beside the eight, but is NOT one of them.
+    expect(f(V3_CARRY_FACT)).toMatchObject({ kind: "capability", verdict: "matches" });
+    expect((V3_CAPABILITY_FACTS as readonly string[]).includes(V3_CARRY_FACT)).toBe(false);
     expect(r.facts.filter((x) => x.kind === "capability").map((x) => x.fact)).toEqual([
       ...V3_CAPABILITY_FACTS,
+      V3_CARRY_FACT,
     ]);
     expect(v3ContractRefusals(r)).toEqual([]);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
@@ -1405,7 +1430,7 @@ describe("PR-114a: the eight capability facts", () => {
     const r = await probe({}, win);
     for (const n of V3_CAPABILITY_FACTS)
       expect(r.facts.find((x) => x.fact === n)?.verdict, n).toBe("matches");
-    expect(r.facts.length).toBe(36);
+    expect(r.facts.length).toBe(37);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -1421,7 +1446,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(3); // serve-keep-reasons, the capability daemon, and its replacement
+    expect(serve.argvs.length).toBe(4); // serve-keep-reasons, the capability daemon, its replacement, the carry fact's daemon
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -1510,7 +1535,7 @@ describe("PR-114a: the eight capability facts", () => {
     const { serve } = await readOf();
     const cap = serve.requests.filter((q) => q.command === "runTests" && isCapabilityRequest(q));
     // 4 no-cross x2, excluded-no-carry x3, included x1, hint x1, strict x1
-    expect(cap).toHaveLength(14);
+    expect(cap).toHaveLength(15);
     for (const q of cap) {
       expect(q.testIsolation).toBe("test");
       expect(q.coverage).toBe(true);
@@ -1520,15 +1545,18 @@ describe("PR-114a: the eight capability facts", () => {
       expect(Array.isArray(q.sourcePaths) && q.sourcePaths.length === 1).toBe(true);
     }
     const dirs = new Set(cap.map((q) => (q.sourcePaths as string[])[0] ?? ""));
-    expect([...dirs].map(folderName).sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
+    expect([...dirs].map(folderName).sort()).toEqual(
+      [...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort(),
+    );
     const strict = cap.filter((q) => Object.hasOwn(q, "strictOrder"));
     expect(strict.map((q) => folderName((q.sourcePaths as string[])[0] ?? ""))).toEqual([
       "batch-lane-strict-reruns",
+      V3_CARRY_FACT,
     ]);
     // the batch requests name the complement in excludeTests and carry no `test`
     // (L2) every batch request, of every fact, has a non-empty complement: LethAL's body
     const batches = cap.filter((x) => x.test === undefined);
-    expect(batches).toHaveLength(8);
+    expect(batches).toHaveLength(9);
     for (const q of batches)
       expect(
         (q.excludeTests as string[] | undefined)?.length ?? 0,
@@ -1536,7 +1564,7 @@ describe("PR-114a: the eight capability facts", () => {
       ).toBeGreaterThan(0);
   });
 
-  test("the invented AL: ids in 50700-50779, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
+  test("the invented AL: ids in 50700-50789, ten per fact, none in the main probe's 50600-50699, and no DotNet", async () => {
     const seen = new Map<string, string>();
     const { r } = await readOf((name, q, def) => {
       const dir = (q.sourcePaths as string[])[0] ?? "";
@@ -1544,14 +1572,14 @@ describe("PR-114a: the eight capability facts", () => {
         seen.set(name, readFileSync(join(dir, "src", "Batch.Codeunit.al"), "utf8"));
       return def;
     });
-    expect(r.facts.length).toBe(36);
-    expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS].sort());
+    expect(r.facts.length).toBe(37);
+    expect([...seen.keys()].sort()).toEqual([...V3_CAPABILITY_FACTS, V3_CARRY_FACT].sort());
     for (const [name, al] of seen) {
       const ids = [...al.matchAll(/^(?:table|codeunit) (\d+) /gm)].map((m) => Number(m[1]));
       expect(ids.length, name).toBeGreaterThan(2);
       for (const id of ids) {
         expect(id, name).toBeGreaterThanOrEqual(50700);
-        expect(id, name).toBeLessThanOrEqual(50779);
+        expect(id, name).toBeLessThanOrEqual(50789);
         expect(Math.floor((id - 50700) / 10), name).toBe(
           Math.floor((Math.min(...ids) - 50700) / 10),
         );
@@ -2113,7 +2141,7 @@ describe("§8 the contract probe, continued", () => {
       kind: "contract",
       verdict: "matches",
     });
-    expect(r.facts.length).toBe(36);
+    expect(r.facts.length).toBe(37);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("pass");
   });
 
@@ -2424,7 +2452,7 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
     );
   });
 
-  test("P10 (R590, r13; PR-114a): 36 facts, 9 defect, 18 contract, 1 warn, 8 capability; the old count of 28 is gate-fail", async () => {
+  test("P10 (R590, r13; PR-114a; PR-340): 37 facts, 9 defect, 18 contract, 1 warn, 9 capability-kind (8 + the carry fact); the old count of 28 is gate-fail", async () => {
     const r = await probe();
     const kinds = (k: string) => r.facts.filter((f) => f.kind === k).length;
     expect([
@@ -2433,8 +2461,8 @@ describe("R639 (pre-commitment r9): leg C's BC readings", () => {
       kinds("contract"),
       kinds("warn"),
       kinds("capability"),
-    ]).toEqual([36, 9, 18, 1, 8]);
-    expect(V3_LEG_C_FACTS).toBe(36);
+    ]).toEqual([37, 9, 18, 1, 9]);
+    expect(V3_LEG_C_FACTS).toBe(37);
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 28).outcome).toBe("gate-fail");
     expect(classifyLegC(r.facts, V3_DEFECT_FACTS, 27).outcome).toBe("gate-fail");
     expect(
@@ -2985,5 +3013,85 @@ describe("T18: the .gated pin", () => {
     expect(
       "batchFacts" in parseGated(JSON.stringify({ ...base, batchFacts: { b: "pass" } }), "x"),
     ).toBe(false);
+  });
+});
+
+describe("PR-340: the carry fact batch-sequential-carry", () => {
+  const spawnsWithEnv = () => {
+    const serve = fakeServe();
+    const envs: (Readonly<Record<string, string | undefined>> | undefined)[] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      envs.push(opts?.env);
+      return serve.spawn(argv, opts);
+    };
+    return { spawn, envs, serve };
+  };
+
+  // Test 8, leg C half. Red (a): drop `serverEnv` from the carry spec in BATCH_FACTS, so its server
+  // does not get the variable. Red (b): put AL_STRICT_SEQUENTIAL into `v3ChildEnv`, so every server does.
+  test("only the carry fact's OWN server gets AL_STRICT_SEQUENTIAL=1; serve-keep-reasons' and the eight facts' servers do not", async () => {
+    const { spawn, envs } = spawnsWithEnv();
+    const r = await probe({}, spawn);
+    expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
+    expect(envs).toHaveLength(3);
+    expect(envs.map((e) => e?.AL_STRICT_SEQUENTIAL)).toEqual([undefined, undefined, "1"]);
+  });
+
+  // Red: judge the reader `pass` as `matches` (loosen the judge), or drop the reader-status check.
+  test("a build that does NOT carry (the reader passes) reads diverged; the other facts and a session are untouched, the gate fails", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === V3_CARRY_FACT && "tests" in def
+          ? { ...def, tests: def.tests.map((t) => ({ ...t, status: "pass", message: undefined })) }
+          : def,
+    });
+    const r = await probe({}, serve.spawn);
+    const f = (n: string) => r.facts.find((x) => x.fact === n);
+    expect(f(V3_CARRY_FACT)?.verdict).toBe("diverged");
+    for (const n of V3_CAPABILITY_FACTS) expect(f(n)?.verdict, n).toBe("matches");
+    expect(v3ContractRefusals(r)).toEqual([]);
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS).outcome).toBe("gate-fail");
+  });
+
+  test("an empty answer is not a match", async () => {
+    const serve = fakeServe(SERVE_ROWS, {
+      cap: (fact, _q, def) =>
+        fact === V3_CARRY_FACT && "tests" in def ? { ...def, tests: [] } : def,
+    });
+    const r = await probe({}, serve.spawn);
+    expect(r.facts.find((x) => x.fact === V3_CARRY_FACT)?.verdict).toBe("diverged");
+  });
+
+  // Test 7 (the gate half, amendment 1): this session's probe must read matches, and a record of the fact
+  // must not say otherwise; a record WITHOUT the fact does not block. Red: drop the probe check (the
+  // `bad` and `undefined` cases), or drop the `was !== undefined &&` guard (the no-record cases).
+  test("carryWalkOffReason: this session's probe must read matches; a recorded diverged wins; a missing record does not block", async () => {
+    const r = await probe();
+    const lethalCommit = "a".repeat(40);
+    const eight = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    expect(carryWalkOffReason(r, { batchFacts: eight, lethalCommit })).toBeUndefined();
+    expect(carryWalkOffReason(r, undefined)).toBeUndefined();
+    const full = { ...eight, [V3_CARRY_FACT]: "matches" };
+    expect(carryWalkOffReason(r, { batchFacts: full, lethalCommit })).toBeUndefined();
+    expect(
+      carryWalkOffReason(r, {
+        batchFacts: { ...eight, [V3_CARRY_FACT]: "diverged" },
+        lethalCommit,
+      }),
+    ).toContain("diverged");
+    const bad = {
+      ...r,
+      facts: r.facts.map((f) => (f.fact === V3_CARRY_FACT ? { ...f, verdict: "diverged" } : f)),
+    } as V3ContractResult;
+    expect(carryWalkOffReason(bad, { batchFacts: full, lethalCommit })).toContain("probe read");
+    expect(carryWalkOffReason(bad, undefined)).toContain("probe read");
+    expect(carryWalkOffReason(undefined, { batchFacts: full, lethalCommit })).toContain(
+      "unmeasured",
+    );
+    expect(carryWalkOffReason(undefined, undefined)).toContain("unmeasured");
+    // The record rule of baseline batching names none of this fact.
+    expect(
+      baselineBatchingOffReason(r, "v", "b".repeat(64), { batchFacts: eight, lethalCommit }) ?? "",
+    ).not.toContain(V3_CARRY_FACT);
   });
 });

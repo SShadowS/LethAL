@@ -642,9 +642,10 @@ export const V3_DEFECT_FACTS = [
  * Leg C's pre-committed fact count: 9 defect, 18 contract, 1 warn, 8 capability (PR-114a: the eight
  * `batch-*` facts of `V3_CAPABILITY_FACTS`; a capability fact not reading `matches` is a gate-fail
  * here, never a session refusal). r13 (R590, the contract fact `dependency-skip-line`) had 28; r12
- * (R667, `message-has-no-type-prefix`) had 27, r9 had 26.
+ * (R667, `message-has-no-type-prefix`) had 27, r9 had 26. PR-340: 37, the ninth `batch-*` fact
+ * `batch-sequential-carry` (`V3_CARRY_FACT`, outside `V3_CAPABILITY_FACTS`; pre-committed `matches`).
  */
-export const V3_LEG_C_FACTS = 36;
+export const V3_LEG_C_FACTS = 37;
 
 /** F4 (R639): leg C's per-fact log line, with `measured` whole. */
 export const legCFactLine = (f: {

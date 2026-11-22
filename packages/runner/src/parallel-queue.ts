@@ -105,6 +105,9 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     sendKillPair: (id, ref) => lane0.sendKillPair?.(id, ref) ?? Promise.resolve(),
     dropPendingPair: (id) => lane0.dropPendingPair?.(id),
     survivorNote: (covering, site) => lane0.survivorNote?.(covering, site),
+    // PR-340: NO `carryWalk` here, on purpose. A walk runs on the daemon and resource file of the lane
+    // that scored the mutant; forwarding it to lane 0 would walk on another lane's daemon. A caller
+    // holding this view sees an absent method, which means no walk.
     baselineNote: () => owner.baselineNote?.(),
   };
 }

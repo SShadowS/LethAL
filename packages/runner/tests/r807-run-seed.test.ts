@@ -513,12 +513,15 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     const bad = hits.filter((m) => !text.slice(m.index, (m.index ?? 0) + reach).includes(needle));
     return { count: hits.length, bad: bad.map((m) => text.slice(m.index, (m.index ?? 0) + 80)) };
   };
-  test("the backend: --version, one-shot and serve spawns all take cacheEnv() (which wraps v3ChildEnv)", async () => {
+  // PR-340: serve spawns pass `cacheEnv(mutantRun)` (v3MutantDaemonEnv, which wraps v3ChildEnv), so the
+  // needle is the call, with or without its argument.
+  test("the backend: --version, one-shot and serve spawns all take cacheEnv(...) (which wraps v3ChildEnv)", async () => {
     const t = await read("al-runner-v3-backend.ts");
-    const r = eachFollowedBy(t, /this\.(?:serverSpawn|spawn)\(/g, "this.cacheEnv()", 250);
+    const r = eachFollowedBy(t, /this\.(?:serverSpawn|spawn)\(/g, "this.cacheEnv(", 250);
     expect(r.count).toBe(4); // R907: the `test --help` read is the fourth
     expect(r.bad).toEqual([]);
-    expect(t).toContain("env: v3ChildEnv(");
+    // PR-340: both branches wrap v3ChildEnv (v3MutantDaemonEnv is v3ChildEnv plus AL_STRICT_SEQUENTIAL).
+    expect(t).toContain("env: mutantRun ? v3MutantDaemonEnv(extra) : v3ChildEnv(extra)");
   });
   test("the probe, the contract probe and doctor wrap their spawns in v3ChildEnv", async () => {
     const probe = eachFollowedBy(

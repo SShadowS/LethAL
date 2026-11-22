@@ -19,6 +19,7 @@ import {
   BC_END_OF_TEST_TEXT,
   BC_HTTP_HUB_TEXT,
   V3_CAPABILITY_FACTS,
+  V3_CARRY_FACT,
 } from "../src/al-runner-v3-contract";
 import type { V3ContractResult } from "../src/al-runner-v3-contract";
 import {
@@ -203,6 +204,8 @@ function alpha5Facts(): { fact: string; verdict: string; measured?: string }[] {
     facts.push({ fact: `contract-${i}`, verdict: "matches", measured: "ok" });
   facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
   for (const c of V3_CAPABILITY_FACTS) facts.push({ fact: c, verdict: "matches", measured: "ok" });
+  // PR-340: the carry fact has no per-build pin entry, so every pin judges it by the default table (matches).
+  facts.push({ fact: V3_CARRY_FACT, verdict: "matches", measured: "ok" });
   return facts;
 }
 const withFact = (
@@ -220,7 +223,7 @@ const runC = (facts: ReturnType<typeof alpha5Facts>, withPin = true) =>
   );
 
 describe("R586c leg C: the pin", () => {
-  test("the 36 facts: 9 defect, 18 contract, 1 warn, 8 capability", () => {
+  test("the 37 facts: 9 defect, 18 contract, 1 warn, 8 capability, the carry fact (no pin entry)", () => {
     expect(alpha5Facts().length).toBe(V3_LEG_C_FACTS);
   });
   test("C-pin-1: alpha.5's readings with the pin pass, with seven pinned lines and no held line", () => {
@@ -635,6 +638,7 @@ describe("R756 edge pin: the edge readings are pinned and pass", () => {
     facts.push({ fact: "serve-keep-reasons", verdict: "matches", measured: "ok" });
     for (const c of V3_CAPABILITY_FACTS)
       facts.push({ fact: c, verdict: "matches", measured: "ok" });
+    facts.push({ fact: V3_CARRY_FACT, verdict: "matches", measured: "ok" }); // PR-340
     return facts;
   };
   const runEdge = (withPin: boolean) =>

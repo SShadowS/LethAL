@@ -4,6 +4,23 @@ import type { MicrosoftMode } from "./digest-inputs";
 import type { AlSource, RenamedMemberNames } from "./line-map";
 import type { OperationOutcome } from "./operation-outcome";
 
+/**
+ * PR-340 §3: what a carry walk found. `killed`: test T went fail, pass, fail with complete rows and the
+ * right echoes. `walked`: all three answers were sound and no test did. `failed`: anything else, the
+ * reason named (never a verdict).
+ */
+export type CarryWalkResult =
+  | {
+      readonly kind: "killed";
+      readonly codeunitId: number;
+      readonly method: string;
+      /** The failure text of T in the first request, and in the reproducing third one. */
+      readonly failure: string | undefined;
+      readonly reproduced: string | undefined;
+    }
+  | { readonly kind: "walked" }
+  | { readonly kind: "failed"; readonly reason: string };
+
 export interface TestMethodRef {
   readonly codeunitId: number;
   readonly codeunitName: string;
@@ -950,6 +967,18 @@ export interface ExecutionBackend {
    */
   cutState?(mutantId: string): unknown;
   restoreCutState?(mutantId: string, state: unknown): void;
+
+  /**
+   * PR-340, OPTIONAL (al-runner-v3 only): the carry walk for a SURVIVOR whose PR-327 (a) label would be
+   * added. Three batch-shaped `strictOrder` requests on the SAME lane's daemon (the mutant, none, the
+   * mutant) over the covering test codeunits run in one session, in order. `undefined`: no walk (the
+   * survivor would not be labelled). Never moves a verdict by itself; the orchestrator scores it.
+   */
+  carryWalk?(
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined>;
 
   /**
    * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
