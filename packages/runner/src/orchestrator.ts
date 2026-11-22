@@ -4842,6 +4842,8 @@ function resolveResume(
   olderDefaultFingerprint?: string,
   /** PR-303: the digest with the prune flag the other way, and this session's flag state. */
   pruneFlag?: { readonly otherPruneFingerprint: string; readonly reachPrune: boolean },
+  /** R1179: this session's discovered tests, to count the carried kills that may seed R197's ledger. */
+  sessionTests: readonly TestMethodRef[] = [],
 ):
   | {
       runId: number;
@@ -5137,10 +5139,26 @@ function resolveResume(
       message: `[lethal] --resume: ${refusedDropped} prior verdict(s) from run ${priorRunId} were measured with a test this session refuses because it has a reachable call that may open a TestPage (${refusedTests.map((t) => t.qualifiedName).join(", ")}). They are not carried; each is scored again without that test (R-236c).`,
     });
   }
+  // R1179: the carried kills that may seed R197's ledger (step 5b seeds those actually carried).
+  let seeds = 0;
+  let noSeed = 0;
+  for (const v of index.carryable.values()) {
+    if (v.verdict !== "killed" && v.verdict !== "timeout-killed") continue;
+    if (carriedKillerRef(v, sessionTests) === undefined) noSeed += 1;
+    else seeds += 1;
+  }
   emit({
     type: "warning",
     code: "resume-reusing-run",
-    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing. Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
+    message: `[lethal] --resume: reusing run ${priorRunId} — ${index.carryable.size} mutant verdict(s) may be carried without re-executing.${
+      seeds > 0
+        ? ` ${seeds} carried kill(s) may seed R197's kill ledger, so the remaining mutants' tests are ordered as in a fresh run (R1179).`
+        : ""
+    }${
+      noSeed > 0
+        ? ` ${noSeed} carried kill(s) will not seed it: their killing test names no single covering test of this session (R1179).`
+        : ""
+    } Every batch is deployed, and baselined unless a prior run's completed baseline for the same instrumented source and test app is on record (then that baseline's verdicts, coverage and durations are reused, R192). A stored no-coverage is never carried: it is re-derived from the coverage this session uses (R621). A survivor is carried only when it was run against every test that covers it in this session (R646).${
       testAppHash !== undefined && priorTestAppHash === `${testAppHash}${PENDING_SUFFIX}`
         ? ` Run ${priorRunId} ended before its post-execution closed-world check (R389); this session's guard gave the same closed answer now, and this run's own check after execution will confirm or revoke everything it carries; if this run also ends early, it stays pending like the run it resumed (R601).`
         : ""
@@ -7628,6 +7646,7 @@ async function runSessionBody(
     resumeInputs,
     olderDefaultFingerprint,
     { otherPruneFingerprint, reachPrune },
+    tests,
   );
 
   const runId = cfg.store.createRun({
@@ -9732,6 +9751,13 @@ async function runSessionBody(
             if (survivor) {
               cfg.store.keepCarriedFacedTests(carriedRowId, carried.coveringTests ?? []);
             }
+            // R1179: a carried kill feeds the session's one ledger (R197) before any remaining
+            // mutant is walked, so the walk orders tests as a fresh run would. No single killer: no
+            // seed (counted in the resume-reusing-run line).
+            if (carried.verdict === "killed" || carried.verdict === "timeout-killed") {
+              const killer = carriedKillerRef(carried, tests);
+              if (killer !== undefined) recordKill(killLedger, m, killer);
+            }
           }
           if (carryNoRecord.length > 0) {
             emit({
@@ -11358,6 +11384,23 @@ export function unsupportedCoverageNote(
 /** Human-readable `Codeunit.method` identity for report/notes — unambiguous across codeunits sharing a method name. */
 export function qualifiedTestName(ref: TestMethodRef): string {
   return `${ref.codeunitName}.${ref.method}`;
+}
+
+/**
+ * R1179: the killer of a carried kill, as this session's own discovered test: the ONE test the
+ * carried row was covered by whose method is its `killingTest`. None, or more than one (the same
+ * method in two codeunits), gives `undefined`, and the kill is not seeded into the ledger.
+ */
+export function carriedKillerRef(
+  carried: { readonly killingTest?: string; readonly coveringTests?: readonly string[] },
+  tests: readonly TestMethodRef[],
+): TestMethodRef | undefined {
+  const method = carried.killingTest;
+  if (method === undefined) return undefined;
+  const names = new Set((carried.coveringTests ?? []).filter((n) => n.endsWith(`.${method}`)));
+  if (names.size !== 1) return undefined;
+  const hits = tests.filter((t) => t.method === method && names.has(qualifiedTestName(t)));
+  return new Set(hits.map(testKeyOf)).size === 1 ? hits[0] : undefined;
 }
 
 /**
