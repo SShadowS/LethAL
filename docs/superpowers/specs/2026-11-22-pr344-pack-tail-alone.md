@@ -124,3 +124,15 @@ time). Related: [[R1156]], R652, PR-297, PR-250.
   warnings can differ from the unpacked walk. The flag is off in every gate, so none of these moves a gate figure.
 - **The predictions are unchanged.** The bound-check figure stays a lower bound (packs of at most 16 entries; about 19 tail
   tests per mutant on t1 gives two packs for some mutants).
+
+## Amendment 2 (2026-11-22, the delta review of 429edb202, before any gate)
+- **Point 2 corrected: a real stop signal only, not the memory guard's stop.** The memory guard (R948) also sets the stop
+  handle's signal, but under it the orchestrator keeps the in-flight verdicts and today's live alone call still runs. So the
+  no-fallback rule applies only when the handle is signalled AND the memory guard did not stop the run (the request watch's
+  own condition). Under a memory stop, a failed pack falls back to T alone, as for any other request error.
+- **Point 4 extended: a kept refusal at entry 0.** If T's own row is a kept safe refusal, no mate is stored (they ran right
+  after it, where PR-56's drift check would have checked the next request). The daemon is not closed: it is armed exactly as
+  T's alone call arms it.
+- **Point 6: `reportedStopMs` is compared.** It decides the position-1 timeout confirm (R517), so the equality test excludes
+  only `durationMs`, `measuredDurationMs` and `callId`.
+- **The predictions are unchanged.**
