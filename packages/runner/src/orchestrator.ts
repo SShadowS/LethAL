@@ -286,7 +286,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { ReachTrace, ReachTraceError, reachSiteKey } from "./reach-trace";
 import type { ReachNullCause } from "./reach-trace";
-import { buildReport } from "./report";
+import { buildReport, withheldKillOf } from "./report";
 import type {
   Caveat,
   DeclarativeSiteFile,
@@ -14302,8 +14302,17 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           );
         }
         const name = qualifiedTestName(stepRef);
-        if (heldErr === undefined) heldErr = { test: name, snap: snapNow() };
-        else notedErr.push(name);
+        // PR-341 (R1178): PR-144's recheck picks a mutant by the kept held error's note. Keep the first withheld-ELIGIBLE
+        // one, so eligibility does not depend on walk order: a later eligible error replaces a kept one that is not, and
+        // the replaced one is only named, as any later held error is.
+        const eligible = (s: WalkSnap): boolean =>
+          withheldKillOf(s.verdict, s.cause, s.failureNote) !== undefined;
+        const snap = snapNow();
+        if (heldErr === undefined) heldErr = { test: name, snap };
+        else if (!eligible(heldErr.snap) && eligible(snap)) {
+          notedErr.push(heldErr.test);
+          heldErr = { test: name, snap };
+        } else notedErr.push(name);
         restoreWalk(stepSnap);
         if (stepDeactivated) {
           // Only a step that deactivated the mutant (a confirm) re-activates it. An error met on the
