@@ -58,3 +58,16 @@ one green test after its codeunit's cut:
   218 ms at 5, before the worker). If fewer than 6 lanes start, the reading is reported and the claim is not judged.
 - **Hard checks (BLOCK):** the binary and version line; the flag set; PR-297, PR-292 and PR-307 in HEAD; no move outside
   the 1,590 unless named; every tail kill noted, confirmed and reproduced.
+
+## Amendment 1 (2026-11-22, the orchestrator's conditions on the BC sample; before the run)
+- **The sample:** 100 of the `error -> killed` moves, stratified by codeunit in proportion, with every one of the four
+  codeunits represented by at least one move when it has any. Seed 302, drawn by a committed script before any BC call.
+- **Escalation:** ANY BC contradiction in the sample (the killing test passes on BC under the mutant) means every
+  `error -> killed` move is checked on BC before the default can change.
+- **Session-dependent moves are marked.** A move is marked when its killing test (codeunit id and method) is on PR-299's
+  `/coord/handoff/PR-299/prediction.tsv` with `predicted_change` other than `no` (yes or unknown). The BC check runs
+  headless on bc4, which is not CI's oracle for those tests (R1166).
+  - A marked move's BC result is reported apart.
+  - A contradiction there is reported, and decided with the R1166 owner ruling, rather than counted blind.
+- **The bound:** with 0 contradictions in 100, the 95% upper bound on the contradiction rate is about 3% (the rule of
+  three, 3/100; exact Clopper-Pearson 3.0%). The result states the bound for the count actually found.
