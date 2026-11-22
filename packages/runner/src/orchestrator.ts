@@ -6677,6 +6677,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
         full,
         baselineReach,
         (cu) => backend.isolationOf?.(cu) ?? "test",
+        tests,
       );
       if (kept.length === full.length) continue;
       pruned.set(m.mutantId, kept); // an empty list keeps its key: an absent key reads as uncovered
@@ -11068,17 +11069,24 @@ export function reachWhy(
 /**
  * PR-303 (R1148): the covering tests to RUN for a mutant, in their order. A test is explicit false
  * when `reachWhy` decides its baseline did not hit the site (statement grain, a complete passing row
- * with line evidence, the mode unchanged). A test codeunit is dropped only when every covering test
- * in it is explicit false; one test that may reach keeps the whole codeunit. Anything undecided keeps.
+ * with line evidence, the mode unchanged). Amendment 2: a test codeunit is dropped only when EVERY test of
+ * it in `finalTests` (the run's whole list, not only the covering ones) is explicit false; one test that may
+ * reach, or any test not measured green with lines (refused, cut, failed, missing row...), keeps the whole codeunit.
  */
 export function pruneCodeunitsForReach(
   m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
   covering: readonly TestMethodRef[],
   baselineReach: BaselineReach | undefined,
   isolationOf: (codeunitId: number) => "test" | "method",
+  finalTests: readonly TestMethodRef[],
 ): readonly TestMethodRef[] {
+  // Amendment 2: a codeunit is droppable only when EVERY test of it in the run's final list is explicit false.
+  // `reachWhy` decides only a passing row with line evidence, so a refused, cut, failed, errored, skipped,
+  // timed-out or unstable test, a missing row and a green test without lines all read undecided and keep it.
+  const inCovering = new Set(covering.map((r) => r.codeunitId));
   const keep = new Set<number>();
-  for (const ref of covering) {
+  for (const ref of finalTests) {
+    if (!inCovering.has(ref.codeunitId) || keep.has(ref.codeunitId)) continue;
     if (reachWhy(m, [ref], baselineReach, isolationOf).reach?.guardReached !== false) {
       keep.add(ref.codeunitId);
     }

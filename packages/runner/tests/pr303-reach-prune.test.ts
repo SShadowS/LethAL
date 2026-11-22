@@ -11,7 +11,7 @@ import type {
 } from "../src/backend";
 import {
   ReachPruneError,
-  pruneCodeunitsForReach,
+  pruneCodeunitsForReach as pruneWithFinal,
   readReachPrune,
   runSession,
 } from "../src/orchestrator";
@@ -59,6 +59,14 @@ const A1 = ref(79100, "A1");
 const A2 = ref(79100, "A2");
 const B1 = ref(79101, "B1");
 const noMove = () => "test" as const;
+/** Amendment 2: the predicate reads the run's whole test list; these tests' list is A1, A2, B1. */
+const pruneCodeunitsForReach = (
+  mut: typeof m,
+  covering: readonly TestMethodRef[],
+  ev: BaselineReach | undefined,
+  iso: (cu: number) => "test" | "method",
+  finalTests: readonly TestMethodRef[] = [A1, A2, B1],
+) => pruneWithFinal(mut, covering, ev, iso, finalTests);
 
 describe("PR-303: pruneCodeunitsForReach", () => {
   test("a codeunit whose covering tests are all explicit false is dropped", () => {
@@ -133,6 +141,24 @@ describe("PR-303: pruneCodeunitsForReach", () => {
       [B1, false],
     ]);
     expect(pruneCodeunitsForReach(m, [A1, B1], ev, noMove)).toEqual([A1]);
+  });
+
+  test("amendment 2: a test in the final list that is not in the covering set (no row, refused, failed) keeps its codeunit", () => {
+    // A2 is in the run's list but not covering (a refused or failed baseline test is never covering) and has no
+    // evidence row: A is kept though its covering test A1 is explicit false. B1 is wholly green and unreaching.
+    const ev = evidence([
+      [A1, false],
+      [A2, undefined],
+      [B1, false],
+    ]);
+    expect(pruneCodeunitsForReach(m, [A1, B1], ev, noMove, [A1, A2, B1])).toEqual([A1]);
+    // Positive control: with A2 measured green and unreaching too, both codeunits drop.
+    const all = evidence([
+      [A1, false],
+      [A2, false],
+      [B1, false],
+    ]);
+    expect(pruneCodeunitsForReach(m, [A1, B1], all, noMove, [A1, A2, B1])).toEqual([]);
   });
 
   test("a codeunit whose mode moved since the baseline keeps its tests", () => {
@@ -292,6 +318,10 @@ class StubBackend implements ExecutionBackend {
       new Map(plans.map((p) => [p.mutantId, p.refs.map((r) => `${r.codeunitName}.${r.method}`)])),
     );
   }
+  /** Amendment 2: per-call extra verdict fields (a runner row, a failure message). */
+  extra?: (mutant: string | null, ref: TestMethodRef) => Partial<TestVerdict>;
+  /** PR-297: `alRunnerV3.refusedCutTail` is on. */
+  refusedCutTail?: boolean;
   survivorNote?: (covering: readonly TestMethodRef[]) => string | undefined;
   useCoveringBudgets(mutantId: string, budgets: readonly { readonly ref: TestMethodRef }[]): void {
     this.budgetCalls.push({
@@ -312,6 +342,7 @@ class StubBackend implements ExecutionBackend {
       ref: r,
       outcome: this.script(active, r),
       durationMs: 5,
+      ...(this.extra?.(active, r) ?? {}),
       ...(active === null
         ? {
             coverage:
@@ -439,6 +470,167 @@ describe("PR-303: the session, flag on", () => {
       expect(on.mutants[i]?.killingTest).toBe(k.killingTest);
       expect(on.mutants[i]?.guardReached).toBe(k.guardReached);
     }
+  });
+});
+
+// ---------------------------------------------------------------- amendment 2: only a wholly measured-green codeunit drops
+
+const refusedText = (r: TestMethodRef) =>
+  `baseline-refused-cut: ${r.codeunitName}.${r.method} was not run under this mutant (PR-250)`;
+const refusedAtBaseline = { runnerRow: "runner-refused" as const, failureMessage: "refused" };
+
+/**
+ * Nobody reaches the site at baseline. Codeunit A holds a test of the kind under test; B is wholly green and
+ * unreaching, so B must always drop, and A must never. The same script runs flag off and flag on.
+ */
+async function offOn(make: () => StubBackend) {
+  const offB = make();
+  const off = await run(offB, undefined);
+  const onB = make();
+  const on = await run(onB, "on");
+  expect(on.mutants.length).toBe(off.mutants.length);
+  expect(off.mutants.length).toBeGreaterThan(0);
+  for (const [i, o] of off.mutants.entries()) {
+    expect(on.mutants[i]?.verdict).toBe(o.verdict);
+    expect(on.mutants[i]?.killingTest).toBe(o.killingTest);
+  }
+  // B is the positive control inside every case: wholly green, measured, unreaching: dropped.
+  // (By the plans: a kill by A ends the walk before B, so the run log alone could not tell.)
+  const inB = (b: StubBackend) =>
+    b.prefetched
+      .flatMap((p) => [...p.values()].flat())
+      .some((t) => t.startsWith("Sandbox Tests B."));
+  expect(inB(onB)).toBe(false);
+  expect(onB.mutatedRuns.some((t) => t.startsWith("Sandbox Tests B."))).toBe(false);
+  expect(inB(offB)).toBe(true);
+  return { off, on, onB };
+}
+
+describe("PR-303 amendment 2: a codeunit holding any unmeasured-green test is kept", () => {
+  // A1 kills under a mutant although it never hit the site at baseline (state-carry): a wrongly dropped A reads survived.
+  const killer = (baseline: (r: TestMethodRef) => TestVerdict["outcome"]) =>
+    ((mutant, r) =>
+      mutant === null
+        ? r.method === "A2"
+          ? baseline(r)
+          : "pass"
+        : r.method === "A1"
+          ? "fail"
+          : "pass") satisfies (mutant: string | null, r: TestMethodRef) => TestVerdict["outcome"];
+
+  for (const [kind, outcome] of [
+    ["failed", "fail"],
+    ["error", "error"],
+    ["skipped", "skip"],
+    ["timed-out", "timeout"],
+  ] as const) {
+    test(`a ${kind} baseline test keeps its codeunit; the verdicts equal the flag-off run's`, async () => {
+      const { off, on, onB } = await offOn(
+        () =>
+          new StubBackend(
+            killer(() => outcome),
+            nobody,
+          ),
+      );
+      expect(off.mutants.every((x) => x.verdict === "killed")).toBe(true);
+      expect(on.mutants.every((x) => x.killingTest === "A1")).toBe(true);
+      expect(onB.mutatedRuns).toContain("Sandbox Tests A.A1");
+    });
+  }
+
+  test("a baseline-refused test keeps its codeunit", async () => {
+    const { off, on, onB } = await offOn(() => {
+      const b = new StubBackend(
+        killer(() => "error"),
+        nobody,
+      );
+      b.extra = (mutant, r) =>
+        r.method === "A2"
+          ? mutant === null
+            ? refusedAtBaseline
+            : { runnerRow: "runner-refused", failureMessage: refusedText(r) }
+          : {};
+      return b;
+    });
+    expect(off.mutants.every((x) => x.verdict === "killed")).toBe(true);
+    expect(on.mutants.every((x) => x.killingTest === "A1")).toBe(true);
+    expect(onB.mutatedRuns).toContain("Sandbox Tests A.A1");
+  });
+
+  test("a green test without line evidence keeps its codeunit", async () => {
+    const { off, on, onB } = await offOn(
+      () =>
+        new StubBackend(
+          killer(() => "pass"),
+          nobody,
+          { procedureOnly: "A2" },
+        ),
+    );
+    expect(off.mutants.every((x) => x.verdict === "killed")).toBe(true);
+    expect(on.mutants.every((x) => x.killingTest === "A1")).toBe(true);
+    expect(onB.mutatedRuns).toContain("Sandbox Tests A.A1");
+  });
+
+  /** A1 is refused at baseline; A2 is green and unreaching but cut after it (PR-250): under a mutant it errors, unmeasured. */
+  const cutBackend = () => {
+    const b = new StubBackend(
+      (mutant, r) =>
+        mutant === null
+          ? r.method === "A1"
+            ? "error"
+            : "pass"
+          : r.method === "A2"
+            ? "error"
+            : "pass",
+      nobody,
+    );
+    b.extra = (mutant, r) =>
+      r.method === "A1" && mutant === null
+        ? refusedAtBaseline
+        : r.method === "A2" && mutant !== null
+          ? { runnerRow: "runner-refused", failureMessage: refusedText(r) }
+          : {};
+    return b;
+  };
+
+  test("a PR-250-cut test (green at baseline, not run under a mutant) keeps its codeunit", async () => {
+    const { off, on, onB } = await offOn(cutBackend);
+    expect(onB.mutatedRuns).toContain("Sandbox Tests A.A2");
+    expect(on.mutants.map((x) => x.verdict)).toEqual(off.mutants.map((x) => x.verdict));
+  });
+
+  test("round-1 regression: a refused-cut error stays error with the flag on, never survived", async () => {
+    const { off, on } = await offOn(cutBackend);
+    expect(off.mutants.every((x) => x.verdict === "error")).toBe(true);
+    expect(on.mutants.every((x) => x.verdict === "error")).toBe(true);
+    expect(on.mutants.some((x) => (x.failureNote ?? "").startsWith("pruned:"))).toBe(false);
+  });
+
+  test("refusedCutTail on too: the refused codeunit is kept, its tail runs alone, the verdict equals pruning off", async () => {
+    const { off, on, onB } = await offOn(() => {
+      const b = new StubBackend(
+        (mutant, r) =>
+          mutant === null
+            ? r.method === "A1"
+              ? "error"
+              : "pass"
+            : r.method === "A2"
+              ? "fail"
+              : "pass",
+        nobody,
+      );
+      b.refusedCutTail = true;
+      b.extra = (mutant, r) =>
+        r.method === "A1"
+          ? mutant === null
+            ? refusedAtBaseline
+            : { runnerRow: "runner-refused", failureMessage: refusedText(r) }
+          : {};
+      return b;
+    });
+    expect(off.mutants.every((x) => x.verdict === "killed")).toBe(true);
+    expect(on.mutants.every((x) => x.killingTest === "A2")).toBe(true);
+    expect(onB.mutatedRuns).toContain("Sandbox Tests A.A2");
   });
 });
 
