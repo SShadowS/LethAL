@@ -37,3 +37,14 @@ Status: pre-commitment (coord PR-342, lethal-preproc, 2026-11-22), after the bui
 ## Recording
 lethal-bugs records the fact for main-bf3a3e863 with an update-gate run after merge (bugs owns the gate and its records).
 PR-256's flag-on gates wait for that record.
+
+## Amendment 1 (2026-11-22, the Opus build review, before any gate)
+- **The record depends on DBM batching (review S1).** The update gate writes a build's `batchFacts` into `.gated` only when
+  DBM passed and batched (`receiptBatchFacts` in `scripts/al-runner-v3-update.ts`). A build whose `stop-groups` matches
+  but whose DBM does not batch gets no `batchFacts`, so PR-256's flag stays refused there. That fails closed; it is a named
+  limit, not a fix in this PR.
+  - Measured for main-bf3a3e863: its receipt has DBM `pass` and `dbmBatched: true`, and its `.gated` already carries
+    `batchFacts` (the eight `batch-*` facts, all `matches`). So the recording plan above holds for `current`.
+- **Review nits, fixed in the branch:** the itest comment's stale "36 facts ... 8 capability" count, and a test that a
+  doubled skip row reads `diverged` (the exactly-one-row rule).
+- **The predictions are unchanged.**

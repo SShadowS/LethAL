@@ -286,7 +286,7 @@ import {
 import { QuarantineStore } from "./quarantine-store";
 import { ReachTrace, ReachTraceError, reachSiteKey } from "./reach-trace";
 import type { ReachNullCause } from "./reach-trace";
-import { buildReport } from "./report";
+import { buildReport, withheldKillOf } from "./report";
 import type {
   Caveat,
   DeclarativeSiteFile,
@@ -7564,6 +7564,7 @@ async function runSessionBody(
     ...(cfg.backend.license !== undefined ? { v3License: cfg.backend.license.sha256 } : {}), // R956
     ...(cfg.backend.companies !== undefined ? { v3Companies: cfg.backend.companies } : {}), // PR-282
     ...(cfg.backend.refusedCutTail === true ? { v3RefusedCutTail: true } : {}), // PR-297
+    ...(cfg.backend.stopGroups === true ? { v3StopGroups: true } : {}), // PR-256
     ...(cfg.only !== undefined ? { only: cfg.only } : {}),
     // R221: in the fingerprint for exactly the reason `only` is. Two runs with different
     // exclusions deployed different mutant sets, and a resume that carried verdicts across an
@@ -10177,6 +10178,8 @@ async function runSessionBody(
             ...(cfg.backend.companies !== undefined ? { companies: cfg.backend.companies } : {}),
             // PR-297: the refused-cut tail was ON.
             ...(cfg.backend.refusedCutTail === true ? { refusedCutTail: true } : {}),
+            // PR-256: per-entry stop groups were ON.
+            ...(cfg.backend.stopGroups === true ? { stopGroups: true } : {}),
           },
         }
       : {}),
@@ -13625,6 +13628,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let heldErr: { readonly test: string; readonly snap: WalkSnap } | undefined;
     const notedErr: string[] = [];
     const afterErr: string[] = []; // the tests a later step answered, names only
+    // PR-341: held errors met BEFORE the kept one, when a later withheld-eligible error replaced them (names only).
+    const earlierErr: string[] = [];
     let stepSnap: WalkSnap = snapNow();
     let stepDeactivated = false; // this step ran a confirm and left the mutant NOT active
     let stepTerminal = false; // this step's cold confirm did not FAIL: its `unstable` is not holdable
@@ -14359,8 +14364,20 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
           );
         }
         const name = qualifiedTestName(stepRef);
-        if (heldErr === undefined) heldErr = { test: name, snap: snapNow() };
-        else notedErr.push(name);
+        // PR-341 (R1178): PR-144's recheck picks a mutant by the kept held error's note. Keep the first withheld-ELIGIBLE
+        // one, so eligibility does not depend on walk order: a later eligible error replaces a kept one that is not, and
+        // the replaced one is only named, as any later held error is.
+        const eligible = (s: WalkSnap): boolean =>
+          withheldKillOf(s.verdict, s.cause, s.failureNote) !== undefined;
+        const snap = snapNow();
+        if (heldErr === undefined) heldErr = { test: name, snap };
+        else if (!eligible(heldErr.snap) && eligible(snap)) {
+          // The replaced error ran BEFORE the kept one: named as earlier, and the "after" list restarts here.
+          notedErr.push(heldErr.test);
+          earlierErr.push(heldErr.test);
+          afterErr.length = 0;
+          heldErr = { test: name, snap };
+        } else notedErr.push(name);
         restoreWalk(stepSnap);
         if (stepDeactivated) {
           // Only a step that deactivated the mutant (a confirm) re-activates it. An error met on the
@@ -14441,7 +14458,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       runnerDisagreement = heldErr.snap.runnerDisagreement;
       runnerDisagreementTest = heldErr.snap.runnerDisagreementTest;
       const later = [...new Set(afterErr)];
-      errNote = later.length > 0 ? `after the error: ${later.join(", ")}` : undefined;
+      const earlier = [...new Set(earlierErr)];
+      const parts = [
+        ...(later.length > 0 ? [`after the error: ${later.join(", ")}`] : []),
+        ...(earlier.length > 0
+          ? [`an earlier held error (not a withheld kill): ${earlier.join(", ")}`]
+          : []),
+      ];
+      errNote = parts.length > 0 ? parts.join("; ") : undefined;
       errNoted = true;
     };
     if (verdict === "survived" && !replaying) adoptHeldError();
@@ -15130,14 +15154,14 @@ function assertSameResumeInputs(
 
 /**
  * The v3 session's `runner_build` lending key. ORDER MATTERS: `store.unfinishedRunUnderOtherEnvironment`
- * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ isolation-auto]`, and ` isolation-auto` must be
+ * strips the end-anchored ` environment-X[ license-H][ companies-H][ refused-cut-tail][ stop-groups][ isolation-auto]`, and ` isolation-auto` must be
  * last (`runMayLend`). So the baseline-source tag goes BEFORE the environment tag.
  */
 export function lendingRunnerBuild(
   backend: ExecutionBackend,
   v3Build: { readonly version: string; readonly binarySha256: string },
 ): string {
-  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.refusedCutTail === true ? " refused-cut-tail" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
+  return `${v3Build.version} ${v3Build.binarySha256}${backend.isolatesTests === true ? " isolate-tests" : ""}${backend.noClient === true ? " no-client" : ""}${backend.skipAfterTimeoutSupported === true ? " skip-after-timeout" : ""}${backend.methodIsolation === true ? " isolation-method" : ""}${baselineSourceTag(backend)}${backend.environmentChoice?.value !== undefined ? ` environment-${backend.environmentChoice.value}` : ""}${backend.license !== undefined ? ` license-${backend.license.sha256.slice(0, 8)}` : ""}${backend.companies !== undefined ? ` companies-${createHash("sha256").update(backend.companies).digest("hex").slice(0, 8)}` : ""}${backend.refusedCutTail === true ? " refused-cut-tail" : ""}${backend.stopGroups === true ? " stop-groups" : ""}${backend.isolationAuto === true ? ISOLATION_AUTO_BUILD_TAG : ""}`;
 }
 
 /**

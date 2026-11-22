@@ -3455,7 +3455,14 @@ export function v3RecheckOf(a: {
   const runner: RecheckRunner = async (req) => {
     const methodConfig: LethalConfigFile = {
       ...a.effectiveConfig,
-      alRunnerV3: { ...(a.effectiveConfig.alRunnerV3 as object), isolation: "method" },
+      // PR-256 (rule 2): the recheck is a confirm path; it never carries the stop.
+      alRunnerV3: {
+        ...(a.effectiveConfig.alRunnerV3 as object),
+        isolation: "method",
+        ...((a.effectiveConfig.alRunnerV3 as { stopGroups?: unknown }).stopGroups !== undefined
+          ? { stopGroups: false }
+          : {}),
+      },
     };
     const {
       recheck: _recheck,
@@ -3857,6 +3864,7 @@ export function v3SectionPassThrough(c: AlRunnerV3ConfigSection) {
     ...(c.serveTimings ? { serveTimings: true } : {}), // PR-237
     ...(c.companies !== undefined ? { companies: c.companies } : {}), // PR-282
     ...(c.refusedCutTail === true ? { refusedCutTail: true } : {}), // PR-297
+    ...(c.stopGroups === true ? { stopGroups: true } : {}), // PR-256
   };
 }
 

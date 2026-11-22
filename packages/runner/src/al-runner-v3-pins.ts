@@ -1124,6 +1124,18 @@ export const baselineBatchingFor = (
   gated: Pick<GatedBuild, "batchFacts" | "lethalCommit"> | undefined,
 ): boolean => baselineBatchingOffReason(contract, version, binarySha256, gated) === undefined;
 
+/** PR-256 (rule 7): the leg-C capability fact `alRunnerV3.stopGroups` needs (upstream #8564). */
+export const STOP_GROUPS_FACT = "stop-groups";
+
+/**
+ * PR-256 (rule 7): does this build's own gate record (`.gated` or the manifest row, as PR-117's capability
+ * facts) read the `stop-groups` fact `matches`? No record carries it yet: the probe and the gate of the first
+ * build with #8564 write it, so `alRunnerV3.stopGroups` is refused on every build until then.
+ */
+export function stopGroupsFor(gated: Pick<GatedBuild, "batchFacts"> | undefined): boolean {
+  return gated?.batchFacts?.[STOP_GROUPS_FACT] === "matches";
+}
+
 /** R782: does this exact build's pin record #5798 as fixed (version line AND sha256)? */
 export function serveRowFieldsFor(version: string, binarySha256: string): boolean {
   return findV3Pin(version, binarySha256)?.serveRowFields !== undefined;

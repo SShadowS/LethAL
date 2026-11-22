@@ -1050,7 +1050,14 @@ describe("R-762 B: the §6 Sleep rule is retired only on a pinned build whose pr
 describe("PR-117: status() reads baseline batching from the build's own .gated", () => {
   const VERSION = "al-runner 3.0.0-alpha.5+edge.20261024 (dcdf9e821)";
   const COMMIT = "a1".repeat(20);
-  async function batching(batchFacts: Record<string, string> | undefined) {
+  let lastStatus: { ok: boolean; details: string } | undefined;
+  async function batching(
+    batchFacts: Record<string, string> | undefined,
+    extra: Partial<AlRunnerV3Config> = {},
+    wantOk = true,
+    /** PR-256 amendment 1: this session's probe reading of sleep-is-noop (gone: the rule is retired). */
+    sleep: "gone" | "defect-present" = "gone",
+  ) {
     const sleepPin = pinsNs.V3_BUILD_PINS.find((p) => p.legC["sleep-is-noop"]?.verdict === "gone");
     if (sleepPin === undefined) throw new Error("no pin records sleep-is-noop gone");
     const versionOnly: SpawnFn = async () => ({ exitCode: 0, stdout: `${VERSION}\n`, stderr: "" });
@@ -1074,7 +1081,7 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
         ...(batchFacts !== undefined ? { batchFacts } : {}),
       }),
     );
-    const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin });
+    const b = backendOf(l, versionOnly, fakeAlc().io, { alRunnerPath: bin, ...extra });
     (b as unknown as { contract: V3ContractResult }).contract = {
       facts: [
         ...V3_CAPABILITY_FACTS.map((fact) => ({
@@ -1087,7 +1094,7 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
         {
           fact: "sleep-is-noop",
           kind: "defect" as const,
-          verdict: "gone" as const,
+          verdict: sleep,
           expected: "x",
           measured: "m",
         },
@@ -1096,7 +1103,8 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const s = await b.status();
-      expect(s.ok).toBe(true);
+      lastStatus = s;
+      expect(s.ok).toBe(wantOk);
       return b;
     } finally {
       warn.mockRestore();
@@ -1116,6 +1124,30 @@ describe("PR-117: status() reads baseline batching from the build's own .gated",
     expect(b.baselineBatchingOffWhy()).toBe(
       `this build's gate record (lethalCommit ${COMMIT}) has no batchFacts`,
     );
+  });
+
+  test("PR-256 (rule 7): stopGroups on a build whose gate record lacks stop-groups is refused by name; with it, allowed; off, nothing moves", async () => {
+    const eight = Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"]));
+    await batching(eight, { stopGroups: true }, false);
+    expect(lastStatus?.details).toContain("al-runner-v3-stop-groups-unsupported");
+    expect(lastStatus?.details).toContain(COMMIT);
+    await batching({ ...eight, "stop-groups": "diverged" }, { stopGroups: true }, false);
+    expect(lastStatus?.details).toContain("al-runner-v3-stop-groups-unsupported");
+    await batching({ ...eight, "stop-groups": "matches" }, { stopGroups: true }, true);
+    await batching(eight, { stopGroups: false }, true);
+    await batching(eight, {}, true);
+  });
+
+  test("PR-256 amendment 1 item 1: the fact present but the §6 Sleep rule in force (probe reads sleep-is-noop present): refused by name", async () => {
+    const withFact = {
+      ...Object.fromEntries(V3_CAPABILITY_FACTS.map((n) => [n, "matches"])),
+      "stop-groups": "matches",
+    };
+    await batching(withFact, { stopGroups: true }, false, "defect-present");
+    expect(lastStatus?.details).toContain("al-runner-v3-stop-groups-unsupported");
+    expect(lastStatus?.details).toContain("§6 Sleep rule applies");
+    // the flag off: the same build is no refusal of PR-256's
+    await batching(withFact, {}, true, "defect-present");
   });
 });
 
