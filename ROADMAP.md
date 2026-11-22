@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**63 of 1142 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1143 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -404,6 +404,7 @@ that ordering is the priority.
 - **R1174** · R197's kill ledger can change a bcdev VERDICT: it moves a scope's earlier killer FIRST, so when that kill rested on state an earlier test codeunit left (a SingleInstance flag), the moved killer runs before the setter and the next mutants of the scope SURVIVE (a false survivor on the authoritative backend) · [R1174.md](docs/roadmap/R1174.md) · done (8e1e360d8) — PR-327 (c), the orchestrator's option 1: the ledger's ORDER is unchanged, and a survivor…
 - **R1178** · PR-144's withheld-kill recheck eligibility depends on which held error the walk reads FIRST: a resume with an empty ledger read a plain refusal first, so three mutants c2 had won back through the recheck stayed `error` (DO: M2519, M2548, M2549; not a refusedCutTail effect) · [R1178.md](docs/roadmap/R1178.md) · open — fix in coord PR-341: keep a withheld-eligible held error as the one the recheck reads when an earlier…
 - **R1179** · On --resume, CARRIED kills never reach R197's kill ledger: only live kill sites call recordKill, so a resumed session walks a procedure's later mutants in a different order than a fresh run, which can move killingTest and PR-144 recheck eligibility · [R1179.md](docs/roadmap/R1179.md) · open — design first (coord PR-341 found it): seed the session ledger from the carried kills, in the order…
+- **R1180** · PR-340's carry walk is not measured for what it leaves in a lane's serve daemon: the carry gate's fixture sends every ordinary request before the walks (one prefetch window), so the next full DO run must compare its unlabelled mutants with a no-walk control per mutant · [R1180.md](docs/roadmap/R1180.md) · open — next: the first full DO run on a head with PR-340, against a LETHAL_V3_CARRY_WALK=off control on the…
 
 ## Product gaps a real project hits
 

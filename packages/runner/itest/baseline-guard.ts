@@ -431,9 +431,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * it per mutant; the list is empty again.
  * PR-144/PR-162's leg RC (`al-runner-v3.recheck.baseline.json`) waited here and was recorded once on
  * 2026-11-18 by the R849 route, equal to spec section 0h's expected rows; the list is empty again.
- * PR-340's `al-runner-v3.carry.baseline.json` (`itest:alrunner-v3-carry`) waits here for its one record run.
+ * PR-340's `al-runner-v3.carry.baseline.json` (`itest:alrunner-v3-carry`) waited here and was recorded once on
+ * 2026-11-22 (main-bf3a3e863), equal per mutant to its pre-commitment's §7 table (8 killed, 5 survived); the list is
+ * empty again.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner-v3.carry.baseline.json"];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {

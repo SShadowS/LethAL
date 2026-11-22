@@ -474,4 +474,8 @@ export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
   // R885 (pre-committed in docs/gates/alrunner-v3.md, 6bb4274d): the leg opts out of downloads, so al-runner
   // says its test data is off; true and expected, since no test of sandbox-data needs demo data.
   "al-runner-v3/T": ["al-runner-v3-test-data-off", ...TABLES],
+  // PR-340 (observed on the first live run, main-bf3a3e863): the carry fixture has no demo data in its cache dir, so
+  // al-runner says its test data is off; true and expected, since no test of sandbox-carry needs demo data.
+  "al-runner-v3-carry/walk": ["al-runner-v3-test-data-off"],
+  "al-runner-v3-carry/off": ["al-runner-v3-test-data-off"],
 };

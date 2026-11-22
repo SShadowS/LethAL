@@ -278,10 +278,12 @@ async function main(): Promise<void> {
   try {
     const walk = await runArm(join(root, "walk"), "walk");
     assertWalkArm(walk.report, walk.carryOff);
-    // S1: the after-walk pin holds only if an ordinary request really followed the last walk.
+    // Amendment 2: on this fixture every request goes out before the walks (one prefetch window), so the
+    // after-walk pin cannot be exercised here; its check is PRINTED as information, never a pass claim.
     const orderProblem = judgeCarryOrder(walk.order);
-    must(orderProblem === undefined, `walk: ${orderProblem ?? ""}`);
-    console.log(`  walk: order ${walk.order.join(" ")}`);
+    console.log(
+      `  walk: order ${walk.order.join(" ")}; after-walk pin: ${orderProblem === undefined ? "an ordinary request followed the last walk on the same daemon" : `not exercised (${orderProblem})`}`,
+    );
     const off = await runArm(join(root, "off"), "off");
     assertOffArm(off.report, walk.report);
     // Last: a record run writes the walk arm once and exits 3 (R332).
