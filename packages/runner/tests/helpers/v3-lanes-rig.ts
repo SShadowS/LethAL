@@ -140,6 +140,8 @@ export interface ServeCtl {
 function fakeServe(ctl: ServeCtl) {
   const daemons: string[][] = [];
   const requests: Req[] = [];
+  /** PR-256: each request's line as sent, by the index of `requests`. */
+  const bodies: string[] = [];
   const closes: number[] = [];
   const cwds: (string | undefined)[] = [];
   const spawn: ServerSpawnFn = (argv, opts) => {
@@ -187,6 +189,20 @@ function fakeServe(ctl: ServeCtl) {
             hiddenRan: [],
           };
           requests.push(req);
+          bodies.push(line);
+          // PR-256: upstream's stop (PR-257): with `stopAfterFirstFailure`, after the first failing row of a
+          // `stopGroup`, that group's later tests do not run and answer the pinned skip row.
+          const stop = body.stopAfterFirstFailure === true;
+          const failedIn = new Map<string, string>();
+          const stopped = (group: unknown, cu: number, r: FakeRow): FakeRow => {
+            if (!stop || typeof group !== "string") return r;
+            const f = failedIn.get(group);
+            if (f !== undefined)
+              return { method: r.method, status: "error", notRun: true, message: stopSkipText(f) };
+            if (r.status === "fail" && r.notRun !== true)
+              failedIn.set(group, `Codeunit${cu}.${r.method}`);
+            return r;
+          };
           const cuOf = (t: unknown) => Number(/^Codeunit(\d+)\./.exec(String(t))?.[1]);
           // PR-297: `Codeunit<n>.<Method>` selects that one test (an alone request); `Codeunit<n>.` the whole codeunit
           const methodOf = (t: unknown) => /^Codeunit\d+\.(.+)$/.exec(String(t))?.[1];
@@ -240,8 +256,9 @@ function fakeServe(ctl: ServeCtl) {
                     if (out && !req.selectedOnly) req.hiddenRan.push(name);
                     return !out;
                   });
-            for (const r of rs) lines.push(testLine(cu, r, String(e.id)));
-            per.push({ type: "entrySummary", entry: e.id, ...count(rs) });
+            const shown = rs.map((r) => stopped(e.stopGroup, cu, r)); // PR-256
+            for (const r of shown) lines.push(testLine(cu, r, String(e.id)));
+            per.push({ type: "entrySummary", entry: e.id, ...count(shown) });
           }
           lines.push(...per);
           const cached = [...selected].every((c) => compiled.has(c));
@@ -257,8 +274,12 @@ function fakeServe(ctl: ServeCtl) {
     };
     return handle;
   };
-  return { spawn, daemons, requests, closes, cwds };
+  return { spawn, daemons, requests, bodies, closes, cwds };
 }
+
+/** PR-256: upstream's skip row text (PR-257, measured), naming the test `failed` (`Codeunit<n>.<Method>`). */
+export const stopSkipText = (failed: string): string =>
+  `NotRun: out-of-scope: the test ${failed} failed before it, and stopAfterFirstFailure (--stop-after-first-failure) runs no test of its codeunit or of a later entry of its group`;
 
 function fakeOneShot(rows: RowsFn) {
   const calls: string[][] = [];
@@ -336,6 +357,10 @@ export async function lanesRig(
     methods?: readonly string[];
     /** PR-297: `alRunnerV3.refusedCutTail`. */
     refusedCutTail?: boolean;
+    /** PR-256: `alRunnerV3.stopGroups` (true, false or absent). */
+    stopGroups?: boolean;
+    /** PR-256: the `stop-groups` build fact (the seam; default: present when `stopGroups` is true). */
+    stopGroupsFact?: boolean;
   } = {},
 ): Promise<LanesRig> {
   const suite = o.methods === undefined ? SUITE : o.methods.map(ref);
@@ -395,6 +420,7 @@ export async function lanesRig(
       transport: "serve-entries",
       ...(o.packEntries !== undefined ? { packEntries: o.packEntries } : {}),
       ...(o.refusedCutTail === true ? { refusedCutTail: true } : {}),
+      ...(o.stopGroups !== undefined ? { stopGroups: o.stopGroups } : {}),
     },
     one.spawn,
     fakeAlc(),
@@ -403,6 +429,8 @@ export async function lanesRig(
   const notices: string[] = [];
   b.setNotify((code, message) => notices.push(`${code}: ${message}`));
   b.seams.sleepRuleRetired = true;
+  if (o.stopGroupsFact !== undefined || o.stopGroups === true)
+    b.seams.stopGroupsFact = o.stopGroupsFact ?? true;
   // R778: these tests measure today's per-kill pair; the batch has its own tests.
   (b as unknown as { pairBatch: boolean }).pairBatch = o.pairBatch === true;
   if (o.afterLaneCopy !== undefined) b.seams.afterLaneCopy = o.afterLaneCopy;
