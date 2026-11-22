@@ -3149,6 +3149,16 @@ describe("PR-342: the stop-groups capability fact (PR-256's alRunnerV3.stopGroup
     expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
   });
 
+  test("review nit: a doubled skip row (two rows of one name) is diverged, never matched on its first copy", () => {
+    const a = asBuilt();
+    const rs = "rows" in a.stop ? a.stop.rows : [];
+    const second = rs.find((x) => x.name === "Codeunit50781.Second");
+    expect(second).toBeDefined();
+    if (second === undefined) return;
+    const stop: StopAnswer = { rows: [...rs, second] };
+    expect(judgeStopGroups({ ...a, stop }).verdict).toBe("diverged");
+  });
+
   test("case 1: a skip of the SECOND ENTRY missing (only the codeunit's own rest) is diverged", () => {
     const a = asBuilt();
     const stop = replace(a.stop, "Codeunit50782.Other", { status: "pass" });

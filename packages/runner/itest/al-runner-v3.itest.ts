@@ -650,8 +650,9 @@ async function legC(scratch: string): Promise<readonly string[]> {
       )
       .map((f) => [f.fact, f.verdict]),
   );
-  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 36 facts (r13,
-  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches); a warn fact (V3_WARN_FACTS) only adds its line, except
+  // RC-2 (I-2): a defect fact moving to `gone` is held; any diverged is gate-fail. 37 facts (r13,
+  // R590: 9 defect, 18 contract, 1 warn; PR-114a: 8 capability, each must read matches; PR-342: stop-groups, whose
+  // diverged only adds its line); a warn fact (V3_WARN_FACTS) only adds its line, except
   // `unkept` (R1000), which is gate-fail.
   const c = classifyLegC(
     r.facts,
