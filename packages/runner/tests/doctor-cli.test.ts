@@ -395,6 +395,7 @@ describe("lethal doctor CLI wiring — create-mode envTool config (final review,
       "dependencies",
       "server-dependencies",
       "text-search-dependencies", // PR-128: skipped too
+      "stop-hung-sessions", // PR-315: advisory, ok
     ]);
     expect(report.checks[4]?.skipped).toBe(true);
     expect(report.checks[3]?.skipped).toBe(true);

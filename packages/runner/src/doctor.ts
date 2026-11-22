@@ -3,6 +3,7 @@ import {
   type ResolvedAssemblyProbingPaths,
   describeAssemblyProbingPaths,
 } from "./assembly-probing-paths";
+import { STOP_HUNG_SESSIONS_OFF_TEXT } from "./backend";
 import { ApiBaseUnsetError, MIN_CONTROL_VERSION, UnfilteredExtensionsQueryError } from "./harness";
 import type { LeaseSnapshot } from "./harness";
 import { type TextSearchApp, textSearchNote } from "./text-search-fields";
@@ -194,6 +195,11 @@ export interface DoctorDeps {
    * it. Present only when doctor is given `--project`.
    */
   readonly assemblyProbingPaths?: () => Promise<ResolvedAssemblyProbingPaths>;
+  /**
+   * PR-315 (GitHub #52): whether the config turns `--stop-hung-sessions` on (`bcdev.stopHungSessions`,
+   * which an envTool config ignores). Advisory: the check is `ok` either way.
+   */
+  readonly stopHungSessions?: () => Promise<{ readonly on: boolean; readonly envTool: boolean }>;
 }
 
 export type ServerDependenciesProbe =
@@ -787,6 +793,7 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
     textSearchDependencies,
     credentialsEnv,
     assemblyProbingPaths,
+    stopHungSessions,
   } = deps;
   const checkPromises: Promise<DoctorCheck>[] = [];
   if (envStatus !== undefined) {
@@ -883,6 +890,25 @@ export async function runDoctor(cfg: DoctorConfig, deps: DoctorDeps): Promise<Do
         ok: true,
         detail: describeAssemblyProbingPaths(await assemblyProbingPaths()),
       })),
+    );
+  }
+  // PR-315: doctor has no warning level, so an advisory is an `ok` check whose detail says "OFF".
+  if (stopHungSessions !== undefined) {
+    const name = "stop-hung-sessions";
+    checkPromises.push(
+      runCheck(name, async () => {
+        const { on, envTool } = await stopHungSessions();
+        if (on)
+          return { name, ok: true, detail: "on: a hung mutant's session is ended on the server." };
+        const where = envTool
+          ? "This config uses an envTool, which ignores the config field: only the flag works."
+          : "";
+        return {
+          name,
+          ok: true,
+          detail: `OFF (advisory, not a failure): ${STOP_HUNG_SESSIONS_OFF_TEXT} ${where}`.trim(),
+        };
+      }),
     );
   }
   // R146. `checks.every(...)` on an empty array is `true`, so a deps object with nothing in it would
