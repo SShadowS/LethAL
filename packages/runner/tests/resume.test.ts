@@ -28,6 +28,7 @@ import { EXPLAIN_SCHEMA_VERSION, explain } from "../src/explain";
 import { ESTIMATE_NOT_A_BOUND, formatEstimate } from "../src/mutant-windows";
 import {
   feedAttestation,
+  isSeedableCarriedKill,
   resumeGuardMessage,
   runSession as runSessionRaw,
 } from "../src/orchestrator";
@@ -7488,5 +7489,19 @@ describe("R1179: --resume seeds the kill ledger from carried kills", () => {
     expect(tableOf(resumed)).toEqual(tableOf(fresh));
     const m3 = resumed.mutants.find((m) => m.mutantCode === "M0003");
     expect([m3?.verdict, m3?.killingTest]).toEqual(["killed", "AOne"]);
+  });
+
+  test("review S1: an R1174 re-walk kill (tagged [ledger-order-survived]) never seeds; a plain kill does", () => {
+    const note =
+      "[ledger-order-survived] survived in the kill ledger's order; killed in the no-ledger order (R1174)";
+    expect(isSeedableCarriedKill({ verdict: "killed", failureNote: note })).toBe(false);
+    expect(isSeedableCarriedKill({ verdict: "timeout-killed", failureNote: `x; ${note}` })).toBe(
+      false,
+    );
+    expect(isSeedableCarriedKill({ verdict: "killed" })).toBe(true);
+    expect(isSeedableCarriedKill({ verdict: "timeout-killed", failureNote: "other note" })).toBe(
+      true,
+    );
+    expect(isSeedableCarriedKill({ verdict: "survived" })).toBe(false);
   });
 });

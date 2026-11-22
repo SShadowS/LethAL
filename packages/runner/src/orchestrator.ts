@@ -5143,7 +5143,7 @@ function resolveResume(
   let seeds = 0;
   let noSeed = 0;
   for (const v of index.carryable.values()) {
-    if (v.verdict !== "killed" && v.verdict !== "timeout-killed") continue;
+    if (!isSeedableCarriedKill(v)) continue;
     if (carriedKillerRef(v, sessionTests) === undefined) noSeed += 1;
     else seeds += 1;
   }
@@ -9754,7 +9754,7 @@ async function runSessionBody(
             // R1179: a carried kill feeds the session's one ledger (R197) before any remaining
             // mutant is walked, so the walk orders tests as a fresh run would. No single killer: no
             // seed (counted in the resume-reusing-run line).
-            if (carried.verdict === "killed" || carried.verdict === "timeout-killed") {
+            if (isSeedableCarriedKill(carried)) {
               const killer = carriedKillerRef(carried, tests);
               if (killer !== undefined) recordKill(killLedger, m, killer);
             }
@@ -11391,6 +11391,20 @@ export function qualifiedTestName(ref: TestMethodRef): string {
  * carried row was covered by whose method is its `killingTest`. None, or more than one (the same
  * method in two codeunits), gives `undefined`, and the kill is not seeded into the ledger.
  */
+/** R1174's re-walk kill tag. Such a kill never calls recordKill live, so a resume never seeds it (R1179). */
+const LEDGER_ORDER_SURVIVED = "[ledger-order-survived]";
+
+/** R1179: true when a carried row is a kill a fresh run would have fed to the ledger. */
+export function isSeedableCarriedKill(carried: {
+  readonly verdict: string;
+  readonly failureNote?: string | undefined;
+}): boolean {
+  return (
+    (carried.verdict === "killed" || carried.verdict === "timeout-killed") &&
+    !(carried.failureNote ?? "").includes(LEDGER_ORDER_SURVIVED)
+  );
+}
+
 export function carriedKillerRef(
   carried: { readonly killingTest?: string; readonly coveringTests?: readonly string[] },
   tests: readonly TestMethodRef[],
@@ -14520,7 +14534,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     if (rw.cur !== undefined && (verdict === "killed" || verdict === "timeout-killed")) {
       failureNote = appendNote(
         failureNote,
-        "[ledger-order-survived] survived in the kill ledger's order; killed in the no-ledger order (R1174)",
+        `${LEDGER_ORDER_SURVIVED} survived in the kill ledger's order; killed in the no-ledger order (R1174)`,
       );
     }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
