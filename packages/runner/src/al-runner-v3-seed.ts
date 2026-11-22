@@ -52,6 +52,9 @@ export function mergeChildEnv(
   extra: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   const out: Record<string, string | undefined> = { ...process.env, ...extra };
+  // PR-340 S2: al-runner reads this variable's PRESENCE (even "0" turns sequential mode on), so an ambient
+  // value must never reach a child that did not ask for it: it stays only when `extra` sets it.
+  if (!Object.hasOwn(extra, V3_STRICT_SEQUENTIAL_ENV)) delete out[V3_STRICT_SEQUENTIAL_ENV];
   for (const k of Object.keys(out)) if (out[k] === undefined) delete out[k];
   return out as Record<string, string>;
 }

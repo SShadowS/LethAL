@@ -344,6 +344,8 @@ export function judgeCarryWalk(a: {
   readonly echoId: number;
   readonly expected: ReadonlyMap<number, ReadonlySet<string>>;
   readonly answers: readonly (readonly V3Row[])[];
+  /** The `--test-timeout` the daemon runs with: `v3RowVerdict` judges a timeout row against it. */
+  readonly stopSeconds: number;
 }): CarryWalkResult {
   const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
   if (a.answers.length !== 3) return failed(`${a.answers.length} answers, not 3`);
@@ -351,6 +353,8 @@ export function judgeCarryWalk(a: {
   for (const [cu, methods] of a.expected) for (const m of methods) wantKeys.add(`${cu}.${m}`);
   const activation = [a.mutantId, SELECTOR_RESOURCE_NONE, a.mutantId];
   const byKey: Map<string, V3Row>[] = [];
+  /** Each row's outcome after the ordinary path's classification (`v3RowVerdict`), never its raw status. */
+  const outcomes: Map<string, TestVerdict["outcome"]>[] = [];
   for (const [i, rows] of a.answers.entries()) {
     const n = i + 1;
     if (rows.length === 0) return failed(`request ${n} gave zero rows`);
@@ -362,7 +366,7 @@ export function judgeCarryWalk(a: {
     for (const r of rows) {
       if (r.codeunit === a.echoId) continue;
       const k = `${r.codeunit}.${r.method.toLowerCase()}`;
-      if (!wantKeys.has(k) || map.has(k) || r.notRun) extra.push(k);
+      if (!wantKeys.has(k) || map.has(k)) extra.push(k);
       else map.set(k, r);
     }
     const missing = [...wantKeys].filter((k) => !map.has(k));
@@ -370,13 +374,45 @@ export function judgeCarryWalk(a: {
       return failed(
         `request ${n} is incomplete: ${missing.length} baseline test(s) missing (${missing.slice(0, 3).join(", ")}), ${extra.length} unexpected, repeated or not-run row(s) (${extra.slice(0, 3).join(", ")})`,
       );
+    // B1: classify exactly as the ordinary path does. A refusal marker without notRun, a RUNNER_REFUSAL
+    // text, an OnRun or timeout row and a notRun row are never a pass or a fail: the walk is not sound.
+    const verdicts = new Map<string, TestVerdict["outcome"]>();
+    for (const [k, r] of map) {
+      const v = v3RowVerdict(
+        { codeunitId: r.codeunit, codeunitName: String(r.codeunit), method: r.method },
+        r,
+        a.stopSeconds,
+        0,
+        undefined,
+      );
+      if (v.outcome !== "pass" && v.outcome !== "fail")
+        return failed(
+          `request ${n}: ${r.name} reads ${v.outcome} (${(v.failureMessage ?? "no message").slice(0, 120)}), which is never a pass or a kill`,
+        );
+      // B1 leftover: a pass al-runner flagged (resting on an unprobed assumption), or one whose flag state
+      // the answer could not report, is no sound no-mutant pass (or any pass): the walk is not sound.
+      if (v.outcome === "pass" && (v.flagged === true || v.flaggedUnknown === true))
+        return failed(
+          `request ${n}: ${r.name} passed but ${v.flagged === true ? "al-runner flagged it" : "its flag state is unknown"}, so it is no sound pass`,
+        );
+      verdicts.set(k, v.outcome);
+    }
     byKey.push(map);
+    outcomes.push(verdicts);
   }
   const [first, second, third] = byKey;
-  if (first === undefined || second === undefined || third === undefined)
+  const [o1, o2, o3] = outcomes;
+  if (
+    first === undefined ||
+    second === undefined ||
+    third === undefined ||
+    o1 === undefined ||
+    o2 === undefined ||
+    o3 === undefined
+  )
     return failed("a request gave no rows");
   for (const [k, r1] of first) {
-    if (r1.status === "fail" && second.get(k)?.status === "pass" && third.get(k)?.status === "fail")
+    if (o1.get(k) === "fail" && o2.get(k) === "pass" && o3.get(k) === "fail")
       return {
         kind: "killed",
         codeunitId: r1.codeunit,
@@ -7592,6 +7628,44 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     covering: readonly TestMethodRef[],
     site?: { readonly objectType: string; readonly codeunitId: number },
   ): Promise<CarryWalkResult | undefined> {
+    // S3: a walk that reaches the daemon is counted, with its wall time (one stderr line at close).
+    if (
+      this.singleInstanceCarryNote(covering, site) === undefined ||
+      this.carryWalkWhyOff !== undefined
+    )
+      return this.carryWalkSend(lane, mutantId, covering, site);
+    const t0 = monoNow();
+    this.carryWalkStats.walks += 1;
+    try {
+      return await this.carryWalkSend(lane, mutantId, covering, site);
+    } finally {
+      this.carryWalkStats.ms += monoNow() - t0;
+    }
+  }
+
+  /** PR-340 S1: called at the first send of each walk that really sends (the carry gate orders its events by it). */
+  private carryWalkSink: (() => void) | undefined;
+  setCarryWalkSink(sink?: () => void): void {
+    this.carryWalkSink = sink;
+  }
+
+  /** PR-340 S3: walks run and their summed wall time, printed once at close when any ran. */
+  private carryWalkStats = { walks: 0, ms: 0 };
+
+  /** PR-340: the walk's text, or `undefined` when none ran (so no existing line moves). */
+  carryWalkLine(): string | undefined {
+    const s = this.carryWalkStats;
+    return s.walks === 0
+      ? undefined
+      : `[lethal] al-runner-v3 carry walks (PR-340, R1173): ${s.walks} walk(s), ${Math.round(s.ms)} ms in all`;
+  }
+
+  private async carryWalkSend(
+    lane: Lane,
+    mutantId: string,
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): Promise<CarryWalkResult | undefined> {
     if (this.singleInstanceCarryNote(covering, site) === undefined) return undefined;
     const failed = (reason: string): CarryWalkResult => ({ kind: "failed", reason });
     if (this.carryWalkWhyOff !== undefined)
@@ -7652,6 +7726,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       let answer: Awaited<ReturnType<AlRunnerServer["runEntries"]>>;
       try {
         await writeFile(lane.resourcePath(), m, "utf8");
+        // S1: the mark of a REAL walk, at its first send (never for a call that sends nothing).
+        if (answers.length === 0) this.carryWalkSink?.();
         daemon.requests += 1;
         answer = await daemon.server.runEntries(body, v3CallDeadlineMs(s, tests));
       } catch (err) {
@@ -7684,7 +7760,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       }
       answers.push(rows);
     }
-    const out = judgeCarryWalk({ mutantId, echoId, expected, answers });
+    const out = judgeCarryWalk({ mutantId, echoId, expected, answers, stopSeconds: s });
     // A row the daemon cannot keep (R612) leaves it dirty: replace it, as every other send does.
     if (answers.some((rows) => !serveDaemonReusable(serveLines(rows), "v3")))
       await this.closeLane(lane, "unkept-row");
@@ -10765,6 +10841,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   async close(): Promise<void> {
     // R766 (b): every lane's daemon, whether or not the transport is serve-entries.
     await this.closeAllDaemons("session-end");
+    // PR-340 S3: a NEW line, only when a walk ran, so no existing pinned line moves.
+    const walkLine = this.carryWalkLine();
+    if (walkLine !== undefined) console.warn(walkLine);
     if (this.entries) {
       const s = this.entriesStats();
       console.warn(

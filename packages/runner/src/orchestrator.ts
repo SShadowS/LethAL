@@ -11222,7 +11222,7 @@ export function readCarryWalk(env: Record<string, string | undefined>): boolean 
 
 /** PR-340: why a resume across a change of `LETHAL_V3_CARRY_WALK` is refused (same shape as PR-303's). */
 function carryWalkResumeMessage(subject: string, nowOn: boolean): string {
-  return `carry-walk-resume-refused: ${subject} was recorded with ${CARRY_WALK_ENV} ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A survivor scored with the carry walk must never be carried into a run without it as an ordinary one (PR-340). Set the knob as that run had it, or drop the resume flag to run from scratch.`;
+  return `carry-walk-resume-refused: ${subject} was recorded with ${CARRY_WALK_ENV} ${nowOn ? "off" : "on, or before the knob existed"}, and this session has it ${nowOn ? "on" : "off"}. A survivor scored with the carry walk must never be carried into a run without it as an ordinary one (PR-340). Set the knob as that run had it, or drop the resume flag to run from scratch.`;
 }
 
 /** PR-303 rule 6: why a resume across a flag change is refused. */

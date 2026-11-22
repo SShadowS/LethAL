@@ -45,6 +45,7 @@ import {
 } from "../src/al-runner-v3-pin";
 import { baselineBatchingOffReason, carryWalkOffReason } from "../src/al-runner-v3-pins";
 import { V3_PREDEFINED_CANDIDATES } from "../src/al-runner-v3-probe";
+import { mergeChildEnv } from "../src/al-runner-v3-seed";
 import type { ArtifactIo } from "../src/artifact";
 import type { SpawnFn } from "../src/publisher";
 
@@ -3030,11 +3031,26 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
   // Test 8, leg C half. Red (a): drop `serverEnv` from the carry spec in BATCH_FACTS, so its server
   // does not get the variable. Red (b): put AL_STRICT_SEQUENTIAL into `v3ChildEnv`, so every server does.
   test("only the carry fact's OWN server gets AL_STRICT_SEQUENTIAL=1; serve-keep-reasons' and the eight facts' servers do not", async () => {
-    const { spawn, envs } = spawnsWithEnv();
-    const r = await probe({}, spawn);
-    expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
-    expect(envs).toHaveLength(3);
-    expect(envs.map((e) => e?.AL_STRICT_SEQUENTIAL)).toEqual([undefined, undefined, "1"]);
+    const before = process.env.AL_STRICT_SEQUENTIAL;
+    try {
+      // S2: judged on the env each spawn REALLY gets (merged over the ambient one), whatever the ambient value.
+      // Red: `mergeChildEnv` not dropping the ambient variable puts "0" or "1" on the first two servers.
+      for (const ambient of ["0", "1", undefined]) {
+        if (ambient === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
+        else process.env.AL_STRICT_SEQUENTIAL = ambient;
+        const { spawn, envs } = spawnsWithEnv();
+        const r = await probe({}, spawn);
+        expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
+        expect(envs).toHaveLength(3);
+        expect(
+          envs.map((e) => mergeChildEnv(e ?? {}).AL_STRICT_SEQUENTIAL),
+          `ambient ${ambient}`,
+        ).toEqual([undefined, undefined, "1"]);
+      }
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
+      else process.env.AL_STRICT_SEQUENTIAL = before;
+    }
   });
 
   // Red: judge the reader `pass` as `matches` (loosen the judge), or drop the reader-status check.

@@ -25,7 +25,6 @@ import { fileURLToPath } from "node:url";
 import { AlRunnerV3Backend, CARRY_WALK_ENV } from "../src/al-runner-v3-backend";
 import {
   AL_RUNNER_V3_DEFAULT_PATH,
-  AlRunnerV3UngatedBuildError,
   checkGated,
   resolveV3Binary,
   sha256OfFile,
@@ -36,6 +35,7 @@ import { type SessionConfig, runSession } from "../src/orchestrator";
 import type { MutantOutcome, SessionReport } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { v3GateBackendCfg } from "./al-runner-v3-gate";
+import { judgeCarryOrder } from "./alrunner-v3-legs";
 import { BaselineRecordedError, assertGateBaseline, preflightGateBaseline } from "./baseline-guard";
 import { prepareFixtureSymbols, v3GateTestDir } from "./fixture-symbols";
 import { emitFailed, emitPassed, emitSkipped } from "./gate-receipt";
@@ -112,8 +112,14 @@ function gateTestDir(testDir: string): string {
 async function runArm(
   scratch: string,
   arm: "walk" | "off",
-): Promise<{ readonly report: SessionReport; readonly carryOff: string | undefined }> {
+): Promise<{
+  readonly report: SessionReport;
+  readonly carryOff: string | undefined;
+  /** S1: the run's walks and serve requests in time order (`judgeCarryOrder`). */
+  readonly order: readonly string[];
+}> {
   await mkdir(scratch, { recursive: true });
+  const order: string[] = [];
   const projectDir = fixture("sandbox-carry");
   const testDir = fixture("sandbox-carry-tests");
   const packagesDir = await microsoftDeps(scratch);
@@ -137,6 +143,8 @@ async function runArm(
       },
     ),
   );
+  // S1: the mark of a walk that REALLY sent (a call that sends nothing, M0012's, leaves none).
+  backend.setCarryWalkSink(() => order.push("walk"));
   const store = new ResultsStore(join(scratch, "lethal.sqlite"));
   const collected = collectWarnings();
   const was = process.env[CARRY_WALK_ENV];
@@ -151,13 +159,20 @@ async function runArm(
       testDir,
       selectorIds: SELECTOR_IDS,
       workers: 1,
-      emit: [collected.subscriber],
+      emit: [
+        collected.subscriber,
+        (e: { type: string; kind?: string }) => {
+          if (e.type === "serve-request-timed") order.push(`req:${e.kind}`);
+          // S1 (b): a close of the lane's daemon after the last walk makes a later request prove nothing.
+          if (e.type === "serve-daemon-closed") order.push("close");
+        },
+      ],
     } as unknown as SessionConfig).catch((e: unknown) => {
       settleThrown("al-runner-v3-carry", arm, collected);
       throw e;
     });
     checkGateWarnings("al-runner-v3-carry", arm, collected);
-    return { report, carryOff: backend.carryWalkOffWhy() };
+    return { report, carryOff: backend.carryWalkOffWhy(), order };
   } finally {
     if (was === undefined) Reflect.deleteProperty(process.env, CARRY_WALK_ENV);
     else process.env[CARRY_WALK_ENV] = was;
@@ -206,7 +221,7 @@ function assertWalkArm(r: SessionReport, carryOff: string | undefined): void {
   );
 }
 
-function assertOffArm(r: SessionReport): void {
+function assertOffArm(r: SessionReport, walkArm: SessionReport): void {
   console.log(
     `  off: ${r.counts.killed} killed / ${r.counts.survived} survived / ${r.counts.noCoverage} no-coverage (errors ${r.counts.errors}) over ${r.mutants.length}`,
   );
@@ -224,6 +239,18 @@ function assertOffArm(r: SessionReport): void {
   }
   for (const code of KILLED_AS_TODAY) {
     must(byCode(r, code)?.verdict === "killed", `off: ${code} is not killed, as today`);
+    // L4: the killer too, not the verdict alone: as today means the walk arm's killer, test for test.
+    must(
+      byCode(r, code)?.killingTest !== undefined &&
+        byCode(r, code)?.killingTest === byCode(walkArm, code)?.killingTest,
+      `off: ${code} killed by ${byCode(r, code)?.killingTest}, the walk arm's ${byCode(walkArm, code)?.killingTest}`,
+    );
+  }
+  for (const code of [...CARRY_KILLED, ...SURVIVE_PLAIN]) {
+    must(
+      byCode(r, code)?.killingTest === undefined || byCode(r, code)?.killingTest === null,
+      `off: ${code} survives, yet names the killer ${byCode(r, code)?.killingTest}`,
+    );
   }
   for (const code of SURVIVE_PLAIN) {
     const m = byCode(r, code);
@@ -245,15 +272,18 @@ async function main(): Promise<void> {
   const version = (execFileSync(BIN, ["--version"], { encoding: "utf8" }) as string).trim();
   // The first line names the build, as every v3 gate does.
   console.log(`al-runner-v3 carry itest: ${version} sha256 ${sha} (${BIN})`);
-  await checkGated(BIN, version, { candidate: false }).catch((err: unknown) => {
-    if (!(err instanceof AlRunnerV3UngatedBuildError)) throw err;
-  });
+  // L4: an ungated build fails this gate loudly; nothing is swallowed.
+  await checkGated(BIN, version, { candidate: false });
   const root = await mkdtemp(join(tmpdir(), "lethal-itest-v3-carry-"));
   try {
     const walk = await runArm(join(root, "walk"), "walk");
     assertWalkArm(walk.report, walk.carryOff);
+    // S1: the after-walk pin holds only if an ordinary request really followed the last walk.
+    const orderProblem = judgeCarryOrder(walk.order);
+    must(orderProblem === undefined, `walk: ${orderProblem ?? ""}`);
+    console.log(`  walk: order ${walk.order.join(" ")}`);
     const off = await runArm(join(root, "off"), "off");
-    assertOffArm(off.report);
+    assertOffArm(off.report, walk.report);
     // Last: a record run writes the walk arm once and exits 3 (R332).
     await assertGateBaseline(walk.report, BASELINE_PATH, "al-runner-v3 carry itest");
   } finally {

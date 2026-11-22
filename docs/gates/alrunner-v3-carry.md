@@ -54,9 +54,20 @@ the burner may move the numbering):
 
 That is 8 killed, 5 survived and 0 errors over 13 mutants.
 
-**After a walk on the same daemon.** The gate runs one lane, so M0012 and M0013 are scored on the same daemon after
-the walks of M0009 to M0011. Pre-committed: M0012 survives and M0013 is killed, as without the walk. This pins that a
-walk leaves the lane's daemon clean for the next ordinary request.
+**After a walk, on the same daemon.** What the gate checks: an ordinary serve request after the last REAL walk, on the
+same daemon (no daemon close in between), reads as expected, and every verdict equals the baseline (M0012 survives, M0013
+is killed, as without the walk).
+
+The one-lane window prefetches the rows of all the mutants before any walk (`cutWindows` has no smaller cap to set), so
+a mutant's scored row alone says nothing about the daemon after a walk. The gate therefore records the run's order and
+FAILS by name unless the order holds (`judgeCarryOrder`):
+- a "walk" mark is made only where a walk really sends its first request, so a call that sends nothing (an unlabelled
+  survivor's) is not a walk;
+- an ordinary live or prefetch `serve-request-timed` follows the last such mark;
+- no `serve-daemon-closed` comes between them, because a request on a fresh daemon proves nothing about the walked one.
+
+M0013's kill is confirmed and reproduced by fresh requests, which is what is meant to carry the pin. The daemon is not
+closed after a walk.
 
 ## The off arm
 

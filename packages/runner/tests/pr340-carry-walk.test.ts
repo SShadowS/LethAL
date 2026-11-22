@@ -9,7 +9,7 @@ import {
   V3_SINGLEINSTANCE_NOTE,
   judgeCarryWalk,
 } from "../src/al-runner-v3-backend";
-import { v3MutantDaemonEnv } from "../src/al-runner-v3-seed";
+import { mergeChildEnv, v3MutantDaemonEnv } from "../src/al-runner-v3-seed";
 import type {
   BackendCapabilities,
   BackendStatus,
@@ -58,7 +58,7 @@ const answer = (m: string, t1: "pass" | "fail", t2: "pass" | "fail" = "pass"): V
   row(2, "T2", t2, t2 === "fail" ? "boom2" : undefined),
 ];
 const judge = (answers: V3Row[][]): CarryWalkResult =>
-  judgeCarryWalk({ mutantId: "M1", echoId: ECHO, expected: EXPECTED, answers });
+  judgeCarryWalk({ mutantId: "M1", echoId: ECHO, expected: EXPECTED, answers, stopSeconds: 60 });
 const failedReason = (r: CarryWalkResult): string => (r.kind === "failed" ? r.reason : r.kind);
 
 describe("PR-340: judgeCarryWalk", () => {
@@ -156,6 +156,67 @@ describe("PR-340: judgeCarryWalk", () => {
     ]);
     expect(r.kind).toBe("failed");
   });
+
+  // B1. Red: in judgeCarryWalk, bypass the `v3RowVerdict` classification (compare `r.status` directly).
+  // Each of these is a `fail` by raw status, which a raw-status judge would call a kill.
+  const REFUSALS: Array<[string, string]> = [
+    [
+      "v3's refusal marker without notRun (K1(a), R675)",
+      "NotRun: out-of-scope: Sleep is not trusted",
+    ],
+    ["a RUNNER_REFUSAL text (R534 D3)", "Codeunit: out-of-scope: a refused statement"],
+  ];
+  for (const [what, message] of REFUSALS) {
+    for (const bad of [0, 1, 2]) {
+      test(`B1. ${what} in answer ${bad + 1} is walk-failed with the reason named, never a kill`, () => {
+        const answers = [answer("M1", "fail"), answer(NONE, "pass"), answer("M1", "fail")];
+        // the same test, refused: its status stays `fail` in answers 1 and 3 (and `pass` -> `fail` in 2)
+        answers[bad] = (answers[bad] ?? []).map((r) =>
+          r.method === "T1" ? { ...r, status: "fail", message } : r,
+        );
+        const r = judge(answers);
+        expect(r.kind).toBe("failed");
+        expect(failedReason(r)).toContain(`request ${bad + 1}: Codeunit1.T1 reads error`);
+      });
+    }
+  }
+
+  test("B1. the control: the same rows with a plain failure message ARE a kill", () => {
+    expect(judge([answer("M1", "fail"), answer(NONE, "pass"), answer("M1", "fail")]).kind).toBe(
+      "killed",
+    );
+  });
+
+  test("B1. a timeout row in any answer is walk-failed, never a pass or a fail", () => {
+    for (const bad of [0, 1, 2]) {
+      const answers = [answer("M1", "fail"), answer(NONE, "pass"), answer("M1", "fail")];
+      answers[bad] = (answers[bad] ?? []).map((r) =>
+        r.method === "T1"
+          ? { ...r, status: "error" as const, notRun: true, message: "Test exceeded 60s timeout." }
+          : r,
+      );
+      const r = judge(answers);
+      expect(r.kind, `answer ${bad + 1}`).toBe("failed");
+      expect(failedReason(r)).toContain("reads timeout");
+    }
+  });
+
+  // B1 leftover. Red: remove the `v.flagged === true || v.flaggedUnknown === true` check in judgeCarryWalk.
+  // A flagged pass in answer 2 would otherwise be the no-mutant pass of a kill.
+  for (const [what, flag, reason] of [
+    ["flagged", { flagged: true as const }, "al-runner flagged it"],
+    ["flag state unknown", { flaggedUnknown: true as const }, "its flag state is unknown"],
+  ] as const) {
+    for (const bad of [0, 1, 2]) {
+      test(`B1. a pass whose ${what} is walk-failed (answer ${bad + 1})`, () => {
+        const answers = [answer("M1", "fail"), answer(NONE, "pass"), answer("M1", "fail")];
+        answers[bad] = (answers[bad] ?? []).map((r) => (r.method === "T2" ? { ...r, ...flag } : r));
+        const r = judge(answers);
+        expect(r.kind).toBe("failed");
+        expect(failedReason(r)).toContain(`request ${bad + 1}: Codeunit2.T2 passed but ${reason}`);
+      });
+    }
+  }
 });
 
 // ================================================================ part 2: the backend's walk
@@ -224,6 +285,7 @@ function shell(
   const b = Object.create(AlRunnerV3Backend.prototype) as Record<string, unknown>;
   b.entries = true;
   b.carryWalkWhyOff = o.whyOff;
+  b.carryWalkStats = { walks: 0, ms: 0 };
   b.coverageIndex = {
     singleInstance: new Set(o.singleInstance === false ? [] : ["codeunit:50100"]),
   };
@@ -499,7 +561,8 @@ describe("PR-340 test 8: AL_STRICT_SEQUENTIAL on every mutant-run daemon", () =>
       ),
     ).rejects.toThrow();
     if (seen === undefined) throw new Error("no spawn was attempted");
-    return seen;
+    // S2: the env the child REALLY gets: the spawn options merged over the ambient environment.
+    return mergeChildEnv(seen);
   }
 
   // Red (a): `cacheEnv(mutantRun)` ignoring its flag (never v3MutantDaemonEnv). Red (b): always v3MutantDaemonEnv
@@ -513,7 +576,10 @@ describe("PR-340 test 8: AL_STRICT_SEQUENTIAL on every mutant-run daemon", () =>
       // the helper alone, as leg C's carry fact's server does it by hand
       expect(v3MutantDaemonEnv().AL_STRICT_SEQUENTIAL).toBe("1");
       const baseline = await envOf(false);
-      expect(Object.hasOwn(baseline, "AL_STRICT_SEQUENTIAL")).toBe(false);
+      // Red (c), S2: `mergeChildEnv` not dropping the ambient variable: "0" or "1" would reach this daemon.
+      expect(Object.hasOwn(baseline, "AL_STRICT_SEQUENTIAL"), `ambient ${ambientValue}`).toBe(
+        false,
+      );
     }
   });
 
@@ -887,7 +953,12 @@ describe("PR-340 test 13: LETHAL_V3_CARRY_WALK", () => {
       const byId = new WalkStub("al-runner-v3", () => ({ kind: "walked" }));
       await expect(
         session(byId, { knob: second, store, project, tag: "-2", extra: { resume: 1 } }),
-      ).rejects.toThrow(/carry-walk-resume-refused/);
+      ).rejects.toThrow(
+        // L1. Red: put back "on" alone: a run recorded before the knob existed has the digest of "on".
+        second === "off"
+          ? /recorded with LETHAL_V3_CARRY_WALK on, or before the knob existed/
+          : /carry-walk-resume-refused/,
+      );
       expect(byId.walks).toEqual([]);
       await expect(
         session(new WalkStub("al-runner-v3", () => ({ kind: "walked" })), {
@@ -908,4 +979,83 @@ describe("PR-340 test 13: LETHAL_V3_CARRY_WALK", () => {
       expect(resumed.report.resumedFrom?.runId).toBe(1);
     }
   }, 120_000);
+});
+
+describe("PR-340 review fixes", () => {
+  // S3. Red: drop `this.carryWalkStats.walks += 1` (or the ms line) in carryWalkOn.
+  test("S3. the walk count and wall time are reported once, and only when a walk ran", async () => {
+    const none = shell({ whyOff: "not proven" });
+    await none.walk(none.lanes[0] as Lane0);
+    expect((none.b as unknown as { carryWalkLine(): string | undefined }).carryWalkLine()).toBe(
+      undefined,
+    );
+    const s = shell();
+    const lane = s.lanes[0] as Lane0;
+    await writeFile(lane.resourcePath(), "NONE", "utf8");
+    await s.walk(lane);
+    await s.walk(lane);
+    const line = (s.b as unknown as { carryWalkLine(): string | undefined }).carryWalkLine();
+    expect(line).toContain("2 walk(s)");
+    expect(line).toMatch(/\d+ ms in all/);
+    await rm(lane.resourcePath(), { force: true });
+  });
+
+  // S1. Red: make judgeCarryOrder accept an order whose only serve request predates the last walk.
+  test("S1. the carry gate's order check: an ordinary request must follow the last walk", async () => {
+    const { judgeCarryOrder } = await import("../itest/alrunner-v3-legs");
+    // every prefetch before every walk: the pin would be empty
+    expect(judgeCarryOrder(["req:warmup", "req:prefetch", "walk", "walk", "walk"])).toContain(
+      "would be empty",
+    );
+    expect(judgeCarryOrder(["req:prefetch", "req:live"])).toContain("no walk ran");
+    expect(judgeCarryOrder(["req:prefetch", "walk", "walk", "req:live"])).toBeUndefined();
+    expect(judgeCarryOrder(["walk", "req:prefetch"])).toBeUndefined();
+  });
+
+  // S1 (b). Red: drop the `.includes("close")` check in judgeCarryOrder.
+  test("S1 (b). a daemon close between the last walk and the next request fails the order check", async () => {
+    const { judgeCarryOrder } = await import("../itest/alrunner-v3-legs");
+    const closed = judgeCarryOrder(["walk", "close", "req:warmup", "req:live"]);
+    expect(closed).toContain("closed between the last walk and the next ordinary request");
+    // a close AFTER the ordinary request, or before the last walk, does not matter
+    expect(judgeCarryOrder(["walk", "req:live", "close"])).toBeUndefined();
+    expect(judgeCarryOrder(["close", "walk", "req:live"])).toBeUndefined();
+  });
+
+  // S1 (a). Red: call `this.carryWalkSink?.()` at the top of carryWalkOn (or carryWalkSend) instead of at the
+  // first send, so an empty call counts as a walk.
+  test("S1 (a). only a walk that really sends leaves a mark: an unlabelled survivor and a build not carry-proven leave none", async () => {
+    const mark = async (o: Parameters<typeof shell>[0]) => {
+      const s = shell(o);
+      const marks: string[] = [];
+      s.raw.carryWalkSink = () => marks.push(`walk@${s.events.length}`);
+      const lane = s.lanes[0] as Lane0;
+      await writeFile(lane.resourcePath(), "NONE", "utf8");
+      await s.walk(lane);
+      await rm(lane.resourcePath(), { force: true });
+      return { marks, s };
+    };
+    expect((await mark({ singleInstance: false })).marks).toEqual([]);
+    expect((await mark({ whyOff: "not proven" })).marks).toEqual([]);
+    const real = await mark({});
+    expect(real.marks).toHaveLength(1);
+    // the mark comes after the guards (ensure and bound ran) and before the first send's request is answered
+    expect(real.s.events.slice(0, 2)).toEqual(["ensure@lane0", "bound@lane0"]);
+    expect(real.marks[0]).toBe("walk@2");
+  });
+
+  // S2 directly. Red: remove the `delete out[V3_STRICT_SEQUENTIAL_ENV]` line in mergeChildEnv.
+  test("S2. mergeChildEnv drops an ambient AL_STRICT_SEQUENTIAL unless the extras set it", () => {
+    const before = process.env.AL_STRICT_SEQUENTIAL;
+    try {
+      for (const ambient of ["0", "1"]) {
+        process.env.AL_STRICT_SEQUENTIAL = ambient;
+        expect(Object.hasOwn(mergeChildEnv({}), "AL_STRICT_SEQUENTIAL")).toBe(false);
+        expect(mergeChildEnv({ AL_STRICT_SEQUENTIAL: "1" }).AL_STRICT_SEQUENTIAL).toBe("1");
+      }
+    } finally {
+      if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
+      else process.env.AL_STRICT_SEQUENTIAL = before;
+    }
+  });
 });
