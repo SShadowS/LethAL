@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**64 of 1132 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**66 of 1134 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -621,6 +621,7 @@ that ordering is the priority.
 - **R1134** · The outbound-HTTP pre-run line lists every test codeunit with no blocking TestHttpRequestPolicy, unranked: on DO all 113; a procedure-level reach to HttpClient would order it by evidence · [R1134.md](docs/roadmap/R1134.md) · open — HELD (PR-200, 2026-11-19): DO's hung tests reach no HttpClient send through explicit calls, and the…
 - **R1137** · Mutants that only left-out company-write tests would cover are judged by a static object reach (PR-212, §2c (i)); a coverage source from a run where those tests ran (§2c (iii)) would make it exact, and is not built · [R1137.md](docs/roadmap/R1137.md) · closed 2026-11-19 — measured no effect on DO's y2 and y3 ((b)=0: 14 of 16 left-out methods red at baseline)…
 - **R1138** · LethAL's lease renew is a second trigger of the BC 29 tier break for tests that create and delete a company with Commit; a renew that does not contend with the run session is filed, not built, until such tests are run on purpose or Microsoft fixes the platform · [R1138.md](docs/roadmap/R1138.md) · open
+- **R1171** · A bcdev run without --stop-hung-sessions (the product default) turns a hanging mutant into a tier quarantine, and nothing before the run says so; the one warning that names the risk fires only for plug-in-tagged sites (GitHub #52) · [R1171.md](docs/roadmap/R1171.md) · open — owner question q-20261122T001447-398e02e9: keep R1064's default off but warn at run start and in…
 
 ## Backends and tooling
 
@@ -1177,6 +1178,7 @@ that ordering is the priority.
 - **R1163** · PR-289's al-runner bug hunt over every refusal and timeout left on DO: 81 texts classified; four shapes measured on BC and posted upstream (#8267, #8219, #7908, #8652) · [R1163.md](docs/roadmap/R1163.md) · open — trigger: al-runner fixes the four shapes below (re-score the DO tests behind them)
 - **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · open
 - **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · open
+- **R1170** · A client-session backend (R1168's end state: run a mutant's tests in the session kind CI uses) is feasible on a BC with a web server, but today's control app caches the active mutant for a whole session, so each mutant would need a fresh ~7 s client session; serving many mutants from one kept session needs a per-mutant activation reload · [R1170.md](docs/roadmap/R1170.md) · open — design; measured by PR-308, PR-313 and PR-314 on R910Win (now removed): a Generation counter…
 
 ---
 
