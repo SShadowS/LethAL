@@ -94,3 +94,18 @@ flag on and the DO measurement follow bugs' gate of a main build that carries it
 4. **NITs:**
    - `stopSkipped` must not count the same skips twice on a re-sent request (scan gap, drift, R612): pinned by a test;
    - a comment where `dropStopSkips` reads `coveringOf`, saying a mutant never registered fails closed.
+
+## Amendment 2 (2026-11-22, the build's one departure from amendment 1, accepted)
+- **Amendment 1 item 2 said:** leave baseline-red tests OUT of stop-grouped entries, as R998's are.
+  - R998 leaves out only a run of tests at the END of a codeunit. A red test BEFORE a covering one is a gap, so the request
+    cannot carry `runSelectedOnly`.
+  - Without it, a left-out test still runs hidden (R1094). It could still fire the stop, and the skip would name a test with
+    no row.
+- **As built:** an entry that would run a baseline-red test gets no group. A request must be all grouped or none, so the whole
+  request goes WITHOUT the stop: exactly today's request.
+  - It costs saving, never a verdict. Such requests are counted (`heldForRed`) and shown with the flag on.
+- **For the DO measurement:** report `heldForRed` against the requests sent. If it turns the stop off for most of DO, true
+  exclusion needs a ruling on sending `runSelectedOnly` with gaps, which changes the state later tests start from.
+- Everything else in amendment 1 is built as written (B1's Sleep gate and `status()` refusal; skips never refusals; the N1
+  counts, pinned). Build: `lethal/pr-256` 2281acb4e.
+
