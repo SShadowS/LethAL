@@ -199,6 +199,8 @@
     "census-r830-r831.ts",
     "changelog-section.test.ts",
     "changelog-section.ts",
+    "cgroup-used.test.ts",
+    "cgroup-used.ts",
     "check-native-grammar.ts",
     "corpus-build-cache.test.ts",
     "corpus-build-cache.ts",

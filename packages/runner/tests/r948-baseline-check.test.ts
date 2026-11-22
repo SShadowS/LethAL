@@ -230,16 +230,50 @@ describe("R948: the cgroup reader and the bound", () => {
     if (v === undefined) throw new Error("ENOENT");
     return v;
   };
-  test("current less the reclaimable page cache, against memory.max", () => {
+  // PR-323 (R1172): this test pinned the old rule, current − inactive_file. The rule is now current − (file − shmem).
+  test("current less the reclaimable page cache (file − shmem), against memory.max", () => {
     const s = readCgroupMemory(
       files({
         "/c/memory.current": "20000000000\n",
-        "/c/memory.stat": "anon 1\ninactive_file 5000000000\nactive_file 7\n",
+        "/c/memory.stat":
+          "anon 1\nfile 12000000000\nactive_file 7000000000\ninactive_file 5000000000\nshmem 0\n",
         "/c/memory.max": "34359738368\n",
       }),
       "/c",
     );
-    expect(s).toEqual({ usedBytes: 15000000000, maxBytes: 34359738368, source: "/c/memory.max" });
+    expect(s).toEqual({ usedBytes: 8000000000, maxBytes: 34359738368, source: "/c/memory.max" });
+  });
+  test("PR-323: large active_file AND large shmem: the cache is subtracted, the shmem never is", () => {
+    const G = 2 ** 30;
+    const stat = `anon ${4 * G}\nfile ${12 * G}\nactive_file ${7 * G}\ninactive_file ${5 * G}\nshmem ${4 * G}\n`;
+    const s = readCgroupMemory(
+      files({
+        "/c/memory.current": `${20 * G}\n`,
+        "/c/memory.stat": stat,
+        "/c/memory.max": `${32 * G}\n`,
+      }),
+      "/c",
+    );
+    // 20 − (12 − 4) = 12 GiB used. The old rule (current − inactive_file) read 15 GiB.
+    expect(s?.usedBytes).toBe(12 * G);
+    // Admission (used + peak + reserve <= max) of a 16 GiB job with the 4 GiB reserve: 12 + 16 + 4 = 32, admitted;
+    // the old rule's 15 + 16 + 4 = 35 refused it.
+    const used = s?.usedBytes ?? Number.POSITIVE_INFINITY;
+    expect(used + 16 * G + 4 * G <= 32 * G).toBe(true);
+  });
+  test("PR-323: a file cache that is all shmem frees nothing; no file line or no stat subtracts nothing", () => {
+    const G = 2 ** 30;
+    const read = (stat: string | undefined) =>
+      readCgroupMemory(
+        files({
+          "/c/memory.current": `${20 * G}\n`,
+          ...(stat !== undefined ? { "/c/memory.stat": stat } : {}),
+        }),
+        "/c",
+      )?.usedBytes;
+    expect(read(`file ${6 * G}\nshmem ${6 * G}\n`)).toBe(20 * G);
+    expect(read(`anon 1\ninactive_file ${5 * G}\nactive_file ${5 * G}\n`)).toBe(20 * G);
+    expect(read(undefined)).toBe(20 * G);
   });
   test("`max` names no limit; no memory.current means no reading at all", () => {
     expect(
