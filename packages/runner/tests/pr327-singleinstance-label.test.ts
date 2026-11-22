@@ -23,7 +23,9 @@ import type {
   TestVerdict,
 } from "../src/backend";
 import { BcDevMcpBackend } from "../src/bcdev-backend";
-import { runSession } from "../src/orchestrator";
+import { isNotedSurvivor } from "../src/confirm";
+import { appendNote, runSession } from "../src/orchestrator";
+import type { MutantOutcome } from "../src/report";
 import { ResultsStore } from "../src/store";
 import { scratchDirs } from "./helpers/scratch";
 
@@ -34,6 +36,20 @@ const ref = (codeunitId: number, method = "T"): TestMethodRef => ({
 });
 const SITE = { objectType: "codeunit", codeunitId: 50100 };
 const SI = new Set(["codeunit:50100"]);
+
+describe("append, never replace", () => {
+  // A survivor with an earlier note is not reachable through a stub session (a held timeout or error
+  // ends as a timeout or error verdict), so the orchestrator's one call site is covered here by its helper.
+  test("the survivor note comes first, the earlier text follows", () => {
+    expect(appendNote("held earlier", "[tag] x")).toBe("[tag] x held earlier");
+    expect(appendNote(undefined, "[tag] x")).toBe("[tag] x");
+  });
+  test("isNotedSurvivor still sees a nearby-tagged survivor that carried an earlier note", () => {
+    const failureNote = appendNote("held earlier", `${V3_REFUSED_NEARBY_TAG} Tests.B: refused`);
+    expect(isNotedSurvivor({ verdict: "survived", failureNote } as MutantOutcome)).toBe(true);
+    expect(failureNote).toContain("held earlier");
+  });
+});
 
 describe("the rule", () => {
   test("tagged: SingleInstance site, tests from 2 test codeunits", () => {

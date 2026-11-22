@@ -304,7 +304,11 @@ export const SERVE_TEST_ISOLATION = "test";
 export const STOP_SIGNAL_POLL_MS = 250;
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
-/** PR-327 (a), R1173: appended to a survivor in a SingleInstance codeunit covered by 2+ test codeunits. */
+/**
+ * PR-327 (a), R1173: appended to a survivor in a SingleInstance codeunit covered by 2+ test codeunits.
+ * Limit: the SingleInstance set lives in the coverage index, which exists only with coverage on. With
+ * v3 `coverage: "none"` there is no index, so no tag: the note can be missing, never wrong.
+ */
 export const V3_SINGLEINSTANCE_TAG = "[singleinstance-carry-unobservable]";
 export const V3_SINGLEINSTANCE_NOTE = `${V3_SINGLEINSTANCE_TAG} survived; touches SingleInstance state; cross-codeunit carry-over not observable on al-runner-v3 (each test codeunit runs in a fresh entry, R1173)`;
 

@@ -412,14 +412,11 @@ export async function buildAlRunnerCoverageIndex(
 }
 
 /**
- * R407: a label that resolved to an ADMITTED multi-object file must name a file inside the index's
- * own bundle. A one-shot label is relative to al-runner's cwd, which is LethAL's own (the transport
- * sets none); a `--server` label is absolute. A source-path or batch-sibling label is the R383
- * defect's signature, so it throws rather than being credited by its trailing segments.
- */
-/**
  * PR-327 (a): the object declares the property `SingleInstance = true;` (name case-insensitive),
  * read from the parsed property member, so a comment or a string that says it does not count.
+ * Limit: only a DIRECT member counts. A property inside a member-level `#if` is not read (reading it
+ * needs the arm map `liveMembers` takes, which is built only for wrapped files), so such an object
+ * gets no tag: the note can be missing, never wrong.
  */
 export function isSingleInstanceCodeunit(objectNode: ALSyntaxNode): boolean {
   return declarationMembers(objectNode).some((m) => {
@@ -435,6 +432,12 @@ export function isSingleInstanceCodeunit(objectNode: ALSyntaxNode): boolean {
   });
 }
 
+/**
+ * R407: a label that resolved to an ADMITTED multi-object file must name a file inside the index's
+ * own bundle. A one-shot label is relative to al-runner's cwd, which is LethAL's own (the transport
+ * sets none); a `--server` label is absolute. A source-path or batch-sibling label is the R383
+ * defect's signature, so it throws rather than being credited by its trailing segments.
+ */
 function assertAdmittedLabel(label: string, key: string, index: AlRunnerCoverageIndex): void {
   const admission = index.frameAdmission;
   if (admission === undefined || !admission.keys.has(key)) return;

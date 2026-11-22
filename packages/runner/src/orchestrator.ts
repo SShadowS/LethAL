@@ -10938,6 +10938,15 @@ export function lineEvidenceOf(
   return reused ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
 }
 
+/**
+ * PR-327: a backend's survivor note is kept together with any note already on the mutant, never
+ * replacing it. It goes FIRST so `[v3-refused-test-nearby]` stays at the start, where `confirm.ts`
+ * (`isNotedSurvivor`) and the itests' `tagged()` read it.
+ */
+export function appendNote(existing: string | undefined, note: string): string {
+  return existing !== undefined ? `${note} ${existing}` : note;
+}
+
 export function baselineReachOf(
   baseline: readonly BaselineRow[],
   lineEvidence: ReadonlySet<TestMethodRef>,
@@ -14212,7 +14221,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
       const note = args.backend.survivorNote?.(covering, m);
-      if (note !== undefined) failureNote = note;
+      if (note !== undefined) failureNote = appendNote(failureNote, note);
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
     const reach =
