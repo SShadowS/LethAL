@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 1135 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**64 of 1135 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -397,7 +397,7 @@ that ordering is the priority.
 - **R1144** · itest:envtool's pinned figures (19 sites, 3 / 12 / 4) are stale: sandbox-app generates 22 on master before PR-209 and 26 after it; the host-only gate refuses until re-recorded against a same-day bcdev run · [R1144.md](docs/roadmap/R1144.md) · open
 - **R1153** · 12 PR-56 keep entries have never matched: al-runner ends their texts with " (not pinned)", the census normalised it away, and the anchored regex needs it (keeps that passed for the wrong reason) · [R1153.md](docs/roadmap/R1153.md) · open — (a) widen each of the 12 only with its own kept-vs-fresh DO proof, later; (b) test every keep entry…
 - **R1166** · DO's verdicts rest on the session kind: DO's CI runs WITH a client (GuiAllowed true), so al-runner v3's default matches it and LethAL's headless bcdev harness differs; on DO, 60 of 422 BC-measured tests change with it · [R1166.md](docs/roadmap/R1166.md) · open — CONFIRMED (owner via kraken, q-20261121T203539-a7741f50): DO's CI uses a client session; al-runner's…
-- **R1167** · A mutant killed through the isolated recheck (PR-144) reports the recheck's RUN set as `coveringTests` (whole test codeunits, non-green tests included) while keeping `coverageAttribution: exact`, which promises tests that executed the procedure · [R1167.md](docs/roadmap/R1167.md) · open — report accuracy only (no verdict moves): pick one, either rechecked rows keep the baseline covering…
+- **R1167** · A mutant killed through the isolated recheck (PR-144) reports the recheck's RUN set as `coveringTests` (whole test codeunits, non-green tests included) while keeping `coverageAttribution: exact`, which promises tests that executed the procedure · [R1167.md](docs/roadmap/R1167.md) · done (b85ef631d, PR-322): a recovered row keeps the mutant's own covering set, plus the killer when that set…
 - **R1168** · bcdev runs tests headless (an ODataV4 session, GuiAllowed false), while a project's own CI often runs a client session (DO's Azure DevOps CI: GuiAllowed true): on DO 60 of 422 tests change outcome by session kind, so the authoritative backend measures a different code path than the project's CI for session-dependent tests · [R1168.md](docs/roadmap/R1168.md) · open — ruled…
 - **R1169** · The session-kind label (R1168, PR-307) reads only the test app's source (HandlerFunctions; TestPage on v3), so a test whose outcome changes with the session kind through APP code (an unhandled Confirm that headless BC answers by default, or a GuiAllowed branch) is not labelled: 5 of PR-299's 60 DO differences · [R1169.md](docs/roadmap/R1169.md) · open — needs a coverage join…
 
@@ -1179,7 +1179,7 @@ that ordering is the priority.
 - **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · open
 - **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · open
 - **R1170** · A client-session backend (R1168's end state: run a mutant's tests in the session kind CI uses) is feasible on a BC with a web server, but today's control app caches the active mutant for a whole session, so each mutant would need a fresh ~7 s client session; serving many mutants from one kept session needs a per-mutant activation reload · [R1170.md](docs/roadmap/R1170.md) · open — resumed as a design…
-- **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · open — measured, not changed: the heavy-slot rules are kraken's and the owner's
+- **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · done (PR-323): ruled q-20261122T015708-0db73446 (kraken from the mantra); readCgroupMemory now reads used =…
 
 ---
 
