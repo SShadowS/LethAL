@@ -39,3 +39,14 @@ note. Evidence: `/coord/handoff/PR-302/`, `/coord/handoff/combined-do/`, and R11
 ## Not in this change
 - R1179 (carried kills never reach the ledger on `--resume`) is filed separately. It is a design question, and it was found
   here.
+  - The orchestrator's ruling: seed the ledger from the carried kills in scoring order. That is PR-341 part 3, with its own
+    pre-commitment.
+
+## Amendment 1 (2026-11-22, the gate scan, before any gate)
+- **The scan:** every committed frozen baseline (`packages/runner/itest/*.baseline.json`, the v3 legs' and the BC gates'),
+  every string field. Not one note contains "after the error:", the text a walk that held two or more errors writes.
+- **So no gate fixture has a walk with two held errors,** and this change can move no gate's verdict or note.
+- **Prediction:** every gate leg (v3 and BC) passes unchanged, the RC leg included.
+- **Unit suites:** pr81, pr51, pr144, orchestrator, resume, pr116 and pr225 pass with 0 snapshot moves (1,187 + 119 tests).
+- **The fix's red check:** the new test "a non-eligible held error, then an eligible one" was red before the change and is
+  green after it.
