@@ -378,6 +378,7 @@ import {
 } from "./test-membership";
 import {
   type KillLedger,
+  ledgerCrossedCodeunits,
   memberCountsByTest,
   newKillLedger,
   orderCoveringTests,
@@ -11021,6 +11022,15 @@ export function lineEvidenceOf(
   return reused ? new Set([...ranHere, ...baseline.map((b) => b.ref)]) : ranHere;
 }
 
+/**
+ * PR-327: a backend's survivor note is kept together with any note already on the mutant, never
+ * replacing it. It goes FIRST so `[v3-refused-test-nearby]` stays at the start, where `confirm.ts`
+ * (`isNotedSurvivor`) and the itests' `tagged()` read it.
+ */
+export function appendNote(existing: string | undefined, note: string): string {
+  return existing !== undefined ? `${note} ${existing}` : note;
+}
+
 export function baselineReachOf(
   baseline: readonly BaselineRow[],
   lineEvidence: ReadonlySet<TestMethodRef>,
@@ -13227,15 +13237,33 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     t.mark = undefined;
   };
-  mutantLoop: for (const [at, m] of args.mutants.entries()) {
-    flushTiming();
+  // PR-327 (c), R1174: a survivor whose ledger order crossed test codeunits is walked once more, in the
+  // no-ledger order, by yielding the same mutant a second time. `ask` is set by the walk's end, `cur` is
+  // live for the second yield only. The second walk's rows replace the first's: it is scored alone.
+  const rw: {
+    ask?: { readonly id: string; readonly order: TestMethodRef[] } | undefined;
+    cur?: { readonly id: string; readonly order: TestMethodRef[] } | undefined;
+  } = {};
+  const mutantEntries = function* () {
+    for (const e of args.mutants.entries()) {
+      yield e;
+      if (rw.ask !== undefined && rw.ask.id === e[1].mutantId) {
+        rw.cur = rw.ask;
+        rw.ask = undefined;
+        yield e;
+        rw.cur = undefined;
+      }
+    }
+  };
+  mutantLoop: for (const [at, m] of mutantEntries()) {
+    if (rw.cur === undefined) flushTiming(); // a re-walk adds to the same unit's timing
     // R766 (b): the queue closed (a latch or a stop elsewhere) or the session latched unsafe: take no more.
     if (args.sink !== undefined && (args.sink.closed || args.safety.isUnsafe)) break;
     // R912: `--time-budget`, before each window and each live mutant (a lane's mutants belong to
     // `runMutantsParallel`'s window, which checks it): stop scheduling; the rest is left out.
     if (budgetSpent(at)) break;
     const win = windowAt.get(m.mutantId);
-    if (win !== undefined && prefetch !== undefined) {
+    if (win !== undefined && prefetch !== undefined && rw.cur === undefined) {
       const clock = args.timeBudget;
       const prefetchT0 = performance.now();
       await prefetch.call(args.backend, prefetchPlans({ ...args, mutants: win }), {
@@ -13262,7 +13290,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     if (covering === undefined) continue; // uncovered, already recorded above
     // PR-303: the FULL covering list, for everything that reports; `covering` (pruned under the flag) plans and runs.
     const fullCovering = args.fullPerMutantTests?.get(m.mutantId) ?? covering;
-    if (timings !== undefined) {
+    if (timings !== undefined && rw.cur === undefined) {
       const scope = procedureScopeOf(m);
       const key = `${Math.max(0, timings.window)}|${scope}`;
       if (!timings.units.has(key))
@@ -13292,14 +13320,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       budgetSpent(at);
       break;
     }
-    args.sink?.begin(m.mutantId);
+    if (rw.cur === undefined) args.sink?.begin(m.mutantId);
     if (covering.length === 0 && fullCovering.length > 0) {
       // PR-303 rule 4: every covering codeunit was pruned. Survived without running, never `no-coverage`;
       // the reach and the note are read over the FULL covering set. Before the `no-coverage` branch below.
       const prunedSurvivor = () => {
         const modeNow = (cu: number) => args.backend.isolationOf?.(cu) ?? "test";
         const reach = reachWhy(m, fullCovering, args.baselineReach, modeNow).reach;
-        const survNote = args.backend.survivorNote?.(fullCovering);
+        const survNote = args.backend.survivorNote?.(fullCovering, m);
         const note = survNote !== undefined ? `${PRUNED_NOTE}; ${survNote}` : `${PRUNED_NOTE}`;
         args.reachTrace?.stage(m.mutantId, {
           file: m.file,
@@ -13453,7 +13481,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let abortAfterRecord: string | undefined;
     // R197: tests that already killed in this procedure first, then the narrowest, then the
     // fastest. A cost heuristic only; see test-order.ts for the measurement behind it.
-    const ordered = orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
+    const ordered =
+      rw.cur?.order ?? orderCoveringTests(covering, m, args.killLedger, args.memberCountsByTest);
     // R586 (F5): a backend that runs a whole test codeunit per call learns every covering ref's
     // budget up front, so one call can be sent the largest of them.
     args.backend.useCoveringBudgets?.(
@@ -13848,7 +13877,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
               killingTestRef = ref;
               killingTestFailure = v.failureMessage;
               killPosition = warm.killPosition;
-              recordKill(args.killLedger, m, ref);
+              if (rw.cur === undefined) recordKill(args.killLedger, m, ref);
             } else {
               verdict = "error";
               cause = warm.cause;
@@ -13887,7 +13916,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             // R86: the MUTATED run's text, never the replay's (which passed).
             killingTestFailure = v.failureMessage;
             killPosition = warm.killPosition;
-            recordKill(args.killLedger, m, ref);
+            if (rw.cur === undefined) recordKill(args.killLedger, m, ref);
           } else {
             verdict = "error";
             cause = warm.cause;
@@ -14168,7 +14197,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
             killPosition = 1;
             // R586 (I1): the backend's tagged note on this kill (v3's shared-codeunit run).
             if (v.backendNote !== undefined) failureNote = v.backendNote;
-            recordKill(args.killLedger, m, ref);
+            // PR-327 (c): a re-walk kill never feeds the ledger; master made no such entry.
+            if (rw.cur === undefined) recordKill(args.killLedger, m, ref);
             // R86: `v`, the MUTATED run that failed — not `confirm`, which just passed. See the
             // `killingTestFailure` declaration above for why the distinction is the whole point.
             killingTestFailure = v.failureMessage;
@@ -14424,10 +14454,37 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       // Q6: a kill elsewhere stands, and says which tests did not run against the mutant.
       failureNote = failureNote !== undefined ? `${failureNote} ${blanked}` : blanked;
     }
+    // PR-327 (c), R1174: a survivor in a ledger order that put one test codeunit ahead of another is
+    // walked once more in the no-ledger order, bcdev only (a session carries state across codeunits).
+    // al-runner-v3 never re-walks: every covering codeunit is a fresh entry there (PR-298 O1), so the
+    // order across codeunits cannot change its verdict. R1173 (b)'s strictOrder lane must revisit this.
+    if (
+      verdict === "survived" &&
+      rw.cur === undefined &&
+      !args.safety.isUnsafe &&
+      args.timeBudget?.exhausted !== true &&
+      args.timeBudget?.signalled !== true &&
+      isBcdev(args.backend.capabilities().kind)
+    ) {
+      // A re-walked mutant's cost figures (`spent`, `testCosts`, `test_results`) are the re-walk's
+      // only; the unit timing spans both walks.
+      const noLedger = orderCoveringTests(covering, m, newKillLedger(), args.memberCountsByTest);
+      if (ledgerCrossedCodeunits(ordered, noLedger)) {
+        rw.ask = { id: m.mutantId, order: noLedger };
+        continue;
+      }
+    }
+    if (rw.cur !== undefined && (verdict === "killed" || verdict === "timeout-killed")) {
+      failureNote = appendNote(
+        failureNote,
+        "[ledger-order-survived] survived in the kill ledger's order; killed in the no-ledger order (R1174)",
+      );
+    }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
-      const note = args.backend.survivorNote?.(fullCovering);
-      if (note !== undefined) failureNote = note;
+      // PR-303: over the FULL covering set; PR-327 (a): with the site, and appended (the survivor note first).
+      const note = args.backend.survivorNote?.(fullCovering, m);
+      if (note !== undefined) failureNote = appendNote(failureNote, note);
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
     const reach =

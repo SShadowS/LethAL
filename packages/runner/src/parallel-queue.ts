@@ -104,7 +104,7 @@ export function splitBackend(owner: ExecutionBackend, lane0: ExecutionBackend): 
     restoreCutState: (id, state) => lane0.restoreCutState?.(id, state),
     sendKillPair: (id, ref) => lane0.sendKillPair?.(id, ref) ?? Promise.resolve(),
     dropPendingPair: (id) => lane0.dropPendingPair?.(id),
-    survivorNote: (covering) => lane0.survivorNote?.(covering),
+    survivorNote: (covering, site) => lane0.survivorNote?.(covering, site),
     baselineNote: () => owner.baselineNote?.(),
   };
 }

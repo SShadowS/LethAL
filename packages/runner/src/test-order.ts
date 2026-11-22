@@ -112,3 +112,33 @@ export function orderCoveringTests(
     )
     .map((x) => x.ref);
 }
+
+/**
+ * PR-327 (c), R1174: did the kill ledger move one test codeunit ahead of another that the
+ * no-ledger order ran first? `ordered` is the ledger's order, `noLedger` the same covering tests
+ * ordered with an EMPTY ledger. A codeunit's place is its FIRST appearance in a list. Crossed means
+ * two codeunits swapped places, which on a backend that carries state across codeunits can turn a
+ * kill into a survivor. The two lists must hold the same tests; a different codeunit set throws.
+ */
+export function ledgerCrossedCodeunits(
+  ordered: readonly TestMethodRef[],
+  noLedger: readonly TestMethodRef[],
+): boolean {
+  // The lists are two orderings of the SAME ref objects, so a ref's identity is its key.
+  const pos = new Map(ordered.map((r, i) => [r, i]));
+  if (
+    pos.size !== ordered.length ||
+    noLedger.length !== ordered.length ||
+    noLedger.some((r) => !pos.has(r))
+  ) {
+    throw new Error("ledgerCrossedCodeunits: the two orders hold different tests");
+  }
+  // Pairwise: t2 (another codeunit) before t1 without the ledger, t1 before t2 with it.
+  for (const [j, t2] of noLedger.entries()) {
+    for (const t1 of noLedger.slice(j + 1)) {
+      if (t1.codeunitId === t2.codeunitId) continue;
+      if ((pos.get(t1) ?? 0) < (pos.get(t2) ?? 0)) return true;
+    }
+  }
+  return false;
+}
