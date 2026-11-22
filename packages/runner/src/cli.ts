@@ -6276,6 +6276,11 @@ export async function buildDoctorDeps(
       ...(v3Check !== undefined ? { alRunnerV3: v3Check } : {}),
       ...(v3EnvCheck !== undefined ? { alRunnerV3Environment: v3EnvCheck } : {}),
       ...probingCheck,
+      // PR-315: `run` reads the config field only when there is no envTool section.
+      stopHungSessions: async () => ({
+        on: configFile.bcdev?.stopHungSessions === true && configFile.envTool === undefined,
+        envTool: configFile.envTool !== undefined,
+      }),
     },
     ...(isCreateMode ? { caveat: DOCTOR_CREATE_MODE_CAVEAT } : {}),
   };

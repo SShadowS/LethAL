@@ -25218,3 +25218,92 @@ describe("R907: --no-client in a session", () => {
     expect(report.counts.killed).toBe(0);
   });
 });
+
+// PR-315 (GitHub #52, R1171). With the stop off, a mutant that never ends quarantines the tier.
+// The warning says so once, before anything is deployed, on bcdev only.
+describe("PR-315: stop-hung-sessions-off warning", () => {
+  async function warningsOf(
+    backend: ExecutionBackend,
+    overrides: Partial<SessionConfig> = {},
+  ): Promise<{ events: RunEvent[]; warnings: Extract<RunEvent, { type: "warning" }>[] }> {
+    const events: RunEvent[] = [];
+    await runSessionForTest(backend, {
+      quarantineDir: freshTmpDir(),
+      emit: [createEmitter([(e) => events.push(e)])],
+      ...overrides,
+    });
+    const warnings = events.filter(
+      (e): e is Extract<RunEvent, { type: "warning" }> =>
+        e.type === "warning" && e.code === "stop-hung-sessions-off",
+    );
+    return { events, warnings };
+  }
+
+  test("emitted once, before the first deployment, for a bcdev session with the stop off", async () => {
+    const { events, warnings } = await warningsOf(fakeBackend());
+    expect(warnings.length).toBe(1);
+    const at = events.findIndex((e) => e.type === "warning" && e.code === "stop-hung-sessions-off");
+    const firstDeploy = events.findIndex((e) => e.type === "batch-published");
+    expect(firstDeploy).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(firstDeploy);
+  });
+
+  test("the message names the flag, the config field and #52", async () => {
+    const { warnings } = await warningsOf(fakeBackend());
+    const m = warnings[0]?.message ?? "";
+    expect(m).toContain("--stop-hung-sessions");
+    expect(m).toContain('"stopHungSessions": true');
+    expect(m).toContain("#52");
+    expect(m).toContain("lethal clear-quarantine");
+    expect(m).toContain("lethal force-reset-lease");
+    expect(m).toContain("envTool");
+  });
+
+  test("not emitted when the stop is on", async () => {
+    const { warnings } = await warningsOf(fakeBackend(), { stopHungSessions: true });
+    expect(warnings.length).toBe(0);
+  });
+
+  test("not emitted for al-runner-v3", async () => {
+    const backend = fakeBackend({
+      capabilities: () => ({
+        coverage: "none",
+        deploy: "none",
+        isolation: "session",
+        kind: "al-runner-v3",
+        authoritative: false,
+      }),
+    });
+    const { events, warnings } = await warningsOf(backend);
+    // The session ran far enough to reach the generate phase, so the zero is not a crash.
+    expect(events.some((e) => e.type === "mutation-set-generated")).toBe(true);
+    expect(warnings.length).toBe(0);
+  });
+
+  // runNamedMutants (and so `lethal verify`) has no stop setting: it asks the backend.
+  async function namedWarnings(stops: boolean | undefined): Promise<number> {
+    const fx = await installedFixture();
+    const events: RunEvent[] = [];
+    const base = fx.cfg.backend;
+    const backend = (
+      stops === undefined
+        ? base
+        : Object.assign(Object.create(base), { stopsHungSessions: () => stops })
+    ) as ExecutionBackend;
+    await runNamedMutants({ ...fx.cfg, backend, emit: [(e) => events.push(e)] });
+    return events.filter((e) => e.type === "warning" && e.code === "stop-hung-sessions-off")
+      .length;
+  }
+
+  test("runNamedMutants: emitted once on bcdev with the stop off", async () => {
+    expect(await namedWarnings(false)).toBe(1);
+  });
+
+  test("runNamedMutants: a backend that cannot say is read as off", async () => {
+    expect(await namedWarnings(undefined)).toBe(1);
+  });
+
+  test("runNamedMutants: not emitted when the backend's stop is on", async () => {
+    expect(await namedWarnings(true)).toBe(0);
+  });
+});

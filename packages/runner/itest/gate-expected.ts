@@ -371,49 +371,58 @@ const CDO_D = [
   "resource-rebase-collision",
   "tests-only-narrowed-baseline",
 ];
+/**
+ * PR-315 (pre-commitment docs/superpowers/specs/2026-11-22-pr315-stop-off-warning.md): every bcdev session that runs
+ * without `--stop-hung-sessions` warns `stop-hung-sessions-off` before deployment. The legs below that build their bcdev
+ * backend in the itest never set the stop, so they gain it. The `verifyFromCli` legs (verify/step3, step4, step4b,
+ * agreement/verify) read the setup-written config, which sets the stop on bc1-bc4 (PR-42), and the hang legs on/single
+ * set it; those do not gain it.
+ */
+const STOP_OFF = "stop-hung-sessions-off";
+const withStopOff = (codes: readonly string[]): readonly string[] => [...codes, STOP_OFF].sort();
 export const GATE_WARNINGS: Readonly<Record<string, readonly string[]>> = {
-  "bcdev/first": [],
-  "bcdev/second": [],
-  "bcdev-names/fenced": [],
-  "bcdev-wrapped/fenced": COMPILED_OUT,
+  "bcdev/first": withStopOff([]),
+  "bcdev/second": withStopOff([]),
+  "bcdev-names/fenced": withStopOff([]),
+  "bcdev-wrapped/fenced": withStopOff(COMPILED_OUT),
   // PR-203 (pre-commitment: R1131 spec §0c, master 837caf2f): hub mode (coverageMode procedure) cannot compare the
   // start WorkDate, and says so once per session; the only bcdev leg in procedure mode.
-  "bcdev-wrapped/hub": [...COMPILED_OUT, "workdate-not-compared"],
-  "tables/first": TABLES,
-  "tables/second": TABLES,
+  "bcdev-wrapped/hub": withStopOff([...COMPILED_OUT, "workdate-not-compared"]),
+  "tables/first": withStopOff(TABLES),
+  "tables/second": withStopOff(TABLES),
   // R746 (pre-commitment docs/superpowers/specs/2026-10-24-r746-chunked-pin-precommitment.md, master
   // d2516693): fenced-coverage-no-procedure-lines no longer fires for trigger-only coverage.
-  "chunked/control": ["only-narrowed-run"],
-  "chunked/chunked": ["only-narrowed-run"],
-  "harden/a": HARDEN_DEPENDENTS,
-  "harden/b": HARDEN_DEPENDENTS,
-  "lend/L0": [],
-  "lend/L1": [],
-  "lend/N0": [],
-  "lend/R1": RESUME_REUSED,
-  "lend/R2": RESUME_REUSED,
-  "lend/RP": RESUME_REUSED,
+  "chunked/control": withStopOff(["only-narrowed-run"]),
+  "chunked/chunked": withStopOff(["only-narrowed-run"]),
+  "harden/a": withStopOff(HARDEN_DEPENDENTS),
+  "harden/b": withStopOff(HARDEN_DEPENDENTS),
+  "lend/L0": withStopOff([]),
+  "lend/L1": withStopOff([]),
+  "lend/N0": withStopOff([]),
+  "lend/R1": withStopOff(RESUME_REUSED),
+  "lend/R2": withStopOff(RESUME_REUSED),
+  "lend/RP": withStopOff(RESUME_REUSED),
   // R969 (PR-04, pre-commitment 2026-11-14-r969-lend-leg-precommitment.md, prediction 2): no snapshot under the new
   // generation, so no resume-baseline-reused; the carry across the reset is said by name.
-  "lend/RL": ["resume-across-lease-reset", "resume-reusing-run"],
-  "lend/R3": ["resume-reusing-run", "snapshot-backend-build-changed"],
-  "lend/N1": ["history-backend-build-changed"],
-  "lend/N5": ["history-test-app-changed"],
-  "verify/run": [],
+  "lend/RL": withStopOff(["resume-across-lease-reset", "resume-reusing-run"]),
+  "lend/R3": withStopOff(["resume-reusing-run", "snapshot-backend-build-changed"]),
+  "lend/N1": withStopOff(["history-backend-build-changed"]),
+  "lend/N5": withStopOff(["history-test-app-changed"]),
+  "verify/run": withStopOff([]),
   "verify/step3": [],
   "verify/step4": [],
   "verify/step4b": [],
-  "testapp/run": [],
-  "testapp/step6": [],
-  "testapp/step7": [],
-  "agreement/a": HARDEN_DEPENDENTS,
-  "agreement/b": HARDEN_DEPENDENTS,
+  "testapp/run": withStopOff([]),
+  "testapp/step6": withStopOff([]),
+  "testapp/step7": withStopOff([]),
+  "agreement/a": withStopOff(HARDEN_DEPENDENTS),
+  "agreement/b": withStopOff(HARDEN_DEPENDENTS),
   "agreement/verify": [],
-  "agreement/named": [],
+  "agreement/named": withStopOff([]),
   "hang/on": [],
   "hang/single": [],
-  "hang/baseline": ["operator-narrowed-run", "tests-only-narrowed-baseline"],
-  "hang/off": ["lost-ack-unreadable"],
+  "hang/baseline": withStopOff(["operator-narrowed-run", "tests-only-narrowed-baseline"]),
+  "hang/off": withStopOff(["lost-ack-unreadable"]),
   "al-runner-v3/S1": [],
   "al-runner-v3/N1": [],
   "al-runner-v3/x-s1": [],

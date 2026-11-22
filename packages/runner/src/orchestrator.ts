@@ -103,7 +103,14 @@ import type {
   TestMethodRef,
   TestVerdict,
 } from "./backend";
-import { isBcdev, isLocalRunner, isUnread, stopIsRetrySafe, weakerStopEvidence } from "./backend";
+import {
+  STOP_HUNG_SESSIONS_OFF_TEXT,
+  isBcdev,
+  isLocalRunner,
+  isUnread,
+  stopIsRetrySafe,
+  weakerStopEvidence,
+} from "./backend";
 import {
   decodeSource,
   hashAlTree,
@@ -7981,6 +7988,14 @@ async function runSessionBody(
       message: `${hangCapableCount} hang-capable mutant(s) deployed: each sits where an enclosing loop's condition reads the variable it writes, so it may run past its budget. With --stop-hung-sessions off, such a mutant strands this tier exactly as any other timeout does.`,
     });
   }
+  // PR-315 (GitHub #52): once per session, before any deployment, bcdev with the stop off.
+  if (isBcdev(backendName) && cfg.stopHungSessions !== true) {
+    emit({
+      type: "warning",
+      code: "stop-hung-sessions-off",
+      message: `--stop-hung-sessions is off: ${STOP_HUNG_SESSIONS_OFF_TEXT}`,
+    });
+  }
   emit({ type: "phase-left", phase: "generate", elapsedMs: generateMutationSetMs });
   // R48: refuse an unscoped run on a large project BEFORE anything is published. See
   // `LARGE_RUN_MUTANT_THRESHOLD` for why this refuses rather than warns.
@@ -10494,6 +10509,15 @@ async function runNamedMutantsBody(
   if (leaseSession !== undefined) {
     const ending = leaseSession;
     cleanups.push(() => ending.end());
+  }
+  // PR-315 (GitHub #52): once per call (`lethal verify` reaches here once), before the first mutant.
+  // No stop setting here: the backend knows what it was built with.
+  if (isBcdev(caps.kind) && backend.stopsHungSessions?.() !== true) {
+    emit({
+      type: "warning",
+      code: "stop-hung-sessions-off",
+      message: `--stop-hung-sessions is off: ${STOP_HUNG_SESSIONS_OFF_TEXT}`,
+    });
   }
   const outcomes: SessionOutcome[] = [];
   const strict = cfg.requireEveryMethodGreen === true;
