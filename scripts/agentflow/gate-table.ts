@@ -304,6 +304,8 @@ const RULES: readonly Rule[] = [
   },
   {
     test: startsWith(
+      "fixtures/sandbox-carry/",
+      "fixtures/sandbox-carry-tests/",
       "fixtures/sandbox-layout/",
       "fixtures/sandbox-layout-tests/",
       "fixtures/sandbox-multiobject/",
@@ -318,7 +320,7 @@ const RULES: readonly Rule[] = [
       "fixtures/sandbox-symbols-tests/",
     ),
     legs: ["alrunner-v3"],
-    why: "fixtures only the v3 gate's legs read (sandbox-optin: leg DBM, PR-114a; sandbox-recheck: leg RC, PR-144)",
+    why: "fixtures only the v3 gates read (sandbox-optin: leg DBM, PR-114a; sandbox-recheck: leg RC, PR-144; sandbox-carry: itest:alrunner-v3-carry, PR-340, run by hand like itest:bcdev-names)",
   },
   {
     test: startsWith(
