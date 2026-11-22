@@ -17,7 +17,14 @@
  */
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { evaluateArms, initParser, parseAL } from "@lethal/engine";
+import {
+  ALNodeKind,
+  type ALSyntaxNode,
+  declarationMembers,
+  evaluateArms,
+  initParser,
+  parseAL,
+} from "@lethal/engine";
 import { wrapRoot } from "@lethal/engine";
 import type { ServerPerTestCoverage } from "./al-runner-server";
 import type { CoverageEntry, CoverageMap, NamingGap } from "./backend";
@@ -84,6 +91,11 @@ export interface AlRunnerCoverageIndex {
    * Multi-object files are not here: their exemption is not a per-object refusal.
    */
   readonly refusals: ReadonlyMap<string, string>;
+  /**
+   * PR-327 (a): `type:id` lower-cased of every indexed codeunit whose `SingleInstance` property is
+   * `true`, read from the parse. Absent: indexes built by hand in tests.
+   */
+  readonly singleInstance?: ReadonlySet<string>;
   /**
    * Every `.al` path scanned but NOT in `byFile` (lower-cased keys): refused, multi-object and not
    * admitted, or holding no indexed object (R-300b: compiled out, undecided, or every object a
@@ -267,6 +279,7 @@ export async function buildAlRunnerCoverageIndex(
   const skippedFiles: string[] = [];
   const entries: LineMapEntry[] = [];
   const declared = new Set<string>();
+  const singleInstance = new Set<string>();
   const exempt = new Set<string>();
   const refusals = new Map<string, string>();
   const admittedWrappedFiles = new Set<string>();
@@ -364,7 +377,11 @@ export async function buildAlRunnerCoverageIndex(
       byFile.set(k, kept);
       shownByKey.set(k, c.file);
     }
-    for (const e of kept) declared.add(keyOfEntry(e));
+    for (const e of kept) {
+      declared.add(keyOfEntry(e));
+      if (e.objectType.toLowerCase() === "codeunit" && isSingleInstanceCodeunit(e.root))
+        singleInstance.add(keyOfEntry(e));
+    }
     entries.push(...kept);
   }
   skippedFiles.sort();
@@ -376,6 +393,7 @@ export async function buildAlRunnerCoverageIndex(
     refusedFiles,
     admittedWrappedFiles,
     declared,
+    singleInstance,
     exempt,
     refusals,
     skippedFiles,
@@ -399,6 +417,24 @@ export async function buildAlRunnerCoverageIndex(
  * sets none); a `--server` label is absolute. A source-path or batch-sibling label is the R383
  * defect's signature, so it throws rather than being credited by its trailing segments.
  */
+/**
+ * PR-327 (a): the object declares the property `SingleInstance = true;` (name case-insensitive),
+ * read from the parsed property member, so a comment or a string that says it does not count.
+ */
+export function isSingleInstanceCodeunit(objectNode: ALSyntaxNode): boolean {
+  return declarationMembers(objectNode).some((m) => {
+    if (m.kind !== ALNodeKind.property) return false;
+    const name = m.childForFieldName("name");
+    const value = m.childForFieldName("value");
+    return (
+      name !== null &&
+      value !== null &&
+      name.text.toLowerCase() === "singleinstance" &&
+      value.text.trim().toLowerCase() === "true"
+    );
+  });
+}
+
 function assertAdmittedLabel(label: string, key: string, index: AlRunnerCoverageIndex): void {
   const admission = index.frameAdmission;
   if (admission === undefined || !admission.keys.has(key)) return;

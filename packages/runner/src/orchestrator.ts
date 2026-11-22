@@ -14211,7 +14211,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
-      const note = args.backend.survivorNote?.(covering);
+      const note = args.backend.survivorNote?.(covering, m);
       if (note !== undefined) failureNote = note;
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.

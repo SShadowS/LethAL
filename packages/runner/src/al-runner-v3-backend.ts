@@ -304,6 +304,22 @@ export const SERVE_TEST_ISOLATION = "test";
 export const STOP_SIGNAL_POLL_MS = 250;
 export const V3_STATE_NOTE_TAG = "[v3-codeunit-state-possible]";
 export const V3_REFUSED_NEARBY_TAG = "[v3-refused-test-nearby]";
+/** PR-327 (a), R1173: appended to a survivor in a SingleInstance codeunit covered by 2+ test codeunits. */
+export const V3_SINGLEINSTANCE_TAG = "[singleinstance-carry-unobservable]";
+export const V3_SINGLEINSTANCE_NOTE = `${V3_SINGLEINSTANCE_TAG} survived; touches SingleInstance state; cross-codeunit carry-over not observable on al-runner-v3 (each test codeunit runs in a fresh entry, R1173)`;
+
+/** The PR-327 (a) rule, pure: site in a SingleInstance codeunit AND covering tests from 2+ test codeunits. */
+export function singleInstanceCarryNoteOf(
+  singleInstance: ReadonlySet<string> | undefined,
+  covering: readonly { readonly codeunitId: number }[],
+  site: { readonly objectType: string; readonly codeunitId: number } | undefined,
+): string | undefined {
+  if (site === undefined) return undefined;
+  if (singleInstance?.has(`${site.objectType.toLowerCase()}:${site.codeunitId}`) !== true)
+    return undefined;
+  if (new Set(covering.map((r) => r.codeunitId)).size < 2) return undefined;
+  return V3_SINGLEINSTANCE_NOTE;
+}
 /**
  * R652: a §5 window's 2-3 plain sends follow ONE bound check (the window's), so a tree change
  * after it can reach their rows. Those rows never make a kill, only an error; each such text says
@@ -2023,7 +2039,10 @@ export interface V3LaneView extends ExecutionBackend {
     mutantId: string,
     budgets: readonly { readonly ref: TestMethodRef; readonly budgetMs: number }[],
   ): void;
-  survivorNote(covering: readonly TestMethodRef[]): string | undefined;
+  survivorNote(
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): string | undefined;
 }
 
 /** R766 (b): a lane beyond lane 0 starts only while this much memory is available (10 GB). */
@@ -6380,7 +6399,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       cutState: (id) => b.cutStateOn(lane, id),
       restoreCutState: (id, state) => b.restoreCutStateOn(lane, id, state),
       useCoveringBudgets: (id, budgets) => b.useCoveringBudgetsOn(lane, id, budgets),
-      survivorNote: (covering) => b.survivorNoteShared(covering),
+      survivorNote: (covering, site) => b.survivorNoteShared(covering, site),
       isolationOf: (cu) => b.isolationOf(cu), // R926: the mode is shared, so reach compares like with like
       deploy: no("deploy"),
       compileCheck: no("compileCheck"),
@@ -7447,12 +7466,37 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
 
   /** I3 (branch b): a survivor whose covering codeunit had a test v3 refused at baseline. */
-  survivorNote(covering: readonly TestMethodRef[]): string | undefined {
+  survivorNote(
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): string | undefined {
     this.soleLane("survivorNote");
-    return this.survivorNoteShared(covering);
+    return this.survivorNoteShared(covering, site);
   }
 
-  private survivorNoteShared(covering: readonly TestMethodRef[]): string | undefined {
+  private survivorNoteShared(
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): string | undefined {
+    const near = this.refusedNearbyNote(covering);
+    const carry = this.singleInstanceCarryNote(covering, site);
+    if (near === undefined) return carry;
+    return carry === undefined ? near : `${near} ${carry}`;
+  }
+
+  /**
+   * PR-327 (a): a survivor whose site is in a `SingleInstance` codeunit and whose covering tests come
+   * from 2 or more test codeunits. v3 runs each test codeunit in a fresh entry, so state one codeunit
+   * leaves in that codeunit cannot reach the next (R1173); BC's one session can. Note only.
+   */
+  private singleInstanceCarryNote(
+    covering: readonly TestMethodRef[],
+    site: { readonly objectType: string; readonly codeunitId: number } | undefined,
+  ): string | undefined {
+    return singleInstanceCarryNoteOf(this.coverageIndex?.singleInstance, covering, site);
+  }
+
+  private refusedNearbyNote(covering: readonly TestMethodRef[]): string | undefined {
     const near = [...new Set(covering.map((r) => r.codeunitId))].flatMap((id) =>
       [...(this.baselineRefused.get(id) ?? [])].map(
         (m) => `${covering.find((c) => c.codeunitId === id)?.codeunitName ?? id}.${m}`,
