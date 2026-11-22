@@ -216,10 +216,13 @@ export interface MemorySample {
 export const MEMORY_HEADROOM_GB_DEFAULT = 4;
 
 /**
- * The container's memory as cgroup v2 reports it: `memory.current` minus `inactive_file` (the page
- * cache the kernel gives back before it kills anything, which is what `docker stats` subtracts too)
- * against `memory.max`. `undefined` when no cgroup v2 file can be read, so the caller says the guard
- * is off, by name. `read` is injectable: tests never read the real `/sys`.
+ * The container's memory as cgroup v2 reports it, against `memory.max`: `memory.current` minus the reclaimable file
+ * cache, `file − shmem` (PR-323, R1172). `memory.stat`'s `file` holds all page cache, active and inactive, AND
+ * `shmem` (tmpfs), which cannot be dropped without swap, so shmem stays counted as used. The old rule subtracted only
+ * `inactive_file`, so idle ACTIVE cache (5.1 GiB measured) refused jobs that fit. No readable `file` line: nothing is
+ * subtracted (never an under-count). `undefined` when `memory.current` cannot be read, so the caller says the guard is
+ * off, by name. The ONE reader for heavy-slot admission, its guard, the v3 lane memory guard (R948) and, through
+ * `scripts/cgroup-used.ts`, run-script watchdogs. `read` is injectable: tests never read the real `/sys`.
  */
 export function readCgroupMemory(
   read: (path: string) => string = (p) => readFileSync(p, "utf8"),
@@ -235,16 +238,21 @@ export function readCgroupMemory(
   };
   const current = num("memory.current");
   if (current === undefined) return undefined;
-  let inactive = 0;
+  let reclaimable = 0;
   try {
-    const m = /^inactive_file (\d+)$/m.exec(read(`${dir}/memory.stat`));
-    inactive = m?.[1] === undefined ? 0 : Number(m[1]);
+    const stat = read(`${dir}/memory.stat`);
+    const field = (k: string): number | undefined => {
+      const m = new RegExp(`^${k} (\\d+)$`, "m").exec(stat);
+      return m?.[1] === undefined ? undefined : Number(m[1]);
+    };
+    const file = field("file");
+    if (file !== undefined) reclaimable = Math.max(0, file - (field("shmem") ?? 0));
   } catch {
-    inactive = 0;
+    reclaimable = 0;
   }
   const max = num("memory.max"); // "max" is not a number: no limit
   return {
-    usedBytes: Math.max(0, current - inactive),
+    usedBytes: Math.max(0, current - reclaimable),
     ...(max !== undefined ? { maxBytes: max } : {}),
     source: `${dir}/memory.max`,
   };

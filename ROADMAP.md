@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**66 of 1135 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**65 of 1135 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1179,7 +1179,7 @@ that ordering is the priority.
 - **R1164** · A v3 run on a pinned al-runner build that is not `current` is silent: the combined DO run c1 ran y3's edge-4ebfe7913 through a reused config's alRunnerV3.path, and only the stderr version line named it; warn by name at start and in the report · [R1164.md](docs/roadmap/R1164.md) · open
 - **R1165** · Costliest-first scope order (PR-281) is built but opt-in: its DO A/B missed the pre-committed wall prediction because outside load fell on both costliest arms; re-measure with load-robust criteria (idle tail, per-test-normalised wall) over more interleaved rounds · [R1165.md](docs/roadmap/R1165.md) · open
 - **R1170** · A client-session backend (R1168's end state: run a mutant's tests in the session kind CI uses) is feasible on a BC with a web server, but today's control app caches the active mutant for a whole session, so each mutant would need a fresh ~7 s client session; serving many mutants from one kept session needs a per-mutant activation reload · [R1170.md](docs/roadmap/R1170.md) · open — design; measured by PR-308, PR-313, PR-314 and PR-319 on throwaway Windows BCs (now removed): a…
-- **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · open — measured, not changed: the heavy-slot rules are kraken's and the owner's
+- **R1172** · The heavy-slot memory guard counts the cgroup's ACTIVE page cache as used (used = memory.current − inactive_file), so about 5 GiB of reclaimable file cache can refuse a job that fits: PR-303's 22 GiB A/B arm waited about an hour at 'used 7.5 GiB' while the jobs' own memory (anon) was 2.0 GiB · [R1172.md](docs/roadmap/R1172.md) · done (PR-323): ruled q-20261122T015708-0db73446 (kraken from the mantra); readCgroupMemory now reads used =…
 
 ---
 
