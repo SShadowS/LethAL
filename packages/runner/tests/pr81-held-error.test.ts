@@ -1120,6 +1120,10 @@ describe("PR-341: the first withheld-ELIGIBLE held error is kept", () => {
     expect(e?.cause).toBe("runner-refused");
     expect(withheldKillOf(e?.verdict ?? "", e?.cause, e?.failureNote)).not.toBeUndefined();
     expect(e?.failureNote).toContain("this failure is not trusted: Expected 1 got 2");
+    // The note (review S1): the kept T2 is never named "after" itself; the later T3 is; the replaced T1 is named earlier.
+    expect(e?.failureNote ?? "").not.toContain(`after the error: ${NAME("T2")}`);
+    expect(e?.failureNote).toContain(`after the error: ${NAME("T3")}`);
+    expect(e?.failureNote).toContain(`an earlier held error (not a withheld kill): ${NAME("T1")}`);
   });
 
   test("eligible first, then non-eligible: unchanged, the first is kept", async () => {

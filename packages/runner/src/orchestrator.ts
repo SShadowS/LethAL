@@ -13568,6 +13568,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     let heldErr: { readonly test: string; readonly snap: WalkSnap } | undefined;
     const notedErr: string[] = [];
     const afterErr: string[] = []; // the tests a later step answered, names only
+    // PR-341: held errors met BEFORE the kept one, when a later withheld-eligible error replaced them (names only).
+    const earlierErr: string[] = [];
     let stepSnap: WalkSnap = snapNow();
     let stepDeactivated = false; // this step ran a confirm and left the mutant NOT active
     let stepTerminal = false; // this step's cold confirm did not FAIL: its `unstable` is not holdable
@@ -14310,7 +14312,10 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         const snap = snapNow();
         if (heldErr === undefined) heldErr = { test: name, snap };
         else if (!eligible(heldErr.snap) && eligible(snap)) {
+          // The replaced error ran BEFORE the kept one: named as earlier, and the "after" list restarts here.
           notedErr.push(heldErr.test);
+          earlierErr.push(heldErr.test);
+          afterErr.length = 0;
           heldErr = { test: name, snap };
         } else notedErr.push(name);
         restoreWalk(stepSnap);
@@ -14393,7 +14398,14 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       runnerDisagreement = heldErr.snap.runnerDisagreement;
       runnerDisagreementTest = heldErr.snap.runnerDisagreementTest;
       const later = [...new Set(afterErr)];
-      errNote = later.length > 0 ? `after the error: ${later.join(", ")}` : undefined;
+      const earlier = [...new Set(earlierErr)];
+      const parts = [
+        ...(later.length > 0 ? [`after the error: ${later.join(", ")}`] : []),
+        ...(earlier.length > 0
+          ? [`an earlier held error (not a withheld kill): ${earlier.join(", ")}`]
+          : []),
+      ];
+      errNote = parts.length > 0 ? parts.join("; ") : undefined;
       errNoted = true;
     };
     if (verdict === "survived" && !replaying) adoptHeldError();
