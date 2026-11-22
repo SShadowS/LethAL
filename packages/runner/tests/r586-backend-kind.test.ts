@@ -76,6 +76,8 @@ const CLASSIFIED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     'caps.kind === "al-runner-v3" ? { kind: "al-runner-v3" } : { kind: "bcdev" };': "v3",
     'if (caps.kind === "al-runner-v3" && workers > 1) {': "v3",
     'if (kind !== "al-runner-v3") return undefined;': "v3",
+    // PR-303: `LETHAL_V3_REACH_PRUNE=on` is refused by name on any backend but v3.
+    'if (backend.capabilities().kind !== "al-runner-v3") {': "v3",
   },
   "doctor.ts": { 'runCheck("al-runner-v3", async () => {': "check-name" },
   "store.ts": {
