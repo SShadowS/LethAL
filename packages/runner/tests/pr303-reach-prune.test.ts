@@ -503,7 +503,7 @@ async function offOn(make: () => StubBackend) {
   expect(inB(onB)).toBe(false);
   expect(onB.mutatedRuns.some((t) => t.startsWith("Sandbox Tests B."))).toBe(false);
   expect(inB(offB)).toBe(true);
-  return { off, on, onB };
+  return { off, on, onB, offB };
 }
 
 describe("PR-303 amendment 2: a codeunit holding any unmeasured-green test is kept", () => {
@@ -606,8 +606,10 @@ describe("PR-303 amendment 2: a codeunit holding any unmeasured-green test is ke
     expect(on.mutants.some((x) => (x.failureNote ?? "").startsWith("pruned:"))).toBe(false);
   });
 
-  test("refusedCutTail on too: the refused codeunit is kept, its tail runs alone, the verdict equals pruning off", async () => {
-    const { off, on, onB } = await offOn(() => {
+  // The stub does not model tail-alone (it lives in the v3 backend; the live DO run measures it). This asserts what the
+  // orchestrator controls: a kept codeunit reaches the backend with the SAME entry as with pruning off, so tail-alone composes.
+  test("refusedCutTail on too: the refused codeunit's plans and budgets equal pruning off, the verdict equals pruning off", async () => {
+    const { off, on, onB, offB } = await offOn(() => {
       const b = new StubBackend(
         (mutant, r) =>
           mutant === null
@@ -631,6 +633,15 @@ describe("PR-303 amendment 2: a codeunit holding any unmeasured-green test is ke
     expect(off.mutants.every((x) => x.verdict === "killed")).toBe(true);
     expect(on.mutants.every((x) => x.killingTest === "A2")).toBe(true);
     expect(onB.mutatedRuns).toContain("Sandbox Tests A.A2");
+    const aOf = (tests: readonly string[]) => tests.filter((t) => t.startsWith("Sandbox Tests A."));
+    const plansA = (b: StubBackend) =>
+      b.prefetched.flatMap((p) => [...p.entries()].map(([id, t]) => [id, aOf(t)] as const));
+    const budgetsA = (b: StubBackend) =>
+      b.budgetCalls.map((c) => [c.mutantId, aOf(c.tests)] as const);
+    expect(plansA(onB).length).toBeGreaterThan(0);
+    expect(plansA(onB)).toEqual(plansA(offB));
+    expect(budgetsA(onB).length).toBeGreaterThan(0);
+    expect(budgetsA(onB)).toEqual(budgetsA(offB));
   });
 });
 

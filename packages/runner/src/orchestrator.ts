@@ -11072,6 +11072,8 @@ export function reachWhy(
  * with line evidence, the mode unchanged). Amendment 2: a test codeunit is dropped only when EVERY test of
  * it in `finalTests` (the run's whole list, not only the covering ones) is explicit false; one test that may
  * reach, or any test not measured green with lines (refused, cut, failed, missing row...), keeps the whole codeunit.
+ * Limit: the backend's `refusedCut` reads the daemon's raw `baselineRows`, while this reads the orchestrator's final
+ * test list, so a refusal of a method the discovery does not list would be unseen here; no route to that exists today.
  */
 export function pruneCodeunitsForReach(
   m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
