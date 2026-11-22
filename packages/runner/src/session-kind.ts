@@ -36,7 +36,7 @@ export class SessionKindUnsetError extends Error {
       .map((s) => `${s.test} (${s.reasons.join(", ")})`)
       .join("; ");
     super(
-      `session-kind-unset: "ciSessionKind" is not set, and ${sensitive.length} test(s) in this run can give a different result in a client session than in a headless one (for example: ${examples}). Say which kind your CI runs: add "ciSessionKind": "client" (or "headless") to ${configPath ?? "lethal.config.json"} (PR-307).`,
+      `session-kind-unset: "ciSessionKind" is not set, and ${sensitive.length} test(s) in this run can give a different result in a client session than in a headless one (for example: ${examples}). Say which kind your CI runs: add "ciSessionKind": "client" (or "headless") to ${configPath ?? "lethal.config.json"}, or pass --ci-session-kind client (or headless), which overrides the config (PR-307).`,
     );
     this.name = "SessionKindUnsetError";
   }
@@ -49,8 +49,10 @@ export function validateCiSessionKind(
 ): SessionKind | undefined {
   if (raw === undefined) return undefined;
   if (raw === "client" || raw === "headless") return raw;
+  // PR-311: a flag names itself; a config file names its field.
+  const what = where.startsWith("--") ? where : `${where} "ciSessionKind"`;
   throw new Error(
-    `invalid-ci-session-kind: ${where} "ciSessionKind" must be "client" or "headless", got ${JSON.stringify(raw)} (PR-307).`,
+    `invalid-ci-session-kind: ${what} must be "client" or "headless", got ${JSON.stringify(raw)} (PR-307).`,
   );
 }
 

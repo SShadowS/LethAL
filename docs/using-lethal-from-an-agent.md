@@ -1201,7 +1201,8 @@ Stated so a consumer does not read an absence as a finding.
   measured without a client (CurrentClientType, `Page.Run` with a record, a request page with a
   handler). On PaymentPractices' header table it then agreed with BC on every kill and every survivor.
 - `"ciSessionKind": "client" | "headless"` (top level, no default; R1168, PR-307) names the session kind your own CI runs
-  tests in.
+  tests in. `--ci-session-kind client|headless` overrides it (flag, then config, then unset), for a config file you may
+  not edit (PR-311).
   - **When it is required:** a run whose final test list holds a session-kind-sensitive test refuses without it, by name
     (`SessionKindUnsetError`). A test is sensitive when it binds `HandlerFunctions`, or, on al-runner-v3, when it may
     open a TestPage or the scan cannot read it.

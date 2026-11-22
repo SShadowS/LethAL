@@ -3782,7 +3782,7 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
       "coverage_attribution": null,
       "covering_tests": "["Sandbox Tests.OverBudgetDetected"]",
       "duration_ms": 1,
-      "failure_note": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was 180000 ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts",
+      "failure_note": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was 180000 ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on",
       "kill_position": null,
       "killing_test": null,
       "killing_test_failure": null,
@@ -3792,7 +3792,7 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
       "verdict": "error",
     },
   ],
-  "quarantined": "test in-flight-unknown running OverBudgetDetected (mutant M0007) [budget was 180000 ms; raise the floor with --mutant-timeout-ms and continue with --resume]",
+  "quarantined": "test in-flight-unknown running OverBudgetDetected (mutant M0007) [budget was 180000 ms; raise the floor with --mutant-timeout-ms and continue with --resume; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on]",
   "testRows": [
     {
       "codeunit_id": 79100,
@@ -4388,7 +4388,7 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
         "coveringTests": [
           "Sandbox Tests.OverBudgetDetected",
         ],
-        "failureNote": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was 180000 ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts",
+        "failureNote": "quarantined: OverBudgetDetected returned no readable result and its operation could not be confirmed complete — container may be stranded. Its budget was 180000 ms; if the mutant was merely slow rather than stranded, raise the floor with --mutant-timeout-ms and re-run with --resume to keep this session's verdicts; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on",
         "mutant": {
           "astHash": "f2cf7a4045e4632a92c773091c2ccf90963b401ce500b0f73377c029bdf0d9cc",
           "blockEndLine": 16,
@@ -4451,7 +4451,7 @@ exports[`C02-04 characterization 5: strand mid-batch 1`] = `
     },
     {
       "event": {
-        "reason": "test in-flight-unknown running OverBudgetDetected (mutant M0007) [budget was 180000 ms; raise the floor with --mutant-timeout-ms and continue with --resume]",
+        "reason": "test in-flight-unknown running OverBudgetDetected (mutant M0007) [budget was 180000 ms; raise the floor with --mutant-timeout-ms and continue with --resume; this session ran without --stop-hung-sessions: if the mutant never ends (a hang), that switch (or config bcdev.stopHungSessions: true, which an envTool config ignores) lets LethAL end its BC session and score it timeout-killed; it is off unless the server's owner turns it on]",
         "seq": 25,
         "type": "quarantined",
       },

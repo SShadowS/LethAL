@@ -3662,6 +3662,8 @@ const VALUE: Readonly<Record<string, string>> = {
   // PR-209: the one profile name; any other is refused by name.
   profile: "slim",
   lines: "src/A.al:1-2",
+  // PR-311: a valid session kind; any other is refused by name.
+  "ci-session-kind": "headless",
   thresholds: "70,50",
   top: "3",
   "expect-mutants": "7",
@@ -3868,7 +3870,8 @@ describe("C02-07: flags are read or refused, never ignored", () => {
     // R917: --tests and --allow-large-run left the list (a dry run reads them).
     // PR-77: --fail-on-survivors joined it (a dry run prints no survivors).
     // PR-171: --confirm-from, --confirm-sample and --confirm-seed joined it.
-    expect(DRY_RUN_REFUSED.length).toBe(20);
+    // PR-311: --ci-session-kind joined it (a dry run runs no test).
+    expect(DRY_RUN_REFUSED.length).toBe(21);
   });
 
   test("R377: --dry-run reads an optional --backend, validated as run validates it", () => {
