@@ -852,6 +852,9 @@ const PR56_SLOTS: Readonly<Record<string, string>> = {
   // PR-195 (spec 2026-11-19-pr195-y2-collation-keep-precommitment.md): the two code points DO's codeunit 68986 meets under the
   // four toggle-blank-string mutants of `IsAsciiAlphaNumeric`, each by name (U+516C CJK, U+041A Cyrillic). No code-point pattern.
   COLLCHAR: "(?:516C|041A)",
+  // PR-354 (spec 2026-11-22-pr354-saveas-layout-keep.md): the four inner errors c2 and t1 met in a SaveAs of report
+  // "Standard Statement", each by name (BaseApp texts). Only the payment reference varies, and only as 15 digits.
+  SAVEASSTMTERR: String.raw`(?:Start Date must have a value\.|End Date must have a value\.|Start date must be earlier than End date\.|The payment reference must be unique\. Payment reference \d{15} already exists\.)`,
 };
 /** PR-56: an anchored entry from a text (after "NotRun: out-of-scope: ") with `%SLOT%` placeholders. */
 const pr56Entry = (template: string): RegExp =>
@@ -1226,6 +1229,18 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   // the same code points from another operation (a key or record ordering); in DO only codeunit 68986 holds such characters.
   // Pinned by `al-runner-serve-pr195.test.ts`.
   ["collation-no-weight-measured", "ordering of the character U+%COLLCHAR% (no collation weight)"],
+  // PR-354 (spec 2026-11-22-pr354-saveas-layout-keep.md, R1184): the SaveAs-with-layout refusal, 89 of c2's 146 refusal
+  // closes. One row per measured report, each with only the inner errors measured with it (census of c2 and t1:
+  // /coord/handoff/PR-354/census.txt). Kept only after the kept-vs-fresh DO check of its spec section 3.
+  // Pinned by `pr354-saveas-keep.test.ts`.
+  [
+    "saveas-layout-statement",
+    'an error in a SaveAs of report "Standard Statement", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): %SAVEASSTMTERR%',
+  ],
+  [
+    "saveas-layout-sales-invoice",
+    'an error in a SaveAs of report "Standard Sales - Invoice", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Tests cannot call the Commit function if TransactionModel property is set to AutoRollback.',
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),
