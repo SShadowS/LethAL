@@ -32,6 +32,18 @@
       "sha256": "1fd3c54126c351075a06fe0e4d7c54aa52b7c92f3587292b587622e10106583a",
       "mutants": 6
     },
+    "fixtures/sandbox-carry-tests/src/SlProbeTests.Codeunit.al": {
+      "sha256": "b8e744a7142b44a00e30ff214a7e4728e94706ffbffa9a77ae569294643ccc65",
+      "mutants": 17
+    },
+    "fixtures/sandbox-carry/src/SlProbeLogic.Codeunit.al": {
+      "sha256": "ae936dc55f04d505096fda15c470a58ca38ca26dfb75d8c850bc0b8ad846f70c",
+      "mutants": 5
+    },
+    "fixtures/sandbox-carry/src/SlProbeState.Codeunit.al": {
+      "sha256": "37f532ee1b7abe25fc02ae12a9eac1fd15c5bd70b50759fd91765efb25c62975",
+      "mutants": 8
+    },
     "fixtures/sandbox-codefree-tests/src/CFTests.Codeunit.al": {
       "sha256": "d1fa22a4397c7e5183af981a8feaed06ac8743a6eac4df2d4ce3c77adc9abcf8",
       "mutants": 102

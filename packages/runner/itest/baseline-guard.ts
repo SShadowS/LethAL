@@ -388,6 +388,13 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "al-runner-v3.recheck.baseline.json",
     "itest:alrunner-v3",
   ),
+  // PR-340: `itest:alrunner-v3-carry` (sandbox-carry, the SingleInstance carry walk), pre-committed in
+  // docs/superpowers/specs/2026-11-22-pr340-v3-carry-walk.md section 7; waits in PENDING_FIRST_RECORD.
+  "al-runner-v3.carry.baseline.json": gateHow(
+    "LETHAL_ITEST_ALRUNNER_V3_CARRY=1",
+    "al-runner-v3.carry.baseline.json",
+    "itest:alrunner-v3-carry",
+  ),
 };
 
 /**
@@ -424,6 +431,9 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * it per mutant; the list is empty again.
  * PR-144/PR-162's leg RC (`al-runner-v3.recheck.baseline.json`) waited here and was recorded once on
  * 2026-11-18 by the R849 route, equal to spec section 0h's expected rows; the list is empty again.
+ * PR-340's `al-runner-v3.carry.baseline.json` (`itest:alrunner-v3-carry`) waited here and was recorded once on
+ * 2026-11-22 (main-bf3a3e863), equal per mutant to its pre-commitment's §7 table (8 killed, 5 survived); the list is
+ * empty again.
  */
 export const PENDING_FIRST_RECORD: readonly string[] = [];
 

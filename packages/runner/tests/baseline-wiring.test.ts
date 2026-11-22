@@ -336,6 +336,8 @@ const WRITING_GATES: Record<string, Readonly<Record<string, string>>> = {
     // PR-144: leg RC.
     RECHECK_BASELINE_PATH: "al-runner-v3.recheck.baseline.json",
   },
+  // PR-340: the carry gate, its own file (the update gate's pins never depend on it).
+  "al-runner-v3-carry.itest.ts": { BASELINE_PATH: "al-runner-v3.carry.baseline.json" },
 };
 const READERS: Record<string, string> = {
   "verify.itest.ts": "bcdev.baseline.json",
