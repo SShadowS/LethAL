@@ -48,3 +48,18 @@ PR-256's flag-on gates wait for that record.
 - **Review nits, fixed in the branch:** the itest comment's stale "36 facts ... 8 capability" count, and a test that a
   doubled skip row reads `diverged` (the exactly-one-row rule).
 - **The predictions are unchanged.**
+
+## Amendment 2 (2026-11-22, the merge with PR-340, before any gate)
+PR-340 landed on master with its own new leg-C fact, `batch-sequential-carry` (`V3_CARRY_FACT`, outside
+`V3_CAPABILITY_FACTS`, pre-committed `matches`), and took the count from 36 to 37 too. Merging master into `lethal/pr-342`
+resolved `V3_LEG_C_FACTS = 37` with NO conflict, because both sides made the same edit. With both facts it is 38.
+- **Leg C's fact count: 38** (9 defect, 18 contract, 1 warn, 8 capability, plus the two facts outside `V3_CAPABILITY_FACTS`:
+  `batch-sequential-carry` and `stop-groups`). `V3_LEG_C_FACTS` = 38 and its pins move together. The old counts 36 and 37
+  are gate-fail.
+- **Daemons:** leg C's contract probe starts one daemon more than either side alone (serve-keep-reasons, the capability
+  facts, the carry fact's, stop-groups'); the spawn guards count every one of them, and every one wraps `v3ChildEnv`.
+- **The itest receipt's `batchFacts`** carries both `batch-sequential-carry` and `stop-groups`, next to the eight.
+- **On `current` main-bf3a3e863:** `stop-groups` `matches` (as before), and `batch-sequential-carry` as PR-340 pre-committed
+  it. No other leg-C reading moves.
+- **`v3ReadingsDigest` is unchanged.**
+- The gate re-runs on the merged head after PR-330 ends (CPUs 12-21 stay light until then).
