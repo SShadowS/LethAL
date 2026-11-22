@@ -77,6 +77,9 @@ const MIN_PROTOCOL_VERSION = 2;
  * lag behind only for an action the client treats as optional, and none is now. Raise it (to
  * app.json's version) whenever a client path REQUIRES a new control action and has no fallback:
  * that is why the two were once pinned equal.
+ * 1.0.0.29 (R1138, PR-309) makes the lease renew read-only while a run claim's runway still covers it (no lock on the
+ * lease row during a run), sizes that runway from the call's own bound, and trims it when the run marker clears.
+ * No wire change; it is required so a client never runs against a build whose renew locks the row for a whole run.
  * 1.0.0.28 (R1131) returns the start WorkDate it set as `workDate` on every answer that ran a method (RunMany's per-method
  * object, RunMutant's status), so the client can refuse a start date that moved from the batch's baseline. No fallback.
  * HarnessInfo also returns `workDate` (the date a test call would start on now, no test run): the fresh read each
@@ -95,7 +98,7 @@ const MIN_PROTOCOL_VERSION = 2;
  * 1.0.0.22 (R583) changes no behaviour: it is the runtime-17.0 build, raised so a container still on
  * the runtime-16 build is refused before any gate measures against it.
  */
-export const MIN_CONTROL_VERSION = "1.0.0.28";
+export const MIN_CONTROL_VERSION = "1.0.0.29";
 
 /**
  * R20: the harness could not be AUTHENTICATED — HTTP 401/403 — as distinct from "the control app is

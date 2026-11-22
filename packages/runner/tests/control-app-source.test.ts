@@ -475,3 +475,94 @@ describe("R847 (Part 1, not yet published): ObjectOwners and FieldOwners", () =>
     expect(procedureBody(api, "ObjectOwners")).not.toContain("FindFirst()");
   });
 });
+
+describe("PR-309: the lease renew does not lock during a run", () => {
+  const state = (): string => read("ControlState.Codeunit.al");
+
+  test("TryRenew's fast path comes before LockTable, on its own ReadUncommitted record, with no write", () => {
+    const body = procedureBody(state(), "TryRenew");
+    const lockAt = body.indexOf("Lease.LockTable();");
+    const fastAt = body.indexOf("Peek.ReadIsolation := IsolationLevel::ReadUncommitted;");
+    expect(fastAt).toBeGreaterThan(0);
+    expect(lockAt).toBeGreaterThan(fastAt);
+    const fast = codeOnly(body.slice(0, lockAt));
+    expect(fast).not.toContain("Modify");
+    expect(fast).not.toContain("Commit");
+    expect(fast).not.toContain("LockTable");
+    expect(fast).not.toContain("Lease.");
+    // all five checks, in the one condition that answers
+    expect(fast).toContain("(Peek.Epoch = Epoch)");
+    expect(fast).toContain("(Peek.Token = Token)");
+    expect(fast).toContain('(Peek."Server Generation" = Generation)');
+    expect(fast).toContain('(Peek."Op Kind" = Peek."Op Kind"::run)');
+    expect(fast).toContain('(Peek."Expires At" >= CurrentDateTime + (TtlSeconds * 1000))');
+    expect(fast).toContain('ExpiresAt := Peek."Expires At";');
+    // ONE contiguous text, whitespace-normalised: an `and` turned `or`, or a missing `exit;`, goes red.
+    expect(fast.replace(/\s+/g, " ")).toContain(
+      'if (Peek.Epoch = Epoch) and (Peek.Token = Token) and (Peek."Server Generation" = Generation) and (Peek."Op Kind" = Peek."Op Kind"::run) and (Peek."Expires At" >= CurrentDateTime + (TtlSeconds * 1000)) then begin Renewed := true; ExpiresAt := Peek."Expires At"; exit; end;',
+    );
+  });
+
+  test("TrimRunClaim is absent from TryEndPublish, TryRenew and TryBeginRun", () => {
+    const src = state();
+    for (const name of ["TryEndPublish", "TryRenew", "TryBeginRun"]) {
+      expect(procedureBody(src, name), name).not.toContain("TrimRunClaim");
+    }
+  });
+
+  test("the locked fallback keeps LockTable, Modify and Commit, and never pulls a run claim inwards", () => {
+    const body = procedureBody(state(), "TryRenew");
+    const locked = body.slice(body.indexOf("Lease.LockTable();"));
+    expect(locked).toContain("Lease.Modify();");
+    expect(locked).toContain("Commit();");
+    expect(locked).toContain(
+      '(Lease."Op Kind" = Lease."Op Kind"::run) and (Lease."Expires At" > NewExpiry)',
+    );
+    expect(locked).toContain('NewExpiry := Lease."Expires At";');
+  });
+
+  test("ExtendRunClaim adds the call's bound, clamped to MaxRunBoundMs, never inwards", () => {
+    const src = state();
+    const body = procedureBody(src, "ExtendRunClaim");
+    expect(body).toContain("if RunBoundMs < 0 then");
+    expect(body).toContain("RunBoundMs := 0;");
+    expect(body).toContain("if RunBoundMs > MaxRunBoundMs() then");
+    expect(body).toContain("RunBoundMs := MaxRunBoundMs();");
+    expect(body).toContain("Runway := CurrentDateTime + RunClaimRunwayMs() + RunBoundMs;");
+    expect(body).toContain('if Lease."Expires At" < Runway then');
+    expect(procedureBody(src, "MaxRunBoundMs")).toContain("exit(600000);");
+    expect(procedureBody(src, "SingleRunBoundMs")).toContain("exit(MaxRunBoundMs());");
+    expect(procedureBody(src, "TryBeginRun")).toContain("ExtendRunClaim(Lease, RunBoundMs);");
+  });
+
+  test("RunMutantMany passes ceiling + stop grace, a single run passes SingleRunBoundMs()", () => {
+    const api = read("ControlApi.Codeunit.al");
+    // each wire value is clamped BEFORE the add, so a huge one cannot overflow an Integer
+    expect(procedureBody(api, "RunMutantMany")).toContain(
+      "MutantId, State.ClampRunBoundMs(RequestCeilingMs) + State.ClampRunBoundMs(StopGraceMs), Claimed, ClaimReason);",
+    );
+    const clamp = procedureBody(state(), "ClampRunBoundMs");
+    expect(clamp).toContain("if Ms < 0 then");
+    expect(clamp).toContain("exit(0);");
+    expect(clamp).toContain("if Ms > MaxRunBoundMs() then");
+    expect(clamp).toContain("exit(MaxRunBoundMs());");
+    expect(procedureBody(api, "RunMutantCore")).toContain(
+      "MutantId, State.SingleRunBoundMs(), Claimed, ClaimReason);",
+    );
+  });
+
+  test("each of the four procedures that clear a run marker trims the runway inside its lock", () => {
+    const src = state();
+    const trim = procedureBody(src, "TrimRunClaim");
+    expect(trim).toContain("Trimmed := CurrentDateTime + RunClaimRunwayMs();");
+    expect(trim).toContain('if Lease."Expires At" > Trimmed then');
+    for (const name of ["TryFinishRun", "TryRecoverOp", "TryStopHungRun", "TryStopHungRunAt"]) {
+      const body = procedureBody(src, name);
+      const trimAt = body.indexOf("TrimRunClaim(Lease);");
+      expect(trimAt, name).toBeGreaterThan(body.indexOf("Lease.LockTable();"));
+      expect(body.indexOf("Lease.Modify();", trimAt), name).toBeGreaterThan(trimAt);
+      // the trim sits right before the one Modify that clears the marker
+      expect(body.slice(trimAt, trimAt + 60), name).toContain("Lease.Modify();");
+    }
+  });
+});
