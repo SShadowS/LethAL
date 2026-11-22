@@ -955,7 +955,10 @@ export interface ExecutionBackend {
    * R586 (I3), OPTIONAL: a tagged note for a SURVIVOR with these covering tests
    * (`[v3-refused-test-nearby] ...`), written into its `failureNote`. Never moves a verdict.
    */
-  survivorNote?(covering: readonly TestMethodRef[]): string | undefined;
+  survivorNote?(
+    covering: readonly TestMethodRef[],
+    site?: { readonly objectType: string; readonly codeunitId: number },
+  ): string | undefined;
 
   /**
    * R885, OPTIONAL: one line for the "no green baseline tests" note when the backend saw why
