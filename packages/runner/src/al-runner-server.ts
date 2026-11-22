@@ -1231,7 +1231,10 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
   ["collation-no-weight-measured", "ordering of the character U+%COLLCHAR% (no collation weight)"],
   // PR-354 (spec 2026-11-22-pr354-saveas-layout-keep.md, R1184): the SaveAs-with-layout refusal, 89 of c2's 146 refusal
   // closes. One row per measured report, each with only the inner errors measured with it (census of c2 and t1:
-  // /coord/handoff/PR-354/census.txt). Kept only after the kept-vs-fresh DO check of its spec section 3.
+  // /coord/handoff/PR-354/census.txt). Kept by the kept-vs-fresh DO check of its spec section 3
+  // (/coord/handoff/PR-354/keepcheck/, main-bf3a3e863, 2026-11-22): 14 requests, every text met on ONE kept daemon (the
+  // payment-reference one at baseline, codeunit 68996), then a request with no mutant after each and one over all six codeunits;
+  // 14 of 14 equal to fresh daemons; the planted-difference self-test caught.
   // Pinned by `pr354-saveas-keep.test.ts`.
   [
     "saveas-layout-statement",
