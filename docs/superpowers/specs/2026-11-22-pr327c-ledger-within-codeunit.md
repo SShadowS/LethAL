@@ -46,3 +46,52 @@ Coord PR-327 (lethal-code, 2026-11-22). **The orchestrator's order:** (a) the v3
 
 ## Out of scope
 - (b) the v3 `strictOrder` lane comes after this.
+
+## Amendment 1 (2026-11-22): the rule above is WITHDRAWN; the orchestrator chose option 1 (a verdict-only re-walk)
+**Why it is withdrawn:** the Opus build review (`/coord/handoff/PR-327/c-review.md`) found the rule BLOCKING. "Keep the
+codeunits in covering order" uses the DISCOVERY order, test files sorted by path. In the hang fixture `HangBaselineTests`
+sorts first, so the 25 s `SleepsPastTheBaselineBudget` would run first under every `DrainQueue` mutant. That moves about 7
+frozen hang rows' `killingTest` and breaks R-658 F1. The WIP is parked on `lethal/pr-327c-wip` and never merges.
+
+### The new rule
+- **The ordering is UNCHANGED.** `orderCoveringTests` keeps R197's keys exactly as today (kills in the scope, members,
+  the code-unit tie). So every kill, `killingTest` and `killPosition` is as before.
+- **`ledgerCrossedCodeunits(m)`:** true when the ledger's kills key put some test codeunit ahead of a covering codeunit
+  that came BEFORE it in the no-ledger order. The no-ledger order is the same function with an empty ledger: members, then
+  the code-unit tie.
+- **The re-walk:** when a mutant's walk ends `survived` and `ledgerCrossedCodeunits(m)` is true, its covering tests are
+  walked ONCE more, in the no-ledger order, under the same mutant and the same budgets.
+  - **The re-walk's verdict is the one scored.**
+  - When it kills, the row carries `killingTest` from the re-walk and the note `[ledger-order-survived]` ("survived in
+    the kill ledger's order; killed in the no-ledger order (R1174)"). That is a label, never hidden.
+  - When it also survives, the row stays `survived` with no note.
+- **On which backends:**
+  - **bcdev,** where a session carries state across codeunits, always.
+  - **al-runner-v3: skipped, by name, with the reason.** Every covering codeunit is a fresh entry there (PR-298's O1
+    freshness, measured at every pin), so the order across codeunits cannot change a v3 verdict, and a re-walk would only
+    cost time.
+  - **This is the orchestrator's condition (i) read through "where the order can change a verdict".** If the
+    orchestrator wants it on v3 too, it is a one-line switch, and its cost is then measured on c2.
+- **No other change:** the R197 ledger record, the kill pairs and the budgets.
+
+### Predictions (written before the build)
+- **The #53 probe on bcdev, red then green:**
+  - today: M0009 killed, M0010 and M0011 survived;
+  - with the fix: **all three KILLED.** M0010 and M0011 carry `[ledger-order-survived]` and `killingTest`
+    `ComputeIsPlain`.
+- **Every BC gate figure is unchanged,** because no kill or ordering moves. A survivor whose re-walk kills would be a
+  verdict move; the gates' survivors are expected not to flip. Any flip is listed by name, pre-committed and re-recorded
+  under R332, never silently.
+- **The cost on R-882's S3 slice** (bcdev, 1,044 mutants, 314 survivors): the static bound has 101 survivors with a
+  cross-codeunit killer in their scope.
+  - **Predicted:** a re-walk on at most those 101. Each re-walk costs one more walk of the survivor's covering tests, so
+    the extra wall is at most 101 × the slice's mean survivor walk time, which is measured, not assumed.
+  - **Flips predicted:** few (0-10), since a flip needs real state carry-over between codeunits.
+  - **BLOCK:** any killed → survived, or any `killingTest` change on a kill, is a BLOCK.
+- **The tests:**
+  - a stateful fake in which the ledger crosses codeunits and the first walk survives, and the re-walk kills: scored
+    killed, with the note;
+  - no crossing means no re-walk, by call count;
+  - a kill is never re-walked;
+  - v3 never re-walks;
+  - each red-checked.
