@@ -62,7 +62,7 @@ import {
   varSectionUnparsed,
   writeInstrumentedProject,
 } from "@lethal/schemata";
-import { AlRunnerV3ServeFallbackWarmupError } from "./al-runner-v3-backend";
+import { AlRunnerV3ServeFallbackWarmupError, REACH_PRUNE_ENV } from "./al-runner-v3-backend";
 import {
   type AppJsonPathChange,
   caseChangeText,
@@ -348,7 +348,12 @@ import {
   staleDependencyMember,
   staleTargetMember,
 } from "./stale-test-app";
-import { ISOLATION_AUTO_BUILD_TAG, type LendingSession, sameHiddenFiles } from "./store";
+import {
+  ISOLATION_AUTO_BUILD_TAG,
+  type LendingSession,
+  PRUNED_NOTE,
+  sameHiddenFiles,
+} from "./store";
 import type { ResultsStore } from "./store";
 import type {
   CarryHidden,
@@ -395,6 +400,7 @@ import {
   isTestPageNotRunMessage,
   testPageNotRunMessage,
 } from "./testpage-unsupported";
+import { reachPruneMessage } from "./timing-summary";
 import { AlRunnerV2RetiredError, RETIRED_V2_BACKEND, v2RetiredRun } from "./v2-retired";
 import { onSkippedLinks, refuseProjectLinks, walkFiles } from "./walk";
 import { describeWebServiceHttpText } from "./webservice-http-text";
@@ -2120,6 +2126,11 @@ export interface SessionConfig {
    * nested session, which must not truncate the main run's file). Production otherwise leaves it unset.
    */
   readonly reachTrace?: ReachTrace | null;
+  /**
+   * PR-303: `false`: never prune and ignore `LETHAL_V3_REACH_PRUNE` (the withheld-kill recheck's nested
+   * session, which must run every covering test). Unset: the environment decides.
+   */
+  readonly reachPrune?: false;
 }
 
 /** Alias kept for readability at call sites within this module. */
@@ -4828,6 +4839,8 @@ function resolveResume(
   resumeInputs?: ResumeInputs,
   /** PR-209: the digest an OLDER default run recorded for this same configuration; set only on a run with no operator narrowing. */
   olderDefaultFingerprint?: string,
+  /** PR-303: the digest with the prune flag the other way, and this session's flag state. */
+  pruneFlag?: { readonly otherPruneFingerprint: string; readonly reachPrune: boolean },
 ):
   | {
       runId: number;
@@ -4892,6 +4905,22 @@ function resolveResume(
         : {}),
     });
     if (found === null) {
+      // PR-303: an unfinished run recorded with the prune flag the other way has another digest.
+      if (pruneFlag !== undefined) {
+        const other = cfg.store.findResumableRun({
+          projectPath: cfg.projectDir,
+          backend: backendName,
+          configFingerprint: pruneFlag.otherPruneFingerprint,
+          carryableVerdicts: [...CARRYABLE_VERDICTS],
+          ...(lendingSession?.runnerBuild !== undefined
+            ? { runnerBuild: lendingSession.runnerBuild }
+            : {}),
+        });
+        if (other !== null)
+          throw new ReachPruneError(
+            reachPruneResumeMessage(`--resume found run ${other}`, pruneFlag.reachPrune),
+          );
+      }
       // PR-209 (M6): an unfinished run of the OLDER default set has another digest, so the search
       // above cannot find it. Name it rather than claim there is none.
       if (olderDefaultFingerprint !== undefined) {
@@ -5050,6 +5079,11 @@ function resolveResume(
       // anyway, as "scoped differently"). NULL is unknown and matches no build.
       assertSameBuildSymbols(row, `--resume-run ${id}`, buildSymbols);
       assertSameResumeInputs(row, `--resume-run ${id}`, resumeInputs); // R886
+      if (pruneFlag !== undefined && row.configFingerprint === pruneFlag.otherPruneFingerprint) {
+        throw new ReachPruneError(
+          reachPruneResumeMessage(`--resume-run ${id}`, pruneFlag.reachPrune),
+        );
+      }
       if (
         olderDefaultFingerprint !== undefined &&
         row.configFingerprint === olderDefaultFingerprint
@@ -5280,6 +5314,8 @@ interface BatchScope {
   readonly testPageRefused?: ReadonlyMap<string, string>;
   /** PR-298: the session's raw-reach trace, when asked for. */
   readonly reachTrace?: ReachTrace;
+  /** PR-303: `LETHAL_V3_REACH_PRUNE=on`, read and checked once per session. */
+  readonly reachPrune?: true;
   /**
    * R896: set (once per session, by `runSession`) when the backend runs `isolation: "auto"`.
    * `decided` turns true in the first batch whose baseline ran live; `resumedRunId` is the run a
@@ -6631,6 +6667,37 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   const minMutantBudgetMs = applyV3MutantStop(scope, measuredDuration);
   // R926: read now, after any `isolation: "auto"` choice, while `baseline` holds the chosen rows.
   const baselineReach = baselineReachOf(baseline, lineEvidence, backend);
+  // PR-303: the PRUNED plan map feeds everything that plans or runs; `perMutantTests` (the FULL map)
+  // feeds everything that reports. Flag off: the same object, so nothing moves.
+  let plannedTests: ReadonlyMap<string, readonly TestMethodRef[]> = perMutantTests;
+  if (scope.reachPrune === true) {
+    const pruned = new Map(perMutantTests);
+    const isolates = backend.isolatesTests === true;
+    let entriesLeftOut = 0;
+    let prunedSurvived = 0;
+    for (const m of toExecute) {
+      const full = perMutantTests.get(m.mutantId);
+      // All-green attribution ran these tests BECAUSE coverage saw nothing of the object: never pruned.
+      if (full === undefined || coverageAttribution.get(m.mutantId) === "all-green") continue;
+      const kept = pruneCodeunitsForReach(
+        m,
+        full,
+        baselineReach,
+        (cu) => backend.isolationOf?.(cu) ?? "test",
+        tests,
+      );
+      if (kept.length === full.length) continue;
+      pruned.set(m.mutantId, kept); // an empty list keeps its key: an absent key reads as uncovered
+      entriesLeftOut += entryCount(full, isolates) - entryCount(kept, isolates);
+      if (kept.length === 0) prunedSurvived += 1;
+    }
+    plannedTests = pruned;
+    emit({
+      type: "warning",
+      code: "reach-prune",
+      message: reachPruneMessage(batchIdx, entriesLeftOut, prunedSurvived),
+    });
+  }
 
   // 6. per-mutant loop, on scope.backend (R671: no fan-out).
   const fallbackTimeoutMs = scope.baselineTimeoutMs;
@@ -6662,7 +6729,7 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
   // baseline time (a whole-codeunit call counts the whole codeunit). It rides the phase's `detail`.
   const estimate = estimateCovered(
     toExecute,
-    perMutantTests,
+    plannedTests,
     costModelOf(scope.parallel?.owner ?? backend, measuredDuration, fallbackTimeoutMs),
   );
   // R912 follow-up: the "long" note rides the same `detail`, never a warning code. The estimate comes
@@ -6684,7 +6751,8 @@ async function scoreBatch(scope: BatchScope, input: ScoreBatchInput): Promise<Sc
     safety,
     ...(leaseSession !== undefined ? { leaseSession } : {}),
     mutants: toExecute,
-    perMutantTests,
+    perMutantTests: plannedTests,
+    ...(plannedTests !== perMutantTests ? { fullPerMutantTests: perMutantTests } : {}),
     coverageAttribution,
     baselineDuration,
     measuredDuration,
@@ -6843,6 +6911,8 @@ async function runSessionBody(
       "reach-trace-resume-refused: LETHAL_REACH_TRACE cannot be used with --resume: a carried verdict has no reach to trace (PR-298)",
     );
   }
+  // PR-303: read and checked before any run, and before the trace file is truncated.
+  const reachPrune = cfg.reachPrune === false ? false : readReachPrune(process.env, cfg.backend);
   reachTrace?.start();
   const caps = cfg.backend.capabilities();
   const nowIso = cfg.nowIso ?? (() => new Date().toISOString());
@@ -7520,12 +7590,23 @@ async function runSessionBody(
   };
   // PR-209 (M6): a run with no operator narrowing carries the marker; the same input WITHOUT it is
   // the digest an older default run recorded, so `resolveResume` can name that store.
-  const configFingerprint = sessionFingerprint({
-    ...fingerprintBase,
-    ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
-  });
+  // PR-303: the prune flag is in the digest only when on, so a flag-off run keeps every digest. The same
+  // digest with the flag the other way names the store of a run the flag change must refuse to resume.
+  const fingerprintWith = (prune: boolean) =>
+    sessionFingerprint({
+      ...fingerprintBase,
+      ...(prune ? { v3ReachPrune: true as const } : {}),
+      ...(resolvedOperators === undefined ? { defaultOperators: 2 as const } : {}),
+    });
+  const configFingerprint = fingerprintWith(reachPrune);
+  const otherPruneFingerprint = fingerprintWith(!reachPrune);
   const olderDefaultFingerprint =
-    resolvedOperators === undefined ? sessionFingerprint(fingerprintBase) : undefined;
+    resolvedOperators === undefined
+      ? sessionFingerprint({
+          ...fingerprintBase,
+          ...(reachPrune ? { v3ReachPrune: true as const } : {}),
+        })
+      : undefined;
   const resolvedResume = resolveResume(
     cfg,
     backendName,
@@ -7545,6 +7626,7 @@ async function runSessionBody(
     },
     resumeInputs,
     olderDefaultFingerprint,
+    { otherPruneFingerprint, reachPrune },
   );
 
   const runId = cfg.store.createRun({
@@ -8362,6 +8444,7 @@ async function runSessionBody(
       baselineTimeoutMs,
       testPageRefused,
       ...(reachTrace !== undefined ? { reachTrace } : {}),
+      ...(reachPrune ? { reachPrune: true as const } : {}),
       ...(timeBudget !== undefined ? { timeBudget } : {}),
       ...(cfg.backend.isolationAuto === true
         ? { isolationAuto: { decided: false, resumedRunId: resumeState?.runId } }
@@ -11007,6 +11090,80 @@ export function reachWhy(
   return { reach: { guardReached: reachedBy.length > 0, reachedBy } };
 }
 
+/**
+ * PR-303 (R1148): the covering tests to RUN for a mutant, in their order. A test is explicit false
+ * when `reachWhy` decides its baseline did not hit the site (statement grain, a complete passing row
+ * with line evidence, the mode unchanged). Amendment 2: a test codeunit is dropped only when EVERY test of
+ * it in `finalTests` (the run's whole list, not only the covering ones) is explicit false; one test that may
+ * reach, or any test not measured green with lines (refused, cut, failed, missing row...), keeps the whole codeunit.
+ * Limit: the backend's `refusedCut` reads the daemon's raw `baselineRows`, while this reads the orchestrator's final
+ * test list, so a refusal of a method the discovery does not list would be unseen here; no route to that exists today.
+ */
+export function pruneCodeunitsForReach(
+  m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
+  covering: readonly TestMethodRef[],
+  baselineReach: BaselineReach | undefined,
+  isolationOf: (codeunitId: number) => "test" | "method",
+  finalTests: readonly TestMethodRef[],
+): readonly TestMethodRef[] {
+  // Amendment 2: a codeunit is droppable only when EVERY test of it in the run's final list is explicit false.
+  // `reachWhy` decides only a passing row with line evidence, so a refused, cut, failed, errored, skipped,
+  // timed-out or unstable test, a missing row and a green test without lines all read undecided and keep it.
+  const inCovering = new Set(covering.map((r) => r.codeunitId));
+  const keep = new Set<number>();
+  for (const ref of finalTests) {
+    if (!inCovering.has(ref.codeunitId) || keep.has(ref.codeunitId)) continue;
+    if (reachWhy(m, [ref], baselineReach, isolationOf).reach?.guardReached !== false) {
+      keep.add(ref.codeunitId);
+    }
+  }
+  return covering.filter((ref) => keep.has(ref.codeunitId));
+}
+
+/** PR-303: a refused `LETHAL_V3_REACH_PRUNE`: a bad value, a backend it does not apply to, or a baseline it does not hold under. */
+export class ReachPruneError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReachPruneError";
+  }
+}
+
+/**
+ * PR-303: `LETHAL_V3_REACH_PRUNE` (unset or empty: off; `on`: on; else refused), with the backend check. Amendment 1's
+ * M1 (`/coord/handoff/PR-303/m1/`) measured the batched baseline's kill side: 0 of PR-235's 342 undecided DO kills read
+ * unreached, so rule 5 allows either baseline mode (batched, the default, or unbatched).
+ */
+export function readReachPrune(
+  env: Record<string, string | undefined>,
+  backend: { capabilities(): { kind: string } },
+): boolean {
+  const v = env[REACH_PRUNE_ENV];
+  if (v === undefined || v === "") return false;
+  if (v !== "on") {
+    throw new ReachPruneError(
+      `reach-prune-value-refused: ${REACH_PRUNE_ENV} is "${v}"; use on to prune, or leave it unset (PR-303)`,
+    );
+  }
+  if (backend.capabilities().kind !== "al-runner-v3") {
+    throw new ReachPruneError(
+      `reach-prune-backend-refused: ${REACH_PRUNE_ENV}=on applies to the al-runner-v3 backend only, not ${backend.capabilities().kind} (PR-303)`,
+    );
+  }
+  return true;
+}
+
+/** PR-303 rule 6: why a resume across a flag change is refused. */
+function reachPruneResumeMessage(subject: string, nowOn: boolean): string {
+  return `reach-prune-resume-refused: ${subject} was recorded with ${REACH_PRUNE_ENV} ${nowOn ? "off" : "on"}, and this session has it ${nowOn ? "on" : "off"}. A pruned survivor must never be carried into a run without pruning as an ordinary one (PR-303). Set the flag as that run had it, or drop the resume flag to run from scratch.`;
+}
+
+/** PR-303: how many test entries a mutant sends: one per codeunit, or per method when each test is isolated. */
+function entryCount(refs: readonly TestMethodRef[], isolatesTests: boolean): number {
+  return isolatesTests
+    ? new Set(refs.map((r) => `${r.codeunitId}.${r.method}`)).size
+    : new Set(refs.map((r) => r.codeunitId)).size;
+}
+
 /** PR-298: whether `ref`'s own baseline hit the mutant's reach line; `null` when that is unknown. */
 export function baselineHitOf(
   m: Pick<MutantManifestEntry, "reachGrain" | "reachLine" | "objectType" | "codeunitId">,
@@ -12912,7 +13069,10 @@ interface RunMutantsArgs {
   readonly timeBudget?: TimeBudget | undefined;
   readonly safety: SessionSafety;
   readonly mutants: readonly MutantManifestEntry[];
+  /** What plans and runs. Under `LETHAL_V3_REACH_PRUNE=on` this is the PRUNED map (PR-303); else the full one. */
   readonly perMutantTests: ReadonlyMap<string, readonly TestMethodRef[]>;
+  /** PR-303: the FULL covering map, for everything that reports; absent: `perMutantTests` is the full map. */
+  readonly fullPerMutantTests?: ReadonlyMap<string, readonly TestMethodRef[]>;
   /** Which attribution path placed each mutant's covering tests — see `CoverageSplit.attribution`. */
   readonly coverageAttribution: ReadonlyMap<string, CoverageAttribution>;
   readonly baselineDuration: ReadonlyMap<string, number>;
@@ -13054,10 +13214,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         }
       : undefined;
   const entriesOf = (mutantId: string): number => {
-    const refs = args.perMutantTests.get(mutantId) ?? [];
-    return args.backend.isolatesTests === true
-      ? new Set(refs.map((r) => `${r.codeunitId}.${r.method}`)).size
-      : new Set(refs.map((r) => r.codeunitId)).size;
+    return entryCount(args.perMutantTests.get(mutantId) ?? [], args.backend.isolatesTests === true);
   };
   const flushTiming = (): void => {
     const t = timings;
@@ -13103,6 +13260,8 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     const covering = args.perMutantTests.get(m.mutantId);
     if (covering === undefined) continue; // uncovered, already recorded above
+    // PR-303: the FULL covering list, for everything that reports; `covering` (pruned under the flag) plans and runs.
+    const fullCovering = args.fullPerMutantTests?.get(m.mutantId) ?? covering;
     if (timings !== undefined) {
       const scope = procedureScopeOf(m);
       const key = `${Math.max(0, timings.window)}|${scope}`;
@@ -13134,6 +13293,62 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       break;
     }
     args.sink?.begin(m.mutantId);
+    if (covering.length === 0 && fullCovering.length > 0) {
+      // PR-303 rule 4: every covering codeunit was pruned. Survived without running, never `no-coverage`;
+      // the reach and the note are read over the FULL covering set. Before the `no-coverage` branch below.
+      const prunedSurvivor = () => {
+        const modeNow = (cu: number) => args.backend.isolationOf?.(cu) ?? "test";
+        const reach = reachWhy(m, fullCovering, args.baselineReach, modeNow).reach;
+        const survNote = args.backend.survivorNote?.(fullCovering);
+        const note = survNote !== undefined ? `${PRUNED_NOTE}; ${survNote}` : `${PRUNED_NOTE}`;
+        args.reachTrace?.stage(m.mutantId, {
+          file: m.file,
+          startLine: m.startLine,
+          operatorName: m.operatorName,
+          startIndex: m.startIndex,
+          endIndex: m.endIndex,
+          verdict: "survived",
+          reachGrain: m.reachGrain ?? null,
+          reachLine: m.reachLine ?? null,
+          killingTest: null,
+          reachOverCovering: reach?.guardReached ?? null,
+          reachOverRan: null,
+          killerBaselineHit: null,
+          nullCause: null,
+          reachFinal: reach?.guardReached ?? null,
+        });
+        record(
+          args.store,
+          args.runId,
+          m,
+          "survived",
+          args.outcomes,
+          args.batchIndex,
+          args.emit,
+          undefined, // killingTest
+          note,
+          undefined, // cause
+          0, // spent: nothing ran
+          fullCovering.map((ref) => qualifiedTestName(ref)),
+          args.coverageAttribution.get(m.mutantId),
+          undefined, // guardObserved
+          undefined, // carried
+          undefined, // strandedSkip
+          undefined, // runner
+          undefined, // runnerDisagreement
+          undefined, // runnerDisagreementTest
+          undefined, // fromRunId
+          undefined, // permissionRefusedTest
+          undefined, // killingTestFailure
+          undefined, // unplaceable
+          undefined, // killPosition
+          reach,
+        );
+      };
+      if (args.sink === undefined) prunedSurvivor();
+      else args.sink.finish(m.mutantId, prunedSurvivor);
+      continue;
+    }
     if (covering.length === 0) {
       // Defensive: the covering-test list resolved to zero refs (e.g. a
       // coverage index key whose tests no longer exist in `greenTests`).
@@ -14211,7 +14426,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
     }
     // R586 (I3): the backend's tagged note on a survivor (v3: a baseline refusal beside it).
     if (verdict === "survived") {
-      const note = args.backend.survivorNote?.(covering);
+      const note = args.backend.survivorNote?.(fullCovering);
       if (note !== undefined) failureNote = note;
     }
     // GH-24: a manifest with no grain (written before GH-24) is never decided either.
@@ -14249,7 +14464,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
       if (args.reachTrace !== undefined) {
         // PR-298: staged here, written by the `mutant-scored` event `record` emits next.
         const modeNow = (cu: number) => args.backend.isolationOf?.(cu) ?? "test";
-        const overCovering = reachWhy(m, covering, args.baselineReach, modeNow);
+        const overCovering = reachWhy(m, fullCovering, args.baselineReach, modeNow);
         const overRan = reachWhy(m, ranRefs, args.baselineReach, modeNow);
         // R926: an all-green mutant ran BECAUSE coverage saw nothing of its object, so that coverage
         // cannot claim "not hit": its covering reach is undecided whatever the lines say.
@@ -14293,7 +14508,7 @@ async function runMutantsOnBackend(args: RunMutantsArgs): Promise<void> {
         spent,
         // `covering` is exactly what this loop just ran the mutant against, so a survivor's report
         // entry names the tests that failed to notice it — see `SessionOutcome.coveringTests`.
-        covering.map((ref) => qualifiedTestName(ref)),
+        fullCovering.map((ref) => qualifiedTestName(ref)),
         args.coverageAttribution.get(m.mutantId),
         guardObserved,
         undefined, // carried

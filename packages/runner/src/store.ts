@@ -369,6 +369,9 @@ export interface TestNarrowing {
 /** R896: the `runner_build` suffix of an `isolation: "auto"` run (always last). */
 export const ISOLATION_AUTO_BUILD_TAG = " isolation-auto";
 
+/** PR-303 rule 4: the note on a mutant whose every covering codeunit was pruned. History never lends such a survivor. */
+export const PRUNED_NOTE = "pruned: no covering test reaches its site";
+
 /** R586: the session side of `runMayLend` step 1: its backend and, on v3, its build. */
 export interface LendingSession {
   readonly backend: string;
@@ -2805,7 +2808,8 @@ export class ResultsStore {
     const rows = this.db
       .query(
         "SELECT ast_hash, codeunit_name, procedure_name, operator_name, operator_major, identity_ordinal, file, member_hash, covering_tests FROM mutants " +
-          "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor')",
+          // PR-303: a pruned survivor never ran a test, so it is never lent into another run.
+          "WHERE run_id = ? AND verdict IN ('survived', 'known-survivor') AND COALESCE(failure_note, '') NOT LIKE 'pruned:%'",
       )
       .all(run.id) as Array<{
       covering_tests: string | null;

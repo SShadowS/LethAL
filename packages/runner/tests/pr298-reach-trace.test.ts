@@ -337,6 +337,8 @@ describe("PR-298 §1: the raw-reach trace", () => {
     await recheck?.runner({ targets: [], tests: [], budgetSeconds: 1 } as never).catch(() => {});
     expect(nestedCfgs).toHaveLength(1);
     expect(nestedCfgs[0]?.reachTrace).toBeNull();
+    // PR-303: the recheck's nested session never prunes (its method-isolation baseline is not what PR-298 measured).
+    expect(nestedCfgs[0]?.reachPrune).toBe(false);
     expect(readRows(path)).toHaveLength(before);
   });
 
