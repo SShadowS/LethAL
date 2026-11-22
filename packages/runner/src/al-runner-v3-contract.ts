@@ -2171,10 +2171,11 @@ async function batchFactsOn(
   serverEnv: Readonly<Record<string, string>> | undefined,
 ): Promise<V3Fact[]> {
   const cache = env.cacheDir !== undefined ? { ALRUNNER_CACHE: resolve(env.cacheDir) } : undefined;
+  // PR-360 review LOW 1: the fact's own variables go INTO v3ChildEnv, so they cannot override its pins.
   const spawn: ServerSpawnFn = (argv) =>
     (env.serveSpawn ?? defaultServerSpawn)(argv, {
       cwd: root,
-      env: { ...v3ChildEnv(cache), ...serverEnv },
+      env: v3ChildEnv({ ...cache, ...serverEnv }),
     });
   const deadline = env.serveDeadlineMs ?? SERVE_DEADLINE_MS;
   const begin = async (): Promise<AlRunnerServer> => {
@@ -2510,7 +2511,7 @@ export async function runV3ContractProbe(env: V3ProbeEnv): Promise<V3ContractRes
   const spawnIn = env.spawn ?? defaultSpawn;
   // R807: every process this probe starts (the binary only; the burner uses Bun.spawn) gets the pinned seed.
   const spawn: SpawnFn = (argv, opts) =>
-    spawnIn(argv, { ...opts, env: { ...v3ChildEnv(), ...opts?.env }, cwd: root });
+    spawnIn(argv, { ...opts, env: v3ChildEnv({ ...opts?.env }), cwd: root }); // PR-360: the pins win
   const alRunnerPath = absToolPath(env.alRunnerPath);
   const packagesDir = resolve(env.packagesDir);
   const cacheDir = env.cacheDir !== undefined ? resolve(env.cacheDir) : undefined;

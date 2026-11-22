@@ -30,7 +30,7 @@ a field-wise read silently returned a fraction of a row and looked complete (R11
 Priority is deliberately not a column: the `order` field sets the ordering inside each section, and
 that ordering is the priority.
 
-**61 of 1147 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
+**62 of 1148 items are OPEN. A row counts as closed only when its status opens with `done` or `closed`; `PARTIALLY fixed`, `additive half DONE`, `SPIKED` and `blocked` are all open.**
 
 ---
 
@@ -1192,6 +1192,7 @@ that ordering is the priority.
 - **R1182** · Adopt al-runner's login replay (ALRUNNER_LOGIN_REPLAY, PERF-01) when a gated current carries it: on DO's 30-request sequence it cut instructions 16.5% and client wall 20% with identical rows, and it removes most of the per-test-session company login that R1099 measured · [R1182.md](docs/roadmap/R1182.md) · open — trigger: the first gated current whose binary carries ALRUNNER_LOGIN_REPLAY (main-bf3a3e863 does not)…
 - **R1183** · On full DO, serve warm-ups are the largest cost outside the tests: c2 sent 521 warm-up requests whose compile alone took 5,971 s, 10.6% of the summed lane time; 146 of its 168 daemon closes were refusals, each followed by a warm-up · [R1183.md](docs/roadmap/R1183.md) · open — attributed (PR-350, /coord/handoff/PR-350/findings.md): the 521 are 165 daemon starts…
 - **R1184** · Keep the v3 serve daemon after ONE refusal family, an error in a report SaveAs with a layout: it caused 89 of c2's 146 refusal restarts (about 3,100 s of compile, 5.5% of lane time), but only after a direct kept-vs-fresh check on DO · [R1184.md](docs/roadmap/R1184.md) · done (94b49e97a) — PR-354: two exact PR56_KEPT rows…
+- **R1185** · Pin al-runner's login replay OFF on every al-runner child and drop an ambient ALRUNNER_LOGIN_REPLAY*: upstream ships it ON by default, so the first gated build carrying it would switch it on for every LethAL run with no DO A/B (R1182) · [R1185.md](docs/roadmap/R1185.md) · open — PR-360 (lethal/pr-360): v3ChildEnv and v3UnpinnedEnv set ALRUNNER_LOGIN_REPLAY=0; mergeChildEnv drops…
 
 ---
 
