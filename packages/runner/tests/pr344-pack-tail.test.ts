@@ -394,37 +394,43 @@ describe("PR-344 amendment 1", () => {
   });
 
   test("S-1 (memory): the memory guard's stop is NOT a stop signal: the failed pack falls back to T alone", async () => {
-    const r = await packRig({ flag: true });
-    await baseline(r);
-    await start(r, "M0005", [A, C, D, E]);
-    let used = 1;
-    let stopped = false;
-    const GIB = 2 ** 30;
-    const inner = r.b as unknown as {
-      cfg: { memoryHeadroomGb?: number };
-      memoryGuard?: unknown;
+    const memoryStop = async (noPack: boolean) => {
+      const r = await packRig({ flag: true, noPack });
+      await baseline(r);
+      await start(r, "M0005", [A, C, D, E]);
+      let used = 1;
+      let stopped = false;
+      const GIB = 2 ** 30;
+      const inner = r.b as unknown as {
+        cfg: { memoryHeadroomGb?: number };
+        memoryGuard?: unknown;
+      };
+      inner.cfg.memoryHeadroomGb = 4;
+      inner.memoryGuard = undefined; // the baseline already decided "off" (no headroom); decide again
+      Object.assign(r.b.seams, {
+        memoryReader: () => ({ usedBytes: used * GIB, maxBytes: 32 * GIB, source: "test" }),
+        memorySleep: async () => {},
+        memoryWaitPolls: 1,
+      });
+      r.b.useStopHandle({
+        spent: () => stopped, // as the budget's handle: a memory stop spends the budget
+        signalled: () => stopped,
+        stopForMemory() {
+          stopped = true; // as the budget's handle does (R955's path)
+        },
+      });
+      expect(await r.b.mayStartGroup()).toBe(true);
+      used = 30;
+      expect(await r.b.mayStartGroup()).toBe(false); // the REAL memory stop: memoryStopped, signalled
+      expect(stopped).toBe(true);
+      return { r, v: await r.b.run(C, OPTS) };
     };
-    inner.cfg.memoryHeadroomGb = 4;
-    inner.memoryGuard = undefined; // the baseline already decided "off" (no headroom); decide again
-    Object.assign(r.b.seams, {
-      memoryReader: () => ({ usedBytes: used * GIB, maxBytes: 32 * GIB, source: "test" }),
-      memorySleep: async () => {},
-      memoryWaitPolls: 1,
-    });
-    r.b.useStopHandle({
-      spent: () => false,
-      signalled: () => stopped,
-      stopForMemory() {
-        stopped = true; // as the budget's handle does (R955's path)
-      },
-    });
-    expect(await r.b.mayStartGroup()).toBe(true);
-    used = 30;
-    expect(await r.b.mayStartGroup()).toBe(false); // the REAL memory stop: memoryStopped, signalled
-    expect(stopped).toBe(true);
-    const v = await r.b.run(C, OPTS);
+    const plain = await memoryStop(true);
+    const { r, v } = await memoryStop(false);
+    expect(sum(v)).toEqual(sum(plain.v)); // T's whole verdict is the unpacked walk's
     expect(v.outcome).toBe("pass"); // T's alone call, as today
     expect(tails(r, "M0005")).toEqual([["C", "D", "E"], ["C"]]);
+    expect(r.b.refusedCutTailStats()).toMatchObject({ packs: 1, failedPacks: 1 }); // the pack did fail
   });
 
   test("entry 0 is a kept refusal: no mate is stored, the daemon is not closed", async () => {
