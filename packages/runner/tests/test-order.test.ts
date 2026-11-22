@@ -122,8 +122,20 @@ describe("orderCoveringTests (R197)", () => {
     const other = t("A", 79200);
     const ledger = newKillLedger();
     recordKill(ledger, mutant(), other);
-    const out = orderCoveringTests([A, other], mutant({ mutantId: "M0002" }), ledger, new Map());
-    expect(out[0]?.codeunitId).toBe(79200);
+    // R1174: codeunit order is kept, so the kill shows within a codeunit: `other` (kill) before
+    // `A2` of the same codeunit 79200, while 79100's `A` was never credited.
+    const other2 = t("A0", 79200);
+    const out = orderCoveringTests(
+      [A, other2, other],
+      mutant({ mutantId: "M0002" }),
+      ledger,
+      new Map(),
+    );
+    expect(out.map((r) => `${r.codeunitId}.${r.method}`)).toEqual([
+      "79100.A",
+      "79200.A",
+      "79200.A0",
+    ]);
   });
 });
 
@@ -217,7 +229,9 @@ describe("R-658 F1: the hang fixture's covering-test order", () => {
 
   test("old legs: the existing killer is first for line 101, then for every later DrainQueue mutant", () => {
     const ledger = newKillLedger();
-    const covering = [zz, sleeps, killer];
+    // R1174: codeunits keep their covering order, so the old codeunit is listed first (the
+    // coverage index lists the existing codeunit before the added one).
+    const covering = [killer, zz, sleeps];
     const first = orderCoveringTests(covering, drain(101, "M0001"), ledger, members);
     expect(first[0]).toEqual(killer);
     recordKill(ledger, drain(101, "M0001"), killer);

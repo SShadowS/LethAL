@@ -74,7 +74,10 @@ export function memberCountsByTest(
 }
 
 /**
- * The order to try `covering` in for mutant `m`:
+ * The order to try `covering` in for mutant `m`. R1174: the test CODEUNITS keep the order they have
+ * in `covering` (first appearance), and the keys below reorder only the tests WITHIN each codeunit.
+ * Why: state a test codeunit leaves behind (SingleInstance globals and the like) reaches only LATER
+ * codeunits, so moving a killer's codeunit first can hide a kill and leave a false survivor.
  *
  *   1. tests that have already killed a mutant in the same procedure this session, most kills
  *      first (the 81% measurement above);
@@ -102,13 +105,25 @@ export function orderCoveringTests(
       name: nameOf(ref),
     };
   };
-  return [...covering]
-    .map((ref) => ({ ref, r: rank(ref) }))
-    .sort(
-      (a, b) =>
-        // R481: the last tie by code unit, never `localeCompare` (the host's default collation),
-        // so two hosts run one mutant's covering tests in one order.
-        b.r.kills - a.r.kills || a.r.members - b.r.members || compareCodeUnits(a.r.name, b.r.name),
-    )
-    .map((x) => x.ref);
+  // R1174: test codeunits keep their order in `covering` (first appearance); only the tests
+  // inside one codeunit are reordered.
+  const groups = new Map<number, TestMethodRef[]>();
+  for (const ref of covering) {
+    const g = groups.get(ref.codeunitId);
+    if (g === undefined) groups.set(ref.codeunitId, [ref]);
+    else g.push(ref);
+  }
+  return [...groups.values()].flatMap((g) =>
+    g
+      .map((ref) => ({ ref, r: rank(ref) }))
+      .sort(
+        (a, b) =>
+          // R481: the last tie by code unit, never `localeCompare` (the host's default collation),
+          // so two hosts run one mutant's covering tests in one order.
+          b.r.kills - a.r.kills ||
+          a.r.members - b.r.members ||
+          compareCodeUnits(a.r.name, b.r.name),
+      )
+      .map((x) => x.ref),
+  );
 }
