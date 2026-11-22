@@ -305,8 +305,23 @@ pair is one ordinary run of the gate there; add the pair to this table when it p
 
 ### server1 (192.168.2.157), the default host since 2026-11-05
 
-**The current proof for `bc1`-`bc3` is coord PR-198's, on 2026-11-19, under the control build of coord PR-196 (R1131)** (the
-first table below). Driver: `/coord/handoff/PR-198/prove.sh`, one server at a time per worktree, each under its own coord lease.
+**The current proof for `bc1`-`bc3` is coord PR-309's, on 2026-11-22, under LethAL Control 1.0.0.29 (R1138's renew without a
+lock during a run)** (the first table below).
+- **Driver:** `/coord/handoff/PR-309/prove.sh` (PR-198's, lane bugs), one server at a time in one worktree (bc3, then bc2, then
+  bc1), each under its own coord lease. Head 49a635ec (branch lethal/pr309, master merged).
+- **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server from 1.0.0.28 and read the build back by sha256 (545efbea…
+  = local). The tests fixtures' `.alpackages` were filled from each server first.
+- **Gates:** every gate's first line named its server, and each passed its own comparison with its baseline. `lethal doctor`
+  was clean, and each lease was released healthy.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc1` | setup; `itest:bcdev`, `bcdev-names`, `bcdev-wrapped`, `tables`, `chunked`, `harden`, `lend`, `lease`, `verify`, `testapp`, `agreement`, `verify-scale`, `stale-publish` | 1.0.0.29 | `/coord/handoff/PR-309/prove/bc1/<gate>.log`, `run.log`, `setup.log` beside them |
+| `bc2` | setup; the same 13, and `itest:hang` | 1.0.0.29 | `/coord/handoff/PR-309/prove/bc2/<gate>.log`, `run.log`, `setup.log` beside them |
+| `bc3` | setup; the same 13, and `itest:hang` | 1.0.0.29 | `/coord/handoff/PR-309/prove/bc3/<gate>.log`, `run.log`, `setup.log` beside them |
+
+**The proof before it, coord PR-198's (2026-11-19), under the control build of coord PR-196 (R1131)**, is history (the table
+right below). Driver: `/coord/handoff/PR-198/prove.sh`, one server at a time per worktree, each under its own coord lease.
 - **Setup:** `bc-linux-setup.ts --held-lease` upgraded each server and read the build back by sha256: bc2 and bc3 from 1.0.0.27,
   bc1 from 1.0.0.26. The tests fixtures' `.alpackages` were filled from each server first.
 - **Gates:** every gate's first line named its server, and each passed its own comparison with its baseline. `lethal doctor`
@@ -628,7 +643,19 @@ nothing about them changes.
   - **Re-proved on the fresh database with the Continia apps** (2026-11-18, the table below).
   - **A user's dependency that needs Full-Text Search** is now a doctor check: R1110, coord PR-128.
 
-### bc4 proof table (2026-11-19, LethAL Control 1.0.0.28; the earlier proofs are kept below it)
+### bc4 proof table (2026-11-22, LethAL Control 1.0.0.29; the earlier proofs are kept below it)
+
+**Under 1.0.0.29 (coord PR-309):**
+- **The build:** branch lethal/pr309 at 49a635ec, in its own worktree (bc4's BC 29 symbols must not overwrite a 28.4
+  worktree's).
+- **Setup:** the same build was published to bc4 earlier that day by PR-309's mechanism check (`bc-linux-setup.ts
+  --held-lease`, upgraded from 1.0.0.28, read back by sha256 545efbea… = local). The proof's setup found it already pinned.
+- **The gates:** the 13 gates and `itest:hang` (400 form) under one coord lease (`/coord/handoff/PR-309/prove.sh bc4`). Each
+  log's `[itest target]` line names `bc4`. Then `doctor` was ok, and the lease was released healthy.
+
+| server | gate | LethAL Control | proof (log) |
+|---|---|---|---|
+| `bc4` | setup; the 13 gates and `itest:hang` (400 form) | 1.0.0.29 | `/coord/handoff/PR-309/prove/bc4/<gate>.log`, `run.log`, `setup.log` beside them |
 
 **Under 1.0.0.28 (coord PR-198):**
 - **The build:** master c73eb7ac, in its own worktree (bc4's BC 29 symbols must not overwrite a 28.4 worktree's), after
