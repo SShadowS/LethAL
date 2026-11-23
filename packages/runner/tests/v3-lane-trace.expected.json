@@ -311,5 +311,7 @@
   "warmupsAfterKept": 0,
   "refusalCloses": 0
  },
- "notices": []
+ "notices": [
+  "al-runner-v3-refused-cut-tail: [lethal] al-runner-v3-refused-cut-tail: tail alone calls: stability 0, under a mutant 0; cut entries (PR-250) 0 (PR-297); tail packs sent 0, failed 0, rows served from a pack 0 (PR-344)"
+ ]
 }

@@ -995,7 +995,7 @@ export interface AlRunnerV3Config {
   readonly license?: { readonly path: string; readonly sha256: string };
   /** PR-282: `alRunnerV3.companies`: `--companies <value>` on every al-runner call that runs tests, one-shot and serve. */
   readonly companies?: string;
-  /** PR-297: `alRunnerV3.refusedCutTail`: a stable green test after a baseline-refusal cut (PR-250) runs alone under a mutant. Absent: off. */
+  /** PR-297: `alRunnerV3.refusedCutTail`: a stable green test after a baseline-refusal cut (PR-250) runs alone under a mutant. Absent: ON (PR-347); only `false` turns it off. */
   readonly refusedCutTail?: boolean;
   /** PR-256: `alRunnerV3.stopGroups`: per-entry stop groups on mutant requests (needs the `stop-groups` fact). Absent: off. */
   readonly stopGroups?: boolean;
@@ -2913,7 +2913,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   }
   /** PR-297: see `ExecutionBackend.refusedCutTail`. */
   get refusedCutTail(): boolean {
-    return this.cfg.refusedCutTail === true;
+    return this.cfg.refusedCutTail !== false; // PR-347: on unless `false`
   }
   /** PR-256: see `ExecutionBackend.stopGroups`. */
   get stopGroups(): boolean {
@@ -4436,7 +4436,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
     this.dropPair();
     this.clearPairStores();
     // PR-297: the end of the baseline phase measures the stable tail tests, still inside the bracket (NONE).
-    if (!on && this.inBaseline && this.cfg.refusedCutTail === true && this.entries)
+    if (!on && this.inBaseline && this.cfg.refusedCutTail !== false && this.entries)
       return this.endBaselineAfterTailStability(completed === true);
     this.inBaseline = on;
     // R948: the baseline's own daemon is closed before the mutant phase starts its own (its stop
@@ -4584,7 +4584,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
   /** PR-297: whether `ref` is a stable green test of a PR-250 cut (flag on): the alone routing's condition. */
   private isStableTail(ref: TestMethodRef): boolean {
     return (
-      this.cfg.refusedCutTail === true &&
+      this.cfg.refusedCutTail !== false &&
       this.tailStable.get(ref.codeunitId)?.has(ref.method.toLowerCase()) === true
     );
   }
@@ -11395,7 +11395,7 @@ export class AlRunnerV3Backend implements ExecutionBackend {
         `[lethal] al-runner-v3 serve-entries (R635): daemons ${s.daemons}, cached:false ${s.cachedFalse}, requests warm-up ${s.warmups} / prefetch ${s.prefetchRequests} / live ${s.liveRequests} / coverage ${s.coverageRequests} / echo ${s.echoRequests}, entries sent ${s.entriesSent}, echo mismatches ${s.echoMismatches}, kill pairs ${s.pairRequests} (fallbacks M cut ${s.pairFallbacks1}, confirm passed ${s.pairFallbacks1Passed} / NONE cut ${s.pairFallbacks2}, confirm passed ${s.pairFallbacks2Passed}; batched pairs: requests ${s.pairBatchRequests}, stored ${s.pairBatchStored}, served ${s.pairBatchServed}, refused ${s.pairBatchRefused} [another codeunit ${this.pairRefusals.otherCodeunit}, not prefetched ${this.pairRefusals.notPrefetched}, not after the kill ${this.pairRefusals.notAfterKill}, cut before the killer ${this.pairRefusals.cutBeforeKiller}]); mutant entries (PR-20) ${s.l4MutantEntries} of ${s.l4WholeTests} test(s), cut after the last covering test ${s.l4Entries}, tests left out ${s.l4Excluded}, widened ${s.l4Widened}, order broken ${s.l4OrderBroken}; cut before a baseline-refused test (PR-250) ${s.refusedCutEntries}; drift after a kept refusal (PR-56) ${s.keptDrifts}; selected-only requests (PR-94) ${s.selectedOnlyRequests}, tests skipped ${s.selectedOnlyTestsSkipped}, refused for a gap ${s.selectedOnlyRefusedGapped}${this.cfg.stopGroups === true ? `; stop-skipped rows (PR-256) ${this.stopCounts.skipped} (not counted as a saving ${this.stopCounts.uncounted}), re-run alone ${this.stopCounts.reruns}, requests without the stop for a baseline-red test ${this.stopCounts.heldForRed}` : ""}; wall ms warm-up ${s.warmupMs} / prefetch ${s.prefetchMs} / live ${s.liveMs} / windows ${s.windowMs} (coverage ${s.coverageMs}, echo ${s.echoMs}) / bound ${s.boundMs} over ${s.boundChecks} checks; test-app compile cache (R780) hits ${this.testAppCache.hits} / misses ${this.testAppCache.misses}; ${v3DaemonClosesText(this.daemonCloses())}${this.lanesBuilt ? `; ${this.splitStatsText()}` : ""}.`,
       );
       // PR-297: the tail alone-call counts (spec section 4(b)); only with the flag on, so no other output moves.
-      if (this.cfg.refusedCutTail === true)
+      if (this.cfg.refusedCutTail !== false)
         this.notify(
           "al-runner-v3-refused-cut-tail",
           `[lethal] al-runner-v3-refused-cut-tail: tail alone calls: stability ${this.tailAloneCalls.stability}, under a mutant ${this.tailAloneCalls.mutant}; cut entries (PR-250) ${s.refusedCutEntries} (PR-297); tail packs sent ${this.tailPacks.sent}, failed ${this.tailPacks.failed}, rows served from a pack ${this.tailPacks.served} (PR-344)`,

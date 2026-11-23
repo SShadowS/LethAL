@@ -11173,7 +11173,8 @@ describe("PR-21 (L5): re-check of a reused serve baseline", () => {
     expect(why).toBeUndefined();
     expect(rowsOf(r2).size).toBeGreaterThan(0);
     // a lane beyond lane 0 holding a daemon makes the call a misuse, by name
-    r2.b.baselinePhase(false);
+    // PR-347: awaited, since the end of a baseline is async once the refused-cut tail is on (the default)
+    await r2.b.baselinePhase(false);
     const v1 = r2.views[1];
     if (v1 === undefined) throw new Error("no lane 1");
     await v1.activate("M0001");

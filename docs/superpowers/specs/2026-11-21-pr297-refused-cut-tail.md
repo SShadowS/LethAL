@@ -12,6 +12,7 @@ the tests after the cut in their own entry; measure first whether verdicts move,
   `error` through it: 89% of all error test time (R1160).
 
 ## 2. The change: a TAIL entry, off by default
+(PR-347 note, 2026-11-23: on by default since PR-347; only `"refusedCutTail": false` turns it off. Fixture leg: TC.)
 - **The tail of `cu`:** the cut tests whose BASELINE row is a PASS (the green ones; a refused, failing or timed-out test is
   never a covering test). Order: baseline order.
 - **The stability check (H1: state dependence):** once per codeunit per session, at the first mutant request that would

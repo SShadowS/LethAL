@@ -88,7 +88,7 @@ time). Related: [[R1156]], R652, PR-297, PR-250.
 
 ## Predictions
 - **Gates:** no gate turns `refusedCutTail` on, so no gate figure, warning set or code list moves (`itest:alrunner-v3` and
-  the BC legs `selectLegs` names).
+  the BC legs `selectLegs` names). (PR-347 note: leg TC of `itest:alrunner-v3` now does, and the default is on since PR-347.)
 - **DO, a narrowed re-check against PR-302's t1** (after S2's probe; the mutants t1 scored with tail alone calls, flag on,
   same build and config): equal verdict and `killingTest` per mutant; bound checks at least about 6,300 (from 34,619; a
   lower bound, see above); bound time about 1,800 s (from 9,777). Test time may rise (Limit 1); failed packs and late cuts
