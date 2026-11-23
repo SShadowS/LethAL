@@ -7,7 +7,7 @@ import {
 } from "@lethal/schemata";
 import type { CoverageMode } from "./backend";
 import { decodeSource, hashSourceSnapshot } from "./baseline-snapshot";
-import { MARK_REASON_PLACEHOLDER } from "./equivalence-marks";
+import { MARK_REASON_PLACEHOLDER, SURVIVING_VERDICTS } from "./equivalence-marks";
 import { GapGroupingError, type GapRow, type GapTally, tallyGaps } from "./gaps";
 import type { Interpretation } from "./interpretation";
 import { spanCovered } from "./line-filter";
@@ -706,13 +706,14 @@ export interface ExplainNotMeasured {
 
 /**
  * A session-level condition about LethAL's OWN state — the half of the line this projection is
- * fully prescriptive about. Each is keyed 1:1 to a report field: `quarantined` to
+ * fully prescriptive about. There are three. Two are keyed 1:1 to a report field: `quarantined` to
  * `SessionReport.quarantined`'s presence, `stranded-skips` to a non-zero
- * `SessionReport.resumedFrom.skippedStranded`.
+ * `SessionReport.resumedFrom.skippedStranded`. The third, `not-run-tests-not-recorded` (PR-381), keys on the
+ * field `notRunAtBaseline` being ABSENT, together with the backend (al-runner-v3) and a survivor.
  *
- * The TOKENS are the source and the type is derived from them, not the other way round, so the two
+ * The TOKENS are the source and the type is derived from them, not the other way round, so they
  * cannot drift apart. R115 gap (3): `explain.test.ts` builds its allowed-authored-string set from
- * runtime constants rather than from a hand-maintained list, and these two literals are the only
+ * runtime constants rather than from a hand-maintained list, and these literals are the only
  * strings in the output with no registry or report behind them. A hand list would have been one
  * more place a new authored string could be quietly added.
  */
@@ -815,8 +816,8 @@ export interface ExplainOutput {
  * mode, relocated onto an existing pinned path.
  *
  * Fix round 3 corrects this comment's own overclaim: `note` is NOT the only string authored here.
- * Three more are — `structureStableUnder`'s `"explainSchemaVersion"` below, and the two
- * `ToolCondition` literals `"quarantined"` / `"stranded-skips"` in `toolConditionsOf`. They need no
+ * Three more are — `structureStableUnder`'s `"explainSchemaVersion"` below, and the three
+ * `ToolCondition` literals `"quarantined"` / `"stranded-skips"` / `"not-run-tests-not-recorded"` in `toolConditionsOf`. They need no
  * pin of their own because they are single TOKENS that consumers filter on by exact value, so
  * widening one into a sentence breaks the code that reads it rather than smuggling anything: putting
  * advice inside `"quarantined"` (through an `as ToolCondition` cast, since the type refuses it
@@ -1817,7 +1818,7 @@ function toolConditionsOf(report: SessionReport): ExplainToolCondition[] {
     });
   }
   // PR-381: say so on an older al-runner-v3 report; never print silence.
-  const unrecorded = report.mutants.filter((m) => m.verdict === "survived").length;
+  const unrecorded = report.mutants.filter((m) => SURVIVING_VERDICTS.has(m.verdict)).length;
   if (
     report.backend === "al-runner-v3" &&
     report.notRunAtBaseline === undefined &&

@@ -990,7 +990,16 @@ describe("mergeConfirmation: PR-381 (R1197) survivors beside tests v3 did not ru
   };
   const withField = (extra: Partial<SessionReport>) => {
     const p = pair({ v3: rows, bc });
-    return { ...p, v3: { ...p.v3, ...extra } as SessionReport };
+    // A stored whole-run result that the subset must NOT use: the merge recomputes over the survivors
+    // still measured by v3.
+    return {
+      ...p,
+      v3: {
+        ...p.v3,
+        survivorsBesideUnrunTests: { survivors: 99, notRunTests: 9 },
+        ...extra,
+      } as SessionReport,
+    };
   };
 
   test("only survivors still measured by v3 are counted, in the provenance and totals", () => {

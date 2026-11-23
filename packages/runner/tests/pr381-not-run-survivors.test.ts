@@ -15,6 +15,7 @@ import {
 import { buildReport, renderConsole } from "../src/report";
 import type { SessionReport } from "../src/report";
 import type { FoldStatics } from "../src/report-fold";
+import { testPageNotRunMessage } from "../src/testpage-unsupported";
 
 /**
  * PR-381 (R1197): survivors in an al-runner-v3 run with tests v3 did not run at baseline carry a
@@ -247,7 +248,7 @@ describe("PR-381 the report", () => {
       classOf({
         name: "Sales Helper Tests.Page",
         outcome: "skip",
-        failureMessage: "refused before sending: a reachable call may open a TestPage",
+        failureMessage: testPageNotRunMessage("a reachable call may open a TestPage"),
       }),
     ).toEqual([]);
   });
@@ -459,6 +460,14 @@ describe("PR-381 test 9: every surface, and its negative twin", () => {
       (t) => t.condition === "not-run-tests-not-recorded",
     );
     expect(c?.count).toBe(2);
+    // known-survivor rows count, as the console's sentence counts them
+    const kOnly = build(CAPS_V3, [PASS, REFUSED_ROW], [{ id: "M0001", verdict: "known-survivor" }]);
+    const { notRunAtBaseline: _c, survivorsBesideUnrunTests: _d, ...oldK } = kOnly;
+    expect(
+      explain(oldK as SessionReport).toolConditions.find(
+        (t) => t.condition === "not-run-tests-not-recorded",
+      )?.count,
+    ).toBe(1);
     expect(explain(yes).toolConditions.map((t) => t.condition)).not.toContain(
       "not-run-tests-not-recorded",
     );

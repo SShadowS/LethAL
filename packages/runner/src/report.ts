@@ -829,9 +829,9 @@ export const CAVEAT_INTERPRETATIONS: Record<Caveat, Interpretation> = {
   },
   "survivors-beside-unrun-tests": {
     meaning:
-      "This is an al-runner-v3 run, and at baseline v3 did not run at least one test to a verdict: it " +
-      "refused it, it timed out or LethAL stopped it (`notRunAtBaseline` names them). Such a test " +
-      "kills nothing here, and v3 has no coverage for it, so a mutant that only it would kill reads " +
+      "Some tests of this run could not be run to a verdict at baseline: the runner refused them, they " +
+      "timed out or LethAL stopped them (`notRunAtBaseline` names them; today it is filled for " +
+      "al-runner-v3 runs). Such a test kills nothing here, and there is no coverage for it, so a mutant that only it would kill reads " +
       "`survived`. Every `survived` and `known-survivor` row of the run is flagged, and the " +
       "`survivorsBesideUnrunTests` count is an UPPER BOUND on the survivors at risk. " +
       "`sharingACodeunit` counts the survivors that carry the `[v3-refused-test-nearby]` note, a hint " +
