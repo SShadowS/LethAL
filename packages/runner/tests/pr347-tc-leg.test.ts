@@ -252,12 +252,20 @@ describe("PR-347 leg TC: the fixture and the wiring", () => {
   test("TC is a default leg, its baseline is recorded (R849) and the leg refuses to start without it", () => {
     expect(V3_TC_LEG).toBe("TC");
     expect(PENDING_FIRST_RECORD).not.toContain("al-runner-v3.tailcut.baseline.json");
-    // R332/R849: recorded once by the gate, equal per mutant to the pre-committed expected file
+    // R332/R849: recorded once by the gate, equal per mutant to the pre-committed expected file (built from TC_TABLE),
+    // which R849 then requires deleted as stale. So the record is held to TC_TABLE's TC-on column here.
     const recorded = JSON.parse(read("packages/runner/itest/al-runner-v3.tailcut.baseline.json"));
-    const expected = JSON.parse(
-      read("packages/runner/itest/expected/al-runner-v3.tailcut.baseline.json"),
+    const tally = (rows: readonly { verdict: string; killingTest: string | null }[]) =>
+      rows.map((r) => `${r.verdict}/${r.killingTest ?? "-"}`).sort();
+    expect(recorded.entries).toHaveLength(TC_TABLE.length);
+    expect(tally(recorded.entries)).toEqual(
+      tally(
+        TC_TABLE.map((s) => ({
+          verdict: s.expect["TC-on"].verdict,
+          killingTest: s.expect["TC-on"].killingTest ?? null,
+        })),
+      ),
     );
-    expect(recorded.entries).toEqual(expected.entries);
     expect(read("packages/runner/itest/al-runner-v3.itest.ts")).toContain(
       'preflightGateBaseline(TAILCUT_BASELINE_PATH, "al-runner-v3 itest leg TC")',
     );
