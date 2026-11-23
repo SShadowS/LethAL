@@ -5710,6 +5710,754 @@ table 51001 "Y2C Order Row"
   ],
 };
 
+/**
+ * PR-373: #8094's family, the largest open coherent one after families 1-22 under R1036's count over c3 and c3off
+ * (main-bf3a3e863; 20 standing sightings of "Format of a value (standard format N) while CurrReport.FormatRegion is <x> is not
+ * pinned"). A document report sets `CurrReport.Language` and `CurrReport.FormatRegion`, then formats a value. Here an invented
+ * report (51000) does that in its data item's OnAfterGetRecord and hands the text to a SingleInstance holder (codeunit 51000).
+ * The cell runs the report with `SaveAs` (Xml, the dataset only: no layout) and reports the text with `Error('V:[...]')`, so
+ * every cell is expected to FAIL with its answer. Cell i is codeunit BASE_ID + 1 + i; the support objects all have id 51000.
+ */
+const FR_REGIONS: readonly (readonly [string, number])[] = [
+  ["en-GB", 2057],
+  ["de-DE", 1031],
+  ["fr-FR", 1036],
+  ["da-DK", 1030],
+  ["en-US", 1033],
+];
+const FR_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/** The report's `Kind` values (its `Compute` case) with the cell's method name. */
+const FR_KINDS: readonly (readonly [number, string])[] = [
+  [0, "Date std0"],
+  [10, "Decimal neg"],
+  [11, "Decimal big"],
+  [20, "Enum caption"],
+  [30, "DateTime"],
+  [31, "Time"],
+  [40, "Date picture"],
+];
+const frCell = (
+  state: string,
+  lang: number,
+  region: string,
+  kind: number,
+  method: string,
+  month = 1,
+): Cell => ({
+  type: "Region",
+  method,
+  state,
+  vars: [
+    'Rep: Report "FR Report";',
+    'Buf: Record "FR Buf";',
+    "OS: OutStream;",
+    'Holder: Codeunit "FR Holder";',
+  ],
+  setup: [
+    "Buf.Data.CreateOutStream(OS);",
+    `Rep.SetCase(${lang}, '${region}', ${region === "" ? "false" : "true"}, ${kind}, DMY2Date(17, ${month}, 2026));`,
+    "Rep.SaveAs('', ReportFormat::Xml, OS);",
+  ],
+  // ponytail: the SingleInstance holder is not cleared before the report runs, so a report that never fires OnAfterGetRecord
+  // would report the previous cell's text. Not seen on bc4 or main-bf3a3e863 (every answer matches its own month and kind).
+  // Add `Holder.Put('');` first when the cells are next re-measured on both sides (it changes the BC-check app).
+  call: "Error('V:[%1]', Holder.Get());",
+  // without the report language, month names and captions follow the session's language
+  ...(lang === 0 ? { depends: "locale" as const } : {}),
+});
+const frSet = (state: string, lang: number, region: string): Cell[] => [
+  ...FR_MONTHS.map((m, i) => frCell(state, lang, region, 4, `Date f4 ${m}`, i + 1)),
+  ...FR_KINDS.map(([k, m]) => frCell(state, lang, region, k, m)),
+];
+export const FORMAT_REGION: Family = {
+  name: "format-region",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
+  // the two texts #8094 itself quotes; a class is matched whole, so every other region's text stays NEW
+  known: [
+    "Format of a value (standard format 4) while CurrReport.FormatRegion is 'en-GB' is not pinned (docs/probes-needed.md)",
+    "Format of a value (standard format 0) while CurrReport.FormatRegion is 'de-DE' is not pinned (docs/probes-needed.md)",
+  ],
+  testPermissions: "Disabled",
+  support: `enum 51000 "FR Kind"
+{
+    value(0; First) { Caption = 'First Value'; }
+    value(1; Second) { Caption = 'Second Value'; }
+}
+
+table 51000 "FR Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "FR Holder"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+
+    procedure Put(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure Get(): Text
+    begin
+        exit(Value);
+    end;
+}
+
+report 51000 "FR Report"
+{
+    UsageCategory = None;
+
+    dataset
+    {
+        dataitem(Row; Integer)
+        {
+            DataItemTableView = where(Number = const(1));
+
+            column(Answer; Answer) { }
+
+            trigger OnAfterGetRecord()
+            var
+                Holder: Codeunit "FR Holder";
+            begin
+                if Lang <> 0 then
+                    CurrReport.Language := Lang;
+                if SetRegion then
+                    CurrReport.FormatRegion := Region;
+                Answer := Compute();
+                Holder.Put(Answer);
+            end;
+        }
+    }
+
+    var
+        Lang: Integer;
+        Region: Text[80];
+        SetRegion: Boolean;
+        Kind: Integer;
+        D: Date;
+        Answer: Text;
+
+    procedure SetCase(NewLang: Integer; NewRegion: Text[80]; NewSetRegion: Boolean; NewKind: Integer; NewDate: Date)
+    begin
+        Lang := NewLang;
+        Region := NewRegion;
+        SetRegion := NewSetRegion;
+        Kind := NewKind;
+        D := NewDate;
+    end;
+
+    local procedure Compute(): Text
+    var
+        E: Enum "FR Kind";
+    begin
+        case Kind of
+            0:
+                exit(Format(D));
+            4:
+                exit(Format(D, 0, 4));
+            10:
+                exit(Format(-1234.5));
+            11:
+                exit(Format(1234567.891));
+            20:
+                begin
+                    E := E::Second;
+                    exit(Format(E));
+                end;
+            30:
+                exit(Format(CreateDateTime(D, 133015T)));
+            31:
+                exit(Format(133015T));
+            40:
+                exit(Format(D, 0, '<Day,2>. <Month Text> <Year4>'));
+        end;
+        Error('FR Report: no kind %1', Kind);
+    end;
+}
+`,
+  handles: {},
+  cells: [
+    ...FR_REGIONS.flatMap(([r, lang]) => [
+      ...frSet(`${r} lang`, lang, r),
+      ...frSet(`${r} only`, 0, r),
+    ]),
+    // control: no language and no region set, so the session's own formats
+    ...frSet("none", 0, ""),
+  ],
+};
+
+/**
+ * PR-374: #8219's family, the largest open coherent one after families 1-23 under R1036's count over c3 and c3off
+ * (main-bf3a3e863): "conversion of Boolean false to BigInteger" (6) and "conversion of Code <x> to BigInteger" (2), met where
+ * RecordRef code hands a FieldRef a value of another type. Each cell opens table 51000 through a RecordRef, takes one field,
+ * gives it one typed value through one FieldRef method, and reports what the field then holds: the filter after SetRange or
+ * SetFilter, the formatted value after `Value :=` or Validate. No row is written. Cell i is codeunit BASE_ID + 1 + i.
+ */
+const FC_FIELDS: readonly (readonly [string, number])[] = [
+  ["BigInteger", 2],
+  ["Integer", 3],
+  ["Decimal", 4],
+  ["Code", 5],
+  ["Text", 6],
+  ["Date", 7],
+  ["Boolean", 8],
+  ["Option", 9],
+  ["Guid", 10],
+];
+/** The value's name, its AL declaration and the statement that sets it. */
+const FC_VALUES: readonly (readonly [string, string, string])[] = [
+  ["Boolean false", "Boolean", "V := false;"],
+  ["Code ABC", "Code[20]", "V := 'ABC';"],
+  ["Code 123", "Code[20]", "V := '123';"],
+  ["Text XY", "Text[30]", "V := 'XY';"],
+  ["Integer 5", "Integer", "V := 5;"],
+  ["BigInteger 5", "BigInteger", "V := 5L;"],
+  ["Decimal 1.5", "Decimal", "V := 1.5;"],
+  ["Date", "Date", "V := DMY2Date(17, 1, 2026);"],
+];
+/** The method, the statement under test and the read-back that becomes the answer. */
+const FC_METHODS: readonly (readonly [string, string, string])[] = [
+  ["SetRange", "FR.SetRange(V);", "FR.GetFilter()"],
+  ["SetFilter", "FR.SetFilter('%1', V);", "FR.GetFilter()"],
+  ["Value", "FR.Value := V;", "Format(FR.Value, 0, 9)"],
+  ["Validate", "FR.Validate(V);", "Format(FR.Value, 0, 9)"],
+];
+export const FIELDREF_CONVERT: Family = {
+  name: "fieldref-convert",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8219",
+  known: ["conversion of Boolean false to BigInteger"],
+  testPermissions: "Disabled",
+  support: `table 51000 "FC Row"
+{
+    fields
+    {
+        field(1; "Key"; Integer) { }
+        field(2; BigInt; BigInteger) { }
+        field(3; Int; Integer) { }
+        field(4; Dec; Decimal) { }
+        field(5; Cod; Code[20]) { }
+        field(6; Txt; Text[50]) { }
+        field(7; Dat; Date) { }
+        field(8; Bool; Boolean) { }
+        field(9; Opt; Option) { OptionMembers = A,B,C; }
+        field(10; Gid; Guid) { }
+    }
+    keys { key(PK; "Key") { Clustered = true; } }
+}
+`,
+  handles: {},
+  cells: FC_FIELDS.flatMap(([field, no]) =>
+    FC_VALUES.flatMap(([value, decl, set]) =>
+      FC_METHODS.map(([method, call, read]) => ({
+        type: `FC ${field}`,
+        method,
+        state: value,
+        vars: ["RecRef: RecordRef;", "FR: FieldRef;", `V: ${decl};`],
+        setup: ["RecRef.Open(51000);", `FR := RecRef.Field(${no});`, set],
+        call: `${call} Error('V:[%1]', ${read});`,
+      })),
+    ),
+  ),
+};
+
+/**
+ * PR-374: the refusal PR-373 found (19 cells): "CurrReport.FormatRegion := '<x>' in a report not started by Run (its formats and
+ * dataset in that region are not built)", and its sibling "after CurrReport.Language := N in a report not started by Run".
+ * al-runner pins a few (language, region) pairs in a report run by SaveAs and refuses the rest. Here each cell is one pair: an
+ * invented report sets `CurrReport.Language`, then `CurrReport.FormatRegion`, in OnAfterGetRecord, and formats a long date, an
+ * amount, a short date and a time in one text. The holder is cleared before each run (PR-373's review), so a run that never
+ * fires the trigger answers `[]`, never the previous cell's text. Cell i is codeunit BASE_ID + 1 + i; support objects at 51000.
+ */
+const LR_LANGUAGES = [1030, 1031, 1033, 1034, 1036, 1040, 1043, 1044, 1053, 2057, 3084];
+const LR_REGIONS = [
+  "da-DK",
+  "de-DE",
+  "en-US",
+  "es-ES",
+  "fr-FR",
+  "it-IT",
+  "nl-NL",
+  "nb-NO",
+  "sv-SE",
+  "en-GB",
+  "fr-CA",
+  "de-CH",
+];
+const lrCell = (lang: number, region: string): Cell => ({
+  type: "Pair",
+  method: region,
+  state: lang === 0 ? "no language" : `lang ${lang}`,
+  vars: [
+    'Rep: Report "LR Report";',
+    'Buf: Record "LR Buf";',
+    "OS: OutStream;",
+    'Holder: Codeunit "LR Holder";',
+  ],
+  setup: [
+    "Holder.Put('');",
+    "Buf.Data.CreateOutStream(OS);",
+    `Rep.SetCase(${lang}, '${region}');`,
+    "Rep.SaveAs('', ReportFormat::Xml, OS);",
+  ],
+  call: "Error('V:[%1]', Holder.Get());",
+  // without the report language, month names follow the session's language
+  ...(lang === 0 ? { depends: "locale" as const } : {}),
+});
+export const LANGUAGE_REGION: Family = {
+  name: "language-region",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/8094",
+  known: [],
+  testPermissions: "Disabled",
+  support: `table 51000 "LR Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; Data; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "LR Holder"
+{
+    SingleInstance = true;
+
+    var
+        Value: Text;
+
+    procedure Put(V: Text)
+    begin
+        Value := V;
+    end;
+
+    procedure Get(): Text
+    begin
+        exit(Value);
+    end;
+}
+
+report 51000 "LR Report"
+{
+    UsageCategory = None;
+
+    dataset
+    {
+        dataitem(Row; Integer)
+        {
+            DataItemTableView = where(Number = const(1));
+
+            column(Answer; Answer) { }
+
+            trigger OnAfterGetRecord()
+            var
+                Holder: Codeunit "LR Holder";
+                D: Date;
+            begin
+                if Lang <> 0 then
+                    CurrReport.Language := Lang;
+                CurrReport.FormatRegion := Region;
+                D := DMY2Date(17, 1, 2026);
+                Answer := Format(D, 0, 4) + '|' + Format(1234567.891) + '|' + Format(D) + '|' + Format(133015T);
+                Holder.Put(Answer);
+            end;
+        }
+    }
+
+    var
+        Lang: Integer;
+        Region: Text[80];
+        Answer: Text;
+
+    procedure SetCase(NewLang: Integer; NewRegion: Text[80])
+    begin
+        Lang := NewLang;
+        Region := NewRegion;
+    end;
+}
+`,
+  handles: {},
+  cells: [
+    ...LR_LANGUAGES.flatMap((lang) => LR_REGIONS.map((r) => lrCell(lang, r))),
+    // the region alone (the shape that ran in PR-373's fr-FR cells)
+    ...LR_REGIONS.map((r) => lrCell(0, r)),
+  ],
+};
+
+/**
+ * PR-375: the largest open coherent cause after families 1-25 under R1036's count over c3 and c3off (main-bf3a3e863): "DotNet
+ * System.IO.Compression.ZipArchive.Dispose: a .NET write over the bytes an AL OutStream held before the call (what the Blob then
+ * holds is not pinned)" (6 sightings, all at baseline). It is met where an app keeps a zip in a Blob and adds a file to it through
+ * the System Application's "Data Compression" codeunit: it opens the archive from the Blob's InStream, clears the Blob, and saves
+ * the archive back into the same Blob through an OutStream. Each cell runs one such sequence on an invented table's Blob fields
+ * (A = 2, B = 3, C = 4; the record is never inserted) and reports what the target Blob then holds, through codeunit 51000's
+ * Describe: `empty`, `notzip:<text>`, or `zip|<entry>:<length>:<first 12 characters>|...`. Compressed bytes are never compared.
+ * Cell i is codeunit BASE_ID + 1 + i; the support objects are at 51000.
+ */
+const ZC_PAYLOADS: readonly (readonly [string, string])[] = [
+  ["hello", "'hello'"],
+  ["empty", "''"],
+  ["long", "PadStr('', 2000, 'x')"],
+];
+/** The scenario's name, its statements (`<payload>` is the entry text) and the field its result is read from. */
+const ZC_SCENARIOS: readonly (readonly [string, readonly string[], number])[] = [
+  [
+    "new to other blob",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "new to source via copy",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "Copy.A := R.A;",
+      "Copy.A.CreateInStream(IS);",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "new to source same blob",
+    [
+      "P.PutText(R, 2, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.CreateZipArchive();",
+      "DC.AddEntry(IS, 'a.txt');",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "update to other blob",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "update to source cleared",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "update to source not cleared",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "read only then add",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, false);",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  [
+    "remove and add to source",
+    [
+      "P.MakeZip(R, 2, 'a.txt', 'first');",
+      "P.PutText(R, 4, <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "DC.RemoveEntry('a.txt');",
+      "R.C.CreateInStream(IS2);",
+      "DC.AddEntry(IS2, 'c.txt');",
+      "Clear(R.A);",
+      "R.A.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    2,
+  ],
+  [
+    "extract entry",
+    [
+      "P.MakeZip(R, 2, 'a.txt', <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, false);",
+      "R.B.CreateOutStream(OS);",
+      "Len := DC.ExtractEntry('a.txt', OS);",
+      "DC.CloseZipArchive();",
+    ],
+    3,
+  ],
+  [
+    "close then save",
+    [
+      "P.MakeZip(R, 2, 'a.txt', <payload>);",
+      "R.A.CreateInStream(IS);",
+      "DC.OpenZipArchive(IS, true);",
+      "DC.CloseZipArchive();",
+      "R.B.CreateOutStream(OS);",
+      "DC.SaveZipArchive(OS);",
+    ],
+    3,
+  ],
+  // IsZip itself (target 0: the answer is Format(DC.IsZip(IS)) of the InStream the statements leave)
+  ["IsZip of a zip", ["P.MakeZip(R, 2, 'a.txt', <payload>);", "R.A.CreateInStream(IS);"], 0],
+  ["IsZip of the text", ["P.PutText(R, 2, <payload>);", "R.A.CreateInStream(IS);"], 0],
+];
+export const ZIP_BLOB: Family = {
+  name: "zip-blob",
+  issue: "https://github.com/aldevtools/BusinessCentral.AL.Runner/issues/7924",
+  known: [],
+  testPermissions: "Disabled",
+  // Data Compression wraps .NET's ZipArchive: al-runner needs its .NET helper (and the exact BC build, which every family now
+  // runs on: REFUSAL_FAMILY_BC_VERSION, PR-377), as LethAL's own serve runs pass them.
+  // ponytail: box paths (the pinned build's sidecar, the cached service tier); take them from the run's config when a second box needs this.
+  args: [
+    "--dotnet-sidecar",
+    "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
+    "--dotnet-assembly-dir",
+    "/coord/cache/bc28-service-windows",
+  ],
+  dependencies: [
+    {
+      id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+      name: "System Application",
+      publisher: "Microsoft",
+      version: "28.0.0.0",
+    },
+  ],
+  support: `table 51000 "ZC Buf"
+{
+    fields
+    {
+        field(1; Id; Integer) { }
+        field(2; A; Blob) { }
+        field(3; B; Blob) { }
+        field(4; C; Blob) { }
+    }
+    keys { key(PK; Id) { Clustered = true; } }
+}
+
+codeunit 51000 "ZC Probe"
+{
+    procedure PutText(var R: Record "ZC Buf"; Which: Integer; T: Text)
+    var
+        OS: OutStream;
+    begin
+        ClearField(R, Which);
+        OpenOut(R, Which, OS);
+        OS.WriteText(T);
+    end;
+
+    // a zip with one entry, built from its own record so the target Blob holds nothing else
+    procedure MakeZip(var R: Record "ZC Buf"; Which: Integer; EntryName: Text; Content: Text)
+    var
+        Src: Record "ZC Buf";
+        DC: Codeunit "Data Compression";
+        IS: InStream;
+        OS: OutStream;
+    begin
+        PutText(Src, 4, Content);
+        Src.C.CreateInStream(IS);
+        DC.CreateZipArchive();
+        DC.AddEntry(IS, EntryName);
+        ClearField(R, Which);
+        OpenOut(R, Which, OS);
+        DC.SaveZipArchive(OS);
+        DC.CloseZipArchive();
+    end;
+
+    procedure Describe(var R: Record "ZC Buf"; Which: Integer): Text
+    var
+        Tmp: Record "ZC Buf";
+        DC: Codeunit "Data Compression";
+        IS: InStream;
+        EntryIS: InStream;
+        OS: OutStream;
+        Names: List of [Text];
+        EntryName: Text;
+        T: Text;
+        Res: Text;
+        B1: Byte;
+        B2: Byte;
+    begin
+        if not HasData(R, Which) then
+            exit('empty');
+        // a zip starts with 'PK' (80, 75); read as bytes, so the probe does not lean on IsZip (it has cells of its own)
+        OpenIn(R, Which, IS);
+        IS.Read(B1);
+        IS.Read(B2);
+        if not ((B1 = 80) and (B2 = 75)) then begin
+            OpenIn(R, Which, IS);
+            exit('notzip:' + ReadAll(IS));
+        end;
+        OpenIn(R, Which, IS);
+        DC.OpenZipArchive(IS, false);
+        DC.GetEntryList(Names);
+        Res := 'zip';
+        foreach EntryName in Names do begin
+            Clear(Tmp.B);
+            Tmp.B.CreateOutStream(OS);
+            DC.ExtractEntry(EntryName, OS);
+            Tmp.B.CreateInStream(EntryIS);
+            T := ReadAll(EntryIS);
+            Res += '|' + EntryName + ':' + Format(StrLen(T)) + ':' + CopyStr(T, 1, 12);
+        end;
+        DC.CloseZipArchive();
+        exit(Res);
+    end;
+
+    local procedure ReadAll(var IS: InStream): Text
+    var
+        Line: Text;
+        Res: Text;
+    begin
+        while not IS.EOS() do begin
+            IS.ReadText(Line);
+            Res += Line;
+        end;
+        exit(Res);
+    end;
+
+    local procedure HasData(var R: Record "ZC Buf"; Which: Integer): Boolean
+    begin
+        case Which of
+            2:
+                exit(R.A.HasValue());
+            3:
+                exit(R.B.HasValue());
+            4:
+                exit(R.C.HasValue());
+        end;
+        Error('ZC Probe: no field %1', Which);
+    end;
+
+    local procedure ClearField(var R: Record "ZC Buf"; Which: Integer)
+    begin
+        case Which of
+            2:
+                Clear(R.A);
+            3:
+                Clear(R.B);
+            4:
+                Clear(R.C);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+
+    local procedure OpenIn(var R: Record "ZC Buf"; Which: Integer; var IS: InStream)
+    begin
+        case Which of
+            2:
+                R.A.CreateInStream(IS);
+            3:
+                R.B.CreateInStream(IS);
+            4:
+                R.C.CreateInStream(IS);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+
+    local procedure OpenOut(var R: Record "ZC Buf"; Which: Integer; var OS: OutStream)
+    begin
+        case Which of
+            2:
+                R.A.CreateOutStream(OS);
+            3:
+                R.B.CreateOutStream(OS);
+            4:
+                R.C.CreateOutStream(OS);
+            else
+                Error('ZC Probe: no field %1', Which);
+        end;
+    end;
+}
+`,
+  handles: {},
+  cells: ZC_SCENARIOS.flatMap(([scenario, statements, target]) =>
+    ZC_PAYLOADS.map(([payload, expr]) => ({
+      type: "Zip",
+      method: scenario,
+      state: payload,
+      vars: [
+        'R: Record "ZC Buf";',
+        'Copy: Record "ZC Buf";',
+        'DC: Codeunit "Data Compression";',
+        'P: Codeunit "ZC Probe";',
+        "IS: InStream;",
+        "IS2: InStream;",
+        "OS: OutStream;",
+        "Len: Integer;",
+      ],
+      setup: statements.map((s) => s.replace("<payload>", expr)),
+      call:
+        target === 0
+          ? "Error('V:[%1]', Format(DC.IsZip(IS)));"
+          : `Error('V:[%1]', P.Describe(R, ${target}));`,
+    })),
+  ),
+};
+
 export const FAMILIES: Readonly<Record<string, Family>> = {
   [UNTOUCHED_HANDLE.name]: UNTOUCHED_HANDLE,
   [DOTNET_NO_OBJECT.name]: DOTNET_NO_OBJECT,
@@ -5750,10 +6498,36 @@ export const FAMILIES: Readonly<Record<string, Family>> = {
   [Y2_XML.name]: Y2_XML,
   // PR-195: appended (BC-check number 23): the collation refusal DO's y2 window closed on, for a keep census
   [Y2_COLLATION.name]: Y2_COLLATION,
+  // PR-373: appended (BC-check number 24): #8094, Format under CurrReport.FormatRegion, for a per-cell BC differential
+  [FORMAT_REGION.name]: FORMAT_REGION,
+  // PR-374: appended (BC-check number 25): #8219, a FieldRef given a value of another type, for a per-cell BC differential
+  [FIELDREF_CONVERT.name]: FIELDREF_CONVERT,
+  // PR-374: appended (BC-check number 26): (language, region) pairs in a report not started by Run, for a per-cell BC differential
+  [LANGUAGE_REGION.name]: LANGUAGE_REGION,
+  // PR-375: appended (BC-check number 27): a zip kept in a Blob, through the System Application's Data Compression
+  [ZIP_BLOB.name]: ZIP_BLOB,
 };
 
 /** The first codeunit id; cell i is `BASE + 1 + i`. */
 export const BASE_ID = 51000;
+
+/**
+ * PR-377: the one BC build every family runs on, four numbers: the build LethAL's DO configs and serve runs name (R1194). A bare
+ * major version (`28`) resolves to a build whose service-tier runtime al-runner then fetches from the artifact feed (PR-375).
+ */
+export const REFUSAL_FAMILY_BC_VERSION = "28.4.53241.56646";
+
+/** PR-377: al-runner's arguments for one family's run of the app in `dir`. */
+export function runArgs(f: Family, dir: string): string[] {
+  return [
+    "test",
+    "--bc-version",
+    REFUSAL_FAMILY_BC_VERSION,
+    ...(f.args ?? []),
+    "--output-json",
+    dir,
+  ];
+}
 
 /** A cell's test codeunit name (AL caps object names at 30). */
 export function cellName(c: Cell, i: number): string {
@@ -6215,15 +6989,12 @@ if (import.meta.main) {
     mkdirSync(join(dir, file, ".."), { recursive: true });
     writeFileSync(join(dir, file), text);
   }
-  const p = Bun.spawnSync(
-    [bin, "test", "--bc-version", "28", ...(f.args ?? []), "--output-json", dir],
-    {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env, ALRUNNER_SEED: "1" },
-      timeout: 600_000,
-    },
-  );
+  const p = Bun.spawnSync([bin, ...runArgs(f, dir)], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, ALRUNNER_SEED: "1" },
+    timeout: 600_000,
+  });
   let j: {
     tests?: { name: string; status: string; message?: string; notRun?: boolean }[];
     compilationErrors?: unknown[];

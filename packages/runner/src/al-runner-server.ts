@@ -1244,6 +1244,23 @@ const PR56_KEPT: ReadonlyArray<readonly [string, string]> = [
     "saveas-layout-sales-invoice",
     'an error in a SaveAs of report "Standard Sales - Invoice", which has a layout of this kind or an extension (whether SaveAs raises it or answers false is not pinned): Tests cannot call the Commit function if TransactionModel property is set to AutoRollback.',
   ],
+  // PR-365 (spec 2026-11-23-pr365-relationfieldno-keep.md, R1187): upstream 1bea5bc7a's refusal of Field.RelationFieldNo for a
+  // TableRelation without a field of an unmeasured shape, refused at BASELINE in 7 DO test runs. Unkept, PR-250 cut each
+  // codeunit's entry before it, leaving 1,504 of c3's mutants `error`. One exact row per measured (field, table) pair, BaseApp
+  // names; no slot, so a fourth pair or a reworded text still closes. Landed on the orchestrator's ruling of 2026-11-23 after the
+  // kept-vs-fresh DO check: A and B equal; C's 10 differences each `error` from 1bea5bc7a's out-of-scope withholding.
+  [
+    "relation-field-no-dimension-set-entry-dimension-code",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Code' of table 'Dimension Set Entry', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
+  [
+    "relation-field-no-sales-invoice-header-ship-to-post-code",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Ship-to Post Code' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
+  [
+    "relation-field-no-sales-invoice-header-dimension-set-id",
+    "the value of field 'RelationFieldNo' of platform table 'Field' is not known for field 'Dimension Set ID' of table 'Sales Invoice Header', a TableRelation without a field of a shape not measured: no corpus test pins it (docs/probes-needed.md)",
+  ],
 ];
 export const V3_SERVE_SAFE_REFUSALS: Readonly<Record<string, RegExp>> = {
   ...Object.fromEntries(PR56_KEPT.map(([name, text]) => [name, pr56Entry(text)])),

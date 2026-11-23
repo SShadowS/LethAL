@@ -13,6 +13,7 @@
  */
 import type { MutantManifestEntry } from "@lethal/schemata";
 import type { TestOutcome } from "./backend";
+import { monoNow } from "./clock";
 import type { RunEvent, RunEventInput } from "./events";
 import { type IsolatedRecheck, withheldKillOf } from "./report";
 
@@ -58,6 +59,15 @@ export interface NestedRecheckResult {
   readonly baseline: readonly { readonly name: string; readonly outcome: TestOutcome }[];
   readonly baselineElapsedMs: number;
   readonly identity: RecheckIdentity;
+  /** PR-370 (R1189): the nested session's `phase-left` events in order, for the `recheck` phase's detail. */
+  readonly phases?: readonly { readonly phase: string; readonly elapsedMs: number }[];
+}
+
+/** PR-370: the nested session's split, for `phase-left` `recheck`'s detail: "nested: generate 12.0 s, ...". */
+export function nestedSplit(
+  phases: readonly { readonly phase: string; readonly elapsedMs: number }[],
+): string {
+  return `nested: ${phases.map((p) => `${p.phase} ${(p.elapsedMs / 1000).toFixed(1)} s`).join(", ")}`;
 }
 
 export interface RecheckRequest {
@@ -402,12 +412,35 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   if (testSet.size === 0)
     return skip("no withheld kill has a covering test that did not pass under its mutant");
   const tests = [...testSet].sort();
+  // PR-370 (R1189): the recheck is a phase of its own, entered here (every skip above emits none) and left exactly once
+  // on every path below, so "teardown left" is never read as the end of the run.
+  const startedMs = monoNow();
+  d.emit({
+    type: "phase-entered",
+    phase: "recheck",
+    detail: `${targets.length} withheld kill(s), ${tests.length} test(s): a nested session (its own daemons, baseline and mutant phase)`,
+  });
+  // Once only: a throw inside an emit after `left()` reaches the catch, which calls it again.
+  let hasLeft = false;
+  const left = (phases?: NestedRecheckResult["phases"]) => {
+    if (hasLeft) return;
+    hasLeft = true;
+    d.emit({
+      type: "phase-left",
+      phase: "recheck",
+      elapsedMs: monoNow() - startedMs,
+      ...(phases !== undefined && phases.length > 0 ? { detail: nestedSplit(phases) } : {}),
+    });
+  };
   let result: NestedRecheckResult;
   try {
     // The main session's daemons would otherwise stay alive beside the nested session's.
     await d.backend.closeDaemons?.();
     // PR-277: a signal during that close: no nested backend is built.
-    if (fired(d.stopSignal) || fired(d.abort)) return skipStopped("a SIGTERM or SIGINT (R955)");
+    if (fired(d.stopSignal) || fired(d.abort)) {
+      left();
+      return skipStopped("a SIGTERM or SIGINT (R955)");
+    }
     const abort = d.abort;
     const run = d.runner({
       targets,
@@ -429,6 +462,7 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
             }),
           ]);
   } catch (err) {
+    left();
     const why = err instanceof Error ? err.message : String(err);
     d.emit({
       type: "warning",
@@ -439,6 +473,7 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
   }
   // PR-277: a nested run a signal stopped part-way did not finish normally: nothing in it recovers a row.
   if (fired(d.stopSignal)) {
+    left(result.phases);
     const why = "a SIGTERM or SIGINT stopped it";
     d.emit({
       type: "warning",
@@ -524,5 +559,6 @@ export async function runWithheldRecheck(d: RecheckDeps): Promise<RecheckSummary
       },
     });
   }
+  left(result.phases);
   return { targets: targets.length, recovered };
 }

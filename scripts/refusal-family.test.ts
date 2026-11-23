@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   BASE_ID,
   BC_UNAVAILABLE_TABLES,
@@ -8,16 +10,20 @@ import {
   DOTNET_EXCEPTION_RSA,
   DOTNET_NO_OBJECT,
   FAMILIES,
+  FIELDREF_CONVERT,
   FORMAT_EVALUATE,
+  FORMAT_REGION,
   type Family,
   GET_URL,
   JSON_TEXT,
+  LANGUAGE_REGION,
   NO_CLIENT,
   PERMISSION_DENIAL,
   PLATFORM_TABLE_READ,
   PUBAPP_FLOWFIELD,
   READ_TEST,
   RECORD_FILTERS,
+  REFUSAL_FAMILY_BC_VERSION,
   SET_TEST,
   T9_REFUSALS,
   T10_REFUSALS,
@@ -29,6 +35,7 @@ import {
   Y1_REFUSALS,
   Y2_COLLATION,
   Y2_XML,
+  ZIP_BLOB,
   bcCheckApp,
   bcCheckFamily,
   cellName,
@@ -43,6 +50,7 @@ import {
   parseBcTsv,
   refusalClasses,
   refusalText,
+  runArgs,
 } from "./refusal-family";
 
 // PR-01: the generator's pure parts. No al-runner runs here.
@@ -1440,10 +1448,355 @@ describe("PR-195: the y2-collation family", () => {
     expect(ctl?.call).toContain("if Result <> 'ABC 12' then Error(");
   });
 
-  test("last of FAMILIES (place 22, BC-check number 23, as 7 is skipped): its BC-check id", () => {
-    expect(Object.keys(FAMILIES).at(-1)).toBe("y2-collation");
+  test("place 22 of FAMILIES (BC-check number 23, as 7 is skipped): its BC-check id", () => {
     expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(21);
     expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051023");
+  });
+});
+
+describe("PR-373: the format-region family", () => {
+  const f = FORMAT_REGION;
+
+  test("209 cells: 5 regions x (with language, region only) x 19 values, plus 19 with no region; distinct names", () => {
+    expect(f.cells).toHaveLength(209);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+    const states = [...new Set(f.cells.map((c) => c.state))];
+    expect(states).toEqual([
+      "en-GB lang",
+      "en-GB only",
+      "de-DE lang",
+      "de-DE only",
+      "fr-FR lang",
+      "fr-FR only",
+      "da-DK lang",
+      "da-DK only",
+      "en-US lang",
+      "en-US only",
+      "none",
+    ]);
+    for (const s of states) expect(f.cells.filter((c) => c.state === s)).toHaveLength(19);
+  });
+
+  test("support: enum, table, holder codeunit and report all at 51000; app.json's range covers every cell", () => {
+    for (const k of ["enum", "table", "codeunit", "report"])
+      expect([...f.support.matchAll(new RegExp(`^${k} (\\d+) `, "gm"))].map((m) => m[1])).toEqual([
+        "51000",
+      ]);
+    const range = JSON.parse(emitApp(f)["app.json"] ?? "{}").idRanges[0];
+    expect(range).toEqual({ from: 51000, to: 51000 + 1 + 209 });
+    expect(f.support).toContain("SingleInstance = true;");
+  });
+
+  test("the report sets the language only when one is given, the region only when asked, then formats and hands the text on", () => {
+    const trig = /trigger OnAfterGetRecord\(\)[\s\S]*?\n {12}end;/.exec(f.support)?.[0] ?? "";
+    expect(trig).toContain("if Lang <> 0 then\n                    CurrReport.Language := Lang;");
+    expect(trig).toContain(
+      "if SetRegion then\n                    CurrReport.FormatRegion := Region;",
+    );
+    expect(trig.indexOf("CurrReport.FormatRegion")).toBeLessThan(
+      trig.indexOf("Answer := Compute();"),
+    );
+    expect(trig).toContain("Holder.Put(Answer);");
+    // an unknown kind must fail loudly, never answer an empty text
+    expect(f.support).toContain("Error('FR Report: no kind %1', Kind);");
+  });
+
+  test("every cell runs the report through SaveAs as Xml, then reports the held text with Error('V:[...]')", () => {
+    for (const c of f.cells) {
+      expect(c.setup?.[1]).toMatch(
+        /^Rep\.SetCase\(\d+, '[a-zA-Z-]*', (true|false), \d+, DMY2Date\(17, \d+, 2026\)\);$/,
+      );
+      expect(c.setup?.[2]).toBe("Rep.SaveAs('', ReportFormat::Xml, OS);");
+      expect(c.call).toBe("Error('V:[%1]', Holder.Get());");
+    }
+  });
+
+  test("the region is set exactly when one is named; the language exactly in the 'lang' cells, and only those are not locale", () => {
+    for (const c of f.cells) {
+      const m = /^Rep\.SetCase\((\d+), '([a-zA-Z-]*)', (true|false),/.exec(c.setup?.[1] ?? "");
+      expect(m).not.toBeNull();
+      const [, lang, region] = m ?? [];
+      expect(region === "").toBe(c.state === "none");
+      expect(lang !== "0").toBe(c.state.endsWith(" lang"));
+      expect(c.depends === "locale").toBe(!c.state.endsWith(" lang"));
+    }
+    const langOf = (s: string) =>
+      /^Rep\.SetCase\((\d+),/.exec(f.cells.find((c) => c.state === s)?.setup?.[1] ?? "")?.[1];
+    expect(["en-GB", "de-DE", "fr-FR", "da-DK", "en-US"].map((r) => langOf(`${r} lang`))).toEqual([
+      "2057",
+      "1031",
+      "1036",
+      "1030",
+      "1033",
+    ]);
+  });
+
+  test("the long date (format 4) runs in all 12 months; every Compute kind a cell names is a case of the report", () => {
+    const months = f.cells
+      .filter((c) => c.state === "en-GB lang" && c.method.startsWith("Date f4 "))
+      .map((c) => /DMY2Date\(17, (\d+), 2026\)/.exec(c.setup?.[1] ?? "")?.[1]);
+    expect(months).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]);
+    const kinds = new Set(f.cells.map((c) => /, (\d+), DMY2Date/.exec(c.setup?.[1] ?? "")?.[1]));
+    expect([...kinds].sort()).toEqual(["0", "10", "11", "20", "30", "31", "4", "40"]);
+    for (const k of kinds) expect(f.support).toContain(`\n            ${k}:\n`);
+  });
+
+  test("place 23 of FAMILIES (BC-check number 24, as 7 is skipped): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(22);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051024");
+  });
+});
+
+describe("PR-374: the fieldref-convert family", () => {
+  const f = FIELDREF_CONVERT;
+  const FIELDS: Record<string, string> = {
+    "FC BigInteger": "BigInteger",
+    "FC Integer": "Integer",
+    "FC Decimal": "Decimal",
+    "FC Code": "Code[20]",
+    "FC Text": "Text[50]",
+    "FC Date": "Date",
+    "FC Boolean": "Boolean",
+    "FC Option": "Option",
+    "FC Guid": "Guid",
+  };
+
+  test("288 cells: 9 field types x 8 values x 4 methods, each combination once; distinct names", () => {
+    expect(f.cells).toHaveLength(288);
+    const keys = f.cells.map((c) => `${c.type}|${c.state}|${c.method}`);
+    expect(new Set(keys).size).toBe(288);
+    expect(new Set(f.cells.map((c) => c.type)).size).toBe(9);
+    expect(new Set(f.cells.map((c) => c.state)).size).toBe(8);
+    expect([...new Set(f.cells.map((c) => c.method))]).toEqual([
+      "SetRange",
+      "SetFilter",
+      "Value",
+      "Validate",
+    ]);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("each cell takes the field its type names: the field number's declared type in table 51000 matches", () => {
+    const decl = new Map(
+      [...f.support.matchAll(/field\((\d+); \w+; ([\w[\]]+)\)/g)].map((m) => [m[1], m[2]] as const),
+    );
+    for (const c of f.cells) {
+      const no = /^FR := RecRef\.Field\((\d+)\);$/.exec(c.setup?.[1] ?? "")?.[1];
+      expect(no).toBeDefined();
+      expect(decl.get(no ?? "")).toBe(FIELDS[c.type]);
+      expect(c.setup?.[0]).toBe("RecRef.Open(51000);");
+    }
+  });
+
+  test("the value's declaration matches its name, and the read-back follows the method", () => {
+    const declOf: Record<string, string> = {
+      "Boolean false": "V: Boolean;",
+      "Code ABC": "V: Code[20];",
+      "Code 123": "V: Code[20];",
+      "Text XY": "V: Text[30];",
+      "Integer 5": "V: Integer;",
+      "BigInteger 5": "V: BigInteger;",
+      "Decimal 1.5": "V: Decimal;",
+      Date: "V: Date;",
+    };
+    // PR-374 review: the statement that sets the value is checked too, so two swapped values cannot pass
+    const setOf: Record<string, string> = {
+      "Boolean false": "V := false;",
+      "Code ABC": "V := 'ABC';",
+      "Code 123": "V := '123';",
+      "Text XY": "V := 'XY';",
+      "Integer 5": "V := 5;",
+      "BigInteger 5": "V := 5L;",
+      "Decimal 1.5": "V := 1.5;",
+      Date: "V := DMY2Date(17, 1, 2026);",
+    };
+    for (const c of f.cells) {
+      expect(c.vars?.[2]).toBe(declOf[c.state]);
+      expect(c.setup?.[2]).toBe(setOf[c.state]);
+      const filter = c.method === "SetRange" || c.method === "SetFilter";
+      expect(
+        c.call.endsWith(
+          filter ? "Error('V:[%1]', FR.GetFilter());" : "Error('V:[%1]', Format(FR.Value, 0, 9));",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("no cell writes a row", () => {
+    for (const c of f.cells)
+      expect([...(c.setup ?? []), c.call].join(" ")).not.toMatch(/\.(Insert|Modify|Delete)\(/);
+  });
+
+  test("place 24 of FAMILIES (BC-check number 25): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(23);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051025");
+  });
+});
+
+describe("PR-374: the language-region family", () => {
+  const f = LANGUAGE_REGION;
+
+  test("144 cells: 11 languages x 12 regions, then the 12 regions with no language; distinct names", () => {
+    expect(f.cells).toHaveLength(144);
+    const pairs = f.cells.map((c) =>
+      /^Rep\.SetCase\((\d+), '([a-zA-Z-]+)'\);$/
+        .exec(c.setup?.[2] ?? "")
+        ?.slice(1)
+        .join("|"),
+    );
+    expect(new Set(pairs).size).toBe(144);
+    expect(f.cells.filter((c) => c.state === "no language")).toHaveLength(12);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("the holder is cleared before every run (PR-373's review), and only the no-language cells are locale", () => {
+    for (const c of f.cells) {
+      expect(c.setup?.[0]).toBe("Holder.Put('');");
+      expect(c.setup?.[3]).toBe("Rep.SaveAs('', ReportFormat::Xml, OS);");
+      expect(c.call).toBe("Error('V:[%1]', Holder.Get());");
+      expect(c.depends === "locale").toBe(c.state === "no language");
+    }
+  });
+
+  test("the report sets the language (when one is given) before the region, then formats", () => {
+    const trig = /trigger OnAfterGetRecord\(\)[\s\S]*?\n {12}end;/.exec(f.support)?.[0] ?? "";
+    expect(trig).toContain("if Lang <> 0 then\n                    CurrReport.Language := Lang;");
+    expect(trig.indexOf("CurrReport.Language")).toBeLessThan(
+      trig.indexOf("CurrReport.FormatRegion := Region;"),
+    );
+    expect(trig.indexOf("CurrReport.FormatRegion")).toBeLessThan(trig.indexOf("Answer := "));
+    expect(trig).toContain("Holder.Put(Answer);");
+  });
+
+  test("place 25 of FAMILIES (BC-check number 26): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(24);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051026");
+  });
+});
+
+describe("PR-375: the zip-blob family", () => {
+  const f = ZIP_BLOB;
+  const scenarios = [...new Set(f.cells.map((c) => c.method))];
+
+  test("36 cells: 12 scenarios x 3 entry texts; distinct names", () => {
+    expect(f.cells).toHaveLength(36);
+    expect(scenarios).toHaveLength(12);
+    expect([...new Set(f.cells.map((c) => c.state))]).toEqual(["hello", "empty", "long"]);
+    const names = f.cells.map((c, i) => cellName(c, i));
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  test("every <payload> is substituted, with the entry text the cell's state names", () => {
+    const expr: Record<string, string> = {
+      hello: "'hello'",
+      empty: "''",
+      long: "PadStr('', 2000, 'x')",
+    };
+    // PR-375 review: the text goes into exactly one statement, the one that writes or zips the entry text, and ends it
+    for (const c of f.cells) {
+      const setup = c.setup ?? [];
+      expect(setup.join("\n")).not.toContain("<payload>");
+      const e = expr[c.state] ?? "?";
+      const hits = setup.filter(
+        (s) =>
+          s.endsWith(`, ${e});`) &&
+          (s.startsWith("P.PutText(R, ") || s.startsWith("P.MakeZip(R, 2, 'a.txt', ")),
+      );
+      expect(hits).toHaveLength(1);
+    }
+  });
+
+  test("each Describe reads the Blob its scenario writes: B for 'to other blob', the read-only add, extract and close; A otherwise", () => {
+    const targetOf = (c: (typeof f.cells)[number]) => /P\.Describe\(R, (\d)\)/.exec(c.call)?.[1];
+    for (const c of f.cells) {
+      if (c.method.startsWith("IsZip")) continue;
+      const writesB = (c.setup ?? []).includes("R.B.CreateOutStream(OS);");
+      expect(targetOf(c)).toBe(writesB ? "3" : "2");
+    }
+  });
+
+  test("the two shapes an app's code takes: a new archive saved into its source Blob through a copy, an open archive saved back after Clear", () => {
+    const copy = f.cells.find((c) => c.method === "new to source via copy")?.setup ?? [];
+    expect(copy.indexOf("Copy.A := R.A;")).toBeLessThan(copy.indexOf("Clear(R.A);"));
+    expect(copy.indexOf("Clear(R.A);")).toBeLessThan(copy.indexOf("DC.SaveZipArchive(OS);"));
+    const back = f.cells.find((c) => c.method === "update to source cleared")?.setup ?? [];
+    expect(back.indexOf("DC.OpenZipArchive(IS, true);")).toBeLessThan(back.indexOf("Clear(R.A);"));
+    expect(back.indexOf("Clear(R.A);")).toBeLessThan(back.indexOf("R.A.CreateOutStream(OS);"));
+    expect(back.at(-1)).toBe("DC.SaveZipArchive(OS);");
+    // its control saves into another Blob, and the variant skips the Clear
+    expect(f.cells.find((c) => c.method === "update to other blob")?.setup).toContain(
+      "R.B.CreateOutStream(OS);",
+    );
+    expect(f.cells.find((c) => c.method === "update to source not cleared")?.setup).not.toContain(
+      "Clear(R.A);",
+    );
+  });
+
+  test("the probe reads a zip by its first two bytes (not IsZip, which has cells of its own) and answers by entry, never by bytes", () => {
+    const describe = /procedure Describe[\s\S]*?\n {4}end;/.exec(f.support)?.[0] ?? "";
+    expect(describe).not.toContain(".IsZip(");
+    expect(describe).toContain("if not ((B1 = 80) and (B2 = 75)) then begin");
+    expect(describe).toContain("DC.GetEntryList(Names);");
+    expect(f.cells.filter((c) => c.call.includes("DC.IsZip(IS)")).map((c) => c.method)).toEqual([
+      "IsZip of a zip",
+      "IsZip of a zip",
+      "IsZip of a zip",
+      "IsZip of the text",
+      "IsZip of the text",
+      "IsZip of the text",
+    ]);
+  });
+
+  test("the run passes the .NET helper (the exact build comes from runArgs, PR-377), and the app depends on the System Application", () => {
+    expect(f.args).toEqual([
+      "--dotnet-sidecar",
+      "/work/tools/al-runner-v3/current/dotnet-sidecar/AlDotNetSidecar.dll",
+      "--dotnet-assembly-dir",
+      "/coord/cache/bc28-service-windows",
+    ]);
+    const app = JSON.parse(emitApp(f)["app.json"] ?? "{}");
+    expect(app.dependencies).toEqual([
+      {
+        id: "63ca2fa4-4f03-4f2b-a480-172fef340d3f",
+        name: "System Application",
+        publisher: "Microsoft",
+        version: "28.0.0.0",
+      },
+    ]);
+  });
+
+  test("last of FAMILIES (place 26, BC-check number 27): its BC-check id", () => {
+    expect(Object.keys(FAMILIES).at(-1)).toBe("zip-blob");
+    expect(Object.keys(FAMILIES).indexOf(f.name)).toBe(25);
+    expect(bcCheckApp(f).id).toBe("51000000-0000-4000-8000-000000051027");
+  });
+});
+
+describe("PR-377: every family runs on one exact BC build", () => {
+  test("the build is four numbers (a bare major version resolves to a build whose .NET runtime al-runner fetches)", () => {
+    expect(REFUSAL_FAMILY_BC_VERSION).toMatch(/^\d+\.\d+\.\d+\.\d+$/);
+  });
+
+  // PR-377 review: keep-census builds its own al-runner commands from the families; neither script may pass a bare major version
+  test("no script that runs the families passes a literal --bc-version of its own", () => {
+    for (const file of ["refusal-family.ts", "keep-census.ts"]) {
+      const src = readFileSync(join(import.meta.dir, file), "utf8");
+      expect(src).not.toMatch(/"--bc-version",\s*"\d/);
+    }
+  });
+
+  test("each family's run carries exactly one --bc-version, the exact build, and its own args after it", () => {
+    for (const f of Object.values(FAMILIES)) {
+      const a = runArgs(f, "/x");
+      const at = a.flatMap((v, i) => (v === "--bc-version" ? [i] : []));
+      expect(at).toEqual([1]);
+      expect(a[2]).toBe(REFUSAL_FAMILY_BC_VERSION);
+      expect(a.slice(3, 3 + (f.args ?? []).length)).toEqual([...(f.args ?? [])]);
+      expect(a.slice(-2)).toEqual(["--output-json", "/x"]);
+    }
   });
 });
 

@@ -74,10 +74,16 @@ async function drive(o: {
 }) {
   const log: string[] = [];
   const emitted: RunEventInput[] = [];
+  /** PR-370: the recheck phase's own events, kept apart so the lists below keep their meaning. */
+  const phases: string[] = [];
   const summary = await runWithheldRecheck({
     events: EVENTS,
     notPassOf: () => o.notPass ?? ["K.K1"],
-    emit: (e) => emitted.push(e),
+    emit: (e) => {
+      if ((e.type === "phase-entered" || e.type === "phase-left") && e.phase === "recheck")
+        phases.push(e.type);
+      else emitted.push(e);
+    },
     main: {},
     budgetSeconds: 10,
     runner:
@@ -97,7 +103,7 @@ async function drive(o: {
     ...(o.abort !== undefined ? { abort: o.abort } : {}),
     ...(o.stopSignal !== undefined ? { stopSignal: o.stopSignal } : {}),
   });
-  return { log, emitted, summary };
+  return { log, emitted, phases, summary };
 }
 
 describe("stopNameOf: what stopped the session", () => {
@@ -115,6 +121,7 @@ describe("runWithheldRecheck: a stopped session (PR-277 part 1)", () => {
   test("stopped: no daemon is closed, the runner never runs, one skip warning names the stop", async () => {
     const r = await drive({ stopped: "a SIGTERM or SIGINT (R955)" });
     expect(r.log).toEqual([]);
+    expect(r.phases).toEqual([]); // PR-370: a skip emits no recheck phase
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: RECHECK_SKIPPED_STOPPED_CODE });
     const msg = r.emitted[0]?.type === "warning" ? r.emitted[0].message : "";
@@ -131,6 +138,7 @@ describe("runWithheldRecheck: a stopped session (PR-277 part 1)", () => {
     const r = await drive({});
     expect(r.log).toEqual(["closeDaemons", "runner"]);
     expect(r.emitted.map((e) => e.type)).toEqual(["recheck-baseline-finished", "mutant-rechecked"]);
+    expect(r.phases).toEqual(["phase-entered", "phase-left"]);
   });
 });
 
@@ -138,6 +146,7 @@ describe("runWithheldRecheck: targets but 0 tests (PR-277 part 3)", () => {
   test("0 tests: no daemon is closed or started, no baseline event, a skip warning names the case", async () => {
     const r = await drive({ notPass: [] });
     expect(r.log).toEqual([]);
+    expect(r.phases).toEqual([]);
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: RECHECK_SKIPPED_CODE });
     const msg = r.emitted[0]?.type === "warning" ? r.emitted[0].message : "";
@@ -171,6 +180,7 @@ describe("runWithheldRecheck: a signal during the recheck (PR-277 part 2)", () =
       },
     });
     expect(seen?.aborted).toBe(true);
+    expect(r.phases).toEqual(["phase-entered", "phase-left"]); // PR-370: a failed run still leaves the phase, once
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: "withheld-recheck-failed" });
     expect(r.summary.recovered).toBe(0);
@@ -190,6 +200,7 @@ describe("runWithheldRecheck: the first signal during the recheck (amendment 1)"
       },
     });
     expect(got).toBe(ac.signal);
+    expect(r.phases).toEqual(["phase-entered", "phase-left"]);
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: "withheld-recheck-failed" });
     expect(r.summary.recovered).toBe(0);
@@ -199,6 +210,7 @@ describe("runWithheldRecheck: the first signal during the recheck (amendment 1)"
     const ac = new AbortController();
     const r = await drive({ stopSignal: ac.signal, duringClose: () => ac.abort() });
     expect(r.log).toEqual(["closeDaemons"]);
+    expect(r.phases).toEqual(["phase-entered", "phase-left"]); // entered before the close, so it pairs
     expect(r.emitted).toHaveLength(1);
     expect(r.emitted[0]).toMatchObject({ type: "warning", code: RECHECK_SKIPPED_STOPPED_CODE });
     expect(r.summary.skipped).toContain("SIGTERM or SIGINT");

@@ -69,7 +69,8 @@ export interface StreamCapabilities {
 const _streamCapsCover = (c: BackendCapabilities): StreamCapabilities => c;
 void _streamCapsCover;
 
-export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown";
+/** PR-370 (R1189): `recheck` is the withheld-kill recheck's nested session, after `teardown`. */
+export type RunPhase = "generate" | "deploy" | "baseline" | "mutants" | "teardown" | "recheck";
 
 /**
  * Why a baseline test did not pass — see `baseline-batch-finished`'s `verdicts[].classification`.
@@ -182,7 +183,13 @@ export type RunEventInput =
       readonly testCount?: number;
       readonly batchIndex?: number;
     }
-  | { readonly type: "phase-left"; readonly phase: RunPhase; readonly elapsedMs: number }
+  | {
+      readonly type: "phase-left";
+      readonly phase: RunPhase;
+      readonly elapsedMs: number;
+      /** PR-370: the `recheck` phase's nested session split ("nested: generate 12.0 s, ..."). */
+      readonly detail?: string;
+    }
   | {
       readonly type: "mutation-set-generated";
       readonly siteCount: number;
