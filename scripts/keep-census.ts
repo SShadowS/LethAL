@@ -17,11 +17,13 @@
 import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isV3RefusalText } from "../packages/runner/src/al-runner-rows";
+import { mergeChildEnv, v3ChildEnv } from "../packages/runner/src/al-runner-v3-seed";
 import {
   type Cell,
   type CellResult,
   FAMILIES,
   type Family,
+  REFUSAL_FAMILY_BC_VERSION,
   classOf,
   classify,
   emitApp,
@@ -339,8 +341,9 @@ class Daemon {
         pkgs,
         "--test-timeout",
         "20",
+        // PR-377: the families' one exact build (a bare `28` resolves to a build whose .NET runtime al-runner fetches)
         "--bc-version",
-        "28",
+        REFUSAL_FAMILY_BC_VERSION,
         ...(hasDeps ? [] : ["--no-download"]),
         "--dotnet-sidecar",
         sidecar,
@@ -350,7 +353,7 @@ class Daemon {
         stdin: "pipe",
         stdout: "pipe",
         stderr: "ignore",
-        env: { ...process.env, ALRUNNER_SEED: "1" } as Record<string, string>,
+        env: mergeChildEnv(v3ChildEnv()), // PR-360: LethAL's own pins (seed, replay off), not the shell's
       },
     );
     this.pid = this.proc.pid;
@@ -569,12 +572,21 @@ function oneShot(
   extra: string[] = [],
 ) {
   const p = Bun.spawnSync(
-    [bin, "test", "--bc-version", "28", "--output-json", ...args, ...extra, dir],
+    [
+      bin,
+      "test",
+      "--bc-version",
+      REFUSAL_FAMILY_BC_VERSION,
+      "--output-json",
+      ...args,
+      ...extra,
+      dir,
+    ],
     {
       cwd,
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, ALRUNNER_SEED: "1" },
+      env: mergeChildEnv(v3ChildEnv()), // PR-360
       timeout: 900_000,
     },
   );

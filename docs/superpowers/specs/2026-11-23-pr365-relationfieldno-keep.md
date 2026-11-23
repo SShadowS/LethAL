@@ -126,3 +126,24 @@ mutant data stay under /coord.
 - **For the rows:** VERIFY (one at a time), Opus review, CI, and the v3 gate when the box frees. Leg C is unchanged, since no
   case is added.
 - **The DO check and the full DO run** are their own steps after PR-359, each on the orchestrator's word.
+
+## Amendment 1 (2026-11-23, before the DO check): the oracle's value of RelationFieldNo
+- **Why:** PR-366's probe (`scripts/r1188-probe`) shows y3's build edge-4ebfe7913 answered `RelationFieldNo = 1` for every
+  no-field shape, the measured control included. Upstream issue #8249 found BC gives 0 for the control.
+  - So Plan C's oracle may have run the 7 tests on a value BC does not give, and so may y3, which the gained-kill check reads.
+  - BC's own answer for the three shapes comes from bugs' PR-367 (the probe on bc4). **The DO check starts only after
+    PR-367's answer is in.**
+- **Plan C, in the two codeunits whose entries hold the 7 tests (68975 and 68984), classified against PR-367:**
+  - **If BC gives 1 for the three shapes** (the oracle's value): unchanged. Every difference is explained one by one, or it
+    blocks.
+  - **If BC gives another value:** the oracle ran those tests on a value BC does not give. A Plan C difference in a test
+    after a refused test is then classified, never counted blindly:
+    - **"oracle value":** the later test reads state the refused test built from `RelationFieldNo` (named per difference
+      from the test's code path). It is reported, not blocking, and R1187 records it.
+    - **otherwise:** explained one by one, or it blocks, as before.
+  - Plans A and B are unaffected: both run on main-bf3a3e863 only.
+- **The gained-kill check against y3, under the same case:** a gained kill is still a BLOCK unless explained one by one.
+  "y3 ran on `RelationFieldNo = 1`" is an allowed explanation only when the killing test's failure follows from that value,
+  named from its code path; it never covers a kill by itself.
+- **The predicted lost kills (at least 150 of 182 y3 kills):** if BC gives another value, a y3 kill that does not recur is
+  listed with whether it rests on the value. Such a kill is not counted against the bound.

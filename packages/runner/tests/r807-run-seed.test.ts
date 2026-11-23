@@ -48,6 +48,7 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
     expect(v3ChildEnv({ ALRUNNER_CACHE: "/c" })).toEqual({
       ALRUNNER_CACHE: "/c",
       ALRUNNER_SEED: "1",
+      ALRUNNER_LOGIN_REPLAY: "0", // PR-360
     });
   });
 
@@ -112,6 +113,7 @@ describe("(a) every spawn path sets the variable, and an ambient value does not 
     }).catch(() => {});
     expect(seen.length).toBeGreaterThan(0);
     for (const e of seen) expect(e?.ALRUNNER_SEED).toBe("1");
+    for (const e of seen) expect(e?.ALRUNNER_LOGIN_REPLAY).toBe("0"); // PR-360
   });
 });
 
@@ -247,6 +249,8 @@ describe("(a) the backend's own spawns", () => {
     expect(v3.calls.some((c) => c.argv[1] === "--version")).toBe(true);
     expect(v3.calls.some((c) => c.argv.includes("--codeunit"))).toBe(true);
     for (const c of v3.calls) expect(c.env?.ALRUNNER_SEED).toBe("1");
+    // PR-360: the same spawns carry the login replay off.
+    for (const c of v3.calls) expect(c.env?.ALRUNNER_LOGIN_REPLAY).toBe("0");
   });
 });
 
@@ -533,7 +537,8 @@ describe("(b) a spawn of the binary cannot bypass the helper", () => {
     expect(probe.count).toBe(1);
     expect(probe.bad).toEqual([]);
     const c = await read("al-runner-v3-contract.ts");
-    expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv()", 150)).toEqual({ count: 1, bad: [] });
+    // PR-360: the probe's own env now goes INTO v3ChildEnv (`v3ChildEnv({ ...opts?.env })`), so the pins win.
+    expect(eachFollowedBy(c, /spawnIn\(argv/g, "v3ChildEnv({", 150)).toEqual({ count: 1, bad: [] });
     // serve-keep-reasons' daemon, (PR-114a) the capability facts' daemon and (PR-342) the stop-groups daemon
     expect(
       eachFollowedBy(c, /env\.serveSpawn \?\? defaultServerSpawn\)\(/g, "v3ChildEnv(", 150),
