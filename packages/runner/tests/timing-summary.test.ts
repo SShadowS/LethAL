@@ -365,6 +365,15 @@ describe("R1119 (PR-150): per-lane busy and idle time over the mutants phase", (
     expect(out).toContain("lane memory holds 1 (printed once per session), idle daemons closed 1");
   });
 
+  test("R1154: requests that overlap on one lane count once in its busy time (merged, never summed)", () => {
+    // perf10c's shape before PR-252: one long request whose wall spans many shorter ones on the same lane.
+    const evs: RunEvent[] = [req(0, 50_000, 50_000)];
+    for (let t = 2_000; t <= 40_000; t += 2_000) evs.push(req(0, t, 1_500));
+    evs.push(req(0, 100_000, 50_000), req(1, 100_000, 100_000)); // the line needs two lanes
+    const line = laneLine(foldTiming(bracket(evs, 100_000)));
+    expect(line).toContain("lane 0 busy 100.0 s (100.0%)");
+  });
+
   test("two batches: each mutants phase counts, the time between them does not", () => {
     const evs: RunEvent[] = [
       at(0, { type: "phase-entered", phase: "mutants" }),

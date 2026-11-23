@@ -6698,11 +6698,8 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       l.setScratchCwd(join(resolve(this.cfg.instrumentedDir), `daemon-${l.index}`));
     }
     this.lanesBuilt = true;
-    // PR-241: said only where packing can apply (the split, which needs lanes).
-    if (this.packEntries !== undefined)
-      console.warn(
-        `[lethal] al-runner-v3 pack-entries ${this.packEntries} (PR-241 A/B; experimental)`,
-      );
+    // PR-395 (R1200): the pack notice is the orchestrator's (`runMutantsParallel`), which knows whether a time
+    // budget has switched packing off; said here, it claimed packing under a budget too.
     return this.laneList.map((l) => this.laneView(l));
   }
 
@@ -10608,15 +10605,9 @@ export class AlRunnerV3Backend implements ExecutionBackend {
       for (const g of again) resent.add(g.mutantId);
       if (again.length > 0) segments.push([...again]);
     }
-    // PR-241: kill pairs are batched per unit, as when the units were prefetched one by one.
-    if (unitSizes === undefined) await this.batchKillPairs(lane, plans);
-    else {
-      let at = 0;
-      for (const size of unitSizes) {
-        await this.batchKillPairs(lane, plans.slice(at, at + size));
-        at += size;
-      }
-    }
+    // R1151 (PR-267): ONE kill-pair batch for the whole call, packed or not; it still chunks by cost
+    // (`groupsThatFit`). Every unit is scored after this, so each pair still follows its kill's prefetch.
+    await this.batchKillPairs(lane, plans);
   }
 
   /**

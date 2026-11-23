@@ -1,7 +1,7 @@
 // R766 step (b), the orchestrator side of `--workers N` on al-runner v3: the refusals, the pull queue
 // of procedure scopes, the per-mutant table equal to N = 1 under a forced interleaving, and the stop
 // rule. The backend is a scripted fake with lane views; "time" is a count of event-loop turns.
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1073,6 +1073,38 @@ describe("PR-241: packing consecutive units, through a session on 2 lanes", () =
     const on = await run(root, procOf, 1000, { timeBudgetSeconds: 3600 });
     expect(on.split.calls).toHaveLength(3);
     expect(on.split.calls.every((c) => c.unitSizes === undefined)).toBe(true);
+  });
+
+  // PR-395 (R1200): the notice says what the orchestrator decided, not only that a cap is set.
+  const ON_LINE = "pack-entries 1000 (PR-241 A/B; experimental)";
+  const OFF_LINE = "pack-entries 1000: off under --time-budget";
+  const notices = async (packEntries: number | undefined, extra: Partial<SessionConfig>) => {
+    const root = await project();
+    const { procOf } = await learn(root);
+    const said = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await run(root, procOf, packEntries, extra);
+      return said.mock.calls.map((c) => String(c[0])).filter((s) => s.includes("pack-entries"));
+    } finally {
+      said.mockRestore();
+    }
+  };
+
+  test("PR-395: a cap and no budget says packing is on, not off", async () => {
+    const lines = await notices(1000, {});
+    expect(lines.some((s) => s.includes(ON_LINE))).toBe(true);
+    expect(lines.some((s) => s.includes(OFF_LINE))).toBe(false);
+  });
+
+  test("PR-395: a cap under a time budget says packing is off under --time-budget, never on", async () => {
+    const lines = await notices(1000, { timeBudgetSeconds: 3600 });
+    expect(lines.some((s) => s.includes(OFF_LINE))).toBe(true);
+    expect(lines.some((s) => s.includes(ON_LINE))).toBe(false);
+  });
+
+  test("PR-395: no cap says nothing about packing", async () => {
+    expect(await notices(undefined, { timeBudgetSeconds: 3600 })).toEqual([]);
+    expect(await notices(undefined, {})).toEqual([]);
   });
 
   test("(a) verdicts, killing tests and failure text equal packed and unpacked; (b) fewer requests, none mixing lanes; (c) off is one request per unit", async () => {

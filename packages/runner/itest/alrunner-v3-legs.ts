@@ -773,8 +773,17 @@ export interface TcRow {
 
 /** The test codeunit, the test T0 whose Format is refused, and the unstable test T4. */
 export const TC_CODEUNIT_ID = 76150;
-export const TC_STABLE_TAIL = ["T1_DoubleTwo", "T2_IsBigTen", "T3_SetsMark", "T5_IsSmallOne"];
+export const TC_STABLE_TAIL = [
+  "T1_DoubleTwo",
+  "T2_IsBigTen",
+  "T3_SetsMark",
+  "T5_IsSmallOne",
+  "T6_HalveZero",
+  "T7_HalveTen",
+];
 export const TC_UNSTABLE_TAIL = ["T4_SeesTheMark"];
+/** (a3) PR-393: TC-on sends exactly one pack per Halve mutant. */
+export const TC_PACKS = 2;
 /** The note the tail kills carry (`al-runner-v3-backend.ts`, `[refused-cut tail: ...]`). */
 export const TC_TAIL_NOTE = "[refused-cut tail";
 
@@ -845,6 +854,13 @@ export const TC_TABLE: readonly TcSite[] = [
     },
     tailKillOn: false,
   },
+  // PR-393: Halve returns 0 under both; T6 passes, so T7 kills whichever the walk reaches first (a pack of [T, mate]).
+  ...["lethal.empty-block", "lethal.return-value"].map((operator) => ({
+    procedureName: "Halve",
+    operator,
+    expect: sameKill("T7_HalveTen"),
+    tailKillOn: true,
+  })),
 ];
 
 /** What the judge reads: the three sessions' rows, the cut counts, the tail's alone calls and its notices. */
@@ -853,7 +869,14 @@ export interface TcInput {
   /** The stats line's `cut before a baseline-refused test (PR-250)` of TC-off and TC-on. */
   readonly cutEntries: { readonly off: number; readonly on: number };
   /** TC-on's `refusedCutTailStats()`: alone calls of the stability pass and under a mutant. */
-  readonly tailCalls: { readonly stability: number; readonly mutant: number };
+  readonly tailCalls: {
+    readonly stability: number;
+    readonly mutant: number;
+    /** PR-393: the pack stats of the same call (PR-344). */
+    readonly packs: number;
+    readonly failedPacks: number;
+    readonly servedFromPack: number;
+  };
   /** TC-on's `al-runner-v3-refused-cut-tail` notices (messages). */
   readonly tailNotices: readonly string[];
   /** What T0 showed in TC-off and TC-on: the refused tests and the `baseline-refused-cut` notice, printed on (a1). */
@@ -896,9 +919,9 @@ const sameSet = (a: readonly string[], b: readonly string[]): boolean =>
 
 /**
  * TC's judge, in the pre-committed order. Returns every failure, each starting `TC:`, in order:
- * (a1) the cut fired, (a2) the tail ran, (b) the three tables per mutant, (c) TC-on equals TC-alone but for the one
+ * (a1) the cut fired, (a2) the tail ran, (a3) TC-on sent exactly 2 packs and none failed (PR-393), (b) the three tables per mutant, (c) TC-on equals TC-alone but for the one
  * T4-only mutant, (d) tail kills carry the note, (f) PR-381's not-run field and caveat per session. (e), the frozen
- * baseline, is the caller's (R332). (a1) and (a2) return early; (b), (c), (d) and (f) all report together.
+ * baseline, is the caller's (R332). (a1), (a2) and (a3) return early; (b), (c), (d) and (f) all report together.
  * Pure, so it is red-checked offline.
  */
 export function judgeTailcutLeg(input: TcInput): readonly string[] {
@@ -929,6 +952,12 @@ export function judgeTailcutLeg(input: TcInput): readonly string[] {
   )
     fails.push(
       `TC: the tail route did not run: stability notice ${stabilityNotice === undefined ? "absent" : `"${stabilityNotice.slice(0, 400)}"`}, pre-committed stable ${TC_STABLE_TAIL.join(", ")} and unstable ${TC_UNSTABLE_TAIL.join(", ")}; tail alone calls under a mutant ${input.tailCalls.mutant}, pre-committed above 0${notRun.length > 0 ? `; ${notRun.map((n) => n.slice(0, 300)).join(" | ")}` : ""}`,
+    );
+  if (fails.length > 0) return fails;
+  // (a3) PR-393: PR-344's packing ran live: one pack per Halve mutant, none failed. servedFromPack is recorded only.
+  if (input.tailCalls.packs !== TC_PACKS || input.tailCalls.failedPacks !== 0)
+    fails.push(
+      `TC: packing did not run as pre-committed: packs ${input.tailCalls.packs} (pre-committed ${TC_PACKS}), failedPacks ${input.tailCalls.failedPacks} (pre-committed 0), servedFromPack ${input.tailCalls.servedFromPack} (recorded only)`,
     );
   if (fails.length > 0) return fails;
   const find = (s: TcSession, site: TcSite): TcRow[] =>
