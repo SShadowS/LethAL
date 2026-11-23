@@ -389,7 +389,7 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
     "itest:alrunner-v3",
   ),
   // PR-347: leg TC (sandbox-tailcut, the refused-cut tail on by default), pre-committed in
-  // docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md; waits in PENDING_FIRST_RECORD.
+  // docs/superpowers/specs/2026-11-23-pr347-refused-cut-tail-default.md; recorded once on 2026-11-23 (see PENDING_FIRST_RECORD).
   "al-runner-v3.tailcut.baseline.json": gateHow(
     "LETHAL_ITEST_ALRUNNER_V3=1 LETHAL_ITEST_V3_LEGS=TC",
     "al-runner-v3.tailcut.baseline.json",
@@ -441,8 +441,11 @@ export const GATE_BASELINES: Readonly<Record<string, string>> = {
  * PR-340's `al-runner-v3.carry.baseline.json` (`itest:alrunner-v3-carry`) waited here and was recorded once on
  * 2026-11-22 (main-bf3a3e863), equal per mutant to its pre-commitment's §7 table (8 killed, 5 survived); the list is
  * empty again.
+ * PR-347's `al-runner-v3.tailcut.baseline.json` (leg TC) waited here and was recorded once on 2026-11-23 (main-bf3a3e863)
+ * by the R849 route, equal per mutant to `expected/al-runner-v3.tailcut.baseline.json` (verdicts and killers from the
+ * spec's TC_TABLE: 8 killed, 1 survived, 1 error); the list is empty again.
  */
-export const PENDING_FIRST_RECORD: readonly string[] = ["al-runner-v3.tailcut.baseline.json"];
+export const PENDING_FIRST_RECORD: readonly string[] = [];
 
 /** R332: thrown after a gate record run wrote its baseline. The gate exits 3: never a pass. */
 export class BaselineRecordedError extends Error {

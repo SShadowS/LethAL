@@ -249,13 +249,13 @@ describe("PR-347 leg TC: the fixture and the wiring", () => {
       expect(JSON.parse(read(`fixtures/${d}/app.json`)).runtime).toBe("17.0");
   });
 
-  test("TC is a default leg, its baseline waits for its record run and the leg refuses to start without it", () => {
+  test("TC is a default leg, its baseline is recorded (R849) and the leg refuses to start without it", () => {
     expect(V3_TC_LEG).toBe("TC");
-    expect(PENDING_FIRST_RECORD).toContain("al-runner-v3.tailcut.baseline.json");
-    // R332: never created by hand
-    expect(existsSync(join(REPO, "packages/runner/itest/al-runner-v3.tailcut.baseline.json"))).toBe(
-      false,
-    );
+    expect(PENDING_FIRST_RECORD).not.toContain("al-runner-v3.tailcut.baseline.json");
+    // R332/R849: recorded once by the gate, equal per mutant to the pre-committed expected file
+    const recorded = JSON.parse(read("packages/runner/itest/al-runner-v3.tailcut.baseline.json"));
+    const expected = JSON.parse(read("packages/runner/itest/expected/al-runner-v3.tailcut.baseline.json"));
+    expect(recorded.entries).toEqual(expected.entries);
     expect(read("packages/runner/itest/al-runner-v3.itest.ts")).toContain(
       'preflightGateBaseline(TAILCUT_BASELINE_PATH, "al-runner-v3 itest leg TC")',
     );
