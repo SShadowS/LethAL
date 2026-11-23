@@ -186,3 +186,20 @@ If a key differs on the first run, the difference is pre-committed in an amendme
   separate knob would only add a fingerprint dimension with no measured need.
 - **NITs accepted:** about 18 un-awaited `baselinePhase(false)` calls in one test file (production awaits); PR-209's generic
   message for runs from before PR-209 (still refused); the flag message coming first on `--resume-run` (still refused).
+
+## Amendment 3 (2026-11-23, after PR-381 merged: TC under the not-run caveat; before TC's record run)
+PR-381 (merged b521dd2b7) adds `notRunAtBaseline` to every al-runner-v3 report, and the caveat `survivors-beside-unrun-tests`
+when it is non-empty and the run has survivors. TC is the only leg where that caveat fires on a refusal: T0 is refused at
+baseline in every session. Derived from the fixture and the table above:
+- **TC-off:** `notRunAtBaseline` = [`Tailcut Tests.T0_RefusedFormat`], 0 survivors, so no caveat.
+- **TC-on:** the same `notRunAtBaseline`, 1 survivor (IsSmall `N <= 3`), so the caveat with `survivors 1, notRunTests 1`.
+- **TC-alone:** `notRunAtBaseline` = [T0] (T0 is refused alone too; T4 fails alone with its own `Error`, an ordinary fail, so
+  it is not counted). 2 survivors (IsBig `N >= 5`, IsSmall `N <= 3`), so the caveat with `survivors 2, notRunTests 1`.
+- **`sharingACodeunit`** (the `[v3-refused-test-nearby]` tag hint) is recorded, not pinned: the tag's source is cleared
+  under method isolation (PR-381 amendment 2), so TC-alone may read 0.
+- **The judge gains (f),** checked after (a)-(d): each session's `notRunAtBaseline` and caveat counts as above, by name. A
+  failure prints the session's actual field and counts. TC becomes PR-381's one live exercise of the caveat on a refusal.
+- **Pack stats (PR-344):** TC-on's `tail packs sent` is predicted above 0 (4 stable tail tests in one codeunit), and is
+  quoted from the record run; it is not judged.
+- **The order:** merge (done, 6ccd98950), (f) built and red-checked, VERIFY, then TC's record run, its confirm run, the full v3
+  gate and the carry gate on the final head, and the BC legs.
