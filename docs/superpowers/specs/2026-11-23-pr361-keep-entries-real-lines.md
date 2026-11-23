@@ -54,6 +54,27 @@ reason. (b) is the guard: every keep entry is tested against a line al-runner re
 - Widen one of the 12 by adding ` \(not pinned\)` to its row: test 3 goes red.
 - Put `Continia` into one line: test 4 goes red.
 
+## Amendment 1 (the build, 2026-11-23): no value is replaced
+- A review of every chosen line found two corpus-run sources that `select.ts` had not marked: PR-195's P5 DO check (its
+  `cascade` line named a DO test, and the kit's copy was cut short) and PR-92. Marking them moved `cascade` to an
+  invented-app repro (PR-295), and `saveas-layout-statement` to a line with no number ("End Date must have a value.").
+- PR-92's `dotnet-json-writer-property-in-array` line keeps its path `'message.toRecipients'`. Its entry pins that exact
+  path, and it is already in committed source (`al-runner-server.ts` and its `JSONPATH` slot): it is Microsoft Graph's mail
+  shape, so it adds no new text.
+- **So the fixture is byte-identical to the captured lines** (`cmp` against `/coord/handoff/PR-361/fixture.json`).
+  Test 4 refuses any 15-digit number, with no exception.
+
+## Amendment 2 (the Opus review, 2026-11-23: no BLOCK, two SERIOUS)
+- **What it checked:** every one of the 131 lines equals a row's `message` in its `from` file, byte for byte.
+- **One branch per entry:** 30 entries hold alternations, and this test proves ONE real line per entry, not one per
+  branch. A dead branch is R1153's failure shape, so the rest is filed as R1186.
+  - `fieldref-method-never-assigned` shared its proof with `fieldref-never-assigned` (both used `FieldRef.Class`), so its
+    line is now a real `FieldRef.SetFilter` row (PR-74's census). The fixture therefore differs from `fixture.json` in that
+    one entry.
+- **Build drift is not caught here:** a line is real for the build that wrote it, and many captures are older builds. A
+  later rewording leaves this test green. That is caught at run time by PR-244's near-miss warning, and per gated build by
+  leg C's `serve-keep-reasons`. This test guards against a pin that never met real output.
+
 ## Checks
 VERIFY full (one at a time beside the timed run), Opus review, CI. 0 moves, since no source changes. The v3 gate is batched
 with PR-360's when the box frees.
