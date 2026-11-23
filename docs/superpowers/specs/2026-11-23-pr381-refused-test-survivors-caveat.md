@@ -166,3 +166,16 @@ one `survived` or `known-survivor` row (B1), then the caveat applies to every su
   stated in the result.
 - **The predictions are unchanged in direction.** c3's `notRunTests` may grow above 237 if c3 has deadline, marker-only or
   transport-failure baseline rows. The offline script re-counts, and the result states the final figure.
+
+## Amendment 3 (2026-11-23, agreed with lethal-code for PR-387, the bcdev follow-up; during round 2)
+- **The `reaches` hook is removed:** `NotRunReach`, `ALWAYS_REACHES` and the parameter. PR-386 closed with no gain, and
+  PR-387 does not need it. `notRunSurvivors(report)` takes one argument. Amendment 1's interface is withdrawn.
+- **The field is backend-neutral: `notRunAtBaseline`** (was `v3NotRunAtBaseline`), so PR-387 fills the same field rather than
+  adding a second one. No report carries it yet, so the rename costs nothing.
+  - In this PR only al-runner-v3 fills it.
+  - **The rule fires on any backend** whose report fills the field and has survivors.
+  - **The one backend check left:** an ABSENT field prints "not recorded in this report" only for al-runner-v3 (older v3
+    reports). A bcdev report prints nothing new in this PR, so report-equality and the gift-card sample stay byte-equal.
+  - A test pins that a bcdev report with the field filled by hand gets the caveat.
+- **PR-387 (lethal-code)** fills `notRunAtBaseline` from bcdev's could-not-run set (TestPage-refused, permission refusals,
+  timeouts, stops; never assertion failures), extends the "not recorded" check to bcdev, and re-records the gates that move.
