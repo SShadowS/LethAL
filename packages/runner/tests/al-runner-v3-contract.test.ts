@@ -24,23 +24,59 @@ import {
   BURN_RELATIVE_FACTOR,
   BURN_TRIES,
   MESSAGE_PREFIX_REASON,
+  SERVE_CASES,
   SERVE_TESTS_AL,
   STOP_GROUPS_FACT,
   STOP_GROUPS_REQUESTS,
   type StopAnswer,
   type V3ContractResult,
+  type V3KeepApp,
+  type V3ProbeEnv,
   V3_CAPABILITY_FACTS,
   V3_CARRY_FACT,
+  V3_KEEP_APP_FAMILIES,
+  V3_KEEP_CASES,
   burnerArgv,
   classifySleep,
   judgeStopGroups,
   leastBusyCore,
   parseAllowedCores,
-  runV3ContractProbe,
+  runV3ContractProbe as runV3ContractProbeRaw,
   v3ContractRefusals,
   v3DefectWarnings,
   v3DefectsGone,
 } from "../src/al-runner-v3-contract";
+
+/**
+ * PR-363: a fake manifest of `V3_KEEP_APP_FAMILIES` family apps, each with one case (`stream-never-created`, whose
+ * refusal text is one short line). `fakeServe` answers a request for one of these dirs with that case's row.
+ */
+const FAKE_KEEP_DIR = "/fake/keep";
+const KEEP_CASE = { entry: "stream-never-created", name: "Codeunit51001.Cell" } as const;
+const KEEP_TEXT = "NotRun: out-of-scope: use of an OutStream that was never created";
+// Build review L1: the manifest must hold exactly V3_KEEP_CASES cases, so fam0 carries the rest (one per family otherwise).
+const KEEP_APPS: readonly V3KeepApp[] = Array.from({ length: V3_KEEP_APP_FAMILIES }, (_, i) => ({
+  family: `fam${i}`,
+  dir: `${FAKE_KEEP_DIR}/fam${i}`,
+  cases:
+    i === 0
+      ? Array.from({ length: V3_KEEP_CASES - (V3_KEEP_APP_FAMILIES - 1) }, (_, k) => ({
+          entry: KEEP_CASE.entry,
+          name: `Codeunit${51001 + k}.Cell`,
+        }))
+      : [KEEP_CASE],
+}));
+/** PR-363: the default answer to a family app's request: each of its cases a kept refusal. */
+const keptRows = (dir: string) =>
+  (KEEP_APPS.find((a) => a.dir === dir)?.cases ?? [KEEP_CASE]).map((c) => ({
+    name: c.name,
+    status: "error",
+    notRun: true,
+    message: KEEP_TEXT,
+  }));
+/** Every probe in this file gets the fake family apps unless it names its own (or, with the raw one, none). */
+const runV3ContractProbe = (env: V3ProbeEnv) =>
+  runV3ContractProbeRaw({ keepApps: KEEP_APPS, ...env });
 import {
   AlRunnerV3UngatedBuildError,
   checkGated,
@@ -649,6 +685,10 @@ function fakeServe(
     ready?: boolean;
     /** PR-114a: change one capability fact's answer to a request (default: the measured reading). */
     cap?: (fact: string, req: Record<string, unknown>, def: CapAnswer) => CapAnswer;
+    /** PR-363: the rows a family app's request (by its dir) gets; default one kept refusal. */
+    family?: (
+      dir: string,
+    ) => { name: string; status: string; notRun?: boolean; message?: string }[];
   } = {},
 ): { spawn: ServerSpawnFn; argvs: string[][]; requests: Record<string, unknown>[] } {
   const argvs: string[][] = [];
@@ -693,6 +733,16 @@ function fakeServe(
           late = undefined;
           if (pending !== undefined) send(pending);
           send(ans);
+        } else if (
+          req.command === "runTests" &&
+          Array.isArray(req.sourcePaths) &&
+          String(req.sourcePaths[0]).startsWith(`${FAKE_KEEP_DIR}/`)
+        ) {
+          // PR-363: a family app's request (its own fresh daemon); answered by dir, default one kept refusal
+          const dir = String(req.sourcePaths[0]);
+          const ans = o.family?.(dir) ?? keptRows(dir);
+          for (const t of ans) emit(JSON.stringify({ type: "test", ...t }));
+          emit(JSON.stringify({ type: "summary", exitCode: 1 }));
         } else if (req.command === "runTests") {
           for (const [name, r] of Object.entries(rows))
             emit(JSON.stringify({ type: "test", name, ...r }));
@@ -754,7 +804,8 @@ describe("R645: the probe's v3 processes run in its scratch dir, not the caller'
       expect(c.cwd).not.toBe(process.cwd());
     }
     // PR-114a: serve-keep-reasons' daemon and the capability facts' daemon; PR-340: and the carry fact's own; PR-342: and stop-groups'.
-    expect(serveCwds).toHaveLength(4);
+    // PR-363: and one fresh daemon per family app, after serve-keep-reasons' own (now 4 + V3_KEEP_APP_FAMILIES)
+    expect(serveCwds).toHaveLength(4 + V3_KEEP_APP_FAMILIES);
     for (const c of serveCwds) {
       expect(c).toBeDefined();
       expect(c).not.toBe(process.cwd());
@@ -833,7 +884,10 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     const r = await probe({}, s.spawn);
     const f = r.facts.find((x) => x.fact === "serve-keep-reasons");
     expect(f).toMatchObject({ kind: "warn", verdict: "matches" });
-    expect(f?.measured).toContain("the keep rule accepts every row of all 20 entries");
+    // PR-363: SERVE_CASES' rows plus the V3_KEEP_CASES family cases
+    expect(f?.measured).toContain(
+      `the keep rule accepts every row of all ${SERVE_CASES.length + V3_KEEP_CASES} entries`,
+    );
     // R998, R1019, R1043, R1009, PR-47, PR-53, PR-54: each new family judged a refusal by its own entry
     for (const e of [
       "download-from-stream-needs-client",
@@ -853,9 +907,14 @@ describe("R612 serve-keep-reasons: a warn fact that pins V3_SERVE_SAFE_REFUSALS 
     expect(f?.measured).toContain("cascade-existing-state: refusal");
     // PR-114a: a second daemon, with the same argv, measures the capability facts; PR-340: a third, the carry fact's own; PR-342: a fourth, stop-groups'.
     const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
-    expect(s.argvs).toEqual([serveArgv, serveArgv, serveArgv, serveArgv]);
+    // PR-363: and one more per family app (V3_KEEP_APP_FAMILIES), right after the first
+    expect(s.argvs).toEqual(Array.from({ length: 4 + V3_KEEP_APP_FAMILIES }, () => serveArgv));
     const run = s.requests.filter(
-      (q) => q.command === "runTests" && !isCapabilityRequest(q) && !isStopGroupsRequest(q),
+      (q) =>
+        q.command === "runTests" &&
+        !isCapabilityRequest(q) &&
+        !isStopGroupsRequest(q) &&
+        !String((q.sourcePaths as string[])[0]).startsWith(`${FAKE_KEEP_DIR}/`),
     );
     expect(run.length).toBe(1);
     expect(run[0]?.testIsolation).toBe("test");
@@ -1518,7 +1577,7 @@ describe("PR-114a: the eight capability facts", () => {
     // the next fact, and every other, reads as if nothing had happened: a fresh daemon after the timeout
     for (const n of V3_CAPABILITY_FACTS.filter((x) => x !== "batch-no-cross-singleinstance"))
       expect(f(n)?.verdict, n).toBe("matches");
-    expect(serve.argvs.length).toBe(5); // serve-keep-reasons, the capability daemon, its replacement, the carry fact's daemon, stop-groups'
+    expect(serve.argvs.length).toBe(5 + V3_KEEP_APP_FAMILIES); // serve-keep-reasons, then PR-363's family daemons, the capability daemon, its replacement, the carry fact's daemon, stop-groups'
   });
 
   test("batch-onrun-excluded-no-carry: diverged when the excluded OnRun writer's row reaches the batch", async () => {
@@ -3136,11 +3195,17 @@ describe("PR-340: the carry fact batch-sequential-carry", () => {
         const r = await probe({}, spawn);
         expect(r.facts.find((f) => f.fact === V3_CARRY_FACT)?.verdict).toBe("matches");
         // serve-keep-reasons, the eight facts', the carry fact's, then (PR-342) stop-groups'.
-        expect(envs).toHaveLength(4);
+        // PR-363: serve-keep-reasons' own and its V3_KEEP_APP_FAMILIES family daemons come first, all without the variable.
+        expect(envs).toHaveLength(3 + 1 + V3_KEEP_APP_FAMILIES);
         expect(
           envs.map((e) => mergeChildEnv(e ?? {}).AL_STRICT_SEQUENTIAL),
           `ambient ${ambient}`,
-        ).toEqual([undefined, undefined, "1", undefined]);
+        ).toEqual([
+          ...Array.from({ length: 1 + V3_KEEP_APP_FAMILIES }, () => undefined),
+          undefined,
+          "1",
+          undefined,
+        ]);
       }
     } finally {
       if (before === undefined) Reflect.deleteProperty(process.env, "AL_STRICT_SEQUENTIAL");
@@ -3433,5 +3498,194 @@ describe("PR-342: the stop-groups capability fact (PR-256's alRunnerV3.stopGroup
     });
     expect(r.facts.some((x) => x.fact === STOP_GROUPS_FACT)).toBe(false);
     expect(s.requests.some(isStopGroupsRequest)).toBe(false);
+  });
+});
+
+describe("PR-363: serve-keep-reasons' per-family apps, each on its own fresh daemon, judged on its own rows", () => {
+  const keepFact = (r: V3ContractResult) => r.facts.find((x) => x.fact === "serve-keep-reasons");
+  const OTHER = { name: "Codeunit51002.Other", status: "error", notRun: true } as const;
+
+  // Red: judge `rows` merged across requests (find the case in the first request that has the name).
+  test("each request is judged on its OWN rows: two families return the same test name with different outcomes", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam1") ? [{ name: KEEP_CASE.name, status: "pass" }] : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("fam1 stream-never-created: MOVED pass");
+    expect(f?.measured).not.toContain("fam0");
+    expect(f?.measured.split("; ")).toHaveLength(1);
+  });
+
+  // Red: start the family daemon once, outside the loop in serveKeepReasons (a shared daemon).
+  test("each family gets a FRESH daemon: one process per request, the same argv as the first", async () => {
+    const inner = fakeServe();
+    const procs: string[][] = [];
+    const spawn: ServerSpawnFn = (argv, opts) => {
+      const p = inner.spawn(argv, opts);
+      const mine: string[] = [];
+      procs.push(mine);
+      return {
+        ...p,
+        write: (line: string) => {
+          const q = JSON.parse(line) as { command: string; sourcePaths?: string[] };
+          if (q.command === "runTests") mine.push(String(q.sourcePaths?.[0]));
+          p.write(line);
+        },
+      };
+    };
+    await probe({}, spawn);
+    // process 0 is the existing request; 1..N each hold exactly one request, for their own app
+    expect(procs.slice(1, 1 + V3_KEEP_APP_FAMILIES)).toEqual(KEEP_APPS.map((a) => [a.dir]));
+    expect(procs[0]).toHaveLength(1);
+    expect(procs[0]?.[0]).not.toContain(FAKE_KEEP_DIR);
+    const serveArgv = [resolve("/fake/alrunner"), "serve", "--test-timeout", "3"];
+    expect(inner.argvs.slice(0, 1 + V3_KEEP_APP_FAMILIES)).toEqual(
+      Array.from({ length: 1 + V3_KEEP_APP_FAMILIES }, () => serveArgv),
+    );
+  });
+
+  const raw = (keepApps?: readonly V3KeepApp[]) => {
+    const s = fakeServe();
+    return runV3ContractProbeRaw({
+      ...(keepApps !== undefined ? { keepApps } : {}),
+      alRunnerPath: "/fake/alrunner",
+      expectedVersion: VERSION,
+      packagesDir: "/fake/deps",
+      bcVersion: BC,
+      alcPath: "/fake/alc",
+      alcIo: fakeAlcIo,
+      tasksetPath: "/usr/bin/taskset",
+      startBurner: () => ({ kill: () => {} }),
+      spawn: fakeV3(),
+      serveSpawn: s.spawn,
+      libraryAssertApp: LIBRARY_ASSERT,
+    }).then((r) => ({ r, s }));
+  };
+
+  // Red: delete the `keepApps === undefined || keepApps.length < V3_KEEP_APP_FAMILIES` check in serveKeepReasons.
+  test("the family apps absent, or fewer than the pinned count: unmeasurable, the reason named, no request made for it", async () => {
+    for (const apps of [undefined, KEEP_APPS.slice(0, V3_KEEP_APP_FAMILIES - 1)]) {
+      const { r, s } = await raw(apps);
+      const f = keepFact(r);
+      expect(f?.verdict).toBe("unmeasurable");
+      expect(f?.measured).toContain("the family apps are missing");
+      expect(f?.measured).toContain(
+        apps === undefined ? "none given" : `9 of ${V3_KEEP_APP_FAMILIES}`,
+      );
+      // never the old request alone: serve-keep-reasons ran no request at all
+      expect(
+        s.requests.some(
+          (q) => q.command === "runTests" && !isCapabilityRequest(q) && !isStopGroupsRequest(q),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  // Red: judge only the chosen cases (drop the `(unjudged)` loop over the request's other rows).
+  test("a refused row in a family request that no entry keeps is unkept, named by family, and fails leg C", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) => [
+        ...keptRows(dir),
+        ...(dir.endsWith("/fam3")
+          ? [{ ...OTHER, message: "NotRun: out-of-scope: a reworded refusal nobody keeps" }]
+          : []),
+      ],
+    });
+    const r = await probe({}, s.spawn);
+    const f = keepFact(r);
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam3 (unjudged): UNKEPT Codeunit51002.Other");
+    expect(classifyLegC(r.facts, V3_DEFECT_FACTS, V3_LEG_C_FACTS, V3_WARN_FACTS).outcome).toBe(
+      "gate-fail",
+    );
+  });
+
+  // Red: let a chosen case's refusal that its OWN entry does not match fall to `moved` only (drop the unkeptRefusal check).
+  test("a chosen case whose refusal text no entry keeps is unkept (a reworded entry), not merely moved", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam7")
+          ? [
+              {
+                name: KEEP_CASE.name,
+                status: "error",
+                notRun: true,
+                message: `${KEEP_TEXT} (reworded)`,
+              },
+            ]
+          : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam7 stream-never-created: UNKEPT");
+  });
+
+  // Red: drop the `res.tests.length === 0` branch (every case would then read MOVED, a mere warning).
+  test("a family request with no row at all is unmeasurable, naming the family and its compilationErrors", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) => (dir.endsWith("/fam5") ? [] : keptRows(dir)),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("fam5: the request returned no test row at all");
+    expect(f?.measured).toContain("compilationErrors");
+  });
+
+  // Red: accept a plain fail or pass for a family case (copy the SERVE_CASES allowances into the family loop).
+  test("a family case that fails plainly (the refusal moved) reads diverged: refusal only", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam2")
+          ? [{ name: KEEP_CASE.name, status: "fail", message: "some plain failure" }]
+          : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("diverged");
+    expect(f?.measured).toContain("fam2 stream-never-created: MOVED fail");
+  });
+
+  // Build review S1. Red: swap `unmeasurable` and `diverged` in the verdict order (a blind family would then pass as a warning).
+  test("a family with no row beside another family's moved case reads unmeasurable, not diverged", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam5")
+          ? []
+          : dir.endsWith("/fam2")
+            ? [{ name: KEEP_CASE.name, status: "pass" }]
+            : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain("fam5: the request returned no test row at all");
+    expect(f?.measured).toContain("fam2 stream-never-created: MOVED pass"); // build review L2: moved rows still shown
+  });
+
+  // Build review S1. Red: put `unmeasurable` before `unkept` in the verdict order.
+  test("a family with no row beside another family's unkept row reads unkept", async () => {
+    const s = fakeServe(SERVE_ROWS, {
+      family: (dir) =>
+        dir.endsWith("/fam5")
+          ? []
+          : dir.endsWith("/fam3")
+            ? [
+                ...keptRows(dir),
+                { ...OTHER, message: "NotRun: out-of-scope: a reworded refusal nobody keeps" },
+              ]
+            : keptRows(dir),
+    });
+    const f = keepFact(await probe({}, s.spawn));
+    expect(f?.verdict).toBe("unkept");
+    expect(f?.measured).toContain("fam3 (unjudged): UNKEPT Codeunit51002.Other");
+  });
+
+  // Build review L1. Red: drop the case-count half of the manifest check.
+  test("a manifest with the right family count but the wrong case count reads unmeasurable before any request", async () => {
+    const short = KEEP_APPS.map((a, i) => (i === 0 ? { ...a, cases: [KEEP_CASE] } : a));
+    const { r } = await raw(short);
+    const f = keepFact(r);
+    expect(f?.verdict).toBe("unmeasurable");
+    expect(f?.measured).toContain(`10 of 10 families, 10 of ${V3_KEEP_CASES} cases`);
   });
 });
